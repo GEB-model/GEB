@@ -8,4 +8,4 @@ pyflwdir
 rasterio
 sphinx_rtd_theme
 hyve
-git+github.com/jensdebruijn/hyve@main
+git+git://github.com/jensdebruijn/hyve@main
