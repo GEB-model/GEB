@@ -6,3 +6,4 @@ sphinx
 arcgis2geojson
 pyflwdir
 rasterio
+sphinx_rtd_theme
