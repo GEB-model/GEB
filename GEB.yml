@@ -1,0 +1,98 @@
+general:
+  start_time: 2000-01-01T00:00:00
+  end_time: 2005-01-01T00:00:00
+  use_gpu: true
+
+agent_settings:
+  fix_activation_order: true
+
+logging:
+  logfile: GEB.log  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  loglevel: DEBUG
+
+draw:
+  draw_every_nth_agent: 1
+  draw_geography: # global # country, rivers
+  draw_agents:
+
+report:
+  activation order:
+    type: farmers
+    scale: global
+    function: null
+    varname: activation_order_by_elevation
+    format: npy
+    initial_only: true
+  elevation:
+    type: farmers
+    scale: global
+    function: null
+    varname: elevation
+    format: npy
+    initial_only: true
+  reservoir irrigation:
+    type: farmers
+    scale: global
+    function: null
+    varname: reservoir_abstraction_m3_by_farmer
+    per_timestep: true
+    format: npy
+  groundwater irrigation:
+    type: farmers
+    scale: global
+    function: null
+    varname: groundwater_abstraction_m3_by_farmer
+    per_timestep: true
+    format: npy
+  channel irrigation:
+    type: farmers
+    scale: global
+    function: null
+    varname: channel_abstraction_m3_by_farmer
+    per_timestep: true
+    format: npy
+  is water aware:
+    type: farmers
+    scale: global
+    function: null
+    varname: is_water_efficient
+    per_timestep: true
+    format: npy
+  yield ratio:
+    type: farmers
+    scale: global
+    function: null
+    varname: yield_ratio_per_farmer
+    format: npy
+    per_timestep: true
+  crop:
+    type: farmers
+    scale: global
+    function: null
+    varname: crop
+    format: npy
+    per_timestep: true
+  n_multicrop_periods:
+    type: farmers
+    scale: global
+    function: null
+    varname: n_multicrop_periods
+    format: npy
+    per_timestep: true
+  next_multicrop_index:
+    type: farmers
+    scale: global
+    function: null
+    varname: next_multicrop_index
+    format: npy
+    per_timestep: true
+
+report_cwatm:
+  hydraulic head:
+    varname: var.head
+    function: mean
+    format: csv
+  reservoir storage:
+    varname: var.reservoirStorageM3C
+    function: sum
+    format: csv
