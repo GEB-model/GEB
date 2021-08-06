@@ -10,7 +10,7 @@ GEB requires the following packages
 Required
 ==========
 - cwatm_abm
-- polygene
+- hyve
 - xarray
 - numba
 - tbb

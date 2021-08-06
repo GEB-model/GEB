@@ -7,7 +7,7 @@ try:
 except ImportError:
     pass
 
-from polygene.reporter import Reporter as ABMReporter
+from hyve.reporter import Reporter as ABMReporter
 
 class CWatMReporter(ABMReporter):
     def __init__(self, model):

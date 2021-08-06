@@ -9,8 +9,8 @@ import math
 
 from numba import njit
 
-from polygene.agents import AgentBaseClass
-from polygene.library.neighbors import find_neighbors
+from hyve.agents import AgentBaseClass
+from hyve.library.neighbors import find_neighbors
 
 @njit
 def is_currently_growing(plant_month: int, harvest_month: int, current_month: int, current_day: int, start_day_per_month: np.ndarray) -> int:

@@ -1,9 +1,9 @@
 import os
 import numpy as np
 from dateutil.relativedelta import relativedelta
-from polygene.library.mapreader import NetCDFReader, ArrayReader
-from polygene.library.raster import write_to_array
-from polygene.data import BaseData
+from hyve.library.mapreader import NetCDFReader, ArrayReader
+from hyve.library.raster import write_to_array
+from hyve.data import BaseData
 
 class ArrayWriter:
     def __init__(self, model, gt, xsize, ysize, dtype):

@@ -1,7 +1,7 @@
 import pyflwdir
 import os
 import rasterio
-from polygene.library.raster import clip_to_mask, upscale
+from hyve.library.raster import clip_to_mask, upscale
 import numpy as np
 from rasterio.warp import reproject, Resampling
 from rasterio.merge import merge

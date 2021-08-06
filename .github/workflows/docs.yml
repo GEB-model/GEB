@@ -24,7 +24,6 @@ jobs:
       # ^-- How to set up caching for pip on Ubuntu
       - name: Cache pip
         uses: actions/cache@v2
-        id:   cache
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
@@ -83,9 +82,6 @@ jobs:
           # _gh-pages/branch-* paths, and not including
           # _gh-pages itself.
           find _gh-pages/ -mindepth 1 ! -path '_gh-pages/branch*' -delete
-          ls docs
-          ls docs/_build
-          ls docs/_build/html
           rsync -a docs/_build/html/ _gh-pages/
       # If a push and not on default branch, then copy the build to
       # _gh-pages/branch/$brname (transforming '/' into '--')

@@ -1,7 +1,7 @@
 import os
 import rasterio
 import numpy as np
-from polygene.library.raster import clip_to_xy_bounds, clip_to_mask, upscale
+from hyve.library.raster import clip_to_xy_bounds, clip_to_mask, upscale
 import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge

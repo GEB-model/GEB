@@ -1,4 +1,4 @@
-from polygene.library.raster import pixel_to_coord
+from hyve.library.raster import pixel_to_coord
 import rasterio
 import os
 import numpy as np

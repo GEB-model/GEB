@@ -6,10 +6,10 @@ import rasterio
 import cProfile
 from pstats import Stats, SortKey
 
-from polygene.visualization.ModularVisualization import ModularServer
-from polygene.visualization.modules import ChartModule
-from polygene.visualization.canvas import Canvas
-from polygene.argparse import parser  
+from hyve.visualization.ModularVisualization import ModularServer
+from hyve.visualization.modules import ChartModule
+from hyve.visualization.canvas import Canvas
+from hyve.argparse import parser  
 from model import GEBModel
 
 import faulthandler

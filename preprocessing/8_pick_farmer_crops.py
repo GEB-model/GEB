@@ -7,8 +7,8 @@ import scipy.interpolate
 from itertools import combinations
 from scipy.ndimage import zoom
 
-from polygene.library.raster import sample_from_map
-from polygene.library.mapreader import ArrayReader, NetCDFReader
+from hyve.library.raster import sample_from_map
+from hyve.library.mapreader import ArrayReader, NetCDFReader
 from random import choices
 
 OUTPUT_FOLDER = os.path.join('DataDrive', 'GEB', 'input', 'agents')

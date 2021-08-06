@@ -2,13 +2,13 @@ from dateutil.relativedelta import relativedelta
 from datetime import timedelta, datetime
 import numpy as np
 import cupy as cp
-from polygene.library.helpers import timeprint
+from hyve.library.helpers import timeprint
 from time import time
 import pandas as pd
 from collections import defaultdict
-from polygene.area import Area
+from hyve.area import Area
 from reporter import Reporter
-from polygene.model import Model as ABM_Model
+from hyve.model import Model as ABM_Model
 from data import Data
 from agents import Agents
 from artists import Artists

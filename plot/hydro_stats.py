@@ -33,7 +33,7 @@ def get_discharge(scenario):
             values.append(value)
     return dates, values
 
-def get_polygene_data(varname, scenario, fileformat='csv'):
+def get_hyve_data(varname, scenario, fileformat='csv'):
     df = pd.read_csv(os.path.join('report', scenario, varname + '.' + fileformat), index_col=0)
     dates = df.index.tolist()
     dates = [datetime.strptime(dt, "%Y-%m-%d") for dt in dates]
@@ -77,12 +77,12 @@ def main():
     ax0.set_title('discharge $(m^3s^{-1})$', **title_formatter)
     # ax0.set_ylabel('$m^3/s$', **label_formatter)
     for i, scenario in enumerate(scenarios):
-        dates, head = get_polygene_data('hydraulic head', scenario=scenario)
+        dates, head = get_hyve_data('hydraulic head', scenario=scenario)
         ax1.plot(dates, head, color=colors[i])
     ax1.set_title('mean hydraulic head $(m)$', **title_formatter)
     # ax1.set_ylabel('$m$', **label_formatter)
     for i, scenario in enumerate(scenarios):
-        dates, reservoir_storage = get_polygene_data('reservoir storage', scenario=scenario)
+        dates, reservoir_storage = get_hyve_data('reservoir storage', scenario=scenario)
         reservoir_storage /= 1e9
         ax2.plot(dates, reservoir_storage, color=colors[i])
     ax2.set_title('reservoir storage $(billion\ m^3)$', **title_formatter)

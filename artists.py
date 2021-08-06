@@ -1,6 +1,6 @@
 from config import VARIABLE_COLOR, MIN_COLOR_BAR_ALPHA
 from config import LEGEND
-from polygene.artists import BaseArtist
+from hyve.artists import BaseArtist
 import colorsys
 import numpy as np
 import pandas as pd
