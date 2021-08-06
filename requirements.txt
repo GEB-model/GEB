@@ -5,3 +5,4 @@ xarray
 sphinx
 arcgis2geojson
 pyflwdir
+rasterio
