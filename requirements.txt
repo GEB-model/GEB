@@ -7,5 +7,4 @@ arcgis2geojson
 pyflwdir
 rasterio
 sphinx_rtd_theme
-hyve
-git+git://github.com/jensdebruijn/hyve@main
+git+https://github.com/jensdebruijn/hyve.git
