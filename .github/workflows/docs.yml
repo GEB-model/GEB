@@ -55,7 +55,7 @@ jobs:
       - name: Build Sphinx docs
         run: |
           cd docs
-          make
+          make html
       # The following supports building all branches and combining on
       # gh-pages
 
