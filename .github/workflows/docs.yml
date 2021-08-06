@@ -81,7 +81,7 @@ jobs:
           # _gh-pages/branch-* paths, and not including
           # _gh-pages itself.
           find _gh-pages/ -mindepth 1 ! -path '_gh-pages/branch*' -delete
-          ls
+          ls docs
           ls docs/_build
           ls docs/_build/html
           rsync -a docs/_build/html/ _gh-pages/
