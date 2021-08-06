@@ -4,7 +4,6 @@ sphinx-autodoc-typehints
 xarray
 sphinx
 arcgis2geojson
-pyflwdir
 rasterio
 sphinx_rtd_theme
 git+https://github.com/jensdebruijn/hyve.git

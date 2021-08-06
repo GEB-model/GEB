@@ -36,7 +36,6 @@ Preprocessing
 - selenium
 - chromedriver_autoinstaller
 - arcgis2geojson
-- pyflwdir
 
 Plotting
 ==========

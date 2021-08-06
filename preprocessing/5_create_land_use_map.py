@@ -1,4 +1,3 @@
-import pyflwdir
 import os
 import rasterio
 from hyve.library.raster import clip_to_mask, upscale

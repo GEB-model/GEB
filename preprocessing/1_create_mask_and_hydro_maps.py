@@ -33,12 +33,12 @@ def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.P
     submask_fn = os.path.join(input_folder, 'areamaps', 'submask.tif')
     with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_basids.tif'), 'r') as src:
         basins = src.read(1)
-        mask = basins != basin_id
+        mask = basins != basin_id  # mask anything that is not basin id
 
-        xmin = mask.shape[1] - np.searchsorted(mask.all(axis=0)[::-1], False, side='right')
-        xmax = np.searchsorted(mask.all(axis=0), False, side='right')
-        ymin = mask.shape[0] - np.searchsorted(mask.all(axis=1)[::-1], False, side='right')
-        ymax = np.searchsorted(mask.all(axis=1), False, side='right')
+        nonmaskedx = np.where(mask.all(axis=0)==False)[0]
+        xmin, xmax = nonmaskedx[0], nonmaskedx[-1] + 1
+        nonmaskedy = np.where(mask.all(axis=1)==False)[0]
+        ymin, ymax = nonmaskedy[0], nonmaskedy[-1] + 1
 
         mask_profile = src.profile
         mask = clip_to_xy_bounds(src, mask_profile, mask, xmin, xmax, ymin, ymax)
