@@ -82,9 +82,9 @@ jobs:
           # _gh-pages itself.
           find _gh-pages/ -mindepth 1 ! -path '_gh-pages/branch*' -delete
           ls
-          ls _build
-          ls _build/html
-          rsync -a _build/html/ _gh-pages/
+          ls docs/_build
+          ls docs/_build/html
+          rsync -a docs/_build/html/ _gh-pages/
       # If a push and not on default branch, then copy the build to
       # _gh-pages/branch/$brname (transforming '/' into '--')
       - name: Copy new build (branch)
