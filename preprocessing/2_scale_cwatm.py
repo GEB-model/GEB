@@ -37,6 +37,7 @@ def scale(files: list[str]) -> None:
     assert newlat.size == profile['height']
 
     for f in files:
+        print(f"Converting {f}")
         extension = os.path.splitext(f)[1]
         if extension != '.nc':
             continue

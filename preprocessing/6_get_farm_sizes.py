@@ -189,7 +189,7 @@ SIZE_CLASSES = (
 
 def submitForm(driver, state: str, district: str, downloadDir: str) -> None:
     """
-    This function clicks the "submit" button and downloads the excel spreadsheet from the resulting page
+    This function clicks the "submit" button and downloads the excel spreadsheet from the resulting page.
 
     args:
         driver: the webdriver to download from
@@ -226,7 +226,7 @@ def submitForm(driver, state: str, district: str, downloadDir: str) -> None:
     button_back = driver.find_element_by_id("btnBack")
     button_back.click()
 
-def configureDropdowns(driver, options):
+def configureDropdowns(driver, options: list):
     """
     this form configures the dropdown options based on the indices specified in the arguments
     :param options: a list of tuples. The tuple MUST be of length 2. The first item of the tuple is the string ID of the

@@ -145,9 +145,6 @@ def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np
         dst.write(farms, 1)
 
 if __name__ == '__main__':
-    with rasterio.open('DataDrive/GEB/input/agents/farm_size/2010-11/farmsize.tif', 'r') as src_farm_size:
-        farm_size_probabilities = src_farm_size.read()
-
     FARM_SIZE_CHOICES_M2 = np.array([
         [0.25, 0.5],
         [0.5, 1],
@@ -160,5 +157,8 @@ if __name__ == '__main__':
         [10, 20],
         [20, 40],
     ]) * 10_000  # Ha to m2
+    
+    with rasterio.open('DataDrive/GEB/input/agents/farm_size/2010-11/farmsize.tif', 'r') as src_farm_size:
+        FARM_SIZE_PROBABILITIES = src_farm_size.read()
 
-    create_farmers(farm_size_probabilities, FARM_SIZE_CHOICES_M2)
+    create_farmers(FARM_SIZE_PROBABILITIES, FARM_SIZE_CHOICES_M2)

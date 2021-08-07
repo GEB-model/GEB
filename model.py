@@ -1,11 +1,6 @@
 from dateutil.relativedelta import relativedelta
-from datetime import timedelta, datetime
-import numpy as np
-import cupy as cp
+from datetime import timedelta
 from hyve.library.helpers import timeprint
-from time import time
-import pandas as pd
-from collections import defaultdict
 from hyve.area import Area
 from reporter import Reporter
 from hyve.model import Model as ABM_Model

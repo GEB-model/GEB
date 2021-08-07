@@ -1,6 +1,8 @@
 Pick farmer crops
 #############################
 
+<TODO>
+
 ## Preprocessing
 1. First we need to create the mask, submask and hydrological base maps. The base maps are created 
 

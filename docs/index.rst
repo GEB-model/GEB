@@ -27,9 +27,10 @@ The figure below shows a schematic overview of the model. The lower part of the 
 
 .. toctree::
   :maxdepth: 1
-  :caption: User Guide
+  :caption: Agents
   
-  Agents <agents>
+  Agents <agents/__init__>
+  Farmers <agents/farmers>
 
 .. toctree::
   :maxdepth: 2
