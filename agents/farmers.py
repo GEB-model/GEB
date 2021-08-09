@@ -950,7 +950,17 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit
-    def field_size_per_farmer_numba(field_indices_per_farmer, field_indices, cell_area):
+    def field_size_per_farmer_numba(field_indices_per_farmer: np.ndarray, field_indices: np.ndarray, cell_area: np.ndarray) -> np.ndarray:
+        """Gets the field size for each farmer.
+
+        Args:
+            field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+            field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
+            cell_area: Subarray of cell_area.
+
+        Returns:
+            field_size_per_farmer: Field size for each farmer in m2.
+        """
         field_size_per_farmer = np.zeros(field_indices_per_farmer.shape[0], dtype=np.float32)
         for farmer in range(field_indices_per_farmer.shape[0]):
             for field in get_farmer_fields(field_indices, field_indices_per_farmer, farmer):
@@ -958,14 +968,22 @@ class Farmers(AgentBaseClass):
         return field_size_per_farmer
 
     @property
-    def field_size_per_farmer(self):
+    def field_size_per_farmer(self) -> np.ndarray:
+        """Gets the field size for each farmer.
+        
+        Returns:
+            field_size_per_farmer: Field size for each farmer in m2.
+        """
         return self.field_size_per_farmer_numba(
             self.field_indices_per_farmer,
             self.field_indices,
             self.model.subvar.cellArea.get() if self.model.config['general']['use_gpu'] else self.model.subvar.cellArea
         )
 
-    def diffuse_water_efficiency_knowledge(self):
+    def diffuse_water_efficiency_knowledge(self) -> None:
+        """
+        When this method is called, all farmers that have a high water efficiency, spread knowledge to a maximum of three other farmers within 5000 meter.
+        """
         neighbors = find_neighbors(
             self.locations,
             np.where(self.is_water_efficient)[0],
@@ -976,12 +994,13 @@ class Farmers(AgentBaseClass):
         neighbors = neighbors[neighbors != -1]
         self.is_water_efficient[neighbors] = True
 
-    def process(self):
+    def step(self) -> None:
+        """
+        This function is called at the beginning of each timestep. Currently only used to diffuse water efficiency knowledge through the farmer population in the `ngo_training` scenario. Only occurs each year on January 1st.
+        """
         if self.model.args.scenario == 'ngo_training' and self.model.current_time.month == 1 and self.model.current_time.day == 1:
             self.diffuse_water_efficiency_knowledge()
         
-    def step(self):
-        self.process()
-
     def add_agents(self):
+        """This function can be used to add new farmers, but is not yet implemented."""
         raise NotImplementedError

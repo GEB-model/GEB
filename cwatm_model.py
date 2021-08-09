@@ -4,18 +4,24 @@ from cwatm.cwatm_model import CWATModel
 from cwatm.management_modules.dynamicModel import ModelFrame
 from cwatm.management_modules.configuration import parse_configuration, read_metanetcdf
 from cwatm.management_modules.globals import dateVar, settingsfile, binding, option, outDir
-from cwatm.management_modules.data_handling import Flags, cbinding
+from cwatm.management_modules.data_handling import cbinding
 from cwatm.management_modules.timestep import checkifDate
 from cwatm.run_cwatm import headerinfo
+import datetime
 
 class CWatM_Model(CWATModel):
-    def __init__(self, start_date, n_steps, settings, use_gpu):
-        self.init_water_table_file = os.path.join('report', 'init', 'water_table.npy')
-        self.set_paramaters(start_date, n_steps, settings, use_gpu)
-        CWATModel.__init__(self)
-        self.initialize_model_frame()
+    """
+    This class is used to initalize the CWatM model from GEB. Several static configuration files are read first, then several dynamic parameters are set based on the configuration of GEB. Then, the model frame is created that can then later be used to iteratate.
 
-    def set_paramaters(self, start_date, n_steps, settings, use_gpu):
+    Args:
+        start_date: Start date of the model.
+        n_steps: Number of steps that the model will run for.
+        settings: Filepath of the CWatM settingsfile. For full configuration options please refer to the CWatM documentation <TODO: link>.
+        use_gpu: Whether the model can use a GPU.
+    """
+    def __init__(self, start_date: datetime.datime, n_steps: int, settings: str, use_gpu: bool) -> None:
+        self.init_water_table_file = os.path.join('report', 'init', 'water_table.npy')
+
         settingsfile.append(settings)
         parse_configuration(settings)
 
@@ -32,7 +38,7 @@ class CWatM_Model(CWATModel):
         else:
             binding['load_init_water_table'] = 'true'
             binding['init_water_table'] = self.init_water_table_file
-        # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
+        read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
         assert start_date.hour == 0 and start_date.minute == 0 and start_date.second == 0 and start_date.microsecond == 0
         binding['StepStart'] = start_date.strftime('%d/%m/%Y')
         binding['SpinUp'] = '0'
@@ -40,15 +46,22 @@ class CWatM_Model(CWATModel):
         checkifDate('StepStart', 'StepEnd', 'SpinUp', cbinding('PrecipitationMaps'))
         headerinfo()
 
-    def initialize_model_frame(self):
+        CWATModel.__init__(self)
         self.stCWATM = ModelFrame(self, firstTimestep=dateVar["intStart"], lastTimeStep=dateVar["intEnd"])
         self.stCWATM.initialize_run()
 
-    def step(self, n):
+    def step(self, n: int) -> None:
+        """Performs n number of (daily) steps in CWatM.
+        
+        Args:
+            n: Number of timesteps to perform.
+        """
         for _ in range(n):
             self.stCWATM.step()
 
-    def report(self):
+    def report(self) -> None:
+        """Function to save required CWatM output to file. Right now only the water table from the initial run is saved to a npy-file, which can then be used to initalize the water table in other scenarios.
+        """
         dirname = os.path.dirname(self.init_water_table_file)
         if not os.path.exists(dirname):
             os.makedirs(dirname)
