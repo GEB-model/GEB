@@ -37,6 +37,8 @@ jobs:
           sudo apt-add-repository ppa:ubuntugis/ubuntugis-unstable
           sudo apt-get update
           sudo apt-get install gdal-bin libgdal-dev
+          gdal-config --version
+          pip install wheels
           pip install GDAL
           git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
           python -m pip install --upgrade pip
