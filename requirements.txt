@@ -7,3 +7,4 @@ arcgis2geojson
 rasterio
 sphinx_rtd_theme
 git+https://github.com/jensdebruijn/hyve.git
+git+https://github.com/jensdebruijn/ABCWatM.git
