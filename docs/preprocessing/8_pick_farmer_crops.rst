@@ -1,6 +1,8 @@
 Pick farmer crops
 #############################
 
+`preprocessing.4_create_lakes_and_reservoirs` assigns a crop type, irrigation type and planting scheme to each farmer using to the MIRCA2000 dataset. We condider specified crops, growing area, and various planting schemes (e.g., single, double-cropping). But before running the file, we need to obtain MIRCA2000 input data as described below.
+
 MIRCA2000
 ****************
 1. Download the `Monthly Growing Area Grids` from the `Goethe-universität <https://www.uni-frankfurt.de/45218031/data_download>`_ and place in `DataDrive/GEB/original_data/MIRCA2000/MGAG`.
