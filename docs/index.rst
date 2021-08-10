@@ -36,4 +36,5 @@ The figure below shows a schematic overview of the model. The lower part of the 
   :maxdepth: 2
   :caption: Reference
 
+  Hydrological Units <hydrounits>
   CWatM Model <cwatm_model>
