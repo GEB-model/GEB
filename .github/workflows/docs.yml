@@ -14,12 +14,12 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - uses: Jimver/cuda-toolkit@v0.2.4
-        id: cuda-toolkit
-        with:
-          cuda: '11.2.2'
-
-    - run: nvcc -V
+      - name: Install CUDA
+        uses: Jimver/cuda-toolkit@v0.2.4
+          id: cuda-toolkit
+          with:
+            cuda: '11.2.2'
+      - run: nvcc -V
       # https://github.com/marketplace/actions/setup-python
       # ^-- This gives info on matrix testing.
       - name: Install Python
