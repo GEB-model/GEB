@@ -11,11 +11,12 @@ data = {
     'rainfed': defaultdict(dict),
     'irrigated': defaultdict(dict)
 }
-folder = 'DataDrive/GEB/original_data/MIRCA2000/monthly_growing_areas'
-for fn in os.listdir(folder):
+input_folder = 'DataDrive/GEB/original_data/MIRCA2000/MGAG'
+output_folder = 'DataDrive/GEB/original_data/MIRCA2000'
+for fn in os.listdir(input_folder):
     if not fn.endswith('.asc'):
         continue
-    fp = os.path.join(folder, fn)
+    fp = os.path.join(input_folder, fn)
     res = re.findall(r'crop_([0-9]{2})_(rainfed|irrigated)_([0-9]{3}).asc', fn)[0]
     crop, kind, month = res
     
@@ -73,7 +74,7 @@ for kind, crops in data.items():
         source = 'MIRCA2000'
         
         with CreateNetCDF(
-            os.path.join(folder, f'{kind}_{int(crop)-1:02d}.nc'),
+            os.path.join(output_folder, f'{kind}_{int(crop)-1:02d}.nc'),
             crop_names[int(crop)],
             source,
             "",

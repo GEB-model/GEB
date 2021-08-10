@@ -247,8 +247,9 @@ def create_mask_shapefile() -> None:
         profile = src.profile
         profile['nodata'] = 1
 
-    geoms = list({'geometry': geom[0], 'properties': {}} for geom in shapes(mask, transform=transform) if geom[1] == 0)
-    gdf = gpd.GeoDataFrame.from_features(geoms)
+    geoms = list({'geometry': geom[0], 'properties': {}} for geom in shapes(mask, transform=transform, connectivity=4) if geom[1] == 0)
+    gdf = gpd.GeoDataFrame.from_features(geoms).buffer(0)  # Invalid polygons are sometimes returned. Buffer(0) helps solve this issue.
+    gdf = gdf.set_crs(4326)
     gdf.to_file('DataDrive/GEB/input/areamaps/mask.shp')
 
 if __name__ == '__main__':

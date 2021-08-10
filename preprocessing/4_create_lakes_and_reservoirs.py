@@ -6,24 +6,26 @@ import pandas as pd
 import geopandas as gpd
 from rasterio.features import rasterize
 
-original_data = os.path.join('DataDrive', 'GEB', 'original_data', 'lakesreservoirs')
-folder = os.path.join('DataDrive', 'GEB/input/routing/lakesreservoirs')
+original_data = os.path.join('DataDrive', 'GEB', 'original_data')
+output_folder = os.path.join('DataDrive', 'GEB', 'input', 'routing', 'lakesreservoirs')
+if not os.path.exists(output_folder):
+    os.makedirs(output_folder)
 
 
 def cut_hydrolakes() -> None:
     """This function cuts the hydrolakes dataset using the basin mask such that is easier to handle."""
-    outfile = os.path.join(folder, 'hydrolakes.shp')
+    outfile = os.path.join(output_folder, 'hydrolakes.shp')
     if not os.path.exists(outfile):
         with rasterio.open('DataDrive/GEB/input/areamaps/mask.tif', 'r') as src:
             bounds = src.bounds
 
-        gdf = gpd.GeoDataFrame.from_file(os.path.join(original_data, "HydroLAKES_polys_v10_shp/HydroLAKES_polys_v10_shp/HydroLAKES_polys_v10.shp"))
+        gdf = gpd.GeoDataFrame.from_file(os.path.join(original_data, "HydroLAKES_polys_v10_shp/HydroLAKES_polys_v10.shp"))
         basin = gdf.cx[bounds.left:bounds.right, bounds.bottom:bounds.top]
         basin.to_file(outfile)
 
 def lakeResIDs2raster() -> None:
     """Creates a raster from hydrolakes dataset, both at the resolution of the basin mask and submask"""
-    shpfile = os.path.join(folder, 'hydrolakes.shp')
+    shpfile = os.path.join(output_folder, 'hydrolakes.shp')
     basin_lakes = gpd.GeoDataFrame.from_file(shpfile)
     geometries = [(shapely.geometry.mapping(geom), value) for value, geom in zip(basin_lakes['Hylak_id'].tolist(), basin_lakes['geometry'].tolist())]
     for type_ in ('', 'sub'):
@@ -34,7 +36,7 @@ def lakeResIDs2raster() -> None:
 
             lake_ids = rasterize(geometries, out_shape=shape, fill=0, transform=transform, dtype=np.int32, all_touched=True)
 
-            with rasterio.open(f'DataDrive/GEB/input/routing/lakesreservoirs/{type_}lakesResID.tif', 'w', **profile) as dst:
+            with rasterio.open(os.path.join(output_folder, f'{type_}lakesResID.tif'), 'w', **profile) as dst:
                 dst.write(lake_ids, 1)
 
 def export_other_lake_data(reservoirs: list[int]) -> None:
@@ -50,21 +52,21 @@ def export_other_lake_data(reservoirs: list[int]) -> None:
     Args:
         reservoirs: list of reservoir ids.
     """
-    shpfile = os.path.join(folder, 'hydrolakes.shp')
+    shpfile = os.path.join(output_folder, 'hydrolakes.shp')
     basin_lakes = gpd.GeoDataFrame.from_file(shpfile)
     # set all lakes with command area as reservoir
     basin_lakes.loc[basin_lakes['Hylak_id'].isin(reservoirs), 'Lake_type'] = 2
-    with rasterio.open(os.path.join(folder, 'lakesResID.tif'), 'r') as src:
+    with rasterio.open(os.path.join(output_folder, 'lakesResID.tif'), 'r') as src:
         lake_ids = src.read(1)
         reservoir_construction_year = np.where(lake_ids > 0, 0, -1)
-        with rasterio.open(os.path.join(folder, 'reservoir_year_construction.tif'), 'w', **src.profile) as dst:
+        with rasterio.open(os.path.join(output_folder, 'reservoir_year_construction.tif'), 'w', **src.profile) as dst:
             dst.write(reservoir_construction_year, 1)
 
         lake_type_array = np.full(basin_lakes['Hylak_id'].max() + 1, 0, dtype=np.int8)
         lake_type_array[basin_lakes['Hylak_id']] = basin_lakes['Lake_type']
         lake_type = np.take(lake_type_array, lake_ids, mode='clip')
         with rasterio.open(
-            os.path.join(folder, 'lakesResType.tif'), 'w',
+            os.path.join(output_folder, 'lakesResType.tif'), 'w',
             **{**src.profile, **{'dtype': lake_type.dtype}}
         ) as dst:
             dst.write(lake_type, 1)
@@ -73,7 +75,7 @@ def export_other_lake_data(reservoirs: list[int]) -> None:
         lake_area_array[basin_lakes['Hylak_id']] = basin_lakes['Lake_area']  # in km2
         lake_area = np.take(lake_area_array, lake_ids, mode='clip')
         with rasterio.open(
-            os.path.join(folder, 'lakesResArea.tif'), 'w',
+            os.path.join(output_folder, 'lakesResArea.tif'), 'w',
             **{**src.profile, **{'dtype': lake_area.dtype}}
         ) as dst:
             dst.write(lake_area, 1)
@@ -83,7 +85,7 @@ def export_other_lake_data(reservoirs: list[int]) -> None:
         lake_dis_array[basin_lakes['Hylak_id']] = .1
         lake_dis = np.take(lake_dis_array, lake_ids, mode='clip')
         with rasterio.open(
-            os.path.join(folder, 'lakesResDis.tif'), 'w',
+            os.path.join(output_folder, 'lakesResDis.tif'), 'w',
             **{**src.profile, **{'dtype': lake_dis.dtype}}
         ) as dst:
             dst.write(lake_dis, 1)
@@ -92,14 +94,14 @@ def export_other_lake_data(reservoirs: list[int]) -> None:
         res_vol_array[basin_lakes['Hylak_id']] = basin_lakes['Vol_res']
         res_vol = np.take(res_vol_array, lake_ids, mode='clip')
         with rasterio.open(
-            os.path.join(folder, 'waterBodyVolRes.tif'), 'w',
+            os.path.join(output_folder, 'waterBodyVolRes.tif'), 'w',
             **{**src.profile, **{'dtype': res_vol.dtype}}
         ) as dst:
             dst.write(res_vol, 1)
 
 def export_variables_to_csv() -> None:
     """Exports the data from the hydrolakes shapefile to a csv file, while dropping the geometry columns. This simply allows the model to more rapidly read the sheet."""
-    shpfile = os.path.join(folder, 'hydrolakes.shp')
+    shpfile = os.path.join(output_folder, 'hydrolakes.shp')
     basin_lakes = gpd.GeoDataFrame.from_file(shpfile)
     df = pd.DataFrame(basin_lakes.drop(columns='geometry'))
     df.to_csv('DataDrive/GEB/input/routing/lakesreservoirs/hydrolakes.csv', index=False)
@@ -109,7 +111,7 @@ def create_command_area_raster() -> list[int]:
     
     Returns:
         hydrolake_ids: A list of hydrolake ids which link to a command area."""
-    shpfile = os.path.join(original_data, 'command_areas.shp')
+    shpfile = os.path.join(output_folder, 'command_areas.shp')
     command_areas = gpd.GeoDataFrame.from_file(shpfile)
     # remove command areas not associated with a reservoir
     command_areas = command_areas[~command_areas['Hylak_id'].isnull()]
@@ -127,9 +129,6 @@ def create_command_area_raster() -> list[int]:
 
             command_areas_raster = rasterize(geometries, out_shape=shape, fill=-1, transform=transform, dtype=np.int32, all_touched=True)
             output_file = f'DataDrive/GEB/input/routing/lakesreservoirs/{type_}command_areas.tif'
-            output_folder = os.path.dirname(output_file)
-            if not os.path.exists(output_folder):
-                os.makedirs(output_folder)
             with rasterio.open(output_file, 'w', **profile) as dst:
                 dst.write(command_areas_raster, 1)
 

@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     study_area = krishna()
 
-    CWATM_SETTINGS = 'cwatm_GEB.ini'
+    CWATM_SETTINGS = 'CWatM_GEB.ini'
     ABM_CONFIG_PATH = 'GEB.yml'
 
     MODEL_NAME = 'GEB'

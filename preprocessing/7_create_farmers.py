@@ -113,7 +113,7 @@ def create_farms(cultivated_land: np.ndarray, gt: tuple[float], farm_size_probab
 
     farmer_locs = farmer_locs[:cur_farm_count]
     assert np.count_nonzero(farms == -1) == 0
-    farms[farms == -2] = -1
+    farms = np.where(farms != -2, farms, -1)
     return farms, farmer_locs
 
 def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np.ndarray) -> None:
@@ -133,6 +133,7 @@ def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np
         cultivated_land = src_cultivated_land.read(1)
 
     farms, farmer_locs = create_farms(cultivated_land, gt, farm_size_probabilities, farm_size_choices_m2, cell_area)
+    farms = farms.astype(np.int32)
 
     assert ((farms >= 0) == (cultivated_land == 1)).all()
     

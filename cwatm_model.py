@@ -19,7 +19,7 @@ class CWatM_Model(CWATModel):
         settings: Filepath of the CWatM settingsfile. For full configuration options please refer to the CWatM documentation <TODO: link>.
         use_gpu: Whether the model can use a GPU.
     """
-    def __init__(self, start_date: datetime.datime, n_steps: int, settings: str, use_gpu: bool) -> None:
+    def __init__(self, start_date: datetime.datetime, n_steps: int, settings: str, use_gpu: bool) -> None:
         self.init_water_table_file = os.path.join('report', 'init', 'water_table.npy')
 
         settingsfile.append(settings)
@@ -38,7 +38,7 @@ class CWatM_Model(CWATModel):
         else:
             binding['load_init_water_table'] = 'true'
             binding['init_water_table'] = self.init_water_table_file
-        read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
+        # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
         assert start_date.hour == 0 and start_date.minute == 0 and start_date.second == 0 and start_date.microsecond == 0
         binding['StepStart'] = start_date.strftime('%d/%m/%Y')
         binding['SpinUp'] = '0'

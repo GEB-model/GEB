@@ -8,10 +8,8 @@ except ModuleNotFoundError:
 import math
 
 from numba import njit
-from model import GEBModel
 
 from hyve.library.neighbors import find_neighbors
-from agents import Agents
 from hyve.agents import AgentBaseClass
 
 
@@ -64,7 +62,7 @@ class Farmers(AgentBaseClass):
         agents: the class that contains all agents (allowing easier communication between agents)
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
-    def __init__(self, model: GEBModel, agents: Agents, reduncancy: float) -> None:
+    def __init__(self, model, agents, reduncancy: float) -> None:
         self.redundancy = reduncancy
         self.input_folder = 'DataDrive/GEB/input'
         AgentBaseClass.__init__(self, model, agents)
@@ -401,6 +399,7 @@ class Farmers(AgentBaseClass):
         df['L_mid'] = df['L_dev'] + df['L_mid']
         df['L_late'] = df['L_mid'] + df['L_late']
         assert np.allclose(df['L_late'], 1.0)
+        assert len(df) == 26
         return df
 
     def get_crop_yield_factors(self) -> dict[np.ndarray]:
@@ -593,6 +592,11 @@ class Farmers(AgentBaseClass):
         assert (n_multicrop_periods != -1).all()
 
         return crop_age_days, crop_harvest_age_days, next_sow_day, n_multicrop_periods, next_multicrop_index
+
+    def by_field(self, var, nofieldvalue=-1):
+        by_field = np.take(var, self.fields)
+        by_field[self.fields == -1] = nofieldvalue
+        return by_field
         
     def sow_initial(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """When the model is initalized, crops are already growing. This function first finds out which farmers are already growing crops, how old these are, as well as the multicrop indices. Then, these arrays per farmer are converted to the field array.
@@ -612,30 +616,17 @@ class Farmers(AgentBaseClass):
         if self.model.config['general']['use_gpu']:
             crop_age_days = cp.array(crop_age_days)
             crop_harvest_age_days = cp.array(crop_harvest_age_days)
-            fields = self.fields.get()
-        else:
-            fields = self.fields
 
         sow = self.crop.copy()
         sow[crop_age_days == -1] = -1
-        sow = np.take(sow, self.fields)
-        sow[self.fields == -1] = -1
         
-        crop_age_days = np.take(crop_age_days, self.fields)
-        crop_age_days[self.fields == -1] = -1
-        
-        crop_harvest_age_days = np.take(crop_harvest_age_days, self.fields)
-        crop_harvest_age_days[self.fields == -1] = -1
-
-        self.next_sow_day = np.take(next_sow_day, fields)
-        self.next_sow_day[fields == -1] = -1
-
-        self.n_multicrop_periods = np.take(n_multicrop_periods, fields)
-        self.n_multicrop_periods[fields == -1] = -1
-
-        self.next_multicrop_index = np.take(next_multicrop_index, fields)
-        self.next_multicrop_index[fields == -1] = -1
-
+        sow = self.by_field(sow)
+        crop_age_days = self.by_field(crop_age_days)
+        crop_harvest_age_days = self.by_field(crop_harvest_age_days)
+        self.next_sow_day = self.by_field(next_sow_day)
+        self.n_multicrop_periods = self.by_field(n_multicrop_periods)
+        self.next_multicrop_index = self.by_field(next_multicrop_index)
+                
         assert (crop_harvest_age_days[crop_age_days >= 0] != -1).all()
         assert sow.shape == crop_age_days.shape == crop_harvest_age_days.shape
 

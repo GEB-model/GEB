@@ -2,7 +2,6 @@ import numpy as np
 from datetime import datetime
 import os
 import rasterio
-import json
 import scipy.interpolate
 from itertools import combinations
 from scipy.ndimage import zoom
@@ -19,13 +18,15 @@ MIRCA2000_FOLDER = os.path.join('DataDrive', 'GEB', 'original_data', 'MIRCA2000'
 FARMER_LOCATIONS = 'DataDrive/GEB/input/agents/farmer_locations.npy'
 ZOOM_FACTOR = 20
 
-def get_crop_calendar(unit_codes):
+def get_crop_calendar(unit_codes: np.ndarray) -> tuple[dict, np.ndarray]:
+    """This function parses MIRCA2000 crop calanders from downloaded format to a convenient dictionary. In addition, the 
+    """
     map_unit_codes = np.full(max(unit_codes) + 1, -1, dtype=np.int32)
     map_unit_codes[unit_codes] = np.arange(len(unit_codes))
-    output = {}
+    crop_calendar_dict = {}
     for kind in ('irrigated', 'rainfed'):
-        output[kind] = {}
-        fn = os.path.join(MIRCA2000_FOLDER, "crop_calendars", f"cropping_calendar_{kind}.txt")
+        crop_calendar_dict[kind] = {}
+        fn = os.path.join(MIRCA2000_FOLDER, f"cropping_calendar_{kind}.txt")
         with open(fn, 'r') as f:
             for i, line in enumerate(f):
                 if i < 8:
@@ -39,24 +40,24 @@ def get_crop_calendar(unit_codes):
                 if unit_code not in unit_codes:
                     continue
                 mapped_unit_code = map_unit_codes[unit_code]
-                if mapped_unit_code not in output[kind]:
-                    output[kind][mapped_unit_code] = {}
+                if mapped_unit_code not in crop_calendar_dict[kind]:
+                    crop_calendar_dict[kind][mapped_unit_code] = {}
                 crop = int(data[1]) - 1
                 cropping_calendar = data[3:]
                 if cropping_calendar:
-                    if crop not in output[kind][mapped_unit_code]:
-                        output[kind][mapped_unit_code][crop] = []
+                    if crop not in crop_calendar_dict[kind][mapped_unit_code]:
+                        crop_calendar_dict[kind][mapped_unit_code][crop] = []
                     for i in range(len(cropping_calendar) // 3):
                         crop_calendar = cropping_calendar[i * 3: (i + 1) * 3]
                         crop_calendar = [float(crop_calendar[0]), int(crop_calendar[1]), int(crop_calendar[2])]
                         if crop_calendar[0]:
-                            output[kind][mapped_unit_code][crop].append({
+                            crop_calendar_dict[kind][mapped_unit_code][crop].append({
                                 "area": crop_calendar[0],
                                 "start": crop_calendar[1],
                                 "end": crop_calendar[2],
                             })
     
-    return output, map_unit_codes
+    return crop_calendar_dict, map_unit_codes
 
 def get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes):
     locations = np.load(FARMER_LOCATIONS)
@@ -79,7 +80,7 @@ def get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes):
         crop_data[kind] = {}
         for crop in range(26):
             crop_data[kind][crop] = NetCDFReader(
-                fp=os.path.join(MIRCA2000_FOLDER, 'monthly_growing_areas', f'{kind}_{"%02d" % crop}.nc'),
+                fp=os.path.join(MIRCA2000_FOLDER, f'{kind}_{"%02d" % crop}.nc'),
                 varname="cropland",
                 bounds=bounds
             )
@@ -93,7 +94,7 @@ def get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes):
     gt = tuple(gt)
 
     MIRCA2000_unit_code = ArrayReader(
-        fp=os.path.join(MIRCA2000_FOLDER, 'crop_calendars', 'unit_code.asc'),
+        fp=os.path.join(MIRCA2000_FOLDER, 'unit_code.asc'),
         bounds=bounds
     )
     MIRCA2000_unit_array = map_unit_codes[MIRCA2000_unit_code.get_data_array().repeat(ZOOM_FACTOR, axis=0).repeat(ZOOM_FACTOR, axis=1)]

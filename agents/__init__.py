@@ -1,11 +1,12 @@
 import numpy as np
 from hyve.agents import AgentBaseClass
+from agents.farmers import Farmers
 
 class NGO(AgentBaseClass):
     def __init__(self, model, agents):
         AgentBaseClass.__init__(self, model, agents)
 
-    def _initiate_agents(self): pass
+    def initiate_agents(self): pass
 
     def provide_training(self):
         rng = np.random.default_rng()
@@ -20,7 +21,7 @@ class Government(AgentBaseClass):
     def __init__(self, model, agents):
         AgentBaseClass.__init__(self, model, agents)
 
-    def _initiate_agents(self): pass
+    def initiate_agents(self): pass
 
     def provide_subsidies(self):
         total_water_use = self.agents.farmers.reservoir_abstraction_m3_by_farmer + self.agents.farmers.groundwater_abstraction_m3_by_farmer + self.agents.farmers.channel_abstraction_m3_by_farmer

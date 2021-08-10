@@ -14,6 +14,17 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
+    steps:
+    - uses: Jimver/cuda-toolkit@v0.2.4
+      id: cuda-toolkit
+      with:
+        cuda: '11.2.2'
+
+    - run: echo "Installed cuda version is: ${{steps.cuda-toolkit.outputs.cuda}}"
+
+    - run: echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
+
+    - run: nvcc -V
       # https://github.com/marketplace/actions/setup-python
       # ^-- This gives info on matrix testing.
       - name: Install Python
@@ -37,7 +48,6 @@ jobs:
           sudo apt-add-repository ppa:ubuntugis/ubuntugis-unstable
           sudo apt-get update
           sudo apt-get install gdal-bin libgdal-dev
-          gdal-config --version
           pip install GDAL==$(gdal-config --version)
           git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
           python -m pip install --upgrade pip

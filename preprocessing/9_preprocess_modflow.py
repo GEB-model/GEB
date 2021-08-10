@@ -146,14 +146,14 @@ class ModflowPreprocess:
         tempmask = np.invert(self.cwatm_basin_mask.astype(bool))
         # Looking at if the ModFlow cell is mainly out of the basin
         ratio_ModFlowcellarea = np.bincount(ModFlow_index, weights=tempmask.ravel()[CWatM_index] * self.area, minlength=self.nrow_ModFlow * self.ncol_ModFlow) / ModFlowcellarea
-        basin_limits = np.ones(self.nrow_ModFlow * self.ncol_ModFlow, dtype=np.int32)
-        basin_limits[ratio_ModFlowcellarea > 0] = 0
-        basin_limits = basin_limits.reshape(self.nrow_ModFlow, self.ncol_ModFlow)
+        basin_mask = np.ones(self.nrow_ModFlow * self.ncol_ModFlow, dtype=np.int32)
+        basin_mask[ratio_ModFlowcellarea > 0] = 0
+        basin_mask = basin_mask.reshape(self.nrow_ModFlow, self.ncol_ModFlow)
 
-        with rasterio.open(os.path.join(self.output_folder, 'modflow_basin.tif'), 'w', driver='GTiff', width=self.ncol_ModFlow,
+        with rasterio.open(os.path.join(self.output_folder, 'modflow_mask.tif'), 'w', driver='GTiff', width=self.ncol_ModFlow,
                 height=self.nrow_ModFlow, count=1, dtype=np.int32, nodata=-1, transform=self.modflow_affine,
                 epsg=self.modflow_epsg) as dst:
-            dst.write(basin_limits, 1)
+            dst.write(basin_mask, 1)
 
     def project_input_map(self, input_map_fp: str, output_map_fp: str) -> None:
         """
@@ -187,4 +187,4 @@ if __name__ == '__main__':
     m = ModflowPreprocess(MODFLOW_PATH, MODFLOW_RESOLUTION, cwatm_basin_mask_fn, MODFLOW_EPSG)
     m.create_indices()
     m.create_modflow_basin()
-    m.project_input_map('DataDrive/GEB/original_data/merit_hydro_03sec/elv.tif', 'elevation_modflow.tif')
+    # m.project_input_map('DataDrive/GEB/input/landsurface/topo/subelv.tif', 'elevation_modflow.tif')

@@ -72,20 +72,6 @@ report:
     varname: crop
     format: npy
     per_timestep: true
-  n_multicrop_periods:
-    type: farmers
-    scale: global
-    function: null
-    varname: n_multicrop_periods
-    format: npy
-    per_timestep: true
-  next_multicrop_index:
-    type: farmers
-    scale: global
-    function: null
-    varname: next_multicrop_index
-    format: npy
-    per_timestep: true
 
 report_cwatm:
   hydraulic head:

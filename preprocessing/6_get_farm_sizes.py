@@ -1,4 +1,3 @@
-from logging import root
 import geopandas as gpd
 import pandas as pd
 import os
@@ -226,17 +225,20 @@ def submitForm(driver, state: str, district: str, downloadDir: str) -> None:
     button_back = driver.find_element_by_id("btnBack")
     button_back.click()
 
-def configureDropdowns(driver, options: list):
+def configureDropdowns(driver: webdriver.chrome.webdriver.WebDriver, options: list):
     """
-    this form configures the dropdown options based on the indices specified in the arguments
-    :param options: a list of tuples. The tuple MUST be of length 2. The first item of the tuple is the string ID of the
+    This form configures the dropdown options based on the indices specified in the arguments.
+
+    Args:
+        options: a list of tuples. The tuple MUST be of length 2. The first item of the tuple is the string ID of the
                     dropdown element. The second item is the index of the option to choose from that dropdown.
                     (for example: [('year', 2), ('state', 1)] is a valid argument)
-    :return: list of the string values used for each dropdown option, in the same order as the parameter.
+    Returns:
+        l: list of the string values used for each dropdown option, in the same order as the parameter.
             (for example: ['2005', 'California'] would be a return value for the example input above)
     """
     # Make the unique combination of options from the 6 dropdowns
-    return_array = []
+    l = []
 
     for option in options:
         elementID = option[0]
@@ -244,14 +246,19 @@ def configureDropdowns(driver, options: list):
         dropdown = driver.find_element_by_id(elementID)
         current_option = dropdown.find_elements_by_tag_name("option")[index]
         current_option.click()
-        return_array.append(current_option.text)
-    return return_array
+        l.append(current_option.text)
+    return l
 
-def findIndexByText(dropdownElement, text):
+def findIndexByText(dropdownElement, text: str) -> int:
     """
-    :param dropdownElement: selenium dropdown element
-    :param text: string to match with option
-    :return: index of the option in the specified dropdown, where the text matches the option's text
+    Function to find the index of element in dropdown menu by the text.
+
+    Args:
+        dropdownElement: Selenium dropdown element.
+        ext: String to match with option.
+    
+    Returns:
+        index: Index of the option in the specified dropdown, where the text matches the option's text
     """
     for i in range (0, len(dropdownElement.find_elements_by_tag_name('option'))):
         if dropdownElement.find_elements_by_tag_name('option')[i].text == text:
@@ -259,14 +266,15 @@ def findIndexByText(dropdownElement, text):
     raise Exception('No option with text: ' + text + ' was found')
 
 
-def download_census(year, states, rootDir, state_start=0, district_start=0):
+def download_census(year, states, rootDir, state_start=0, district_start=0) -> None:
     """
     Function to download files from agcensus website
-    :param index_year: index of the year dropdown
-    :param rootDir: folder to download files to
-    :param state_start: index of state dropdown to start from
-    :param district_start: index of district dropdown to start from
-    :return:
+
+    Args:
+        index_year: index of the year dropdown
+        rootDir: folder to download files to
+        state_start: index of state dropdown to start from
+        district_start: index of district dropdown to start from
     """
     chrome_options = Options()
     # This option fixes a problem with timeout exceptions not being thrown after the limit has been reached
@@ -338,32 +346,32 @@ def download_census(year, states, rootDir, state_start=0, district_start=0):
                     _state_start = index_state
                     global _district_start
                     _district_start = index_district
-                    log.info('successfully downloaded configuration: y' + str(index_year) + '-sg' + str(all_social_groups_index) + '-s' +
+                    print('successfully downloaded configuration: y' + str(index_year) + '-sg' + str(all_social_groups_index) + '-s' +
                              str(index_state) + '-d' + str(index_district) + '-t' + str(landuse_table_index))
 
                 except Exception as e:
                     # If configureDropdowns failed, then options will be null
                     if (options != None):
-                        log.error('There was an error while submitting the form for options:\n' +
+                        print('There was an error while submitting the form for options:\n' +
                                   'Year: ' + str(options[0]) + '\n' +
                                   'Social Group: ' + str(options[1]) + '\n' +
                                   'State: ' + str(options[2]) + '\n' +
                                   'District: ' + str(options[3]) + '\n' +
                                   'Table: ' + str(options[4]) + '\n')
                     else:
-                        log.error('There was an error while submitting the form for options:\n' +
+                        print('There was an error while submitting the form for options:\n' +
                                   'Year index: ' + str(index_year) + '\n' +
                                   'Social Group index: ' + str(all_social_groups_index) + '\n' +
                                   'State index: ' + str(index_state) + '\n' +
                                   'District index: ' + str(index_district) + '\n' +
                                   'Table index: ' + str(landuse_table_index) + '\n')
-                    log.debug(e)
-                    for i in range(0, 2):
+                    print(e)
+                    for _ in range(0, 2):
                         # Retry up to 3 more times. First success breaks out of for-loop
                         try:
                             driver.get("http://agcensus.dacnet.nic.in/DistCharacteristic.aspx")
                             configureDropdowns(driver, dropdown_input)
-                            submitForm(driver, str(index_year), str(index_state), str(index_district), downloadDir)
+                            submitForm(driver, state_name, district_name, downloadDir)
                             _state_start = index_state
                             _district_start = index_district
                             break
@@ -380,20 +388,36 @@ def download_census(year, states, rootDir, state_start=0, district_start=0):
                 continue
 
 
-def get_districts():
-    gdf = gpd.GeoDataFrame.from_file('DataDrive/GEB/original_data/GADM/gadm36_2.shp')
-    gdf = gdf[gdf['GID_0'] == 'IND']
+def get_districts() -> gpd.GeoDataFrame:
+    """Reads all global admin 2 areas, and selects only those in India. Then sets all columns for size classes to -1 as a placeholder value.
+    
+    Returns:
+        districts: all districts in India with placeholder columns for sizes.
+        
+    """
+    districts = gpd.GeoDataFrame.from_file('DataDrive/GEB/original_data/GADM/gadm36_2.shp')
+    districts = districts[districts['GID_0'] == 'IND']
     for size_class in SIZE_CLASSES:  # create empty columns
-        gdf[size_class] = -1
-    return gdf
+        districts[size_class] = -1
+    return districts
 
-def parse_census_file(fn):
-    df = pd.read_csv(fn)
+def parse_census_file(fp: str) -> tuple[pd.DataFrame, str, str]:
+    """Reads census file in csv-format from disk, and returns values. Also reads the state and district name.
+
+    Args:
+        fp: csv-filepath.
+    
+    Returns:
+        df: DataFrame with census data for given state and district.
+        state: State of census data.
+        district: District for census data.
+    """
+    df = pd.read_csv(fp)
     state = df['Textbox73'].iloc[0].replace('STATE : ', '')
     district = df['Textbox78'].iloc[0].replace('DISTRICT : ', '')
     return df, state, district
 
-def match_name_and_fill(df, districts, state, district):
+def match_name_and_fill(census_data: pd.DataFrame, districts, state, district):
     state = state.title()
     district = district.title()
     if state in STATE_TRANSLATION:
@@ -419,24 +443,36 @@ def match_name_and_fill(df, districts, state, district):
         print(state, ',', district, 'not found')
         raise
     for size_class in SIZE_CLASSES:
-        value = df.loc[df['SizeClass'] == size_class]['total_hold']
+        value = census_data.loc[census_data['SizeClass'] == size_class]['total_hold']
         if len(value) > 0:
             districts.loc[(districts['NAME_1'] == state) & (districts['NAME_2'] == district), size_class] = int(value)
 
-def create_shapefile():
-    districts = get_districts()
-    for i, fn in enumerate(os.listdir(csv_dir)):
-        df, state, district = parse_census_file(os.path.join(csv_dir, fn))
+def create_shapefile_and_clip_to_study_region(mask_fp: str) -> gpd.GeoDataFrame:
+    """Create shapefile of India districts, and complements with downloaded census data.
+
+    Args:
+        mask_fp: Filepath of the study region shapefile.
+    
+    Returns:
+        study_region_districts: GeoDataFrame wit all districts and downloaded census data.
+    """
+    all_districts = get_districts()
+    for _, fn in enumerate(os.listdir(csv_dir)):
+        census_data, state, district = parse_census_file(os.path.join(csv_dir, fn))
         if state == 'LAKSHADWEEP':
             continue
         if state == 'DELHI':
             continue
         if district == 'BRIHANMUMBAI':
             continue
-        match_name_and_fill(df, districts, state, district)
-    return districts
+        match_name_and_fill(census_data, all_districts, state, district)
+    mask = gpd.GeoDataFrame.from_file(mask_fp)  
+    study_region_districts = all_districts.loc[gpd.clip(all_districts, mask).index]  # clip by study region
+    return study_region_districts
 
 def export_farm_sizes(farm_size_shapefile, root_dir):
+    """
+    """
     with rasterio.open(f'DataDrive/GEB/input/areamaps/submask.tif') as src:
         profile = src.profile
         transform = src.profile['transform']
@@ -488,10 +524,8 @@ if __name__ == '__main__':
                 print(f"Error occured for {fn}. Removing file and restarting.")
         if not error:
             break
-
-    farm_size_shapefile = create_shapefile()
-    mask = gpd.GeoDataFrame.from_file('DataDrive/GEB/input/areamaps/mask.shp')  
-    farm_size_shapefile = farm_size_shapefile.loc[gpd.clip(farm_size_shapefile, mask).index]  # clip by study region
+    mask_fn = 'DataDrive/GEB/input/areamaps/mask.shp'
+    farm_size_shapefile = create_shapefile_and_clip_to_study_region(mask_fn)
 
     # copy size classes for enclaved Hyderabad from surounding Ranga Reddy district
     for size_class in SIZE_CLASSES:

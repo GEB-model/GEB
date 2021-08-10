@@ -41,52 +41,44 @@ Finally, the GLC30 land use classes are converted to CWatM land use classes (see
      - GLC30 description
      - CWatM index
      - CWatM description
-   * - 0
-     - <TODO>
-     - 1
-     - Grasland/non irrigated land
    * - 10
-     - <TODO>
+     - cropland
      - 1
      - Grasland/non irrigated land
    * - 20
-     - <TODO>
+     - forest
      - 0
      - Forest
    * - 30
-     - <TODO>
+     - Grassland
      - 1
      - Grasland/non irrigated land
    * - 40
-     - <TODO>
+     - Shrubland
      - 1
      - Grasland/non irrigated land
    * - 50
-     - <TODO>
+     - Wetland
      - 1
      - Grasland/non irrigated land
    * - 60
-     - <TODO>
+     - Water body
      - 5
      - Water covered area
    * - 70
-     - <TODO>
+     - Tundra
      - 1
      - Grasland/non irrigated land
    * - 80
-     - <TODO>
+     - Impervious area
      - 4
      - Sealed area
    * - 90
-     - <TODO>
+     - Barren land
      - 1
      - Grasland/non irrigated land
    * - 100
-     - <TODO>
-     - 1
-     - Grasland/non irrigated land
-   * - 255
-     - <TODO>
+     - Snow/ice
      - 1
      - Grasland/non irrigated land
 

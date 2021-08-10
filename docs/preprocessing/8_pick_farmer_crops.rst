@@ -1,17 +1,15 @@
 Pick farmer crops
 #############################
 
-<TODO>
-
-## Preprocessing
-1. First we need to create the mask, submask and hydrological base maps. The base maps are created 
-
-## MIRCA2000
-1. Download monthly growing areas from the [Goethe-universität](https://www.uni-frankfurt.de/45218031/data_download) and place in `DataDrive/GEB/original_data/MIRCA2000/monthly_growing_areas`.
+MIRCA2000
+****************
+1. Download the `Monthly Growing Area Grids` from the `Goethe-universität <https://www.uni-frankfurt.de/45218031/data_download>`_ and place in `DataDrive/GEB/original_data/MIRCA2000/MGAG`.
 2. Decompress the data.
 3. Also download `flt_to_asc.exe` from the same page.
 4. Convert the flt-files to asc-files using the exe-file. A batch script for convenience is provided in `prepare_input_data/MIRCA2000`.
 5. Create netcdf-files (also created in `DataDrive/GEB/original_data/MIRCA2000/monthly_growing_areas`) by running `prepare_input_data/MIRCA2000/asc_to_netcdf.py`.
+6. Download the `Condensed Crop Calendars` for both irrigated and rainfed crops, decompress, and place in `DataDrive/GEB/original_data/MIRCA2000`.
+7. Download the `Calendar units`, decompress, and place in `DataDrive/GEB/original_data/MIRCA2000`.
 
 .. automodule:: preprocessing.8_pick_farmer_crops
     :members:
