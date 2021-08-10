@@ -19,9 +19,9 @@ class Artists(BaseArtist):
 
     def draw_farmers(self, model, idx):
         if not hasattr(self.model, 'legend') and hasattr(self.model, 'subvar'):
-            crops = self.model.subvar.crop_data['Crop']
-            self.legend = {crop: color for crop, color in zip(crops, self.model.subvar.crop_data['Color'])}
-        color = self.model.subvar.crop_data['Color'][self.model.agents.farmers.crop[idx].get()]
+            crops = self.model.data.subvar.crop_data['Crop']
+            self.legend = {crop: color for crop, color in zip(crops, self.model.data.subvar.crop_data['Color'])}
+        color = self.model.data.subvar.crop_data['Color'][self.model.agents.farmers.crop[idx].get()]
         return {"type": "shape", "shape": "circle", "r": 1, "filled": True, "color": color}
 
     def draw_rivers(self):
@@ -38,8 +38,8 @@ class Artists(BaseArtist):
             },
             'subvar.crop_map': {
                 'type': 'categorical',
-                # 'names': self.model.subvar.crop_data['Crop'],
-                # 'colors': [self.hex_to_rgb(color) for color in self.model.subvar.crop_data['Color']]
+                # 'names': self.model.data.subvar.crop_data['Crop'],
+                # 'colors': [self.hex_to_rgb(color) for color in self.model.data.subvar.crop_data['Color']]
             },
         }
 

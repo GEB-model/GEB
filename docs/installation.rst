@@ -9,39 +9,39 @@ GEB requires the following packages
 
 Required
 ==========
-- cwatm_abm
-- hyve
-- xarray
-- numba
-- tbb
-- gdal
-- netcdf4
-- pandas
-- openpyxl
-- geopandas
-- numpy
-- cartopy
-- tornado
-- python-dateutil
-- rasterio
-- scipy
-- pyyaml
+* cwatm_abm
+* hyve 
+* xarray
+* numba
+* tbb
+* gdal
+* netcdf4
+* pandas
+* openpyxl
+* geopandas
+* numpy
+* cartopy
+* tornado
+* python-dateutil
+* rasterio
+* scipy
+* pyyaml
 
 Optional
 ===========
-- cupy
+* cupy
 
 Preprocessing
 ================
-- selenium
-- chromedriver_autoinstaller
-- arcgis2geojson
+* selenium
+* chromedriver_autoinstaller
+* arcgis2geojson
 
 Plotting
 ==========
-- matplotlib
+* matplotlib
 
 Documentation
 ==============
-- sphinx
-- sphinx-autodoc-typehints
+* sphinx
+* sphinx*autodoc*typehints

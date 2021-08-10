@@ -10,7 +10,7 @@ from pyproj import Transformer
 
 class ModflowPreprocess:
     """
-    This class is used to do all modflow preprocessing. CWatM works in a lon-lat grid, while MODFLOW works in a cartesian grid <TODO:check>. Therefore a custom MODFLOW grid is created that encompasses the entirety of the CWatM mask. In addition, a mapping is created that maps the area of a given cell in the CWatM grid to a given MODFLOW cell. All required data for MODFLOW is also projected to the newly created MODFLOW grid.
+    This class is used to do all modflow preprocessing. CWatM works in a lon-lat grid, while MODFLOW works in a cartesian grid. Therefore a custom MODFLOW grid is created that encompasses the entirety of the CWatM mask. In addition, a mapping is created that maps the area of a given cell in the CWatM grid to a given MODFLOW cell. All required data for MODFLOW is also projected to the newly created MODFLOW grid.
 
     Args:
         modflow_path: path where processed data will be saved.
@@ -97,7 +97,7 @@ class ModflowPreprocess:
 
     def create_indices(self):
         """
-        Creates a mapping of cells between MODFLOW and CWatM, and saves them to npy-files. The mapping contains the x and y index of a CWatM and MODFLOW cell and the area size (m2 <TODO:SUPERSCRIPT>) of their overlap. Cell combinations that are not in the indices do not overlap.
+        Creates a mapping of cells between MODFLOW and CWatM, and saves them to npy-files. The mapping contains the x and y index of a CWatM and MODFLOW cell and the area size (m\ :sup:`2`) of their overlap. Cell combinations that are not in the indices do not overlap.
         """
 
         # Create CWatM shapefile

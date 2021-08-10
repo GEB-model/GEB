@@ -34,8 +34,8 @@ class CWatMReporter(ABMReporter):
         self.variables_dict = {}
 
         def add_var(vartype):
-            compressed_size = getattr(self.model, vartype).size
-            for varname, variable in vars(getattr(self.model, vartype)).items():
+            compressed_size = getattr(self.model.data, vartype).size
+            for varname, variable in vars(getattr(self.model.data, vartype)).items():
                 if isinstance(variable, (np.ndarray, cp.ndarray)):
                     if variable.ndim == 1 and variable.size == compressed_size:
                         name = f'{vartype}.{varname}'
@@ -52,13 +52,13 @@ class CWatMReporter(ABMReporter):
 
     def get_array(self, name, decompress=False):
         if name.startswith('subvar.'):
-            array = getattr(self.model.subvar, name[7:])
+            array = getattr(self.model.data.subvar, name[7:])
             if decompress:
-                array = self.model.subvar.decompress(array)
+                array = self.model.data.subvar.decompress(array)
         elif name.startswith('var.'):
-            array = getattr(self.model.var, name[4:])
+            array = getattr(self.model.data.var, name[4:])
             if decompress:
-                array = self.model.var.decompress(array)
+                array = self.model.data.var.decompress(array)
         else:
             raise NotImplementedError
 
@@ -143,9 +143,9 @@ class Reporter:
 
     def report(self):
         np.save('report/fields.npy', self.model.agents.farmers.fields)
-        np.save('report/mask.npy', self.model.var.mask)
-        np.save('report/subcell_locations.npy', self.model.subvar.subcell_locations)
-        np.save('report/scaling.npy', self.model.subvar.scaling)
+        np.save('report/mask.npy', self.model.data.var.mask)
+        np.save('report/subcell_locations.npy', self.model.data.subvar.subcell_locations)
+        np.save('report/scaling.npy', self.model.data.subvar.scaling)
 
         self.abm_reporter.report()
         self.cwatmreporter.report()

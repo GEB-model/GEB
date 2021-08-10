@@ -35,3 +35,5 @@ The figure below shows a schematic overview of the model. The lower part of the 
 .. toctree::
   :maxdepth: 2
   :caption: Reference
+
+  CWatM Model <cwatm_model>

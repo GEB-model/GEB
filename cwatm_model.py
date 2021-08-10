@@ -16,7 +16,7 @@ class CWatM_Model(CWATModel):
     Args:
         start_date: Start date of the model.
         n_steps: Number of steps that the model will run for.
-        settings: Filepath of the CWatM settingsfile. For full configuration options please refer to the CWatM documentation <TODO: link>.
+        settings: Filepath of the CWatM settingsfile. For full configuration options please refer to the `CWatM documentation <https://cwatm.iiasa.ac.at/>`.
         use_gpu: Whether the model can use a GPU.
     """
     def __init__(self, start_date: datetime.datetime, n_steps: int, settings: str, use_gpu: bool) -> None:

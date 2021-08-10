@@ -4,17 +4,20 @@ from hyve.library.helpers import timeprint
 from hyve.area import Area
 from reporter import Reporter
 from hyve.model import Model as ABM_Model
-from data import Data
 from agents import Agents
 from artists import Artists
+from hydrounits import Data
 
 from cwatm_model import CWatM_Model
 
 
 class GEBModel(ABM_Model, CWatM_Model):
     def __init__(self, ABM_config_path, CwatM_settings, study_area, args, coordinate_system='WGS84'):
+        
         self.__init_ABM__(ABM_config_path, study_area, args, coordinate_system)
+        self.data = Data(self)
         self.__init_hydromodel__(CwatM_settings)
+
         self.reporter = Reporter(self)
 
     def __init_ABM__(self, config_path, study_area, args, coordinate_system):
@@ -34,7 +37,6 @@ class GEBModel(ABM_Model, CWatM_Model):
         
         self.artists = Artists(self)
         self.area = Area(self, study_area)
-        self.data = Data(self)
         self.agents = Agents(self)
 
         assert coordinate_system == 'WGS84'  # coordinate system must be WGS84. If not, all code needs to be reviewed

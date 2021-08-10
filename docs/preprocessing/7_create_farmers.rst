@@ -1,7 +1,7 @@
 Create farmers
 #############################
 
-This file is used to create the farmer agents. If you have a map of all individual farms, you should use that. If not, then you can use :doc:`7_create_farmers` to create a statistically representative dataset of farmers. The first input `FARM_SIZE_CHOICES_M2` an array of the various farm sizes that exist in m2 <TODO>. Here a lower and upper bound are given for each choice of farm size.
+This file is used to create the farmer agents. If you have a map of all individual farms, you should use that. If not, then you can use :doc:`7_create_farmers` to create a statistically representative dataset of farmers. The first input `FARM_SIZE_CHOICES_M2` an array of the various farm sizes that exist in m\ :sup:`2`. Here a lower and upper bound are given for each choice of farm size.
 
 The second input `FARM_SIZE_PROBABILITIES` is a map at the resolution and bounds of the submask, here placed in `DataDrive/GEB/input/agents/farm_size/2010-11/farmsize.tif`, and as layers the probability that each of the previously defined farm sizes occurs in a given cell. Naturally, the probabilities for a given cell should add up to 1.
 

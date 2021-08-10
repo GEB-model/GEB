@@ -1,3 +1,4 @@
+from hyve.library.mapIO import ArrayReader
 import os
 import numpy as np
 import pandas as pd
@@ -93,8 +94,12 @@ class Farmers(AgentBaseClass):
         """
         This function is used to initiate all agent attributes, such as crop type, irrigiation type and elevation.
         """
+        elevation_map = ArrayReader(
+            fp='DataDrive/GEB/input/landsurface/topo/subelv.tif',
+            bounds=self.model.bounds
+        )
         self._elevation = np.zeros(self.max_n, dtype=np.float32)
-        self.elevation = self.model.data.elevation.sample_coords(self.locations)
+        self.elevation = elevation_map.sample_coords(self.locations)
         crop_file = os.path.join('DataDrive', 'GEB', 'input', 'agents', 'crop.npy')
         if self.model.config['general']['use_gpu']:
             self._crop = cp.load(crop_file)
@@ -968,7 +973,7 @@ class Farmers(AgentBaseClass):
         return self.field_size_per_farmer_numba(
             self.field_indices_per_farmer,
             self.field_indices,
-            self.model.subvar.cellArea.get() if self.model.config['general']['use_gpu'] else self.model.subvar.cellArea
+            self.model.data.subvar.cellArea.get() if self.model.config['general']['use_gpu'] else self.model.data.subvar.cellArea
         )
 
     def diffuse_water_efficiency_knowledge(self) -> None:
