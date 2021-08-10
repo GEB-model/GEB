@@ -19,7 +19,6 @@ jobs:
         id: cuda-toolkit
         with:
           cuda: '11.2.2'
-      - run: nvcc -V
       # https://github.com/marketplace/actions/setup-python
       # ^-- This gives info on matrix testing.
       - name: Install Python
@@ -47,6 +46,7 @@ jobs:
           git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install cupy-cuda${nvcc --version | grep "release" | awk '{print $6}' | cut -c2-}
       - name: Debugging information
         run: |
           echo "github.ref:" ${{github.ref}}
