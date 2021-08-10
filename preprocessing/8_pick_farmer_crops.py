@@ -19,7 +19,14 @@ FARMER_LOCATIONS = 'DataDrive/GEB/input/agents/farmer_locations.npy'
 ZOOM_FACTOR = 20
 
 def get_crop_calendar(unit_codes: np.ndarray) -> tuple[dict, np.ndarray]:
-    """This function parses MIRCA2000 crop calanders from downloaded format to a convenient dictionary. In addition, the 
+    """This function parses MIRCA2000 crop calanders from downloaded format to a convenient dictionary. In addition, the unit code map will be mapped to lower values.
+
+    Args:
+        unit_codes: Array of unit codes for study area.
+
+    Returns:
+        crop_calendar: Dictionary of crop calendars for set of attributes.
+        map_unit_codes: Array of reduced unit codes for study area.
     """
     map_unit_codes = np.full(max(unit_codes) + 1, -1, dtype=np.int32)
     map_unit_codes[unit_codes] = np.arange(len(unit_codes))
