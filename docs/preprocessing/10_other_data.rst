@@ -7,6 +7,7 @@ Create a csv-file `crop_factors.csv` in `DataDrive/GEB/input/crop_data/`, and co
 
 .. list-table:: crop_factors.csv
    :header-rows: 1
+   :align: center
 
    * - name
      - L_ini
@@ -54,6 +55,7 @@ Then, create a csv-file `yield_ratios.csv` in `DataDrive/GEB/input/crop_data/`, 
 
 .. list-table:: yield_ratios.csv
    :header-rows: 1
+   :align: center
 
    * - name
      - alpha

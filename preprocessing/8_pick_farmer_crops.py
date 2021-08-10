@@ -66,7 +66,19 @@ def get_crop_calendar(unit_codes: np.ndarray) -> tuple[dict, np.ndarray]:
     
     return crop_calendar_dict, map_unit_codes
 
-def get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes):
+def get_crop_and_irrigation_per_farmer(crop_calendar: dict, map_unit_codes: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Function to get crop type, irrigation type and MIRCA2000 unit code for each farmer. First, the farmer locations are loaded (as previously generated), then a map of farmer irrigation is loaded to retrieve irrigating farmers. Next, the MIRCA2000 unit codes for each farmer are retrieved. Subsequently, MIRCA2000 crop data is read and linearly interpolated to support the higher resolution grid of the model. Using the farmer locations, a crop is then randomly chosen for each farmer while considering the probablity that a certain crop is growing in that space according to the MIRCA2000 specification. Crop choice, irrigation type and unit codes per farmer are saved to the disk in NumPy arrays.
+
+    Args:
+        crop_calendar: Dictionary of crop calendars for set of attributes.
+        map_unit_codes: Array of reduced unit codes for study area.
+
+    Returns:
+        crop_per_farmer: Chosen crop code per farmer.
+        irrigating_farmers: Array with whether farmer is irrigating or not (Irrigating == True).
+        farmer_unit_codes: Reduced MIRCA2000 unit code per farmer.
+    """
     locations = np.load(FARMER_LOCATIONS)
     n = locations.shape[0]
 
@@ -81,6 +93,12 @@ def get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes):
     
     crop_per_farmer = np.full(n, -1, dtype=np.int8)
     irrigating_farmers = irrigated_land.sample_coords(locations)
+
+    MIRCA2000_unit_code = ArrayReader(
+        fp=os.path.join(MIRCA2000_FOLDER, 'unit_code.asc'),
+        bounds=bounds
+    )
+    MIRCA2000_unit_array = map_unit_codes[MIRCA2000_unit_code.get_data_array().repeat(ZOOM_FACTOR, axis=0).repeat(ZOOM_FACTOR, axis=1)]
 
     crop_data = {}
     for kind in ('rainfed', 'irrigated'):
@@ -99,12 +117,6 @@ def get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes):
     gt[1] = gt[1] / ZOOM_FACTOR
     gt[5] = gt[5] / ZOOM_FACTOR
     gt = tuple(gt)
-
-    MIRCA2000_unit_code = ArrayReader(
-        fp=os.path.join(MIRCA2000_FOLDER, 'unit_code.asc'),
-        bounds=bounds
-    )
-    MIRCA2000_unit_array = map_unit_codes[MIRCA2000_unit_code.get_data_array().repeat(ZOOM_FACTOR, axis=0).repeat(ZOOM_FACTOR, axis=1)]
 
     all_crops = set(range(26))
     for kind in ('rainfed', 'irrigated'):
@@ -164,10 +176,10 @@ def get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes):
         growing_areas = growing_areas / growing_areas.sum(axis=0)
         
         # sample crop options
-        cropping_options = sample_from_map(growing_areas, locations[farmers_kind], gt)
+        planting_schemes = sample_from_map(growing_areas, locations[farmers_kind], gt)
 
         # randomly select crop
-        crop_choice = (cropping_options.cumsum(1) > np.random.rand(cropping_options.shape[0])[:,None]).argmax(1)
+        crop_choice = (planting_schemes.cumsum(1) > np.random.rand(planting_schemes.shape[0])[:,None]).argmax(1)
 
         # assign crop choice to self
         crop_per_farmer[farmers_kind] = crop_choice
@@ -182,11 +194,28 @@ def get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes):
     
     return crop_per_farmer, irrigating_farmers, farmer_unit_codes
 
-def overlap(r1, r2):
+def overlap(r1: set[int], r2: set[int]) -> bool:
+    """Check whether 2 sets overlap. Used to check whether 2 crops overlap in growth period.
+    
+    Args:
+        r1: Set of growing months for first crop.
+        r2: Set of growing months for second crop.
+
+    Returns:
+        overlap: True if crop growth periods overlap, False otherwise.
+    """
     return len(r1 | r2) < len(r1) + len(r2)
 
-def get_ranges(potential_crops):
-    ranges = []
+def get_range_months(potential_crops: list[dict]) -> list[set]:
+    """Gets growing months for list of crops.
+
+    Args:
+        potential_crops: List of crops, specifying start and end of growing period in dict as follows: [{'start': ..., 'end': ...}, ..., {...}]
+
+    Returns:
+        growth_range_months: List of crops (same as function input) and their growing months as a set.
+    """
+    growth_range_months = []
     for crop in potential_crops:
         start, end = crop['start'], crop['end']
         if start > end:
@@ -195,11 +224,27 @@ def get_ranges(potential_crops):
             months[months == 0] = 12
         else:
             months = np.array(range(start, end+1))
-        ranges.append(set(months))
-    return ranges
+        growth_range_months.append(set(months))
+    return growth_range_months
 
-def get_cropping_options(crop_calendars, crop_per_farmer, farmer_unit_codes):
-    cropping_options = np.full((2, farmer_unit_codes.max() + 1, 26, 3, 2, 3), -1, dtype=np.int32)  # is_irrigating, unit_code, crop, crop_selection, max_multicrop, start, end, weight
+def get_planting_schemes(crop_calendars: dict, crop_per_farmer: np.ndarray, farmer_unit_codes: np.ndarray) -> np.ndarray:
+    """Multiple planting schemes (e.g., single, multi-cropping) exist for some crops in MIRCA2000. This function is used to create the cropping options. Results are saved as a 6-dimensional NumPy arrays, specifying all the different options. While not very easy to work with, it allows the model to be much better than for example with a JSON-file.
+
+    Args:
+        crop_calendars: Dictionary of crop calendars for set of attributes.
+        crop_per_farmer: Chosen crop code per farmer.
+        farmer_unit_codes: Reduced MIRCA2000 unit code per farmer.
+
+    Returns:
+        planting_schemes: A 6-dimensional array which contains the planing schemes.
+            1. Whether the crop is irrigated or not.
+            2. The unit code for the crop.
+            3. The crop.
+            4. The planting scheme (e.g., single or double cropping).
+            5. If multicropping, the various crop stages.
+            6. The planting month and the harvest month.
+    """
+    planting_schemes = np.full((2, farmer_unit_codes.max() + 1, 26, 3, 2, 3), -1, dtype=np.int32)  # is_irrigating, unit_code, crop, crop_selection, max_multicrop, start, end, weight
     unique_unit_codes = np.unique(farmer_unit_codes)
     unique_crops = np.unique(crop_per_farmer)
     for is_irrigating, is_irrigating_name in ((0, 'rainfed'), (1, 'irrigated')):
@@ -211,37 +256,50 @@ def get_cropping_options(crop_calendars, crop_per_farmer, farmer_unit_codes):
                 if not potential_crops:
                     raise ValueError
                 elif len(potential_crops) == 1:
-                    cropping_options[is_irrigating, unit_code, crop, 0, 0] = [potential_crops[0]['start'], potential_crops[0]['end'], 1]
+                    planting_schemes[is_irrigating, unit_code, crop, 0, 0] = [potential_crops[0]['start'], potential_crops[0]['end'], 1]
                 elif len(potential_crops) == 2:
-                    ranges = get_ranges(potential_crops)
+                    ranges = get_range_months(potential_crops)
                     if overlap(ranges[0], ranges[1]):  # no multicropping
                         for i in range(2):
-                            cropping_options[is_irrigating, unit_code, crop, i, 0] = [potential_crops[i]['start'], potential_crops[i]['end'], potential_crops[i]['area']]
+                            planting_schemes[is_irrigating, unit_code, crop, i, 0] = [potential_crops[i]['start'], potential_crops[i]['end'], potential_crops[i]['area']]
                     else: # multicropping
                         assert potential_crops[0]['area'] == potential_crops[1]['area']
-                        cropping_options[is_irrigating, unit_code, crop, 0, 0] = [potential_crops[0]['start'], potential_crops[0]['end'], 1]
-                        cropping_options[is_irrigating, unit_code, crop, 0, 1] = [potential_crops[1]['start'], potential_crops[1]['end'], 1]
+                        planting_schemes[is_irrigating, unit_code, crop, 0, 0] = [potential_crops[0]['start'], potential_crops[0]['end'], 1]
+                        planting_schemes[is_irrigating, unit_code, crop, 0, 1] = [potential_crops[1]['start'], potential_crops[1]['end'], 1]
                 elif len(potential_crops) == 3:
-                    ranges = get_ranges(potential_crops)
+                    ranges = get_range_months(potential_crops)
                     crops_overlap = all([overlap(left, right) for left, right in combinations(ranges, 2)])
                     if crops_overlap:  # no multicropping
                         for i in range(3):
-                            cropping_options[is_irrigating, unit_code, crop, i, 0] = [potential_crops[i]['start'], potential_crops[i]['end'], potential_crops[i]['area']]
+                            planting_schemes[is_irrigating, unit_code, crop, i, 0] = [potential_crops[i]['start'], potential_crops[i]['end'], potential_crops[i]['area']]
                     else:
                         raise NotImplementedError('multicropping for 3 crops is not implemented')
                 else:
                     raise NotImplementedError('Only max of 3 crops is currently implemented')
 
-    np.save(os.path.join(OUTPUT_FOLDER, 'planting_schemes.npy'), cropping_options)
-    return cropping_options
+    np.save(os.path.join(OUTPUT_FOLDER, 'planting_schemes.npy'), planting_schemes)
+    return planting_schemes
 
-def pick_cropping_option(cropping_options, irrigating_farmers, crop_per_farmer, farmer_unit_codes):
+def pick_planting_scheme(planting_schemes: np.ndarray, irrigating_farmers: np.ndarray, crop_per_farmer: np.ndarray, farmer_unit_codes: np.ndarray) -> None:
+    """Here the farmers pick one of the planting schemes relative to the growing area of their crop and irrigation type in the area. Saves the planting scheme to a numpy-array.
+
+    Args:
+        planting_schemes: A 6-dimensional array which contains the planing schemes.
+            1. Whether the crop is irrigated or not.
+            2. The unit code for the crop.
+            3. The crop.
+            4. The planting scheme (e.g., single or double cropping).
+            5. If multicropping, the various crop stages.
+            6. The planting month and the harvest month.
+        irrigating_farmers: Array with whether farmer is irrigating or not (Irrigating == True).
+        crop_per_farmer: Chosen crop code per farmer.
+    """
     planting_scheme = np.full_like(crop_per_farmer, -1)
     for i in range(irrigating_farmers.size):
         is_irrigating = irrigating_farmers[i]
         unit_code = farmer_unit_codes[i]
         crop = crop_per_farmer[i]
-        crop_options = cropping_options[is_irrigating][unit_code][crop]
+        crop_options = planting_schemes[is_irrigating][unit_code][crop]
         n_options = (crop_options[:, 0, 0] != -1).sum()
         if n_options == 1:
             planting_scheme[i] = 0
@@ -262,5 +320,5 @@ if __name__ == '__main__':
         356031, 356032, 356033, 356034, 356035
     ])
     crop_per_farmer, irrigating_farmers, farmer_unit_codes = get_crop_and_irrigation_per_farmer(crop_calendar, map_unit_codes)
-    cropping_options = get_cropping_options(crop_calendar, crop_per_farmer, farmer_unit_codes)
-    pick_cropping_option(cropping_options, irrigating_farmers, crop_per_farmer, farmer_unit_codes)
+    planting_schemes = get_planting_schemes(crop_calendar, crop_per_farmer, farmer_unit_codes)
+    pick_planting_scheme(planting_schemes, irrigating_farmers, crop_per_farmer, farmer_unit_codes)
