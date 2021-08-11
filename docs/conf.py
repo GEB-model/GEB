@@ -18,8 +18,8 @@ sys.path.insert(0, os.path.abspath('..'))
 # -- Project information -----------------------------------------------------
 
 project = 'GEB'
-copyright = '2021, Jens de Bruijn'
-author = 'Jens de Bruijn'
+copyright = '2021, IIASA and VU-IVM'
+author = 'Jens de Bruijn, Mikhail Smilovic, Luca Guillamot, Peter Burek'
 
 # The full version, including alpha/beta/rc tags
 release = '0.1'

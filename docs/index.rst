@@ -13,9 +13,7 @@ GEB aims to simulate both environment, for now the hydrological system, the beha
 
 The figure below shows a schematic overview of the model. The lower part of the figure shows the hydrological model, CWatM, while the upper part shows the agent-based model. Both models are imported in a single file and run iteratively at a daily timestep.
 
-.. image:: images/schematic_overview.png
-  :alt: A schematic overview of the model structure
-
+.. image:: images/schematic_overview.svg
 
 .. toctree::
   :maxdepth: 1
@@ -41,3 +39,9 @@ The figure below shows a schematic overview of the model. The lower part of the 
   Model <model>
   CWatM Model <cwatm_model>
   Artists <artists>
+
+.. toctree::
+  :maxdepth: 2
+  :caption: About
+
+  Authors <authors>
