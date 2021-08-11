@@ -29,6 +29,8 @@ The figure below shows a schematic overview of the model. The lower part of the 
   
   Agents <agents/__init__>
   Farmers <agents/farmers>
+  NGO <agents/ngo>
+  Government <agents/government>
 
 .. toctree::
   :maxdepth: 2

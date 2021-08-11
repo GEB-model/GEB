@@ -56,11 +56,11 @@ def take_with_ignore(a, indices, ignore_index, ignore_value=np.nan):
 
 
 class Farmers(AgentBaseClass):
-    """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model, the agent parent class and the redundancy. All other variables are loaded at later stages.
+    """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
     
     Args:
-        model: the entire model
-        agents: the class that contains all agents (allowing easier communication between agents)
+        model: The GEB model.
+        agents: The class that includes all agent types (allowing easier communication between agents).
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
     def __init__(self, model, agents, reduncancy: float) -> None:
