@@ -32,7 +32,7 @@ class CWatM_Model(CWATModel):
 
         option['useGPU'] = use_gpu
         binding['max_groundwater_abstraction_depth'] = 50
-        if self.args.scenario == 'initial':
+        if self.args.scenario == 'spinup':
             binding['load_init_water_table'] = 'false'
             binding['initial_water_table_depth'] = 2
         else:
@@ -65,5 +65,5 @@ class CWatM_Model(CWATModel):
         dirname = os.path.dirname(self.init_water_table_file)
         if not os.path.exists(dirname):
             os.makedirs(dirname)
-        if self.args.scenario == 'initial':
+        if self.args.scenario == 'spinup':
             np.save(self.init_water_table_file, self.groundwater_modflow_module.modflow.decompress(self.groundwater_modflow_module.modflow.head))

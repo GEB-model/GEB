@@ -1,4 +1,3 @@
-from dateutil.relativedelta import relativedelta
 from datetime import timedelta
 from hyve.library.helpers import timeprint
 from hyve.area import Area
@@ -7,12 +6,19 @@ from hyve.model import Model as ABM_Model
 from agents import Agents
 from artists import Artists
 from hydrounits import Data
-
+import argparse
 from cwatm_model import CWatM_Model
 
 
 class GEBModel(ABM_Model, CWatM_Model):
-    def __init__(self, ABM_config_path, CwatM_settings, study_area, args, coordinate_system='WGS84'):
+    def __init__(self, ABM_config_path, CwatM_settings, name, xmin, xmax, ymin, ymax, args, coordinate_system='WGS84'):
+        study_area = {
+            "name": name,
+            'xmin': xmin,
+            'xmax': xmax,
+            'ymin': ymin,
+            'ymax': ymax,            
+        }
         
         self.__init_ABM__(ABM_config_path, study_area, args, coordinate_system)
         self.data = Data(self)
@@ -20,16 +26,22 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.reporter = Reporter(self)
 
-    def __init_ABM__(self, config_path, study_area, args, coordinate_system):
+    def __init_ABM__(self, config_path: str, study_area: dict[str, float], args: argparse.Namespace, coordinate_system: str):
+        """Initializes the agent-based model.
+        
+        Args:
+            config_path: Filepath of the YAML-configuration file.
+            study_area: Dictionary with study area name, xmin, xmax, ymin and ymax.
+        """
         ABM_Model.__init__(self, config_path, args)
 
-        self.current_time = self.config['general']['start_time']
         self.timestep_length = timedelta(days=1)
-        self.end_time = self.config['general']['end_time']
-
-        if args.scenario == 'initial':
-            self.end_time = self.current_time
-            self.current_time -= relativedelta(years=10)
+        if args.scenario == 'spinup':
+            self.end_time = self.config['general']['start_time']
+            self.current_time = self.config['general']['spinup_start']
+        else:
+            self.current_time = self.config['general']['start_time']
+            self.end_time = self.config['general']['end_time']
         
         self.n_timesteps = (self.end_time - self.current_time) / self.timestep_length
         assert self.n_timesteps.is_integer()

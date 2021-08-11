@@ -1,10 +1,6 @@
-import json
-import os
-import numpy as np
-import pandas as pd
 import rasterio
 import cProfile
-from pstats import Stats, SortKey
+from pstats import Stats
 
 from hyve.visualization.ModularVisualization import ModularServer
 from hyve.visualization.modules import ChartModule
@@ -19,18 +15,14 @@ def krishna():
     with rasterio.open('DataDrive/GEB/input/areamaps/mask.tif') as src:
         bounds = src.bounds
 
-    return {
-        'name': 'Krishna',
-        'xmin': bounds.left,
-        'xmax': bounds.right,
-        'ymin': bounds.bottom,
-        'ymax': bounds.top,
-    }
+    return 'krishna', bounds.left, bounds.right, bounds.bottom, bounds.top
 
+parser.description = "GEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail."
+parser.add_argument('--scenario', dest='scenario', type=str, default='base', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (spinup, base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.
+""")
+parser.add_argument('--export_folder', dest='export_folder', type=str, default=None, help="The folder to export model results to. If not specified the name of the scenario is used.")
+parser.add_argument('--profiling', dest='profiling', default=False, action='store_true', help="The model can be run with profiling on, most importantly to find slow parts of the code. If this option is used a ")
 if __name__ == '__main__':
-    parser.add_argument('--scenario', dest='scenario', type=str, default='base', required=True)
-    parser.add_argument('--export_folder', dest='export_folder', type=str, default=None)
-    parser.add_argument('--profiling', dest='profiling', default=False, action='store_true')
     args = parser.parse_args()
     if args.export_folder is None and args.scenario is not None:
         args.export_folder = args.scenario
@@ -39,7 +31,7 @@ if __name__ == '__main__':
     import faulthandler
     faulthandler.enable()
 
-    study_area = krishna()
+    study_area_name, xmin, xmax, ymin, ymax = krishna()
 
     CWATM_SETTINGS = 'CWatM_GEB.ini'
     ABM_CONFIG_PATH = 'GEB.yml'
@@ -82,7 +74,11 @@ if __name__ == '__main__':
     model_params = {
         "CwatM_settings": CWATM_SETTINGS,
         "ABM_config_path": ABM_CONFIG_PATH,
-        "study_area": study_area,
+        "name": study_area_name,
+        'xmin': xmin,
+        'xmax': xmax,
+        'ymin': ymin,
+        'ymax': ymax, 
         "args": args
     }
 

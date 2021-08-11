@@ -445,7 +445,7 @@ class Farmers(AgentBaseClass):
         
         Args:
             crop_map: array of currently harvested crops.
-            evap_ratios: ratio of actual to potential evapotranspiration.
+            evap_ratios: ratio of actual to potential evapotranspiration of harvested crops.
             alpha: alpha value per crop used in MIRCA2000.
             beta: beta value per crop used in MIRCA2000.
             P0: P0 value per crop used in MIRCA2000.
@@ -486,7 +486,7 @@ class Farmers(AgentBaseClass):
             yield_ratio: Map of yield ratio.
         """
         return self.get_yield_ratio_numba(
-            crop_map,
+            crop_map[harvest],
             actual_transpiration[harvest] / potential_transpiration[harvest],
             self.crop_yield_factors['alpha'],
             self.crop_yield_factors['beta'],
@@ -740,8 +740,7 @@ class Farmers(AgentBaseClass):
         )
         if np.count_nonzero(harvest):
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
-            fields = self.fields.get() if self.model.config['general']['use_gpu'] else self.fields
-            harvesting_farmer_fields = fields[harvest]
+            harvesting_farmer_fields = self.fields[harvest]
             self.yield_ratio_per_farmer = np.bincount(harvesting_farmer_fields, weights=yield_ratio, minlength=self.n)
             harvesting_farmers = np.unique(harvesting_farmer_fields)
             if self.model.current_timestep > 365:
