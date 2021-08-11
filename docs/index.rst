@@ -1,9 +1,8 @@
-######################
 GEB
 ######################
 
-:Copyright: IIASA & VU-IVM
-:Authors: Jens de Bruijn
+:Copyright: .. include:: copyright.rst
+:Authors: .. include:: authors.rst
 :Version: 0.01
 :Version Date: |today|
 
@@ -44,4 +43,4 @@ The figure below shows a schematic overview of the model. The lower part of the 
   :maxdepth: 2
   :caption: About
 
-  Authors <authors>
+  Authors <authors_page>
