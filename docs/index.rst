@@ -23,6 +23,7 @@ The figure below shows a schematic overview of the model. The lower part of the 
 
   Installation <installation>
   Preprocessing <preprocessing/preprocessing>
+  Configuration <configuration>
   Running the model <running>
 
 .. toctree::
@@ -38,3 +39,4 @@ The figure below shows a schematic overview of the model. The lower part of the 
 
   Hydrological Units <hydrounits>
   CWatM Model <cwatm_model>
+  Artists <artists>

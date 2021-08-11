@@ -1,0 +1,5 @@
+Artists
+#################
+
+.. automodule:: artists
+    :members:
