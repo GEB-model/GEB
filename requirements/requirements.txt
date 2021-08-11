@@ -1,14 +1,9 @@
-chromedriver_autoinstaller
-rasterio 
+rasterio
 numba
 tbb
-netcdf4
 pandas
 openpyxl
 geopandas
 numpy
-tornado
-python-dateutil
-pyyaml
 git+https://github.com/jensdebruijn/hyve.git
 git+https://github.com/jensdebruijn/ABCWatM.git

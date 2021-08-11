@@ -1,6 +1,5 @@
 from pathlib import Path
 from datetime import timedelta, datetime
-from dateutil.relativedelta import relativedelta
 
 DATA_FOLDER = Path('D:/DATA/')
 CWatM_FOLDER = Path('D:/CWatM/')

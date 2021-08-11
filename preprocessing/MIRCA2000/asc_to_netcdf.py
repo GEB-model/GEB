@@ -4,7 +4,6 @@ import numpy as np
 import re
 from collections import defaultdict
 from datetime import datetime
-from dateutil.relativedelta import relativedelta
 from hyve.library.raster import CreateNetCDF
 
 data = {
@@ -56,7 +55,7 @@ for kind, crops in data.items():
         print(kind, crop)
         timesteps = [datetime(2000, 1, 1)]
         for _ in range(11):
-            timesteps.append(timesteps[-1] + relativedelta(months=1))
+            timesteps.append(timesteps[-1].replace(month=timesteps[-1].month + 1))
 
         ds = gdal.Open(months['001'])
         gt = ds.GetGeoTransform()
