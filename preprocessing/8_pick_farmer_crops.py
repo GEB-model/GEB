@@ -146,7 +146,6 @@ def get_crop_and_irrigation_per_farmer(crop_calendar: dict, map_unit_codes: np.n
         xym = np.vstack((np.ravel(xx[mask]), np.ravel(yy[mask]))).T
 
         growing_areas_list = []
-        # import matplotlib.pyplot as plt
         for i in range(26):
             growing_areas_crop = scipy.interpolate.NearestNDInterpolator(xym, np.ravel(growing_areas[i, ...][mask]))(np.ravel(xx), np.ravel(yy)).reshape(xx.shape)
             growing_areas_crop[growing_areas_crop < 0] = 0

@@ -6,8 +6,7 @@ try:
     import cupy as cp
 except ModuleNotFoundError:
     pass
-import matplotlib.pyplot as plt
-from cwatm.management_modules.data_handling import loadsetclone, metaNetCDF, readnetcdfInitial, checkOption, cbinding
+from cwatm.management_modules.data_handling import readnetcdfInitial, checkOption
 
 @njit(cache=True)
 def _decompress_subvar(mixed_array, subcell_locations, scaling, mask):
