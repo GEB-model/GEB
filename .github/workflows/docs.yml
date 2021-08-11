@@ -45,7 +45,7 @@ jobs:
           pip install GDAL==$(gdal-config --version)
           git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements_docs.txt
+          pip install -r requirements/requirements.txt -r requirements/docs.txt -r requirements/preprocessing.txt
           # pip install cupy-cuda112
       - name: Debugging information
         run: |

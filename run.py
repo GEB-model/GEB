@@ -18,7 +18,7 @@ def krishna():
     return 'krishna', bounds.left, bounds.right, bounds.bottom, bounds.top
 
 parser.description = "GEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail."
-parser.add_argument('--scenario', dest='scenario', type=str, default='base', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (spinup, base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.
+parser.add_argument('--scenario', dest='scenario', type=str, default='base', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.
 """)
 parser.add_argument('--export_folder', dest='export_folder', type=str, default=None, help="The folder to export model results to. If not specified the name of the scenario is used.")
 parser.add_argument('--profiling', dest='profiling', default=False, action='store_true', help="The model can be run with profiling on, most importantly to find slow parts of the code. If this option is used a ")
