@@ -58,11 +58,9 @@ class CWatM_Model(CWATModel):
         for _ in range(n):
             self.stCWATM.step()
 
-    def report(self) -> None:
-        """Function to save required CWatM output to file. Right now only the water table from the initial run is saved to a npy-file, which can then be used to initalize the water table in other scenarios.
-        """
+    def export_water_table(self) -> None:
+        """Function to save required water table output to file."""
         dirname = os.path.dirname(self.init_water_table_file)
         if not os.path.exists(dirname):
             os.makedirs(dirname)
-        if self.args.scenario == 'spinup':
-            np.save(self.init_water_table_file, self.groundwater_modflow_module.modflow.decompress(self.groundwater_modflow_module.modflow.head))
+        np.save(self.init_water_table_file, self.groundwater_modflow_module.modflow.decompress(self.groundwater_modflow_module.modflow.head))

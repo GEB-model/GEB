@@ -38,5 +38,6 @@ The figure below shows a schematic overview of the model. The lower part of the 
   :caption: Reference
 
   Hydrological Units <hydrounits>
+  Model <model>
   CWatM Model <cwatm_model>
   Artists <artists>
