@@ -39,7 +39,6 @@ class CWatM_Model(CWATModel):
             binding['load_init_water_table'] = 'true'
             binding['init_water_table'] = self.init_water_table_file
         # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
-        assert start_date.hour == 0 and start_date.minute == 0 and start_date.second == 0 and start_date.microsecond == 0
         binding['StepStart'] = start_date.strftime('%d/%m/%Y')
         binding['SpinUp'] = '0'
         binding['StepEnd'] = str(n_steps)

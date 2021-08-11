@@ -5,7 +5,7 @@ The model can be configured through using `GEB.yml` (YALM-format). In the model 
 
 general
 *********
-The model start end and time can be configured in the general section, as well as whether the model should use a GPU (cupy is required for this option to work).
+The model start, end and spinup time (format: YYYY-MM-DD) can be configured in the general section, as well as whether the model should use a GPU (cupy is required for this option to work).
 
 agent_settings
 ****************
