@@ -62,9 +62,9 @@ class GEBModel(ABM_Model, CWatM_Model):
         assert self.n_timesteps.is_integer()
         self.n_timesteps = int(self.n_timesteps)
         
-        self.artists = Artists(self)
         self.area = Area(self, study_area)
         self.agents = Agents(self)
+        self.artists = Artists(self)
 
         assert coordinate_system == 'WGS84'  # coordinate system must be WGS84. If not, all code needs to be reviewed
 

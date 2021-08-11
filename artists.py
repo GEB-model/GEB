@@ -1,27 +1,22 @@
-from config import VARIABLE_COLOR, MIN_COLOR_BAR_ALPHA
-from config import LEGEND
 from hyve.artists import BaseArtist
-import colorsys
 import numpy as np
-import pandas as pd
-try:
-    import cupy as cp
-except ModuleNotFoundError:
-    pass
-from cwatm.management_modules.data_handling import decompress
 
 class Artists(BaseArtist):
     def __init__(self, model):
         BaseArtist.__init__(self, model)
-        self.color = VARIABLE_COLOR
-        self.min_colorbar_alpha = MIN_COLOR_BAR_ALPHA
+        self.color = '#1386FF'
+        self.min_colorbar_alpha = .4
         self.background_variable = "subvar.crop_map"
+        self.map_crop_to_color = {
+            idx: self.model.config['draw']['crop_colors'][name]
+            for idx, name in self.model.agents.farmers.get_crop_factors()['name'].to_dict().items()
+        }
 
-    def draw_farmers(self, model, idx):
+    def draw_farmers(self, model, agents, idx):
         if not hasattr(self.model, 'legend') and hasattr(self.model, 'subvar'):
             crops = self.model.data.subvar.crop_data['Crop']
             self.legend = {crop: color for crop, color in zip(crops, self.model.data.subvar.crop_data['Color'])}
-        color = self.model.data.subvar.crop_data['Color'][self.model.agents.farmers.crop[idx].get()]
+        color = self.map_crop_to_color[self.model.agents.farmers.crop[idx].item()]
         return {"type": "shape", "shape": "circle", "r": 1, "filled": True, "color": color}
 
     def draw_rivers(self):

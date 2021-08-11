@@ -73,7 +73,7 @@ if __name__ == '__main__':
 
     model_params = {
         "CwatM_settings": CWATM_SETTINGS,
-        "ABM_config_path": ABM_CONFIG_PATH,
+        "GEB_config_path": ABM_CONFIG_PATH,
         "name": study_area_name,
         'xmin': xmin,
         'xmax': xmax,
@@ -100,7 +100,7 @@ if __name__ == '__main__':
         if args.profiling:
             print("Profiling not available for browser version")
         server_elements = [
-            Canvas(study_area['xmin'], study_area['xmax'], study_area['ymin'], study_area['ymax'], max_canvas_height=800, max_canvas_width=1200)
+            Canvas(xmin, xmax, ymin, ymax, max_canvas_height=800, max_canvas_width=1200)
         ] + [ChartModule(series) for series in series_to_plot]
 
         DISPLAY_TIMESTEPS = [

@@ -8,12 +8,40 @@ agent_settings:
   fix_activation_order: false
 
 logging:
-  logfile: GEB.log  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  logfile: GEB.log  # DEBUG/INFO/WARNING/ERROR/CRITICAL
   loglevel: DEBUG
 
 draw:
   draw_every_nth_agent: 1
-  draw_agents: farmers
+  draw_agents:
+    farmers:
+  crop_colors:
+    Wheat: #7f3f3f
+    Maize: #7f4e4e
+    Rice: #7f5d5d
+    Barley: #7f6b6b
+    Rye: #7f7a7a
+    Millet: #757f7f
+    Sorghum: #667f7f
+    Soybeans: #587f7f
+    Sunflower: #497f7f
+    Potatoes: #3f7f7f
+    Cassava: #3f7f7f
+    Sugarcane: #3f7f7f
+    Sugarbeets: #3f7f7f
+    Oilpalm: #3f7f7f
+    Rapeseed: #3f7070
+    Groundnuts: #3f6262
+    Pulses: #3f5353
+    Citrus: #3f4444
+    Datepalm: #493f3f
+    Grapes: #583f3f
+    Cotton: #663f3f
+    Cocoa: #753f3f
+    Coffee: #7f3f3f
+    Others perennial: #7f3f3f
+    Fodder grasses: #7f3f3f
+    Others annual: #7f3f3f
 
 report:
   activation order:

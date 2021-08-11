@@ -25,7 +25,8 @@ draw
 This section is only used for the visual interface. This section closely works together with the :doc:`artists`.
 
 - draw_every_nth_agent: To avoid drawing all farmers, which might become very slow, this option allows to only draw every nth agent. For example, setting this to 1000, means that every 1000th agent is drawn.
-- draw_agents: Which agent types should be drawn.
+- draw_agents: Which agent types should be drawn. <TODO>
+- crop_colors: <TODO>
 
 report
 *******
