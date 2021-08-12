@@ -12,7 +12,7 @@ logging:
   loglevel: DEBUG
 
 draw:
-  draw_every_nth_agent: 1
+  draw_every_nth_agent: 100000
   draw_agents:
     farmers:
   crop_colors:
