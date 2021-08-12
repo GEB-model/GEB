@@ -1,12 +1,10 @@
-from numba import njit, types
-from numba.typed import List
-
+from numba import njit
 
 @njit()
 def remap_to_cwatm(from_array, from_gt, to_array, to_gt):
     for py_from in range(from_array.shape[0]):
         for px_from in range(from_array.shape[1]):
-            px_to, py_to = remap_pixel(from_gt, to_gt, px_from, py_from)
+            px_to, py_to = reproject_pixel(from_gt, to_gt, px_from, py_from)
             to_array[py_to, px_to] += from_array[py_from, px_from]
     assert from_array.sum() == to_array.sum()
 
@@ -19,7 +17,7 @@ def get_array_remapper_large_cell_to_small_cell(from_array, from_gt, to_array, t
     n = 0  # == py_to * to_array_xsize + px_to
     for py_to in range(to_array.shape[0]):
         for px_to in range(to_array.shape[1]):
-            px_from, py_from = remap_pixel(to_gt, from_gt, px_to, py_to)
+            px_from, py_from = reproject_pixel(to_gt, from_gt, px_to, py_to)
             array_map[n] = py_from * from_array_xsize + px_from
             n += 1
 

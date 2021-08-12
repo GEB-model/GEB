@@ -1,6 +1,6 @@
 import os
 import rasterio
-from hyve.library.raster import clip_to_mask, upscale
+from hyve.library.raster import clip_to_other, upscale
 import numpy as np
 from rasterio.warp import reproject, Resampling
 from rasterio.merge import merge
@@ -35,7 +35,7 @@ def get_rivers(threshold: int):
 
     with rasterio.open('DataDrive/GEB/input/areamaps/submask.tif') as submask_src:
         rivers, riverprofile = upscale(rivers, up_cells_profile_org, 2)
-        rivers, riverprofile = clip_to_mask(rivers, riverprofile, submask_src.profile)
+        rivers, riverprofile = clip_to_other(rivers, riverprofile, submask_src.profile)
 
         return rivers
             

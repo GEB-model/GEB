@@ -1,7 +1,7 @@
 import os
 import rasterio
 import numpy as np
-from hyve.library.raster import clip_to_xy_bounds, clip_to_mask, upscale
+from hyve.library.raster import clip_to_xy_bounds, clip_to_other, upscale
 import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
@@ -92,7 +92,7 @@ def create_ldd(mask_profile: rasterio.profiles.Profile) -> None:
         dir_map = src.read(1)
         src_profile = src.profile
 
-        dir_map, profile = clip_to_mask(dir_map, src_profile, mask_profile)
+        dir_map, profile = clip_to_other(dir_map, src_profile, mask_profile)
 
         ldd = np.zeros_like(dir_map)
         ldd[dir_map == 32] = 7
@@ -116,7 +116,7 @@ def get_channel_manning_and_width(mask_profile: rasterio.profiles.Profile) -> No
     """
     with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_elevtn.tif'), 'r') as DEM_src:
         DEM = DEM_src.read(1)
-        DEM, DEM_profile = clip_to_mask(DEM, DEM_src.profile, mask_profile)
+        DEM, DEM_profile = clip_to_other(DEM, DEM_src.profile, mask_profile)
     
     cell_area_path = os.path.join(input_folder, 'areamaps', 'cell_area.tif')
     with rasterio.open(cell_area_path, 'r') as cell_area_src:
@@ -124,7 +124,7 @@ def get_channel_manning_and_width(mask_profile: rasterio.profiles.Profile) -> No
 
     with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_uparea.tif'), 'r') as uparea_src:
         upstream_area = uparea_src.read(1) #* 1e6  # km2 to m2
-        upstream_area, upstream_profile = clip_to_mask(upstream_area, uparea_src.profile, mask_profile)
+        upstream_area, upstream_profile = clip_to_other(upstream_area, uparea_src.profile, mask_profile)
 
         with rasterio.open(os.path.join(input_folder, 'routing/kinematic/upstream_area.tif'), 'w', **upstream_profile) as upstream_dst:
             upstream_dst.write(upstream_area, 1)
@@ -159,7 +159,7 @@ def get_river_length_and_channelratio(mask_profile: rasterio.profiles.Profile) -
     """
     with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_rivlen_ds.tif'), 'r') as rivlen_src:
         rivlen = rivlen_src.read(1)
-        rivlen, profile = clip_to_mask(rivlen, rivlen_src.profile, mask_profile)
+        rivlen, profile = clip_to_other(rivlen, rivlen_src.profile, mask_profile)
         rivlen[rivlen == -9999] = np.nan
 
         with rasterio.open(os.path.join(input_folder, 'routing/kinematic/chanleng.tif'), 'w', **profile) as chanleng_dst:
@@ -188,7 +188,7 @@ def get_river_slope(mask_profile: rasterio.profiles.Profile) -> None:
     """
     with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_rivslp.tif'), 'r') as rivslp_src:
         rivslp = rivslp_src.read(1)
-        rivslp, profile = clip_to_mask(rivslp, rivslp_src.profile, mask_profile)
+        rivslp, profile = clip_to_other(rivslp, rivslp_src.profile, mask_profile)
 
         with rasterio.open(os.path.join(input_folder, 'routing/kinematic/changrad.tif'), 'w', **profile) as chanslp_dst:
             chanslp_dst.write(rivslp, 1)
@@ -223,9 +223,9 @@ def get_elevation_std(mask_profile: rasterio.profiles.Profile) -> None:
     })
 
     scaling = 10
-    DEM, DEM_profile = clip_to_mask(DEM, DEM_profile, mask_profile)
+    DEM, DEM_profile = clip_to_other(DEM, DEM_profile, mask_profile)
     _, high_res_dem_profile_target = upscale(DEM, mask_profile, scaling)
-    High_res_DEM, High_res_DEM_profile = clip_to_mask(High_res_DEM, High_res_DEM_profile_org, high_res_dem_profile_target)
+    High_res_DEM, High_res_DEM_profile = clip_to_other(High_res_DEM, High_res_DEM_profile_org, high_res_dem_profile_target)
     High_res_DEM[High_res_DEM < 0] = 0
 
     with rasterio.open(os.path.join(input_folder, 'landsurface/topo/subelv.tif'), 'w', **High_res_DEM_profile) as dst:
