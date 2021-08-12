@@ -62,7 +62,7 @@ class CWatMReporter(ABMReporter):
         else:
             raise NotImplementedError
 
-        assert isinstance(array, np.ndarray)
+        assert isinstance(array, (np.ndarray, cp.ndarray))
 
         return array
 

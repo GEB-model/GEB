@@ -1,3 +1,4 @@
+from typing import Any
 from numba import njit
 import rasterio
 import os
@@ -9,10 +10,19 @@ except ModuleNotFoundError:
 from cwatm.management_modules.data_handling import readnetcdfInitial, checkOption
 
 @njit(cache=True)
-def _decompress_subvar(mixed_array, subcell_locations, scaling, mask):
-    ysize, xsize = mask.shape
-    subarray = np.full((ysize * scaling, xsize * scaling), np.nan, dtype=mixed_array.dtype)
-    
+def _decompress_subvar(subarray: np.ndarray, outarray: np.ndarray, subcell_locations: np.ndarray, mask: np.ndarray, scaling: int, ysize: int, xsize: int) -> np.ndarray:
+    """Decompress subvar array.
+
+    Args:
+        subarray: Subarray.
+        subcell_locations: Array that maps the locations of subcells to cells.
+        scaling: The scaling used for map between cells and hydrounits.
+        mask: Mask of study area.
+        nanvalue: Value to use for values outside the mask.
+
+    Returns:
+        outarray: Decompressed subarray.
+    """  
     i = 0
     
     for y in range(ysize):
@@ -21,10 +31,10 @@ def _decompress_subvar(mixed_array, subcell_locations, scaling, mask):
             if not is_masked:
                 for ys in range(scaling):
                     for xs in range(scaling):
-                        subarray[y * scaling + ys, x * scaling + xs] = mixed_array[subcell_locations[i]]
+                        outarray[y * scaling + ys, x * scaling + xs] = subarray[subcell_locations[i]]
                         i += 1
 
-    return subarray
+    return outarray
 
 
 class BaseVariables:
@@ -68,7 +78,7 @@ class Variables(BaseVariables):
     def load_mask(self):
         mask_fn = 'DataDrive/CWatM/krishna/input/areamaps/mask.tif'
         with rasterio.open(mask_fn) as mask_src:
-            self.mask = mask_src.read()[0]
+            self.mask = mask_src.read(1).astype(np.bool)
             self.gt = mask_src.transform.to_gdal()
             self.cell_size = mask_src.transform.a
             # assert self.cell_size == -mask_src.transform.e
@@ -114,6 +124,7 @@ class Variables(BaseVariables):
             return default
 
     def plot(self, array):
+        import matplotlib.pyplot as plt
         plt.imshow(array)
         plt.show()
 
@@ -288,16 +299,23 @@ class HydroUnits(BaseVariables):
         else:
             return output
 
-    def decompress(self, array):
-        if isinstance(array, cp.ndarray):
-            array = array.get()
-        return _decompress_subvar(array, self.subcell_locations, self.scaling, self.model.data.var.mask)
+    def decompress(self, subarray):
+        if isinstance(subarray, cp.ndarray):
+            array = subarray.get()
+        if np.issubdtype(subarray, np.integer):
+            nanvalue = -1
+        else:
+            nanvalue = np.nan
+        ysize, xsize = self.model.data.var.mask.shape
+        decompresssed = np.full((ysize * self.scaling, xsize * self.scaling), nanvalue, dtype=subarray.dtype)
+        return _decompress_subvar(array, outarray=decompresssed, subcell_locations=self.subcell_locations, mask=self.model.data.var.mask, scaling=self.scaling, ysize=ysize, xsize=xsize)
 
-    def plot(self, mixed_array, ax=None, show=True):
-        assert mixed_array.size == self.land_use_type.size
+    def plot(self, subarray, ax=None, show=True):
+        import matplotlib.pyplot as plt
+        assert subarray.size == self.land_use_type.size
         if ax is None:
             fig, ax = plt.subplots()
-        ax.imshow(self.decompress(mixed_array), resample=False)
+        ax.imshow(self.decompress(subarray), resample=False)
         if show:
             plt.show()
 
