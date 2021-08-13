@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Union
 from numba import njit
 import rasterio
 import os
@@ -38,10 +38,17 @@ def _decompress_subvar(subarray: np.ndarray, outarray: np.ndarray, subcell_locat
 
 
 class BaseVariables:
+    """This class has some basic functions that can be used for variables regardless of scale."""
     def __init__(self):
         pass
 
-    def plot(self, data, ax=None):
+    def plot(self, data: np.ndarray, ax=None) -> None:
+        """Create a simple plot for data.
+        
+        Args:
+            data: Array to plot.
+            ax: Optional matplotlib axis object. If given, data will be plotted on given axes.
+        """
         import matplotlib.pyplot as plt
         data = self.decompress(data)
         if ax:
@@ -50,59 +57,103 @@ class BaseVariables:
             plt.imshow(data)
             plt.show()
 
-    def MtoM3(self, array):
+    def MtoM3(self, array: np.ndarray) -> np.ndarray:
+        """Convert array from meters to cubic meters.
+        
+        Args:
+            array: Data in meters.
+            
+        Returns:
+            array: Data in cubic meters.
+        """
         return array * self.cellArea
 
-    def M3toM(self, array):
+    def M3toM(self, array: np.ndarray) -> np.ndarray:
+        """Convert array from cubic meters to meters.
+        
+        Args:
+            array: Data in cubic meters.
+            
+        Returns:
+            array: Data in meters.
+        """
         return array / self.cellArea
 
 
 class Variables(BaseVariables):
+    """This class is to store data in the 'normal' grid cells. This class works with compressed and uncompressed arrays. On initialization of the class, the mask of the study area is read from disk. This is the shape of any uncompressed array. Many values in this array, however, fall outside the stuy area as they are masked. Therefore, the array can be compressed by saving only the non-masked values.
+    
+    On initialization, as well as geotransformation and cell size are set, and the cell area is read from disk.
+
+    Then, the mask is compressed by removing all masked cells, resulting in a compressed array.
+    """
     def __init__(self, data, model):
         self.data = data
         self.model = model
         self.scaling = 1
-        self.load_mask()
-        BaseVariables.__init__(self)
-
-    @property
-    def size(self):
-        return self.compressed_size
-
-    def full(self, *args, **kwargs):
-        return np.full(self.mask.shape, *args, **kwargs)
-
-    def full_compressed(self, *args, **kwargs):
-        return np.full(self.compressed_size, *args, **kwargs)
-
-    def load_mask(self):
         mask_fn = 'DataDrive/CWatM/krishna/input/areamaps/mask.tif'
         with rasterio.open(mask_fn) as mask_src:
             self.mask = mask_src.read(1).astype(np.bool)
             self.gt = mask_src.transform.to_gdal()
             self.cell_size = mask_src.transform.a
-            # assert self.cell_size == -mask_src.transform.e
+        with rasterio.open('DataDrive/CWatM/krishna/input/areamaps/cell_area.tif') as cell_area_src:
+            self.cell_area_uncompressed = cell_area_src.read(1)
         
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
-        with rasterio.open('DataDrive/CWatM/krishna/input/areamaps/cell_area.tif') as cell_area_src:
-            self.cellArea_uncompressed = cell_area_src.read(1)
-            self.cellArea = self.compress(self.cellArea_uncompressed)
+        self.cellArea = self.compress(self.cell_area_uncompressed)
+        BaseVariables.__init__(self)
 
-    def compress(self, array):
+    def full(self, *args, **kwargs) -> np.ndarray:
+        """Return a full array with size of mask. Takes any other argument normally used in np.full.
+        
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
+        return np.full(self.mask.shape, *args, **kwargs)
+
+    def full_compressed(self, *args, **kwargs) -> np.ndarray:
+        """Return a full array with size of compressed array. Takes any other argument normally used in np.full.
+        
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
+        return np.full(self.compressed_size, *args, **kwargs)
+
+    def compress(self, array: np.ndarray) -> np.ndarray:
+        """Compress array.
+        
+        Args:
+            array: Uncompressed array.
+            
+        Returns:
+            array: Compressed array.
+        """
         return array.ravel()[self.mask_flat == False]
 
-    def decompress(self, array, nanvalue=None):
-        if nanvalue is None:
+    def decompress(self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float]=None) -> np.ndarray:
+        """Decompress array.
+        
+        Args:
+            array: Compressed array.
+            fillvalue: Value to use for masked values.
+            
+        Returns:
+            array: Decompressed array.
+        """
+        if fillvalue is None:
             if array.dtype in (np.float32, np.float64):
-                nanvalue = np.nan
+                fillvalue = np.nan
             else:
-                nanvalue = 0
-        outmap = self.full(nanvalue, dtype=array.dtype).reshape(self.mask_flat.size)
+                fillvalue = 0
+        outmap = self.full(fillvalue, dtype=array.dtype).reshape(self.mask_flat.size)
         outmap[self.mask_flat == False] = array
         return outmap.reshape(self.mask.shape)
 
     def load_initial(self, name, default=0.0, number=None):
+        raise ValueError
         """
         First it is checked if the initial value is given in the settings file
 
@@ -123,13 +174,24 @@ class Variables(BaseVariables):
         else:
             return default
 
-    def plot(self, array):
+    def plot(self, array: np.ndarray) -> None:
+        """Plot array.
+        
+        Args:
+            array: Array to plot.
+        """
         import matplotlib.pyplot as plt
         plt.imshow(array)
         plt.show()
 
-    def plot_compressed(self, array, nanvalue=None):
-        self.plot(self.decompress(array, nanvalue=nanvalue))
+    def plot_compressed(self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float]=None):
+        """Plot compressed array.
+        
+        Args:
+            array: Compressed array to plot.
+            fillvalue: Value to use for masked values.
+        """
+        self.plot(self.decompress(array, fillvalue=fillvalue))
 
 
 class HydroUnits(BaseVariables):
