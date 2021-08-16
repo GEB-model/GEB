@@ -1,0 +1,13 @@
+Land units
+#####################
+
+Most geographical models, including hydrological models, work using cells. This is essentially an area on the map that responds as a unit. The resolution of the grid varies, depending on the required detail of the simulation, computational run-time, availablity of input data among others. (Near-) square cells are very useful in this respect, because input data (such as satellite observations) are often available in a grid. CWatM, like most hydrological models, operates at these grids. For each cell, various land use types are modelled, and then aggregated to the cell level while considering the relative sizes of the land use types in that particular cell. Farmers occupy non-irrigated land, paddy-irrigated land, and non-paddy irrigated land. However, when a single land use type is shared among multiple farmers, their hydrological environment is shared, and thus must respond identically.
+
+This creates an issue for agent-based models, where implementation of heterogeneous decision-making is required. For example, when one farmer decides to irrigate and other does not, the soil moisture in their fields should also be represented separately. Therefore, we use the concept of `land units`. To create the `land units`, each individual field owned by a farmer becomes a `land unit` first. Then, in addition, each other land use type becomes a separate land unit. `land units` never cross cell boundaries. This means that farmers whose fields are dispersed across multiple cells are simulated by multiple `land units`. Here, we assume that each `land unit`, is relatively homogeneous as it each `land unit` is operated by 1) a single farmer, or by a single other (i.e., non-farm) land-use type and 2) never crosses the boundary a hydrological model cell. This concept is similar to hydrological response units (HRUs), but operates at the sub-grid level rather than the basin level and delineation of the units is performed differently.
+
+.. image:: images/subcells.png
+
+The figure above displays how this works in practice. Cells in the hydrological model are separated by the regular horizontal and vertical black lines. The left panel displays the various land use types, the moddle panel the farmers that own the cropland, and the rightmost panel shows the resulting hydrological units. Note that each contiguous area in the middle and right panel of a single color is one field or hydrological unit respectively, while separated areas are different fields or hydrological units. One exception is the hydrological units of the same land use type that are not owned by agents. These are represented by a single hydrological unit if they are encompassed within a single cell.
+
+.. automodule:: landunits
+    :members:

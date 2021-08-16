@@ -16,7 +16,7 @@ def _decompress_subvar(subarray: np.ndarray, outarray: np.ndarray, subcell_locat
     Args:
         subarray: Subarray.
         subcell_locations: Array that maps the locations of subcells to cells.
-        scaling: The scaling used for map between cells and hydrounits.
+        scaling: The scaling used for map between cells and land units.
         mask: Mask of study area.
         nanvalue: Value to use for values outside the mask.
 
@@ -194,7 +194,7 @@ class Variables(BaseVariables):
         self.plot(self.decompress(array, fillvalue=fillvalue))
 
 
-class HydroUnits(BaseVariables):
+class LandUnits(BaseVariables):
     def __init__(self, data, model):
         self.data = data
         self.model = model
@@ -387,7 +387,7 @@ class Data:
     def __init__(self, model):
         self.model = model
         self.var = Variables(self, model)
-        self.subvar = HydroUnits(self, model)
+        self.subvar = LandUnits(self, model)
         self.subvar.cellArea = self.to_subvar(data=self.var.cellArea, fn='mean')
 
     @staticmethod
