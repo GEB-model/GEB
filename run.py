@@ -21,7 +21,9 @@ parser.description = "GEB aims to simulate both environment, for now the hydrolo
 parser.add_argument('--scenario', dest='scenario', type=str, default='base', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.
 """)
 parser.add_argument('--export_folder', dest='export_folder', type=str, default=None, help="The folder to export model results to. If not specified the name of the scenario is used.")
+print('Write profiling text')
 parser.add_argument('--profiling', dest='profiling', default=False, action='store_true', help="The model can be run with profiling on, most importantly to find slow parts of the code. If this option is used a ")
+parser.add_argument('--GPU', dest='use_gpu', default=False, action='store_true', help="Whether a GPU can be used to run the model. This requires CuPy to be installed.")
 if __name__ == '__main__':
     args = parser.parse_args()
     if args.export_folder is None and args.scenario is not None:

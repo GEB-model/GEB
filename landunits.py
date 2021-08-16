@@ -153,7 +153,6 @@ class Variables(BaseVariables):
         return outmap.reshape(self.mask.shape)
 
     def load_initial(self, name, default=0.0, number=None):
-        raise ValueError
         """
         First it is checked if the initial value is given in the settings file
 
@@ -204,13 +203,13 @@ class LandUnits(BaseVariables):
         self.land_use_type, self.land_use_ratios, self.land_owners, self.subvar_to_var, self.var_to_subvar, self.var_to_subvar_uncompressed, self.subcell_locations = self.create_subcell_mask()
         self.land_use_type[self.land_use_type == 2] = 1
         self.land_use_type[self.land_use_type == 3] = 1
-        if self.model.config['general']['use_gpu']:
+        if self.model.args.use_gpu:
             self.land_owners = cp.array(self.land_owners)
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
 
     @property
-    def size(self):
+    def compressed_size(self):
         return self.land_use_type.size
 
     @staticmethod
@@ -317,13 +316,13 @@ class LandUnits(BaseVariables):
         return self._create_subcell_mask(farms, land_use_classes, self.data.var.mask, self.scaling)
 
     def zeros(self, *args, **kwargs):
-        if checkOption('useGPU'):
+        if self.model.args.use_gpu:
             return cp.zeros(*args, **kwargs)
         else:
             return np.zeros(*args, **kwargs)        
 
     def full_compressed(self, fill_value, dtype, *args, **kwargs):
-        if checkOption('useGPU'):
+        if self.model.args.use_gpu:
             return cp.full(self.land_use_type.size, fill_value, dtype, *args, **kwargs)
         else:
             return np.full(self.land_use_type.size, fill_value, dtype, *args, **kwargs)
@@ -356,7 +355,7 @@ class LandUnits(BaseVariables):
         with rasterio.open(fp) as src:
             array = src.read()[0]
         output = self._load_map(array, self.scaling, self.mixed_size, self.has_subcells.reshape(self.model.data.var.mask.shape))
-        if self.model.config['general']['use_gpu']:
+        if self.model.args.use_gpu:
             return cp.array(output)
         else:
             return output
@@ -432,7 +431,7 @@ class Data:
             outdata = data
         else:
             outdata = self._to_subvar(data, self.subvar.var_to_subvar, self.subvar.land_use_ratios, mask=mask, fn=fn)
-            if self.model.config['general']['use_gpu']:
+            if self.model.args.use_gpu:
                 outdata = cp.asarray(outdata)
         
         if varname:
@@ -476,7 +475,7 @@ class Data:
         if isinstance(subdata, float):  # check if data is simple float. Otherwise should be numpy array.
             outdata = subdata
         else:
-            if self.model.config['general']['use_gpu'] and isinstance(subdata, cp.ndarray):
+            if self.model.args.use_gpu and isinstance(subdata, cp.ndarray):
                 subdata = subdata.get()
             outdata = self._to_var(subdata, self.subvar.var_to_subvar, self.subvar.land_use_ratios, fn)
 

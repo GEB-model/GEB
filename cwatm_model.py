@@ -19,7 +19,7 @@ class CWatM_Model(CWATModel):
         settings: Filepath of the CWatM settingsfile. For full configuration options please refer to the `CWatM documentation <https://cwatm.iiasa.ac.at/>`.
         use_gpu: Whether the model can use a GPU.
     """
-    def __init__(self, start_date: datetime.datetime, n_steps: int, settings: str, use_gpu: bool) -> None:
+    def __init__(self, start_date: datetime.datetime, n_steps: int, settings: str) -> None:
         self.init_water_table_file = os.path.join('report', 'init', 'water_table.npy')
 
         settingsfile.append(settings)
@@ -30,7 +30,6 @@ class CWatM_Model(CWATModel):
             if not os.path.exists(outDir['OUTPUT']):
                 os.makedirs(outDir['OUTPUT'])
 
-        option['useGPU'] = use_gpu
         binding['max_groundwater_abstraction_depth'] = 50
         if self.args.scenario == 'spinup':
             binding['load_init_water_table'] = 'false'

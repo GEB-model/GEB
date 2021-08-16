@@ -34,7 +34,7 @@ class CWatMReporter(ABMReporter):
         self.variables_dict = {}
 
         def add_var(vartype):
-            compressed_size = getattr(self.model.data, vartype).size
+            compressed_size = getattr(self.model.data, vartype).compressed_size
             for varname, variable in vars(getattr(self.model.data, vartype)).items():
                 if isinstance(variable, (np.ndarray, cp.ndarray)):
                     if variable.ndim == 1 and variable.size == compressed_size:

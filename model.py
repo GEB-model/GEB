@@ -32,9 +32,9 @@ class GEBModel(ABM_Model, CWatM_Model):
             'ymin': ymin,
             'ymax': ymax,            
         }
-        
-        self.__init_ABM__(GEB_config_path, study_area, args, coordinate_system)
+        self.args = args
         self.data = Data(self)
+        self.__init_ABM__(GEB_config_path, study_area, args, coordinate_system)
         self.__init_hydromodel__(CwatM_settings)
 
         self.reporter = Reporter(self)
@@ -73,8 +73,12 @@ class GEBModel(ABM_Model, CWatM_Model):
         timeprint("Finished setup")
 
     def __init_hydromodel__(self, settings: str) -> None:
-        """Function to initialize CWatM"""
-        CWatM_Model.__init__(self, self.current_time, self.n_timesteps, settings, self.config['general']['use_gpu'])
+        """Function to initialize CWatM.
+        
+        Args:
+            settings: Filepath of CWatM settingsfile
+        """
+        CWatM_Model.__init__(self, self.current_time, self.n_timesteps, settings)
 
     def step(self, step_size: Union[int, str]=1) -> None:
         """

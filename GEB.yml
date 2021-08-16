@@ -1,8 +1,7 @@
 general:
   start_time: 2000-01-01
-  end_time: 2000-01-02
-  spinup_start: 1999-12-31
-  use_gpu: true
+  end_time: 2000-01-03
+  spinup_start: 1999-12-30
 
 agent_settings:
   fix_activation_order: false
