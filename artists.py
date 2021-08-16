@@ -1,3 +1,4 @@
+from typing import Union, Any
 from hyve.artists import BaseArtist
 import numpy as np
 
@@ -11,7 +12,7 @@ class Artists(BaseArtist):
         BaseArtist.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
-        self.background_variable = "subvar.crop_map"
+        self.background_option = "subvar.crop_map"
         self.map_crop_to_color = {
             idx: self.model.config['draw']['crop_colors'][name]
             for idx, name in self.model.agents.farmers.get_crop_factors()['name'].to_dict().items()
@@ -43,7 +44,23 @@ class Artists(BaseArtist):
         return {"type": "shape", "shape": "line", "color": "Blue"}
 
     @property
-    def custom_plot(self):
+    def custom_plot(self) -> dict[dict]:
+        """Here you can specify custom options for plotting the background.
+        
+        Returns:
+            custom_dict: Dictionary of dictionaries. The first level is the name of each of the variables, the second level the options for those variables.
+
+        Example:
+            .. code-block:: python
+
+                {
+                    'subvar.crop_map': {
+                        'type': 'discrete',
+                        'nanvalue': -1
+                    }
+                }
+
+        """
         return {
             'subvar.crop_stage': {
                 'type': 'discrete'
@@ -54,24 +71,41 @@ class Artists(BaseArtist):
             'subvar.crop_map': {
                 'type': 'categorical',
                 'nanvalue': -1,
-                # 'names': self.model.data.subvar.crop_data['Crop'],
-                # 'colors': [self.hex_to_rgb(color) for color in self.model.data.subvar.crop_data['Color']]
             },
         }
 
-    def get_background_options(self):
+    def get_background_options(self) -> list:
+        """This function gets a list of variables that can be used to show in the background.
+        
+        Returns:
+            options: List of names for options to show in background.
+        """
         return list(self.model.reporter.cwatmreporter.variables_dict.keys())
 
-    def get_background(self, minvalue=None, maxvalue=None, nanvalue=-1, color='#1386FF'):
-        name = self.background_variable
+    def set_background_option(self, option_name: str) -> None:
+        """This function is used to update the name of the variable to use for drawing the background of the map."""
+        self.background_option = option_name
 
-        array = self.model.reporter.cwatmreporter.get_array(name, decompress=True)
+    def get_background(self, minvalue: Union[float, int, None]=None, maxvalue: Union[float, int, None]=None, nanvalue=Any, color: str='#1386FF') -> tuple[np.ndarray, dict]:
+        """This function is called from the canvas class to draw the canvas background. The name of the variable to draw is stored in `self.background_option`.
+        
+        Args:
+            minvalue: The minimum value for the display scale.
+            maxvalue: The maximum value for the display scale.
+            nanvalue: The value that should be displayed as NaN.
+            color: The color to use to display the variable.
+
+        Returns:
+            background: RGBA-array to display as background.
+            legend: Dictionary with data and formatting rules for background legend.
+        """
+        array = self.model.reporter.cwatmreporter.get_array(self.background_option, decompress=True)
         mask = self.model.data.var.mask.astype(np.bool)
-        if name.startswith('subvar.'):
+        if self.background_option.startswith('subvar.'):
             mask = mask.repeat(self.model.data.subvar.scaling, axis=0).repeat(self.model.data.subvar.scaling, axis=1)
 
-        if name in self.custom_plot:
-            options = self.custom_plot[name]
+        if self.background_option in self.custom_plot:
+            options = self.custom_plot[self.background_option]
         else:
             options = {}
         if 'type' not in options:
