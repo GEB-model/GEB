@@ -1,4 +1,4 @@
 sphinx
 sphinx-autodoc-typehints
 sphinxcontrib-autoprogram
-sphinx_rtd_theme
+sphinxcontrib-autoyaml

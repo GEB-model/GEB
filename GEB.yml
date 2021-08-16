@@ -1,47 +1,81 @@
+###
+# This section contains several general model settings.
 general:
+  ###
+  # model start time (YYYY-MM-DD).
   start_time: 2000-01-01
+  ###
+  # model end time (YYYY-MM-DD).
   end_time: 2000-01-03
+  ###
+  # start of the spinup time (YYYY-MM-DD).
   spinup_start: 1999-12-30
 
+###
+# This section can contain settings to change the behavior or the agents.
 agent_settings:
+  ###
+  # If this setting is set to true, the farmers in the model are activated in a set order, allowing for better reproducability of the model.
   fix_activation_order: false
 
+###
+# This sections contains settings for logging of the model. 
 logging:
-  logfile: GEB.log  # DEBUG/INFO/WARNING/ERROR/CRITICAL
+  ###
+  # The file which the logs are written to.
+  logfile: GEB.log  
+  ###
+  # The loglevel, choose from: DEBUG, INFO, WARNING, ERROR, CRITICAL
   loglevel: DEBUG
 
+###
+# This section is only used for the visual interface. This section closely works together with the `artists`.
 draw:
-  draw_every_nth_agent: 100000
+  ###
+  # Here, you can specify which types of agents are to be drawn. In addition, you can specify options on how those agents will be drawn. These options must correspond to method arguments in the artists.
   draw_agents:
     farmers:
+      draw_every_nth: 100000
+  ###
+  # Specify the colors of the crops to use here. These names must match the crop names in the crop factors file (DataDrive/GEB/input/crop_data/crop_factors.csv).
   crop_colors:
-    Wheat: #7f3f3f
-    Maize: #7f4e4e
-    Rice: #7f5d5d
-    Barley: #7f6b6b
-    Rye: #7f7a7a
-    Millet: #757f7f
-    Sorghum: #667f7f
-    Soybeans: #587f7f
-    Sunflower: #497f7f
-    Potatoes: #3f7f7f
-    Cassava: #3f7f7f
-    Sugarcane: #3f7f7f
-    Sugarbeets: #3f7f7f
-    Oilpalm: #3f7f7f
-    Rapeseed: #3f7070
-    Groundnuts: #3f6262
-    Pulses: #3f5353
-    Citrus: #3f4444
-    Datepalm: #493f3f
-    Grapes: #583f3f
-    Cotton: #663f3f
-    Cocoa: #753f3f
-    Coffee: #7f3f3f
-    Others perennial: #7f3f3f
-    Fodder grasses: #7f3f3f
-    Others annual: #7f3f3f
+    Wheat: #006400
+    Maize: #8b0000
+    Rice: #808000
+    Barley: #483d8b
+    Rye: #3cb371
+    Millet: #008080
+    Sorghum: #4682b4
+    Soybeans: #000080
+    Sunflower: #9acd32
+    Potatoes: #b03060
+    Cassava: #9932cc
+    Sugarcane: #ff0000
+    Sugarbeets: #ff8c00
+    Oilpalm: #ffff00
+    Rapeseed: #0000cd
+    Groundnuts: #7cfc00
+    Pulses: #00ff7f
+    Citrus: #00ffff
+    Datepalm: #ff00ff
+    Grapes: #1e90ff
+    Cotton: #fa8072
+    Cocoa: #eee8aa
+    Coffee: #add8e6
+    Others perennial: #ff1493
+    Fodder grasses: #ee82ee
+    Others annual: #ffc0cb
 
+###
+# Here, you can configure which data should be saved from the model in the `report` folder. This should be formatted as follows:
+#
+# - **name**: name of the folder to which the data is saved.
+#
+#   - **type**: agent type e.g., farmer. Should be identical to attribute name in Agents class.
+#   - **function**: whether to use a function to parse the data. 'null' means the data is saved literally, 'mean' takes the mean etc. Options are given in Hyve's documentation`.
+#   - **varname**: attribute name of variable in agent class.
+#   - **format**: format to save to.
+#   - **initial_only**: if true only save the data for the first timestep.
 report:
   activation order:
     type: farmers
@@ -92,6 +126,14 @@ report:
     format: npy
     per_timestep: true
 
+###
+# In this section you can configure what CWatM data is saved, such as the groundwater head in each timestep, as follows:
+#
+# - **name**: name of the folder to which the data is saved.
+#
+#   - **varname**: attribute name of CWatM data. Should be precededed by 'var.' for data from CWatM cells and 'subvar.' for data from hydrologial units..
+#   - **function**: whether to use a function to parse the data. For example, 'mean' takes the mean etc. Options are 'mean', 'sum', 'nanmean' and 'nansum'.
+#   - **format**: format to save to.
 report_cwatm:
   hydraulic head:
     varname: var.head
