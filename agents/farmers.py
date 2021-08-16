@@ -16,7 +16,7 @@ from hyve.agents import AgentBaseClass
 
 @njit
 def is_currently_growing(plant_month: int, harvest_month: int, current_month: int, current_day: int, start_day_per_month: np.ndarray) -> int:
-    """Checks whether a crop is currently growing based on the sow month, harvest month, and current model date. Used for initalization of the model.
+    """Checks whether a crop is currently growing based on the plant month, harvest month, and current model date. Used for initalization of the model.
 
     Args:
         plant_month: month that the crop is planted.
@@ -70,7 +70,7 @@ class Farmers(AgentBaseClass):
         self.crop_yield_factors = self.get_crop_yield_factors()
 
     def initiate_agents(self) -> None:
-        """Calls functions to initialize all agent attributes, including their locations.
+        """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
         """
         self.fields = self.model.data.subvar.land_owners
         if self.model.args.use_gpu:
@@ -79,6 +79,7 @@ class Farmers(AgentBaseClass):
         
         self.initiate_locations()
         self.initiate_attributes()
+        self.plant_initial()
         print(f'initialized {self.n} agents')
 
     def initiate_locations(self) -> None:
@@ -134,7 +135,6 @@ class Farmers(AgentBaseClass):
 
         self.planting_schemes = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'planting_schemes.npy'))
 
-        self.sow_initial()
         self.actual_transpiration_crop = self.model.data.subvar.full_compressed(0, dtype=np.float32)
         self.potential_transpiration_crop = self.model.data.subvar.full_compressed(0, dtype=np.float32)
 
@@ -560,7 +560,7 @@ class Farmers(AgentBaseClass):
         """
         crop_age_days = np.full(n, -1, dtype=np.int32)
         crop_harvest_age_days = np.full(n, -1, dtype=np.int32)
-        next_sow_day = np.full(n, -1, dtype=np.int32)
+        next_plant_day = np.full(n, -1, dtype=np.int32)
         next_multicrop_index = np.full(n, -1, dtype=np.int32)
         n_multicrop_periods = np.full(n, -1, dtype=np.int32)
 
@@ -579,63 +579,58 @@ class Farmers(AgentBaseClass):
                     next_multicrop_index[i] = j
                     break
                 elif n_cropping_periods == 1:
-                    next_sow_day[i] = start_day_per_month[farmer_planting_scheme[j, 0] - 1]
+                    next_plant_day[i] = start_day_per_month[farmer_planting_scheme[j, 0] - 1]
                     next_multicrop_index[i] = 0
                     break
-            else:  # no crops are currently planted, so let's find out the first crop with a sow day
+            else:  # no crops are currently planted, so let's find out the first crop with a plant day
                 assert n_cropping_periods > 1
                 for j in range(n_cropping_periods):
-                    if j == 0:  # if first option, just set it as the next sow day
-                        next_sow_day[i] = start_day_per_month[farmer_planting_scheme[j, 0] - 1]
+                    if j == 0:  # if first option, just set it as the next plant day
+                        next_plant_day[i] = start_day_per_month[farmer_planting_scheme[j, 0] - 1]
                     else:  # if not, find the first option starting from the current day
-                        potential_next_sow_day = start_day_per_month[farmer_planting_scheme[j, 0] - 1]
-                        next_sow_day[i] = ((min((potential_next_sow_day - current_day) % days_in_year, (next_sow_day[i] - current_day) % days_in_year)) + current_day) % days_in_year
+                        potential_next_plant_day = start_day_per_month[farmer_planting_scheme[j, 0] - 1]
+                        next_plant_day[i] = ((min((potential_next_plant_day - current_day) % days_in_year, (next_plant_day[i] - current_day) % days_in_year)) + current_day) % days_in_year
 
                 for j in range(n_cropping_periods):
-                    if start_day_per_month[farmer_planting_scheme[j, 0] - 1] == next_sow_day[i]:
+                    if start_day_per_month[farmer_planting_scheme[j, 0] - 1] == next_plant_day[i]:
                         next_multicrop_index[i] = j
                         break
                 else:  # make sure one of the options is picked
                     assert False
 
-            assert crop_harvest_age_days[i] != -1 or next_sow_day[i] != -1
+            assert crop_harvest_age_days[i] != -1 or next_plant_day[i] != -1
 
         assert (next_multicrop_index != -1).all()
         assert (n_multicrop_periods != -1).all()
 
-        return crop_age_days, crop_harvest_age_days, next_sow_day, n_multicrop_periods, next_multicrop_index
+        return crop_age_days, crop_harvest_age_days, next_plant_day, n_multicrop_periods, next_multicrop_index
 
     def by_field(self, var, nofieldvalue=-1):
         by_field = np.take(var, self.fields)
         by_field[self.fields == -1] = nofieldvalue
         return by_field
         
-    def sow_initial(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def plant_initial(self) -> None:
         """When the model is initalized, crops are already growing. This function first finds out which farmers are already growing crops, how old these are, as well as the multicrop indices. Then, these arrays per farmer are converted to the field array.
-        
-        Returns:
-            sow: Subarray map of what crops are growing.
-            crop_age_days: Subarray map of the current crop age in days.
-            crop_harvest_age_days: Subarray map of the havest age in days.
         """
         if self.model.args.use_gpu:
             crop = self.crop.get()
         else:
             crop = self.crop.copy()
 
-        crop_age_days, crop_harvest_age_days, next_sow_day, n_multicrop_periods, next_multicrop_index = self.get_crop_age_and_harvest_day_initial(self.n, self.model.current_time.month, self.current_day_of_year, self.planting_schemes, crop, self.irrigating, self.unit_code, self.planting_scheme, self.start_day_per_month)
-        assert np.logical_xor((next_sow_day == -1), (crop_harvest_age_days == -1)).all()
+        crop_age_days, crop_harvest_age_days, next_plant_day, n_multicrop_periods, next_multicrop_index = self.get_crop_age_and_harvest_day_initial(self.n, self.model.current_time.month, self.current_day_of_year, self.planting_schemes, crop, self.irrigating, self.unit_code, self.planting_scheme, self.start_day_per_month)
+        assert np.logical_xor((next_plant_day == -1), (crop_harvest_age_days == -1)).all()
         if self.model.args.use_gpu:
             crop_age_days = cp.array(crop_age_days)
             crop_harvest_age_days = cp.array(crop_harvest_age_days)
 
-        sow = self.crop.copy()
-        sow[crop_age_days == -1] = -1
+        plant = self.crop.copy()
+        plant[crop_age_days == -1] = -1
         
-        self.crop_map = self.by_field(sow)
+        self.crop_map = self.by_field(plant)
         self.crop_age_days_map = self.by_field(crop_age_days)
         self.crop_harvest_age_days_map = self.by_field(crop_harvest_age_days)
-        self.next_sow_day = self.by_field(next_sow_day)
+        self.next_plant_day = self.by_field(next_plant_day)
         self.n_multicrop_periods = self.by_field(n_multicrop_periods)
         self.next_multicrop_index = self.by_field(next_multicrop_index)
                 
@@ -658,7 +653,7 @@ class Farmers(AgentBaseClass):
         crop_map: np.ndarray,
         crop_age_days: np.ndarray,
         crop_harvest_age_days: np.ndarray,
-        next_sow_day: np.ndarray,
+        next_plant_day: np.ndarray,
         next_multicrop_index: np.ndarray,
         n_multicrop_periods: np.ndarray,
         planting_schemes: np.ndarray,
@@ -667,7 +662,7 @@ class Farmers(AgentBaseClass):
         crop: np.ndarray,
         planting_scheme: np.ndarray
     ) -> np.ndarray:
-        """This function determines whether crops are ready to be harvested by comparing the crop harvest age to the current age of the crop. If the crop is harvested, the crops next multicrop index and next sow day are determined.
+        """This function determines whether crops are ready to be harvested by comparing the crop harvest age to the current age of the crop. If the crop is harvested, the crops next multicrop index and next plant day are determined.
 
         Args:
             n: Number of farmers.
@@ -677,7 +672,7 @@ class Farmers(AgentBaseClass):
             crop_map: Subarray map of crops.
             crop_age_days: Subarray map of current crop age in days.
             crop_harvest_age_days: Subarray map of crop harvest age in days.
-            next_sow_day: Subarray map of next sowing day.
+            next_plant_day: Subarray map of next planting day.
             next_multicrop_index: Subarray map of the next multicropping index.
             n_multicrop_periods: Subarray map of the number of multicropping periods.
             planting_schemes: A 6-dimensional array which contains the planing schemes.
@@ -708,20 +703,16 @@ class Farmers(AgentBaseClass):
                         harvest[field] = True
                         next_multicrop_index[field] = (next_multicrop_index[field] + 1) % n_multicrop_periods[field]
                         assert next_multicrop_index[field] < n_multicrop_periods[field] 
-                        next_sow_month = planting_schemes[irrigating[i], unit_code[i], crop[i], planting_scheme[i], next_multicrop_index[field]]
-                        assert next_sow_month[0] != -1
-                        next_sow_day[field] = start_day_per_month[next_sow_month - 1][0]
+                        next_plant_month = planting_schemes[irrigating[i], unit_code[i], crop[i], planting_scheme[i], next_multicrop_index[field]]
+                        assert next_plant_month[0] != -1
+                        next_plant_day[field] = start_day_per_month[next_plant_month - 1][0]
                 else:
                     assert crop_map[field] == -1
                     assert crop_harvest_age_days[field] == -1
         return harvest
         
-    def harvest(self) -> np.ndarray:
+    def harvest(self):
         """This function determines which crops needs to be harvested, based on the current age of the crops and the harvest age of the crop. First a helper function is used to obtain the harvest map. Then, if at least 1 field is harvested, the yield ratio is obtained for all fields using the ratio of actual to potential evapotranspiration, saves the harvest per farmer and potentially invests in water saving techniques.
-
-        Returns:
-            harvest: Subarray map of the fields to be harvested.
-
         """
         actual_transpiration = self.actual_transpiration_crop.get() if self.model.args.use_gpu else self.actual_transpiration_crop
         potential_transpiration = self.potential_transpiration_crop.get() if self.model.args.use_gpu else self.potential_transpiration_crop
@@ -736,7 +727,7 @@ class Farmers(AgentBaseClass):
             crop_map,
             crop_age_days,
             crop_harvest_age_days,
-            self.next_sow_day,
+            self.next_plant_day,
             self.next_multicrop_index,
             self.n_multicrop_periods,
             self.planting_schemes,
@@ -772,11 +763,11 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit
-    def sow_numba(
+    def plant_numba(
         n: int,
         start_day_per_month: np.ndarray,
         current_day: int,
-        next_sow_day: np.ndarray,
+        next_plant_day: np.ndarray,
         crop: np.ndarray,
         field_indices_per_farmer: np.ndarray,
         field_indices: np.ndarray,
@@ -786,13 +777,13 @@ class Farmers(AgentBaseClass):
         planting_scheme: np.ndarray,
         next_multicrop_index: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Determines when and what crop should be planted, by comparing the current day to the next sow day. Also sets the haverst age of the plant.
+        """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
         
         Args:
             n: Number of farmers.
             start_day_per_month: Starting day of each month of year.
             current_day: Current day.
-            next_sow_day: Subarray map of next sowing day.
+            next_plant_day: Subarray map of next planting day.
             crop: Crops grown by each farmer. 
             field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices. 
@@ -810,33 +801,28 @@ class Farmers(AgentBaseClass):
             next_multicrop_index: Subarray map of the next multicropping index.
 
         Returns:
-            sow: Subarray map of what crops are sown this day.
+            plant: Subarray map of what crops are plantn this day.
             crop_harvest_age_days: Subarray map of the havest age in days.
         """
-        sow = np.full_like(next_sow_day, -1, dtype=np.int32)
-        crop_harvest_age_days = np.full_like(next_sow_day, -1, dtype=np.int32)
+        plant = np.full_like(next_plant_day, -1, dtype=np.int32)
+        crop_harvest_age_days = np.full_like(next_plant_day, -1, dtype=np.int32)
         for i in range(n):
             farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, i)
             for field in farmer_fields:
-                if next_sow_day[field] != -1 and next_sow_day[field] == current_day:
-                    sow[field] = crop[i]
+                if next_plant_day[field] != -1 and next_plant_day[field] == current_day:
+                    plant[field] = crop[i]
                     crop_data = planting_schemes[irrigating[i], unit_code[i], crop[i], planting_scheme[i], next_multicrop_index[field]]
                     crop_harvest_age_days[field] = (start_day_per_month[crop_data[1] - 1] - start_day_per_month[crop_data[0] - 1]) % 365
-        return sow, crop_harvest_age_days
+        return plant, crop_harvest_age_days
 
-    def sow(self) -> tuple[np.ndarray, np.ndarray]:
-        """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.sow_numba`. Then converts the array to cupy array if model is running with GPU.
-
-        Returns:
-            sow: Subarray map of what crops are sown this day.
-            crop_harvest_age_days: Subarray map of the havest age in days.
-
+    def plant(self) -> None:
+        """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU.
         """
-        sow_map, crop_harvest_age_days = self.sow_numba(
+        plant_map, crop_harvest_age_days = self.plant_numba(
             self.n,
             self.start_day_per_month,
             self.current_day_of_year,
-            self.next_sow_day,
+            self.next_plant_day,
             self.crop.get() if self.model.args.use_gpu else self.crop,
             self.field_indices_per_farmer,
             self.field_indices,
@@ -847,12 +833,12 @@ class Farmers(AgentBaseClass):
             self.next_multicrop_index
         )
         if self.model.args.use_gpu:
-            sow_map = cp.array(sow_map)
+            plant_map = cp.array(plant_map)
             crop_harvest_age_days = cp.array(crop_harvest_age_days)
 
-        self.crop_map = np.where(sow_map >= 0, sow_map, self.crop_map)
-        self.crop_age_days_map[sow_map >= 0] = 0
-        self.crop_harvest_age_days_map[sow_map >= 0] = crop_harvest_age_days[sow_map >= 0]
+        self.crop_map = np.where(plant_map >= 0, plant_map, self.crop_map)
+        self.crop_age_days_map[plant_map >= 0] = 0
+        self.crop_harvest_age_days_map[plant_map >= 0] = crop_harvest_age_days[plant_map >= 0]
 
         assert (self.crop_harvest_age_days_map[self.crop_map > 0] > 0).all()
         assert (self.crop_age_days_map[self.crop_map > 0] >= 0).all()
@@ -1024,13 +1010,13 @@ class Farmers(AgentBaseClass):
         """
         This function is called at the beginning of each timestep. First, in the `ngo_training` scenario water efficiency knowledge diffuses through the farmer population. Only occurs each year on January 1st.
 
-        Then, farmers harvest and sow crops.
+        Then, farmers harvest and plant crops.
         """
         if self.model.args.scenario == 'ngo_training' and self.model.current_time.month == 1 and self.model.current_time.day == 1:
             self.diffuse_water_efficiency_knowledge()
 
         self.harvest()
-        self.sow()
+        self.plant()
         
     def add_agents(self):
         """This function can be used to add new farmers, but is not yet implemented."""
