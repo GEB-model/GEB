@@ -13,7 +13,7 @@ class Artists(BaseArtist):
         BaseArtist.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
-        self.background_variable = "data.subvar.crop_map"  # set initial background iamge.
+        self.background_variable = "data.landunit.crop_map"  # set initial background iamge.
         self.custom_plot = self.get_custom_plot()
 
     def draw_farmers(self, model, agents, idx: int) -> dict:
@@ -27,10 +27,10 @@ class Artists(BaseArtist):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if not hasattr(model, 'legend') and hasattr(model, 'subvar'):
-            crops = model.data.subvar.crop_data['Crop']
-            self.legend = {crop: color for crop, color in zip(crops, model.data.subvar.crop_data['Color'])}
-        color = self.custom_plot['data.subvar.crop_map']['colors'][agents.crop[idx].item()]
+        if not hasattr(model, 'legend') and hasattr(model, 'landunit'):
+            crops = model.data.landunit.crop_data['Crop']
+            self.legend = {crop: color for crop, color in zip(crops, model.data.landunit.crop_data['Color'])}
+        color = self.custom_plot['data.landunit.crop_map']['colors'][agents.crop[idx].item()]
         return {"type": "shape", "shape": "circle", "r": 1, "filled": True, "color": color}
 
     def draw_rivers(self) -> dict:
@@ -51,7 +51,7 @@ class Artists(BaseArtist):
             .. code-block:: python
 
                 {
-                    'subvar.crop_map': {
+                    'landunit.crop_map': {
                         'type': 'discrete',
                         'nanvalue': -1,
                         'names': ['crop name 1', 'crop name 2'],
@@ -61,13 +61,13 @@ class Artists(BaseArtist):
 
         """
         return {
-            'data.subvar.crop_stage': {
+            'data.landunit.crop_stage': {
                 'type': 'discrete'
             },
-            'data.subvar.crop_age': {
+            'data.landunit.crop_age': {
                 'type': 'discrete'
             },
-            'data.subvar.crop_map': {
+            'data.landunit.crop_map': {
                 'type': 'categorical',
                 'nanvalue': -1,
                 'names': [self.model.config['draw']['crop_data'][i]['name'] for i in range(26)],

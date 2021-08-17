@@ -10,8 +10,8 @@ except ModuleNotFoundError:
 from cwatm.management_modules.data_handling import readnetcdfInitial, checkOption
 
 @njit(cache=True)
-def _decompress_subvar(subarray: np.ndarray, outarray: np.ndarray, subcell_locations: np.ndarray, mask: np.ndarray, scaling: int, ysize: int, xsize: int) -> np.ndarray:
-    """Decompress subvar array.
+def _decompress_landunit(subarray: np.ndarray, outarray: np.ndarray, subcell_locations: np.ndarray, mask: np.ndarray, scaling: int, ysize: int, xsize: int) -> np.ndarray:
+    """Decompress landunit array.
 
     Args:
         subarray: Subarray.
@@ -201,7 +201,7 @@ class LandUnits(BaseVariables):
 
         self.mask = self.data.var.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.var.cell_size / self.scaling
-        self.land_use_type, self.land_use_ratios, self.land_owners, self.subvar_to_var, self.var_to_subvar, self.var_to_subvar_uncompressed, self.subcell_locations = self.create_subcell_mask()
+        self.land_use_type, self.land_use_ratios, self.land_owners, self.landunit_to_var, self.var_to_landunit, self.var_to_landunit_uncompressed, self.subcell_locations = self.create_subcell_mask()
         self.land_use_type[self.land_use_type == 2] = 1
         self.land_use_type[self.land_use_type == 3] = 1
         if self.model.args.use_gpu:
@@ -219,9 +219,9 @@ class LandUnits(BaseVariables):
         ysize, xsize = mask.shape
 
         n_nonmasked_cells = mask.size - mask.sum()
-        var_to_subvar = np.full(n_nonmasked_cells, -1, dtype=np.int32)
-        var_to_subvar_uncompressed = np.full(mask.size, -1, dtype=np.int32)
-        subvar_to_var = np.full(farms.size, -1, dtype=np.int32)
+        var_to_landunit = np.full(n_nonmasked_cells, -1, dtype=np.int32)
+        var_to_landunit_uncompressed = np.full(mask.size, -1, dtype=np.int32)
+        landunit_to_var = np.full(farms.size, -1, dtype=np.int32)
         land_use_array = np.full(farms.size, -1, dtype=np.int32)
         land_use_size = np.full(farms.size, -1, dtype=np.int32)
         land_use_owner = np.full(farms.size, -1, dtype=np.int32)
@@ -257,7 +257,7 @@ class LandUnits(BaseVariables):
                             land_use_size[j] = 1
                             land_use_owner[j] = farm
 
-                            subvar_to_var[j] = var_cell_count_compressed
+                            landunit_to_var[j] = var_cell_count_compressed
 
                             prev_farm = farm
                             j += 1
@@ -285,7 +285,7 @@ class LandUnits(BaseVariables):
                             land_use_size[j] = 1
                             prev_land_use = land_use
 
-                            subvar_to_var[j] = var_cell_count_compressed
+                            landunit_to_var[j] = var_cell_count_compressed
 
                             j += 1
                         else:
@@ -294,20 +294,20 @@ class LandUnits(BaseVariables):
                         subcells_locations[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
                         l += 1
 
-                    var_to_subvar[var_cell_count_compressed] = j
+                    var_to_landunit[var_cell_count_compressed] = j
                     var_cell_count_compressed += 1
-                var_to_subvar_uncompressed[var_cell_count_uncompressed] = j
+                var_to_landunit_uncompressed[var_cell_count_uncompressed] = j
                 var_cell_count_uncompressed += 1
         
         land_use_size = land_use_size[:j]
         land_use_array = land_use_array[:j]
         land_use_owner = land_use_owner[:j]
-        subvar_to_var = subvar_to_var[:j]
+        landunit_to_var = landunit_to_var[:j]
         subcells_locations = subcells_locations[:var_cell_count_compressed * (scaling ** 2)]
         assert int(land_use_size.sum()) == n_nonmasked_cells * (scaling ** 2)
         
         land_use_ratio = land_use_size / (scaling ** 2)
-        return land_use_array, land_use_ratio, land_use_owner, subvar_to_var, var_to_subvar, var_to_subvar_uncompressed, subcells_locations
+        return land_use_array, land_use_ratio, land_use_owner, landunit_to_var, var_to_landunit, var_to_landunit_uncompressed, subcells_locations
 
     def create_subcell_mask(self):
         with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farms.tif'), 'r') as farms_src:
@@ -370,7 +370,7 @@ class LandUnits(BaseVariables):
             nanvalue = np.nan
         ysize, xsize = self.model.data.var.mask.shape
         decompresssed = np.full((ysize * self.scaling, xsize * self.scaling), nanvalue, dtype=subarray.dtype)
-        return _decompress_subvar(array, outarray=decompresssed, subcell_locations=self.subcell_locations, mask=self.model.data.var.mask, scaling=self.scaling, ysize=ysize, xsize=xsize)
+        return _decompress_landunit(array, outarray=decompresssed, subcell_locations=self.subcell_locations, mask=self.model.data.var.mask, scaling=self.scaling, ysize=ysize, xsize=xsize)
 
     def plot(self, subarray, ax=None, show=True):
         import matplotlib.pyplot as plt
@@ -387,26 +387,26 @@ class Data:
     def __init__(self, model):
         self.model = model
         self.var = Variables(self, model)
-        self.subvar = LandUnits(self, model)
-        self.subvar.cellArea = self.to_subvar(data=self.var.cellArea, fn='mean')
+        self.landunit = LandUnits(self, model)
+        self.landunit.cellArea = self.to_landunit(data=self.var.cellArea, fn='mean')
 
     @staticmethod
     @njit
-    def _to_subvar(array, var_to_subvar, area_sizes, mask=None, fn=None):
-        assert var_to_subvar[-1] == area_sizes.size
-        assert array.shape == var_to_subvar.shape
+    def _to_landunit(array, var_to_landunit, area_sizes, mask=None, fn=None):
+        assert var_to_landunit[-1] == area_sizes.size
+        assert array.shape == var_to_landunit.shape
         output_array = np.zeros(area_sizes.size, dtype=array.dtype)
         prev_index = 0
 
         if mask.size == 0:  # no mask
             if fn is None:
-                for i in range(var_to_subvar.size):
-                    cell_index = var_to_subvar[i]
+                for i in range(var_to_landunit.size):
+                    cell_index = var_to_landunit[i]
                     output_array[prev_index:cell_index] = array[i]
                     prev_index = cell_index
             elif fn == 'mean':
-                for i in range(var_to_subvar.size):
-                    cell_index = var_to_subvar[i]
+                for i in range(var_to_landunit.size):
+                    cell_index = var_to_landunit[i]
                     cell_sizes = area_sizes[prev_index:cell_index]
                     output_array[prev_index:cell_index] = array[i] / cell_sizes.sum() * cell_sizes
                     prev_index = cell_index
@@ -414,8 +414,8 @@ class Data:
                 raise NotImplementedError
         else:
             if fn is None:
-                for i in range(var_to_subvar.size):
-                    cell_index = var_to_subvar[i]
+                for i in range(var_to_landunit.size):
+                    cell_index = var_to_landunit[i]
                     output_array[prev_index:cell_index][~mask[prev_index:cell_index]] = array[i]
                     prev_index = cell_index
             else:
@@ -423,7 +423,7 @@ class Data:
                 
         return output_array
 
-    def to_subvar(self, *, data=None, varname=None, fn=None, mask=np.zeros(0, dtype=np.bool), delete=True):
+    def to_landunit(self, *, data=None, varname=None, fn=None, mask=np.zeros(0, dtype=np.bool), delete=True):
         assert bool(data is not None) != bool(varname is not None)
         if varname:
             data = getattr(self.var, varname)
@@ -431,25 +431,25 @@ class Data:
         if isinstance(data, (float, int)):  # check if data is simple float. Otherwise should be numpy array.
             outdata = data
         else:
-            outdata = self._to_subvar(data, self.subvar.var_to_subvar, self.subvar.land_use_ratios, mask=mask, fn=fn)
+            outdata = self._to_landunit(data, self.landunit.var_to_landunit, self.landunit.land_use_ratios, mask=mask, fn=fn)
             if self.model.args.use_gpu:
                 outdata = cp.asarray(outdata)
         
         if varname:
             if delete:
                 delattr(self.var, varname)
-            setattr(self.subvar, varname, outdata)
+            setattr(self.landunit, varname, outdata)
         return outdata
 
     @staticmethod
     @njit
-    def _to_var(array, var_to_subvar, cell_sizes, fn='mean'):
-        output_array = np.empty(var_to_subvar.size, dtype=array.dtype)
-        assert var_to_subvar[-1] == cell_sizes.size
+    def _to_var(array, var_to_landunit, cell_sizes, fn='mean'):
+        output_array = np.empty(var_to_landunit.size, dtype=array.dtype)
+        assert var_to_landunit[-1] == cell_sizes.size
 
         prev_index = 0
-        for i in range(var_to_subvar.size):
-            cell_index = var_to_subvar[i]
+        for i in range(var_to_landunit.size):
+            cell_index = var_to_landunit[i]
             if fn == 'mean':
                 values = array[prev_index:cell_index]
                 weights = cell_sizes[prev_index:cell_index]
@@ -471,17 +471,17 @@ class Data:
         assert bool(subdata is not None) != bool(varname is not None)
         assert fn is not None
         if varname:
-            subdata = getattr(self.subvar, varname)
+            subdata = getattr(self.landunit, varname)
         assert not isinstance(subdata, list)
         if isinstance(subdata, float):  # check if data is simple float. Otherwise should be numpy array.
             outdata = subdata
         else:
             if self.model.args.use_gpu and isinstance(subdata, cp.ndarray):
                 subdata = subdata.get()
-            outdata = self._to_var(subdata, self.subvar.var_to_subvar, self.subvar.land_use_ratios, fn)
+            outdata = self._to_var(subdata, self.landunit.var_to_landunit, self.landunit.land_use_ratios, fn)
 
         if varname:
             if delete:
-                delattr(self.subvar, varname)
+                delattr(self.landunit, varname)
             setattr(self.var, varname, outdata)
         return outdata

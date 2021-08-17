@@ -207,8 +207,8 @@ def create_grid(ax, high_res=False):
 
 
 def plot_land_use_type(ax, dummymodel):
-    land_use_type = dummymodel.subvar.land_use_type
-    land_use_type = dummymodel.subvar.decompress(land_use_type)
+    land_use_type = dummymodel.landunit.land_use_type
+    land_use_type = dummymodel.landunit.decompress(land_use_type)
     land_use_type = cut(land_use_type)
     land_use_type[land_use_type > 2] = land_use_type[land_use_type > 2] - 1
     land_use_type_colored = np.array(LAND_USE_TYPE_COLORS)[land_use_type.astype(np.int32)]
@@ -260,8 +260,8 @@ def main(include_circle=False, show=True, combine_units=True, high_res=False):
     create_grid(ax0, high_res=high_res)
 
     # land owners
-    land_owners = dummymodel.subvar.land_owners
-    land_owners = dummymodel.subvar.decompress(land_owners)
+    land_owners = dummymodel.landunit.land_owners
+    land_owners = dummymodel.landunit.decompress(land_owners)
     land_owners = cut(land_owners)
     graph, regions = create_region_graph(land_owners)
     land_owners_colored = color(graph, regions, COLORS, "smallest_last", 4)
@@ -272,9 +272,9 @@ def main(include_circle=False, show=True, combine_units=True, high_res=False):
 
     # units
     if combine_units:
-        units = dummymodel.subvar.full_compressed(0, dtype=np.int32)
+        units = dummymodel.landunit.full_compressed(0, dtype=np.int32)
         units = cp.arange(0, units.size, dtype=np.int32)
-        units = dummymodel.subvar.decompress(units)
+        units = dummymodel.landunit.decompress(units)
         units = cut(units)
         graph, regions = create_region_graph(units)
 
@@ -359,8 +359,8 @@ def plot_pies():
     ax1.imshow(array)
     create_grid(ax1)
 
-    land_use_type = dummymodel.subvar.land_use_type
-    land_use_type = dummymodel.subvar.decompress(land_use_type)
+    land_use_type = dummymodel.landunit.land_use_type
+    land_use_type = dummymodel.landunit.decompress(land_use_type)
     land_use_type = cut(land_use_type)
     land_use_type[land_use_type > 2] = land_use_type[land_use_type > 2] - 1
 

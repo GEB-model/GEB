@@ -21,7 +21,7 @@ sys.path.insert(1, os.path.join(sys.path[0], '..'))
 import matplotlib as mpl
 
 @njit(cache=True)
-def _decompress_subvar(mixed_array, subcell_locations, scaling, mask):
+def _decompress_landunit(mixed_array, subcell_locations, scaling, mask):
     ysize, xsize = mask.shape
     subarray = np.full((ysize * scaling, xsize * scaling), np.nan, dtype=mixed_array.dtype)
     
@@ -115,7 +115,7 @@ class Plot:
             ax.set_title(title, size=4, pad=2, fontweight='bold')
 
     def farmer_array_to_fields(self, array, nofieldvalue):
-        fields_decompressed = _decompress_subvar(self.fields, self.subcell_locations, self.scaling, self.mask)
+        fields_decompressed = _decompress_landunit(self.fields, self.subcell_locations, self.scaling, self.mask)
         fields_decompressed = fields_decompressed[self.submask == 0]
         is_field = np.where(fields_decompressed != -1)
         cell_area = self.cell_area[self.submask == 0]
@@ -126,7 +126,7 @@ class Plot:
 
         array = np.take(array, self.fields)
         array[self.fields == -1] = nofieldvalue
-        array = _decompress_subvar(array, self.subcell_locations, self.scaling, self.mask)
+        array = _decompress_landunit(array, self.subcell_locations, self.scaling, self.mask)
         return array
 
     def plot_by_area(self, array, ax=None, title=None):

@@ -51,7 +51,7 @@ class CWatMReporter(ABMReporter):
                         continue
         
         add_var('data.var')
-        add_var('data.subvar')
+        add_var('data.landunit')
 
     def get_array(self, attr, decompress=False):
         array = attrgetter(attr)(self.model)
@@ -72,7 +72,7 @@ class CWatMReporter(ABMReporter):
                 self.report_value(name, None, conf)
             else:
                 if conf['varname'].endswith("crop"):
-                    crop_map = self.get_array('subvar.crop_map')
+                    crop_map = self.get_array('landunit.crop_map')
                     array = array[crop_map == conf['crop']]
                 if array.size == 0:
                     value = None
@@ -140,8 +140,8 @@ class Reporter:
     def report(self):
         np.save('report/fields.npy', self.model.agents.farmers.fields)
         np.save('report/mask.npy', self.model.data.var.mask)
-        np.save('report/subcell_locations.npy', self.model.data.subvar.subcell_locations)
-        np.save('report/scaling.npy', self.model.data.subvar.scaling)
+        np.save('report/subcell_locations.npy', self.model.data.landunit.subcell_locations)
+        np.save('report/scaling.npy', self.model.data.landunit.scaling)
 
         self.abm_reporter.report()
         self.cwatmreporter.report()
