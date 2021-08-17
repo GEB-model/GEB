@@ -15,7 +15,7 @@ class Agents:
         self.government = Government(model, self)
 
     def step(self) -> None:
-        """This function is called every timestep and activates the agents in order."""
+        """This function is called every timestep and activates the agents in order of NGO, government and then farmers."""
         self.ngo.step()
         self.government.step()
         self.farmers.step()

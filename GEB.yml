@@ -41,82 +41,82 @@ draw:
   crop_data:
     0:
       name: Wheat
-      color: '006400'
+      color: '#006400'
     1:
       name: Maize
-      color: '808000'
+      color: '#808000'
     2:
       name: Rice
-      color: '808000'
+      color: '#808000'
     3:
       name: Barley
-      color: '483d8b'
+      color: '#483d8b'
     4:
       name: Rye
-      color: '3cb371'
+      color: '#3cb371'
     5:
       name: Millet
-      color: '008080'
+      color: '#008080'
     6:
       name: Sorghum
-      color: '4682b4'
+      color: '#4682b4'
     7:
       name: Soybeans
-      color: '000080'
+      color: '#000080'
     8:
       name: Sunflower
-      color: '9acd32'
+      color: '#9acd32'
     9:
       name: Potatoes
-      color: 'b03060'
+      color: '#b03060'
     10:
       name: Cassava
-      color: '9932cc'
+      color: '#9932cc'
     11:
       name: Sugarcane
-      color: 'ff0000'
+      color: '#ff0000'
     12:
       name: Sugarbeets
-      color: 'ff8c00'
+      color: '#ff8c00'
     13:
       name: Oilpalm
-      color: 'ffff00'
+      color: '#ffff00'
     14:
       name: Rapeseed
-      color: '0000cd'
+      color: '#0000cd'
     15:
       name: Groundnuts
-      color: '7cfc00'
+      color: '#7cfc00'
     16:
       name: Pulses
-      color: '00ff7f'
+      color: '#00ff7f'
     17:
       name: Citrus
-      color: '00ffff'
+      color: '#00ffff'
     18:
       name: Datepalm
-      color: 'ff00ff'
+      color: '#ff00ff'
     19:
       name: Grapes
-      color: '1e90ff'
+      color: '#1e90ff'
     20:
       name: Cotton
-      color: 'fa8072'
+      color: '#fa8072'
     21:
       name: Cocoa
-      color: 'eee8aa'
+      color: '#eee8aa'
     22:
       name: Coffee
-      color: 'add8e6'
+      color: '#add8e6'
     23:
       name: Others perennial
-      color: 'ff1493'
+      color: '#ff1493'
     24:
       name: Fodder grasses
-      color: 'ee82ee'
+      color: '#ee82ee'
     25:
       name: Others annual
-      color: 'ffc0cb'
+      color: '#ffc0cb'
 
 ###
 # Here, you can configure which data should be saved from the model in the `report` folder. This should be formatted as follows:

@@ -27,10 +27,10 @@ class Artists(BaseArtist):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if not hasattr(self.model, 'legend') and hasattr(self.model, 'subvar'):
-            crops = self.model.data.subvar.crop_data['Crop']
-            self.legend = {crop: color for crop, color in zip(crops, self.model.data.subvar.crop_data['Color'])}
-        color = self.custom_plot['data.subvar.crop_map']['colors'][self.model.agents.farmers.crop[idx].item()]
+        if not hasattr(model, 'legend') and hasattr(model, 'subvar'):
+            crops = model.data.subvar.crop_data['Crop']
+            self.legend = {crop: color for crop, color in zip(crops, model.data.subvar.crop_data['Color'])}
+        color = self.custom_plot['data.subvar.crop_map']['colors'][agents.crop[idx].item()]
         return {"type": "shape", "shape": "circle", "r": 1, "filled": True, "color": color}
 
     def draw_rivers(self) -> dict:
@@ -71,7 +71,7 @@ class Artists(BaseArtist):
                 'type': 'categorical',
                 'nanvalue': -1,
                 'names': [self.model.config['draw']['crop_data'][i]['name'] for i in range(26)],
-                'colors': ['#' + self.model.config['draw']['crop_data'][i]['color'] for i in range(26)],
+                'colors': [self.model.config['draw']['crop_data'][i]['color'] for i in range(26)],
             },
         }
 
