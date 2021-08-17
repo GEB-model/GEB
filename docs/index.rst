@@ -39,6 +39,7 @@ The figure below shows a schematic overview of the model. The lower part of the 
   Land units <landunits>
   Model <model>
   CWatM Model <cwatm_model>
+  Report <report>
   Artists <artists>
 
 .. toctree::
