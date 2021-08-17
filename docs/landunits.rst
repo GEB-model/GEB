@@ -7,7 +7,7 @@ This creates an issue for agent-based models, where implementation of heterogene
 
 .. image:: images/subcells.png
 
-The figure above displays how this works in practice. Cells in the hydrological model are separated by the regular horizontal and vertical black lines. The left panel displays the various land use types, the moddle panel the farmers that own the cropland, and the rightmost panel shows the resulting hydrological units. Note that each contiguous area in the middle and right panel of a single color is one field or hydrological unit respectively, while separated areas are different fields or hydrological units. One exception is the hydrological units of the same land use type that are not owned by agents. These are represented by a single hydrological unit if they are encompassed within a single cell.
+The figure above displays how this works in practice. Grid cells in the hydrological model are separated by the regular horizontal and vertical black lines. The left panel displays the various land use types, the moddle panel the farmers that own the cropland, and the rightmost panel shows the resulting hydrological units. Note that each contiguous area in the middle and right panel of a single color is one field or hydrological unit respectively, while separated areas are different fields or hydrological units. One exception is the hydrological units of the same land use type that are not owned by agents. These are represented by a single hydrological unit if they are encompassed within a single cell.
 
 .. automodule:: landunits
     :members:
