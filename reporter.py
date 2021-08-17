@@ -50,7 +50,7 @@ class CWatMReporter(ABMReporter):
                     else:
                         continue
         
-        add_var('data.var')
+        add_var('data.grid')
         add_var('data.landunit')
 
     def get_array(self, attr, decompress=False):
@@ -139,7 +139,7 @@ class Reporter:
 
     def report(self):
         np.save('report/fields.npy', self.model.agents.farmers.fields)
-        np.save('report/mask.npy', self.model.data.var.mask)
+        np.save('report/mask.npy', self.model.data.grid.mask)
         np.save('report/unmerged_landunit_indices.npy', self.model.data.landunit.unmerged_landunit_indices)
         np.save('report/scaling.npy', self.model.data.landunit.scaling)
 

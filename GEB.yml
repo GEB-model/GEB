@@ -188,10 +188,10 @@ report:
 #   - **format**: format to save to.
 report_cwatm:
   hydraulic head:
-    varname: data.var.head
+    varname: data.grid.head
     function: mean
     format: csv
   reservoir storage:
-    varname: data.var.reservoirStorageM3C
+    varname: data.grid.reservoirStorageM3C
     function: sum
     format: csv
