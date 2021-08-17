@@ -6,6 +6,8 @@ try:
     import cupy as cp
 except ImportError:
     pass
+from operator import attrgetter
+
 
 from hyve.reporter import Reporter as ABMReporter
 
@@ -33,34 +35,28 @@ class CWatMReporter(ABMReporter):
     def set_variables(self):
         self.variables_dict = {}
 
-        def add_var(vartype):
-            compressed_size = getattr(self.model.data, vartype).compressed_size
-            for varname, variable in vars(getattr(self.model.data, vartype)).items():
+        def add_var(attr):
+            attributes = attrgetter(attr)(self.model)
+            compressed_size = attributes.compressed_size
+            for varname, variable in vars(attributes).items():
                 if isinstance(variable, (np.ndarray, cp.ndarray)):
                     if variable.ndim == 1 and variable.size == compressed_size:
-                        name = f'{vartype}.{varname}'
+                        name = f'{attr}.{varname}'
                         self.variables_dict[name] = variable
                     if variable.ndim == 2 and variable.shape[1] == compressed_size:
                         for i in range(variable.shape[0]):
-                            name = f'{vartype}.{varname}[{i}]'
+                            name = f'{attr}.{varname}[{i}]'
                             self.variables_dict[name] = variable[i]
                     else:
                         continue
         
-        add_var('var')
-        add_var('subvar')
+        add_var('data.var')
+        add_var('data.subvar')
 
-    def get_array(self, name, decompress=False):
-        if name.startswith('subvar.'):
-            array = getattr(self.model.data.subvar, name[7:])
-            if decompress:
-                array = self.model.data.subvar.decompress(array)
-        elif name.startswith('var.'):
-            array = getattr(self.model.data.var, name[4:])
-            if decompress:
-                array = self.model.data.var.decompress(array)
-        else:
-            raise NotImplementedError
+    def get_array(self, attr, decompress=False):
+        array = attrgetter(attr)(self.model)
+        if decompress:
+            array = attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
 
         assert isinstance(array, (np.ndarray, cp.ndarray))
 

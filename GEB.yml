@@ -35,36 +35,88 @@ draw:
   # Here, you can specify which types of agents are to be drawn. In addition, you can specify options on how those agents will be drawn. These options must correspond to method arguments in the artists.
   draw_agents:
     farmers:
-      draw_every_nth: 100000
+      draw_every_nth: 10000
   ###
-  # Specify the colors of the crops to use here. These names must match the crop names in the crop factors file (DataDrive/GEB/input/crop_data/crop_factors.csv).
-  crop_colors:
-    Wheat: #006400
-    Maize: #8b0000
-    Rice: #808000
-    Barley: #483d8b
-    Rye: #3cb371
-    Millet: #008080
-    Sorghum: #4682b4
-    Soybeans: #000080
-    Sunflower: #9acd32
-    Potatoes: #b03060
-    Cassava: #9932cc
-    Sugarcane: #ff0000
-    Sugarbeets: #ff8c00
-    Oilpalm: #ffff00
-    Rapeseed: #0000cd
-    Groundnuts: #7cfc00
-    Pulses: #00ff7f
-    Citrus: #00ffff
-    Datepalm: #ff00ff
-    Grapes: #1e90ff
-    Cotton: #fa8072
-    Cocoa: #eee8aa
-    Coffee: #add8e6
-    Others perennial: #ff1493
-    Fodder grasses: #ee82ee
-    Others annual: #ffc0cb
+  # Specify the colors and names of the crops to use here. The indices must match the indices the crop factors file (DataDrive/GEB/input/crop_data/crop_factors.csv).
+  crop_data:
+    0:
+      name: Wheat
+      color: '006400'
+    1:
+      name: Maize
+      color: '808000'
+    2:
+      name: Rice
+      color: '808000'
+    3:
+      name: Barley
+      color: '483d8b'
+    4:
+      name: Rye
+      color: '3cb371'
+    5:
+      name: Millet
+      color: '008080'
+    6:
+      name: Sorghum
+      color: '4682b4'
+    7:
+      name: Soybeans
+      color: '000080'
+    8:
+      name: Sunflower
+      color: '9acd32'
+    9:
+      name: Potatoes
+      color: 'b03060'
+    10:
+      name: Cassava
+      color: '9932cc'
+    11:
+      name: Sugarcane
+      color: 'ff0000'
+    12:
+      name: Sugarbeets
+      color: 'ff8c00'
+    13:
+      name: Oilpalm
+      color: 'ffff00'
+    14:
+      name: Rapeseed
+      color: '0000cd'
+    15:
+      name: Groundnuts
+      color: '7cfc00'
+    16:
+      name: Pulses
+      color: '00ff7f'
+    17:
+      name: Citrus
+      color: '00ffff'
+    18:
+      name: Datepalm
+      color: 'ff00ff'
+    19:
+      name: Grapes
+      color: '1e90ff'
+    20:
+      name: Cotton
+      color: 'fa8072'
+    21:
+      name: Cocoa
+      color: 'eee8aa'
+    22:
+      name: Coffee
+      color: 'add8e6'
+    23:
+      name: Others perennial
+      color: 'ff1493'
+    24:
+      name: Fodder grasses
+      color: 'ee82ee'
+    25:
+      name: Others annual
+      color: 'ffc0cb'
 
 ###
 # Here, you can configure which data should be saved from the model in the `report` folder. This should be formatted as follows:
@@ -136,10 +188,10 @@ report:
 #   - **format**: format to save to.
 report_cwatm:
   hydraulic head:
-    varname: var.head
+    varname: data.var.head
     function: mean
     format: csv
   reservoir storage:
-    varname: var.reservoirStorageM3C
+    varname: data.var.reservoirStorageM3C
     function: sum
     format: csv

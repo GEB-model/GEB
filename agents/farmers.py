@@ -64,6 +64,7 @@ class Farmers(AgentBaseClass):
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
     def __init__(self, model, agents, reduncancy: float) -> None:
+        self.var = model.data.subvar
         self.redundancy = reduncancy
         self.input_folder = 'DataDrive/GEB/input'
         AgentBaseClass.__init__(self, model, agents)
@@ -389,7 +390,7 @@ class Farmers(AgentBaseClass):
             self.irrigating,
             cell_area,
             subvar_to_var,
-            self.crop_map.get() if self.model.args.use_gpu else self.crop_map,
+            self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map,
             totalPotIrrConsumption,
             available_channel_storage_m3,
             available_groundwater_m3,
@@ -627,7 +628,7 @@ class Farmers(AgentBaseClass):
         plant = self.crop.copy()
         plant[crop_age_days == -1] = -1
         
-        self.crop_map = self.by_field(plant)
+        self.var.crop_map = self.by_field(plant)
         self.crop_age_days_map = self.by_field(crop_age_days)
         self.crop_harvest_age_days_map = self.by_field(crop_harvest_age_days)
         self.next_plant_day = self.by_field(next_plant_day)
@@ -635,13 +636,13 @@ class Farmers(AgentBaseClass):
         self.next_multicrop_index = self.by_field(next_multicrop_index)
                 
         assert (self.crop_harvest_age_days_map[self.crop_age_days_map >= 0] != -1).all()
-        assert self.crop_map.shape == self.crop_age_days_map.shape == self.crop_harvest_age_days_map.shape
+        assert self.var.crop_map.shape == self.crop_age_days_map.shape == self.crop_harvest_age_days_map.shape
 
-        assert (self.crop_harvest_age_days_map[self.crop_map > 0] > 0).all()
+        assert (self.crop_harvest_age_days_map[self.var.crop_map > 0] > 0).all()
 
         field_is_paddy_irrigated = self.by_field(self.is_paddy_irrigated, nofieldvalue=0)
-        self.model.data.subvar.land_use_type[(self.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
-        self.model.data.subvar.land_use_type[(self.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
+        self.model.data.subvar.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
+        self.model.data.subvar.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
 
     @staticmethod
     @njit
@@ -716,7 +717,7 @@ class Farmers(AgentBaseClass):
         """
         actual_transpiration = self.actual_transpiration_crop.get() if self.model.args.use_gpu else self.actual_transpiration_crop
         potential_transpiration = self.potential_transpiration_crop.get() if self.model.args.use_gpu else self.potential_transpiration_crop
-        crop_map = self.crop_map.get() if self.model.args.use_gpu else self.crop_map
+        crop_map = self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map
         crop_age_days = self.crop_age_days_map.get() if self.model.args.use_gpu else self.crop_age_days_map
         crop_harvest_age_days = self.crop_harvest_age_days_map.get() if self.model.args.use_gpu else self.crop_harvest_age_days_map
         harvest = self.harvest_numba(
@@ -751,7 +752,7 @@ class Farmers(AgentBaseClass):
         self.potential_transpiration_crop[harvest] = 0
 
         # remove crops from crop_map where they are harvested
-        self.crop_map[harvest] = -1
+        self.var.crop_map[harvest] = -1
         self.crop_age_days_map[harvest] = -1
         self.crop_harvest_age_days_map[harvest] = -1
 
@@ -759,7 +760,7 @@ class Farmers(AgentBaseClass):
         self.model.data.subvar.land_use_type[harvest] = 1
 
         # increase crop age by 1 where crops are not harvested and growing
-        self.crop_age_days_map[(harvest == False) & (self.crop_map >= 0)] += 1
+        self.crop_age_days_map[(harvest == False) & (self.var.crop_map >= 0)] += 1
 
     @staticmethod
     @njit
@@ -836,16 +837,16 @@ class Farmers(AgentBaseClass):
             plant_map = cp.array(plant_map)
             crop_harvest_age_days = cp.array(crop_harvest_age_days)
 
-        self.crop_map = np.where(plant_map >= 0, plant_map, self.crop_map)
+        self.var.crop_map = np.where(plant_map >= 0, plant_map, self.var.crop_map)
         self.crop_age_days_map[plant_map >= 0] = 0
         self.crop_harvest_age_days_map[plant_map >= 0] = crop_harvest_age_days[plant_map >= 0]
 
-        assert (self.crop_harvest_age_days_map[self.crop_map > 0] > 0).all()
-        assert (self.crop_age_days_map[self.crop_map > 0] >= 0).all()
+        assert (self.crop_harvest_age_days_map[self.var.crop_map > 0] > 0).all()
+        assert (self.crop_age_days_map[self.var.crop_map > 0] >= 0).all()
 
         field_is_paddy_irrigated = self.by_field(self.is_paddy_irrigated, nofieldvalue=0)
-        self.model.data.subvar.land_use_type[(self.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
-        self.model.data.subvar.land_use_type[(self.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
+        self.model.data.subvar.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
+        self.model.data.subvar.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
     
     @property
     def locations(self):

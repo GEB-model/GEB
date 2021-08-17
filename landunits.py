@@ -199,6 +199,7 @@ class LandUnits(BaseVariables):
         self.model = model
         self.scaling = 20
 
+        self.mask = self.data.var.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.var.cell_size / self.scaling
         self.land_use_type, self.land_use_ratios, self.land_owners, self.subvar_to_var, self.var_to_subvar, self.var_to_subvar_uncompressed, self.subcell_locations = self.create_subcell_mask()
         self.land_use_type[self.land_use_type == 2] = 1
