@@ -53,7 +53,9 @@ class Artists(BaseArtist):
                 {
                     'subvar.crop_map': {
                         'type': 'discrete',
-                        'nanvalue': -1
+                        'nanvalue': -1,
+                        'names': ['crop name 1', 'crop name 2'],
+                        'colors': ['#00FF00', '#FF0000']
                     }
                 }
 
