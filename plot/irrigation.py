@@ -21,7 +21,7 @@ sys.path.insert(1, os.path.join(sys.path[0], '..'))
 import matplotlib as mpl
 
 @njit(cache=True)
-def _decompress_landunit(mixed_array, subcell_locations, scaling, mask):
+def _decompress_landunit(mixed_array, unmerged_landunit_indices, scaling, mask):
     ysize, xsize = mask.shape
     subarray = np.full((ysize * scaling, xsize * scaling), np.nan, dtype=mixed_array.dtype)
     
@@ -33,7 +33,7 @@ def _decompress_landunit(mixed_array, subcell_locations, scaling, mask):
             if not is_masked:
                 for ys in range(scaling):
                     for xs in range(scaling):
-                        subarray[y * scaling + ys, x * scaling + xs] = mixed_array[subcell_locations[i]]
+                        subarray[y * scaling + ys, x * scaling + xs] = mixed_array[unmerged_landunit_indices[i]]
                         i += 1
 
     return subarray
@@ -89,7 +89,7 @@ class Plot:
         with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'areamaps', 'sub_cell_area.tif'), 'r') as src_cell_area:
             self.cell_area = src_cell_area.read(1)
         
-        self.subcell_locations = np.load('report/subcell_locations.npy')
+        self.unmerged_landunit_indices = np.load('report/unmerged_landunit_indices.npy')
         self.scaling = np.load('report/scaling.npy').item()
 
     def read_gadm3(self):
@@ -115,7 +115,7 @@ class Plot:
             ax.set_title(title, size=4, pad=2, fontweight='bold')
 
     def farmer_array_to_fields(self, array, nofieldvalue):
-        fields_decompressed = _decompress_landunit(self.fields, self.subcell_locations, self.scaling, self.mask)
+        fields_decompressed = _decompress_landunit(self.fields, self.unmerged_landunit_indices, self.scaling, self.mask)
         fields_decompressed = fields_decompressed[self.submask == 0]
         is_field = np.where(fields_decompressed != -1)
         cell_area = self.cell_area[self.submask == 0]
@@ -126,7 +126,7 @@ class Plot:
 
         array = np.take(array, self.fields)
         array[self.fields == -1] = nofieldvalue
-        array = _decompress_landunit(array, self.subcell_locations, self.scaling, self.mask)
+        array = _decompress_landunit(array, self.unmerged_landunit_indices, self.scaling, self.mask)
         return array
 
     def plot_by_area(self, array, ax=None, title=None):

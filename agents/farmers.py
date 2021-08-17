@@ -614,6 +614,10 @@ class Farmers(AgentBaseClass):
     def plant_initial(self) -> None:
         """When the model is initalized, crops are already growing. This function first finds out which farmers are already growing crops, how old these are, as well as the multicrop indices. Then, these arrays per farmer are converted to the field array.
         """
+
+        self.var.land_use_type[self.var.land_use_type == 2] = 1
+        self.var.land_use_type[self.var.land_use_type == 3] = 1
+
         if self.model.args.use_gpu:
             crop = self.crop.get()
         else:

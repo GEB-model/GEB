@@ -9,33 +9,6 @@ except ModuleNotFoundError:
     pass
 from cwatm.management_modules.data_handling import readnetcdfInitial, checkOption
 
-@njit(cache=True)
-def _decompress_landunit(subarray: np.ndarray, outarray: np.ndarray, subcell_locations: np.ndarray, mask: np.ndarray, scaling: int, ysize: int, xsize: int) -> np.ndarray:
-    """Decompress landunit array.
-
-    Args:
-        subarray: Subarray.
-        subcell_locations: Array that maps the locations of subcells to cells.
-        scaling: The scaling used for map between cells and land units.
-        mask: Mask of study area.
-        nanvalue: Value to use for values outside the mask.
-
-    Returns:
-        outarray: Decompressed subarray.
-    """  
-    i = 0
-    
-    for y in range(ysize):
-        for x in range(xsize):
-            is_masked = mask[y, x]
-            if not is_masked:
-                for ys in range(scaling):
-                    for xs in range(scaling):
-                        outarray[y * scaling + ys, x * scaling + xs] = subarray[subcell_locations[i]]
-                        i += 1
-
-    return outarray
-
 
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
@@ -194,28 +167,58 @@ class Variables(BaseVariables):
 
 
 class LandUnits(BaseVariables):
-    def __init__(self, data, model):
+    """This class forms the basis for the land units. To create the `land units`, each individual field owned by a farmer becomes a `land unit` first. Then, in addition, each other land use type becomes a separate land unit. `land units` never cross cell boundaries. This means that farmers whose fields are dispersed across multiple cells are simulated by multiple `land units`. Here, we assume that each `land unit`, is relatively homogeneous as it each `land unit` is operated by 1) a single farmer, or by a single other (i.e., non-farm) land-use type and 2) never crosses the boundary a hydrological model cell.
+
+    On initalization, the mask of the study area for the cells are loaded first, and a mask on the maximum resolution of the land units is created. In this case, the maximum resolution of the land units is 20 times higher than the mask. Then the land units are actually created.
+
+    Args:
+        data: Data class for model.
+        model: The GEB model.
+    """
+    def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
         self.scaling = 20
 
         self.mask = self.data.var.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.var.cell_size / self.scaling
-        self.land_use_type, self.land_use_ratios, self.land_owners, self.landunit_to_var, self.var_to_landunit, self.var_to_landunit_uncompressed, self.subcell_locations = self.create_subcell_mask()
-        self.land_use_type[self.land_use_type == 2] = 1
-        self.land_use_type[self.land_use_type == 3] = 1
+        self.land_use_type, self.land_use_ratio, self.land_owners, self.landunit_to_var, self.var_to_landunit, self.var_to_landunit_uncompressed, self.unmerged_landunit_indices = self.create_landunits()
         if self.model.args.use_gpu:
             self.land_owners = cp.array(self.land_owners)
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
 
     @property
-    def compressed_size(self):
+    def compressed_size(self) -> int:
+        """Gets the compressed size of a full land unit array.
+        
+        Returns:
+            compressed_size: Compressed size of land unit array.
+        """
         return self.land_use_type.size
 
     @staticmethod
     @njit()
-    def _create_subcell_mask(farms, land_use_classes, mask, scaling):
+    def create_landunits_numba(farms, land_use_classes, mask, scaling) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Numba helper function to create land units.
+        
+        Args:
+            farms: Map of farms. Each unique integer is a unique farm. -1 is no farm.
+            land_use_classes: CWatM land use class map [0-5].
+            mask: Mask of the normal grid cells.
+            scaling: Scaling between mask and maximum resolution of land units.
+
+        Returns:
+            land_use_array: Land use of each land unit.
+            land_use_ratio: Relative size of land unit to grid.
+            land_use_owner: Owner of land unit.
+            landunit_to_var: Maps land units to index of compressed cell index.
+            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the last unit for that cell.
+            var_to_landunit_uncompressed: Array of size of the grid cells. Each value maps to the index of the last unit for that cell.
+            unmerged_landunit_indices: The index of the land unit to the subcell.
+        """
+        assert farms.size == mask.size * scaling * scaling
+        assert farms.size == land_use_classes.size
         ysize, xsize = mask.shape
 
         n_nonmasked_cells = mask.size - mask.sum()
@@ -225,7 +228,7 @@ class LandUnits(BaseVariables):
         land_use_array = np.full(farms.size, -1, dtype=np.int32)
         land_use_size = np.full(farms.size, -1, dtype=np.int32)
         land_use_owner = np.full(farms.size, -1, dtype=np.int32)
-        subcells_locations = np.full(farms.size, -1, dtype=np.uint32)
+        unmerged_landunit_indices = np.full(farms.size, -1, dtype=np.uint32)
 
         j = 0
         var_cell_count_compressed = 0
@@ -264,7 +267,7 @@ class LandUnits(BaseVariables):
                         else:
                             land_use_size[j-1] += 1
 
-                        subcells_locations[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
+                        unmerged_landunit_indices[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
                         l += 1
 
                     sort_idx = np.argsort(cell_land_use_classes)
@@ -291,7 +294,7 @@ class LandUnits(BaseVariables):
                         else:
                             land_use_size[j-1] += 1
 
-                        subcells_locations[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
+                        unmerged_landunit_indices[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
                         l += 1
 
                     var_to_landunit[var_cell_count_compressed] = j
@@ -303,87 +306,139 @@ class LandUnits(BaseVariables):
         land_use_array = land_use_array[:j]
         land_use_owner = land_use_owner[:j]
         landunit_to_var = landunit_to_var[:j]
-        subcells_locations = subcells_locations[:var_cell_count_compressed * (scaling ** 2)]
+        unmerged_landunit_indices = unmerged_landunit_indices[:var_cell_count_compressed * (scaling ** 2)]
         assert int(land_use_size.sum()) == n_nonmasked_cells * (scaling ** 2)
         
         land_use_ratio = land_use_size / (scaling ** 2)
-        return land_use_array, land_use_ratio, land_use_owner, landunit_to_var, var_to_landunit, var_to_landunit_uncompressed, subcells_locations
+        return land_use_array, land_use_ratio, land_use_owner, landunit_to_var, var_to_landunit, var_to_landunit_uncompressed, unmerged_landunit_indices
 
-    def create_subcell_mask(self):
+    def create_landunits(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Function to create land units.
+        
+        Returns:
+            land_use_array: Land use of each land unit.
+            land_use_ratio: Relative size of land unit to grid.
+            land_use_owner: Owner of land unit.
+            landunit_to_var: Maps land units to index of compressed cell index.
+            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the last unit for that cell.
+            var_to_landunit_uncompressed: Array of size of the grid cells. Each value maps to the index of the last unit for that cell.
+            unmerged_landunit_indices: The index of the land unit to the subcell.
+            """
         with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farms.tif'), 'r') as farms_src:
             farms = farms_src.read()[0]
         with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'landsurface', 'land_use_classes.tif'), 'r') as src:
             land_use_classes = src.read()[0]
-        return self._create_subcell_mask(farms, land_use_classes, self.data.var.mask, self.scaling)
+        return self.create_landunits_numba(farms, land_use_classes, self.data.var.mask, self.scaling)
 
-    def zeros(self, *args, **kwargs):
+    def zeros(self, size, dtype, *args, **kwargs) -> np.ndarray:
+        """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
+        
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            array: Array with size of number of land units.
+        """
         if self.model.args.use_gpu:
-            return cp.zeros(*args, **kwargs)
+            return cp.zeros(size, dtype, *args, **kwargs)
         else:
-            return np.zeros(*args, **kwargs)        
+            return np.zeros(size, dtype, *args, **kwargs)        
 
-    def full_compressed(self, fill_value, dtype, *args, **kwargs):
+    def full_compressed(self, fill_value, dtype, *args, **kwargs) -> np.ndarray:
+        """Return a full array with size of number of land units. Takes any other argument normally used in np.full.
+        
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            array: Array with size of number of land units.
+        """
         if self.model.args.use_gpu:
-            return cp.full(self.land_use_type.size, fill_value, dtype, *args, **kwargs)
+            return cp.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
         else:
-            return np.full(self.land_use_type.size, fill_value, dtype, *args, **kwargs)
-
-    def load_initial(self, *args, **kwargs):
-        return self.model.data.var.load_initial(*args, **kwargs)
+            return np.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
 
     @staticmethod
     @njit(cache=True)
-    def _load_map(array, scaling, output_size, has_subcells, fn=np.mean):
-        output_array = np.empty(output_size, dtype=array.dtype)
-        j = 0
+    def decompress_landunit_numba(landunit_array: np.ndarray, outarray: np.ndarray, unmerged_landunit_indices: np.ndarray, mask: np.ndarray, scaling: int, ysize: int, xsize: int) -> np.ndarray:
+        """Numba helper function to decompress landunit array.
 
-        ysize, xsize = has_subcells.shape
-        for y in range(0, ysize):
-            for x in range(0, xsize):
-                cell_has_subcells = has_subcells[y, x]
-                cell = array[y * scaling : (y + 1) * scaling, x * scaling : (x + 1) * scaling]
-                if cell_has_subcells:
-                    j_next = j + (scaling ** 2)
-                    output_array[j: j_next] = cell.ravel()
-                    j = j_next
-                else:
-                    output_array[j] = np.mean(cell)
-                    j += 1
+        Args:
+            landunit_array: landunit_array.
+            unmerged_landunit_indices: The index of the land unit to the subcell.
+            scaling: The scaling used for map between cells and land units.
+            mask: Mask of study area.
+            nanvalue: Value to use for values outside the mask.
 
-        return output_array
+        Returns:
+            outarray: Decompressed landunit_array.
+        """  
+        i = 0
+        
+        for y in range(ysize):
+            for x in range(xsize):
+                is_masked = mask[y, x]
+                if not is_masked:
+                    for ys in range(scaling):
+                        for xs in range(scaling):
+                            outarray[y * scaling + ys, x * scaling + xs] = landunit_array[unmerged_landunit_indices[i]]
+                            i += 1
 
-    def load_map(self, fp, fn):
-        with rasterio.open(fp) as src:
-            array = src.read()[0]
-        output = self._load_map(array, self.scaling, self.mixed_size, self.has_subcells.reshape(self.model.data.var.mask.shape))
-        if self.model.args.use_gpu:
-            return cp.array(output)
-        else:
-            return output
+        return outarray
 
-    def decompress(self, subarray):
-        if isinstance(subarray, cp.ndarray):
-            array = subarray.get()
-        if np.issubdtype(subarray, np.integer):
+    def decompress(self, landunit_array: np.ndarray) -> np.ndarray:
+        """Decompress landunit array.
+
+        Args:
+            landunit_array: landunit_array.
+
+        Returns:
+            outarray: Decompressed landunit_array.
+        """  
+        if isinstance(landunit_array, cp.ndarray):
+            array = landunit_array.get()
+        if np.issubdtype(landunit_array, np.integer):
             nanvalue = -1
         else:
             nanvalue = np.nan
         ysize, xsize = self.model.data.var.mask.shape
-        decompresssed = np.full((ysize * self.scaling, xsize * self.scaling), nanvalue, dtype=subarray.dtype)
-        return _decompress_landunit(array, outarray=decompresssed, subcell_locations=self.subcell_locations, mask=self.model.data.var.mask, scaling=self.scaling, ysize=ysize, xsize=xsize)
+        decompresssed = np.full((ysize * self.scaling, xsize * self.scaling), nanvalue, dtype=landunit_array.dtype)
+        return self.decompress_landunit_numba(
+            array,
+            outarray=decompresssed,
+            unmerged_landunit_indices=self.unmerged_landunit_indices,
+            mask=self.model.data.var.mask,
+            scaling=self.scaling,
+            ysize=ysize,
+            xsize=xsize
+        )
 
-    def plot(self, subarray, ax=None, show=True):
+    def plot(self, landunit_array: np.ndarray, ax=None, show: bool=True):
+        """Function to plot landunit data.
+
+        Args:
+            landunit_array: Data to plot. Size must be equal to number of land units.
+            ax: Optional matplotlib axis object. If given, data will be plotted on given axes.
+            show: Boolean whether to show the plot or not.
+        """
         import matplotlib.pyplot as plt
-        assert subarray.size == self.land_use_type.size
+        assert landunit_array.size == self.compressed_size
         if ax is None:
             fig, ax = plt.subplots()
-        ax.imshow(self.decompress(subarray), resample=False)
+        ax.imshow(self.decompress(landunit_array), resample=False)
         if show:
             plt.show()
 
 
 
 class Data:
+    """The base data class for the GEB model. This class contains the data for the normal grid, the land units, and has methods to convert between the grid and land units.
+    
+    Args:
+        model: The GEB model.
+    """
     def __init__(self, model):
         self.model = model
         self.var = Variables(self, model)
@@ -392,38 +447,51 @@ class Data:
 
     @staticmethod
     @njit
-    def _to_landunit(array, var_to_landunit, area_sizes, mask=None, fn=None):
-        assert var_to_landunit[-1] == area_sizes.size
-        assert array.shape == var_to_landunit.shape
-        output_array = np.zeros(area_sizes.size, dtype=array.dtype)
+    def to_landunit_numba(data, var_to_landunit, land_use_ratio, fn=None):
+        """Numba helper function to convert from grid to land unit.
+        
+        Args:
+            data: The grid data to be converted.
+            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the last unit for that cell.
+            land_use_ratio: Relative size of land unit to grid.
+            fn: Name of function to apply to data. None if data should be directly inserted into landunits - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
+
+        Returns:
+            ouput_data: Data converted to land units.
+        """
+        assert var_to_landunit[-1] == land_use_ratio.size
+        assert data.shape == var_to_landunit.shape
+        output_data = np.zeros(land_use_ratio.size, dtype=data.dtype)
         prev_index = 0
 
-        if mask.size == 0:  # no mask
-            if fn is None:
-                for i in range(var_to_landunit.size):
-                    cell_index = var_to_landunit[i]
-                    output_array[prev_index:cell_index] = array[i]
-                    prev_index = cell_index
-            elif fn == 'mean':
-                for i in range(var_to_landunit.size):
-                    cell_index = var_to_landunit[i]
-                    cell_sizes = area_sizes[prev_index:cell_index]
-                    output_array[prev_index:cell_index] = array[i] / cell_sizes.sum() * cell_sizes
-                    prev_index = cell_index
-            else:
-                raise NotImplementedError
+        if fn is None:
+            for i in range(var_to_landunit.size):
+                cell_index = var_to_landunit[i]
+                output_data[prev_index:cell_index] = data[i]
+                prev_index = cell_index
+        elif fn == 'mean':
+            for i in range(var_to_landunit.size):
+                cell_index = var_to_landunit[i]
+                cell_sizes = land_use_ratio[prev_index:cell_index]
+                output_data[prev_index:cell_index] = data[i] / cell_sizes.sum() * cell_sizes
+                prev_index = cell_index
         else:
-            if fn is None:
-                for i in range(var_to_landunit.size):
-                    cell_index = var_to_landunit[i]
-                    output_array[prev_index:cell_index][~mask[prev_index:cell_index]] = array[i]
-                    prev_index = cell_index
-            else:
-                raise NotImplementedError
-                
-        return output_array
+            raise NotImplementedError
 
-    def to_landunit(self, *, data=None, varname=None, fn=None, mask=np.zeros(0, dtype=np.bool), delete=True):
+        return output_data
+
+    def to_landunit(self, *, data=None, varname=None, fn=None, delete=True):
+        """Function to convert from grid to land unit.
+        
+        Args:
+            data: The grid data to be converted (if set, varname cannot be set).
+            varname: Name of variable to be converted. Must be present in grid class. (if set, data cannot be set).
+            fn: Name of function to apply to data. None if data should be directly inserted into landunits - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
+            delete: Whether to delete the data from the grid class. Can only be set if varname is given.
+
+        Returns:
+            ouput_data: Data converted to land units.
+        """
         assert bool(data is not None) != bool(varname is not None)
         if varname:
             data = getattr(self.var, varname)
@@ -431,7 +499,7 @@ class Data:
         if isinstance(data, (float, int)):  # check if data is simple float. Otherwise should be numpy array.
             outdata = data
         else:
-            outdata = self._to_landunit(data, self.landunit.var_to_landunit, self.landunit.land_use_ratios, mask=mask, fn=fn)
+            outdata = self.to_landunit_numba(data, self.landunit.var_to_landunit, self.landunit.land_use_ratio, fn=fn)
             if self.model.args.use_gpu:
                 outdata = cp.asarray(outdata)
         
@@ -443,42 +511,64 @@ class Data:
 
     @staticmethod
     @njit
-    def _to_var(array, var_to_landunit, cell_sizes, fn='mean'):
-        output_array = np.empty(var_to_landunit.size, dtype=array.dtype)
-        assert var_to_landunit[-1] == cell_sizes.size
+    def to_var_numba(data, var_to_landunit, land_use_ratio, fn='mean'):
+        """Numba helper function to convert from land unit to grid.
+        
+        Args:
+            data: The grid data to be converted.
+            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the last unit for that cell.
+            land_use_ratio: Relative size of land unit to grid.
+            fn: Name of function to apply to data. In most cases, several land units are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
+
+        Returns:
+            ouput_data: Data converted to land units.
+        """
+        output_data = np.empty(var_to_landunit.size, dtype=data.dtype)
+        assert var_to_landunit[-1] == land_use_ratio.size
 
         prev_index = 0
         for i in range(var_to_landunit.size):
             cell_index = var_to_landunit[i]
             if fn == 'mean':
-                values = array[prev_index:cell_index]
-                weights = cell_sizes[prev_index:cell_index]
-                output_array[i] = (values * weights).sum() / weights.sum()
+                values = data[prev_index:cell_index]
+                weights = land_use_ratio[prev_index:cell_index]
+                output_data[i] = (values * weights).sum() / weights.sum()
             elif fn == 'sum':
-                output_array[i] = np.sum(array[prev_index:cell_index])
+                output_data[i] = np.sum(data[prev_index:cell_index])
             elif fn == 'nansum':
-                output_array[i] = np.nansum(array[prev_index:cell_index])
+                output_data[i] = np.nansum(data[prev_index:cell_index])
             elif fn == 'max':
-                output_array[i] = np.max(array[prev_index: cell_index])
+                output_data[i] = np.max(data[prev_index: cell_index])
             elif fn == 'min':
-                output_array[i] = np.min(array[prev_index: cell_index])
+                output_data[i] = np.min(data[prev_index: cell_index])
             else:
                 raise NotImplementedError
             prev_index = cell_index
-        return output_array
+        return output_data
 
-    def to_var(self, *, subdata=None, varname=None, fn=None, delete=True):
-        assert bool(subdata is not None) != bool(varname is not None)
+    def to_var(self, *, landunit_data=None, varname=None, fn=None, delete=True):
+        """Function to convert from land units to grid.
+        
+        Args:
+            landunit_data: The landunit data to be converted (if set, varname cannot be set).
+            varname: Name of variable to be converted. Must be present in landunit class. (if set, data cannot be set).
+            fn: Name of function to apply to data. In most cases, several land units are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
+            delete: Whether to delete the data from the grid class. Can only be set if varname is given.
+
+        Returns:
+            ouput_data: Data converted to grid units.
+        """
+        assert bool(landunit_data is not None) != bool(varname is not None)
         assert fn is not None
         if varname:
-            subdata = getattr(self.landunit, varname)
-        assert not isinstance(subdata, list)
-        if isinstance(subdata, float):  # check if data is simple float. Otherwise should be numpy array.
-            outdata = subdata
+            landunit_data = getattr(self.landunit, varname)
+        assert not isinstance(landunit_data, list)
+        if isinstance(landunit_data, float):  # check if data is simple float. Otherwise should be numpy array.
+            outdata = landunit_data
         else:
-            if self.model.args.use_gpu and isinstance(subdata, cp.ndarray):
-                subdata = subdata.get()
-            outdata = self._to_var(subdata, self.landunit.var_to_landunit, self.landunit.land_use_ratios, fn)
+            if self.model.args.use_gpu and isinstance(landunit_data, cp.ndarray):
+                landunit_data = landunit_data.get()
+            outdata = self.to_var_numba(landunit_data, self.landunit.var_to_landunit, self.landunit.land_use_ratio, fn)
 
         if varname:
             if delete:

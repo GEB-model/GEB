@@ -140,7 +140,7 @@ class Reporter:
     def report(self):
         np.save('report/fields.npy', self.model.agents.farmers.fields)
         np.save('report/mask.npy', self.model.data.var.mask)
-        np.save('report/subcell_locations.npy', self.model.data.landunit.subcell_locations)
+        np.save('report/unmerged_landunit_indices.npy', self.model.data.landunit.unmerged_landunit_indices)
         np.save('report/scaling.npy', self.model.data.landunit.scaling)
 
         self.abm_reporter.report()
