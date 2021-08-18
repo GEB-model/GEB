@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from hyve.library.mapIO import ArrayReader
 import os
 import numpy as np

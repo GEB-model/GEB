@@ -1,4 +1,5 @@
-from typing import Union, Any
+# -*- coding: utf-8 -*-
+from typing import Union
 from hyve.artists import BaseArtist
 import numpy as np
 from operator import attrgetter

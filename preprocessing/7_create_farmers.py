@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from hyve.library.raster import pixel_to_coord
 import rasterio
 import os

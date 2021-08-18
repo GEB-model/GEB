@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import matplotlib.colors as mcolors
 
 import os

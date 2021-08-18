@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import math
 from itertools import combinations
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset

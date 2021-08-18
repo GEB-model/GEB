@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import rasterio
 from hyve.library.raster import clip_to_other, upscale

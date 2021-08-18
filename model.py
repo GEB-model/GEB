@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from datetime import timedelta
 from hyve.library.helpers import timeprint
 from hyve.area import Area

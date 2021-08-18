@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import rasterio
 import cProfile
 from pstats import Stats

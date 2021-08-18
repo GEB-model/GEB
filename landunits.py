@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from typing import Union
 from numba import njit
 import rasterio

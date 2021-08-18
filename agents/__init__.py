@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from agents.farmers import Farmers
 from agents.ngo import NGO
 from agents.government import Government
