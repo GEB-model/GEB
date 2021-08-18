@@ -1,2 +1,5 @@
 Report
 ########
+
+.. automodule:: reporter
+    :members:

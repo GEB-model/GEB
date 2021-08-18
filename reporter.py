@@ -1,3 +1,7 @@
+"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in Hyve's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `GEB.yml` (see :doc:`configuration`). All data is saved in a subfolder (see `--export_folder` in :doc:`running`) of a folder called "report". 
+
+"""
+
 import os
 import pandas as pd
 from collections.abc import Iterable
@@ -12,9 +16,13 @@ from operator import attrgetter
 from hyve.reporter import Reporter as ABMReporter
 
 class CWatMReporter(ABMReporter):
-    def __init__(self, model):
+    """This class is used to report CWatM data to disk. On initialization the export folder is created if it does not yet exist. Then all variables to report are on read from the configuration folder, and the datastructures to save the data are created.
+    
+    Args:
+        model: The GEB model.
+    """
+    def __init__(self, model) -> None:
         self.model = model
-        self.set_variables()
 
         self.export_folder = (
             os.path.join('report', self.model.args.export_folder)
@@ -25,35 +33,27 @@ class CWatMReporter(ABMReporter):
 
         self.variables = {}
         self.timesteps = []
-        self._initialize()  # initalize
 
-    def _initialize(self):
         for name in self.model.config['report_cwatm']:
             self.variables[name] = []
         self.step()  # report on inital state
 
-    def set_variables(self):
-        self.variables_dict = {}
+    def get_array(self, attr: str, decompress: bool=False) -> np.ndarray:
+        """This function retrieves a NumPy array from the model based the name of the variable. Optionally decompresses the array.
 
-        def add_var(attr):
-            attributes = attrgetter(attr)(self.model)
-            compressed_size = attributes.compressed_size
-            for varname, variable in vars(attributes).items():
-                if isinstance(variable, (np.ndarray, cp.ndarray)):
-                    if variable.ndim == 1 and variable.size == compressed_size:
-                        name = f'{attr}.{varname}'
-                        self.variables_dict[name] = variable
-                    if variable.ndim == 2 and variable.shape[1] == compressed_size:
-                        for i in range(variable.shape[0]):
-                            name = f'{attr}.{varname}[{i}]'
-                            self.variables_dict[name] = variable[i]
-                    else:
-                        continue
+        Args:
+            attr: Name of the variable to retrieve. Name can contain "." to specify variables are a "deeper" level.
+            decompress: Boolean value whether to decompress the array. If True, the class to which the top variable name belongs to must have an equivalent function called `decompress`.
+
+        Returns:
+            array: The requested array.
+
+        Example:
+            Read discharge from `data.grid`. Because :code:`decompress=True`, `data.grid` must have a `decompress` method.
+            ::
         
-        add_var('data.grid')
-        add_var('data.landunit')
-
-    def get_array(self, attr, decompress=False):
+                >>> get_array(data.grid.discharge, decompress=True)
+        """
         array = attrgetter(attr)(self.model)
         if decompress:
             array = attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
@@ -62,9 +62,9 @@ class CWatMReporter(ABMReporter):
 
         return array
 
-    def step(self):
+    def step(self) -> None:
+        """This method is called after every timestep, to collect data for reporting from the model."""
         self.timesteps.append(self.model.current_time)
-        self.set_variables()
         for name, conf in self.model.config['report_cwatm'].items():
             array = self.get_array(conf['varname'])
             if array is None:
@@ -97,8 +97,8 @@ class CWatMReporter(ABMReporter):
                         raise ValueError()
                 self.report_value(name, value, conf)
 
-    def report(self):
-        report_dict = {}
+    def report(self) -> None:
+        """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
             if isinstance(values[0], Iterable):
                 df = pd.DataFrame.from_dict(
@@ -116,32 +116,24 @@ class CWatMReporter(ABMReporter):
                 df.to_excel(os.path.join(self.export_folder, name + '.' + export_format))
             else:
                 raise ValueError(f'save_to format {export_format} unknown')
-        return report_dict
-
 
 class Reporter:
+    """This is the main reporter class for the GEB model. On initialization the ABMReporter and CWatMReporter classes are initalized.
+    
+    Args:
+        model: The GEB model.
+    """
     def __init__(self, model):
         self.model = model
         self.abm_reporter = ABMReporter(model)
         self.cwatmreporter = CWatMReporter(model)
 
-    @property
-    def variables(self):
-        return {**self.abm_reporter.variables, **self.cwatmreporter.variables}
-
-    @property
-    def timesteps(self):
-        return self.abm_reporter.timesteps
-
-    def step(self):
+    def step(self) -> None:
+        """This function is called at the end of every timestep. This function only forwards the step function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.step()
         self.cwatmreporter.step()
 
     def report(self):
-        np.save('report/fields.npy', self.model.agents.farmers.fields)
-        np.save('report/mask.npy', self.model.data.grid.mask)
-        np.save('report/unmerged_landunit_indices.npy', self.model.data.landunit.unmerged_landunit_indices)
-        np.save('report/scaling.npy', self.model.data.landunit.scaling)
-
+        """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM. """
         self.abm_reporter.report()
         self.cwatmreporter.report()

@@ -2,6 +2,10 @@ from typing import Union, Any
 from hyve.artists import BaseArtist
 import numpy as np
 from operator import attrgetter
+try:
+    import cupy as cp
+except ModuleNotFoundError:
+    pass
 
 class Artists(BaseArtist):
     """This class is used to configure how the display environment works.
@@ -15,6 +19,7 @@ class Artists(BaseArtist):
         self.min_colorbar_alpha = .4
         self.background_variable = "data.landunit.crop_map"  # set initial background iamge.
         self.custom_plot = self.get_custom_plot()
+        self.set_variables()
 
     def draw_farmers(self, model, agents, idx: int) -> dict:
         """This function is used to draw farmers. First it is determined what crop is grown by the farmer, then the we get the color used to display that crop from the model configuration.
@@ -75,13 +80,39 @@ class Artists(BaseArtist):
             },
         }
 
+    def set_variables(self) -> None:
+        """This function is used to get a dictionary of variables that can be shown as background variable. The dictionary :code:`self.variables_dict` contains the name of each variable to display as key, and the actual variable as value.
+        
+        Checks are performed to see whether the data is the right size. Only compressed data can be shown. If a dataset has multiple dimensions, the dimensions can be shown seperately as `variable[0], variable[1], ...`.
+        """
+        self.variables_dict = {}
+
+        def add_var(attr):
+            attributes = attrgetter(attr)(self.model)
+            compressed_size = attributes.compressed_size
+            for varname, variable in vars(attributes).items():
+                if isinstance(variable, (np.ndarray, cp.ndarray)):
+                    if variable.ndim == 1 and variable.size == compressed_size:
+                        name = f'{attr}.{varname}'
+                        self.variables_dict[name] = variable
+                    if variable.ndim == 2 and variable.shape[1] == compressed_size:
+                        for i in range(variable.shape[0]):
+                            name = f'{attr}.{varname}[{i}]'
+                            self.variables_dict[name] = variable[i]
+                    else:
+                        continue
+        
+        add_var('data.grid')
+        add_var('data.landunit')
+
     def get_background_variables(self) -> list:
         """This function gets a list of variables that can be used to show in the background.
         
         Returns:
             options: List of names for options to show in background.
         """
-        return list(self.model.reporter.cwatmreporter.variables_dict.keys())
+        self.set_variables()
+        return list(self.variables_dict.keys())
 
     def set_background_variable(self, option_name: str) -> None:
         """This function is used to update the name of the variable to use for drawing the background of the map."""
