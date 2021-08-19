@@ -417,7 +417,7 @@ class Farmers(AgentBaseClass):
         return df
 
     def get_crop_yield_factors(self) -> dict[np.ndarray]:
-        """Read csv-file of values for crop water depletion. Obtained from Table 2 of this paper: https://doi.org/10.1029/2008GB003435
+        """Read csv-file of values for crop water depletion. Obtained from Table 2 of this paper: https://doi.org/10.1016/j.jhydrol.2009.07.031
         
         Returns:
             yield_factors: dictonary with np.ndarray of values per crop for each variable.

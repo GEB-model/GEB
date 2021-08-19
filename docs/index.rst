@@ -22,6 +22,7 @@ The figure below shows a schematic overview of the model. The lower part of the 
   Preprocessing <preprocessing/preprocessing>
   Configuration <configuration>
   Running the model <running>
+  Land units <landunits>
 
 .. toctree::
   :maxdepth: 1
@@ -36,7 +37,6 @@ The figure below shows a schematic overview of the model. The lower part of the 
   :maxdepth: 2
   :caption: Reference
 
-  Land units <landunits>
   Model <model>
   CWatM Model <cwatm_model>
   Report <report>
