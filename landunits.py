@@ -65,12 +65,12 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        mask_fn = 'DataDrive/CWatM/krishna/input/areamaps/mask.tif'
+        mask_fn = 'DataDrive/GEB/input/areamaps/mask.tif'
         with rasterio.open(mask_fn) as mask_src:
             self.mask = mask_src.read(1).astype(np.bool)
             self.gt = mask_src.transform.to_gdal()
             self.cell_size = mask_src.transform.a
-        with rasterio.open('DataDrive/CWatM/krishna/input/areamaps/cell_area.tif') as cell_area_src:
+        with rasterio.open('DataDrive/GEB/input/areamaps/cell_area.tif') as cell_area_src:
             self.cell_area_uncompressed = cell_area_src.read(1)
         
         self.mask_flat = self.mask.ravel()
