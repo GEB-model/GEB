@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=initial
-#SBATCH --output=initial.out
+#SBATCH --job-name=spinup
+#SBATCH --output=spinup.out
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
@@ -19,4 +19,4 @@ cd $SCRIPT_DIR
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate abm  # activate conda environment
 
-python run.py --headless --scenario initial
+python run.py --headless --scenario spinup
