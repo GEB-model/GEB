@@ -10,6 +10,7 @@ from landunits import Data
 import argparse
 from cwatm_model import CWatM_Model
 from typing import Union
+import yaml
 
 class GEBModel(ABM_Model, CWatM_Model):
     """GEB parent class.
@@ -51,19 +52,23 @@ class GEBModel(ABM_Model, CWatM_Model):
             args: Run arguments.
             coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
         """
-        ABM_Model.__init__(self, config_path, args)
 
-        self.timestep_length = timedelta(days=1)
+        with open(config_path, 'r') as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+
+        timestep_length = timedelta(days=1)
         if args.scenario == 'spinup':
-            self.end_time = self.config['general']['start_time']
-            self.current_time = self.config['general']['spinup_start']
+            end_time = config['general']['start_time']
+            current_time = config['general']['spinup_start']
         else:
-            self.current_time = self.config['general']['start_time']
-            self.end_time = self.config['general']['end_time']
+            current_time = config['general']['start_time']
+            end_time = config['general']['end_time']
         
-        self.n_timesteps = (self.end_time - self.current_time) / self.timestep_length
-        assert self.n_timesteps.is_integer()
-        self.n_timesteps = int(self.n_timesteps)
+        n_timesteps = (end_time - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+
+        ABM_Model.__init__(self, current_time, timestep_length, config_path, args=args, n_timesteps=n_timesteps)
         
         self.area = Area(self, study_area)
         self.agents = Agents(self)
@@ -100,7 +105,7 @@ class GEBModel(ABM_Model, CWatM_Model):
             self.reporter.step()
 
     def run(self) -> None:
-        """Run the model for the entire period, and export water table in case of spinupt scenario."""
+        """Run the model for the entire period, and export water table in case of spinup scenario."""
         for _ in range(self.n_timesteps):
             self.step()
         if self.args.scenario == 'spinup':

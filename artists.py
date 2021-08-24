@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from typing import Union
-from hyve.artists import BaseArtist
+from hyve.artists import Artists as HyveArtists
 import numpy as np
 from operator import attrgetter
 try:
@@ -8,14 +8,14 @@ try:
 except ModuleNotFoundError:
     pass
 
-class Artists(BaseArtist):
+class Artists(HyveArtists):
     """This class is used to configure how the display environment works.
     
     Args:
         model: The GEB model.
     """
     def __init__(self, model) -> None:
-        BaseArtist.__init__(self, model)
+        HyveArtists.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
         self.background_variable = "data.landunit.crop_map"  # set initial background iamge.

@@ -135,48 +135,56 @@ report:
     varname: activation_order_by_elevation
     format: npy
     initial_only: true
+    save: export
   elevation:
     type: farmers
     function: null
     varname: elevation
     format: npy
     initial_only: true
+    save: export
   reservoir irrigation:
     type: farmers
     function: null
     varname: reservoir_abstraction_m3_by_farmer
     per_timestep: true
     format: npy
+    save: export
   groundwater irrigation:
     type: farmers
     function: null
     varname: groundwater_abstraction_m3_by_farmer
     per_timestep: true
     format: npy
+    save: export
   channel irrigation:
     type: farmers
     function: null
     varname: channel_abstraction_m3_by_farmer
     per_timestep: true
     format: npy
+    save: export
   is water aware:
     type: farmers
     function: null
     varname: is_water_efficient
     per_timestep: true
     format: npy
+    save: export
   yield ratio:
     type: farmers
     function: null
     varname: yield_ratio_per_farmer
     format: npy
     per_timestep: true
+    save: export
   crop:
     type: farmers
     function: null
     varname: crop
-    format: npy
+    format: csv
     per_timestep: true
+    save: export
 
 ###
 # In this section you can configure what CWatM data is saved, such as the groundwater head in each timestep, as follows:
@@ -191,7 +199,9 @@ report_cwatm:
     varname: data.grid.head
     function: mean
     format: csv
+    save: save
   reservoir storage:
     varname: data.grid.reservoirStorageM3C
     function: sum
     format: csv
+    save: save

@@ -10,7 +10,9 @@ class NGO(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
     def __init__(self, model, agents):
-        AgentBaseClass.__init__(self, model, agents)
+        self.model = model
+        self.agents = agents
+        AgentBaseClass.__init__(self)
 
     def initiate_agents(self) -> None:
         """Initalizes the NGO agent by setting the number of trainings provided when activated."""

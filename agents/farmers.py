@@ -65,11 +65,13 @@ class Farmers(AgentBaseClass):
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
     def __init__(self, model, agents, reduncancy: float) -> None:
+        self.model = model
+        self.agents = agents
         self.var = model.data.landunit
         self.redundancy = reduncancy
         self.input_folder = 'DataDrive/GEB/input'
-        AgentBaseClass.__init__(self, model, agents)
         self.crop_yield_factors = self.get_crop_yield_factors()
+        self.initiate_agents()
 
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
@@ -134,6 +136,7 @@ class Farmers(AgentBaseClass):
         self._reservoir_abstraction_m3_by_farmer = np.zeros(self.max_n, dtype=np.float32)
         self._groundwater_abstraction_m3_by_farmer = np.zeros(self.max_n, dtype=np.float32)
         self._water_availability_by_farmer = np.zeros(self.max_n, dtype=np.float32)
+        self._n_water_limited_days = np.zeros(self.max_n, dtype=np.int32)
 
         self.planting_schemes = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'planting_schemes.npy'))
 
@@ -965,6 +968,14 @@ class Farmers(AgentBaseClass):
     def water_availability_by_farmer(self, value):      
         self._water_availability_by_farmer[:self.n] = value
 
+    @property
+    def n_water_limited_days(self):
+        return self._n_water_limited_days[:self.n]
+
+    @n_water_limited_days.setter
+    def n_water_limited_days(self, value):      
+        self._n_water_limited_days[:self.n] = value
+
     @staticmethod
     @njit
     def field_size_per_farmer_numba(field_indices_per_farmer: np.ndarray, field_indices: np.ndarray, cell_area: np.ndarray) -> np.ndarray:
@@ -1006,7 +1017,7 @@ class Farmers(AgentBaseClass):
             5000,
             3,
             29,
-            kind='longlat',
+            grid='longlat',
             search_ids=np.where(self.is_water_efficient)[0],
         )
         neighbors = neighbors[neighbors != -1]
