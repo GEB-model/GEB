@@ -139,6 +139,11 @@ class Farmers(AgentBaseClass):
         self._n_water_limited_days = np.zeros(self.max_n, dtype=np.int32)
 
         self.planting_schemes = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'planting_schemes.npy'))
+        
+        # Set planting scheme for sugarcane in all regions.
+        self.planting_schemes[:, :, 11, 0, 0, 0] = 1
+        self.planting_schemes[:, :, 11, 0, 0, 1] = 12
+        self.planting_schemes[:, :, 11, 0, 0, 2] = 1
 
         self.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
         self.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
@@ -217,6 +222,7 @@ class Farmers(AgentBaseClass):
         activation_order: np.ndarray,
         field_indices_per_farmer: np.ndarray,
         field_indices: np.ndarray,
+        water_limited_days: np.ndarray,
         is_water_efficient: np.ndarray,
         irrigated: np.ndarray,
         cell_area: np.ndarray,
@@ -236,6 +242,7 @@ class Farmers(AgentBaseClass):
             activation_order: Order in which the agents are activated. Agents that are activated first get a first go at extracting water, leaving less water for other farmers.
             field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
+            water_limited_days: Current number of days where farmer has been water limited.
             is_water_efficient: Boolean array that specifies whether the specific farmer is efficient with water use.
             cell_area: The area of each subcell in m2.
             landunit_to_grid: Array to map the index of each subcell to the corresponding cell.
@@ -283,6 +290,8 @@ class Farmers(AgentBaseClass):
             
             return_fraction = 0.5
             farmer_irrigation = irrigated[farmer]
+
+            farmer_is_water_limited = False
             
             for field in farmer_fields:
                 f_var = landunit_to_grid[field]
@@ -332,10 +341,16 @@ class Farmers(AgentBaseClass):
                 
                 assert irrigation_water_demand_cell >= -1e15  # Make sure irrigation water demand is zero, or positive. Allow very small error.
 
+                if irrigation_water_demand_cell > 1e-15:
+                    farmer_is_water_limited = True
+
                 water_consumption_m[field] = water_withdrawal_m[field] * efficiency
                 irrigation_loss_m = water_withdrawal_m[field] - water_consumption_m[field]
                 returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
                 addtoevapotrans_m[field] = irrigation_loss_m * (1 - return_fraction)
+
+            if farmer_is_water_limited:
+                water_limited_days[farmer] += 1
         
         return (
             channel_abstraction_m3_by_farmer,
@@ -390,6 +405,7 @@ class Farmers(AgentBaseClass):
             activation_order,
             self.field_indices_per_farmer,
             self.field_indices,
+            self.n_water_limited_days,
             self.is_water_efficient,
             self.irrigating,
             cell_area,
@@ -662,6 +678,7 @@ class Farmers(AgentBaseClass):
         crop_map: np.ndarray,
         crop_age_days: np.ndarray,
         crop_harvest_age_days: np.ndarray,
+        n_water_limited_days: np.ndarray,
         next_plant_day: np.ndarray,
         next_multicrop_index: np.ndarray,
         n_multicrop_periods: np.ndarray,
@@ -681,6 +698,7 @@ class Farmers(AgentBaseClass):
             crop_map: Subarray map of crops.
             crop_age_days: Subarray map of current crop age in days.
             crop_harvest_age_days: Subarray map of crop harvest age in days.
+            n_water_limited_days: Number of days that crop was water limited.
             next_plant_day: Subarray map of next planting day.
             next_multicrop_index: Subarray map of the next multicropping index.
             n_multicrop_periods: Subarray map of the number of multicropping periods.
@@ -701,8 +719,9 @@ class Farmers(AgentBaseClass):
             harvest: Boolean subarray map of fields to be harvested.
         """
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
-        for i in range(n):
-            farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, i)
+        for farmer_i in range(n):
+            farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_i)
+            n_water_limited_days_farmer = n_water_limited_days[farmer_i]
             for field in farmer_fields:
                 crop_age = crop_age_days[field]
                 if crop_age >= 0:
@@ -710,9 +729,16 @@ class Farmers(AgentBaseClass):
                     assert crop_harvest_age_days[field] != -1
                     if crop_age == crop_harvest_age_days[field]:
                         harvest[field] = True
+                        
+                        if n_water_limited_days_farmer < .5 * crop_harvest_age_days[field]:  # switch to sugar cane
+                            crop[farmer_i] = 11
+                            planting_scheme[farmer_i] = 0
+                            next_multicrop_index[field] = 0
+                            n_multicrop_periods[field] = 1
+                        
                         next_multicrop_index[field] = (next_multicrop_index[field] + 1) % n_multicrop_periods[field]
                         assert next_multicrop_index[field] < n_multicrop_periods[field] 
-                        next_plant_month = planting_schemes[irrigating[i], unit_code[i], crop[i], planting_scheme[i], next_multicrop_index[field]]
+                        next_plant_month = planting_schemes[irrigating[farmer_i], unit_code[farmer_i], crop[farmer_i], planting_scheme[farmer_i], next_multicrop_index[field]]
                         assert next_plant_month[0] != -1
                         next_plant_day[field] = start_day_per_month[next_plant_month - 1][0]
                 else:
@@ -736,6 +762,7 @@ class Farmers(AgentBaseClass):
             crop_map,
             crop_age_days,
             crop_harvest_age_days,
+            self.n_water_limited_days,
             self.var.next_plant_day,
             self.var.next_multicrop_index,
             self.var.n_multicrop_periods,

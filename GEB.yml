@@ -178,6 +178,13 @@ report:
     format: npy
     per_timestep: true
     save: export
+  water limited days:
+    type: farmers
+    function: null
+    varname: n_water_limited_days
+    format: npy
+    per_timestep: true
+    save: export
   crop:
     type: farmers
     function: null

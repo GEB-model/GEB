@@ -12,11 +12,8 @@ class NGO(AgentBaseClass):
     def __init__(self, model, agents):
         self.model = model
         self.agents = agents
+        self.n_trainings = 100_000  # Number of trainings to provide each year.
         AgentBaseClass.__init__(self)
-
-    def initiate_agents(self) -> None:
-        """Initalizes the NGO agent by setting the number of trainings provided when activated."""
-        self.n_trainings = 100_000
 
     def provide_training(self) -> None:
         """Provides training to a set number of farmers that are not yet efficient in their water usage."""
