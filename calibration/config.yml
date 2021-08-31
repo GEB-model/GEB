@@ -1,8 +1,9 @@
-forcingstart: 2000-01-01
+start_date: 2000-01-01
+end_date: 2000-01-03
 timeperiod: daily
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
-scenario: spinup
+scenario: base
 
 observed_data:
   path: observations.csv
@@ -13,7 +14,7 @@ options:
   redo_best_run: True
 
 DEAP:
-  use_multiprocessing: true
+  use_multiprocessing: false
   pool_limit: 5
   maximize: True
   ngen: 2

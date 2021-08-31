@@ -18,7 +18,7 @@ Sat Kumar Tomer (modified by Hylke Beck)
 Please see his book "Python in Hydrology"   http://greenteapress.com/pythonhydro/pythonhydro.pdf
 
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 import os
 import shutil
 import hydroStats
@@ -53,8 +53,6 @@ OBJECTIVE = 'KGE'
 LOG_FOLDER = os.path.join(ROOT, 'logs')
 if not os.path.exists(LOG_FOLDER):
 	os.makedirs(LOG_FOLDER)
-
-ForcingStart = config['forcingstart']  # Start of forcing
 
 if config['timeperiod'] == "monthly":
 	monthly = 1
@@ -156,6 +154,9 @@ def RunModel(Individual):
 
 		with open('GEB.yml', 'r') as f:
 			template = yaml.load(f, Loader=yaml.FullLoader)
+
+		template['general']['start_time'] = config['start_date']
+		template['general']['end_time'] = config['end_date']
 
 		template['report'] = {}  # no other reporting than discharge required.
 		template['report_cwatm'] = {}  # no other reporting than discharge required.

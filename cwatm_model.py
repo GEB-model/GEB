@@ -32,17 +32,12 @@ class CWatM_Model(CWATModel):
         for parameter, value in self.config['parameters'].items():
             binding[parameter] = value
 
-        binding['max_groundwater_abstraction_depth'] = 50
         if self.args.scenario == 'spinup':
-            binding['load_init_water_table'] = 'false'
-            binding['initial_water_table_depth'] = 2
             self.load_initial = False
             self.save_initial = True
         else:
             self.load_initial = True
             self.save_initial = False
-            binding['load_init_water_table'] = 'true'
-            binding['init_water_table'] = self.init_water_table_file
         
         # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
         binding['StepStart'] = start_date.strftime('%d/%m/%Y')

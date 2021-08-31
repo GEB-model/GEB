@@ -11,6 +11,9 @@ import argparse
 from cwatm_model import CWatM_Model
 from typing import Union
 import yaml
+import os
+from operator import attrgetter
+import numpy as np
 
 class GEBModel(ABM_Model, CWatM_Model):
     """GEB parent class.
@@ -37,7 +40,11 @@ class GEBModel(ABM_Model, CWatM_Model):
             'ymax': ymax,            
         }
         self.args = args
+
+
         self.data = Data(self)
+        self.config = self.setup_config(GEB_config_path)
+        self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
         self.__init_ABM__(GEB_config_path, study_area, args, coordinate_system)
         self.__init_hydromodel__(CwatM_settings)
 
@@ -108,5 +115,16 @@ class GEBModel(ABM_Model, CWatM_Model):
         """Run the model for the entire period, and export water table in case of spinup scenario."""
         for _ in range(self.n_timesteps):
             self.step()
-        if self.args.scenario == 'spinup':
-            CWatM_Model.export_water_table(self)
+
+        if self.save_initial:
+            
+            initCondVar = ['landunit.w1', 'landunit.w2', 'landunit.w3', 'landunit.topwater', 'landunit.interceptStor', 'landunit.SnowCoverS', 'landunit.FrostIndex', 'grid.channelStorageM3', 'grid.discharge', 'grid.lakeInflow', 'grid.lakeStorage', 'grid.reservoirStorage', 'grid.lakeVolume', 'grid.outLake', 'grid.lakeOutflow', 'modflow.head']
+            # self.initCondVar.extend(['grid.smalllakeInflow', 'grid.smalllakeStorage', 'grid.smalllakeOutflow', 'grid.smalllakeInflowOld', 'grid.smalllakeVolumeM3'])
+
+            if not os.path.exists(self.initial_conditions_folder):
+                os.makedirs(self.initial_conditions_folder)
+            for initvar in initCondVar:
+                fp = os.path.join(self.initial_conditions_folder, f"{initvar}.npy")
+                values = attrgetter(initvar)(self.data)
+                np.save(fp, values)
+

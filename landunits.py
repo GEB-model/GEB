@@ -55,7 +55,7 @@ class BaseVariables:
 
     def load_initial(self, name, default=.0, gpu=False):
         if self.model.load_initial:
-            fp = os.path.join(self.model.init_save_folder, f"{name}.npy")
+            fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npy")
             if gpu:
                 return cp.load(fp)
             else:
@@ -425,6 +425,17 @@ class LandUnits(BaseVariables):
     def load_initial(self, name, default=.0):
         return super().load_initial('landunit.' + name, default=default, gpu=self.model.args.use_gpu)
 
+
+class Modflow(BaseVariables):
+    def __init__(self, data, model):
+        self.data = data
+        self.model = model
+
+        BaseVariables.__init__(self)
+
+    def load_initial(self, name, default=.0):
+        return super().load_initial('modflow.' + name, default=default)
+    
 class Data:
     """The base data class for the GEB model. This class contains the data for the normal grid, the land units, and has methods to convert between the grid and land units.
     
@@ -436,6 +447,7 @@ class Data:
         self.grid = Grid(self, model)
         self.landunit = LandUnits(self, model)
         self.landunit.cellArea = self.to_landunit(data=self.grid.cellArea, fn='mean')
+        self.modflow = Modflow(self, model)
 
     @staticmethod
     @njit

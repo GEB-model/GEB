@@ -9,10 +9,12 @@ general:
   end_time: 2003-01-01
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_start: 1990-01-01
+  spinup_start: 1999-12-31
+  # spinup_start: 1990-01-01
   ###
   # base folder where to report output data to
   report_folder: DataDrive/GEB/report/
+  initial_conditions_folder: DataDrive/GEB/initial
   init_water_table: DataDrive/GEB/report/init/water_table.npy
   ###
   #
@@ -223,3 +225,12 @@ report_cwatm:
 
 parameters:
   soildepth_factor: 1.2357589498352997
+  preferentialFlowConstant: 7.771620196341074
+  SnowMeltCoef: 0.004
+  arnoBeta_add: 0.4378794431106299
+  factor_interflow: 1.7415262118498727
+  recessionCoeff_factor: 5.08489365888276
+  manningsN: 7.159801087098635
+  lakeAFactor: 1.2001137835309703
+  lakeEvaFactor: 1.5932766384205812
+  normalStorageLimit: 0.645563228322237
