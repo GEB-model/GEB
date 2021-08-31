@@ -11,35 +11,31 @@ Félix-Antoine Fortin, François-Michel De Rainville, Marc-André Gardner, Marc 
 
 The calibration tool was created by Hylke Beck 2014 (JRC, Princeton) hylkeb@princeton.edu
 Thanks Hylke for making it available for use and modification
-Modified by Peter Burek
+Modified by Peter Burek and Jens de Bruijn
 
 The submodule Hydrostats was created 2011 by:
 Sat Kumar Tomer (modified by Hylke Beck)
 Please see his book "Python in Hydrology"   http://greenteapress.com/pythonhydro/pythonhydro.pdf
 
 """
+from datetime import timedelta
 import os
-import sys
 import shutil
 import hydroStats
 import array
 import random
 import numpy as np
-import datetime
 from deap import algorithms
 from deap import base
-from deap import benchmarks
 from deap import creator
 from deap import tools
-import pandas
+import pandas as pd
+import yaml
 
 import multiprocessing
 import time
-from configparser import ConfigParser
-import glob
 from subprocess import Popen, PIPE
 
-import ast
 from sys import platform
 import pickle
 
@@ -48,112 +44,78 @@ global gen
 gen = 0
 WarmupDays = 0
 
+with open('calibration/config.yml', 'r') as f:
+	config = yaml.load(f, Loader=yaml.FullLoader)
 
-########################################################################
-#   Read settings file
-########################################################################
+ROOT = 'DataDrive/GEB/calibration'
+OBJECTIVE = 'KGE'
 
-iniFile = os.path.normpath(sys.argv[1])
+LOG_FOLDER = os.path.join(ROOT, 'logs')
+if not os.path.exists(LOG_FOLDER):
+	os.makedirs(LOG_FOLDER)
 
-parser = ConfigParser()
-parser.read(iniFile)
+ForcingStart = config['forcingstart']  # Start of forcing
 
-if platform == "win32":
-    root = parser.get('DEFAULT','RootPC')
-else:
-	root = parser.get('DEFAULT', 'Root')
-rootbasin = os.path.join(root,parser.get('DEFAULT', 'Rootbasin'))
-
-ForcingStart = datetime.datetime.strptime(parser.get('DEFAULT','ForcingStart'),"%d/%m/%Y")  # Start of forcing
-
-timeperiod = parser.get('DEFAULT','timeperiod')
-if timeperiod == "monthly":
+if config['timeperiod'] == "monthly":
 	monthly = 1
-	dischargetss = 'discharge_monthavg.tss'
+	dischargetss = os.path.join(config['scenario'], 'var.discharge_monthavg.tss')
 	frequen = 'MS'
-else:
+elif config['timeperiod'] == "daily":
 	monthly = 0
-	dischargetss = 'discharge_daily.tss'
+	dischargetss = os.path.join(config['scenario'], 'var.discharge_daily.tss')
 	frequen = 'd'
+else:
+	raise ValueError("timeperiod must be 'monthly' or 'daily'")
 
+ParamRangesPath = os.path.join(ROOT, config['parameter_ranges'])
+SubCatchmentPath = os.path.join(ROOT, config['subcatchmentpath'])
+if not os.path.exists(SubCatchmentPath):
+	os.makedirs(SubCatchmentPath)
 
+Qtss_csv = os.path.join(ROOT, config['observed_data']['path'])
+Qtss_col = config['observed_data']['column']
 
-ParamRangesPath = os.path.join(rootbasin,parser.get('Path','ParamRanges'))
-SubCatchmentPath = os.path.join(rootbasin,parser.get('Path','SubCatchmentPath'))
-Qtss_csv = os.path.join(rootbasin,parser.get('ObservedData', 'Qtss'))
-Qtss_col = parser.get('ObservedData', 'Column')
-
-modeltemplate = parser.get('Path','Templates')
-ModelSettings_template = parser.get('Templates','ModelSettings')
-RunModel_template = parser.get('Templates','RunModel')
-
-use_multiprocessing = int(parser.get('DEAP','use_multiprocessing'))
+use_multiprocessing = config['DEAP']['use_multiprocessing']
 
 try:
-    pool_limit = int(parser.get('DEAP','pool_limit'))
+    pool_limit = config['DEAP']['pool_limit']
 except:
     pool_limit = 10000
 
-ngen = int(parser.get('DEAP','ngen'))
-mu = int(parser.get('DEAP','mu'))
-lambda_ = int(parser.get('DEAP','lambda_'))
-maximize =  parser.getboolean('DEAP','maximize')
-if maximize: maxDeap = 1.0
-else: maxDeap = -1.0
+ngen = config['DEAP']['ngen']
+mu = config['DEAP']['mu']
+lambda_ = config['DEAP']['lambda_']
+maximize =  config['DEAP']['maximize']
+if maximize:
+	maxDeap = 1.0
+else:
+	maxDeap = -1.0
 
 
-firstrun = parser.getboolean('Option', 'firstrun')   # using default run as first run
-if firstrun:
-	para_first = ast.literal_eval(parser.get("Option", "para_first"))
-bestrun = parser.getboolean('Option', 'bestrun')
+define_first_run = config['options']['define_first_run']
+if define_first_run:
+	raise NotImplementedError
+redo_best_run = config['options']['redo_best_run']
 
 ########################################################################
 #   Preparation for calibration
 ########################################################################
 
-path_subcatch = os.path.join(SubCatchmentPath)
-
-# Load xml and .bat template files
-runmodel = os.path.splitext(os.path.join(rootbasin,modeltemplate,RunModel_template))[0]
-
-if platform == "win32":
-	runmodel = runmodel +".bat"
-else:
-	runmodel = runmodel + ".sh"
-
-f = open(runmodel,"r")
-template_bat = f.read()
-f.close()
-f = open(os.path.join(rootbasin,modeltemplate,ModelSettings_template),"r")
-template_xml = f.read()
-f.close()
-
 # Load parameter range file
-ParamRanges = pandas.read_csv(ParamRangesPath,sep=",",index_col=0)
-# ar = np.recfromcsv('example.csv'), my_data = genfromtxt('my_file.csv', delimiter=',')
+ParamRanges = pd.read_csv(ParamRangesPath, sep=",", index_col=0)
+ParamRanges = ParamRanges[ParamRanges['Use'] == True].drop('Use', axis=1)
 
 # Load observed streamflow
-streamflow_data = pandas.read_csv(Qtss_csv,sep=",", parse_dates=True, index_col=0)
+streamflow_data = pd.read_csv(Qtss_csv, sep=",", parse_dates=True, index_col=0)
 observed_streamflow = streamflow_data[Qtss_col]
-observed_streamflow[observed_streamflow<-9000]= np.nan
-
+observed_streamflow.name = 'observed'
+assert (observed_streamflow >= 0).all()
 
 # first standard parameter set
-# Snowmelt, crop KC, soil depth,pref. flow, arno beta, groundwater recession, runoff conc., routing, manning, No of run
-# recalculated to a population setting
-if firstrun:
-	#para_first = [0.0035, 1.0, 1.0, 3.0, 1.0, 1.0, 1.0, 0.05, 1.]
-	para_first2 = []
-	for ii in range(0, len(ParamRanges - 1)):
-		delta = float(ParamRanges.iloc[ii, 1]) - float(ParamRanges.iloc[ii, 0])
-		if delta == 0:
-			para_first2.append(0.)
-		else:
-			para_first2.append((para_first[ii] - float(ParamRanges.iloc[ii, 0])) / delta)
+if define_first_run:
+	raise NotImplementedError
 
 ii = 1
-
-
 
 ########################################################################
 #   Function for running the model, returns objective function scores
@@ -173,112 +135,99 @@ def RunModel(Individual):
 	# 3) Run the model and loads the simulated streamflow
 
 	# Random number is appended to settings and .bat files to avoid simultaneous editing
-	#run_rand_id = str(gen).zfill(2) + "_" + str(int(random.random()*100000000)).zfill(10)
 	id =int(Individual[-1])
-	run_rand_id = str(id//1000).zfill(2) + "_" + str(id%1000).zfill(3)
+	run_id = str(id//1000).zfill(2) + "_" + str(id%1000).zfill(3)
+	print('working on:', run_id)
 
-	directory_run = os.path.join(path_subcatch, run_rand_id)
-
-	template_xml_new = template_xml
-	template_xml_new = template_xml_new.replace("%root", root)
-	for ii in range(0,len(ParamRanges)-1):
-		template_xml_new = template_xml_new.replace("%"+ParamRanges.index[ii],str(Parameters[ii]))
-	# replace output directory
-	template_xml_new = template_xml_new.replace('%run_rand_id', directory_run)
+	directory_run = os.path.join(SubCatchmentPath, run_id)
 
 	if os.path.isdir(directory_run):
-		if os.path.exists(os.path.join(directory_run,dischargetss)):
+		if os.path.exists(os.path.join(directory_run, dischargetss)):
 			runmodel = False
 		else:
 			runmodel = True
 			shutil.rmtree(directory_run)
-	else: runmodel = True
+	else:
+		runmodel = True
 
-
+	config_path = os.path.join(directory_run, 'config.yml')
 	if runmodel:
 		os.mkdir(directory_run)
-		f = open(os.path.join(directory_run, ModelSettings_template[:-4] + '-Run' + run_rand_id + '.ini'), "w")
-		f.write(template_xml_new)
-		f.close()
 
-		template_bat_new = template_bat
-		template_bat_new = template_bat_new.replace('%run',ModelSettings_template[:-4]+'-Run'+run_rand_id+'.ini')
-		runfile = os.path.join(directory_run,RunModel_template[:-4]+run_rand_id)
-		if platform == "win32":
-			runfile = runfile + ".bat"
-			if use_multiprocessing == 0:
-				print("multiprocess off")
-				template_bat_new = template_bat_new.split()[0] + " " + template_bat_new.split()[1] + " " + template_bat_new.split()[2] + " -l\npause"
-		else:
-			runfile = runfile + ".sh"
-			if use_multiprocessing == 0:
-				template_bat_new = template_bat_new.split()[0] + " " + template_bat_new.split()[1] + " " + template_bat_new.split()[2] + " -l"
-		f = open(runfile, "w")
-		f.write(template_bat_new)
-		f.close()
+		with open('GEB.yml', 'r') as f:
+			template = yaml.load(f, Loader=yaml.FullLoader)
 
-		currentdir = os.getcwd()
-		os.chdir(directory_run)
+		template['report'] = {}  # no other reporting than discharge required.
+		template['report_cwatm'] = {}  # no other reporting than discharge required.
 
-		p = Popen(runfile, shell=True, stdout=PIPE, stderr=PIPE, bufsize=16*1024*1024)
+		for i, name in enumerate(ParamRanges.index):
+			template['parameters'][name] = Parameters[i]
+
+		template['general']['report_folder'] = directory_run
+
+		with open(config_path, 'w') as f:
+			yaml.dump(template, f)
+
+		command = f"python run.py --config {config_path} --headless --scenario {config['scenario']}"
+
+		p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
 		output, errors = p.communicate()
-		f = open("log"+run_rand_id+".txt",'w')
-		content = "OUTPUT:\n"+str(output)+"\nERRORS:\n"+str(errors)
-		f.write(content)
-		f.close()
+		with open(os.path.join(LOG_FOLDER, f"log{run_id}.txt"), 'w') as f:
+			content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
+			f.write(content)
 
-		os.chdir(currentdir)
-
-
-	Qsim_tss = os.path.join(directory_run,dischargetss)
+		modflow_folder = os.path.join(directory_run, config['scenario'], 'modflow_model')
+		if os.path.exists(modflow_folder):
+			shutil.rmtree(modflow_folder)
 	
+	else:
+		with open(config_path, 'r') as f:
+			template = yaml.load(f, Loader=yaml.FullLoader)
+
+	Qsim_tss = os.path.join(directory_run, dischargetss)
 	
-	if os.path.isfile(Qsim_tss)==False:
-		print("run_rand_id: "+str(run_rand_id)+" File: "+ Qsim_tss)
-		raise Exception("No simulated streamflow found. Probably the model failed to start? Check the log files of the run!")
-	simulated_streamflow = pandas.read_csv(Qsim_tss,sep=r"\s+",index_col=0,skiprows=4,header=None,skipinitialspace=True)
+	if not os.path.isfile(Qsim_tss):
+		print("run_id: "+str(run_id)+" File: "+ Qsim_tss)
+		raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
+	
+	simulated_streamflow = pd.read_csv(Qsim_tss,sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
 	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
 
-	if len(observed_streamflow) != len(simulated_streamflow[1]):
-		raise Exception("run_rand_id: " + str(
-			run_rand_id) + ": observed and simulated streamflow arrays have different number of elements (" + str(
-			len(observed_streamflow)) + " and " + str(len(simulated_streamflow[1])) + " elements, respectively)")
+	simulated_dates = [template['general']['start_time']]
+	for _ in range(len(simulated_streamflow) - 1):
+		simulated_dates.append(simulated_dates[-1] + timedelta(days=1))
+	simulated_streamflow = simulated_streamflow[1]
+	simulated_streamflow.index = [pd.Timestamp(date) for date in simulated_dates]
+	simulated_streamflow.name = 'simulated'
 
-	#Qobs = observed_streamflow[Cal_Start:Cal_End].values+0.001
-	#Qobs = observed_streamflow
-	q1 = simulated_streamflow[1].values+0.0001
-	Qobs = observed_streamflow[~np.isnan(observed_streamflow)]
-	#Qsim = q1[~np.isnan(observed_streamflow)]
-	Qsim1=[]
-	for i in range(observed_streamflow.shape[0]):
-		if not(np.isnan(observed_streamflow[i])):
-			Qsim1.append(q1[i])
-	Qsim = np.asarray(Qsim1)
+	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
+	streamflows['simulated'] += 0.0001
 
 
+	if OBJECTIVE == 'KGE':
+		# Compute objective function score
+		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'],warmup=WarmupDays)
+		print("run_id: "+str(run_id)+", KGE: "+"{0:.3f}".format(KGE))
+		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
+			myfile.write(str(run_id)+","+str(KGE)+"\n")
+		return KGE, # If using just one objective function, put a comma at the end!!!
 
-	# Compute objective function score
+	elif OBJECTIVE == 'COR':
 
-	KGE = hydroStats.KGE(s=Qsim,o=Qobs,warmup=WarmupDays)
-	print("   run_rand_id: "+str(run_rand_id)+", KGE: "+"{0:.3f}".format(KGE))
-	with open(os.path.join(path_subcatch,"runs_log.csv"), "a") as myfile:
-		myfile.write(str(run_rand_id)+","+str(KGE)+"\n")
-	return KGE, # If using just one objective function, put a comma at the end!!!
+		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'],warmup=WarmupDays)
+		print("run_id: "+str(run_id)+", COR "+"{0:.3f}".format(COR))
+		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
+			myfile.write(str(run_id)+","+str(COR)+"\n")
+		return COR, # If using just one objective function, put a comma at the end!!!
 
-	"""
-	COR = hydroStats.correlation(s=Qsim,o=Qobs,warmup=WarmupDays)
-	print("   run_rand_id: "+str(run_rand_id)+", COR "+"{0:.3f}".format(COR))
-	with open(os.path.join(path_subcatch,"runs_log.csv"), "a") as myfile:
-		myfile.write(str(run_rand_id)+","+str(COR)+"\n")
-	return COR, # If using just one objective function, put a comma at the end!!!
-
-
-	NSE = hydroStats.NS(s=Qsim, o=Qobs, warmup=WarmupDays)
-	print "   run_rand_id: " + str(run_rand_id) + ", NSE: " + "{0:.3f}".format(NSE)
-	with open(os.path.join(path_subcatch, "runs_log.csv"), "a") as myfile:
-		myfile.write(str(run_rand_id) + "," + str(NSE) + "\n")
-	return NSE,  # If using just one objective function, put a comma at the end!!!
-	"""
+	elif OBJECTIVE == 'NSE':
+		NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'], warmup=WarmupDays)
+		print("run_id: " + str(run_id) + ", NSE: " + "{0:.3f}".format(NSE))
+		with open(os.path.join(SubCatchmentPath, "runs_log.csv"), "a") as myfile:
+			myfile.write(str(run_id) + "," + str(NSE) + "\n")
+		return NSE,  # If using just one objective function, put a comma at the end!!!
+	else:
+		raise ValueError
 
 ########################################################################
 #   Perform calibration using the DEAP module
@@ -322,13 +271,12 @@ if __name__ == "__main__":
 
 	t = time.time()
 
-	if use_multiprocessing==True:
+	if use_multiprocessing is True:
 		pool_size = multiprocessing.cpu_count() * 1
-		print(pool_size, pool_limit)
 		if pool_size > pool_limit: pool_size = pool_limit
+		print(f'Pool size: {pool_size}')
 		pool = multiprocessing.Pool(processes=pool_size)
 		toolbox.register("map", pool.map)
-		print(pool_size)
 	
 
 	# For someone reason, if sum of cxpb and mutpb is not one, a lot less Pareto optimal solutions are produced
@@ -336,7 +284,7 @@ if __name__ == "__main__":
 	mutpb = 0.1
 
 	startlater = False
-	checkpoint = os.path.join(SubCatchmentPath,"checkpoint.pkl")
+	checkpoint = os.path.join(SubCatchmentPath, "checkpoint.pkl")
 	if os.path.exists(os.path.join(checkpoint)):
 		with open(checkpoint, "rb" ) as cp_file:
 			cp = pickle.load(cp_file)
@@ -356,11 +304,8 @@ if __name__ == "__main__":
 			population[ii][-1]= float(gen * 1000 + ii+1)
 
 		#first run parameter set:
-		if firstrun:
-			for ii in range(len(population[0])):
-				population[0][ii] = para_first2[ii]
-			population[0][-1] = 0.
-
+		if define_first_run:
+			raise NotImplementedError
 
 	effmax = np.zeros(shape=(ngen+1,1))*np.NaN
 	effmin = np.zeros(shape=(ngen+1,1))*np.NaN
@@ -396,8 +341,6 @@ if __name__ == "__main__":
 		print(">> gen: "+str(gen)+", effmax_KGE: "+"{0:.3f}".format(effmax[gen,0]))
 		gen = 1
 
-
-
 	# Begin the generational process
 	conditions = {"ngen" : False, "StallFit" : False}
 	while not any(conditions.values()):
@@ -415,8 +358,6 @@ if __name__ == "__main__":
 			pickle.dump(cp, cp_file)
 		cp_file.close()
 		startlater = False
-
-
 
 		# Evaluate the individuals with an invalid fitness
 		invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
@@ -452,15 +393,11 @@ if __name__ == "__main__":
 		gen += 1
 		# Copied and modified from algorithms.py eaMuPlusLambda until here
 
-
-
-
 	# Finito
-	if use_multiprocessing == True:
+	if use_multiprocessing is True:
 		pool.close()
 	elapsed = time.time() - t
 	print(">> Time elapsed: "+"{0:.2f}".format(elapsed)+" s")
-
 
 	########################################################################
 	#   Save calibration results
@@ -468,13 +405,13 @@ if __name__ == "__main__":
 
 	# Save history of the change in objective function scores during calibration to csv file
 	print(">> Saving optimization history (front_history.csv)")
-	front_history = pandas.DataFrame({'gen':list(range(gen)),
+	front_history = pd.DataFrame({'gen':list(range(gen)),
 									  'effmax_R':effmax[:,0],
 									  'effmin_R':effmin[:,0],
 									  'effstd_R':effstd[:,0],
 									  'effavg_R':effavg[:,0],
 									  })
-	front_history.to_csv(os.path.join(path_subcatch,"front_history.csv"),',')
+	front_history.to_csv(os.path.join(SubCatchmentPath,"front_history.csv"),',')
 	# as numpy  numpy.asarray  ; numpy.savetxt("foo.csv", a, delimiter=","); a.tofile('foo.csv',sep=',',format='%10.5f')
 
 	# Compute overall efficiency scores from the objective function scores for the
@@ -495,16 +432,16 @@ if __name__ == "__main__":
 	# The table is sorted by overall efficiency score
 	print(">> Saving Pareto optimal solutions (pareto_front.csv)")
 	ind = np.argsort(effover)[::-1]
-	pareto_front = pandas.DataFrame({'effover':effover[ind],'R':front[ind,0]})
+	pareto_front = pd.DataFrame({'effover':effover[ind],'R':front[ind,0]})
 	for ii in range(len(ParamRanges)):
 		pareto_front["param_"+str(ii).zfill(2)+"_"+ParamRanges.index[ii]] = paramvals[ind,ii]
-	pareto_front.to_csv(os.path.join(path_subcatch,"pareto_front.csv"),',')
+	pareto_front.to_csv(os.path.join(SubCatchmentPath,"pareto_front.csv"),',')
 
 	# Select the "best" parameter set and run Model for the entire forcing period
 	Parameters = paramvals[best,:]
 
 
-	if bestrun:
+	if redo_best_run:
 		print(">> Running Model using the \"best\" parameter set")
 		# Note: The following code must be identical to the code near the end where Model is run
 		# using the "best" parameter set. This code:
@@ -513,24 +450,24 @@ if __name__ == "__main__":
 		# 3) Runs Model and loads the simulated streamflow
 		# Random number is appended to settings and .bat files to avoid simultaneous editing
 
-		run_rand_id = str(gen).zfill(2) + "_best"
+		run_id = str(gen).zfill(2) + "_best"
 		template_xml_new = template_xml
-		directory_run = os.path.join(path_subcatch, run_rand_id)
+		directory_run = os.path.join(SubCatchmentPath, run_id)
 		template_xml_new = template_xml_new.replace("%root", root)
 		for ii in range(0,len(ParamRanges)):
 			template_xml_new = template_xml_new.replace("%"+ParamRanges.index[ii],str(Parameters[ii]))
-		template_xml_new = template_xml_new.replace('%run_rand_id', directory_run)
+		template_xml_new = template_xml_new.replace('%run_id', directory_run)
 
 		os.mkdir(directory_run)
 
 		#template_xml_new = template_xml_new.replace('%InitModel',"1")
-		f = open(os.path.join(directory_run,ModelSettings_template[:-4]+'-Run'+run_rand_id+'.ini'), "w")
+		f = open(os.path.join(directory_run,ModelSettings_template[:-4]+'-Run'+run_id+'.ini'), "w")
 		f.write(template_xml_new)
 		f.close()
 		template_bat_new = template_bat
-		template_bat_new = template_bat_new.replace('%run',ModelSettings_template[:-4]+'-Run'+run_rand_id+'.ini')
+		template_bat_new = template_bat_new.replace('%run',ModelSettings_template[:-4]+'-Run'+run_id+'.ini')
 
-		runfile = os.path.join(directory_run, RunModel_template[:-4] + run_rand_id)
+		runfile = os.path.join(directory_run, RunModel_template[:-4] + run_id)
 		if platform == "win32":
 			runfile = runfile + ".bat"
 		else:
@@ -544,7 +481,7 @@ if __name__ == "__main__":
 
 		p = Popen(runfile, shell=True, stdout=PIPE, stderr=PIPE, bufsize=16*1024*1024)
 		output, errors = p.communicate()
-		f = open("log"+run_rand_id+".txt",'w')
+		f = open("log"+run_id+".txt",'w')
 		content = "OUTPUT:\n"+str(output)+"\nERRORS:\n"+str(errors)
 		f.write(content)
 		f.close()
@@ -552,26 +489,26 @@ if __name__ == "__main__":
 
 		Qsim_tss = os.path.join(directory_run,dischargetss)
 		
-		simulated_streamflow = pandas.read_table(Qsim_tss,sep=r"\s+",index_col=0,skiprows=4,header=None,skipinitialspace=True)
+		simulated_streamflow = pd.read_table(Qsim_tss,sep=r"\s+",index_col=0,skiprows=4,header=None,skipinitialspace=True)
 		simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
 		Qsim = simulated_streamflow[1].values
 
 		# Save simulated streamflow to disk
 		print(">> Saving \"best\" simulated streamflow (streamflow_simulated_best.csv)")
-		Qsim = pandas.DataFrame(data=Qsim, index=pandas.date_range(ForcingStart, periods=len(Qsim), freq=frequen))
-		Qsim.to_csv(os.path.join(path_subcatch,"streamflow_simulated_best.csv"),',',header="")
-		try: os.remove(os.path.join(path_subcatch,"out",'streamflow_simulated_best.tss'))
+		Qsim = pd.DataFrame(data=Qsim, index=pd.date_range(ForcingStart, periods=len(Qsim), freq=frequen))
+		Qsim.to_csv(os.path.join(SubCatchmentPath,"streamflow_simulated_best.csv"),',',header="")
+		try: os.remove(os.path.join(SubCatchmentPath,"out",'streamflow_simulated_best.tss'))
 		except: pass
-		#os.rename(Qsim_tss, os.path.join(path_subcatch,"out",'streamflow_simulated_best.tss'))
+		#os.rename(Qsim_tss, os.path.join(SubCatchmentPath,"out",'streamflow_simulated_best.tss'))
 
 	"""
 	# Delete all .xml, .bat, .tmp, and .txt files created for the runs
-	for filename in glob.glob(os.path.join(path_subcatch,"*.xml")):
+	for filename in glob.glob(os.path.join(SubCatchmentPath,"*.xml")):
 		os.remove(filename)
-	for filename in glob.glob(os.path.join(path_subcatch,"*.bat")):
+	for filename in glob.glob(os.path.join(SubCatchmentPath,"*.bat")):
 		os.remove(filename)
-	for filename in glob.glob(os.path.join(path_subcatch,"*.tmp")):
+	for filename in glob.glob(os.path.join(SubCatchmentPath,"*.tmp")):
 		os.remove(filename)
-	for filename in glob.glob(os.path.join(path_subcatch,"*.txt")):
+	for filename in glob.glob(os.path.join(SubCatchmentPath,"*.txt")):
 		os.remove(filename)
 	"""

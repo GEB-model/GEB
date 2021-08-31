@@ -21,13 +21,12 @@ def krishna():
 parser.description = "GEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail."
 parser.add_argument('--scenario', dest='scenario', type=str, default='base', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.
 """)
-parser.add_argument('--export_folder', dest='export_folder', type=str, default=None, help="The folder to export model results to. If not specified the name of the scenario is used.")
 parser.add_argument('--profiling', dest='profiling', default=False, action='store_true', help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.")
 parser.add_argument('--GPU', dest='use_gpu', default=False, action='store_true', help="Whether a GPU can be used to run the model. This requires CuPy to be installed.")
+parser.add_argument('--config', dest='config', default='GEB.yml', help="Path of the model configuration file.")
+
 if __name__ == '__main__':
     args = parser.parse_args()
-    if args.export_folder is None and args.scenario is not None:
-        args.export_folder = args.scenario
     import sys; sys.setrecursionlimit(2000)
 
     import faulthandler
@@ -36,7 +35,6 @@ if __name__ == '__main__':
     study_area_name, xmin, xmax, ymin, ymax = krishna()
 
     CWATM_SETTINGS = 'CWatM_GEB.ini'
-    ABM_CONFIG_PATH = 'GEB.yml'
 
     MODEL_NAME = 'GEB'
 
@@ -75,7 +73,7 @@ if __name__ == '__main__':
 
     model_params = {
         "CwatM_settings": CWATM_SETTINGS,
-        "GEB_config_path": ABM_CONFIG_PATH,
+        "GEB_config_path": args.config,
         "name": study_area_name,
         'xmin': xmin,
         'xmax': xmax,

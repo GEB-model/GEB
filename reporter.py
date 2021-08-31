@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in Hyve's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `GEB.yml` (see :doc:`configuration`). All data is saved in a subfolder (see `--export_folder` in :doc:`running`) of a folder called "report". 
+"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in Hyve's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `GEB.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`). 
 
 """
 
@@ -25,11 +25,7 @@ class CWatMReporter(ABMReporter):
     def __init__(self, model) -> None:
         self.model = model
 
-        self.export_folder = (
-            os.path.join('report', self.model.args.export_folder)
-            if self.model.args and hasattr(self.model.args, "export_folder") and self.model.args.export_folder is not None
-            else "report"
-        )
+        self.export_folder = os.path.join(self.model.config['general']['report_folder'], self.model.args.scenario)
         self.maybe_create_export_folder()
 
         self.variables = {}
@@ -126,8 +122,16 @@ class Reporter:
     """
     def __init__(self, model):
         self.model = model
-        self.abm_reporter = ABMReporter(model)
+        self.abm_reporter = ABMReporter(model, subfolder=self.model.args.scenario)
         self.cwatmreporter = CWatMReporter(model)
+
+    @property
+    def variables(self):
+        return {**self.abm_reporter.variables, **self.cwatmreporter.variables}
+
+    @property
+    def timesteps(self):
+        return self.abm_reporter.timesteps
 
     def step(self) -> None:
         """This function is called at the end of every timestep. This function only forwards the step function to the reporter for the ABM model and CWatM."""

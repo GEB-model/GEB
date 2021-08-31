@@ -19,4 +19,4 @@ cd $SCRIPT_DIR
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate abm  # activate conda environment
 
-python run.py --headless --scenario ngo_training
+python run.py --GPU --headless --scenario ngo_training

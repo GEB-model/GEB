@@ -283,15 +283,6 @@ class Plot:
         ax.set_xlabel('Basin percentile counted as upper')
         ax.legend()
 
-def read_npy(name, dt, scenario=None):
-    if scenario:
-        report_folder = os.path.join('report', scenario)
-    else:
-        report_folder = 'report'
-    fn = os.path.join(report_folder, name, dt.isoformat().replace(':', '').replace('-', '') + '.npy')
-    return np.load(fn)
-
-
 def read_irrigation_data(scenario):
     dt = copy(START_DATE)
     timesteps = (END_DATE - START_DATE) // TIMEDELTA + 1

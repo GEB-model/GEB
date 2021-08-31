@@ -1,0 +1,22 @@
+forcingstart: 2000-01-01
+timeperiod: daily
+subcatchmentpath: runs
+parameter_ranges: parameter_ranges.csv
+scenario: spinup
+
+observed_data:
+  path: observations.csv
+  column: flow
+
+options:
+  define_first_run: False
+  redo_best_run: True
+
+DEAP:
+  use_multiprocessing: true
+  pool_limit: 5
+  maximize: True
+  ngen: 2
+  mu: 5 # 256
+  lambda_: 2 # 32
+ 

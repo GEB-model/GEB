@@ -24,6 +24,6 @@ conda activate abm  # activate conda environment
 for scenario in base self_investment ngo_training government_subsidies;
 do
     echo "running $scenario"
-    srun --export=ALL -N1 -n1 --gres=gpu:1 --exclusive python run.py --headless --scenario $scenario &
+    srun --export=ALL -N1 -n1 --gres=gpu:1 --exclusive python run.py --GPU --headless --scenario $scenario &
 done
 wait

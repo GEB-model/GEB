@@ -21,23 +21,29 @@ class CWatM_Model(CWATModel):
         use_gpu: Whether the model can use a GPU.
     """
     def __init__(self, start_date: datetime.datetime, n_steps: int, settings: str) -> None:
-        self.init_water_table_file = os.path.join('report', 'init', 'water_table.npy')
+        self.init_water_table_file = os.path.join(self.config['general']['init_water_table'])
 
         settingsfile.append(settings)
         parse_configuration(settings)
 
-        if self.args and hasattr(self.args, "export_folder") and self.args.export_folder is not None:
-            outDir['OUTPUT'] = os.path.join(outDir['OUTPUT'], self.args.export_folder)
-            if not os.path.exists(outDir['OUTPUT']):
-                os.makedirs(outDir['OUTPUT'])
+        outDir['OUTPUT'] = os.path.join(self.config['general']['report_folder'], self.args.scenario)
+
+        # calibration
+        for parameter, value in self.config['parameters'].items():
+            binding[parameter] = value
 
         binding['max_groundwater_abstraction_depth'] = 50
         if self.args.scenario == 'spinup':
             binding['load_init_water_table'] = 'false'
             binding['initial_water_table_depth'] = 2
+            self.load_initial = False
+            self.save_initial = True
         else:
+            self.load_initial = True
+            self.save_initial = False
             binding['load_init_water_table'] = 'true'
             binding['init_water_table'] = self.init_water_table_file
+        
         # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
         binding['StepStart'] = start_date.strftime('%d/%m/%Y')
         binding['SpinUp'] = '0'

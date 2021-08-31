@@ -1,12 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=govsub
-#SBATCH --output=government_subsidies.out
-#SBATCH --gres=gpu:1
+#SBATCH --job-name=calibrate
+#SBATCH --output=calibrate.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=64G
 #SBATCH --time=100:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jens.de.bruijn@vu.nl
@@ -17,6 +15,7 @@ SCRIPT_DIR="/scistor/ivm/jbn271/Packages/GEB/"
 cd $SCRIPT_DIR
 
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
+
 conda activate abm  # activate conda environment
 
-python run.py --GPU --headless --scenario government_subsidies
+python calibration/calibrate.py

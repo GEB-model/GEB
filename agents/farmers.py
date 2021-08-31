@@ -686,7 +686,8 @@ class Farmers(AgentBaseClass):
         irrigating: np.ndarray,
         unit_code: np.ndarray,
         crop: np.ndarray,
-        planting_scheme: np.ndarray
+        planting_scheme: np.ndarray,
+        switch_crops: bool
     ) -> np.ndarray:
         """This function determines whether crops are ready to be harvested by comparing the crop harvest age to the current age of the crop. If the crop is harvested, the crops next multicrop index and next plant day are determined.
 
@@ -714,6 +715,7 @@ class Farmers(AgentBaseClass):
             unit_code: The unit code of each farmer.
             crop: Crops grown by each farmer.
             planting_scheme: The planting scheme for each farmer.
+            switch_crops: Whether to switch crops or not.
 
         Returns:
             harvest: Boolean subarray map of fields to be harvested.
@@ -730,11 +732,12 @@ class Farmers(AgentBaseClass):
                     if crop_age == crop_harvest_age_days[field]:
                         harvest[field] = True
                         
-                        if n_water_limited_days_farmer < .5 * crop_harvest_age_days[field]:  # switch to sugar cane
-                            crop[farmer_i] = 11
-                            planting_scheme[farmer_i] = 0
-                            next_multicrop_index[field] = 0
-                            n_multicrop_periods[field] = 1
+                        if switch_crops:
+                            if n_water_limited_days_farmer < .5 * crop_harvest_age_days[field]:  # switch to sugar cane
+                                crop[farmer_i] = 11
+                                planting_scheme[farmer_i] = 0
+                                next_multicrop_index[field] = 0
+                                n_multicrop_periods[field] = 1
                         
                         next_multicrop_index[field] = (next_multicrop_index[field] + 1) % n_multicrop_periods[field]
                         assert next_multicrop_index[field] < n_multicrop_periods[field] 
@@ -770,7 +773,8 @@ class Farmers(AgentBaseClass):
             self.irrigating,
             self.unit_code,
             self.crop.get() if self.model.args.use_gpu else self.crop,
-            self.planting_scheme
+            self.planting_scheme,
+            self.model.config['general']['switch_crops']
         )
         if np.count_nonzero(harvest):
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)

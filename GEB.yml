@@ -6,10 +6,17 @@ general:
   start_time: 2000-01-01
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2000-01-05
+  end_time: 2003-01-01
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_start: 1995-01-01
+  spinup_start: 1990-01-01
+  ###
+  # base folder where to report output data to
+  report_folder: DataDrive/GEB/report/
+  init_water_table: DataDrive/GEB/report/init/water_table.npy
+  ###
+  #
+  switch_crops: false
 
 ###
 # This section can contain settings to change the behavior or the agents.
@@ -128,6 +135,7 @@ draw:
 #   - **varname**: attribute name of variable in agent class.
 #   - **format**: format to save to.
 #   - **initial_only**: if true only save the data for the first timestep.
+#   - **save**: save variable in model run, or export, or both (save/save+export/export).
 report:
   activation order:
     type: farmers
@@ -189,7 +197,7 @@ report:
     type: farmers
     function: null
     varname: crop
-    format: csv
+    format: npy
     per_timestep: true
     save: export
 
@@ -212,3 +220,6 @@ report_cwatm:
     function: sum
     format: csv
     save: save
+
+parameters:
+  soildepth_factor: 1.2357589498352997

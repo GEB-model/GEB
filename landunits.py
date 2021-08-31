@@ -53,7 +53,15 @@ class BaseVariables:
         """
         return array / self.cellArea
 
-
+    def load_initial(self, name, default=.0, gpu=False):
+        if self.model.load_initial:
+            fp = os.path.join(self.model.init_save_folder, f"{name}.npy")
+            if gpu:
+                return cp.load(fp)
+            else:
+                return np.load(fp)
+        else:
+            return default
 class Grid(BaseVariables):
     """This class is to store data in the 'normal' grid cells. This class works with compressed and uncompressed arrays. On initialization of the class, the mask of the study area is read from disk. This is the shape of any uncompressed array. Many values in this array, however, fall outside the stuy area as they are masked. Therefore, the array can be compressed by saving only the non-masked values.
     
@@ -126,27 +134,6 @@ class Grid(BaseVariables):
         outmap[self.mask_flat == False] = array
         return outmap.reshape(self.mask.shape)
 
-    def load_initial(self, name, default=0.0, number=None):
-        """
-        First it is checked if the initial value is given in the settings file
-
-        * if it is <> None it is used directly
-        * if None it is loaded from the init netcdf file
-
-        :param name: Name of the init value
-        :param default: default value -> default is 0.0
-        :param number: in case of snow or runoff concentration several layers are included: number = no of the layer
-        :return: spatial map or value of initial condition
-        """
-
-        if number is not None:
-            name = name + str(number)
-
-        if self.loadInit:
-            return readnetcdfInitial(self.initLoadFile, name)
-        else:
-            return default
-
     def plot(self, array: np.ndarray) -> None:
         """Plot array.
         
@@ -165,6 +152,9 @@ class Grid(BaseVariables):
             fillvalue: Value to use for masked values.
         """
         self.plot(self.decompress(array, fillvalue=fillvalue))
+
+    def load_initial(self, name, default=.0):
+        return super().load_initial('grid.' + name, default=default)
 
 
 class LandUnits(BaseVariables):
@@ -432,7 +422,8 @@ class LandUnits(BaseVariables):
         if show:
             plt.show()
 
-
+    def load_initial(self, name, default=.0):
+        return super().load_initial('landunit.' + name, default=default, gpu=self.model.args.use_gpu)
 
 class Data:
     """The base data class for the GEB model. This class contains the data for the normal grid, the land units, and has methods to convert between the grid and land units.
