@@ -1,9 +1,10 @@
+spinup_start: 1995-01-01
 start_date: 2000-01-01
-end_date: 2000-01-03
+end_date: 2003-01-01
 timeperiod: daily
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
-scenario: base
+scenario: spinup
 
 observed_data:
   path: observations.csv

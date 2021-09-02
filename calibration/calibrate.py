@@ -155,7 +155,7 @@ def RunModel(Individual):
 		with open('GEB.yml', 'r') as f:
 			template = yaml.load(f, Loader=yaml.FullLoader)
 
-		template['general']['start_time'] = config['start_date']
+		template['general']['start_time'] = config['spinup_start']
 		template['general']['end_time'] = config['end_date']
 
 		template['report'] = {}  # no other reporting than discharge required.
@@ -169,7 +169,7 @@ def RunModel(Individual):
 		with open(config_path, 'w') as f:
 			yaml.dump(template, f)
 
-		command = f"python run.py --config {config_path} --headless --scenario {config['scenario']}"
+		command = f"python run.py --config {config_path} --GPU --headless --scenario {config['scenario']}"
 
 		p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
 		output, errors = p.communicate()
@@ -207,7 +207,7 @@ def RunModel(Individual):
 
 	if OBJECTIVE == 'KGE':
 		# Compute objective function score
-		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'],warmup=WarmupDays)
+		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'], warmup=WarmupDays)
 		print("run_id: "+str(run_id)+", KGE: "+"{0:.3f}".format(KGE))
 		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id)+","+str(KGE)+"\n")
@@ -215,7 +215,7 @@ def RunModel(Individual):
 
 	elif OBJECTIVE == 'COR':
 
-		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'],warmup=WarmupDays)
+		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'], warmup=WarmupDays)
 		print("run_id: "+str(run_id)+", COR "+"{0:.3f}".format(COR))
 		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id)+","+str(COR)+"\n")

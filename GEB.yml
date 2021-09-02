@@ -234,3 +234,4 @@ parameters:
   lakeAFactor: 1.2001137835309703
   lakeEvaFactor: 1.5932766384205812
   normalStorageLimit: 0.645563228322237
+  max_reseroir_release_factor: 0.03
