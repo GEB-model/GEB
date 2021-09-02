@@ -9,8 +9,8 @@ general:
   end_time: 2003-01-01
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_start: 1999-12-31
-  # spinup_start: 1990-01-01
+  # spinup_start: 1999-12-31
+  spinup_start: 1990-01-01
   ###
   # base folder where to report output data to
   report_folder: DataDrive/GEB/report/
