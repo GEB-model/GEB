@@ -82,8 +82,7 @@ def export_other_lake_data(reservoirs: list[int]) -> None:
             dst.write(lake_area, 1)
 
         lake_dis_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
-        print('dis must be replaced by sensible value')
-        lake_dis_array[basin_lakes['Hylak_id']] = .1
+        lake_dis_array[basin_lakes['Hylak_id']] = basin_lakes['Dis_avg']
         lake_dis = np.take(lake_dis_array, lake_ids, mode='clip')
         with rasterio.open(
             os.path.join(output_folder, 'lakesResDis.tif'), 'w',
