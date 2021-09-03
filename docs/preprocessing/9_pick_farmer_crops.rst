@@ -1,7 +1,7 @@
 Pick farmer crops
 #############################
 
-`preprocessing.4_create_lakes_and_reservoirs` assigns a crop type, irrigation type and planting scheme to each farmer using to the MIRCA2000 dataset. We condider specified crops, growing area, and various planting schemes (e.g., single, double-cropping). But before running the file, we need to obtain MIRCA2000 input data as described below.
+`preprocessing.4_create_lakes_and_reservoirs` assigns a crop type, irrigation type and planting scheme to each farmer using to the MIRCA2000 dataset. We condider specified crops, growing area, and various planting schemes (e.g., single, double-cropping). But before running the file, we need to obtain MIRCA2000 input data and irrigated areas as described below.
 
 MIRCA2000
 ****************
@@ -13,5 +13,9 @@ MIRCA2000
 6. Download the `Condensed Crop Calendars` for both irrigated and rainfed crops, decompress, and place in `DataDrive/GEB/original_data/MIRCA2000`.
 7. Download the `Calendar units`, decompress, and place in `DataDrive/GEB/original_data/MIRCA2000`.
 
-.. automodule:: preprocessing.8_pick_farmer_crops
+Irrigated land
+****************
+You can download the irrigated areas from `Scientific Data <https://www.nature.com/articles/sdata2016118>`_, and place it in `DataDrive/GEB/original_data/india_irrigated_land`.
+
+.. automodule:: preprocessing.9_pick_farmer_crops
     :members:

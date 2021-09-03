@@ -188,4 +188,4 @@ if __name__ == '__main__':
     m = ModflowPreprocess(MODFLOW_PATH, MODFLOW_RESOLUTION, cwatm_basin_mask_fn, MODFLOW_EPSG)
     m.create_indices()
     m.create_modflow_basin()
-    # m.project_input_map('DataDrive/GEB/input/landsurface/topo/subelv.tif', 'elevation_modflow.tif')
+    m.project_input_map('DataDrive/GEB/input/landsurface/topo/subelv.tif', 'elevation_modflow.tif')

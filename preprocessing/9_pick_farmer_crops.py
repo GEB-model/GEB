@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from numba.core.decorators import njit
 import numpy as np
 from datetime import datetime
 import os
@@ -67,6 +68,64 @@ def get_crop_calendar(unit_codes: np.ndarray) -> tuple[dict, np.ndarray]:
     
     return crop_calendar_dict, map_unit_codes
 
+
+def get_farm_sizes():
+    with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farms.tif'), 'r') as src:
+        farms = src.read(1)
+
+    with rasterio.open('DataDrive/GEB/input/areamaps/sub_cell_area.tif', 'r') as src:
+        cell_area = src.read(1)
+
+    assert cell_area.shape == farms.shape
+
+    cell_area = cell_area[farms != -1]
+    farms = farms[farms != -1]
+
+    farm_sizes = np.bincount(farms, weights=cell_area)
+    assert (farm_sizes > 0).all()
+    return farm_sizes
+
+@njit
+def is_groundwater_irrigating(irrigating_farmers, groundwater_irrigation_probabilities, farms_size_ha):
+    """
+    Below 0.5
+    0.5-1.0
+    1.0-2.0
+    2.0-3.0
+    3.0-4.0
+    4.0-5.0
+    5.0-7.5
+    7.5-10.0
+    10.0-20.0
+    20.0 & ABOVE
+    """
+    has_well = np.zeros(irrigating_farmers.size, dtype=np.float32)
+    for i in range(irrigating_farmers.size):
+        is_irrigating = irrigating_farmers[i]
+        if is_irrigating:
+            farm_size_ha = farms_size_ha[i]
+            if farm_size_ha < 0.5:
+                has_well[i] = groundwater_irrigation_probabilities[i, 0]
+            elif farm_size_ha < 1:
+                has_well[i] = groundwater_irrigation_probabilities[i, 1]
+            elif farm_size_ha < 2:
+                has_well[i] = groundwater_irrigation_probabilities[i, 2]
+            elif farm_size_ha < 3:
+                has_well[i] = groundwater_irrigation_probabilities[i, 3]
+            elif farm_size_ha < 4:
+                has_well[i] = groundwater_irrigation_probabilities[i, 4]
+            elif farm_size_ha < 5:
+                has_well[i] = groundwater_irrigation_probabilities[i, 5]
+            elif farm_size_ha < 7.5:
+                has_well[i] = groundwater_irrigation_probabilities[i, 6]
+            elif farm_size_ha < 10:
+                has_well[i] = groundwater_irrigation_probabilities[i, 7]
+            elif farm_size_ha < 20:
+                has_well[i] = groundwater_irrigation_probabilities[i, 8]
+            else:
+                has_well[i] = groundwater_irrigation_probabilities[i, 9]
+    return has_well
+
 def get_crop_and_irrigation_per_farmer(crop_calendar: dict, map_unit_codes: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Function to get crop type, irrigation type and MIRCA2000 unit code for each farmer. First, the farmer locations are loaded (as previously generated), then a map of farmer irrigation is loaded to retrieve irrigating farmers. Next, the MIRCA2000 unit codes for each farmer are retrieved. Subsequently, MIRCA2000 crop data is read and linearly interpolated to support the higher resolution grid of the model. Using the farmer locations, a crop is then randomly chosen for each farmer while considering the probablity that a certain crop is growing in that space according to the MIRCA2000 specification. Crop choice, irrigation type and unit codes per farmer are saved to the disk in NumPy arrays.
@@ -88,12 +147,25 @@ def get_crop_and_irrigation_per_farmer(crop_calendar: dict, map_unit_codes: np.n
     bounds = bounds.left, bounds.right, bounds.bottom, bounds.top
 
     irrigated_land = ArrayReader(
-        fp=os.path.join('DataDrive', 'IRRIGATED_LAND_INDIA', '2014-2015.tif'),
+        fp=os.path.join('DataDrive', 'GEB', 'original_data', 'india_irrigated_land', '2010-2011.tif'),
         bounds=bounds
     )
-    
-    crop_per_farmer = np.full(n, -1, dtype=np.int8)
     irrigating_farmers = irrigated_land.sample_coords(locations)
+
+    groundwater_irrigated = ArrayReader(
+        fp=os.path.join('DataDrive', 'GEB', 'input', 'agents', 'irrigation_source', '2010-11', 'irrigation_source.tif'),
+        bounds=bounds
+    )
+
+    farm_sizes = get_farm_sizes()
+    farm_sizes_ha = farm_sizes / 10_000
+
+    crop_per_farmer = np.full(n, -1, dtype=np.int8)
+
+    groundwater_irrigated_farmers = is_groundwater_irrigating(irrigating_farmers, groundwater_irrigated.sample_coords(locations), farm_sizes_ha)
+    groundwater_irrigated_farmers = np.random.binomial(1, groundwater_irrigated_farmers)
+
+    np.save(os.path.join(OUTPUT_FOLDER, 'is_groundwater_irrigating.npy'), crop_per_farmer)
 
     MIRCA2000_unit_code = ArrayReader(
         fp=os.path.join(MIRCA2000_FOLDER, 'unit_code.asc'),

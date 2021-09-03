@@ -14,7 +14,8 @@ This section describes how all model input data should be obtained and processed
    4_create_lakes_and_reservoirs
    5_create_land_use_map
    6_get_farm_sizes
-   7_create_farmers
-   8_pick_farmer_crops
-   9_preprocess_modflow
-   10_other_data
+   7_get_irrigation_source
+   8_create_farmers
+   9_pick_farmer_crops
+   10_preprocess_modflow
+   11_other_data

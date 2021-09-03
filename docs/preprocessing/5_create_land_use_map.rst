@@ -82,7 +82,7 @@ Finally, the GLC30 land use classes are converted to CWatM land use classes (see
      - 1
      - Grasland/non irrigated land
 
-All rivers are also set to 5 (i.e., water covered area). Cultivated land (i.e., land use class 30 in GLC30 & land use class 1 in CWatM) is also exported separately, which is then used in :doc:`7_create_farmers` to ensure only cultivated land is used for farming purposes.
+All rivers are also set to 5 (i.e., water covered area). Cultivated land (i.e., land use class 30 in GLC30 & land use class 1 in CWatM) is also exported separately, which is then used in :doc:`8_create_farmers` to ensure only cultivated land is used for farming purposes.
 
 .. automodule:: preprocessing.5_create_land_use_map
     :members:
