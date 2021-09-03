@@ -165,7 +165,7 @@ def get_crop_and_irrigation_per_farmer(crop_calendar: dict, map_unit_codes: np.n
     groundwater_irrigated_farmers = is_groundwater_irrigating(irrigating_farmers, groundwater_irrigated.sample_coords(locations), farm_sizes_ha)
     groundwater_irrigated_farmers = np.random.binomial(1, groundwater_irrigated_farmers)
 
-    np.save(os.path.join(OUTPUT_FOLDER, 'is_groundwater_irrigating.npy'), crop_per_farmer)
+    np.save(os.path.join(OUTPUT_FOLDER, 'is_groundwater_irrigating.npy'), groundwater_irrigated_farmers)
 
     MIRCA2000_unit_code = ArrayReader(
         fp=os.path.join(MIRCA2000_FOLDER, 'unit_code.asc'),

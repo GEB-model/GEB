@@ -117,6 +117,8 @@ class Farmers(AgentBaseClass):
             self._crop = np.load(crop_file)
         self._irrigating = np.zeros(self.max_n, dtype=np.int8)
         self.irrigating = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'irrigating.npy'))
+        self._groundwater_irrigating = np.zeros(self.max_n, dtype=np.bool)
+        self.groundwater_irrigating = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'is_groundwater_irrigating.npy'))
         self._planting_scheme = np.zeros(self.max_n, dtype=np.int8)
         self.planting_scheme = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'planting_scheme.npy'))
         self._unit_code = np.zeros(self.max_n, dtype=np.int32)
@@ -225,6 +227,7 @@ class Farmers(AgentBaseClass):
         water_limited_days: np.ndarray,
         is_water_efficient: np.ndarray,
         irrigated: np.ndarray,
+        groundwater_irrigated: np.ndarray,
         cell_area: np.ndarray,
         landunit_to_grid: np.ndarray,
         crop_map: np.ndarray,
@@ -244,6 +247,8 @@ class Farmers(AgentBaseClass):
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
             water_limited_days: Current number of days where farmer has been water limited.
             is_water_efficient: Boolean array that specifies whether the specific farmer is efficient with water use.
+            irrigated: Array that specifies whether a farm is irrigated.
+            groundwater_irrigated: Array that specifies whether a farm is groundwater irrigated.
             cell_area: The area of each subcell in m2.
             landunit_to_grid: Array to map the index of each subcell to the corresponding cell.
             crop_map: Map of the currently growing crops.
@@ -289,17 +294,14 @@ class Farmers(AgentBaseClass):
                 efficiency = 0.6
             
             return_fraction = 0.5
-            farmer_irrigation = irrigated[farmer]
-
-            farmer_is_water_limited = False
-            
-            for field in farmer_fields:
-                f_var = landunit_to_grid[field]
-                crop = crop_map[field]
-                irrigation_water_demand_cell = totalPotIrrConsumption[field] / efficiency
-                
-                if crop != -1:
-                    if farmer_irrigation:
+            if irrigated[farmer]:
+                farmer_is_water_limited = False
+                for field in farmer_fields:
+                    f_var = landunit_to_grid[field]
+                    crop = crop_map[field]
+                    irrigation_water_demand_cell = totalPotIrrConsumption[field] / efficiency
+                    
+                    if crop != -1:
                         # channel abstraction
                         available_channel_storage_cell_m = available_channel_storage_m3[f_var] / cell_area[field]
                         channel_abstraction_cell_m = min(available_channel_storage_cell_m, irrigation_water_demand_cell)
@@ -327,27 +329,30 @@ class Farmers(AgentBaseClass):
                             
                             irrigation_water_demand_cell -= reservoir_abstraction_m_cell
 
-                        # groundwater irrigation
-                        available_groundwater_cell_m = available_groundwater_m3[f_var] / cell_area[field]
-                        groundwater_abstraction_cell_m = min(available_groundwater_cell_m, irrigation_water_demand_cell)
-                        groundwater_abstraction_cell_m3 = groundwater_abstraction_cell_m * cell_area[field]
-                        groundwater_abstraction_m3[f_var] = groundwater_abstraction_cell_m3
-                        available_groundwater_m3[f_var] -= groundwater_abstraction_cell_m3
-                        water_withdrawal_m[field] += groundwater_abstraction_cell_m
+                        if groundwater_irrigated[farmer]:
+                            # groundwater irrigation
+                            available_groundwater_cell_m = available_groundwater_m3[f_var] / cell_area[field]
+                            groundwater_abstraction_cell_m = min(available_groundwater_cell_m, irrigation_water_demand_cell)
+                            groundwater_abstraction_cell_m3 = groundwater_abstraction_cell_m * cell_area[field]
+                            groundwater_abstraction_m3[f_var] = groundwater_abstraction_cell_m3
+                            available_groundwater_m3[f_var] -= groundwater_abstraction_cell_m3
+                            water_withdrawal_m[field] += groundwater_abstraction_cell_m
 
-                        groundwater_abstraction_m3_by_farmer[farmer] += groundwater_abstraction_cell_m3
-                
-                        irrigation_water_demand_cell -= groundwater_abstraction_cell_m
-                
-                assert irrigation_water_demand_cell >= -1e15  # Make sure irrigation water demand is zero, or positive. Allow very small error.
+                            groundwater_abstraction_m3_by_farmer[farmer] += groundwater_abstraction_cell_m3
+                    
+                            irrigation_water_demand_cell -= groundwater_abstraction_cell_m
+                    
+                    assert irrigation_water_demand_cell >= -1e15  # Make sure irrigation water demand is zero, or positive. Allow very small error.
 
-                if irrigation_water_demand_cell > 1e-15:
-                    farmer_is_water_limited = True
+                    if irrigation_water_demand_cell > 1e-15:
+                        farmer_is_water_limited = True
 
-                water_consumption_m[field] = water_withdrawal_m[field] * efficiency
-                irrigation_loss_m = water_withdrawal_m[field] - water_consumption_m[field]
-                returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
-                addtoevapotrans_m[field] = irrigation_loss_m * (1 - return_fraction)
+                    water_consumption_m[field] = water_withdrawal_m[field] * efficiency
+                    irrigation_loss_m = water_withdrawal_m[field] - water_consumption_m[field]
+                    returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
+                    addtoevapotrans_m[field] = irrigation_loss_m * (1 - return_fraction)
+            else:
+                farmer_is_water_limited = True
 
             if farmer_is_water_limited:
                 water_limited_days[farmer] += 1
@@ -408,6 +413,7 @@ class Farmers(AgentBaseClass):
             self.n_water_limited_days,
             self.is_water_efficient,
             self.irrigating,
+            self.groundwater_irrigating,
             cell_area,
             landunit_to_grid,
             self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map,
@@ -813,6 +819,7 @@ class Farmers(AgentBaseClass):
         field_indices: np.ndarray,
         planting_schemes: np.ndarray,
         irrigating: np.ndarray,
+        n_water_limited_days: np.ndarray,
         unit_code: np.ndarray,
         planting_scheme: np.ndarray,
         next_multicrop_index: np.ndarray
@@ -853,6 +860,7 @@ class Farmers(AgentBaseClass):
                     plant[field] = crop[i]
                     crop_data = planting_schemes[irrigating[i], unit_code[i], crop[i], planting_scheme[i], next_multicrop_index[field]]
                     crop_harvest_age_days[field] = (start_day_per_month[crop_data[1] - 1] - start_day_per_month[crop_data[0] - 1]) % 365
+                    n_water_limited_days[i] = 0
         return plant, crop_harvest_age_days
 
     def plant(self) -> None:
@@ -868,6 +876,7 @@ class Farmers(AgentBaseClass):
             self.field_indices,
             self.planting_schemes,
             self.irrigating,
+            self.n_water_limited_days,
             self.unit_code,
             self.planting_scheme,
             self.var.next_multicrop_index
@@ -934,6 +943,14 @@ class Farmers(AgentBaseClass):
     @irrigating.setter
     def irrigating(self, value):      
         self._irrigating[:self.n] = value
+
+    @property
+    def groundwater_irrigating(self):
+        return self._groundwater_irrigating[:self.n]
+
+    @groundwater_irrigating.setter
+    def groundwater_irrigating(self, value):      
+        self._groundwater_irrigating[:self.n] = value
 
     @property
     def unit_code(self):
