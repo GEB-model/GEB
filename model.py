@@ -14,6 +14,7 @@ import yaml
 import os
 from operator import attrgetter
 import numpy as np
+from time import time
 
 class GEBModel(ABM_Model, CWatM_Model):
     """GEB parent class.
@@ -107,9 +108,12 @@ class GEBModel(ABM_Model, CWatM_Model):
         else:
             n = step_size
         for _ in range(n):
+            t0 = time()
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
             self.reporter.step()
+            t1 = time()
+            print(t1-t0)
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""

@@ -56,11 +56,11 @@ if not os.path.exists(LOG_FOLDER):
 
 if config['timeperiod'] == "monthly":
 	monthly = 1
-	dischargetss = os.path.join(config['scenario'], 'var.discharge_monthavg.tss')
+	dischargetss = os.path.join('spinup', 'var.discharge_monthavg.tss')
 	frequen = 'MS'
 elif config['timeperiod'] == "daily":
 	monthly = 0
-	dischargetss = os.path.join(config['scenario'], 'var.discharge_daily.tss')
+	dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
 	frequen = 'd'
 else:
 	raise ValueError("timeperiod must be 'monthly' or 'daily'")
@@ -75,10 +75,10 @@ Qtss_col = config['observed_data']['column']
 
 use_multiprocessing = config['DEAP']['use_multiprocessing']
 
-try:
-    pool_limit = config['DEAP']['pool_limit']
-except:
-    pool_limit = 10000
+# try:
+#     pool_limit = config['DEAP']['pool_limit']
+# except:
+#     pool_limit = 10000
 
 ngen = config['DEAP']['ngen']
 mu = config['DEAP']['mu']
@@ -155,8 +155,8 @@ def RunModel(Individual):
 		with open('GEB.yml', 'r') as f:
 			template = yaml.load(f, Loader=yaml.FullLoader)
 
-		template['general']['start_time'] = config['spinup_start']
-		template['general']['end_time'] = config['end_date']
+		template['general']['spinup_start'] = config['spinup_start']
+		template['general']['start_time'] = config['end_date']
 
 		template['report'] = {}  # no other reporting than discharge required.
 		template['report_cwatm'] = {}  # no other reporting than discharge required.
@@ -169,7 +169,7 @@ def RunModel(Individual):
 		with open(config_path, 'w') as f:
 			yaml.dump(template, f)
 
-		command = f"python run.py --config {config_path} --GPU --headless --scenario {config['scenario']}"
+		command = f"python run.py --config {config_path} --headless --scenario spinup"
 
 		p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
 		output, errors = p.communicate()
@@ -177,7 +177,7 @@ def RunModel(Individual):
 			content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
 			f.write(content)
 
-		modflow_folder = os.path.join(directory_run, config['scenario'], 'modflow_model')
+		modflow_folder = os.path.join(directory_run, 'spinup', 'modflow_model')
 		if os.path.exists(modflow_folder):
 			shutil.rmtree(modflow_folder)
 	
@@ -202,8 +202,8 @@ def RunModel(Individual):
 	simulated_streamflow.name = 'simulated'
 
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
+	streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
-
 
 	if OBJECTIVE == 'KGE':
 		# Compute objective function score
@@ -273,8 +273,8 @@ if __name__ == "__main__":
 	t = time.time()
 
 	if use_multiprocessing is True:
-		pool_size = multiprocessing.cpu_count() * 1
-		if pool_size > pool_limit: pool_size = pool_limit
+		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK'))
+		# if pool_size > pool_limit: pool_size = pool_limit
 		print(f'Pool size: {pool_size}')
 		pool = multiprocessing.Pool(processes=pool_size)
 		toolbox.register("map", pool.map)
@@ -442,74 +442,74 @@ if __name__ == "__main__":
 	Parameters = paramvals[best,:]
 
 
-	if redo_best_run:
-		print(">> Running Model using the \"best\" parameter set")
-		# Note: The following code must be identical to the code near the end where Model is run
-		# using the "best" parameter set. This code:
-		# 1) Modifies the settings file containing the unscaled parameter values amongst other things
-		# 2) Makes a .bat file to run Model
-		# 3) Runs Model and loads the simulated streamflow
-		# Random number is appended to settings and .bat files to avoid simultaneous editing
+	# if redo_best_run:
+	# 	print(">> Running Model using the \"best\" parameter set")
+	# 	# Note: The following code must be identical to the code near the end where Model is run
+	# 	# using the "best" parameter set. This code:
+	# 	# 1) Modifies the settings file containing the unscaled parameter values amongst other things
+	# 	# 2) Makes a .bat file to run Model
+	# 	# 3) Runs Model and loads the simulated streamflow
+	# 	# Random number is appended to settings and .bat files to avoid simultaneous editing
 
-		run_id = str(gen).zfill(2) + "_best"
-		template_xml_new = template_xml
-		directory_run = os.path.join(SubCatchmentPath, run_id)
-		template_xml_new = template_xml_new.replace("%root", root)
-		for ii in range(0,len(ParamRanges)):
-			template_xml_new = template_xml_new.replace("%"+ParamRanges.index[ii],str(Parameters[ii]))
-		template_xml_new = template_xml_new.replace('%run_id', directory_run)
+	# 	run_id = str(gen).zfill(2) + "_best"
+	# 	template_xml_new = template_xml
+	# 	directory_run = os.path.join(SubCatchmentPath, run_id)
+	# 	template_xml_new = template_xml_new.replace("%root", root)
+	# 	for ii in range(0,len(ParamRanges)):
+	# 		template_xml_new = template_xml_new.replace("%"+ParamRanges.index[ii],str(Parameters[ii]))
+	# 	template_xml_new = template_xml_new.replace('%run_id', directory_run)
 
-		os.mkdir(directory_run)
+	# 	os.mkdir(directory_run)
 
-		#template_xml_new = template_xml_new.replace('%InitModel',"1")
-		f = open(os.path.join(directory_run,ModelSettings_template[:-4]+'-Run'+run_id+'.ini'), "w")
-		f.write(template_xml_new)
-		f.close()
-		template_bat_new = template_bat
-		template_bat_new = template_bat_new.replace('%run',ModelSettings_template[:-4]+'-Run'+run_id+'.ini')
+	# 	#template_xml_new = template_xml_new.replace('%InitModel',"1")
+	# 	f = open(os.path.join(directory_run,ModelSettings_template[:-4]+'-Run'+run_id+'.ini'), "w")
+	# 	f.write(template_xml_new)
+	# 	f.close()
+	# 	template_bat_new = template_bat
+	# 	template_bat_new = template_bat_new.replace('%run',ModelSettings_template[:-4]+'-Run'+run_id+'.ini')
 
-		runfile = os.path.join(directory_run, RunModel_template[:-4] + run_id)
-		if platform == "win32":
-			runfile = runfile + ".bat"
-		else:
-			runfile = runfile + ".sh"
-		f = open(runfile, "w")
-		f.write(template_bat_new)
-		f.close()
+	# 	runfile = os.path.join(directory_run, RunModel_template[:-4] + run_id)
+	# 	if platform == "win32":
+	# 		runfile = runfile + ".bat"
+	# 	else:
+	# 		runfile = runfile + ".sh"
+	# 	f = open(runfile, "w")
+	# 	f.write(template_bat_new)
+	# 	f.close()
 
-		currentdir = os.getcwd()
-		os.chdir(directory_run)
+	# 	currentdir = os.getcwd()
+	# 	os.chdir(directory_run)
 
-		p = Popen(runfile, shell=True, stdout=PIPE, stderr=PIPE, bufsize=16*1024*1024)
-		output, errors = p.communicate()
-		f = open("log"+run_id+".txt",'w')
-		content = "OUTPUT:\n"+str(output)+"\nERRORS:\n"+str(errors)
-		f.write(content)
-		f.close()
-		os.chdir(currentdir)
+	# 	p = Popen(runfile, shell=True, stdout=PIPE, stderr=PIPE, bufsize=16*1024*1024)
+	# 	output, errors = p.communicate()
+	# 	f = open("log"+run_id+".txt",'w')
+	# 	content = "OUTPUT:\n"+str(output)+"\nERRORS:\n"+str(errors)
+	# 	f.write(content)
+	# 	f.close()
+	# 	os.chdir(currentdir)
 
-		Qsim_tss = os.path.join(directory_run,dischargetss)
+	# 	Qsim_tss = os.path.join(directory_run,dischargetss)
 		
-		simulated_streamflow = pd.read_table(Qsim_tss,sep=r"\s+",index_col=0,skiprows=4,header=None,skipinitialspace=True)
-		simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
-		Qsim = simulated_streamflow[1].values
+	# 	simulated_streamflow = pd.read_table(Qsim_tss,sep=r"\s+",index_col=0,skiprows=4,header=None,skipinitialspace=True)
+	# 	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
+	# 	Qsim = simulated_streamflow[1].values
 
-		# Save simulated streamflow to disk
-		print(">> Saving \"best\" simulated streamflow (streamflow_simulated_best.csv)")
-		Qsim = pd.DataFrame(data=Qsim, index=pd.date_range(ForcingStart, periods=len(Qsim), freq=frequen))
-		Qsim.to_csv(os.path.join(SubCatchmentPath,"streamflow_simulated_best.csv"),',',header="")
-		try: os.remove(os.path.join(SubCatchmentPath,"out",'streamflow_simulated_best.tss'))
-		except: pass
-		#os.rename(Qsim_tss, os.path.join(SubCatchmentPath,"out",'streamflow_simulated_best.tss'))
+	# 	# Save simulated streamflow to disk
+	# 	print(">> Saving \"best\" simulated streamflow (streamflow_simulated_best.csv)")
+	# 	Qsim = pd.DataFrame(data=Qsim, index=pd.date_range(ForcingStart, periods=len(Qsim), freq=frequen))
+	# 	Qsim.to_csv(os.path.join(SubCatchmentPath,"streamflow_simulated_best.csv"),',',header="")
+	# 	try: os.remove(os.path.join(SubCatchmentPath,"out",'streamflow_simulated_best.tss'))
+	# 	except: pass
+	# 	#os.rename(Qsim_tss, os.path.join(SubCatchmentPath,"out",'streamflow_simulated_best.tss'))
 
-	"""
-	# Delete all .xml, .bat, .tmp, and .txt files created for the runs
-	for filename in glob.glob(os.path.join(SubCatchmentPath,"*.xml")):
-		os.remove(filename)
-	for filename in glob.glob(os.path.join(SubCatchmentPath,"*.bat")):
-		os.remove(filename)
-	for filename in glob.glob(os.path.join(SubCatchmentPath,"*.tmp")):
-		os.remove(filename)
-	for filename in glob.glob(os.path.join(SubCatchmentPath,"*.txt")):
-		os.remove(filename)
-	"""
+	# """
+	# # Delete all .xml, .bat, .tmp, and .txt files created for the runs
+	# for filename in glob.glob(os.path.join(SubCatchmentPath,"*.xml")):
+	# 	os.remove(filename)
+	# for filename in glob.glob(os.path.join(SubCatchmentPath,"*.bat")):
+	# 	os.remove(filename)
+	# for filename in glob.glob(os.path.join(SubCatchmentPath,"*.tmp")):
+	# 	os.remove(filename)
+	# for filename in glob.glob(os.path.join(SubCatchmentPath,"*.txt")):
+	# 	os.remove(filename)
+	# """

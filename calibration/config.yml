@@ -1,10 +1,9 @@
-spinup_start: 1995-01-01
-start_date: 2000-01-01
-end_date: 2003-01-01
+spinup_start: 2003-01-01
+start_date: 2006-01-01
+end_date: 2010-12-31
 timeperiod: daily
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
-scenario: spinup
 
 observed_data:
   path: observations.csv
@@ -15,10 +14,9 @@ options:
   redo_best_run: True
 
 DEAP:
-  use_multiprocessing: false
-  pool_limit: 5
+  use_multiprocessing: true
   maximize: True
-  ngen: 2
-  mu: 5 # 256
-  lambda_: 2 # 32
+  ngen: 3
+  mu: 24 # 256
+  lambda_: 12 # 32
  

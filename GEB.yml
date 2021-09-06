@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2000-01-01
+  start_time: 2010-01-01
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2003-01-01
+  end_time: 2015-01-01
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_start: 1999-12-31
-  spinup_start: 1990-01-01
+  spinup_start: 2000-01-01
   ###
   # base folder where to report output data to
   report_folder: DataDrive/GEB/report/
@@ -224,14 +224,25 @@ report_cwatm:
     save: save
 
 parameters:
-  soildepth_factor: 1.2357589498352997
-  preferentialFlowConstant: 7.771620196341074
-  SnowMeltCoef: 0.004
-  arnoBeta_add: 0.4378794431106299
-  factor_interflow: 1.7415262118498727
-  recessionCoeff_factor: 5.08489365888276
-  manningsN: 7.159801087098635
-  lakeAFactor: 1.2001137835309703
-  lakeEvaFactor: 1.5932766384205812
-  normalStorageLimit: 0.645563228322237
-  max_reseroir_release_factor: 0.03
+  # soildepth_factor: 1.2357589498352997
+  # preferentialFlowConstant: 7.771620196341074
+  # SnowMeltCoef: 0.004
+  # arnoBeta_add: 0.4378794431106299
+  # factor_interflow: 1.7415262118498727
+  # recessionCoeff_factor: 5.08489365888276
+  # manningsN: 7.159801087098635
+  # lakeAFactor: 1.2001137835309703
+  # lakeEvaFactor: 1.5932766384205812
+  # normalStorageLimit: 0.645563228322237
+  # max_reseroir_release_factor: 0.03
+  SnowMeltCoef: 0.004150002962783986
+  arnoBeta_add: 0.016537498788292478
+  factor_interflow: 0.46389657924040695
+  lakeAFactor: 1.6549448278581103
+  lakeEvaFactor: 2.5123339898215837
+  manningsN: 9.415767286641726
+  max_reseroir_release_factor: 0.05
+  normalStorageLimit: 0.5564635588313748
+  preferentialFlowConstant: 1.1615355767004527
+  recessionCoeff_factor: 8.129353411178002
+  soildepth_factor: 1.4195275697865783
