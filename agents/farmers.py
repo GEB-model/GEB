@@ -199,15 +199,18 @@ class Farmers(AgentBaseClass):
         """
         # if activation order is fixed. Get the random state, and set a fixed seet.
         if self.model.config['agent_settings']['fix_activation_order']:
+            if hasattr(self, 'activation_order_by_elevation_fixed'):
+                return self.activation_order_by_elevation_fixed
             random_state = np.random.get_state()
             np.random.seed(42)
+        elevation = self.elevation
         # Shuffle agent elevation and agent_ids in unision.
-        p = np.random.permutation(self.elevation.size)
+        p = np.random.permutation(elevation.size)
         # if activation order is fixed, set random state to previous state
         if self.model.config['agent_settings']['fix_activation_order']:
             np.random.set_state(random_state)
-        elevation_shuffled = self.elevation[p]
-        agent_ids_shuffled = np.arange(0, self.elevation.size, 1, dtype=np.int32)[p]
+        elevation_shuffled = elevation[p]
+        agent_ids_shuffled = np.arange(0, elevation.size, 1, dtype=np.int32)[p]
         # Use argsort to find the order or the shuffled elevation. Using a stable sorting
         # algorithm such that the random shuffling in the previous step is conserved
         # in groups with identical elevation.
@@ -216,6 +219,8 @@ class Farmers(AgentBaseClass):
         # Return the agent ids ranks in the order of activation.
         ranks = np.empty_like(argsort_agend_ids)
         ranks[argsort_agend_ids] = np.arange(argsort_agend_ids.size)
+        if self.model.config['agent_settings']['fix_activation_order']:
+            self.activation_order_by_elevation_fixed = ranks
         return ranks
 
     @staticmethod
@@ -461,7 +466,7 @@ class Farmers(AgentBaseClass):
         Returns:
             starting_day_per_month: Starting day of each month of year.
         """
-        return np.cumsum(np.array([0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30]))
+        return np.cumsum(np.array([1, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30]))
 
     @property
     def current_day_of_year(self) -> int:
@@ -470,7 +475,7 @@ class Farmers(AgentBaseClass):
         Returns:
             day: current day of the year.
         """
-        return self.start_day_per_month[self.model.current_time.month - 1] + self.model.current_time.day
+        return self.model.current_time.timetuple().tm_yday
 
     @staticmethod
     @njit
@@ -790,6 +795,8 @@ class Farmers(AgentBaseClass):
             if self.model.current_timestep > 365:
                 self.save_harvest(harvesting_farmers)
             self.invest_in_water_efficiency(harvesting_farmers)
+        else:
+            self.yield_ratio_per_farmer = np.zeros(self.n, dtype=np.float32)
         if self.model.args.use_gpu:
             harvest = cp.array(harvest)
         
