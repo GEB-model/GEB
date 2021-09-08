@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from datetime import timedelta
+from datetime import timedelta, date
 from hyve.library.helpers import timeprint
 from hyve.area import Area
 from reporter import Reporter
@@ -71,6 +71,9 @@ class GEBModel(ABM_Model, CWatM_Model):
         else:
             current_time = config['general']['start_time']
             end_time = config['general']['end_time']
+
+        assert isinstance(end_time, date)
+        assert isinstance(current_time, date)
         
         n_timesteps = (end_time - current_time) / timestep_length
         assert n_timesteps.is_integer()
@@ -108,12 +111,13 @@ class GEBModel(ABM_Model, CWatM_Model):
         else:
             n = step_size
         for _ in range(n):
+            print(self.current_time)
             t0 = time()
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
             self.reporter.step()
             t1 = time()
-            print(t1-t0)
+            print(t1-t0, 'seconds')
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
