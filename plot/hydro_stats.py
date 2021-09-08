@@ -13,7 +13,7 @@ import matplotlib.patches as mpatches
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
 TIMEDELTA = timedelta(days=1)
-OUTPUT_FOLDER = os.path.join('DataDrive/GEB/output')
+OUTPUT_FOLDER = os.path.join('DataDrive', 'GEB', 'report')
 with open('GEB.yml', 'r') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
@@ -35,7 +35,7 @@ def get_discharge(scenario):
     return dates, values
 
 def get_hyve_data(varname, scenario, fileformat='csv'):
-    df = pd.read_csv(os.path.join('report', scenario, varname + '.' + fileformat), index_col=0)
+    df = pd.read_csv(os.path.join(OUTPUT_FOLDER, scenario, varname + '.' + fileformat), index_col=0)
     dates = df.index.tolist()
     dates = [datetime.strptime(dt, "%Y-%m-%d") for dt in dates]
     return dates, np.array(df[varname].tolist())
@@ -57,11 +57,17 @@ def add_patches_legend(ax, labels, colors, ncol, legend_fontsize=8, legend_title
     if legend_title:
         legend.set_title(legend_title)
 
+def get_observed_discharge(dates):
+    df = pd.read_csv('DataDrive/GEB/calibration/observations.csv', parse_dates=['Dates'])
+    return df[df['Dates'].isin(dates)]['flow']
+
 def main():
     title_formatter = {'size': 'small', 'fontweight': 'bold', 'pad': 3}
-    colors = ['black', 'blue', 'orange', 'red']
     scenarios = ('base', 'self_investment', 'government_subsidies', 'ngo_training')
-    fig, axes = plt.subplots(1, 3, figsize=(9, 3), dpi=300)
+    scenarios = ('base', )
+    colors = ['black', 'blue', 'orange', 'red']
+    colors = colors[:len(scenarios)]
+    fig, axes = plt.subplots(1, 3, figsize=(9, 3), dpi=300, sharex=True)
     plt.subplots_adjust(left=0.04, right=0.99, bottom=0.17, top=0.92, wspace=0.2)
     ax0, ax1, ax2 = axes
 
@@ -69,12 +75,14 @@ def main():
         ax0,
         labels=[s.replace('_', ' ') for s in scenarios],
         colors=colors,
-        ncol=4
+        ncol=len(scenarios)
     )
 
     for i, scenario in enumerate(scenarios):
         dates, discharge = get_discharge(scenario)
         ax0.plot(dates, discharge, label=scenario, color=colors[i])
+    observed_discharge = get_observed_discharge(dates)
+    ax0.plot(dates, observed_discharge)
     ax0.set_title('discharge $(m^3s^{-1})$', **title_formatter)
     # ax0.set_ylabel('$m^3/s$', **label_formatter)
     for i, scenario in enumerate(scenarios):
@@ -91,9 +99,9 @@ def main():
     for ax in axes:
         ax.ticklabel_format(useOffset=False, axis='y')
         ax.tick_params(axis='both', labelsize='x-small', pad=1)
-    plt.savefig('plot/output/hydro_stats_per_scenario.png')
-    plt.savefig('plot/output/hydro_stats_per_scenario.svg')
-    # plt.show()
+    # plt.savefig('plot/output/hydro_stats_per_scenario.png')
+    # plt.savefig('plot/output/hydro_stats_per_scenario.svg')
+    plt.show()
 
 
 if __name__ == '__main__':
