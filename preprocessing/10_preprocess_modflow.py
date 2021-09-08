@@ -8,6 +8,7 @@ import rasterio.features
 from rasterio import Affine
 from rasterio.warp import reproject, Resampling
 from pyproj import Transformer
+from rasterio.merge import merge
 
 class ModflowPreprocess:
     """
@@ -155,6 +156,8 @@ class ModflowPreprocess:
                 height=self.nrow_ModFlow, count=1, dtype=np.int32, nodata=-1, transform=self.modflow_affine,
                 epsg=self.modflow_epsg) as dst:
             dst.write(basin_mask, 1)
+        self.basin_mask = basin_mask
+        return basin_mask
 
     def project_input_map(self, input_map_fp: str, output_map_fp: str) -> None:
         """
@@ -168,17 +171,18 @@ class ModflowPreprocess:
             src_transform = src.transform
             src_crs = src.crs
             source = src.read(1)
-            source[source == src.profile['nodata']] = 0
+            source_nodata = src.profile['nodata']
 
         destination = np.zeros((self.nrow_ModFlow, self.ncol_ModFlow), dtype=source.dtype)
 
         reproject(source, destination, src_transform=src_transform, src_crs=src_crs, dst_transform=self.modflow_affine,
-                    dst_crs=self.modflow_epsg, resampling=Resampling.average)
+                    dst_crs=self.modflow_epsg, src_nodata=source_nodata, resampling=Resampling.average)
         
         with rasterio.open(os.path.join(self.output_folder, output_map_fp), 'w', driver='GTiff', width=self.ncol_ModFlow,
                             height=self.nrow_ModFlow, count=1, dtype=destination.dtype, nodata=0, transform=self.modflow_affine,
                             crs=self.modflow_epsg) as dst:
             dst.write(destination, indexes=1)
+        return destination
 
 if __name__ == '__main__':
     MODFLOW_PATH = 'DataDrive/GEB/input/groundwater/modflow'
@@ -186,6 +190,26 @@ if __name__ == '__main__':
     cwatm_basin_mask_fn = "DataDrive/GEB/input/areamaps/mask.tif"  # Mask of the CWATM model
     MODFLOW_EPSG = 32643
     m = ModflowPreprocess(MODFLOW_PATH, MODFLOW_RESOLUTION, cwatm_basin_mask_fn, MODFLOW_EPSG)
-    m.create_indices()
-    m.create_modflow_basin()
-    m.project_input_map('DataDrive/GEB/input/landsurface/topo/subelv.tif', 'elevation_modflow.tif')
+    # m.create_indices()
+    # m.create_modflow_basin()
+
+    merit_hydro_03sec_folder = os.path.join('DataDrive', 'GEB', 'original_data', 'merit_hydro_03sec')
+    elv_maps = []
+    for fn in os.listdir(merit_hydro_03sec_folder):
+        fp = os.path.join(merit_hydro_03sec_folder, fn)
+        if os.path.splitext(fp)[0].endswith('_elv'):
+            src = rasterio.open(fp)
+            profile = src.profile
+            elv_maps.append(rasterio.open(fp))
+    
+    DEM, transform = merge(elv_maps)
+    DEM = DEM[0, :, :]
+    profile.update({
+        'transform': transform,
+        'width': DEM.shape[1],
+        'height': DEM.shape[0],
+    })
+    with rasterio.open(os.path.join(m.output_folder, 'elevation.tif'), 'w', **profile) as dst:
+        dst.write(DEM, 1)
+
+    m.project_input_map(os.path.join(m.output_folder, 'elevation.tif'), 'elevation_modflow.tif')
