@@ -3,8 +3,8 @@
 #SBATCH --job-name=all
 #SBATCH --output=all.out
 #SBATCH --gres=gpu:2
-#SBATCH --nodes=2
-#SBATCH --ntasks=2
+#SBATCH --nodes=1
+#SBATCH --ntasks=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=16G
