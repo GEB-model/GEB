@@ -22,10 +22,13 @@ class CWatMReporter(ABMReporter):
     Args:
         model: The GEB model.
     """
-    def __init__(self, model) -> None:
+    def __init__(self, model, subfolder=None) -> None:
         self.model = model
 
-        self.export_folder = os.path.join(self.model.config['general']['report_folder'], self.model.args.scenario)
+        if subfolder:
+            self.export_folder = os.path.join(self.model.config['general']['report_folder'], self.model.args.scenario)
+        else:
+            self.export_folder = self.model.config['general']['report_folder']
         self.maybe_create_export_folder()
 
         self.variables = {}
@@ -123,7 +126,7 @@ class Reporter:
     def __init__(self, model):
         self.model = model
         self.abm_reporter = ABMReporter(model, subfolder=self.model.args.scenario)
-        self.cwatmreporter = CWatMReporter(model)
+        self.cwatmreporter = CWatMReporter(model, subfolder=self.model.args.scenario)
 
     @property
     def variables(self):
