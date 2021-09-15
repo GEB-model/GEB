@@ -186,7 +186,7 @@ class ModflowPreprocess:
 
 if __name__ == '__main__':
     MODFLOW_PATH = 'DataDrive/GEB/input/groundwater/modflow'
-    MODFLOW_RESOLUTION = 2000  # ModFlow model's resolution [m]
+    MODFLOW_RESOLUTION = 1000  # ModFlow model's resolution [m]
     cwatm_basin_mask_fn = "DataDrive/GEB/input/areamaps/mask.tif"  # Mask of the CWATM model
     MODFLOW_EPSG = 32643
     m = ModflowPreprocess(MODFLOW_PATH, MODFLOW_RESOLUTION, cwatm_basin_mask_fn, MODFLOW_EPSG)
