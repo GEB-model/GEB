@@ -75,10 +75,7 @@ Qtss_col = config['observed_data']['column']
 
 use_multiprocessing = config['DEAP']['use_multiprocessing']
 
-# try:
-#     pool_limit = config['DEAP']['pool_limit']
-# except:
-#     pool_limit = 10000
+select_best = config['DEAP']['select_best']
 
 ngen = config['DEAP']['ngen']
 mu = config['DEAP']['mu']
@@ -93,7 +90,6 @@ else:
 define_first_run = config['options']['define_first_run']
 if define_first_run:
 	raise NotImplementedError
-redo_best_run = config['options']['redo_best_run']
 
 ########################################################################
 #   Preparation for calibration
@@ -169,10 +165,27 @@ def RunModel(Individual):
 		with open(config_path, 'w') as f:
 			yaml.dump(template, f)
 
+		with current_gpu_use_count.get_lock():
+			if current_gpu_use_count.value < n_gpus:
+				use_gpu = True
+				current_gpu_use_count.value += 1
+				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+			else:
+				use_gpu = False
+				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+		
 		command = f"python run.py --config {config_path} --headless --scenario spinup"
+		if use_gpu:
+			command += ' --GPU'
 
 		p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
 		output, errors = p.communicate()
+		
+		if use_gpu:
+			with current_gpu_use_count.get_lock():
+				current_gpu_use_count.value -= 1
+				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+		
 		with open(os.path.join(LOG_FOLDER, f"log{run_id}.txt"), 'w') as f:
 			content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
 			f.write(content)
@@ -211,7 +224,7 @@ def RunModel(Individual):
 		print("run_id: "+str(run_id)+", KGE: "+"{0:.3f}".format(KGE))
 		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id)+","+str(KGE)+"\n")
-		return KGE, # If using just one objective function, put a comma at the end!!!
+		score = KGE, # If using just one objective function, put a comma at the end!!!
 
 	elif OBJECTIVE == 'COR':
 
@@ -219,16 +232,18 @@ def RunModel(Individual):
 		print("run_id: "+str(run_id)+", COR "+"{0:.3f}".format(COR))
 		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id)+","+str(COR)+"\n")
-		return COR, # If using just one objective function, put a comma at the end!!!
+		score = COR, # If using just one objective function, put a comma at the end!!!
 
 	elif OBJECTIVE == 'NSE':
 		NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'], warmup=WarmupDays)
 		print("run_id: " + str(run_id) + ", NSE: " + "{0:.3f}".format(NSE))
 		with open(os.path.join(SubCatchmentPath, "runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id) + "," + str(NSE) + "\n")
-		return NSE,  # If using just one objective function, put a comma at the end!!!
+		score = NSE,  # If using just one objective function, put a comma at the end!!!
 	else:
 		raise ValueError
+	
+	return score
 
 ########################################################################
 #   Perform calibration using the DEAP module
@@ -265,6 +280,8 @@ toolbox.register("mate", tools.cxBlend, alpha=0.15)
 toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
 toolbox.register("select", tools.selNSGA2)
 
+history = tools.History()
+
 toolbox.decorate("mate", checkBounds(0, 1))
 toolbox.decorate("mutate", checkBounds(0, 1))
 
@@ -272,23 +289,40 @@ if __name__ == "__main__":
 
 	t = time.time()
 
+	n_gpus = config['gpus']
+
+	print("created counter")
+
+	current_gpu_use_count = multiprocessing.Value('i')
+	def get_gpu_counter():
+		global current_gpu_use_count
+		current_gpu_use_count = multiprocessing.Value('i')
+		current_gpu_use_count.value = 0
+
 	if use_multiprocessing is True:
-		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK'))
-		# if pool_size > pool_limit: pool_size = pool_limit
+		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK') or 1)
 		print(f'Pool size: {pool_size}')
+		# pool = multiprocessing.Pool(processes=pool_size, initializer=get_gpu_counter, initargs=())
 		pool = multiprocessing.Pool(processes=pool_size)
 		toolbox.register("map", pool.map)
 	
-
 	# For someone reason, if sum of cxpb and mutpb is not one, a lot less Pareto optimal solutions are produced
-	cxpb = 0.9
-	mutpb = 0.1
+	cxpb = 0.7  # The probability of mating two individuals
+	mutpb = 0.3 # The probability of mutating an individual.
+
+	effmax = np.zeros(shape=(ngen+1,1))*np.NaN
+	effmin = np.zeros(shape=(ngen+1,1))*np.NaN
+	effavg = np.zeros(shape=(ngen+1,1))*np.NaN
+	effstd = np.zeros(shape=(ngen+1,1))*np.NaN
+	if use_multiprocessing == 0:
+		print ("Start calibration")
 
 	startlater = False
 	checkpoint = os.path.join(SubCatchmentPath, "checkpoint.pkl")
 	if os.path.exists(os.path.join(checkpoint)):
 		with open(checkpoint, "rb" ) as cp_file:
 			cp = pickle.load(cp_file)
+			populationall = cp["populationall"]
 			population = cp["population"]
 			start_gen = cp["generation"]
 			random.setstate(cp["rndstate"])
@@ -298,6 +332,7 @@ if __name__ == "__main__":
 				startlater = True
 				gen = start_gen
 
+	# if population is not saved before
 	else:
 		population = toolbox.population(n=mu)
 		# Numbering of runs
@@ -308,19 +343,17 @@ if __name__ == "__main__":
 		if define_first_run:
 			raise NotImplementedError
 
-	effmax = np.zeros(shape=(ngen+1,1))*np.NaN
-	effmin = np.zeros(shape=(ngen+1,1))*np.NaN
-	effavg = np.zeros(shape=(ngen+1,1))*np.NaN
-	effstd = np.zeros(shape=(ngen+1,1))*np.NaN
-	if startlater == False:
+	if startlater is False:
 		halloffame = tools.ParetoFront()
+		history.update(population)
 
 		# saving population
-		cp = dict(population=population, generation=gen, rndstate=random.getstate())
+		populationall = {}
+		populationall[0] = population.copy()
+		cp = dict(populationall=populationall, population=population, generation=gen, rndstate=random.getstate())
 		with open(checkpoint, "wb") as cp_file:
 			pickle.dump(cp, cp_file)
 		cp_file.close()
-
 
 		# Evaluate the individuals with an invalid fitness
 		invalid_ind = [ind for ind in population if not ind.fitness.valid]
@@ -339,22 +372,30 @@ if __name__ == "__main__":
 			effavg[0,ii] = np.average([halloffame[x].fitness.values[ii] for x in range(len(halloffame))])
 			effstd[0,ii] = np.std([halloffame[x].fitness.values[ii] for x in range(len(halloffame))])
 		gen = 0
-		print(">> gen: "+str(gen)+", effmax_KGE: "+"{0:.3f}".format(effmax[gen,0]))
+		print(">> gen: " + str(gen) + ", effmax_KGE: " + "{0:.3f}".format(effmax[gen,0]))
+		#history.update(population)
+		population[:] = toolbox.select(population, lambda_)
+
+		# select best  population - child number (lambda_) from initial population
 		gen = 1
 
 	# Begin the generational process
+	# from gen 1 .....
 	conditions = {"ngen" : False, "StallFit" : False}
 	while not any(conditions.values()):
 		if startlater == False:
 			# Vary the population
 			offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
+			#offspring = algorithms.varAnd(population, toolbox, cxpb, mutpb)
 
 			# put in the number of run
 			for ii in range(lambda_):
 				offspring[ii][-1] = float(gen * 1000 + ii + 1)
 
+
 		# saving population
-		cp = dict(population=population, generation=gen, rndstate=random.getstate(), offspring=offspring, halloffame=halloffame)
+		populationall[gen] = population.copy()
+		cp = dict(populationall=populationall,population=population, generation=gen, rndstate=random.getstate(), offspring=offspring, halloffame=halloffame)
 		with open(checkpoint, "wb") as cp_file:
 			pickle.dump(cp, cp_file)
 		cp_file.close()
@@ -371,7 +412,8 @@ if __name__ == "__main__":
 			halloffame.update(offspring)
 
 		# Select the next generation population
-		population[:] = toolbox.select(population + offspring, mu)
+		population[:] = toolbox.select(population + offspring, select_best)
+		history.update(population)
 
 		# put in the number of run
 		#for ii in xrange(mu):
@@ -395,14 +437,42 @@ if __name__ == "__main__":
 		# Copied and modified from algorithms.py eaMuPlusLambda until here
 
 	# Finito
-	if use_multiprocessing is True:
+	if use_multiprocessing == True:
 		pool.close()
-	elapsed = time.time() - t
-	print(">> Time elapsed: "+"{0:.2f}".format(elapsed)+" s")
+	#elapsed = time.time() - t
+	#print(">> Time elapsed: "+"{0:.2f}".format(elapsed)+" s")
 
 	########################################################################
 	#   Save calibration results
 	########################################################################
+	#print ("make history graph")
+	#graph = nx.DiGraph(history.genealogy_tree)
+	#graph = graph.reverse()
+	# Make the graph top-down
+	#color =[]
+	#for i in graph:
+	#	color.append(toolbox.evaluate(history.genealogy_history[i])[0])
+
+	#colors = [toolbox.evaluate(history.genealogy_history[i])[0] for i in graph]
+	#nx.draw(graph, node_color=color)
+	#G.add_node(1, color='red', style='filled', fillcolor='blue', shape='square')
+
+	#A = nx.nx_agraph.to_agraph(graph)
+
+	#A.node_attr['style'] = 'filled'
+	#A.node_attr['shape'] = 'circle'
+	#A.node_attr['gradientangle'] = 90
+
+
+	#for i in A.nodes():
+		#n = A.get_node(i)
+		#n.attr['fillcolor'] = 'green;0.5:yellow'
+		#n.attr['fillcolor'] = color
+
+	#A.layout(prog='dot')
+	#A.draw('test.png',prog='dot')
+
+	# -----------------------------------------------------------------
 
 	# Save history of the change in objective function scores during calibration to csv file
 	print(">> Saving optimization history (front_history.csv)")
@@ -412,7 +482,7 @@ if __name__ == "__main__":
 									  'effstd_R':effstd[:,0],
 									  'effavg_R':effavg[:,0],
 									  })
-	front_history.to_csv(os.path.join(SubCatchmentPath,"front_history.csv"),',')
+	front_history.to_csv(os.path.join(SubCatchmentPath, "front_history.csv"),',')
 	# as numpy  numpy.asarray  ; numpy.savetxt("foo.csv", a, delimiter=","); a.tofile('foo.csv',sep=',',format='%10.5f')
 
 	# Compute overall efficiency scores from the objective function scores for the
@@ -436,80 +506,4 @@ if __name__ == "__main__":
 	pareto_front = pd.DataFrame({'effover':effover[ind],'R':front[ind,0]})
 	for ii in range(len(ParamRanges)):
 		pareto_front["param_"+str(ii).zfill(2)+"_"+ParamRanges.index[ii]] = paramvals[ind,ii]
-	pareto_front.to_csv(os.path.join(SubCatchmentPath,"pareto_front.csv"),',')
-
-	# Select the "best" parameter set and run Model for the entire forcing period
-	Parameters = paramvals[best,:]
-
-
-	# if redo_best_run:
-	# 	print(">> Running Model using the \"best\" parameter set")
-	# 	# Note: The following code must be identical to the code near the end where Model is run
-	# 	# using the "best" parameter set. This code:
-	# 	# 1) Modifies the settings file containing the unscaled parameter values amongst other things
-	# 	# 2) Makes a .bat file to run Model
-	# 	# 3) Runs Model and loads the simulated streamflow
-	# 	# Random number is appended to settings and .bat files to avoid simultaneous editing
-
-	# 	run_id = str(gen).zfill(2) + "_best"
-	# 	template_xml_new = template_xml
-	# 	directory_run = os.path.join(SubCatchmentPath, run_id)
-	# 	template_xml_new = template_xml_new.replace("%root", root)
-	# 	for ii in range(0,len(ParamRanges)):
-	# 		template_xml_new = template_xml_new.replace("%"+ParamRanges.index[ii],str(Parameters[ii]))
-	# 	template_xml_new = template_xml_new.replace('%run_id', directory_run)
-
-	# 	os.mkdir(directory_run)
-
-	# 	#template_xml_new = template_xml_new.replace('%InitModel',"1")
-	# 	f = open(os.path.join(directory_run,ModelSettings_template[:-4]+'-Run'+run_id+'.ini'), "w")
-	# 	f.write(template_xml_new)
-	# 	f.close()
-	# 	template_bat_new = template_bat
-	# 	template_bat_new = template_bat_new.replace('%run',ModelSettings_template[:-4]+'-Run'+run_id+'.ini')
-
-	# 	runfile = os.path.join(directory_run, RunModel_template[:-4] + run_id)
-	# 	if platform == "win32":
-	# 		runfile = runfile + ".bat"
-	# 	else:
-	# 		runfile = runfile + ".sh"
-	# 	f = open(runfile, "w")
-	# 	f.write(template_bat_new)
-	# 	f.close()
-
-	# 	currentdir = os.getcwd()
-	# 	os.chdir(directory_run)
-
-	# 	p = Popen(runfile, shell=True, stdout=PIPE, stderr=PIPE, bufsize=16*1024*1024)
-	# 	output, errors = p.communicate()
-	# 	f = open("log"+run_id+".txt",'w')
-	# 	content = "OUTPUT:\n"+str(output)+"\nERRORS:\n"+str(errors)
-	# 	f.write(content)
-	# 	f.close()
-	# 	os.chdir(currentdir)
-
-	# 	Qsim_tss = os.path.join(directory_run,dischargetss)
-		
-	# 	simulated_streamflow = pd.read_table(Qsim_tss,sep=r"\s+",index_col=0,skiprows=4,header=None,skipinitialspace=True)
-	# 	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
-	# 	Qsim = simulated_streamflow[1].values
-
-	# 	# Save simulated streamflow to disk
-	# 	print(">> Saving \"best\" simulated streamflow (streamflow_simulated_best.csv)")
-	# 	Qsim = pd.DataFrame(data=Qsim, index=pd.date_range(ForcingStart, periods=len(Qsim), freq=frequen))
-	# 	Qsim.to_csv(os.path.join(SubCatchmentPath,"streamflow_simulated_best.csv"),',',header="")
-	# 	try: os.remove(os.path.join(SubCatchmentPath,"out",'streamflow_simulated_best.tss'))
-	# 	except: pass
-	# 	#os.rename(Qsim_tss, os.path.join(SubCatchmentPath,"out",'streamflow_simulated_best.tss'))
-
-	# """
-	# # Delete all .xml, .bat, .tmp, and .txt files created for the runs
-	# for filename in glob.glob(os.path.join(SubCatchmentPath,"*.xml")):
-	# 	os.remove(filename)
-	# for filename in glob.glob(os.path.join(SubCatchmentPath,"*.bat")):
-	# 	os.remove(filename)
-	# for filename in glob.glob(os.path.join(SubCatchmentPath,"*.tmp")):
-	# 	os.remove(filename)
-	# for filename in glob.glob(os.path.join(SubCatchmentPath,"*.txt")):
-	# 	os.remove(filename)
-	# """
+	pareto_front.to_csv(os.path.join(SubCatchmentPath, "pareto_front.csv"))
