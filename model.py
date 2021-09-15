@@ -41,15 +41,21 @@ class GEBModel(ABM_Model, CWatM_Model):
             'ymax': ymax,            
         }
         self.args = args
-
-
         self.data = Data(self)
+
         self.config = self.setup_config(GEB_config_path)
         self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
         self.__init_ABM__(GEB_config_path, study_area, args, coordinate_system)
         self.__init_hydromodel__(CwatM_settings)
 
         self.reporter = Reporter(self)
+
+        areamaps_folder = os.path.join(self.reporter.abm_reporter.export_folder, 'areamaps')
+        if not os.path.exists(areamaps_folder):
+            os.makedirs(areamaps_folder)
+        np.save(os.path.join(areamaps_folder, 'land_owners.npy'), self.data.landunit.land_owners)
+        np.save(os.path.join(areamaps_folder, 'unmerged_landunit_indices.npy'), self.data.landunit.unmerged_landunit_indices)
+        np.save(os.path.join(areamaps_folder, 'scaling.npy'), self.data.landunit.scaling)
 
     def __init_ABM__(self, config_path: str, study_area: dict[str, float], args: argparse.Namespace, coordinate_system: str) -> None:
         """Initializes the agent-based model.
