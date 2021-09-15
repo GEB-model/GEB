@@ -158,9 +158,9 @@ def create_command_area_raster() -> list[int]:
 
 
 if __name__ == '__main__':
-    # cut_hydrolakes()
-    # lakeResIDs2raster()
-    # export_variables_to_csv()
+    cut_hydrolakes()
+    lakeResIDs2raster()
+    export_variables_to_csv()
     reservoirs = create_command_area_raster()
     export_other_lake_data(reservoirs)
     
