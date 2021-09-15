@@ -3,8 +3,9 @@
 #SBATCH --output=calibrate.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=144G
+#SBATCH --cpus-per-task=2
+#SBATCH --gres=gpu:1
+#SBATCH --mem-per-cpu=12G
 #SBATCH --time=200:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jens.de.bruijn@vu.nl

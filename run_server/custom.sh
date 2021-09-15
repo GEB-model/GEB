@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=base
-#SBATCH --output=irrigation.out
+#SBATCH --job-name=custom
+#SBATCH --output=custom.out
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
@@ -19,4 +19,6 @@ cd $SCRIPT_DIR
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate abm  # activate conda environment
 
-python plot/plot_irrigation.py
+python run.py --GPU --headless --scenario spinup
+python run.py --GPU --headless --scenario base
+python calibration/calibrate.py
