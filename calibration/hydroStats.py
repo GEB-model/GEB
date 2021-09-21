@@ -222,7 +222,7 @@ def NSlog(s,o,warmup):
     o = np.log(o)
     return 1 - sum((s-o)**2)/sum((o-np.mean(o))**2)
 
-def correlation(s,o,warmup):
+def correlation(s,o):
     """
     correlation coefficient
     input:
@@ -231,9 +231,7 @@ def correlation(s,o,warmup):
     output:
         correlation: correlation coefficient
     """
-    #s = s[warmup+1:]
-    #o = o[warmup+1:]
-    #s,o = filter_nan(s,o)
+
     if s.size == 0:
         corr = np.NaN
     else:
@@ -330,7 +328,7 @@ def rankB(obj,ranking,w, station_w):
 
 
 
-def KGE(s,o,warmup):
+def KGE(s, o):
     """
     Kling Gupta Efficiency (Kling et al., 2012, http://dx.doi.org/10.1016/j.jhydrol.2012.01.011)
     input:
@@ -339,9 +337,6 @@ def KGE(s,o,warmup):
     output:
         KGE: Kling Gupta Efficiency
     """
-    #s = s[warmup+1:]
-    #o = o[warmup+1:]
-    #s,o = filter_nan(s,o)
     B = np.mean(s) / np.mean(o)
     y = (np.std(s) / np.mean(s)) / (np.std(o) / np.mean(o))
     r = np.corrcoef(o, s)[0,1]
