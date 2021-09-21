@@ -34,7 +34,7 @@ class CWatM_Model(CWATModel):
 
         if self.args.scenario == 'spinup':
             self.load_initial = False
-            self.save_initial = True
+            self.save_initial = self.config['general']['export_inital_on_spinup'] 
         else:
             self.load_initial = True
             self.save_initial = False

@@ -6,7 +6,8 @@ general:
   start_time: 2006-01-01
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2010-12-31
+  end_time: 2007-01-01
+  # end_time: 2010-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   spinup_start: 2000-01-01
@@ -18,6 +19,7 @@ general:
   ###
   #
   switch_crops: false
+  export_inital_on_spinup: true
 
 ###
 # This section can contain settings to change the behavior or the agents.
@@ -233,4 +235,15 @@ parameters:
   lakeAFactor: 1.2001137835309703
   lakeEvaFactor: 1.5932766384205812
   normalStorageLimit: 0.645563228322237
-  max_reseroir_release_factor: 0.03
+  max_reservoir_release_factor: 0.03
+  # SnowMeltCoef: 0.005777810112777455
+  # arnoBeta_add: 0.21066975532888235
+  # factor_interflow: 0.6188894074176792
+  # lakeAFactor: 3.141554604609948
+  # lakeEvaFactor: 2.34602890190283
+  # manningsN: 1.6605011081483918
+  # max_reservoir_release_factor: 0.37
+  # normalStorageLimit: 0.6842538823449608
+  # preferentialFlowConstant: 3.1601543505188596
+  # recessionCoeff_factor: 7.542470489484948
+  # soildepth_factor: 0.8256825908730563
