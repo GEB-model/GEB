@@ -7,7 +7,7 @@
 #SBATCH --ntasks=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=16G
+#SBATCH --mem-per-cpu=12G
 #SBATCH --time=100:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jens.de.bruijn@vu.nl
