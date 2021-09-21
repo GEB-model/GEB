@@ -153,7 +153,7 @@ def RunModel(Individual):
 
 		template['general']['spinup_start'] = config['spinup_start']
 		template['general']['start_time'] = config['end_date']
-
+		template['general']['export_inital_on_spinup'] = False
 		template['report'] = {}  # no other reporting than discharge required.
 		template['report_cwatm'] = {}  # no other reporting than discharge required.
 
@@ -167,7 +167,7 @@ def RunModel(Individual):
 
 		with current_gpu_use_count.get_lock():
 			if current_gpu_use_count.value < n_gpus:
-				use_gpu = True
+				use_gpu = current_gpu_use_count.value
 				current_gpu_use_count.value += 1
 				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 			else:
@@ -175,13 +175,14 @@ def RunModel(Individual):
 				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 		
 		command = f"python run.py --config {config_path} --headless --scenario spinup"
-		if use_gpu:
-			command += ' --GPU'
+		if use_gpu is not False:
+			command += f' --GPU --gpu_device {use_gpu}'
+		print(command)
 
 		p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
 		output, errors = p.communicate()
 		
-		if use_gpu:
+		if use_gpu is not False:
 			with current_gpu_use_count.get_lock():
 				current_gpu_use_count.value -= 1
 				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
@@ -291,8 +292,6 @@ if __name__ == "__main__":
 
 	n_gpus = config['gpus']
 
-	print("created counter")
-
 	current_gpu_use_count = multiprocessing.Value('i')
 	def get_gpu_counter():
 		global current_gpu_use_count
@@ -310,12 +309,10 @@ if __name__ == "__main__":
 	cxpb = 0.7  # The probability of mating two individuals
 	mutpb = 0.3 # The probability of mutating an individual.
 
-	effmax = np.zeros(shape=(ngen+1,1))*np.NaN
-	effmin = np.zeros(shape=(ngen+1,1))*np.NaN
-	effavg = np.zeros(shape=(ngen+1,1))*np.NaN
-	effstd = np.zeros(shape=(ngen+1,1))*np.NaN
-	if use_multiprocessing == 0:
-		print ("Start calibration")
+	effmax = np.full((ngen + 1, 1), np.nan)
+	effmin = np.full((ngen + 1, 1), np.nan)
+	effavg = np.full((ngen + 1, 1), np.nan)
+	effstd = np.full((ngen + 1, 1), np.nan)
 
 	startlater = False
 	checkpoint = os.path.join(SubCatchmentPath, "checkpoint.pkl")

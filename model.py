@@ -15,6 +15,10 @@ import os
 from operator import attrgetter
 import numpy as np
 from time import time
+try:
+    import cupy as cp
+except ImportError:
+    pass
 
 class GEBModel(ABM_Model, CWatM_Model):
     """GEB parent class.
@@ -41,6 +45,8 @@ class GEBModel(ABM_Model, CWatM_Model):
             'ymax': ymax,            
         }
         self.args = args
+        if self.args.use_gpu:
+            cp.cuda.Device(self.args.gpu_device).use()
         self.data = Data(self)
 
         self.config = self.setup_config(GEB_config_path)

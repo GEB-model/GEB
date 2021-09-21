@@ -4,7 +4,7 @@ end_date: 2006-01-01
 timeperiod: daily
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
-gpus: 1
+gpus: 2
 
 observed_data:
   path: observations.csv
@@ -18,5 +18,5 @@ DEAP:
   maximize: True
   ngen: 3 # 10
   mu: 12 # 120
-  lambda_: 6 # 24
+  lambda_: 8 # 24
   select_best: 10
