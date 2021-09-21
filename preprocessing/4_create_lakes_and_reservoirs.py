@@ -40,7 +40,7 @@ def lakeResIDs2raster() -> None:
             with rasterio.open(os.path.join(output_folder, f'{type_}lakesResID.tif'), 'w', **profile) as dst:
                 dst.write(lake_ids, 1)
 
-def export_other_lake_data(reservoirs: list[int]) -> None:
+def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series) -> None:
     """
     This function exports several data from the hydrolakes dataset to raster for use in CWatM; year of construction, lake type, area and volume.
 
@@ -71,6 +71,15 @@ def export_other_lake_data(reservoirs: list[int]) -> None:
             **{**src.profile, **{'dtype': lake_type.dtype}}
         ) as dst:
             dst.write(lake_type, 1)
+
+        lake_command_area_in_study_area_array = np.full(basin_lakes['Hylak_id'].max() + 1, 0, dtype=np.float32)
+        lake_command_area_in_study_area_array[area_in_study_area.index] = area_in_study_area
+        lake_command_area_in_study_area = np.take(lake_command_area_in_study_area_array, lake_ids, mode='clip')
+        with rasterio.open(
+            os.path.join(output_folder, 'area_command_area_in_study_area.tif'), 'w',
+            **{**src.profile, **{'dtype': lake_command_area_in_study_area.dtype}}
+        ) as dst:
+            dst.write(lake_command_area_in_study_area, 1)
 
         lake_area_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
         lake_area_array[basin_lakes['Hylak_id']] = basin_lakes['Lake_area']  # in km2
@@ -138,8 +147,18 @@ def create_command_area_raster() -> list[int]:
     # remove command areas not associated with a reservoir
     command_areas = command_areas[~command_areas['Hylak_id'].isnull()]
     command_areas['Hylak_id'] = command_areas['Hylak_id'].astype(np.int32)
-    # only selected completed command areas
-    command_areas = command_areas[command_areas['status'] == 'Completed']
+
+    mask = gpd.read_file(os.path.join('DataDrive/GEB/input/areamaps/mask.shp'))
+
+    command_areas_in_study_area = gpd.overlay(command_areas, mask, how='intersection')
+    command_areas_in_study_area['area'] = command_areas_in_study_area.area
+    area_of_command_area_in_study_area_by_hylak_id = command_areas_in_study_area.groupby('Hylak_id')['area'].sum()
+
+    command_areas['area'] = command_areas.area
+    area_of_command_area_by_hylak_id = command_areas.groupby('Hylak_id')['area'].sum()
+
+    merge = pd.merge(left=area_of_command_area_in_study_area_by_hylak_id, right=area_of_command_area_by_hylak_id, left_index=True, right_index=True)
+    area_in_study_area = merge['area_x'] / merge['area_y']
     
     geometries = [(shapely.geometry.mapping(geom), value) for value, geom in zip(command_areas['Hylak_id'].tolist(), command_areas['geometry'].tolist())]
     for type_ in ('', 'sub'):
@@ -154,13 +173,13 @@ def create_command_area_raster() -> list[int]:
             with rasterio.open(output_file, 'w', **profile) as dst:
                 dst.write(command_areas_raster, 1)
 
-    return command_areas['Hylak_id'].to_list()
+    return command_areas['Hylak_id'].to_list(), area_in_study_area
 
 
 if __name__ == '__main__':
     cut_hydrolakes()
     lakeResIDs2raster()
     export_variables_to_csv()
-    reservoirs = create_command_area_raster()
-    export_other_lake_data(reservoirs)
+    reservoirs, area_in_study_area = create_command_area_raster()
+    export_other_lake_data(reservoirs, area_in_study_area)
     
