@@ -190,8 +190,8 @@ if __name__ == '__main__':
     cwatm_basin_mask_fn = "DataDrive/GEB/input/areamaps/mask.tif"  # Mask of the CWATM model
     MODFLOW_EPSG = 32643
     m = ModflowPreprocess(MODFLOW_PATH, MODFLOW_RESOLUTION, cwatm_basin_mask_fn, MODFLOW_EPSG)
-    # m.create_indices()
-    # m.create_modflow_basin()
+    m.create_indices()
+    m.create_modflow_basin()
 
     merit_hydro_03sec_folder = os.path.join('DataDrive', 'GEB', 'original_data', 'merit_hydro_03sec')
     elv_maps = []
