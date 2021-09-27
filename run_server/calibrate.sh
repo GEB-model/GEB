@@ -3,7 +3,7 @@
 #SBATCH --output=calibrate.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:2
 #SBATCH --mem-per-cpu=12G
 #SBATCH --time=200:00:00
