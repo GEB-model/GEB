@@ -99,6 +99,7 @@ def is_groundwater_irrigating(irrigating_farmers, groundwater_irrigation_probabi
     10.0-20.0
     20.0 & ABOVE
     """
+
     has_well = np.zeros(irrigating_farmers.size, dtype=np.float32)
     for i in range(irrigating_farmers.size):
         is_irrigating = irrigating_farmers[i]
@@ -162,7 +163,12 @@ def get_crop_and_irrigation_per_farmer(crop_calendar: dict, map_unit_codes: np.n
 
     crop_per_farmer = np.full(n, -1, dtype=np.int8)
 
-    groundwater_irrigated_farmers = is_groundwater_irrigating(irrigating_farmers, groundwater_irrigated.sample_coords(locations), farm_sizes_ha)
+    groundwater_irrigation_probabilities = groundwater_irrigated.sample_coords(locations)
+    irrigation_correction_factor = irrigating_farmers.sum() / irrigating_farmers.size
+    groundwater_irrigation_probabilities /= irrigation_correction_factor
+    groundwater_irrigation_probabilities[groundwater_irrigation_probabilities > 1] = 1
+
+    groundwater_irrigated_farmers = is_groundwater_irrigating(irrigating_farmers, groundwater_irrigation_probabilities, farm_sizes_ha)
     groundwater_irrigated_farmers = np.random.binomial(1, groundwater_irrigated_farmers)
 
     np.save(os.path.join(OUTPUT_FOLDER, 'is_groundwater_irrigating.npy'), groundwater_irrigated_farmers)
