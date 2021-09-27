@@ -6,8 +6,8 @@ general:
   start_time: 2006-01-01
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2007-01-01
-  # end_time: 2010-12-31
+  # end_time: 2006-01-05
+  end_time: 2010-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   spinup_start: 2000-01-01
@@ -236,6 +236,9 @@ parameters:
   lakeEvaFactor: 1.5932766384205812
   normalStorageLimit: 0.645563228322237
   max_reservoir_release_factor: 0.03
+  NormalOutflowQ: .1
+  return_fraction: .5
+
   # SnowMeltCoef: 0.005777810112777455
   # arnoBeta_add: 0.21066975532888235
   # factor_interflow: 0.6188894074176792
