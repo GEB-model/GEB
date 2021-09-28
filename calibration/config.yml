@@ -17,6 +17,6 @@ DEAP:
   use_multiprocessing: true
   maximize: True
   ngen: 3 # 10
-  mu: 12 # 120
+  mu: 24 # 120
   lambda_: 8 # 24
   select_best: 10
