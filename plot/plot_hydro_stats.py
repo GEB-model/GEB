@@ -100,52 +100,59 @@ def main():
     title_formatter = {'size': 'small', 'fontweight': 'bold', 'pad': 3}
     scenarios = ('base', 'self_investment', 'government_subsidies', 'ngo_training')
     scenarios = ('base', )
-    scenarios = ('best_base', )
     colors = ['black', 'blue', 'orange', 'red']
-    colors = colors[:len(scenarios)]
+    colors = colors[:len(scenarios) + 1]
     fig, axes = plt.subplots(1, 3, sharex=True)#, figsize=(6, 2), dpi=300, sharex=True)
     # plt.subplots_adjust(left=0.04, right=0.99, bottom=0.17, top=0.92, wspace=0.2)
     ax0, ax1, ax2 = axes
 
     add_patches_legend(
         ax0,
-        labels=[s.replace('_', ' ') for s in scenarios],
+        labels=['observed'] + [s.replace('_', ' ') for s in scenarios],
         colors=colors,
-        ncol=len(scenarios)
+        ncol=len(scenarios) + 1
     )
 
     discharges = []
     for i, scenario in enumerate(scenarios):
         dates, discharge = get_discharge(scenario)
-        ax0.plot(dates, discharge, label=scenario, color=colors[i])
+        ax0.plot(dates, discharge, label=scenario, color=colors[i+1])
         discharges.append(discharge)
     
     observed_discharge = get_observed_discharge(dates)
-    ax0.plot(dates, observed_discharge)
+    ax0.plot(dates, observed_discharge, color=colors[0], linestyle='dashed')
 
     for scenario, discharge in zip(scenarios, discharges):
         print('scenario')
         print('\tKGE:', KGE(discharge, observed_discharge))
         print('\tcorrelation:', correlation(discharge, observed_discharge))
+    
+    ax0.set_ylim(0, ax0.get_ylim()[1])
+
+    ax0.text(0.1, 0.9, f'KGE: {round(KGE(discharge, observed_discharge), 3)}\ncorr: {round(correlation(discharge, observed_discharge), 3)}',
+     horizontalalignment='left',
+     verticalalignment='top',
+     transform = ax0.transAxes)
+     
 
     ax0.set_title('discharge $(m^3s^{-1})$', **title_formatter)
     # ax0.set_ylabel('$m^3/s$', **label_formatter)
-    # for i, scenario in enumerate(scenarios):
-    #     dates, head = get_hyve_data('hydraulic head', scenario=scenario)
-    #     ax1.plot(dates, head, color=colors[i])
-    # ax1.set_title('mean hydraulic head $(m)$', **title_formatter)
-    # # ax1.set_ylabel('$m$', **label_formatter)
-    # for i, scenario in enumerate(scenarios):
-    #     dates, reservoir_storage = get_hyve_data('reservoir storage', scenario=scenario)
-    #     reservoir_storage /= 1e9
-    #     ax2.plot(dates, reservoir_storage, color=colors[i])
-    # ax2.set_title('reservoir storage $(billion\ m^3)$', **title_formatter)
-    # # ax2.set_ylabel('', **label_formatter)
-    # for ax in axes:
-    #     ax.ticklabel_format(useOffset=False, axis='y')
-    #     ax.tick_params(axis='both', labelsize='x-small', pad=1)
-    # # plt.savefig('plot/output/hydro_stats_per_scenario.png')
-    # plt.savefig('plot/output/hydro_stats_per_scenario.svg')
+    for i, scenario in enumerate(scenarios):
+        dates, head = get_hyve_data('hydraulic head', scenario=scenario)
+        ax1.plot(dates, head, color=colors[i])
+    ax1.set_title('mean hydraulic head $(m)$', **title_formatter)
+    # ax1.set_ylabel('$m$', **label_formatter)
+    for i, scenario in enumerate(scenarios):
+        dates, reservoir_storage = get_hyve_data('reservoir storage', scenario=scenario)
+        reservoir_storage /= 1e9
+        ax2.plot(dates, reservoir_storage, color=colors[i])
+    ax2.set_title('reservoir storage $(billion\ m^3)$', **title_formatter)
+    # ax2.set_ylabel('', **label_formatter)
+    for ax in axes:
+        ax.ticklabel_format(useOffset=False, axis='y')
+        ax.tick_params(axis='both', labelsize='x-small', pad=1)
+    # plt.savefig('plot/output/hydro_stats_per_scenario.png')
+    plt.savefig('plot/output/hydro_stats_per_scenario.svg')
     plt.show()
 
 
