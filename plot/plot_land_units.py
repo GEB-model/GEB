@@ -13,6 +13,7 @@ import numpy as np
 from scipy.ndimage import generate_binary_structure
 from cwatm.management_modules import data_handling
 from matplotlib.patches import Circle
+import os
 
 
 def cbinding_replace(name):
@@ -23,36 +24,40 @@ def cbinding_replace(name):
 
 data_handling.cbinding = cbinding_replace
 
-from cwatm.management_modules.cells.mixed import Cells
-
+from landunits import Data
 LAND_USE_TYPE_COLORS = np.array([
     (0, 124, 8),  # Forest No.0
     (195, 255, 211),  # Grasland/non irrigated land
     (0, 222, 15),  # Irrigation
-    (118, 118, 118),  # Sealed area
+    # (118, 118, 118),  # Sealed area
     (0, 104, 222),  # Water covered area
 ])
 LAND_USE_TYPE_LABELS = [
     'forest',
     'grassland / barren land',
     'cropland',
-    'sealed area',
+    # 'sealed area',
     'water'
 ]
-COLORS = np.array([(102,194,165), (252,141,98), (141,160,203), (231,138,195)])
-UNIT_COLORS = np.array([
+UNIT_COLORS = [
+    (0, 161, 157),
+    (255, 248, 229),
+    (255, 179, 68),
+    (224, 93, 93)
+]
+COLORS = [
     tuple(int(h.strip('#')[i:i+2], 16) for i in (0, 2, 4))
     for h in [
-        '#008080', '#ffa500', '#00ff00',
-        '#0000ff', '#ff1493'
+        '#6F69AC', '#95DAC1', '#FFEBA1',
+        '#FD6F96'
     ]
-])
-CELL_SIZE = 10
+]
+CELL_SIZE = 20
 
 
 def cut(array):
-    # return array[1540: 1550, 2480: 2490]
-    return array[1540: 1610, 2480: 2550]
+    array = array[1540*2+60: 1610*2-20, 2480*2+40: 2550*2-40]
+    return array
 
 def neighbors(shape, conn=1):
     dim = len(shape)
@@ -178,7 +183,7 @@ def create_region_graph(array):
 
 def color(G, regions, colors, strategy, maximum, contracted_nodes=None):
 
-    coloring = greedy_color(G, strategy=strategy)
+    coloring = greedy_color(G, strategy=strategy, interchange=True)
     assert max(coloring.values()) + 1 <= maximum
 
     coloring_array = np.full(regions.max() + 1, -1, dtype=np.int32)
@@ -189,7 +194,8 @@ def color(G, regions, colors, strategy, maximum, contracted_nodes=None):
         for contracted_node in contracted_nodes[::-1]:
             coloring_array[contracted_node[1]] = coloring_array[contracted_node[0]]
 
-    assert (coloring_array >= 0).all()
+    if (coloring_array == -1).any():
+        colors.append((255, 255, 255))
 
     color_indices = coloring_array[regions]
     return np.array(colors)[color_indices]
@@ -207,14 +213,16 @@ def create_grid(ax, high_res=False):
     ax.axes.yaxis.set_ticklabels([])
 
 
-def plot_land_use_type(ax, dummymodel):
-    land_use_type = dummymodel.landunit.land_use_type
-    land_use_type = dummymodel.landunit.decompress(land_use_type)
+def plot_land_use_type(ax, dummymodel, land_owners):
+    land_use_type = dummymodel.data.landunit.land_use_type
+    land_use_type = dummymodel.data.landunit.decompress(land_use_type)
     land_use_type = cut(land_use_type)
+    land_use_type[(land_use_type == 1) & (land_owners != -1)] = 3
     land_use_type[land_use_type > 2] = land_use_type[land_use_type > 2] - 1
+    land_use_type[land_use_type > 3] = land_use_type[land_use_type > 3] - 1
     land_use_type_colored = np.array(LAND_USE_TYPE_COLORS)[land_use_type.astype(np.int32)]
     ax.imshow(land_use_type_colored)
-    ax.set_title("Land use type")
+    ax.set_title("a - Land use type")
 
     patches = [
         mpatches.Patch(color=LAND_USE_TYPE_COLORS[i] / 255, label=LAND_USE_TYPE_LABELS[i])
@@ -225,7 +233,7 @@ def plot_land_use_type(ax, dummymodel):
         loc='upper left',
         bbox_to_anchor=(0, -0.05),
         borderaxespad=0,
-        ncol=1,
+        ncol=2,
         columnspacing=1,
         fontsize=10,
         frameon=False,
@@ -236,46 +244,51 @@ def plot_land_use_type(ax, dummymodel):
 
 
 def get_dummy_model():
-    class Config:
-        def __init__(self, model):
-            self.use_gpu = True
-
-    class DummyModel(Cells):
+    class Args:
         def __init__(self):
-            self.conf = Config(self)
-            Cells.__init__(self)
-    
-    return DummyModel()
+            self.use_gpu = False
 
+    class DummyModel:
+        def __init__(self):
+            self.args = Args()
+            self.data = Data(self)
+
+    return DummyModel()
 
 def main(include_circle=False, show=True, combine_units=True, high_res=False):
     dummymodel = get_dummy_model()
 
     fig, (ax0, ax1, ax2) = plt.subplots(1, 3,
-        sharex=True, sharey=True, figsize=(12, 6))
+        sharex=True, sharey=True, figsize=(12, 4.5))
     plt.tight_layout()
     plt.subplots_adjust(top=0.99)
+    land_owners = dummymodel.data.landunit.land_owners
+    land_owners = dummymodel.data.landunit.decompress(land_owners)
+    land_owners = cut(land_owners)
 
     # land use type
-    land_use_type, land_use_type_colored = plot_land_use_type(ax0, dummymodel)
+    land_use_type, land_use_type_colored = plot_land_use_type(ax0, dummymodel, land_owners)
     create_grid(ax0, high_res=high_res)
 
     # land owners
-    land_owners = dummymodel.landunit.land_owners
-    land_owners = dummymodel.landunit.decompress(land_owners)
-    land_owners = cut(land_owners)
     graph, regions = create_region_graph(land_owners)
+    for v in np.unique(regions[land_owners == -1]):
+        graph.remove_node(v)
     land_owners_colored = color(graph, regions, COLORS, "smallest_last", 4)
     land_owners_colored[land_owners == -1] = 255
     ax1.imshow(land_owners_colored)
-    ax1.set_title("Land owners")
+    ax1.set_title("b - Crop farms (agents)")
     create_grid(ax1, high_res=high_res)
 
     # units
     if combine_units:
-        units = dummymodel.landunit.full_compressed(0, dtype=np.int32)
-        units = cp.arange(0, units.size, dtype=np.int32)
-        units = dummymodel.landunit.decompress(units)
+        units = dummymodel.data.landunit.full_compressed(0, dtype=np.int32)
+        if dummymodel.args.use_gpu:
+            units = cp.arange(0, units.size, dtype=np.int32)
+        else:
+            units = np.arange(0, units.size, dtype=np.int32)
+
+        units = dummymodel.data.landunit.decompress(units)
         units = cut(units)
         graph, regions = create_region_graph(units)
 
@@ -309,15 +322,15 @@ def main(include_circle=False, show=True, combine_units=True, high_res=False):
         # ax2.axes.yaxis.set_ticklabels([])
     
     ax2.imshow(units)
-    ax2.set_title("Hydrological units")
+    ax2.set_title("c - Land management units")
 
     if include_circle:
-        for ax in (ax0, ax1, ax2):
-            circle = Circle((34, 27.5), 6, fill=False, edgecolor='red', linewidth=2)
+        for ax in (ax1, ax2):
+            circle = Circle((23.5, 19.5), 4.5, fill=False, edgecolor='red', linewidth=2.5)
             ax.add_patch(circle)
 
-    plt.savefig(f'plot/output/subcells{"_with_circle" if include_circle else ""}{"_high_res" if high_res else ""}.png', dpi=300)
-    plt.savefig(f'plot/output/subcells{"_with_circle" if include_circle else ""}{"_high_res" if high_res else ""}.eps')
+    plt.savefig(f'D:/OneDrive/Work/GEB/Paper/figures/subcells{"_with_circle" if include_circle else ""}{"_high_res" if high_res else ""}.png', dpi=300)
+    plt.savefig(f'D:/OneDrive/Work/GEB/Paper/figures/subcells{"_with_circle" if include_circle else ""}{"_high_res" if high_res else ""}.eps')
     
     if show:
         plt.show()
@@ -350,7 +363,7 @@ def plot_pies():
     size = 70
     array = np.full((size, size, 3), 255, dtype=np.int32)
 
-    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(8, 6))
+    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(8, 4.5))
     plt.tight_layout()
     plt.subplots_adjust(top=0.99)
 
@@ -385,7 +398,7 @@ def plot_pies():
 if __name__ == '__main__':
     # main(include_circle=True, show=True, combine_units=False)
     # main(include_circle=False, show=True, combine_units=True)
-    main(include_circle=False, show=False, combine_units=True, high_res=True)
+    main(include_circle=True, show=True, combine_units=True, high_res=False)
     # main(include_circle=True, show=False, combine_units=True)
     # main(include_circle=True, show=False, combine_units=True)
     # plot_pies()
