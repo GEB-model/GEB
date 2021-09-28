@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=base
+#SBATCH --job-name=plot
 #SBATCH --output=irrigation.out
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1

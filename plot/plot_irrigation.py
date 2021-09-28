@@ -7,8 +7,7 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from numba import njit
-from datetime import datetime, timedelta
-import pandas as pd
+from datetime import timedelta
 import geopandas as gpd
 from numba import njit
 import rasterio
