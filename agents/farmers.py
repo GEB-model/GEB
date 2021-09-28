@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 try:
     import cupy as cp
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     pass
 import math
 
@@ -241,7 +241,8 @@ class Farmers(AgentBaseClass):
         available_groundwater_m3: np.ndarray,
         groundwater_head: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
-        command_areas: np.ndarray
+        command_areas: np.ndarray,
+        return_fraction: float
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation. 
@@ -298,7 +299,6 @@ class Farmers(AgentBaseClass):
             else:
                 efficiency = 0.6
             
-            return_fraction = 0.5
             if irrigated[farmer]:
                 farmer_is_water_limited = False
                 for field in farmer_fields:
@@ -381,7 +381,8 @@ class Farmers(AgentBaseClass):
         available_groundwater_m3: np.ndarray,
         groundwater_head: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
-        command_areas: np.ndarray
+        command_areas: np.ndarray,
+        return_fraction: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function allows the abstraction of water by farmers for irrigation purposes. It's main purpose is to call the relevant numba function to do the actual abstraction. In addition, the function saves the abstraction from the various sources by farmer.
@@ -427,7 +428,8 @@ class Farmers(AgentBaseClass):
             available_groundwater_m3,
             groundwater_head,
             available_reservoir_storage_m3,
-            command_areas
+            command_areas,
+            return_fraction
         )
         return (
             water_withdrawal_m,

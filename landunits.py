@@ -6,7 +6,7 @@ import os
 import numpy as np
 try:
     import cupy as cp
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     pass
 from cwatm.management_modules.data_handling import readnetcdfInitial, checkOption
 
@@ -389,15 +389,15 @@ class LandUnits(BaseVariables):
             outarray: Decompressed landunit_array.
         """  
         if isinstance(landunit_array, cp.ndarray):
-            array = landunit_array.get()
-        if np.issubdtype(landunit_array, np.integer):
+            landunit_array = landunit_array.get()
+        if np.issubdtype(landunit_array.dtype, np.integer):
             nanvalue = -1
         else:
             nanvalue = np.nan
         ysize, xsize = self.model.data.grid.mask.shape
         decompresssed = np.full((ysize * self.scaling, xsize * self.scaling), nanvalue, dtype=landunit_array.dtype)
         return self.decompress_landunit_numba(
-            array,
+            landunit_array,
             outarray=decompresssed,
             unmerged_landunit_indices=self.unmerged_landunit_indices,
             mask=self.model.data.grid.mask,

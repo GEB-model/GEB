@@ -5,7 +5,7 @@ import numpy as np
 from operator import attrgetter
 try:
     import cupy as cp
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     pass
 
 class Artists(HyveArtists):
@@ -92,7 +92,7 @@ class Artists(HyveArtists):
             attributes = attrgetter(attr)(self.model)
             compressed_size = attributes.compressed_size
             for varname, variable in vars(attributes).items():
-                if isinstance(variable, (np.ndarray, cp.ndarray)):
+                if isinstance(variable, (np.ndarray, cp.ndarray) if self.model.args.use_gpu else np.ndarray):
                     if variable.ndim == 1 and variable.size == compressed_size:
                         name = f'{attr}.{varname}'
                         self.variables_dict[name] = variable

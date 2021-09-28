@@ -10,7 +10,7 @@ import numpy as np
 try:
     import cupy as cp
 except ImportError:
-    pass
+    cp = np
 from operator import attrgetter
 
 

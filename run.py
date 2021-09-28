@@ -27,6 +27,8 @@ parser.add_argument('--config', dest='config', default='GEB.yml', help="Path of 
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    if args.use_gpu:
+        import cupy
     import sys; sys.setrecursionlimit(2000)
 
     import faulthandler
