@@ -14,7 +14,7 @@ options:
   define_first_run: False
 
 DEAP:
-  use_multiprocessing: true
+  use_multiprocessing: True
   maximize: True
   ngen: 3 # 10
   mu: 24 # 120

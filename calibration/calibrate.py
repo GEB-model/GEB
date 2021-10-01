@@ -34,15 +34,13 @@ import yaml
 
 import multiprocessing
 import time
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, run
 
-from sys import platform
 import pickle
 
 ## Set global parameter
 global gen
 gen = 0
-WarmupDays = 0
 
 with open('calibration/config.yml', 'r') as f:
 	config = yaml.load(f, Loader=yaml.FullLoader)
@@ -115,22 +113,16 @@ ii = 1
 #   Function for running the model, returns objective function scores
 ########################################################################
 
-def RunModel(Individual):
-
-	# Convert scaled parameter values ranging from 0 to 1 to usncaled parameter values
-	Parameters = [None] * len(ParamRanges)
-	for ii in range(0,len(ParamRanges-1)):
-		Parameters[ii] = Individual[ii]*(float(ParamRanges.iloc[ii,1])-float(ParamRanges.iloc[ii,0]))+float(ParamRanges.iloc[ii,0])
-
-	# Note: The following code must be identical to the code near the end where the model is run
-	# using the "best" parameter set. This code:
-	# 1) Modifies the settings file containing the unscaled parameter values amongst other things
-	# 2) Makes a .bat file to run the model
-	# 3) Run the model and loads the simulated streamflow
+def RunModel(args):
+	individual, run_id = args
+	individual = np.array(individual.tolist())
+	assert (individual >= 0).all() and (individual <= 1).all()
+	values = ParamRanges.copy()
+	values['scale'] = individual
+	values['value'] = values['MinValue'] + (values['MaxValue'] - values['MinValue']) * values['scale']
 
 	# Random number is appended to settings and .bat files to avoid simultaneous editing
-	id =int(Individual[-1])
-	run_id = str(id//1000).zfill(2) + "_" + str(id%1000).zfill(3)
+	run_id = str(run_id//1000).zfill(2) + "_" + str(run_id%1000).zfill(3)
 	print('working on:', run_id)
 
 	directory_run = os.path.join(SubCatchmentPath, run_id)
@@ -157,8 +149,8 @@ def RunModel(Individual):
 		template['report'] = {}  # no other reporting than discharge required.
 		template['report_cwatm'] = {}  # no other reporting than discharge required.
 
-		for i, name in enumerate(ParamRanges.index):
-			template['parameters'][name] = Parameters[i]
+		for name, value in values['value'].items():
+			template['parameters'][name] = value
 
 		template['general']['report_folder'] = directory_run
 
@@ -221,7 +213,7 @@ def RunModel(Individual):
 
 	if OBJECTIVE == 'KGE':
 		# Compute objective function score
-		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'], warmup=WarmupDays)
+		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])
 		print("run_id: "+str(run_id)+", KGE: "+"{0:.3f}".format(KGE))
 		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id)+","+str(KGE)+"\n")
@@ -229,14 +221,14 @@ def RunModel(Individual):
 
 	elif OBJECTIVE == 'COR':
 
-		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'], warmup=WarmupDays)
+		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'])
 		print("run_id: "+str(run_id)+", COR "+"{0:.3f}".format(COR))
 		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id)+","+str(COR)+"\n")
 		score = COR, # If using just one objective function, put a comma at the end!!!
 
 	elif OBJECTIVE == 'NSE':
-		NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'], warmup=WarmupDays)
+		NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'])
 		print("run_id: " + str(run_id) + ", NSE: " + "{0:.3f}".format(NSE))
 		with open(os.path.join(SubCatchmentPath, "runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id) + "," + str(NSE) + "\n")
@@ -322,6 +314,7 @@ if __name__ == "__main__":
 			populationall = cp["populationall"]
 			population = cp["population"]
 			start_gen = cp["generation"]
+			run_indices = cp["run_indices"]
 			random.setstate(cp["rndstate"])
 			if start_gen > 0:
 				offspring = cp["offspring"]
@@ -333,8 +326,7 @@ if __name__ == "__main__":
 	else:
 		population = toolbox.population(n=mu)
 		# Numbering of runs
-		for ii in range(mu):
-			population[ii][-1]= float(gen * 1000 + ii+1)
+		run_indices = [gen * 1000 + ii + 1 for ii in range(mu)]
 
 		#first run parameter set:
 		if define_first_run:
@@ -347,14 +339,14 @@ if __name__ == "__main__":
 		# saving population
 		populationall = {}
 		populationall[0] = population.copy()
-		cp = dict(populationall=populationall, population=population, generation=gen, rndstate=random.getstate())
+		cp = dict(populationall=populationall, population=population, generation=gen, rndstate=random.getstate(), run_indices=run_indices)
 		with open(checkpoint, "wb") as cp_file:
 			pickle.dump(cp, cp_file)
 		cp_file.close()
 
 		# Evaluate the individuals with an invalid fitness
 		invalid_ind = [ind for ind in population if not ind.fitness.valid]
-		fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
+		fitnesses = toolbox.map(toolbox.evaluate, zip(invalid_ind, run_indices))
 		for ind, fit in zip(invalid_ind, fitnesses):
 			ind.fitness.values = fit
 
@@ -385,14 +377,12 @@ if __name__ == "__main__":
 			offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
 			#offspring = algorithms.varAnd(population, toolbox, cxpb, mutpb)
 
-			# put in the number of run
-			for ii in range(lambda_):
-				offspring[ii][-1] = float(gen * 1000 + ii + 1)
+			run_indices = [gen * 1000 + ii + 1 for ii in range(lambda_)]
 
 
 		# saving population
 		populationall[gen] = population.copy()
-		cp = dict(populationall=populationall,population=population, generation=gen, rndstate=random.getstate(), offspring=offspring, halloffame=halloffame)
+		cp = dict(populationall=populationall,population=population, generation=gen, rndstate=random.getstate(), offspring=offspring, halloffame=halloffame, run_indices=run_indices)
 		with open(checkpoint, "wb") as cp_file:
 			pickle.dump(cp, cp_file)
 		cp_file.close()
@@ -400,7 +390,7 @@ if __name__ == "__main__":
 
 		# Evaluate the individuals with an invalid fitness
 		invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-		fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
+		fitnesses = toolbox.map(toolbox.evaluate, zip(invalid_ind, run_indices))
 		for ind, fit in zip(invalid_ind, fitnesses):
 			ind.fitness.values = fit
 
@@ -411,10 +401,6 @@ if __name__ == "__main__":
 		# Select the next generation population
 		population[:] = toolbox.select(population + offspring, select_best)
 		history.update(population)
-
-		# put in the number of run
-		#for ii in xrange(mu):
-		#	population[ii][-1] = float(gen * 1000 + ii + 1)
 
 		# Loop through the different objective functions and calculate some statistics
 		# from the Pareto optimal population
