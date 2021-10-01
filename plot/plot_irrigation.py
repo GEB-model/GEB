@@ -17,6 +17,7 @@ import yaml
 from jplot import plot_raster
 from plot import read_npy
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+from matplotlib import cm
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
@@ -88,7 +89,6 @@ class Plot:
         self.land_owners = np.load(os.path.join(areamaps_folder, 'land_owners.npy'))
         self.field_indices, self.land_owners_per_farmer = _set_fields(self.land_owners)
 
-        # self.mask = np.load('report/mask.npy')
         with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'areamaps', 'mask.tif'), 'r') as src:
             self.mask = src.read(1)
         with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'areamaps', 'submask.tif'), 'r') as src:
@@ -197,10 +197,14 @@ class Plot:
             show=False
         )
         axins.set_xlim(2300, 3300) # apply the x-limits
-        axins.set_ylim(6500, 7500) # apply the x-limits
+        axins.set_ylim(7500, 6500) # apply the y-limits
         axins.axes.xaxis.set_visible(False)
         axins.axes.yaxis.set_visible(False)
-        mark_inset(ax, axins, loc1=1, loc2=3, fc="none", ec="black", linewidth=0.3)
+        patch, pp1, pp2 =mark_inset(ax, axins, loc1=1, loc2=3, fc="none", ec="black", linewidth=0.3)
+        pp1.loc1 = 1
+        pp1.loc2 = 3
+        pp2.loc1 = 3
+        pp2.loc2 = 1
         self.design_plot(ax, title)
 
     @staticmethod
@@ -370,8 +374,8 @@ def add_colorbar_legend(
 def plot_irrigation():
     plotter = Plot()
 
-    channel_irrigation, groundwater_irrigation, reservoir_irrigation = read_irrigation_data('base')
-    total_irrigation = channel_irrigation + groundwater_irrigation + reservoir_irrigation
+    channel_irrigation_by_farm, groundwater_irrigation, reservoir_irrigation = read_irrigation_data('base')
+    total_irrigation = channel_irrigation_by_farm + groundwater_irrigation + reservoir_irrigation
 
     # fig, ax = plt.subplots(1)
     # plotter.plot_by_activation_order(reservoir_irrigation, activation_order, name='reservoir irrigation', ax=ax)
@@ -383,14 +387,30 @@ def plot_irrigation():
     fig, (ax0, ax1, ax2) = plt.subplots(1, 3, dpi=300, figsize=(6, 2))
     plt.subplots_adjust(wspace=0.15, left=0.03, right=0.98, bottom=0.15, top=0.99)
 
-    channel_irrigation = plotter.farmer_array_to_fields(channel_irrigation, 0)
+    cmap = 'Blues'
+    # vmax = np.nanmax(np.maximum(np.maximum(channel_irrigation, groundwater_irrigation), reservoir_irrigation))
+    vmin = 0
+    vmax = 0.01
+
+    fields = np.ones_like(channel_irrigation_by_farm)
+    fields = plotter.farmer_array_to_fields(fields, 0)
+
+    def get_plt(array):
+        array /= np.nanmax(vmax)
+        array[array > vmax] = 1
+        array[array < 0] = 0
+        array = cm.Blues(array)
+        array[fields == 0,:] = .9
+        array[np.isnan(fields), :] = 1
+        return array
+
+    channel_irrigation = plotter.farmer_array_to_fields(channel_irrigation_by_farm, 0)
+    channel_irrigation = get_plt(channel_irrigation)
+
+
     groundwater_irrigation = plotter.farmer_array_to_fields(groundwater_irrigation, 0)
     reservoir_irrigation = plotter.farmer_array_to_fields(reservoir_irrigation, 0)
 
-    cmap = 'Blues'
-    vmin = 0
-    # vmax = np.nanmax(np.maximum(np.maximum(channel_irrigation, groundwater_irrigation), reservoir_irrigation))
-    vmax = 0.01
 
     plotter.plot_array(
         channel_irrigation,
