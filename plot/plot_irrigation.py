@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-import matplotlib.colors as mcolors
-
 import os
-from copy import copy
 import sys
+from copy import copy
+from datetime import timedelta
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
+import matplotlib.colors as mcolors
+from matplotlib import cm
 from numba import njit
-from datetime import timedelta
 import geopandas as gpd
-from numba import njit
 import rasterio
 from rasterio.features import rasterize
 import shapely
@@ -17,11 +17,9 @@ import yaml
 from jplot import plot_raster
 from plot import read_npy
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
-from matplotlib import cm
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
-import matplotlib as mpl
 
 with open('GEB.yml', 'r') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
@@ -183,7 +181,7 @@ class Plot:
             ticks_fontsize=4,
             # legend='colorbar'
         )
-        axins = inset_axes(ax, .6, .6, loc='lower right', bbox_to_anchor=(1.1, -0.03), bbox_transform=ax.transAxes)
+        axins = inset_axes(ax, .45, .45, loc='lower right', bbox_to_anchor=(.85, -0.03), bbox_transform=ax.transAxes)
         plot_raster(
             array,
             self.submask_transform.to_gdal(),
@@ -196,15 +194,39 @@ class Plot:
             cmap=cmap,
             show=False
         )
-        axins.set_xlim(2300, 3300) # apply the x-limits
-        axins.set_ylim(7500, 6500) # apply the y-limits
+        axins.set_xlim(2050, 3300) # apply the x-limits
+        axins.set_ylim(7250, 6000) # apply the y-limits
         axins.axes.xaxis.set_visible(False)
         axins.axes.yaxis.set_visible(False)
-        patch, pp1, pp2 =mark_inset(ax, axins, loc1=1, loc2=3, fc="none", ec="black", linewidth=0.3)
+        _, pp1, pp2 = mark_inset(ax, axins, loc1=1, loc2=3, fc="none", ec="black", linewidth=0.3)
         pp1.loc1 = 1
-        pp1.loc2 = 3
+        pp1.loc2 = 4
         pp2.loc1 = 3
-        pp2.loc2 = 1
+        pp2.loc2 = 2
+        
+        axins2 = inset_axes(ax, .30, .30, loc='lower right', bbox_to_anchor=(1.05, 0.05), bbox_transform=ax.transAxes)
+        plot_raster(
+            array,
+            self.submask_transform.to_gdal(),
+            proj=4326,
+            bbox=None,
+            ax=axins2,
+            fig=fig,
+            vmin=vmin,
+            vmax=vmax,
+            cmap=cmap,
+            show=False
+        )
+        axins2.set_xlim(2050+910-25, 2050+960+25) # apply the x-limits
+        axins2.set_ylim(6000+550+25, 6000+500-25) # apply the y-limits
+        axins2.axes.xaxis.set_visible(False)
+        axins2.axes.yaxis.set_visible(False)
+        _, pp3, pp4 = mark_inset(axins, axins2, loc1=1, loc2=3, fc="none", ec="black", linewidth=0.3)
+        pp3.loc1 = 2
+        pp3.loc2 = 3
+        pp4.loc1 = 3
+        pp4.loc2 = 2
+        
         self.design_plot(ax, title)
 
     @staticmethod
@@ -299,6 +321,7 @@ def read_irrigation_data(scenario):
     dt = copy(START_DATE)
     timesteps = (END_DATE - START_DATE) // TIMEDELTA + 1
     for i in range(timesteps):
+        print(dt)
         if not i % 10:
             print(i)
         if i == 0:
@@ -375,7 +398,7 @@ def plot_irrigation():
     plotter = Plot()
 
     channel_irrigation_by_farm, groundwater_irrigation, reservoir_irrigation = read_irrigation_data('base')
-    total_irrigation = channel_irrigation_by_farm + groundwater_irrigation + reservoir_irrigation
+    # total_irrigation = channel_irrigation_by_farm + groundwater_irrigation + reservoir_irrigation
 
     # fig, ax = plt.subplots(1)
     # plotter.plot_by_activation_order(reservoir_irrigation, activation_order, name='reservoir irrigation', ax=ax)
@@ -394,6 +417,7 @@ def plot_irrigation():
 
     fields = np.ones_like(channel_irrigation_by_farm)
     fields = plotter.farmer_array_to_fields(fields, 0)
+    # fields = fields[:1000, :1000]
 
     def get_plt(array):
         array /= np.nanmax(vmax)
@@ -405,11 +429,12 @@ def plot_irrigation():
         return array
 
     channel_irrigation = plotter.farmer_array_to_fields(channel_irrigation_by_farm, 0)
+    # channel_irrigation = channel_irrigation[:1000, :1000]
     channel_irrigation = get_plt(channel_irrigation)
-
-
     groundwater_irrigation = plotter.farmer_array_to_fields(groundwater_irrigation, 0)
+    groundwater_irrigation = get_plt(groundwater_irrigation)
     reservoir_irrigation = plotter.farmer_array_to_fields(reservoir_irrigation, 0)
+    reservoir_irrigation = get_plt(reservoir_irrigation)
 
 
     plotter.plot_array(
@@ -424,22 +449,22 @@ def plot_irrigation():
     )
 
     plotter.plot_array(
-        groundwater_irrigation,
+        reservoir_irrigation,
         nofieldvalue=0,
         fig=fig,
         ax=ax1,
-        title='groundwater irrigation',
+        title='reservoir irrigation',
         vmin=vmin,
         vmax=vmax,
         cmap=cmap
     )
-
+    
     plotter.plot_array(
-        reservoir_irrigation,
+        groundwater_irrigation,
         nofieldvalue=0,
         fig=fig,
         ax=ax2,
-        title='reservoir irrigation',
+        title='groundwater irrigation',
         vmin=vmin,
         vmax=vmax,
         cmap=cmap
