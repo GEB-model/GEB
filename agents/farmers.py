@@ -275,24 +275,25 @@ class Farmers(AgentBaseClass):
             addtoevapotrans_m: Evaporated irrigation water in meters.
         """
         
-        mixed_array_size = cell_area.size
-        water_withdrawal_m = np.zeros(mixed_array_size, dtype=np.float32)
-        water_consumption_m = np.zeros(mixed_array_size, dtype=np.float32)
+        land_unit_array_size = cell_area.size
+        water_withdrawal_m = np.zeros(land_unit_array_size, dtype=np.float32)
+        water_consumption_m = np.zeros(land_unit_array_size, dtype=np.float32)
         
-        returnFlowIrr_m = np.zeros(mixed_array_size, dtype=np.float32)
-        addtoevapotrans_m = np.zeros(mixed_array_size, dtype=np.float32)
+        returnFlowIrr_m = np.zeros(land_unit_array_size, dtype=np.float32)
+        addtoevapotrans_m = np.zeros(land_unit_array_size, dtype=np.float32)
         
         groundwater_abstraction_m3 = np.zeros(available_groundwater_m3.size, dtype=np.float32)
         channel_abstraction_m3 = np.zeros(available_channel_storage_m3.size, dtype=np.float32)
         
         reservoir_abstraction_m_per_basin_m3 = np.zeros(available_reservoir_storage_m3.size, dtype=np.float32)
-        reservoir_abstraction_m = np.zeros(mixed_array_size, dtype=np.float32)
+        reservoir_abstraction_m = np.zeros(land_unit_array_size, dtype=np.float32)
 
         channel_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
         reservoir_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
         groundwater_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
         
-        for farmer in range(activation_order.size):
+        for activated_farmer_index in range(activation_order.size):
+            farmer = activation_order[activated_farmer_index]
             farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer)
             if is_water_efficient[farmer]:
                 efficiency = 0.8
