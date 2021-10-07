@@ -99,11 +99,11 @@ def get_observed_discharge(dates):
 def main():
     title_formatter = {'size': 'small', 'fontweight': 'bold', 'pad': 3}
     scenarios = ('base', 'self_investment', 'government_subsidies', 'ngo_training')
-    scenarios = ('base', )
+    scenarios = ('base', 'government_subsidies', 'ngo_training')
     colors = ['black', 'blue', 'orange', 'red']
     colors = colors[:len(scenarios) + 1]
-    fig, axes = plt.subplots(1, 3, sharex=True)#, figsize=(6, 2), dpi=300, sharex=True)
-    # plt.subplots_adjust(left=0.04, right=0.99, bottom=0.17, top=0.92, wspace=0.2)
+    fig, axes = plt.subplots(1, 3, sharex=True, figsize=(8, 3), dpi=300)
+    plt.subplots_adjust(left=0.055, right=0.99, bottom=0.17, top=0.92, wspace=0.2)
     ax0, ax1, ax2 = axes
 
     add_patches_legend(
@@ -139,13 +139,13 @@ def main():
     # ax0.set_ylabel('$m^3/s$', **label_formatter)
     for i, scenario in enumerate(scenarios):
         dates, head = get_hyve_data('hydraulic head', scenario=scenario)
-        ax1.plot(dates, head, color=colors[i])
+        ax1.plot(dates, head, color=colors[i+1])  # observed is 0
     ax1.set_title('mean hydraulic head $(m)$', **title_formatter)
     # ax1.set_ylabel('$m$', **label_formatter)
     for i, scenario in enumerate(scenarios):
         dates, reservoir_storage = get_hyve_data('reservoir storage', scenario=scenario)
         reservoir_storage /= 1e9
-        ax2.plot(dates, reservoir_storage, color=colors[i])
+        ax2.plot(dates, reservoir_storage, color=colors[i+1])  # observed is 0
     ax2.set_title('reservoir storage $(billion\ m^3)$', **title_formatter)
     # ax2.set_ylabel('', **label_formatter)
     for ax in axes:
