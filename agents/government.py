@@ -12,11 +12,8 @@ class Government(AgentBaseClass):
     def __init__(self, model, agents):
         self.model = model
         self.agents = agents
-        AgentBaseClass.__init__(self)
-
-    def initiate_agents(self) -> None:
-        """Initalizes the government agent by setting the number of subsidies provided when activated."""
         self.ratio_farmers_to_provide_subsidies = 0.05
+        AgentBaseClass.__init__(self)
 
     def provide_subsidies(self) -> None:
         """Provides subsidies to a number of farmers that are not yet efficient in their water usage."""
