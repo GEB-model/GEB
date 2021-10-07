@@ -553,7 +553,7 @@ class Farmers(AgentBaseClass):
         """
         if self.model.args.scenario == 'self_investment':
             invest = (
-                self.latest_harvests[harvesting_farmers, 0] < np.mean(self.latest_harvests[harvesting_farmers, 1:], axis=1)
+                self.latest_harvests[harvesting_farmers, 0] * 1.1 < np.mean(self.latest_harvests[harvesting_farmers, 1:], axis=1)
             )
             self.is_water_efficient[harvesting_farmers] |= invest
 
