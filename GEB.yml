@@ -6,8 +6,8 @@ general:
   start_time: 2006-01-01
   ###
   # model end time (YYYY-MM-DD).
-  # end_time: 2006-01-05
-  end_time: 2010-12-31
+  end_time: 2006-01-05
+  # end_time: 2010-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   spinup_start: 2000-01-01
@@ -18,7 +18,7 @@ general:
   init_water_table: DataDrive/GEB/report/init/water_table.npy
   ###
   #
-  switch_crops: false
+  switch_crops: true
   export_inital_on_spinup: true
 
 ###

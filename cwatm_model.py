@@ -26,7 +26,11 @@ class CWatM_Model(CWATModel):
         settingsfile.append(settings)
         parse_configuration(settings)
 
-        outDir['OUTPUT'] = os.path.join(self.config['general']['report_folder'], self.args.scenario)
+        subfolder = self.args.scenario
+        if self.config['general']['switch_crops']:
+            subfolder += '_switch_crops'
+
+        outDir['OUTPUT'] = os.path.join(self.config['general']['report_folder'], subfolder)
 
         # calibration
         for parameter, value in self.config['parameters'].items():

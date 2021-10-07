@@ -26,7 +26,7 @@ class CWatMReporter(ABMReporter):
         self.model = model
 
         if subfolder:
-            self.export_folder = os.path.join(self.model.config['general']['report_folder'], self.model.args.scenario)
+            self.export_folder = os.path.join(self.model.config['general']['report_folder'], subfolder)
         else:
             self.export_folder = self.model.config['general']['report_folder']
         self.maybe_create_export_folder()
@@ -125,8 +125,11 @@ class Reporter:
     """
     def __init__(self, model):
         self.model = model
-        self.abm_reporter = ABMReporter(model, subfolder=self.model.args.scenario)
-        self.cwatmreporter = CWatMReporter(model, subfolder=self.model.args.scenario)
+        subfolder = self.model.args.scenario
+        if self.model.config['general']['switch_crops']:
+            subfolder += '_switch_crops'
+        self.abm_reporter = ABMReporter(model, subfolder=subfolder)
+        self.cwatmreporter = CWatMReporter(model, subfolder=subfolder)
 
     @property
     def variables(self):
