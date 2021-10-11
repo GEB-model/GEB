@@ -119,7 +119,7 @@ class Plot:
 
     def design_plot(self, ax, title):
         if title:
-            ax.set_title(title, size=4, pad=2, fontweight='bold')
+            ax.set_title(title, size=6, pad=2, fontweight='bold')
 
     def farmer_array_to_fields(self, array, nofieldvalue):
         fields_decompressed = _decompress_landunit(self.land_owners, self.unmerged_landunit_indices, self.scaling, self.mask)
@@ -413,7 +413,7 @@ def plot_irrigation():
     cmap = 'Blues'
     # vmax = np.nanmax(np.maximum(np.maximum(channel_irrigation, groundwater_irrigation), reservoir_irrigation))
     vmin = 0
-    vmax = 0.01
+    vmax = 0.02
 
     fields = np.ones_like(channel_irrigation_by_farm)
     fields = plotter.farmer_array_to_fields(fields, 0)

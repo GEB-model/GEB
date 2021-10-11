@@ -8,7 +8,8 @@ import yaml
 import pandas as pd
 import sys
 import numpy as np
-import matplotlib.patches as mpatches
+import matplotlib.dates as mdates
+from matplotlib.lines import Line2D
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
@@ -16,6 +17,8 @@ TIMEDELTA = timedelta(days=1)
 OUTPUT_FOLDER = os.path.join('DataDrive', 'GEB', 'report')
 with open('GEB.yml', 'r') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
+LINEWIDTH = .5
+TITLE_FORMATTER = {'size': 'small', 'fontweight': 'bold', 'pad': 3}
 
 
 def KGE(s, o):
@@ -53,108 +56,176 @@ def correlation(s,o):
     return corr
 
 
-def get_discharge(scenario):
+def get_discharge(scenario, switch_crop):
     values = []
     dates = []
-    with open(os.path.join(OUTPUT_FOLDER, scenario, 'var.discharge_daily.tss'), 'r') as f:
-        for i, line in enumerate(f):
-            if i < 4:
-                continue
-            if len(dates) == 0:
-                dates.append(config['general']['start_time'])
-            else:
-                dates.append(dates[-1] + TIMEDELTA)
-            match = re.match(r"\s+([0-9]+)\s+([0-9\.e-]+)\s*$", line)
-            value = float(match.group(2))
-            values.append(value)
-    return dates, np.array(values)
+    subfolder = scenario
+    if switch_crop:
+        subfolder += '_switch_crops'
+    try:
+        with open(os.path.join(OUTPUT_FOLDER, subfolder, 'var.discharge_daily.tss'), 'r') as f:
+            for i, line in enumerate(f):
+                if i < 4:
+                    continue
+                if len(dates) == 0:
+                    dates.append(config['general']['start_time'])
+                else:
+                    dates.append(dates[-1] + TIMEDELTA)
+                match = re.match(r"\s+([0-9]+)\s+([0-9\.e-]+)\s*$", line)
+                value = float(match.group(2))
+                values.append(value)
+        return dates, np.array(values)
+    except FileNotFoundError:
+        return None
 
-def get_hyve_data(varname, scenario, fileformat='csv'):
-    df = pd.read_csv(os.path.join(OUTPUT_FOLDER, scenario, varname + '.' + fileformat), index_col=0)
+def get_hyve_data(varname, scenario, switch_crop, fileformat='csv'):
+    subfolder = scenario
+    if switch_crop:
+        subfolder += '_switch_crops'
+    try:
+        df = pd.read_csv(os.path.join(OUTPUT_FOLDER, subfolder, varname + '.' + fileformat), index_col=0)
+    except FileNotFoundError:
+        return None
     dates = df.index.tolist()
     dates = [datetime.strptime(dt, "%Y-%m-%d") for dt in dates]
     return dates, np.array(df[varname].tolist())
 
-def add_patches_legend(ax, labels, colors, ncol, legend_fontsize=8, legend_title=None):
-    patches = [mpatches.Patch(color=colors[i], label=labels[i]) for i in range(len(colors)) if labels[i] is not None]
+def add_patches_legend(ax, labels, colors, ncol):
+    patches = [Line2D([],[],linestyle='', label='')] + [
+        Line2D([0], [0], color=colors[i], label=labels[i], linestyle='--')
+        for i in range(len(labels)) if labels[i] is not None
+    ]
     legend = ax.legend(
+        title=r'$\ \ \ \ \ \ \bf{With\ crop\ switching}$',
+        title_fontsize='xx-small',
         handles=patches,
         loc='upper left',
-        bbox_to_anchor=(0, -0.13),
+        bbox_to_anchor=(-.07, -0.27),
         borderaxespad=0,
-        ncol=ncol,
+        ncol=ncol+1,
         columnspacing=1,
-        fontsize=legend_fontsize,
+        fontsize=6,
         frameon=False,
-        handlelength=1,
+        handlelength=2,
         borderpad=0
     )
-    if legend_title:
-        legend.set_title(legend_title)
+    legend._legend_box.align = "left"
+    
+    ax.add_artist(legend)
+
+    patches = [Line2D([],[],linestyle='', label='')] + [
+        Line2D([0], [0], color=colors[i], label=labels[i], linestyle='-')
+        for i in range(len(labels)) if labels[i] is not None
+    ]
+    legend = ax.legend(
+        title=r'$\ \ \ \ \ \ \bf{No\ crop\ switching}$',
+        title_fontsize='xx-small',
+        handles=patches,
+        loc='upper left',
+        bbox_to_anchor=(-.07, -0.12),
+        borderaxespad=0,
+        ncol=ncol+1,
+        columnspacing=1,
+        fontsize=6,
+        frameon=False,
+        handlelength=2,
+        borderpad=0
+    )
+    legend._legend_box.align = "left"
 
 def get_observed_discharge(dates):
     df = pd.read_csv('DataDrive/GEB/calibration/observations.csv', parse_dates=['Dates'])
     return df[df['Dates'].isin(dates)]['flow'].to_numpy()
 
-def main():
-    title_formatter = {'size': 'small', 'fontweight': 'bold', 'pad': 3}
-    scenarios = ('base', 'self_investment', 'government_subsidies', 'ngo_training')
-    scenarios = ('base', 'government_subsidies', 'ngo_training')
+def scenarios():
+    scenarios = ('base', 'ngo_training', 'government_subsidies', 'self_investment')
+    labels = ('base', 'NGO adaptation', 'Government subsidies', 'Self-improvement')
     colors = ['black', 'blue', 'orange', 'red']
     colors = colors[:len(scenarios) + 1]
     fig, axes = plt.subplots(1, 3, sharex=True, figsize=(8, 3), dpi=300)
-    plt.subplots_adjust(left=0.055, right=0.99, bottom=0.17, top=0.92, wspace=0.2)
+    plt.subplots_adjust(left=0.055, right=0.95, bottom=0.26, top=0.92, wspace=0.2)
     ax0, ax1, ax2 = axes
+    linewidth = .5
 
     add_patches_legend(
         ax0,
-        labels=['observed'] + [s.replace('_', ' ') for s in scenarios],
+        labels=labels,
         colors=colors,
-        ncol=len(scenarios) + 1
+        ncol=len(scenarios)
     )
 
-    discharges = []
-    for i, scenario in enumerate(scenarios):
-        dates, discharge = get_discharge(scenario)
-        ax0.plot(dates, discharge, label=scenario, color=colors[i+1])
-        discharges.append(discharge)
-    
-    observed_discharge = get_observed_discharge(dates)
-    ax0.plot(dates, observed_discharge, color=colors[0], linestyle='dashed')
+    for switch_crop in (True, False):
+        linestyle = '--' if switch_crop else '-'
 
-    for scenario, discharge in zip(scenarios, discharges):
-        print('scenario')
-        print('\tKGE:', KGE(discharge, observed_discharge))
-        print('\tcorrelation:', correlation(discharge, observed_discharge))
+        discharges = []
+        for i, scenario in enumerate(scenarios):
+            res = get_discharge(scenario, switch_crop=switch_crop)
+            if res:
+                dates, discharge = res
+                ax0.plot(dates, discharge, label=scenario, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)
+                discharges.append(discharge)
+
+        for i, scenario in enumerate(scenarios):
+            res = get_hyve_data('hydraulic head', scenario=scenario, switch_crop=switch_crop)
+            if res:
+                dates, head = res
+                ax1.plot(dates, head, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+
+        for i, scenario in enumerate(scenarios):
+            res = get_hyve_data('reservoir storage', scenario=scenario, switch_crop=switch_crop)
+            if res:
+                dates, reservoir_storage = res
+                reservoir_storage /= 1e9
+                ax2.plot(dates, reservoir_storage, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
     
+    ax0.set_title('discharge $(m^3s^{-1})$', **TITLE_FORMATTER)
+    ax1.set_title('mean hydraulic head $(m)$', **TITLE_FORMATTER)
+    ax2.set_title('reservoir storage $(billion\ m^3)$', **TITLE_FORMATTER)
     ax0.set_ylim(0, ax0.get_ylim()[1])
-
-    ax0.text(0.1, 0.9, f'KGE: {round(KGE(discharge, observed_discharge), 3)}\ncorr: {round(correlation(discharge, observed_discharge), 3)}',
-     horizontalalignment='left',
-     verticalalignment='top',
-     transform = ax0.transAxes)
-     
-
-    ax0.set_title('discharge $(m^3s^{-1})$', **title_formatter)
-    # ax0.set_ylabel('$m^3/s$', **label_formatter)
-    for i, scenario in enumerate(scenarios):
-        dates, head = get_hyve_data('hydraulic head', scenario=scenario)
-        ax1.plot(dates, head, color=colors[i+1])  # observed is 0
-    ax1.set_title('mean hydraulic head $(m)$', **title_formatter)
-    # ax1.set_ylabel('$m$', **label_formatter)
-    for i, scenario in enumerate(scenarios):
-        dates, reservoir_storage = get_hyve_data('reservoir storage', scenario=scenario)
-        reservoir_storage /= 1e9
-        ax2.plot(dates, reservoir_storage, color=colors[i+1])  # observed is 0
-    ax2.set_title('reservoir storage $(billion\ m^3)$', **title_formatter)
-    # ax2.set_ylabel('', **label_formatter)
     for ax in axes:
+        ax.set_xlim(dates[0], dates[-1] + timedelta(days=1))
         ax.ticklabel_format(useOffset=False, axis='y')
         ax.tick_params(axis='both', labelsize='x-small', pad=1)
-    # plt.savefig('plot/output/hydro_stats_per_scenario.png')
+        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=12))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+    plt.savefig('plot/output/hydro_stats_per_scenario.png')
     plt.savefig('plot/output/hydro_stats_per_scenario.svg')
+    plt.show()
+
+def obs_vs_sim():
+    fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
+    plt.subplots_adjust(left=0.1, right=0.97, bottom=0.07, top=0.92)
+    dates, simulated_discharge = get_discharge('base', False)
+    observed_discharge = get_observed_discharge(dates)
+    ax.plot(dates, observed_discharge, color='black', linestyle='-', linewidth=LINEWIDTH, label='observed')
+    ax.plot(dates, simulated_discharge, color='blue', linestyle='-', linewidth=LINEWIDTH, label='simulated')
+    ax.set_xlim(dates[0], dates[-1] + timedelta(days=2))
+    ax.set_title('Observed vs simulated discharge $(m^3s^{-1})$', **TITLE_FORMATTER)
+    ax.set_ylim(0, ax.get_ylim()[1])
+    ax.ticklabel_format(useOffset=False, axis='y')
+    ax.tick_params(axis='both', labelsize='x-small', pad=1)
+    ax.legend(fontsize=6, frameon=False, handlelength=2, borderpad=1, loc=2)
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=12))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+    KGE_score = round(KGE(simulated_discharge, observed_discharge), 3)
+    corr_score = round(correlation(simulated_discharge, observed_discharge), 3)
+
+    ax.text(
+        0.85,
+        0.95,
+        r'$\bf{KGE}$: '+ str(KGE_score) + '\n' + r'$\bf{corr}$: ' + str(corr_score),
+        horizontalalignment='left',
+        verticalalignment='top',
+        transform=ax.transAxes,
+        fontsize=5
+    )
+    plt.savefig('plot/output/obs_vs_sim.png')
+    plt.savefig('plot/output/obs_vs_sim.svg')
     plt.show()
 
 
 if __name__ == '__main__':
-    main()
+    scenarios()
+    obs_vs_sim()
