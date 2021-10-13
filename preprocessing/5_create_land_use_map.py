@@ -6,6 +6,8 @@ import numpy as np
 from rasterio.warp import reproject, Resampling
 from rasterio.merge import merge
 
+from config import ORIGINAL_DATA, INPUT
+
 def get_rivers(threshold: int):
     """Creates a river map at the resolution of the submask. All cells with at least `threshold` number of upstream cells are considered river. The function loads number of upstream cells from files that end with `_upg` from `DataDrive/GEB/original_data/merit_hydro_03sec`.
     
@@ -15,7 +17,7 @@ def get_rivers(threshold: int):
     Return:
         rivers: raster with rivers
     """
-    merit_hydro_03sec_folder = os.path.join('DataDrive', 'GEB', 'original_data', 'merit_hydro_03sec')
+    merit_hydro_03sec_folder = os.path.join(ORIGINAL_DATA, 'merit_hydro_03sec')
     upcell_maps = []
     for fn in os.listdir(merit_hydro_03sec_folder):
         fp = os.path.join(merit_hydro_03sec_folder, fn)
@@ -34,7 +36,7 @@ def get_rivers(threshold: int):
 
     rivers = upcells > threshold
 
-    with rasterio.open('DataDrive/GEB/input/areamaps/submask.tif') as submask_src:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif')) as submask_src:
         rivers, riverprofile = upscale(rivers, up_cells_profile_org, 2)
         rivers, riverprofile = clip_to_other(rivers, riverprofile, submask_src.profile)
 
@@ -47,13 +49,13 @@ def merge_GLC30() -> np.ndarray:
     Returns:
         GLC30: Raster map of the land use type per GLC30 at the resolution of the submask.
     """
-    with rasterio.open('DataDrive/GEB/input/areamaps/submask.tif', 'r') as mask_src:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif'), 'r') as mask_src:
         mask_transform = mask_src.transform
         mask_crs = mask_src.profile['crs']
         mask = mask_src.read(1)
 
     GLC30 = None
-    GLC30_folder = os.path.join('DataDrive', 'GEB', 'original_data', 'GLC30')
+    GLC30_folder = os.path.join(ORIGINAL_DATA, 'GLC30')
     for folder in os.listdir(GLC30_folder):
         folder = os.path.join(GLC30_folder, folder)
         if os.path.isfile(folder):
@@ -111,7 +113,7 @@ def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray) -> None:
 
     CWatM[rivers == True] = 5
 
-    with rasterio.open('DataDrive/GEB/input/areamaps/submask.tif') as submask_src:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif')) as submask_src:
         submask = submask_src.read(1)
         submask_profile = submask_src.profile
     
@@ -122,14 +124,14 @@ def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray) -> None:
     CWatM_land_use_profile = dict(submask_profile)
     CWatM_land_use_profile['dtype'] = CWatM.dtype
     CWatM_land_use_profile['nodata'] = -1
-    with rasterio.open("DataDrive/GEB/input/landsurface/land_use_classes.tif", 'w', **CWatM_land_use_profile) as dst:
+    with rasterio.open(os.path.join(INPUT, 'landsurface', 'land_use_classes.tif'), 'w', **CWatM_land_use_profile) as dst:
         dst.write(CWatM, 1)
 
     cultivated_land = np.zeros_like(GLC30, dtype=np.int8)
     cultivated_land[(GLC30 == 10) & (CWatM == 1)] = True
     profile = dict(CWatM_land_use_profile)
     profile['dtype'] = cultivated_land.dtype
-    with rasterio.open("DataDrive/GEB/input/landsurface/cultivated_land.tif", 'w', **profile) as dst:
+    with rasterio.open(os.path.join(INPUT, "landsurface", "cultivated_land.tif"), 'w', **profile) as dst:
         dst.write(cultivated_land, 1)
 
 if __name__ == '__main__':

@@ -4,6 +4,8 @@ import xarray as xr
 import numpy as np
 import rasterio
 
+from config import INPUT, INPUT_5MIN
+
 def list_files(dir: str) -> list[str]:
     """This function gets a list of all files in all subdirectories of given folder.
 
@@ -17,7 +19,7 @@ def list_files(dir: str) -> list[str]:
     files = []
     for root, _, filenames in os.walk(dir):
         for filename in filenames:
-            files.append(os.path.join(root, filename))
+            files.append(os.path.join(root.replace(dir + '\\', ''), filename))
     return files
 
 def scale(files: list[str]) -> None:
@@ -26,7 +28,7 @@ def scale(files: list[str]) -> None:
     Args:
         files: list of files to convert
     """
-    with rasterio.open('DataDrive/GEB/input/areamaps/mask.tif') as src:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'mask.tif')) as src:
         profile = src.profile
         transform = profile['transform']
 
@@ -42,16 +44,16 @@ def scale(files: list[str]) -> None:
         extension = os.path.splitext(f)[1]
         if extension != '.nc':
             continue
-        ds = xr.open_dataset(f)
+        ds = xr.open_dataset(os.path.join(INPUT_5MIN, f))
 
         # Interpolate
         data_set_interp = ds.interp(lat=newlat, lon=newlon, method='nearest')
-        output_file = f.replace('input_5min', 'input')
+        output_file = os.path.join(INPUT, f)
         output_folder = os.path.dirname(output_file)
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
         data_set_interp.to_netcdf(output_file, mode='w')
 
 if __name__ == '__main__':
-    files = list_files('DataDrive/GEB/input_5min')
+    files = list_files(INPUT_5MIN)
     scale(files)

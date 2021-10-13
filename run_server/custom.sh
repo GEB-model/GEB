@@ -21,4 +21,5 @@ conda activate abm  # activate conda environment
 
 python run.py --GPU --headless --scenario spinup
 python run.py --GPU --headless --scenario base
-python calibration/calibrate.py
+python run.py --GPU --headless --scenario ngo_training
+python run.py --GPU --headless --scenario government_subsidies

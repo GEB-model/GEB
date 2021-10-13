@@ -36,22 +36,17 @@ class GEBModel(ABM_Model, CWatM_Model):
     """
 
     description = """GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.\nGEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail. The model does so by coupling an agent-based model which simulates millions individual people or households and a hydrological model. While the model can be expanded to other agents and environmental interactions, we focus on farmers, high-level agents, irrigation behaviour and land management for now."""
-    def __init__(self, GEB_config_path: str, CwatM_settings: str, name: str, xmin: float, xmax: float, ymin: float, ymax: float, args: argparse.Namespace, coordinate_system: str='WGS84'):
-        study_area = {
-            "name": name,
-            'xmin': xmin,
-            'xmax': xmax,
-            'ymin': ymin,
-            'ymax': ymax,            
-        }
+    def __init__(self, GEB_config_path: str, CwatM_settings: str, args: argparse.Namespace, coordinate_system: str='WGS84'):
         self.args = args
         if self.args.use_gpu:
             cp.cuda.Device(self.args.gpu_device).use()
+        
+        self.config = self.setup_config(GEB_config_path)
+        
         self.data = Data(self)
 
-        self.config = self.setup_config(GEB_config_path)
         self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
-        self.__init_ABM__(GEB_config_path, study_area, args, coordinate_system)
+        self.__init_ABM__(GEB_config_path, args, coordinate_system)
         self.__init_hydromodel__(CwatM_settings)
 
         self.reporter = Reporter(self)
@@ -63,7 +58,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         np.save(os.path.join(areamaps_folder, 'unmerged_landunit_indices.npy'), self.data.landunit.unmerged_landunit_indices)
         np.save(os.path.join(areamaps_folder, 'scaling.npy'), self.data.landunit.scaling)
 
-    def __init_ABM__(self, config_path: str, study_area: dict[str, float], args: argparse.Namespace, coordinate_system: str) -> None:
+    def __init_ABM__(self, config_path: str, args: argparse.Namespace, coordinate_system: str) -> None:
         """Initializes the agent-based model.
         
         Args:
@@ -93,6 +88,13 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         ABM_Model.__init__(self, current_time, timestep_length, config_path, args=args, n_timesteps=n_timesteps)
         
+        study_area = {
+            'xmin': self.data.grid.bounds.left,
+            'xmax': self.data.grid.bounds.right,
+            'ymin': self.data.grid.bounds.bottom,
+            'ymax': self.data.grid.bounds.top,
+        }
+
         self.area = Area(self, study_area)
         self.agents = Agents(self)
         self.artists = Artists(self)

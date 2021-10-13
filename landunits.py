@@ -73,12 +73,14 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        mask_fn = 'DataDrive/GEB/input/areamaps/mask.tif'
+        mask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'mask.tif')
         with rasterio.open(mask_fn) as mask_src:
             self.mask = mask_src.read(1).astype(np.bool)
             self.gt = mask_src.transform.to_gdal()
+            self.bounds = mask_src.bounds
             self.cell_size = mask_src.transform.a
-        with rasterio.open('DataDrive/GEB/input/areamaps/cell_area.tif') as cell_area_src:
+        cell_area_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'cell_area.tif')
+        with rasterio.open(cell_area_fn) as cell_area_src:
             self.cell_area_uncompressed = cell_area_src.read(1)
         
         self.mask_flat = self.mask.ravel()
@@ -315,9 +317,9 @@ class LandUnits(BaseVariables):
             var_to_landunit_uncompressed: Array of size of the grid cells. Each value maps to the index of the last unit for that cell.
             unmerged_landunit_indices: The index of the land unit to the subcell.
             """
-        with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farms.tif'), 'r') as farms_src:
+        with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as farms_src:
             farms = farms_src.read()[0]
-        with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'landsurface', 'land_use_classes.tif'), 'r') as src:
+        with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'land_use_classes.tif'), 'r') as src:
             land_use_classes = src.read()[0]
         return self.create_landunits_numba(farms, land_use_classes, self.data.grid.mask, self.scaling)
 

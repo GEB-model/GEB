@@ -12,12 +12,14 @@ from hyve.library.raster import sample_from_map
 from hyve.library.mapIO import ArrayReader, NetCDFReader
 from random import choices
 
-OUTPUT_FOLDER = os.path.join('DataDrive', 'GEB', 'input', 'agents')
+from config import INPUT, ORIGINAL_DATA
+
+OUTPUT_FOLDER = os.path.join(INPUT, 'agents')
 if not os.path.exists(OUTPUT_FOLDER):
     os.makedirs(OUTPUT_FOLDER)
 
-MIRCA2000_FOLDER = os.path.join('DataDrive', 'GEB', 'original_data', 'MIRCA2000')
-FARMER_LOCATIONS = 'DataDrive/GEB/input/agents/farmer_locations.npy'
+MIRCA2000_FOLDER = os.path.join(ORIGINAL_DATA, 'MIRCA2000')
+FARMER_LOCATIONS = os.path.join(OUTPUT_FOLDER, 'farmer_locations.npy')
 ZOOM_FACTOR = 20
 
 def get_crop_calendar(unit_codes: np.ndarray) -> tuple[dict, np.ndarray]:
@@ -70,10 +72,10 @@ def get_crop_calendar(unit_codes: np.ndarray) -> tuple[dict, np.ndarray]:
 
 
 def get_farm_sizes():
-    with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farms.tif'), 'r') as src:
+    with rasterio.open(os.path.join(INPUT, 'agents', 'farms.tif'), 'r') as src:
         farms = src.read(1)
 
-    with rasterio.open('DataDrive/GEB/input/areamaps/sub_cell_area.tif', 'r') as src:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'sub_cell_area.tif'), 'r') as src:
         cell_area = src.read(1)
 
     assert cell_area.shape == farms.shape
@@ -143,18 +145,18 @@ def get_crop_and_irrigation_per_farmer(crop_calendar: dict, map_unit_codes: np.n
     locations = np.load(FARMER_LOCATIONS)
     n = locations.shape[0]
 
-    with rasterio.open('DataDrive/GEB/input/areamaps/mask.tif') as src:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'mask.tif')) as src:
         bounds = src.bounds
     bounds = bounds.left, bounds.right, bounds.bottom, bounds.top
 
     irrigated_land = ArrayReader(
-        fp=os.path.join('DataDrive', 'GEB', 'original_data', 'india_irrigated_land', '2010-2011.tif'),
+        fp=os.path.join(ORIGINAL_DATA, 'india_irrigated_land', '2010-2011.tif'),
         bounds=bounds
     )
     irrigating_farmers = irrigated_land.sample_coords(locations)
 
     groundwater_irrigated = ArrayReader(
-        fp=os.path.join('DataDrive', 'GEB', 'input', 'agents', 'irrigation_source', '2010-11', 'irrigation_source.tif'),
+        fp=os.path.join(INPUT, 'agents', 'irrigation_source', '2010-11', 'irrigation_source.tif'),
         bounds=bounds
     )
 

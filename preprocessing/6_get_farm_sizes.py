@@ -12,6 +12,8 @@ from selenium.webdriver.chrome.options import Options
 import chromedriver_autoinstaller
 import time
 
+from config import ORIGINAL_DATA, INPUT
+
 
 STATE_TRANSLATION = {
     'A & N Islands': 'Andaman and Nicobar',
@@ -396,7 +398,7 @@ def get_districts() -> gpd.GeoDataFrame:
         districts: all districts in India with placeholder columns for sizes.
         
     """
-    districts = gpd.GeoDataFrame.from_file('DataDrive/GEB/original_data/GADM/gadm36_2.shp')
+    districts = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, "GADM", "gadm36_2.shp"))
     districts = districts[districts['GID_0'] == 'IND']
     for size_class in SIZE_CLASSES:  # create empty columns
         districts[size_class] = -1
@@ -474,7 +476,7 @@ def create_shapefile_and_clip_to_study_region(mask_fp: str) -> gpd.GeoDataFrame:
 def export_farm_sizes(farm_size_shapefile, root_dir):
     """
     """
-    with rasterio.open(f'DataDrive/GEB/input/areamaps/submask.tif') as src:
+    with rasterio.open(os.path.join(INPUT, "areamaps", "submask.tif")) as src:
         profile = src.profile
         transform = src.profile['transform']
         shape = src.profile['height'], src.profile['width']
@@ -500,7 +502,7 @@ if __name__ == '__main__':
     chromedriver_autoinstaller.install()
 
     year = '2010-11'
-    root_dir = os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farm_size', year)
+    root_dir = os.path.join(INPUT, 'agents', 'farm_size', year)
     csv_dir = os.path.join(root_dir, 'csv')
     states = ['ANDHRA PRADESH', 'KARNATAKA', 'MAHARASHTRA']
 
@@ -525,7 +527,7 @@ if __name__ == '__main__':
                 print(f"Error occured for {fn}. Removing file and restarting.")
         if not error:
             break
-    mask_fn = 'DataDrive/GEB/input/areamaps/mask.shp'
+    mask_fn = os.path.join(INPUT, "areamaps", "mask.shp")
     farm_size_shapefile = create_shapefile_and_clip_to_study_region(mask_fn)
 
     # copy size classes for enclaved Hyderabad from surounding Ranga Reddy district

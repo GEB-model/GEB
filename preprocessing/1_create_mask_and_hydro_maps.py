@@ -7,16 +7,14 @@ import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
 import geopandas as gpd
+from config import ORIGINAL_DATA, INPUT
 
-original_data_folder = 'DataDrive/GEB/original_data'
-input_folder = 'DataDrive/GEB/input'
-
-if not os.path.exists(os.path.join(input_folder, 'areamaps')):
-    os.makedirs(os.path.join(input_folder, 'areamaps'))
-if not os.path.exists(os.path.join(input_folder, 'routing', 'kinematic')):
-    os.makedirs(os.path.join(input_folder, 'routing', 'kinematic'))
-if not os.path.exists(os.path.join(input_folder, 'landsurface', 'topo')):
-    os.makedirs(os.path.join(input_folder, 'landsurface', 'topo'))
+if not os.path.exists(os.path.join(INPUT, 'areamaps')):
+    os.makedirs(os.path.join(INPUT, 'areamaps'))
+if not os.path.exists(os.path.join(INPUT, 'routing', 'kinematic')):
+    os.makedirs(os.path.join(INPUT, 'routing', 'kinematic'))
+if not os.path.exists(os.path.join(INPUT, 'landsurface', 'topo')):
+    os.makedirs(os.path.join(INPUT, 'landsurface', 'topo'))
 
     
 def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.Profile, rasterio.profiles.Profile]:
@@ -30,9 +28,9 @@ def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.P
         mask_profile: rasterio profile for mask
         submask_profile: rasterio profile for submask
     """
-    mask_fn = os.path.join(input_folder, 'areamaps', 'mask.tif')
-    submask_fn = os.path.join(input_folder, 'areamaps', 'submask.tif')
-    with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_basids.tif'), 'r') as src:
+    mask_fn = os.path.join(INPUT, 'areamaps', 'mask.tif')
+    submask_fn = os.path.join(INPUT, 'areamaps', 'submask.tif')
+    with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_basids.tif'), 'r') as src:
         basins = src.read(1)
         mask = basins != basin_id  # mask anything that is not basin id
 
@@ -42,7 +40,7 @@ def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.P
         ymin, ymax = nonmaskedy[0], nonmaskedy[-1] + 1
 
         mask_profile = src.profile
-        mask = clip_to_xy_bounds(src, mask_profile, mask, xmin, xmax, ymin, ymax)
+        mask_profile, mask = clip_to_xy_bounds(src, mask_profile, mask, xmin, xmax, ymin, ymax)
         mask_profile['nodata'] = -1
 
         with rasterio.open(mask_fn, 'w', **mask_profile) as mask_clipped_src:
@@ -62,7 +60,7 @@ def create_cell_area_map(mask_profile: rasterio.profiles.Profile, prefix: str=''
         mask_profile: Rasterio profile of basin mask
         prefix: Filename prefix
     """
-    cell_area_path = os.path.join(input_folder, 'areamaps', f'{prefix}cell_area.tif')
+    cell_area_path = os.path.join(INPUT, 'areamaps', f'{prefix}cell_area.tif')
     RADIUS_EARTH_EQUATOR = 40075017  # m
     distance_1_degree_latitude = RADIUS_EARTH_EQUATOR / 360
 
@@ -88,8 +86,8 @@ def create_ldd(mask_profile: rasterio.profiles.Profile) -> None:
     Args:
         mask_profile: Rasterio profile of basin mask
     """
-    output_fn = os.path.join(input_folder, 'routing/kinematic/ldd.tif')
-    with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_flwdir.tif'), 'r') as src:
+    output_fn = os.path.join(INPUT, 'routing/kinematic/ldd.tif')
+    with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_flwdir.tif'), 'r') as src:
         dir_map = src.read(1)
         src_profile = src.profile
 
@@ -115,19 +113,19 @@ def get_channel_manning_and_width(mask_profile: rasterio.profiles.Profile) -> No
     Args:
         mask_profile: Rasterio profile of basin mask
     """
-    with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_elevtn.tif'), 'r') as DEM_src:
+    with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_elevtn.tif'), 'r') as DEM_src:
         DEM = DEM_src.read(1)
         DEM, DEM_profile = clip_to_other(DEM, DEM_src.profile, mask_profile)
     
-    cell_area_path = os.path.join(input_folder, 'areamaps', 'cell_area.tif')
+    cell_area_path = os.path.join(INPUT, 'areamaps', 'cell_area.tif')
     with rasterio.open(cell_area_path, 'r') as cell_area_src:
         area_m = cell_area_src.read(1)
 
-    with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_uparea.tif'), 'r') as uparea_src:
+    with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_uparea.tif'), 'r') as uparea_src:
         upstream_area = uparea_src.read(1) #* 1e6  # km2 to m2
         upstream_area, upstream_profile = clip_to_other(upstream_area, uparea_src.profile, mask_profile)
 
-        with rasterio.open(os.path.join(input_folder, 'routing/kinematic/upstream_area.tif'), 'w', **upstream_profile) as upstream_dst:
+        with rasterio.open(os.path.join(INPUT, 'routing/kinematic/upstream_area.tif'), 'w', **upstream_profile) as upstream_dst:
             upstream_dst.write(upstream_area, 1)
 
     a = (2 * area_m) / upstream_area
@@ -136,19 +134,19 @@ def get_channel_manning_and_width(mask_profile: rasterio.profiles.Profile) -> No
     b[b > 1] = 1
     manning = 0.025 + 0.015 * a + 0.030 * b
 
-    with rasterio.open(os.path.join(input_folder, 'routing/kinematic/manning.tif'), 'w', **DEM_profile) as manning_dst:
+    with rasterio.open(os.path.join(INPUT, 'routing/kinematic/manning.tif'), 'w', **DEM_profile) as manning_dst:
         manning_dst.write(manning.astype(np.float32), 1)
 
     chanwidth = upstream_area / 500.
     chanwidth[chanwidth < 3] = 3
 
-    with rasterio.open(os.path.join(input_folder, 'routing/kinematic/chanwidth.tif'), 'w', **DEM_profile) as chanwidth_dst:
+    with rasterio.open(os.path.join(INPUT, 'routing/kinematic/chanwidth.tif'), 'w', **DEM_profile) as chanwidth_dst:
         chanwidth_dst.write(chanwidth.astype(np.float32), 1)
 
     upstream_area_no_negative = np.array(upstream_area)
     upstream_area_no_negative[upstream_area_no_negative < 0] = 0
     channel_bankfull = 0.27 * upstream_area_no_negative ** 0.26
-    with rasterio.open(os.path.join(input_folder, 'routing/kinematic/chandepth.tif'), 'w', **DEM_profile) as channel_bankfull_dst:
+    with rasterio.open(os.path.join(INPUT, 'routing/kinematic/chandepth.tif'), 'w', **DEM_profile) as channel_bankfull_dst:
         channel_bankfull_dst.write(channel_bankfull.astype(np.float32), 1)
 
 
@@ -158,18 +156,18 @@ def get_river_length_and_channelratio(mask_profile: rasterio.profiles.Profile) -
     Args:
         mask_profile: Rasterio profile of basin mask
     """
-    with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_rivlen_ds.tif'), 'r') as rivlen_src:
+    with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_rivlen_ds.tif'), 'r') as rivlen_src:
         rivlen = rivlen_src.read(1)
         rivlen, profile = clip_to_other(rivlen, rivlen_src.profile, mask_profile)
         rivlen[rivlen == -9999] = np.nan
 
-        with rasterio.open(os.path.join(input_folder, 'routing/kinematic/chanleng.tif'), 'w', **profile) as chanleng_dst:
+        with rasterio.open(os.path.join(INPUT, 'routing/kinematic/chanleng.tif'), 'w', **profile) as chanleng_dst:
             chanleng_dst.write(rivlen, 1)
 
-        with rasterio.open(os.path.join(input_folder, 'areamaps', 'cell_area.tif'), 'r') as cell_area_src:
+        with rasterio.open(os.path.join(INPUT, 'areamaps', 'cell_area.tif'), 'r') as cell_area_src:
             cell_area = cell_area_src.read(1)
 
-        with rasterio.open(os.path.join(input_folder, 'routing/kinematic/chanwidth.tif'), 'r') as chanwidth_src:
+        with rasterio.open(os.path.join(INPUT, 'routing/kinematic/chanwidth.tif'), 'r') as chanwidth_src:
             chanwidth = chanwidth_src.read(1)
         
         rivlen[rivlen < 0] = 0
@@ -178,7 +176,7 @@ def get_river_length_and_channelratio(mask_profile: rasterio.profiles.Profile) -
         river_ratio[river_ratio > 1] = 1
         assert not (river_ratio < 0).any()
 
-        with rasterio.open(os.path.join(input_folder, 'routing/kinematic/chanratio.tif'), 'w', **profile) as river_ratio_dst:
+        with rasterio.open(os.path.join(INPUT, 'routing/kinematic/chanratio.tif'), 'w', **profile) as river_ratio_dst:
             river_ratio_dst.write(river_ratio, 1)
 
 def get_river_slope(mask_profile: rasterio.profiles.Profile) -> None:
@@ -187,26 +185,26 @@ def get_river_slope(mask_profile: rasterio.profiles.Profile) -> None:
     Args:
         mask_profile: Rasterio profile of basin mask
     """
-    with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_rivslp.tif'), 'r') as rivslp_src:
+    with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_rivslp.tif'), 'r') as rivslp_src:
         rivslp = rivslp_src.read(1)
         rivslp, profile = clip_to_other(rivslp, rivslp_src.profile, mask_profile)
 
-        with rasterio.open(os.path.join(input_folder, 'routing/kinematic/changrad.tif'), 'w', **profile) as chanslp_dst:
+        with rasterio.open(os.path.join(INPUT, 'routing/kinematic/changrad.tif'), 'w', **profile) as chanslp_dst:
             chanslp_dst.write(rivslp, 1)
 
 def get_elevation_std(mask_profile: rasterio.profiles.Profile) -> None:
     """Clips 30 arcsecond elevation map to mask, and creates map of standard deviation in elevation map using the 3 arcsecond elevation map.
 
-    All MERIT Hydro elevation files should be in `DataDrive/GEB/original_data/merit_hydro_03sec`.
+    All MERIT Hydro elevation files should be in `ROOT/original_data/merit_hydro_03sec`.
     
         Args:
             mask_profile: Rasterio profile of basin mask
     """
-    with rasterio.open(os.path.join(original_data_folder, 'merit_hydro_30sec/30sec_elevtn.tif'), 'r') as DEM_src:
+    with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_elevtn.tif'), 'r') as DEM_src:
         DEM_profile = DEM_src.profile
         DEM = DEM_src.read(1)
 
-    merit_hydro_03sec_folder = os.path.join(original_data_folder, 'merit_hydro_03sec')
+    merit_hydro_03sec_folder = os.path.join(ORIGINAL_DATA, 'merit_hydro_03sec')
     elv_maps = []
     for fn in os.listdir(merit_hydro_03sec_folder):
         fp = os.path.join(merit_hydro_03sec_folder, fn)
@@ -229,19 +227,19 @@ def get_elevation_std(mask_profile: rasterio.profiles.Profile) -> None:
     High_res_DEM, High_res_DEM_profile = clip_to_other(High_res_DEM, High_res_DEM_profile_org, high_res_dem_profile_target)
     High_res_DEM[High_res_DEM < 0] = 0
 
-    with rasterio.open(os.path.join(input_folder, 'landsurface/topo/subelv.tif'), 'w', **High_res_DEM_profile) as dst:
+    with rasterio.open(os.path.join(INPUT, 'landsurface/topo/subelv.tif'), 'w', **High_res_DEM_profile) as dst:
         dst.write(High_res_DEM, 1)
     
     elevation_per_cell = (High_res_DEM.reshape(High_res_DEM.shape[0] // scaling, scaling, -1, scaling).swapaxes(1, 2).reshape(-1, scaling, scaling))
     elevationSTD = np.std(elevation_per_cell, axis=(1,2)).reshape(DEM.shape)
 
-    with rasterio.open(os.path.join(input_folder, 'landsurface/topo/elvstd.tif'), 'w', **DEM_profile) as dst:
+    with rasterio.open(os.path.join(INPUT, 'landsurface/topo/elvstd.tif'), 'w', **DEM_profile) as dst:
         dst.write(elevationSTD, 1)
 
 def create_mask_shapefile() -> None:
     """Creates a shapefile from the basin mask.
     """
-    mask_file = 'DataDrive/GEB/input/areamaps/mask.tif'
+    mask_file = os.path.join(INPUT, 'areamaps', 'mask.tif')
     with rasterio.open(mask_file, 'r') as src:
         transform = src.transform
         mask = src.read(1)
@@ -250,8 +248,8 @@ def create_mask_shapefile() -> None:
 
     geoms = list({'geometry': geom[0], 'properties': {}} for geom in shapes(mask, transform=transform, connectivity=4) if geom[1] == 0)
     gdf = gpd.GeoDataFrame.from_features(geoms).buffer(0)  # Invalid polygons are sometimes returned. Buffer(0) helps solve this issue.
-    gdf = gdf.set_crs(4326)
-    gdf.to_file('DataDrive/GEB/input/areamaps/mask.shp')
+    gdf = gdf.set_crs("EPSG:4326")
+    gdf.to_file(mask_file.replace('.tif', '.shp'))
 
 if __name__ == '__main__':
     UPSCALE_FACTOR = 20

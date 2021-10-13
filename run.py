@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import rasterio
 import cProfile
 from pstats import Stats
 
@@ -11,12 +10,6 @@ from model import GEBModel
 
 import faulthandler
 faulthandler.enable()
-
-def krishna():
-    with rasterio.open('DataDrive/GEB/input/areamaps/mask.tif') as src:
-        bounds = src.bounds
-
-    return 'krishna', bounds.left, bounds.right, bounds.bottom, bounds.top
 
 parser.description = "GEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail."
 parser.add_argument('--scenario', dest='scenario', type=str, default='base', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""")
@@ -34,13 +27,9 @@ if __name__ == '__main__':
     import faulthandler
     faulthandler.enable()
 
-    study_area_name, xmin, xmax, ymin, ymax = krishna()
-
     CWATM_SETTINGS = 'CWatM_GEB.ini'
 
     MODEL_NAME = 'GEB'
-
-    # crops_colors = pd.read_excel('DataDrive/Bhima/crops/crop_data.xlsx', index_col=1)['Color'].to_dict()
 
     series_to_plot = [
         # crop_series,
@@ -76,11 +65,6 @@ if __name__ == '__main__':
     model_params = {
         "CwatM_settings": CWATM_SETTINGS,
         "GEB_config_path": args.config,
-        "name": study_area_name,
-        'xmin': xmin,
-        'xmax': xmax,
-        'ymin': ymin,
-        'ymax': ymax, 
         "args": args,
     }
 
@@ -102,7 +86,7 @@ if __name__ == '__main__':
         if args.profiling:
             print("Profiling not available for browser version")
         server_elements = [
-            Canvas(xmin, xmax, ymin, ymax, max_canvas_height=800, max_canvas_width=1200)
+            Canvas(max_canvas_height=800, max_canvas_width=1200)
         ] + [ChartModule(series) for series in series_to_plot]
 
         DISPLAY_TIMESTEPS = [

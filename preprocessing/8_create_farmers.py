@@ -6,6 +6,8 @@ import numpy as np
 from numba import njit
 from random import random
 
+from config import INPUT
+
 import faulthandler
 faulthandler.enable()
 
@@ -125,12 +127,12 @@ def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np
         farm_size_probabilities: map of indices of farm size
         farm_size_choices_m2: size of 
     """
-    with rasterio.open('DataDrive/GEB/input/areamaps/sub_cell_area.tif', 'r') as src_cell_area:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'sub_cell_area.tif'), 'r') as src_cell_area:
         cell_area = src_cell_area.read(1)
         cell_area_profile = src_cell_area.profile
         gt = src_cell_area.transform.to_gdal()
 
-    with rasterio.open("DataDrive/GEB/input/landsurface/cultivated_land.tif", 'r') as src_cultivated_land:
+    with rasterio.open(os.path.join(INPUT, 'landsurface', "cultivated_land.tif"), 'r') as src_cultivated_land:
         cultivated_land = src_cultivated_land.read(1)
 
     farms, farmer_locs = create_farms(cultivated_land, gt, farm_size_probabilities, farm_size_choices_m2, cell_area)
@@ -138,7 +140,7 @@ def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np
 
     assert ((farms >= 0) == (cultivated_land == 1)).all()
     
-    farmer_folder = 'DataDrive/GEB/input/agents'
+    farmer_folder = os.path.join(INPUT, 'agents')
     np.save(os.path.join(farmer_folder, 'farmer_locations.npy'), farmer_locs)
 
     profile = dict(cell_area_profile)
@@ -160,7 +162,7 @@ if __name__ == '__main__':
         [20, 40],
     ]) * 10_000  # Ha to m2
     
-    with rasterio.open('DataDrive/GEB/input/agents/farm_size/2010-11/farmsize.tif', 'r') as src_farm_size:
+    with rasterio.open(os.path.join(INPUT, 'agents', 'farm_size', '2010-11', 'farmsize.tif'), 'r') as src_farm_size:
         FARM_SIZE_PROBABILITIES = src_farm_size.read()
 
     create_farmers(FARM_SIZE_PROBABILITIES, FARM_SIZE_CHOICES_M2)

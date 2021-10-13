@@ -2,7 +2,7 @@
 Preprocessing
 ##############
 
-This section describes how all model input data should be obtained and processed. By default, all data should be saved in the folder `DataDrive/GEB`.
+This section describes how all model input data should be obtained and processed. By default, all data should be saved in the folder `ROOT`.
 
 .. toctree::
    :maxdepth: 2

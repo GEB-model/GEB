@@ -10,6 +10,8 @@ from rasterio.warp import reproject, Resampling
 from pyproj import Transformer
 from rasterio.merge import merge
 
+from config import ORIGINAL_DATA, INPUT
+
 class ModflowPreprocess:
     """
     This class is used to do all modflow preprocessing. CWatM works in a lon-lat grid, while MODFLOW works in a cartesian grid. Therefore a custom MODFLOW grid is created that encompasses the entirety of the CWatM mask. In addition, a mapping is created that maps the area of a given cell in the CWatM grid to a given MODFLOW cell. All required data for MODFLOW is also projected to the newly created MODFLOW grid.
@@ -185,15 +187,15 @@ class ModflowPreprocess:
         return destination
 
 if __name__ == '__main__':
-    MODFLOW_PATH = 'DataDrive/GEB/input/groundwater/modflow'
+    MODFLOW_PATH = os.path.join(INPUT, 'groundwater', 'modflow')
     MODFLOW_RESOLUTION = 1000  # ModFlow model's resolution [m]
-    cwatm_basin_mask_fn = "DataDrive/GEB/input/areamaps/mask.tif"  # Mask of the CWATM model
+    cwatm_basin_mask_fn = os.path.join(INPUT, 'areamaps', "mask.tif")  # Mask of the CWATM model
     MODFLOW_EPSG = 32643
     m = ModflowPreprocess(MODFLOW_PATH, MODFLOW_RESOLUTION, cwatm_basin_mask_fn, MODFLOW_EPSG)
     m.create_indices()
     m.create_modflow_basin()
 
-    merit_hydro_03sec_folder = os.path.join('DataDrive', 'GEB', 'original_data', 'merit_hydro_03sec')
+    merit_hydro_03sec_folder = os.path.join(ORIGINAL_DATA, 'merit_hydro_03sec')
     elv_maps = []
     for fn in os.listdir(merit_hydro_03sec_folder):
         fp = os.path.join(merit_hydro_03sec_folder, fn)

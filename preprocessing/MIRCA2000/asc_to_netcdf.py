@@ -7,12 +7,14 @@ from collections import defaultdict
 from datetime import datetime
 from hyve.library.raster import CreateNetCDF
 
+from config import ORIGINAL_DATA
+
 data = {
     'rainfed': defaultdict(dict),
     'irrigated': defaultdict(dict)
 }
-input_folder = 'DataDrive/GEB/original_data/MIRCA2000/MGAG'
-output_folder = 'DataDrive/GEB/original_data/MIRCA2000'
+input_folder = os.path.join(ORIGINAL_DATA, 'MIRCA2000', 'MGAG')
+output_folder = os.path.join(ORIGINAL_DATA, 'MIRCA2000')
 for fn in os.listdir(input_folder):
     if not fn.endswith('.asc'):
         continue

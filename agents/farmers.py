@@ -69,7 +69,6 @@ class Farmers(AgentBaseClass):
         self.agents = agents
         self.var = model.data.landunit
         self.redundancy = reduncancy
-        self.input_folder = 'DataDrive/GEB/input'
         self.crop_yield_factors = self.get_crop_yield_factors()
         self.initiate_agents()
 
@@ -90,7 +89,7 @@ class Farmers(AgentBaseClass):
         """
         Loads locations of the farmers from .npy-file and saves to self.locations. Sets self.n to the current numbers of farmers, and sets self.max_n to the maximum number of farmers that can be expected in the model (model will fail if more than max_n farmers.) considering reducancy parameter.
         """
-        agent_locations = np.load(os.path.join(self.input_folder, "agents/farmer_locations.npy"))
+        agent_locations = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmer_locations.npy'))
 
         self.n = agent_locations.shape[0]
         assert self.n > 0
@@ -105,24 +104,24 @@ class Farmers(AgentBaseClass):
         This function is used to initiate all agent attributes, such as crop type, irrigiation type and elevation.
         """
         elevation_map = ArrayReader(
-            fp='DataDrive/GEB/input/landsurface/topo/subelv.tif',
+            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
             bounds=self.model.bounds
         )
         self._elevation = np.zeros(self.max_n, dtype=np.float32)
         self.elevation = elevation_map.sample_coords(self.locations)
-        crop_file = os.path.join('DataDrive', 'GEB', 'input', 'agents', 'crop.npy')
+        crop_file = os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy')
         if self.model.args.use_gpu:
             self._crop = cp.load(crop_file)
         else:
             self._crop = np.load(crop_file)
         self._irrigating = np.zeros(self.max_n, dtype=np.int8)
-        self.irrigating = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'irrigating.npy'))
+        self.irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'irrigating.npy'))
         self._groundwater_irrigating = np.zeros(self.max_n, dtype=np.bool)
-        self.groundwater_irrigating = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'is_groundwater_irrigating.npy'))
+        self.groundwater_irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'is_groundwater_irrigating.npy'))
         self._planting_scheme = np.zeros(self.max_n, dtype=np.int8)
-        self.planting_scheme = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'planting_scheme.npy'))
+        self.planting_scheme = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'planting_scheme.npy'))
         self._unit_code = np.zeros(self.max_n, dtype=np.int32)
-        self.unit_code = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farmer_unit_codes.npy'))
+        self.unit_code = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmer_unit_codes.npy'))
         if self.model.args.use_gpu:
             self._is_paddy_irrigated = cp.zeros(self.max_n, dtype=np.bool_)
         else:
@@ -140,7 +139,7 @@ class Farmers(AgentBaseClass):
         self._water_availability_by_farmer = np.zeros(self.max_n, dtype=np.float32)
         self._n_water_limited_days = np.zeros(self.max_n, dtype=np.int32)
 
-        self.planting_schemes = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'planting_schemes.npy'))
+        self.planting_schemes = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'planting_schemes.npy'))
         
         # Set planting scheme for sugarcane in all regions.
         self.planting_schemes[:, :, 11, 0, 0, 0] = 1
@@ -440,8 +439,8 @@ class Farmers(AgentBaseClass):
         )
 
     def get_crop_factors(self) -> pd.DataFrame:
-        """Loads crop factors from disk (DataDrive/GEB/input/crop_data/crop_factors.csv). The length of the various crop stages is relative and is cumulated to one."""
-        df = pd.read_csv(os.path.join('DataDrive', 'GEB', 'input', 'crop_data', 'crop_factors.csv'))
+        """Loads crop factors from disk. The length of the various crop stages is relative and is cumulated to one."""
+        df = pd.read_csv(os.path.join(self.model.config['general']['input_folder'], 'crop_data', 'crop_factors.csv'))
         df['L_dev'] = df['L_ini'] + df['L_dev']
         df['L_mid'] = df['L_dev'] + df['L_mid']
         df['L_late'] = df['L_mid'] + df['L_late']
@@ -455,7 +454,7 @@ class Farmers(AgentBaseClass):
         Returns:
             yield_factors: dictonary with np.ndarray of values per crop for each variable.
         """
-        df = pd.read_csv(os.path.join('DataDrive', 'GEB', 'input', 'crop_data', 'yield_ratios.csv'))
+        df = pd.read_csv(os.path.join(self.model.config['general']['input_folder'], 'crop_data', 'yield_ratios.csv'))
         yield_factors = df[['alpha', 'beta', 'P0', 'P1']].to_dict(orient='list')
         yield_factors = {
             key: np.array(value) for key, value in yield_factors.items()

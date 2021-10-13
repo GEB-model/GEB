@@ -3,7 +3,7 @@ Other data
 
 You also need to collect some other data. First some data from Siebert and Döll's paper on MIRCA2000. Of course alternative data can be used.
 
-Create a csv-file `crop_factors.csv` in `DataDrive/GEB/input/crop_data/`, and copy the data from Table 1 of their `paper <https://doi.org/10.1016/j.jhydrol.2009.07.031>`_, formatted as displayed below.
+Create a csv-file `crop_factors.csv` in `ROOT/input/crop_data/`, and copy the data from Table 1 of their `paper <https://doi.org/10.1016/j.jhydrol.2009.07.031>`_, formatted as displayed below.
 
 .. list-table:: crop_factors.csv
    :header-rows: 1
@@ -51,7 +51,7 @@ Create a csv-file `crop_factors.csv` in `DataDrive/GEB/input/crop_data/`, and co
      - ...
 
 
-Then, create a csv-file `yield_ratios.csv` in `DataDrive/GEB/input/crop_data/`, and copy the data from Table 2 from the same paper, formatted as displayed below.
+Then, create a csv-file `yield_ratios.csv` in `ROOT/input/crop_data/`, and copy the data from Table 2 from the same paper, formatted as displayed below.
 
 .. list-table:: yield_ratios.csv
    :header-rows: 1
