@@ -36,7 +36,7 @@ class GEBModel(ABM_Model, CWatM_Model):
     """
 
     description = """GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.\nGEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail. The model does so by coupling an agent-based model which simulates millions individual people or households and a hydrological model. While the model can be expanded to other agents and environmental interactions, we focus on farmers, high-level agents, irrigation behaviour and land management for now."""
-    def __init__(self, GEB_config_path: str, CwatM_settings: str, args: argparse.Namespace, coordinate_system: str='WGS84'):
+    def __init__(self, GEB_config_path: str, args: argparse.Namespace, coordinate_system: str='WGS84'):
         self.args = args
         if self.args.use_gpu:
             cp.cuda.Device(self.args.gpu_device).use()
@@ -47,7 +47,7 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
         self.__init_ABM__(GEB_config_path, args, coordinate_system)
-        self.__init_hydromodel__(CwatM_settings)
+        self.__init_hydromodel__(self.config['general']['CWatM_settings'])
 
         self.reporter = Reporter(self)
 

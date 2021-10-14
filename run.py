@@ -27,8 +27,6 @@ if __name__ == '__main__':
     import faulthandler
     faulthandler.enable()
 
-    CWATM_SETTINGS = 'CWatM_GEB.ini'
-
     MODEL_NAME = 'GEB'
 
     series_to_plot = [
@@ -63,7 +61,6 @@ if __name__ == '__main__':
     ]
 
     model_params = {
-        "CwatM_settings": CWATM_SETTINGS,
         "GEB_config_path": args.config,
         "args": args,
     }

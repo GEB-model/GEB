@@ -13,11 +13,11 @@ general:
   spinup_start: 2000-01-01
   ###
   # base folder where to report output data to
-  CWatM_settings: CWatM_GEB.ini
-  input_folder: DataDrive/GEB/input/
-  report_folder: DataDrive/GEB/report/
-  initial_conditions_folder: DataDrive/GEB/initial
-  init_water_table: DataDrive/GEB/report/init/water_table.npy
+  CWatM_settings: CWatM_GEB_Bhima.ini
+  input_folder: DataDrive/GEB_Bhima/input/
+  report_folder: DataDrive/GEB_Bhima/report/
+  initial_conditions_folder: DataDrive/GEB_Bhima/initial
+  init_water_table: DataDrive/GEB_Bhima/report/init/water_table.npy
   ###
   #
   switch_crops: false
