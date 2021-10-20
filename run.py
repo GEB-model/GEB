@@ -73,9 +73,10 @@ if __name__ == '__main__':
             with open('profiling_stats.cprof', 'w') as stream:
                 stats = Stats(pr, stream=stream)
                 stats.strip_dirs()
-                stats.sort_stats('time')
+                stats.sort_stats('cumtime')
                 stats.dump_stats('.prof_stats')
                 stats.print_stats()
+            pr.dump_stats('profile.prof')
         else:
             model.run()
         report = model.report()
