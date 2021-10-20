@@ -85,6 +85,7 @@ def get_hyve_data(varname, scenario, switch_crop, fileformat='csv'):
     try:
         df = pd.read_csv(os.path.join(OUTPUT_FOLDER, subfolder, varname + '.' + fileformat), index_col=0)
     except FileNotFoundError:
+        print(f"WARNING: {varname} for {scenario} {'with' if switch_crop else 'without'} not found.")
         return None
     dates = df.index.tolist()
     dates = [datetime.strptime(dt, "%Y-%m-%d") for dt in dates]
@@ -165,7 +166,7 @@ def scenarios():
         ncol=1
     )
 
-    for switch_crop in (True, False):
+    for switch_crop in (False, True):
         linestyle = '--' if switch_crop else '-'
 
         discharges = []
