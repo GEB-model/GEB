@@ -94,7 +94,7 @@ if define_first_run:
 ########################################################################
 
 # Load parameter range file
-ParamRanges = pd.read_csv(ParamRangesPath, sep=",", index_col=0)
+ParamRanges = pd.read_csv(ParamRangesPath, sep=";", index_col=0)
 ParamRanges = ParamRanges[ParamRanges['Use'] == True].drop('Use', axis=1)
 
 # Load observed streamflow
@@ -112,6 +112,14 @@ ii = 1
 ########################################################################
 #   Function for running the model, returns objective function scores
 ########################################################################
+
+def multi_set(dict_obj, value, *attrs):
+	d = dict_obj
+	for attr in attrs[:-1]:
+		d = d[attr]
+	if not attrs[-1] in d:
+		raise KeyError("Key does not exist in config file.")
+	d[attrs[-1]] = value
 
 def RunModel(args):
 	individual, run_id = args
@@ -149,8 +157,8 @@ def RunModel(args):
 		template['report'] = {}  # no other reporting than discharge required.
 		template['report_cwatm'] = {}  # no other reporting than discharge required.
 
-		for name, value in values['value'].items():
-			template['parameters'][name] = value
+		for _, row in values[['Key', 'value']].iterrows():
+			multi_set(template, row['value'], *row['Key'].split('.'))
 
 		template['general']['report_folder'] = directory_run
 

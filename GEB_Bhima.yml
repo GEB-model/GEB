@@ -6,8 +6,8 @@ general:
   start_time: 2006-01-01
   ###
   # model end time (YYYY-MM-DD).
-  # end_time: 2006-01-05
-  end_time: 2008-01-01
+  # end_time: 2010-01-01
+  end_time: 2006-01-30
   ###
   # start of the spinup time (YYYY-MM-DD).
   spinup_start: 2000-01-01
@@ -29,6 +29,10 @@ agent_settings:
   ###
   # If this setting is set to true, the farmers in the model are activated in a set order, allowing for better reproducability of the model.
   fix_activation_order: true
+  reservoir_operators:
+    max_reservoir_release_factor: 0.03
+  farmers:
+    return_fraction: .5
 
 ###
 # This sections contains settings for logging of the model. 
@@ -223,9 +227,7 @@ parameters:
   lakeAFactor: 1.2001137835309703
   lakeEvaFactor: 1.5932766384205812
   normalStorageLimit: 0.645563228322237
-  max_reservoir_release_factor: 0.03
   NormalOutflowQ: .1
-  return_fraction: .5
 
   # SnowMeltCoef: 0.005777810112777455
   # arnoBeta_add: 0.21066975532888235
@@ -233,7 +235,6 @@ parameters:
   # lakeAFactor: 3.141554604609948
   # lakeEvaFactor: 2.34602890190283
   # manningsN: 1.6605011081483918
-  # max_reservoir_release_factor: 0.37
   # normalStorageLimit: 0.6842538823449608
   # preferentialFlowConstant: 3.1601543505188596
   # recessionCoeff_factor: 7.542470489484948

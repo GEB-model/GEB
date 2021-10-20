@@ -75,10 +75,7 @@ class Farmers(AgentBaseClass):
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
         """
-        self.fields = self.var.land_owners
-        if self.model.args.use_gpu:
-            self.fields = self.fields.get()
-        self.create_field_indices(self.fields)
+        self.update_field_indices()
         
         self.initiate_locations()
         self.initiate_attributes()
@@ -146,12 +143,12 @@ class Farmers(AgentBaseClass):
         self.planting_schemes[:, :, 11, 0, 0, 1] = 12
         self.planting_schemes[:, :, 11, 0, 0, 2] = 1
 
-        self.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
-        self.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
+        self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
+        self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
 
     @staticmethod
     @njit(cache=True)
-    def create_field_indices_numba(land_owners: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def update_field_indices_numba(land_owners: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Creates `field_indices_per_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer.
 
         Args:
@@ -186,9 +183,9 @@ class Farmers(AgentBaseClass):
         field_indices = field_indices[:-last_not_owned]
         return field_indices_per_farmer, field_indices
 
-    def create_field_indices(self, *args, **kwargs) -> None:
+    def update_field_indices(self) -> None:
         """Creates `field_indices_per_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer."""
-        self.field_indices_per_farmer, self.field_indices = self.create_field_indices_numba(*args, **kwargs)
+        self.field_indices_per_farmer, self.field_indices = self.update_field_indices_numba(self.var.land_owners)
     
     @property
     def activation_order_by_elevation(self):
@@ -382,7 +379,6 @@ class Farmers(AgentBaseClass):
         groundwater_head: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
         command_areas: np.ndarray,
-        return_fraction: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function allows the abstraction of water by farmers for irrigation purposes. It's main purpose is to call the relevant numba function to do the actual abstraction. In addition, the function saves the abstraction from the various sources by farmer.
@@ -429,7 +425,7 @@ class Farmers(AgentBaseClass):
             groundwater_head,
             available_reservoir_storage_m3,
             command_areas,
-            return_fraction
+            return_fraction=self.model.config['agent_settings']['farmers']['return_fraction']
         )
         return (
             water_withdrawal_m,
@@ -640,8 +636,8 @@ class Farmers(AgentBaseClass):
         return crop_age_days, crop_harvest_age_days, next_plant_day, n_multicrop_periods, next_multicrop_index
 
     def by_field(self, var, nofieldvalue=-1):
-        by_field = np.take(var, self.fields)
-        by_field[self.fields == -1] = nofieldvalue
+        by_field = np.take(var, self.var.land_owners)
+        by_field[self.var.land_owners == -1] = nofieldvalue
         return by_field
         
     def plant_initial(self) -> None:
@@ -765,8 +761,8 @@ class Farmers(AgentBaseClass):
     def harvest(self):
         """This function determines which crops needs to be harvested, based on the current age of the crops and the harvest age of the crop. First a helper function is used to obtain the harvest map. Then, if at least 1 field is harvested, the yield ratio is obtained for all fields using the ratio of actual to potential evapotranspiration, saves the harvest per farmer and potentially invests in water saving techniques.
         """
-        actual_transpiration = self.actual_transpiration_crop.get() if self.model.args.use_gpu else self.actual_transpiration_crop
-        potential_transpiration = self.potential_transpiration_crop.get() if self.model.args.use_gpu else self.potential_transpiration_crop
+        actual_transpiration = self.var.actual_transpiration_crop.get() if self.model.args.use_gpu else self.var.actual_transpiration_crop
+        potential_transpiration = self.var.potential_transpiration_crop.get() if self.model.args.use_gpu else self.var.potential_transpiration_crop
         crop_map = self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map
         crop_age_days = self.var.crop_age_days_map.get() if self.model.args.use_gpu else self.var.crop_age_days_map
         crop_harvest_age_days = self.var.crop_harvest_age_days_map.get() if self.model.args.use_gpu else self.var.crop_harvest_age_days_map
@@ -791,7 +787,7 @@ class Farmers(AgentBaseClass):
         )
         if np.count_nonzero(harvest):
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
-            harvesting_farmer_fields = self.fields[harvest]
+            harvesting_farmer_fields = self.var.land_owners[harvest]
             self.yield_ratio_per_farmer = np.bincount(harvesting_farmer_fields, weights=yield_ratio, minlength=self.n)
             harvesting_farmers = np.unique(harvesting_farmer_fields)
             if self.model.current_timestep > 365:
@@ -802,8 +798,8 @@ class Farmers(AgentBaseClass):
         if self.model.args.use_gpu:
             harvest = cp.array(harvest)
         
-        self.actual_transpiration_crop[harvest] = 0
-        self.potential_transpiration_crop[harvest] = 0
+        self.var.actual_transpiration_crop[harvest] = 0
+        self.var.potential_transpiration_crop[harvest] = 0
 
         # remove crops from crop_map where they are harvested
         self.var.crop_map[harvest] = -1

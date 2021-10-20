@@ -58,6 +58,23 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
     basin_lakes = gpd.GeoDataFrame.from_file(shpfile)
     # set all lakes with command area as reservoir
     basin_lakes.loc[basin_lakes['Hylak_id'].isin(reservoirs), 'Lake_type'] = 2
+
+    df = pd.read_excel(os.path.join(ORIGINAL_DATA, 'reservoir_capacity.xlsx'))
+    df = df[df['Hylak_id'] != -1].set_index('Hylak_id')
+
+    reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy()
+    for hylak_id, capacity in df['Gross_capacity_BCM'].items():
+        capacity *= 1000  # BCM to MCM
+        reservoir_volumes.loc[hylak_id] = capacity
+
+    reservoir_FLR = reservoir_volumes.copy()
+    for hylak_id, capacity in df['Capacity_FLR_BCM'].items():
+        capacity *= 1000  # BCM to MCM
+        reservoir_FLR.loc[hylak_id] = capacity
+
+    assert (basin_lakes['Hylak_id'] > 0).all()
+    pd.DataFrame(basin_lakes.drop(columns='geometry')).to_excel(os.path.join(output_folder, 'basin_lakes_data.xlsx'))
+
     with rasterio.open(os.path.join(output_folder, 'lakesResID.tif'), 'r') as src:
         lake_ids = src.read(1)
         reservoir_construction_year = np.where(lake_ids > 0, 0, -1)
@@ -99,14 +116,6 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
             **{**src.profile, **{'dtype': lake_dis.dtype}}
         ) as dst:
             dst.write(lake_dis, 1)
-
-        df = pd.read_excel(os.path.join(ORIGINAL_DATA, 'reservoir_capacity.xlsx'))
-        df = df[df['Hylak_id'] != -1].set_index('Hylak_id')
-
-        reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy()
-        for hylak_id, capacity in df['Gross_capacity_BCM'].items():
-            capacity *= 1000  # BCM to MCM
-            reservoir_volumes.loc[hylak_id] = capacity
         
         res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
         res_vol_array[basin_lakes['Hylak_id']] = reservoir_volumes
@@ -116,11 +125,6 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
             **{**src.profile, **{'dtype': res_vol.dtype}}
         ) as dst:
             dst.write(res_vol, 1)
-
-        reservoir_FLR = reservoir_volumes.copy()
-        for hylak_id, capacity in df['Capacity_FLR_BCM'].items():
-            capacity *= 1000  # BCM to MCM
-            reservoir_FLR.loc[hylak_id] = capacity
 
         res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
         res_vol_array[basin_lakes['Hylak_id']] = reservoir_FLR
