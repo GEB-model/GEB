@@ -173,11 +173,10 @@ class LandUnits(BaseVariables):
         self.model = model
         self.scaling = 20
 
-        self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
+        # self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.grid.cell_size / self.scaling
         self.land_use_type, self.land_use_ratio, self.land_owners, self.landunit_to_grid, self.var_to_landunit, self.var_to_landunit_uncompressed, self.unmerged_landunit_indices = self.create_landunits()
         if self.model.args.use_gpu:
-            self.land_owners = cp.array(self.land_owners)
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
 
@@ -206,8 +205,8 @@ class LandUnits(BaseVariables):
             land_use_ratio: Relative size of land unit to grid.
             land_use_owner: Owner of land unit.
             landunit_to_grid: Maps land units to index of compressed cell index.
-            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the last unit for that cell.
-            var_to_landunit_uncompressed: Array of size of the grid cells. Each value maps to the index of the last unit for that cell.
+            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+            var_to_landunit_uncompressed: Array of size of the grid cells. Each value maps to the index of the first unit of the next cell.
             unmerged_landunit_indices: The index of the land unit to the subcell.
         """
         assert farms.size == mask.size * scaling * scaling
@@ -313,8 +312,8 @@ class LandUnits(BaseVariables):
             land_use_ratio: Relative size of land unit to grid.
             land_use_owner: Owner of land unit.
             landunit_to_grid: Maps land units to index of compressed cell index.
-            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the last unit for that cell.
-            var_to_landunit_uncompressed: Array of size of the grid cells. Each value maps to the index of the last unit for that cell.
+            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+            var_to_landunit_uncompressed: Array of size of the grid cells. Each value maps to the index of the first unit of the next cell.
             unmerged_landunit_indices: The index of the land unit to the subcell.
             """
         with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as farms_src:
@@ -458,7 +457,7 @@ class Data:
         
         Args:
             data: The grid data to be converted.
-            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the last unit for that cell.
+            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             land_use_ratio: Relative size of land unit to grid.
             fn: Name of function to apply to data. None if data should be directly inserted into landunits - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
 
@@ -522,7 +521,7 @@ class Data:
         
         Args:
             data: The grid data to be converted.
-            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the last unit for that cell.
+            var_to_landunit: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             land_use_ratio: Relative size of land unit to grid.
             fn: Name of function to apply to data. In most cases, several land units are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
 
@@ -581,3 +580,96 @@ class Data:
                 delattr(self.landunit, varname)
             setattr(self.var, varname, outdata)
         return outdata
+
+    def split_landunit_data(self, a, i, att=None):
+        assert att is None or (att > 0 and att < 1)
+        assert att is None or np.issubdtype(a.dtype, np.floating)
+        if isinstance(a, cp.ndarray):
+            is_cupy = True
+            a = a.get()
+        else:
+            is_cupy = False
+        if a.ndim == 1:
+            a = np.insert(a, i, a[i] * (att or 1), axis=0)
+        elif a.ndim == 2:
+            a = np.insert(a, i, a[:, i] * (att or 1), axis=1)
+        else:
+            raise NotImplementedError
+        if att is not None:
+            a[i+1] = (1 - att) * a[i+1]
+        if is_cupy:
+            a = cp.array(a)
+        return a
+
+    def split_landunit(self, index):
+        att = .50
+        subcell_indices = np.where(self.landunit.unmerged_landunit_indices == 0)[0]
+        split_loc = int(subcell_indices.size * att)
+        assert split_loc > 0 and split_loc < subcell_indices.size
+        att = split_loc / subcell_indices.size
+        
+        self.landunit.unmerged_landunit_indices[self.landunit.unmerged_landunit_indices > index] += 1
+        self.landunit.unmerged_landunit_indices[subcell_indices[split_loc:]] += 1
+        self.landunit.landunit_to_grid = self.split_landunit_data(self.landunit.landunit_to_grid, index)
+        self.landunit.var_to_landunit[self.landunit.landunit_to_grid[index]:] += 1
+        
+        self.landunit.land_owners = self.split_landunit_data(self.landunit.land_owners, index)
+        self.model.agents.farmers.update_field_indices()
+
+        # self.model.agents.farmers.field_indices[self.model.agents.farmers.field_indices >= self.model.agents.farmers.field_indices[index]] += 1
+        # self.model.agents.farmers.field_indices = np.insert(self.model.agents.farmers.field_indices, index, self.model.agents.farmers.field_indices[index] - 1)
+        # np.array_equal(self.model.agents.farmers.field_indices, self.model.agents.farmers.create_field_indices(self.landunit.land_owners)[1])
+                
+        self.model.agents.farmers.field_indices_per_farmer
+        self.model.agents.farmers.field_indices
+        self.model.agents.farmers.field_indices = self.split_landunit_data(self.model.agents.farmers.field_indices, index)
+        
+        self.landunit.land_use_type = self.split_landunit_data(self.landunit.land_use_type, index)
+        self.landunit.land_use_ratio = self.split_landunit_data(self.landunit.land_use_ratio, index, att=att)
+        self.landunit.cellArea = self.split_landunit_data(self.landunit.cellArea, index, att=att)
+        self.landunit.crop_map = self.split_landunit_data(self.landunit.crop_map, index)
+        self.landunit.crop_age_days_map = self.split_landunit_data(self.landunit.crop_age_days_map, index)
+        self.landunit.crop_harvest_age_days_map = self.split_landunit_data(self.landunit.crop_harvest_age_days_map, index)
+        self.landunit.next_plant_day = self.split_landunit_data(self.landunit.next_plant_day, index)
+        self.landunit.n_multicrop_periods = self.split_landunit_data(self.landunit.n_multicrop_periods, index)
+        self.landunit.next_multicrop_index = self.split_landunit_data(self.landunit.next_multicrop_index, index)
+        self.landunit.Precipitation = self.split_landunit_data(self.landunit.Precipitation, index)
+        self.landunit.SnowCoverS = self.split_landunit_data(self.landunit.SnowCoverS, index)
+        self.landunit.DeltaTSnow = self.split_landunit_data(self.landunit.DeltaTSnow, index)
+        self.landunit.FrostIndex = self.split_landunit_data(self.landunit.FrostIndex, index)
+        self.landunit.percolationImp = self.split_landunit_data(self.landunit.percolationImp, index)
+        self.landunit.cropGroupNumber = self.split_landunit_data(self.landunit.cropGroupNumber, index)
+        self.landunit.capriseindex = self.split_landunit_data(self.landunit.capriseindex, index)
+        self.landunit.actBareSoilEvap = self.split_landunit_data(self.landunit.actBareSoilEvap, index)
+        self.landunit.actTransTotal = self.split_landunit_data(self.landunit.actTransTotal, index)
+        self.landunit.KSat1 = self.split_landunit_data(self.landunit.KSat1, index)
+        self.landunit.KSat2 = self.split_landunit_data(self.landunit.KSat2, index)
+        self.landunit.KSat3 = self.split_landunit_data(self.landunit.KSat3, index)
+        self.landunit.lambda1 = self.split_landunit_data(self.landunit.lambda1, index)
+        self.landunit.lambda2 = self.split_landunit_data(self.landunit.lambda2, index)
+        self.landunit.lambda3 = self.split_landunit_data(self.landunit.lambda3, index)
+        self.landunit.wwp1 = self.split_landunit_data(self.landunit.wwp1, index)
+        self.landunit.wwp2 = self.split_landunit_data(self.landunit.wwp2, index)
+        self.landunit.wwp3 = self.split_landunit_data(self.landunit.wwp3, index)
+        self.landunit.ws1 = self.split_landunit_data(self.landunit.ws1, index)
+        self.landunit.ws2 = self.split_landunit_data(self.landunit.ws2, index)
+        self.landunit.ws3 = self.split_landunit_data(self.landunit.ws3, index)
+        self.landunit.wres1 = self.split_landunit_data(self.landunit.wres1, index)
+        self.landunit.wres2 = self.split_landunit_data(self.landunit.wres2, index)
+        self.landunit.wres3 = self.split_landunit_data(self.landunit.wres3, index)
+        self.landunit.wfc1 = self.split_landunit_data(self.landunit.wfc1, index)
+        self.landunit.wfc2 = self.split_landunit_data(self.landunit.wfc2, index)
+        self.landunit.wfc3 = self.split_landunit_data(self.landunit.wfc3, index)
+        self.landunit.kunSatFC12 = self.split_landunit_data(self.landunit.kunSatFC12, index)
+        self.landunit.kunSatFC23 = self.split_landunit_data(self.landunit.kunSatFC23, index)
+        self.landunit.adjRoot = self.split_landunit_data(self.landunit.adjRoot, index)
+        self.landunit.arnoBeta = self.split_landunit_data(self.landunit.arnoBeta, index)
+        self.landunit.w1 = self.split_landunit_data(self.landunit.w1, index)
+        self.landunit.w2 = self.split_landunit_data(self.landunit.w2, index)
+        self.landunit.w3 = self.split_landunit_data(self.landunit.w3, index)
+        self.landunit.topwater = self.split_landunit_data(self.landunit.topwater, index)
+        self.landunit.totAvlWater = self.split_landunit_data(self.landunit.totAvlWater, index)
+        self.landunit.minInterceptCap = self.split_landunit_data(self.landunit.minInterceptCap, index)
+        self.landunit.interceptStor = self.split_landunit_data(self.landunit.interceptStor, index)
+        self.landunit.potential_transpiration_crop = self.split_landunit_data(self.landunit.potential_transpiration_crop, index)
+        self.landunit.actual_transpiration_crop = self.split_landunit_data(self.landunit.actual_transpiration_crop, index)
