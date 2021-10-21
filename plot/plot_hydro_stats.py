@@ -10,6 +10,7 @@ import sys
 import numpy as np
 import matplotlib.dates as mdates
 from matplotlib.lines import Line2D
+from plot import read_npy
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
@@ -92,7 +93,7 @@ def get_hyve_data(varname, scenario, switch_crop, fileformat='csv'):
     return dates, np.array(df[varname].tolist())
 
 def add_patches_legend(ax, labels, colors, ncol):
-    offset = 0
+    offset = 0.10
 
     patches = [
         Line2D([0], [0], color=colors[i], label=labels[i], linestyle='--')
@@ -104,16 +105,16 @@ def add_patches_legend(ax, labels, colors, ncol):
     
     legend = ax.legend(
         title=r'$\ \ \ \ \ \ \bf{With\ crop\ switching}$',
-        title_fontsize='xx-small',
+        title_fontsize=5,
         handles=patches,
         loc='upper left',
-        bbox_to_anchor=(offset, -0.70),
+        bbox_to_anchor=(offset, 1.65),
         borderaxespad=0,
         ncol=ncol+1,
         columnspacing=1,
-        fontsize=6,
+        fontsize=4,
         frameon=False,
-        handlelength=2,
+        handlelength=3,
         borderpad=0
     )
     legend._legend_box.align = "left"
@@ -129,16 +130,16 @@ def add_patches_legend(ax, labels, colors, ncol):
     
     legend = ax.legend(
         title=r'$\ \ \ \ \ \ \bf{No\ crop\ switching}$',
-        title_fontsize='xx-small',
+        title_fontsize=5,
         handles=patches,
         loc='upper left',
-        bbox_to_anchor=(offset, -0.22),
+        bbox_to_anchor=(offset, 2.05),
         borderaxespad=0,
         ncol=ncol+1,
         columnspacing=1,
-        fontsize=6,
+        fontsize=4,
         frameon=False,
-        handlelength=2,
+        handlelength=3,
         borderpad=0
     )
     legend._legend_box.align = "left"
@@ -147,16 +148,32 @@ def get_observed_discharge(dates):
     df = pd.read_csv('DataDrive/GEB/calibration/observations.csv', parse_dates=['Dates'])
     return df[df['Dates'].isin(dates)]['flow'].to_numpy()
 
+def read_crop_data(dates, scenario, switch_crop):
+    surgar_cane = np.zeros(len(dates), dtype=np.float32)
+    if switch_crop:
+        scenario += '_switch_crops'
+    for i, date in enumerate(dates):
+        try:
+            crops = read_npy(os.path.join('DataDrive', 'GEB', 'report'), 'crop', date.date(), scenario=scenario)
+        except FileNotFoundError:
+            print(f"WARNING: crops for {scenario} {'with' if switch_crop else 'without'} not found.")
+            return None
+        surgar_cane[i] = np.count_nonzero(crops == 11)
+
+    return dates, surgar_cane
+
 def scenarios():
+    n_agents = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farmer_locations.npy')).shape[0]
+
     scenarios = ('base', 'ngo_training', 'government_subsidies')
     labels = ('No irrigation adaptation', 'NGO adaptation', 'Government subsidies')
     colors = ['black', 'blue', 'orange', 'red']
     colors = colors[:len(scenarios) + 1]
     fig, axes = plt.subplots(3, 2, sharex=True, figsize=(5, 9), dpi=300)
-    plt.subplots_adjust(left=0.065, right=0.99, bottom=0.08, top=0.96, wspace=0.15, hspace=0.15)
+    plt.subplots_adjust(left=0.065, right=0.98, bottom=0.08, top=0.96, wspace=0.15, hspace=0.20)
     ((ax0, ax1), (ax2, ax3), (ax4, ax5)) = axes
-    fig.delaxes(ax5)
-    axes = (ax0, ax1, ax2, ax3, ax4)
+    fig.delaxes(ax1)
+    axes = (ax0, ax2, ax3, ax4, ax5)
     linewidth = .5
 
     add_patches_legend(
@@ -181,34 +198,43 @@ def scenarios():
             res = get_hyve_data('hydraulic head', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, head = res
-                ax1.plot(dates, head, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+                ax2.plot(dates, head, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
 
         for i, scenario in enumerate(scenarios):
             res = get_hyve_data('reservoir storage', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, reservoir_storage = res
                 reservoir_storage /= 1e9
-                ax2.plot(dates, reservoir_storage, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+                ax3.plot(dates, reservoir_storage, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
 
         for i, scenario in enumerate(scenarios):
             res = get_hyve_data('is water aware', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, efficient = res
-                ax3.plot(dates, efficient, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+                efficient = efficient.astype(np.float64)
+                efficient /= (n_agents / 100)
+                ax4.plot(dates, efficient, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+
+        for i, scenario in enumerate(scenarios):
+            res = read_crop_data(dates, scenario=scenario, switch_crop=switch_crop)
+            if res is not None:
+                dates, sugar_cane = res
+                sugar_cane /= (n_agents / 100)
+                ax5.plot(dates, sugar_cane, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
     
     ax0.set_title('discharge $(m^3s^{-1})$', **TITLE_FORMATTER)
-    ax1.set_title('mean hydraulic head $(m)$', **TITLE_FORMATTER)
-    ax2.set_title('reservoir storage $(billion\ m^3)$', **TITLE_FORMATTER)
-    ax3.set_title('farmers with high irrigation efficiency $(\%)$', **TITLE_FORMATTER)
-    ax4.set_title('farmers with sugar cane $(\%)$', **TITLE_FORMATTER)
+    ax2.set_title('mean hydraulic head $(m)$', **TITLE_FORMATTER)
+    ax3.set_title('reservoir storage $(billion\ m^3)$', **TITLE_FORMATTER)
+    ax4.set_title('farmers with high irrigation efficiency $(\%)$', **TITLE_FORMATTER)
+    ax5.set_title('farmers with sugar cane $(\%)$', **TITLE_FORMATTER)
     ax0.set_ylim(0, ax0.get_ylim()[1])
-    ax3.set_ylim(0, 100)
     ax4.set_ylim(0, 100)
+    ax5.set_ylim(0, 100)
     for ax in axes:
         ax.set_xlim(dates[0], dates[-1] + timedelta(days=1))
         ax.ticklabel_format(useOffset=False, axis='y')
         ax.tick_params(axis='both', labelsize=5, pad=1)
-        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=12))
+        ax.xaxis.set_major_locator(mdates.YearLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
 
     plt.savefig('plot/output/hydro_stats_per_scenario.png')
