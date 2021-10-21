@@ -32,6 +32,41 @@ class ReservoirOperators(AgentBaseClass):
     def set_reservoir_release_factors(self) -> None:
         self.reservoir_release_factors = np.full(len(self.reservoirs), self.model.config['agent_settings']['reservoir_operators']['max_reservoir_release_factor'])
 
+    def regulate_reservoir_outflow(
+        self,
+        reservoirStorageM3C,
+        resVolumeC,
+        minQC,
+        deltaO,
+        conLimitC,
+        deltaLN,
+        normQC,
+        inflowC,
+        nondmgQC,
+        floodLimitC,
+        normLimitC,
+        norm_floodLimitC
+    ):
+        reservoir_fill = reservoirStorageM3C / resVolumeC
+        reservoir_outflow1 = np.minimum(minQC, reservoirStorageM3C * self.model.InvDtSec)
+        reservoir_outflow2 = minQC + deltaO * (reservoir_fill - conLimitC) / deltaLN
+        reservoir_outflow3 = normQC
+        temp = np.minimum(nondmgQC, np.maximum(inflowC * 1.2, normQC))
+        reservoir_outflow4 = np.maximum((reservoir_fill - floodLimitC - 0.01) * resVolumeC * self.model.InvDtSec, temp)
+        reservoir_outflow = reservoir_outflow1.copy()
+
+        reservoir_outflow = np.where(reservoir_fill > conLimitC, reservoir_outflow2, reservoir_outflow)
+        reservoir_outflow = np.where(reservoir_fill > normLimitC, normQC, reservoir_outflow)
+        reservoir_outflow = np.where(reservoir_fill > norm_floodLimitC, reservoir_outflow3, reservoir_outflow)
+        reservoir_outflow = np.where(reservoir_fill > floodLimitC, reservoir_outflow4, reservoir_outflow)
+
+        temp = np.minimum(reservoir_outflow, np.maximum(inflowC, normQC))
+
+        reservoir_outflow = np.where((reservoir_outflow > 1.2 * inflowC) &
+                                    (reservoir_outflow > normQC) &
+                                    (reservoir_fill < floodLimitC), temp, reservoir_outflow)
+        return reservoir_outflow
+
     def get_available_water_reservoir_command_areas(self, reservoir_ID, reservoir_storage_m3):
         return self.reservoir_release_factors[self.waterBodyID_to_agent_id(reservoir_ID)] * reservoir_storage_m3
 
