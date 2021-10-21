@@ -169,12 +169,11 @@ def scenarios():
     labels = ('No irrigation adaptation', 'NGO adaptation', 'Government subsidies')
     colors = ['black', 'blue', 'orange', 'red']
     colors = colors[:len(scenarios) + 1]
-    fig, axes = plt.subplots(3, 2, sharex=True, figsize=(5, 9), dpi=300)
-    plt.subplots_adjust(left=0.065, right=0.98, bottom=0.08, top=0.96, wspace=0.15, hspace=0.20)
+    fig, axes = plt.subplots(3, 2, sharex=True, figsize=(5, 6), dpi=300)
+    plt.subplots_adjust(left=0.065, right=0.98, bottom=0.08, top=0.96, wspace=0.15, hspace=0.15)
     ((ax0, ax1), (ax2, ax3), (ax4, ax5)) = axes
     fig.delaxes(ax1)
     axes = (ax0, ax2, ax3, ax4, ax5)
-    linewidth = .5
 
     add_patches_legend(
         ax3,
