@@ -19,10 +19,4 @@ cd $SCRIPT_DIR
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate abm  # activate conda environment
 
-python run.py --GPU --headless --scenario spinup
-python run.py --GPU --headless --scenario base
-python run.py --GPU --headless --scenario ngo_training
-python run.py --GPU --headless --scenario government_subsidies
-python run.py --GPU --headless --scenario base --config GEB_switch.yml
-python run.py --GPU --headless --scenario ngo_training --config GEB_switch.yml
-python run.py --GPU --headless --scenario government_subsidies --config GEB_switch.yml
+python run.py --GPU --headless --scenario government_subsidies --config GEB_switch.yml --gpu_device 1

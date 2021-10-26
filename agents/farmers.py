@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-from hyve.library.mapIO import ArrayReader
 import os
+import random
 import numpy as np
 import pandas as pd
 try:
@@ -11,6 +11,7 @@ import math
 
 from numba import njit
 
+from hyve.library.mapIO import ArrayReader
 from hyve.library.neighbors import find_neighbors
 from hyve.agents import AgentBaseClass
 
@@ -107,10 +108,7 @@ class Farmers(AgentBaseClass):
         self._elevation = np.zeros(self.max_n, dtype=np.float32)
         self.elevation = elevation_map.sample_coords(self.locations)
         crop_file = os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy')
-        if self.model.args.use_gpu:
-            self._crop = cp.load(crop_file)
-        else:
-            self._crop = np.load(crop_file)
+        self._crop = np.load(crop_file)
         self._irrigating = np.zeros(self.max_n, dtype=np.int8)
         self.irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'irrigating.npy'))
         self._groundwater_irrigating = np.zeros(self.max_n, dtype=np.bool)
@@ -647,10 +645,7 @@ class Farmers(AgentBaseClass):
         self.var.land_use_type[self.var.land_use_type == 2] = 1
         self.var.land_use_type[self.var.land_use_type == 3] = 1
 
-        if self.model.args.use_gpu:
-            crop = self.crop.get()
-        else:
-            crop = self.crop.copy()
+        crop = self.crop.copy()
 
         crop_age_days, crop_harvest_age_days, next_plant_day, n_multicrop_periods, next_multicrop_index = self.get_crop_age_and_harvest_day_initial(self.n, self.model.current_time.month, self.current_day_of_year, self.planting_schemes, crop, self.irrigating, self.unit_code, self.planting_scheme, self.start_day_per_month)
         assert np.logical_xor((next_plant_day == -1), (crop_harvest_age_days == -1)).all()
@@ -658,7 +653,10 @@ class Farmers(AgentBaseClass):
             crop_age_days = cp.array(crop_age_days)
             crop_harvest_age_days = cp.array(crop_harvest_age_days)
 
-        plant = self.crop.copy()
+        if self.model.args.use_gpu:
+            plant = cp.array(self.crop)
+        else:
+            plant = self.crop.copy()
         plant[crop_age_days == -1] = -1
         
         self.var.crop_map = self.by_field(plant)
@@ -696,7 +694,8 @@ class Farmers(AgentBaseClass):
         unit_code: np.ndarray,
         crop: np.ndarray,
         planting_scheme: np.ndarray,
-        switch_crops: bool
+        switch_crops: bool,
+        field_size_per_farmer: np.ndarray,
     ) -> np.ndarray:
         """This function determines whether crops are ready to be harvested by comparing the crop harvest age to the current age of the crop. If the crop is harvested, the crops next multicrop index and next plant day are determined.
 
@@ -731,6 +730,7 @@ class Farmers(AgentBaseClass):
         """
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
+            switch_if_not_limited = random.random() < 0.05
             farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_i)
             n_water_limited_days_farmer = n_water_limited_days[farmer_i]
             for field in farmer_fields:
@@ -742,7 +742,7 @@ class Farmers(AgentBaseClass):
                         harvest[field] = True
                         
                         if switch_crops:
-                            if n_water_limited_days_farmer < .5 * crop_harvest_age_days[field]:  # switch to sugar cane
+                            if n_water_limited_days_farmer < .5 * crop_harvest_age_days[field] and field_size_per_farmer[farmer_i] > 5000 and switch_if_not_limited:  # switch to sugar cane
                                 crop[farmer_i] = 11
                                 planting_scheme[farmer_i] = 0
                                 next_multicrop_index[field] = 0
@@ -781,9 +781,10 @@ class Farmers(AgentBaseClass):
             self.planting_schemes,
             self.irrigating,
             self.unit_code,
-            self.crop.get() if self.model.args.use_gpu else self.crop,
+            self.crop,
             self.planting_scheme,
-            self.model.config['general']['switch_crops']
+            self.model.config['general']['switch_crops'],
+            self.field_size_per_farmer
         )
         if np.count_nonzero(harvest):
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
@@ -797,7 +798,7 @@ class Farmers(AgentBaseClass):
             self.yield_ratio_per_farmer = np.zeros(self.n, dtype=np.float32)
         if self.model.args.use_gpu:
             harvest = cp.array(harvest)
-        
+
         self.var.actual_transpiration_crop[harvest] = 0
         self.var.potential_transpiration_crop[harvest] = 0
 
@@ -876,7 +877,7 @@ class Farmers(AgentBaseClass):
             self.start_day_per_month,
             self.current_day_of_year,
             self.var.next_plant_day,
-            self.crop.get() if self.model.args.use_gpu else self.crop,
+            self.crop,
             self.field_indices_per_farmer,
             self.field_indices,
             self.planting_schemes,

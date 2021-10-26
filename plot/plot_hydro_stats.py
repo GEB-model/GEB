@@ -270,7 +270,7 @@ def obs_vs_sim(scenario):
     )
     plt.savefig('plot/output/obs_vs_sim.png')
     plt.savefig('plot/output/obs_vs_sim.svg')
-    plt.show()
+    # plt.show()
 
 
 if __name__ == '__main__':
