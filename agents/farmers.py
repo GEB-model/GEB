@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
-from hyve.library.mapIO import ArrayReader
 import os
+import math
+from random import random
 import numpy as np
 import pandas as pd
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
-import math
 
 from numba import njit
 
+from hyve.library.mapIO import ArrayReader
 from hyve.library.neighbors import find_neighbors
 from hyve.agents import AgentBaseClass
 
@@ -691,7 +692,8 @@ class Farmers(AgentBaseClass):
         unit_code: np.ndarray,
         crop: np.ndarray,
         planting_scheme: np.ndarray,
-        switch_crops: bool
+        switch_crops: bool,
+        field_size_per_farmer: np.ndarray,
     ) -> np.ndarray:
         """This function determines whether crops are ready to be harvested by comparing the crop harvest age to the current age of the crop. If the crop is harvested, the crops next multicrop index and next plant day are determined.
 
@@ -726,6 +728,7 @@ class Farmers(AgentBaseClass):
         """
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
+            switch_if_not_limited = random() < 1
             farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_i)
             n_water_limited_days_farmer = n_water_limited_days[farmer_i]
             for field in farmer_fields:
@@ -737,7 +740,7 @@ class Farmers(AgentBaseClass):
                         harvest[field] = True
                         
                         if switch_crops:
-                            if n_water_limited_days_farmer < .5 * crop_harvest_age_days[field]:  # switch to sugar cane
+                            if n_water_limited_days_farmer < .5 * crop_harvest_age_days[field] and field_size_per_farmer[farmer_i] > 5000 and switch_if_not_limited:  # switch to sugar cane
                                 crop[farmer_i] = 11
                                 planting_scheme[farmer_i] = 0
                                 next_multicrop_index[field] = 0
@@ -778,7 +781,8 @@ class Farmers(AgentBaseClass):
             self.unit_code,
             self.crop,
             self.planting_scheme,
-            self.model.args.switch_crops
+            self.model.args.switch_crops,
+            self.field_size_per_farmer,
         )
         if np.count_nonzero(harvest):
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
