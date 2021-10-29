@@ -1060,13 +1060,14 @@ class Farmers(AgentBaseClass):
         """
         When this method is called, all farmers that have a high water efficiency, spread knowledge to a maximum of three other farmers within 5000 meter.
         """
+        water_efficient_farmers = np.where(self.is_water_efficient)[0]
         neighbors = find_neighbors(
             self.locations,
             5000,
-            3,
+            1,
             29,
             grid='longlat',
-            search_ids=np.where(self.is_water_efficient)[0],
+            search_ids=np.random.choice(water_efficient_farmers, size=water_efficient_farmers.size // 100, replace=False),
         )
         neighbors = neighbors[neighbors != -1]
         self.is_water_efficient[neighbors] = True
@@ -1077,7 +1078,7 @@ class Farmers(AgentBaseClass):
 
         Then, farmers harvest and plant crops.
         """
-        if self.model.args.scenario == 'ngo_training' and self.model.current_time.month == 1 and self.model.current_time.day == 1:
+        if self.model.args.scenario == 'ngo_training':
             self.diffuse_water_efficiency_knowledge()
 
         self.harvest()
