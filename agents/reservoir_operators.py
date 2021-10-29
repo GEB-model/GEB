@@ -20,7 +20,7 @@ class ReservoirOperators(AgentBaseClass):
     def initiate_agents(self):
         fn = os.path.join(self.model.config['general']['input_folder'], 'routing', 'lakesreservoirs', 'basin_lakes_data.xlsx')
         df = pd.read_excel(fn)
-        self.reservoirs = df[df['Lake_type'] == 2]
+        self.reservoirs = df[df['Lake_type'] == 2].copy()
         self.reservoirs['agent_index'] = np.arange(len(self.reservoirs))
 
         self.set_reservoir_release_factors()

@@ -20,7 +20,6 @@ general:
   init_water_table: DataDrive/GEB_Bhima/report/init/water_table.npy
   ###
   #
-  switch_crops: false
   export_inital_on_spinup: true
 
 ###
