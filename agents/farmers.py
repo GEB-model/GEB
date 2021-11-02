@@ -728,7 +728,7 @@ class Farmers(AgentBaseClass):
         """
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
-            switch_if_not_limited = random() < 1
+            switch_if_not_limited = random() <= .3
             farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_i)
             n_water_limited_days_farmer = n_water_limited_days[farmer_i]
             for field in farmer_fields:
