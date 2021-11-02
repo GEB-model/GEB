@@ -5,6 +5,7 @@ timeperiod: daily
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
 gpus: 2
+monthly: true
 
 observed_data:
   path: observations.csv
@@ -14,9 +15,9 @@ options:
   define_first_run: False
 
 DEAP:
-  use_multiprocessing: False
+  use_multiprocessing: True
   maximize: True
-  ngen: 3 # 10
-  mu: 24 # 120
-  lambda_: 8 # 24
+  ngen: 10 # 10
+  mu: 120 # 120
+  lambda_: 24 # 24
   select_best: 10

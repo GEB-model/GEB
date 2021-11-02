@@ -118,7 +118,7 @@ def multi_set(dict_obj, value, *attrs):
 	for attr in attrs[:-1]:
 		d = d[attr]
 	if not attrs[-1] in d:
-		raise KeyError("Key does not exist in config file.")
+		raise KeyError(f"Key {attrs} does not exist in config file.")
 	d[attrs[-1]] = value
 
 def RunModel(args):
@@ -218,6 +218,10 @@ def RunModel(args):
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
 	streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
+
+	if config['monthly']:
+		streamflows['date'] = streamflows.index
+		streamflows = streamflows.resample('M', on='date').mean()
 
 	if OBJECTIVE == 'KGE':
 		# Compute objective function score
