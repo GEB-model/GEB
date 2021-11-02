@@ -3,7 +3,6 @@ import os
 import re
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from numpy.core.fromnumeric import size
 import yaml
 import pandas as pd
 import sys
