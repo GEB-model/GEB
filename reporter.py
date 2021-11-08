@@ -56,7 +56,8 @@ class CWatMReporter(ABMReporter):
         """
         array = attrgetter(attr)(self.model)
         if decompress:
-            array = attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
+            decompressed_array = attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
+            return array, decompressed_array
 
         assert isinstance(array, (np.ndarray, cp.ndarray))
 
