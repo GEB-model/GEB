@@ -64,13 +64,17 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
 
     reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy()
     for hylak_id, capacity in df['Gross_capacity_BCM'].items():
-        capacity *= 1000  # BCM to MCM
+        capacity *= 1_000_000_000  # BCM to m3
         reservoir_volumes.loc[hylak_id] = capacity
+
+    basin_lakes['reservoir_volume'] = reservoir_volumes.values
 
     reservoir_FLR = reservoir_volumes.copy()
     for hylak_id, capacity in df['Capacity_FLR_BCM'].items():
-        capacity *= 1000  # BCM to MCM
+        capacity *= 1_000_000_000  # BCM to m3
         reservoir_FLR.loc[hylak_id] = capacity
+
+    basin_lakes['flood_volume'] = reservoir_FLR.values
 
     assert (basin_lakes['Hylak_id'] > 0).all()
     pd.DataFrame(basin_lakes.drop(columns='geometry')).to_excel(os.path.join(output_folder, 'basin_lakes_data.xlsx'))
@@ -116,7 +120,7 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
             **{**src.profile, **{'dtype': lake_dis.dtype}}
         ) as dst:
             dst.write(lake_dis, 1)
-        
+
         res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
         res_vol_array[basin_lakes['Hylak_id']] = reservoir_volumes
         res_vol = np.take(res_vol_array, lake_ids, mode='clip')

@@ -30,6 +30,9 @@ class Government(AgentBaseClass):
             total_water_use_m_not_yet_water_efficient = total_water_use_m[~self.agents.farmers.is_water_efficient]
             self.agents.farmers.is_water_efficient[indices_not_yet_water_efficient[np.argpartition(-total_water_use_m_not_yet_water_efficient, n_farmers_to_upgrade)[:n_farmers_to_upgrade]]] = True
 
+    def request_flood_cushions(self, reservoirIDs):
+        pass
+
     def step(self) -> None:
         """This function is run each timestep. However, only in on the first day of each year and if the scenario is `government_subsidies` subsidies is actually provided to farmers."""
         if self.model.args.scenario == 'government_subsidies' and self.model.current_timestep != 0:
