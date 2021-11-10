@@ -173,7 +173,7 @@ class LandUnits(BaseVariables):
         self.model = model
         self.scaling = 20
 
-        # self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
+        self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.grid.cell_size / self.scaling
         self.land_use_type, self.land_use_ratio, self.land_owners, self.landunit_to_grid, self.var_to_landunit, self.var_to_landunit_uncompressed, self.unmerged_landunit_indices = self.create_landunits()
         if self.model.args.use_gpu:

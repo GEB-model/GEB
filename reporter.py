@@ -56,7 +56,8 @@ class CWatMReporter(ABMReporter):
         """
         array = attrgetter(attr)(self.model)
         if decompress:
-            array = attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
+            decompressed_array = attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
+            return array, decompressed_array
 
         assert isinstance(array, (np.ndarray, cp.ndarray))
 
@@ -126,7 +127,7 @@ class Reporter:
     def __init__(self, model):
         self.model = model
         subfolder = self.model.args.scenario
-        if self.model.config['general']['switch_crops']:
+        if self.model.args.switch_crops:
             subfolder += '_switch_crops'
         self.abm_reporter = ABMReporter(model, subfolder=subfolder)
         self.cwatmreporter = CWatMReporter(model, subfolder=subfolder)

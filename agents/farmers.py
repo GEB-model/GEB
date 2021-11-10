@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 import os
-import random
+import math
+from random import random
 import numpy as np
 import pandas as pd
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
-import math
 
 from numba import njit
 
@@ -645,9 +645,7 @@ class Farmers(AgentBaseClass):
         self.var.land_use_type[self.var.land_use_type == 2] = 1
         self.var.land_use_type[self.var.land_use_type == 3] = 1
 
-        crop = self.crop.copy()
-
-        crop_age_days, crop_harvest_age_days, next_plant_day, n_multicrop_periods, next_multicrop_index = self.get_crop_age_and_harvest_day_initial(self.n, self.model.current_time.month, self.current_day_of_year, self.planting_schemes, crop, self.irrigating, self.unit_code, self.planting_scheme, self.start_day_per_month)
+        crop_age_days, crop_harvest_age_days, next_plant_day, n_multicrop_periods, next_multicrop_index = self.get_crop_age_and_harvest_day_initial(self.n, self.model.current_time.month, self.current_day_of_year, self.planting_schemes, self.crop, self.irrigating, self.unit_code, self.planting_scheme, self.start_day_per_month)
         assert np.logical_xor((next_plant_day == -1), (crop_harvest_age_days == -1)).all()
         if self.model.args.use_gpu:
             crop_age_days = cp.array(crop_age_days)
@@ -730,7 +728,7 @@ class Farmers(AgentBaseClass):
         """
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
-            switch_if_not_limited = random.random() < 0.05
+            switch_if_not_limited = random() <= .3
             farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_i)
             n_water_limited_days_farmer = n_water_limited_days[farmer_i]
             for field in farmer_fields:
@@ -783,8 +781,8 @@ class Farmers(AgentBaseClass):
             self.unit_code,
             self.crop,
             self.planting_scheme,
-            self.model.config['general']['switch_crops'],
-            self.field_size_per_farmer
+            self.model.args.switch_crops,
+            self.field_size_per_farmer,
         )
         if np.count_nonzero(harvest):
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
@@ -798,7 +796,7 @@ class Farmers(AgentBaseClass):
             self.yield_ratio_per_farmer = np.zeros(self.n, dtype=np.float32)
         if self.model.args.use_gpu:
             harvest = cp.array(harvest)
-
+        
         self.var.actual_transpiration_crop[harvest] = 0
         self.var.potential_transpiration_crop[harvest] = 0
 
@@ -1066,13 +1064,14 @@ class Farmers(AgentBaseClass):
         """
         When this method is called, all farmers that have a high water efficiency, spread knowledge to a maximum of three other farmers within 5000 meter.
         """
+        water_efficient_farmers = np.where(self.is_water_efficient)[0]
         neighbors = find_neighbors(
             self.locations,
             5000,
-            3,
+            1,
             29,
             grid='longlat',
-            search_ids=np.where(self.is_water_efficient)[0],
+            search_ids=np.random.choice(water_efficient_farmers, size=water_efficient_farmers.size // 100, replace=False),
         )
         neighbors = neighbors[neighbors != -1]
         self.is_water_efficient[neighbors] = True
@@ -1083,7 +1082,7 @@ class Farmers(AgentBaseClass):
 
         Then, farmers harvest and plant crops.
         """
-        if self.model.args.scenario == 'ngo_training' and self.model.current_time.month == 1 and self.model.current_time.day == 1:
+        if self.model.args.scenario == 'ngo_training':
             self.diffuse_water_efficiency_knowledge()
 
         self.harvest()

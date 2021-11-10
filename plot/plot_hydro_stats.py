@@ -3,7 +3,6 @@ import os
 import re
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from numpy.core.fromnumeric import size
 import yaml
 import pandas as pd
 import sys
@@ -96,7 +95,7 @@ def add_patches_legend(ax, labels, colors, ncol):
     offset = 0.10
 
     patches = [
-        Line2D([0], [0], color=colors[i], label=labels[i], linestyle='--')
+        Line2D([0], [0], color=colors[i], label=labels[i], linestyle='--', marker='v', markersize=1, linewidth=0.5)
         for i in range(len(labels)) if labels[i] is not None
     ]
     
@@ -122,7 +121,7 @@ def add_patches_legend(ax, labels, colors, ncol):
     ax.add_artist(legend)
 
     patches = [
-        Line2D([0], [0], color=colors[i], label=labels[i], linestyle='-')
+        Line2D([0], [0], color=colors[i], label=labels[i], linestyle='-', marker='^', markersize=1, linewidth=0.5)
         for i in range(len(labels)) if labels[i] is not None
     ]
     for _ in range(len(patches)):
@@ -182,7 +181,17 @@ def scenarios():
         ncol=1
     )
 
+    PLOT_STYLE = {'markersize': 1}
+    MARKEVERY = 100
+    MARKSTARTINT = int(MARKEVERY / 10 / len(scenarios))
+
+    n = 0
     for switch_crop in (False, True):
+        if switch_crop:
+            PLOT_STYLE['marker'] = 'v'
+        else:
+            PLOT_STYLE['marker'] = '^'
+        PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
         linestyle = '--' if switch_crop else '-'
 
         discharges = []
@@ -190,21 +199,27 @@ def scenarios():
             res = get_discharge(scenario, switch_crop=switch_crop)
             if res:
                 dates, discharge = res
-                ax0.plot(dates, discharge, label=scenario, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)
+                ax0.plot(dates, discharge, label=scenario, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)
                 discharges.append(discharge)
+            n += 1
+            PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
             res = get_hyve_data('hydraulic head', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, head = res
-                ax2.plot(dates, head, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+                ax2.plot(dates, head, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
+            n += 1
+            PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
             res = get_hyve_data('reservoir storage', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, reservoir_storage = res
                 reservoir_storage /= 1e9
-                ax3.plot(dates, reservoir_storage, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+                ax3.plot(dates, reservoir_storage, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
+            n += 1
+            PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
             res = get_hyve_data('is water aware', scenario=scenario, switch_crop=switch_crop)
@@ -212,14 +227,18 @@ def scenarios():
                 dates, efficient = res
                 efficient = efficient.astype(np.float64)
                 efficient /= (n_agents / 100)
-                ax4.plot(dates, efficient, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+                ax4.plot(dates, efficient, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
+            n += 1
+            PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
             res = read_crop_data(dates, scenario=scenario, switch_crop=switch_crop)
             if res is not None:
                 dates, sugar_cane = res
                 sugar_cane /= (n_agents / 100)
-                ax5.plot(dates, sugar_cane, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH)  # observed is 0
+                ax5.plot(dates, sugar_cane, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
+            n += 1
+            PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
     
     ax0.set_title('discharge $(m^3s^{-1})$', **TITLE_FORMATTER)
     ax2.set_title('mean hydraulic head $(m)$', **TITLE_FORMATTER)

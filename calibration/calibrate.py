@@ -52,16 +52,7 @@ LOG_FOLDER = os.path.join(ROOT, 'logs')
 if not os.path.exists(LOG_FOLDER):
 	os.makedirs(LOG_FOLDER)
 
-if config['timeperiod'] == "monthly":
-	monthly = 1
-	dischargetss = os.path.join('spinup', 'var.discharge_monthavg.tss')
-	frequen = 'MS'
-elif config['timeperiod'] == "daily":
-	monthly = 0
-	dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
-	frequen = 'd'
-else:
-	raise ValueError("timeperiod must be 'monthly' or 'daily'")
+dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
 
 ParamRangesPath = os.path.join(ROOT, config['parameter_ranges'])
 SubCatchmentPath = os.path.join(ROOT, config['subcatchmentpath'])
@@ -118,7 +109,7 @@ def multi_set(dict_obj, value, *attrs):
 	for attr in attrs[:-1]:
 		d = d[attr]
 	if not attrs[-1] in d:
-		raise KeyError("Key does not exist in config file.")
+		raise KeyError(f"Key {attrs} does not exist in config file.")
 	d[attrs[-1]] = value
 
 def RunModel(args):
@@ -218,6 +209,10 @@ def RunModel(args):
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
 	streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
+
+	if config['monthly']:
+		streamflows['date'] = streamflows.index
+		streamflows = streamflows.resample('M', on='date').mean()
 
 	if OBJECTIVE == 'KGE':
 		# Compute objective function score

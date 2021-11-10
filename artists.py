@@ -79,6 +79,12 @@ class Artists(HyveArtists):
                 'names': [self.model.config['draw']['crop_data'][i]['name'] for i in range(26)],
                 'colors': [self.model.config['draw']['crop_data'][i]['color'] for i in range(26)],
             },
+            'data.landunit.land_use_type': {
+                'type': 'categorical',
+                'nanvalue': -1,
+                'names': ["forest", "grassland/non-irrigated", "paddy-irrigated", "non-paddy irrigated", "sealed", "water"],
+                'colors': ["#274e2e", "#8ff40b", "#8555aa", "#d66a29", "#7e8180", "#2636d9"],
+            },
         }
 
     def set_variables(self) -> None:
@@ -131,7 +137,7 @@ class Artists(HyveArtists):
             background: RGBA-array to display as background.
             legend: Dictionary with data and formatting rules for background legend.
         """
-        array = self.model.reporter.cwatmreporter.get_array(self.background_variable, decompress=True)
+        compressed_array, array = self.model.reporter.cwatmreporter.get_array(self.background_variable, decompress=True)
         mask = attrgetter('.'.join(self.background_variable.split('.')[:-1]))(self.model).mask
 
         if self.background_variable in self.custom_plot:
@@ -189,7 +195,7 @@ class Artists(HyveArtists):
             else:
                 nanvalue = None
             if options['type'] == 'categorical':
-                unique_values = np.unique(array)
+                unique_values = np.unique(compressed_array)
                 if nanvalue is not None:
                     unique_values = unique_values[unique_values != nanvalue]
                 unique_values = unique_values.tolist()
@@ -205,7 +211,7 @@ class Artists(HyveArtists):
                 channels = (0, 1, 2)
                 background[:,:,3][array != nanvalue] = 255
             elif options['type'] == 'discrete':
-                unique_values = np.arange(array[array != nanvalue].min(), array[array != nanvalue].max()+1, 1).tolist()
+                unique_values = np.arange(compressed_array[compressed_array != nanvalue].min(), compressed_array[compressed_array != nanvalue].max()+1, 1).tolist()
                 if 'names' in options:
                     names = options['names']
                 else:

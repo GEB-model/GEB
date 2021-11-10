@@ -27,7 +27,7 @@ class CWatM_Model(CWATModel):
         parse_configuration(settings)
 
         subfolder = self.args.scenario
-        if self.config['general']['switch_crops']:
+        if self.args.switch_crops:
             subfolder += '_switch_crops'
 
         outDir['OUTPUT'] = os.path.join(self.config['general']['report_folder'], subfolder)

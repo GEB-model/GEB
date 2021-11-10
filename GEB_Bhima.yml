@@ -3,11 +3,11 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2006-01-01
+  start_time: 2000-01-20
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2006-01-30
+  end_time: 2006-01-05
   ###
   # start of the spinup time (YYYY-MM-DD).
   spinup_start: 2000-01-01
@@ -20,7 +20,6 @@ general:
   init_water_table: DataDrive/GEB_Bhima/report/init/water_table.npy
   ###
   #
-  switch_crops: true
   export_inital_on_spinup: true
 
 ###
@@ -54,7 +53,7 @@ draw:
   # Here, you can specify which types of agents are to be drawn. In addition, you can specify options on how those agents will be drawn. These options must correspond to method arguments in the artists.
   draw_agents:
     farmers:
-      draw_every_nth: 10000
+      draw_every_nth: 100
   ###
   # Specify the colors and names of the crops to use here. The indices must match the indices the crop factors file (DataDrive/GEB/input/crop_data/crop_factors.csv).
   crop_data:
@@ -230,14 +229,3 @@ parameters:
   lakeAFactor: 1.2001137835309703
   lakeEvaFactor: 1.5932766384205812
   normalStorageLimit: 0.645563228322237
-
-  # SnowMeltCoef: 0.005777810112777455
-  # arnoBeta_add: 0.21066975532888235
-  # factor_interflow: 0.6188894074176792
-  # lakeAFactor: 3.141554604609948
-  # lakeEvaFactor: 2.34602890190283
-  # manningsN: 1.6605011081483918
-  # normalStorageLimit: 0.6842538823449608
-  # preferentialFlowConstant: 3.1601543505188596
-  # recessionCoeff_factor: 7.542470489484948
-  # soildepth_factor: 0.8256825908730563

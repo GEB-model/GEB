@@ -64,14 +64,14 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
 
     reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy()
     for hylak_id, capacity in df['Gross_capacity_BCM'].items():
-        capacity *= 1_000_000_000  # BCM to M3
+        capacity *= 1_000_000_000  # BCM to m3
         reservoir_volumes.loc[hylak_id] = capacity
 
     basin_lakes['reservoir_volume'] = reservoir_volumes.values
 
     reservoir_FLR = reservoir_volumes.copy()
     for hylak_id, capacity in df['Capacity_FLR_BCM'].items():
-        capacity *= 1_000_000_000  # BCM to M3
+        capacity *= 1_000_000_000  # BCM to m3
         reservoir_FLR.loc[hylak_id] = capacity
 
     basin_lakes['flood_volume'] = reservoir_FLR.values

@@ -5,7 +5,11 @@
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
+<<<<<<< HEAD
 #SBATCH --cpus-per-task=6
+=======
+#SBATCH --cpus-per-task=5
+>>>>>>> regulate_flow
 #SBATCH --mem=24G
 #SBATCH --time=100:00:00
 #SBATCH --mail-type=END,FAIL
@@ -19,4 +23,14 @@ cd $SCRIPT_DIR
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate abm  # activate conda environment
 
+<<<<<<< HEAD
 python run.py --GPU --headless --scenario government_subsidies --config GEB_switch.yml --gpu_device 1
+=======
+python run.py --GPU --headless --scenario spinup
+python run.py --GPU --headless --scenario base
+python run.py --GPU --headless --scenario base --switch_crops
+python run.py --GPU --headless --scenario government_subsidies
+python run.py --GPU --headless --scenario government_subsidies --switch_crops
+python run.py --GPU --headless --scenario ngo_training
+python run.py --GPU --headless --scenario ngo_training --switch_crops
+>>>>>>> regulate_flow

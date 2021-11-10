@@ -64,14 +64,14 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
 
     reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy()
     for hylak_id, capacity in df['Gross_capacity_BCM'].items():
-        capacity *= 1_000_000_000  # BCM to M3
+        capacity *= 1_000_000_000  # BCM to m3
         reservoir_volumes.loc[hylak_id] = capacity
 
     basin_lakes['reservoir_volume'] = reservoir_volumes.values
 
     reservoir_FLR = reservoir_volumes.copy()
     for hylak_id, capacity in df['Capacity_FLR_BCM'].items():
-        capacity *= 1_000_000_000  # BCM to M3
+        capacity *= 1_000_000_000  # BCM to m3
         reservoir_FLR.loc[hylak_id] = capacity
 
     basin_lakes['flood_volume'] = reservoir_FLR.values
@@ -120,24 +120,24 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
             **{**src.profile, **{'dtype': lake_dis.dtype}}
         ) as dst:
             dst.write(lake_dis, 1)
-        
-        # res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
-        # res_vol_array[basin_lakes['Hylak_id']] = reservoir_volumes
-        # res_vol = np.take(res_vol_array, lake_ids, mode='clip')
-        # with rasterio.open(
-        #     os.path.join(output_folder, 'waterBodyVolRes.tif'), 'w',
-        #     **{**src.profile, **{'dtype': res_vol.dtype}}
-        # ) as dst:
-        #     dst.write(res_vol, 1)
 
-        # res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
-        # res_vol_array[basin_lakes['Hylak_id']] = reservoir_FLR
-        # res_vol = np.take(res_vol_array, lake_ids, mode='clip')
-        # with rasterio.open(
-        #     os.path.join(output_folder, 'waterBodyVolResFLR.tif'), 'w',
-        #     **{**src.profile, **{'dtype': res_vol.dtype}}
-        # ) as dst:
-        #     dst.write(res_vol, 1)
+        res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
+        res_vol_array[basin_lakes['Hylak_id']] = reservoir_volumes
+        res_vol = np.take(res_vol_array, lake_ids, mode='clip')
+        with rasterio.open(
+            os.path.join(output_folder, 'waterBodyVolRes.tif'), 'w',
+            **{**src.profile, **{'dtype': res_vol.dtype}}
+        ) as dst:
+            dst.write(res_vol, 1)
+
+        res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
+        res_vol_array[basin_lakes['Hylak_id']] = reservoir_FLR
+        res_vol = np.take(res_vol_array, lake_ids, mode='clip')
+        with rasterio.open(
+            os.path.join(output_folder, 'waterBodyVolResFLR.tif'), 'w',
+            **{**src.profile, **{'dtype': res_vol.dtype}}
+        ) as dst:
+            dst.write(res_vol, 1)
 
 def export_variables_to_csv() -> None:
     """Exports the data from the hydrolakes shapefile to a csv file, while dropping the geometry columns. This simply allows the model to more rapidly read the sheet."""

@@ -1,10 +1,10 @@
-spinup_start: 2003-01-01
+spinup_start: 2002-01-01
 start_date: 2004-01-01
-end_date: 2006-01-01
-timeperiod: daily
+end_date: 2010-01-01
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
 gpus: 2
+monthly: true
 
 observed_data:
   path: observations.csv
@@ -14,9 +14,9 @@ options:
   define_first_run: False
 
 DEAP:
-  use_multiprocessing: False
+  use_multiprocessing: True
   maximize: True
-  ngen: 3 # 10
-  mu: 24 # 120
-  lambda_: 8 # 24
+  ngen: 10 # 10
+  mu: 120 # 120
+  lambda_: 24 # 24
   select_best: 10
