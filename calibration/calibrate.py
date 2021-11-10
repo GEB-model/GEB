@@ -52,16 +52,7 @@ LOG_FOLDER = os.path.join(ROOT, 'logs')
 if not os.path.exists(LOG_FOLDER):
 	os.makedirs(LOG_FOLDER)
 
-if config['timeperiod'] == "monthly":
-	monthly = 1
-	dischargetss = os.path.join('spinup', 'var.discharge_monthavg.tss')
-	frequen = 'MS'
-elif config['timeperiod'] == "daily":
-	monthly = 0
-	dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
-	frequen = 'd'
-else:
-	raise ValueError("timeperiod must be 'monthly' or 'daily'")
+dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
 
 ParamRangesPath = os.path.join(ROOT, config['parameter_ranges'])
 SubCatchmentPath = os.path.join(ROOT, config['subcatchmentpath'])

@@ -1,7 +1,6 @@
-spinup_start: 2003-01-01
+spinup_start: 2002-01-01
 start_date: 2004-01-01
-end_date: 2006-01-01
-timeperiod: daily
+end_date: 2010-01-01
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
 gpus: 2
