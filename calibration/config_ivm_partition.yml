@@ -3,9 +3,9 @@ start_date: 2000-01-01
 end_date: 2006-01-01
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
-gpus: 2
+gpus: 0
 monthly: true
-forward: true
+forward: false
 
 observed_data:
   path: observations.csv

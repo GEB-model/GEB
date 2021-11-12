@@ -34,15 +34,20 @@ import yaml
 
 import multiprocessing
 import time
-from subprocess import Popen, PIPE, run
+from subprocess import Popen, PIPE
 
+import argparse
 import pickle
 
 ## Set global parameter
 global gen
 gen = 0
 
-with open('calibration/config.yml', 'r') as f:
+parser = argparse.ArgumentParser()
+parser.add_argument('--config', dest='config', type=str, required=True)
+args = parser.parse_args()
+
+with open(args.config, 'r') as f:
 	config = yaml.load(f, Loader=yaml.FullLoader)
 
 ROOT = 'DataDrive/GEB/calibration'
@@ -296,7 +301,6 @@ if __name__ == "__main__":
 	if use_multiprocessing is True:
 		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK') or 1)
 		print(f'Pool size: {pool_size}')
-		# pool = multiprocessing.Pool(processes=pool_size, initializer=get_gpu_counter, initargs=())
 		pool = multiprocessing.Pool(processes=pool_size)
 		toolbox.register("map", pool.map)
 	
@@ -349,6 +353,9 @@ if __name__ == "__main__":
 
 		# Evaluate the individuals with an invalid fitness
 		invalid_ind = [ind for ind in population if not ind.fitness.valid]
+		if not config['forward']:
+			invalid_ind = invalid_ind[::-1]
+			run_indices = run_indices[::-1]
 		fitnesses = toolbox.map(toolbox.evaluate, zip(invalid_ind, run_indices))
 		for ind, fit in zip(invalid_ind, fitnesses):
 			ind.fitness.values = fit
