@@ -24,7 +24,7 @@ def cbinding_replace(name):
 
 data_handling.cbinding = cbinding_replace
 
-from landunits import Data
+from HRUs import Data
 LAND_USE_TYPE_COLORS = np.array([
     (0, 124, 8),  # Forest No.0
     (195, 255, 211),  # Grasland/non irrigated land
@@ -214,8 +214,8 @@ def create_grid(ax, high_res=False):
 
 
 def plot_land_use_type(ax, dummymodel, land_owners):
-    land_use_type = dummymodel.data.landunit.land_use_type
-    land_use_type = dummymodel.data.landunit.decompress(land_use_type)
+    land_use_type = dummymodel.data.HRU.land_use_type
+    land_use_type = dummymodel.data.HRU.decompress(land_use_type)
     land_use_type = cut(land_use_type)
     land_use_type[(land_use_type == 1) & (land_owners != -1)] = 3
     land_use_type[land_use_type > 2] = land_use_type[land_use_type > 2] - 1
@@ -262,8 +262,8 @@ def main(include_circle=False, show=True, combine_units=True, high_res=False):
         sharex=True, sharey=True, figsize=(12, 4.5))
     plt.tight_layout()
     plt.subplots_adjust(top=0.99)
-    land_owners = dummymodel.data.landunit.land_owners
-    land_owners = dummymodel.data.landunit.decompress(land_owners)
+    land_owners = dummymodel.data.HRU.land_owners
+    land_owners = dummymodel.data.HRU.decompress(land_owners)
     land_owners = cut(land_owners)
 
     # land use type
@@ -282,13 +282,13 @@ def main(include_circle=False, show=True, combine_units=True, high_res=False):
 
     # units
     if combine_units:
-        units = dummymodel.data.landunit.full_compressed(0, dtype=np.int32)
+        units = dummymodel.data.HRU.full_compressed(0, dtype=np.int32)
         if dummymodel.args.use_gpu:
             units = cp.arange(0, units.size, dtype=np.int32)
         else:
             units = np.arange(0, units.size, dtype=np.int32)
 
-        units = dummymodel.data.landunit.decompress(units)
+        units = dummymodel.data.HRU.decompress(units)
         units = cut(units)
         graph, regions = create_region_graph(units)
 
@@ -373,8 +373,8 @@ def plot_pies():
     ax1.imshow(array)
     create_grid(ax1)
 
-    land_use_type = dummymodel.landunit.land_use_type
-    land_use_type = dummymodel.landunit.decompress(land_use_type)
+    land_use_type = dummymodel.HRU.land_use_type
+    land_use_type = dummymodel.HRU.decompress(land_use_type)
     land_use_type = cut(land_use_type)
     land_use_type[land_use_type > 2] = land_use_type[land_use_type > 2] - 1
 

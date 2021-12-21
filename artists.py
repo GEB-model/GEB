@@ -18,7 +18,7 @@ class Artists(HyveArtists):
         HyveArtists.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
-        self.background_variable = "data.landunit.crop_map"  # set initial background iamge.
+        self.background_variable = "data.HRU.crop_map"  # set initial background iamge.
         self.custom_plot = self.get_custom_plot()
         self.set_variables()
 
@@ -33,10 +33,10 @@ class Artists(HyveArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if not hasattr(model, 'legend') and hasattr(model, 'landunit'):
-            crops = model.data.landunit.crop_data['Crop']
-            self.legend = {crop: color for crop, color in zip(crops, model.data.landunit.crop_data['Color'])}
-        color = self.custom_plot['data.landunit.crop_map']['colors'][agents.crop[idx].item()]
+        if not hasattr(model, 'legend') and hasattr(model, 'HRU'):
+            crops = model.data.HRU.crop_data['Crop']
+            self.legend = {crop: color for crop, color in zip(crops, model.data.HRU.crop_data['Color'])}
+        color = self.custom_plot['data.HRU.crop_map']['colors'][agents.crop[idx].item()]
         return {"type": "shape", "shape": "circle", "r": 1, "filled": True, "color": color}
 
     def draw_rivers(self) -> dict:
@@ -57,7 +57,7 @@ class Artists(HyveArtists):
             .. code-block:: python
 
                 {
-                    'landunit.crop_map': {
+                    'HRU.crop_map': {
                         'type': 'discrete',
                         'nanvalue': -1,
                         'names': ['crop name 1', 'crop name 2'],
@@ -67,19 +67,19 @@ class Artists(HyveArtists):
 
         """
         return {
-            'data.landunit.crop_stage': {
+            'data.HRU.crop_stage': {
                 'type': 'discrete'
             },
-            'data.landunit.crop_age': {
+            'data.HRU.crop_age': {
                 'type': 'discrete'
             },
-            'data.landunit.crop_map': {
+            'data.HRU.crop_map': {
                 'type': 'categorical',
                 'nanvalue': -1,
                 'names': [self.model.config['draw']['crop_data'][i]['name'] for i in range(26)],
                 'colors': [self.model.config['draw']['crop_data'][i]['color'] for i in range(26)],
             },
-            'data.landunit.land_use_type': {
+            'data.HRU.land_use_type': {
                 'type': 'categorical',
                 'nanvalue': -1,
                 'names': ["forest", "grassland/non-irrigated", "paddy-irrigated", "non-paddy irrigated", "sealed", "water"],
@@ -110,7 +110,7 @@ class Artists(HyveArtists):
                         continue
         
         add_var('data.grid')
-        add_var('data.landunit')
+        add_var('data.HRU')
 
     def get_background_variables(self) -> list:
         """This function gets a list of variables that can be used to show in the background.

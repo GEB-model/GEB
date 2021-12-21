@@ -22,7 +22,7 @@ The figure below shows a schematic overview of the model. The lower part of the 
   Preprocessing <preprocessing/preprocessing>
   Configuration <configuration>
   Running the model <running>
-  Land units <landunits>
+  Land units <HRUs>
 
 .. toctree::
   :maxdepth: 1

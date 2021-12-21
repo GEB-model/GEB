@@ -6,7 +6,7 @@ from reporter import Reporter
 from hyve.model import Model as ABM_Model
 from agents import Agents
 from artists import Artists
-from landunits import Data
+from HRUs import Data
 import argparse
 from cwatm_model import CWatM_Model
 from typing import Union
@@ -54,9 +54,9 @@ class GEBModel(ABM_Model, CWatM_Model):
         areamaps_folder = os.path.join(self.reporter.abm_reporter.export_folder, 'areamaps')
         if not os.path.exists(areamaps_folder):
             os.makedirs(areamaps_folder)
-        np.save(os.path.join(areamaps_folder, 'land_owners.npy'), self.data.landunit.land_owners)
-        np.save(os.path.join(areamaps_folder, 'unmerged_landunit_indices.npy'), self.data.landunit.unmerged_landunit_indices)
-        np.save(os.path.join(areamaps_folder, 'scaling.npy'), self.data.landunit.scaling)
+        np.save(os.path.join(areamaps_folder, 'land_owners.npy'), self.data.HRU.land_owners)
+        np.save(os.path.join(areamaps_folder, 'unmerged_HRU_indices.npy'), self.data.HRU.unmerged_HRU_indices)
+        np.save(os.path.join(areamaps_folder, 'scaling.npy'), self.data.HRU.scaling)
 
     def __init_ABM__(self, config_path: str, args: argparse.Namespace, coordinate_system: str) -> None:
         """Initializes the agent-based model.
@@ -140,7 +140,7 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         if self.save_initial:
             
-            initCondVar = ['landunit.w1', 'landunit.w2', 'landunit.w3', 'landunit.topwater', 'landunit.interceptStor', 'landunit.SnowCoverS', 'landunit.FrostIndex', 'grid.channelStorageM3', 'grid.discharge', 'grid.lakeInflow', 'grid.lakeStorage', 'grid.reservoirStorage', 'grid.lakeVolume', 'grid.outLake', 'grid.lakeOutflow', 'modflow.head']
+            initCondVar = ['HRU.w1', 'HRU.w2', 'HRU.w3', 'HRU.topwater', 'HRU.interceptStor', 'HRU.SnowCoverS', 'HRU.FrostIndex', 'grid.channelStorageM3', 'grid.discharge', 'grid.lakeInflow', 'grid.lakeStorage', 'grid.reservoirStorage', 'grid.lakeVolume', 'grid.outLake', 'grid.lakeOutflow', 'modflow.head']
             # self.initCondVar.extend(['grid.smalllakeInflow', 'grid.smalllakeStorage', 'grid.smalllakeOutflow', 'grid.smalllakeInflowOld', 'grid.smalllakeVolumeM3'])
 
             if not os.path.exists(self.initial_conditions_folder):

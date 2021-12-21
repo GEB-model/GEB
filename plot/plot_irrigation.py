@@ -25,7 +25,7 @@ with open('GEB.yml', 'r') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 @njit(cache=True)
-def _decompress_landunit(mixed_array, unmerged_landunit_indices, scaling, mask):
+def _decompress_HRU(mixed_array, unmerged_HRU_indices, scaling, mask):
     ysize, xsize = mask.shape
     subarray = np.full((ysize * scaling, xsize * scaling), np.nan, dtype=mixed_array.dtype)
     
@@ -37,7 +37,7 @@ def _decompress_landunit(mixed_array, unmerged_landunit_indices, scaling, mask):
             if not is_masked:
                 for ys in range(scaling):
                     for xs in range(scaling):
-                        subarray[y * scaling + ys, x * scaling + xs] = mixed_array[unmerged_landunit_indices[i]]
+                        subarray[y * scaling + ys, x * scaling + xs] = mixed_array[unmerged_HRU_indices[i]]
                         i += 1
 
     return subarray
@@ -96,7 +96,7 @@ class Plot:
         with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'areamaps', 'sub_cell_area.tif'), 'r') as src_cell_area:
             self.cell_area = src_cell_area.read(1)
         
-        self.unmerged_landunit_indices = np.load(os.path.join(areamaps_folder, 'unmerged_landunit_indices.npy'))
+        self.unmerged_HRU_indices = np.load(os.path.join(areamaps_folder, 'unmerged_HRU_indices.npy'))
         self.scaling = np.load(os.path.join(areamaps_folder, 'scaling.npy')).item()
 
     def read_gadm3(self):
@@ -122,7 +122,7 @@ class Plot:
             ax.set_title(title, size=6, pad=2, fontweight='bold')
 
     def farmer_array_to_fields(self, array, nofieldvalue):
-        fields_decompressed = _decompress_landunit(self.land_owners, self.unmerged_landunit_indices, self.scaling, self.mask)
+        fields_decompressed = _decompress_HRU(self.land_owners, self.unmerged_HRU_indices, self.scaling, self.mask)
         fields_decompressed = fields_decompressed[self.submask == 0]
         is_field = np.where(fields_decompressed != -1)
         cell_area = self.cell_area[self.submask == 0]
@@ -133,7 +133,7 @@ class Plot:
 
         array = np.take(array, self.land_owners)
         array[self.land_owners == -1] = nofieldvalue
-        array = _decompress_landunit(array, self.unmerged_landunit_indices, self.scaling, self.mask)
+        array = _decompress_HRU(array, self.unmerged_HRU_indices, self.scaling, self.mask)
         return array
 
     def plot_by_area(self, array, ax=None, title=None):

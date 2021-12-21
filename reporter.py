@@ -73,7 +73,7 @@ class CWatMReporter(ABMReporter):
                 self.report_value(name, None, conf)
             else:
                 if conf['varname'].endswith("crop"):
-                    crop_map = self.get_array('landunit.crop_map')
+                    crop_map = self.get_array('HRU.crop_map')
                     array = array[crop_map == conf['crop']]
                 if array.size == 0:
                     value = None

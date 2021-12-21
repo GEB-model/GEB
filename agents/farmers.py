@@ -68,7 +68,7 @@ class Farmers(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
         self.agents = agents
-        self.var = model.data.landunit
+        self.var = model.data.HRU
         self.redundancy = reduncancy
         self.crop_yield_factors = self.get_crop_yield_factors()
         self.initiate_agents()
@@ -228,7 +228,7 @@ class Farmers(AgentBaseClass):
         irrigated: np.ndarray,
         groundwater_irrigated: np.ndarray,
         cell_area: np.ndarray,
-        landunit_to_grid: np.ndarray,
+        HRU_to_grid: np.ndarray,
         crop_map: np.ndarray,
         totalPotIrrConsumption: np.ndarray,
         available_channel_storage_m3: np.ndarray,
@@ -250,7 +250,7 @@ class Farmers(AgentBaseClass):
             irrigated: Array that specifies whether a farm is irrigated.
             groundwater_irrigated: Array that specifies whether a farm is groundwater irrigated.
             cell_area: The area of each subcell in m2.
-            landunit_to_grid: Array to map the index of each subcell to the corresponding cell.
+            HRU_to_grid: Array to map the index of each subcell to the corresponding cell.
             crop_map: Map of the currently growing crops.
             totalPotIrrConsumption: Potential irrigation consumption.
             available_channel_storage_m3: Water available for irrigation from channels.
@@ -297,7 +297,7 @@ class Farmers(AgentBaseClass):
             if irrigated[farmer]:
                 farmer_is_water_limited = False
                 for field in farmer_fields:
-                    f_var = landunit_to_grid[field]
+                    f_var = HRU_to_grid[field]
                     crop = crop_map[field]
                     irrigation_water_demand_cell = totalPotIrrConsumption[field] / efficiency
                     
@@ -370,7 +370,7 @@ class Farmers(AgentBaseClass):
     def abstract_water(
         self,
         cell_area: np.ndarray,
-        landunit_to_grid: np.ndarray,
+        HRU_to_grid: np.ndarray,
         totalPotIrrConsumption: np.ndarray,
         available_channel_storage_m3: np.ndarray,
         available_groundwater_m3: np.ndarray,
@@ -383,7 +383,7 @@ class Farmers(AgentBaseClass):
 
         Args:
             cell_area: the area of each subcell in m2.
-            landunit_to_grid: array to map the index of each subcell to the corresponding cell.
+            HRU_to_grid: array to map the index of each subcell to the corresponding cell.
             totalPotIrrConsumption: potential irrigation consumption.
             available_channel_storage_m3: water available for irrigation from channels.
             groundwater_head: groundwater head.
@@ -415,7 +415,7 @@ class Farmers(AgentBaseClass):
             self.irrigating,
             self.groundwater_irrigating,
             cell_area,
-            landunit_to_grid,
+            HRU_to_grid,
             self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map,
             totalPotIrrConsumption,
             available_channel_storage_m3,

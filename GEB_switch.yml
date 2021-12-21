@@ -204,7 +204,7 @@ report:
 #
 # - **name**: name of the folder to which the data is saved.
 #
-#   - **varname**: attribute name of CWatM data. Should be precededed by 'var.' for data from CWatM cells and 'landunit.' for data from hydrologial units..
+#   - **varname**: attribute name of CWatM data. Should be precededed by 'var.' for data from CWatM cells and 'HRU.' for data from hydrologial units..
 #   - **function**: whether to use a function to parse the data. For example, 'mean' takes the mean etc. Options are 'mean', 'sum', 'nanmean' and 'nansum'.
 #   - **format**: format to save to.
 report_cwatm:
