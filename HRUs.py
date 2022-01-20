@@ -390,7 +390,7 @@ class HRUs(BaseVariables):
         Returns:
             outarray: Decompressed HRU_array.
         """  
-        if isinstance(HRU_array, cp.ndarray):
+        if self.model.args.use_gpu:
             HRU_array = HRU_array.get()
         if np.issubdtype(HRU_array.dtype, np.integer):
             nanvalue = -1
