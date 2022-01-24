@@ -13,7 +13,7 @@ import numpy as np
 from scipy.ndimage import generate_binary_structure
 from cwatm.management_modules import data_handling
 from matplotlib.patches import Circle
-import os
+import yaml
 
 
 def cbinding_replace(name):
@@ -251,6 +251,8 @@ def get_dummy_model():
     class DummyModel:
         def __init__(self):
             self.args = Args()
+            with open('GEB.yml', 'r') as f:
+                self.config = yaml.load(f, Loader=yaml.FullLoader)
             self.data = Data(self)
 
     return DummyModel()
@@ -322,15 +324,15 @@ def main(include_circle=False, show=True, combine_units=True, high_res=False):
         # ax2.axes.yaxis.set_ticklabels([])
     
     ax2.imshow(units)
-    ax2.set_title("c - Land management units")
+    ax2.set_title("c - Hydrological response units")
 
     if include_circle:
         for ax in (ax1, ax2):
             circle = Circle((23.5, 19.5), 4.5, fill=False, edgecolor='red', linewidth=2.5)
             ax.add_patch(circle)
 
-    plt.savefig(f'D:/OneDrive/Work/GEB/Paper/figures/subcells{"_with_circle" if include_circle else ""}{"_high_res" if high_res else ""}.png', dpi=300)
-    plt.savefig(f'D:/OneDrive/Work/GEB/Paper/figures/subcells{"_with_circle" if include_circle else ""}{"_high_res" if high_res else ""}.eps')
+    plt.savefig(f'D:/OneDrive - IIASA/Paper/figures/subcells{"_with_circle" if include_circle else ""}{"_high_res" if high_res else ""}.png', dpi=300)
+    plt.savefig(f'D:/OneDrive - IIASA/Paper/figures/subcells{"_with_circle" if include_circle else ""}{"_high_res" if high_res else ""}.eps')
     
     if show:
         plt.show()

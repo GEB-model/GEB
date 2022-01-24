@@ -7,6 +7,7 @@ import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
 import geopandas as gpd
+
 from config import ORIGINAL_DATA, INPUT
 
 if not os.path.exists(os.path.join(INPUT, 'areamaps')):

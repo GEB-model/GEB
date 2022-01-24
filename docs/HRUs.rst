@@ -1,5 +1,5 @@
-Land units
-#####################
+Hydrological response units
+############################
 
 Most geographical models, including hydrological models, work using cells. This is essentially an area on the map that responds as a unit. The resolution of the grid varies, depending on the required detail of the simulation, computational run-time, availablity of input data among others. (Near-) square cells are very useful in this respect, because input data (such as satellite observations) are often available in a grid. CWatM, like most hydrological models, operates at these grids. For each cell, various land use types are modelled, and then aggregated to the cell level while considering the relative sizes of the land use types in that particular cell. Farmers occupy non-irrigated land, paddy-irrigated land, and non-paddy irrigated land. However, when a single land use type is shared among multiple farmers, their hydrological environment is shared, and thus must respond identically.
 
