@@ -8,6 +8,8 @@ try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     cp = np
+from osgeo import osr, gdal, gdalconst
+
 
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
