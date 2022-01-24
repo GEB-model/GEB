@@ -8,8 +8,6 @@ try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     cp = np
-from cwatm.management_modules.data_handling import readnetcdfInitial, checkOption
-
 
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
