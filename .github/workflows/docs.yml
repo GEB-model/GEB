@@ -72,6 +72,7 @@ jobs:
           mkdir _build
           make html
       - uses: actions/upload-artifact@v2
+        if: always()
         with:
           name: run_logs
           path: /tmp/ # or path/to/artifact
