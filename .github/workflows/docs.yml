@@ -51,6 +51,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get remove mysql* && sudo apt-get install -y mysql-server libmysqlclient-dev
+          sudo apt-get install gdal-bin libgdal-dev
       - name: Test
         run: |
           python -c "from osgeo import gdal"
