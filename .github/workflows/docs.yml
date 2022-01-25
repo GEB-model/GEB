@@ -75,7 +75,7 @@ jobs:
         if: always()
         with:
           name: run_logs
-          path: /tmp/ # or path/to/artifact
+          path: /tmp/sphinx-err-*.log
       # The following supports building all branches and combining on
       # gh-pages
 
