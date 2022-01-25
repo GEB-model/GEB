@@ -41,13 +41,16 @@ jobs:
         run: |
           sudo apt-add-repository ppa:ubuntugis/ubuntugis-unstable
           sudo apt-get update
-          sudo apt-get install -y mysql-server libmysqlclient-dev
           sudo apt-get install gdal-bin libgdal-dev
           pip install GDAL==$(gdal-config --version)
           git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
           python -m pip install --upgrade pip
           pip install -r requirements/requirements.txt -r requirements/docs.txt -r requirements/preprocessing.txt
           # pip install cupy-cuda112
+      - name: GA fixes
+        run: |
+          sudo apt-get update
+          sudo apt-get remove mysql* && sudo apt-get install -y mysql-server libmysqlclient-dev
       - name: Test
         run: |
           python -c "from osgeo import gdal"
