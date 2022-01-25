@@ -220,13 +220,13 @@ report_cwatm:
     save: save
 
 parameters:
-  soildepth_factor: 1.2357589498352997
-  preferentialFlowConstant: 7.771620196341074
   SnowMeltCoef: 0.004
-  arnoBeta_add: 0.4378794431106299
-  factor_interflow: 1.7415262118498727
-  recessionCoeff_factor: 5.08489365888276
-  manningsN: 7.159801087098635
-  lakeAFactor: 1.2001137835309703
-  lakeEvaFactor: 1.5932766384205812
+  arnoBeta_add: 0.18781855039414305
+  factor_interflow: 1.5507514321846023
+  lakeAFactor: 0.8654560453843747
+  lakeEvaFactor: 1.471582423324509
+  manningsN: 2.058737439843661
   normalStorageLimit: 0.645563228322237
+  preferentialFlowConstant: 6.1010022638948005
+  recessionCoeff_factor: 6.959587883563559
+  soildepth_factor: 1.1880513031716229
