@@ -17,8 +17,4 @@ cd $SCRIPT_DIR
 
 conda activate abm  # activate conda environment
 
-<<<<<<< HEAD
 python plot/plot_hydro_stats.py
-=======
-python plot/plot_hydro_stats.py
->>>>>>> regulate_flow
