@@ -294,4 +294,4 @@ def obs_vs_sim(scenario):
 
 if __name__ == '__main__':
     scenarios()
-    # obs_vs_sim('base')
+    obs_vs_sim('base')

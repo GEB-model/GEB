@@ -7,8 +7,8 @@ import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
 import geopandas as gpd
-
 from config import ORIGINAL_DATA, INPUT
+from typing import Union
 
 if not os.path.exists(os.path.join(INPUT, 'areamaps')):
     os.makedirs(os.path.join(INPUT, 'areamaps'))
@@ -18,12 +18,13 @@ if not os.path.exists(os.path.join(INPUT, 'landsurface', 'topo')):
     os.makedirs(os.path.join(INPUT, 'landsurface', 'topo'))
 
     
-def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.Profile, rasterio.profiles.Profile]:
+def create_mask(basin_id: int, upscale_factor: int, poor_point: Union[None, tuple[float, float]]=None) -> tuple[rasterio.profiles.Profile, rasterio.profiles.Profile]:
     """This function creates a mask and a submask (using global UPSCALE_FACTOR), and returns rasterio profile for both
 
     Args:
         basin_id: The basin id of the `merit_hydro_30sec/30sec_basids.tif`
         upscale_factor: The size of the subcell mask relative to the basin mask.
+        poor_point: Optional poor point of subbasin. pyflwdir must be installed to use this option.
 
     Returns:
         mask_profile: rasterio profile for mask
@@ -31,6 +32,7 @@ def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.P
     """
     mask_fn = os.path.join(INPUT, 'areamaps', 'mask.tif')
     submask_fn = os.path.join(INPUT, 'areamaps', 'submask.tif')
+
     with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_basids.tif'), 'r') as src:
         basins = src.read(1)
         mask = basins != basin_id  # mask anything that is not basin id
@@ -40,9 +42,31 @@ def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.P
         nonmaskedy = np.where(mask.all(axis=1)==False)[0]
         ymin, ymax = nonmaskedy[0], nonmaskedy[-1] + 1
 
-        mask_profile = src.profile
-        mask_profile, mask = clip_to_xy_bounds(src, mask_profile, mask, xmin, xmax, ymin, ymax)
+        mask_profile_org = src.profile
+        mask_profile, mask = clip_to_xy_bounds(src, mask_profile_org, mask, xmin, xmax, ymin, ymax)
         mask_profile['nodata'] = -1
+
+        if poor_point:
+            import pyflwdir
+            with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_flwdir.tif'), 'r') as src:
+                ldd_profile, ldd = clip_to_xy_bounds(src, mask_profile, src.read(1), xmin, xmax, ymin, ymax)
+
+            flw = pyflwdir.from_array(
+                ldd,
+                ftype="d8",
+                transform=ldd_profile['transform'],
+                latlon=ldd_profile['crs'].is_geographic,
+                cache=True,
+            )
+            subbasin_mask = ~flw.basins(xy=poor_point).astype(bool)
+            nonmaskedx = np.where(subbasin_mask.all(axis=0)==False)[0]
+            subxmin, subxmax = nonmaskedx[0], nonmaskedx[-1] + 1
+            nonmaskedy = np.where(subbasin_mask.all(axis=1)==False)[0]
+            subymin, subymax = nonmaskedy[0], nonmaskedy[-1] + 1
+
+            mask_profile, _ = clip_to_xy_bounds(src, mask_profile_org, mask, subxmin + xmin, subxmax + xmin, subymin + ymin, subymax + ymin)
+            mask = subbasin_mask[subymin: subymax, subxmin: subxmax]
+            mask_profile['nodata'] = -1
 
         with rasterio.open(mask_fn, 'w', **mask_profile) as mask_clipped_src:
             mask_clipped_src.write(mask.astype(mask_profile['dtype']), 1)
@@ -254,7 +278,7 @@ def create_mask_shapefile() -> None:
 
 if __name__ == '__main__':
     UPSCALE_FACTOR = 20
-    mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR)
+    mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(75.896042,17.370451))
     create_mask_shapefile()
     create_cell_area_map(mask_profile)
     create_cell_area_map(submask_profile, prefix='sub_')

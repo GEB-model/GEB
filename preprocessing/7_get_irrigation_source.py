@@ -551,7 +551,7 @@ if __name__ == '__main__':
 
     # copy size classes for enclaved Hyderabad from surounding Ranga Reddy district
     for size_class in SIZE_CLASSES:
-        irrigation_source_shapefile.loc[irrigation_source_shapefile['GID_2'] == 'IND.32.2_1', size_class] = irrigation_source_shapefile.loc[irrigation_source_shapefile['GID_2'] == 'IND.32.9_1', size_class].values[0]
+        # irrigation_source_shapefile.loc[irrigation_source_shapefile['GID_2'] == 'IND.32.2_1', size_class] = irrigation_source_shapefile.loc[irrigation_source_shapefile['GID_2'] == 'IND.32.9_1', size_class].values[0]
         assert (~np.isnan(irrigation_source_shapefile[size_class])).all()  # make sure all are filled now
     
     export_irrigation_sources(irrigation_source_shapefile, root_dir)

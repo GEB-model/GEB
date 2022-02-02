@@ -532,7 +532,7 @@ if __name__ == '__main__':
 
     # copy size classes for enclaved Hyderabad from surounding Ranga Reddy district
     for size_class in SIZE_CLASSES:
-        farm_size_shapefile.loc[farm_size_shapefile['GID_2'] == 'IND.32.2_1', size_class] = int(farm_size_shapefile.loc[farm_size_shapefile['GID_2'] == 'IND.32.9_1', size_class])
+        # farm_size_shapefile.loc[farm_size_shapefile['GID_2'] == 'IND.32.2_1', size_class] = int(farm_size_shapefile.loc[farm_size_shapefile['GID_2'] == 'IND.32.9_1', size_class])
         assert (farm_size_shapefile[size_class] != -1).all()  # make sure all are filled now
 
     export_farm_sizes(farm_size_shapefile, root_dir)
