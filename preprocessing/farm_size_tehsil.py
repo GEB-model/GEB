@@ -2,14 +2,14 @@
 import geopandas as gpd
 import pandas as pd
 import os
-from rasterio.features import rasterize
-import matplotlib.pyplot as plt
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 import chromedriver_autoinstaller
 import time
+from tqdm import tqdm
+from io import StringIO
 
-from config import ORIGINAL_DATA, INPUT
+from config import ORIGINAL_DATA
 
 TRANSLATE_DISTRICT = {
     "SANGLI": "SANGALI",
@@ -18,8 +18,6 @@ TRANSLATE_DISTRICT = {
     "OSMANABAD": "USMANABAD",
     "BID": "BEED",
 }
-
-
 
 class CensusScraper:
     def __init__(self, root_dir):
@@ -36,6 +34,8 @@ class CensusScraper:
             district_start: index of district dropdown to start from
         """
         chrome_options = Options()
+        chrome_options.add_argument('headless')
+
         # This option fixes a problem with timeout exceptions not being thrown after the limit has been reached
         chrome_options.add_argument('--dns-prefetch-disable')
         # Makes a new download directory for each year index
@@ -44,6 +44,7 @@ class CensusScraper:
             os.makedirs(self.downloadDir)
         prefs = {'download.default_directory': self.downloadDir}
         chrome_options.add_experimental_option('prefs', prefs)
+        chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
         self.driver = webdriver.Chrome(options=chrome_options)
         self.driver.set_page_load_timeout(180)
         self.driver.get("http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx")
@@ -79,8 +80,8 @@ class CensusScraper:
             counter: the index of the current unique dropdown configuration
             downloadDir: download directory of the current webdriver
         """
-        if os.path.exists(os.path.join(self.downloadDir, 'TehsilT1table2.csv')):
-            os.remove(os.path.join(self.downloadDir, 'TehsilT1table2.csv'))
+        if os.path.exists(os.path.join(self.downloadDir, 'TehsilT1table1.csv')):
+            os.remove(os.path.join(self.downloadDir, 'TehsilT1table1.csv'))
         # If the file is already in the data folder, don't try to download
         if os.path.exists(new_file):
             return
@@ -94,7 +95,7 @@ class CensusScraper:
         button_excel.click()
 
         # Rename the file so OS doesn't interrupt
-        old_file = os.path.join(self.downloadDir, 'TehsilT1table2.csv')
+        old_file = os.path.join(self.downloadDir, 'TehsilT1table1.csv')
         while not os.path.exists(old_file):
             time.sleep(1)
         time.sleep(3)
@@ -108,7 +109,8 @@ class CensusScraper:
         dropdown_state = self.driver.find_element_by_id(ID)
         return [option.text for option in dropdown_state.find_elements_by_tag_name("option")]
 
-    def download(self, year, to_download) -> None:
+    def download(self, year, to_download, n=None) -> None:
+        print("Working on", year)
         # Need to click the current year first because the other dropdown options change based on this
         dropdown_year = self.driver.find_element_by_id("_ctl0_ContentPlaceHolder1_ddlYear")
 
@@ -118,36 +120,37 @@ class CensusScraper:
         dropdown_options[index_year].click()
 
         for ID, value in [
-            ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS BY SIZE GROUP'),
+            ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
             ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
             ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
         ]:
             self.configure_dropdown(ID, value)
 
-        for state, districts in to_download.items():
-            print('state:', state)
-            self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlState", state)
-            for district, tehsils in districts.items():
-                print('district:', district)
-                self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlDistrict", district)
-                for tehsil in tehsils:
-                    print('tehsil:', tehsil)
-                    fp = os.path.join(self.downloadDir, state + '-' + district  + '-' + tehsil + '.csv')
-                    fp = fp.replace('/', '')  # slashes in names don't work with pathnames
-                    if not os.path.exists(fp):
-                        self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlTehsil", tehsil)
-                        self.download_file(fp)
+        with tqdm(total=n) as pbar:
+            for state, districts in to_download.items():
+                self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlState", state)
+                for district, tehsils in districts.items():
+                    self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlDistrict", district)
+                    for tehsil in tehsils:
+                        fp = os.path.join(self.downloadDir, state + '-' + district  + '-' + tehsil + '.csv')
+                        fp = fp.replace('/', '')  # slashes in names don't work with pathnames
+                        if not os.path.exists(fp):
+                            self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlTehsil", tehsil)
+                            self.download_file(fp)
+                        pbar.update(1)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         # make sure the dbconnection gets closed
         self.driver.quit()
 
 def main(year, scrape=True):
+    print('')
     root_dir = os.path.join(ORIGINAL_DATA, 'census', 'farm_size', year)
     csv_dir = os.path.join(root_dir, 'csv')
 
     tehsil_2_shapefile = {}
     to_download = {}
+    n = 0
     with open(os.path.join(ORIGINAL_DATA, 'census', f'subdistricts_Bhima_{year}.csv')) as f:
         for row in f.readlines():
             row = row.strip()
@@ -158,20 +161,21 @@ def main(year, scrape=True):
             if district not in to_download[state]:
                 to_download[state][district] = []
             to_download[state][district].append(tehsil)
+            n += 1
 
     if scrape:
         while True:
             while True:
                 try:
                     with CensusScraper(csv_dir) as downloader:
-                        downloader.download(year, to_download)
+                        downloader.download(year, to_download, n=n)
                     break
                 except Exception as e:
                     print(e)
                     print('Download failed, continuing from where it failed, but going for a little sleep first (1800 seconds)')
                     time.sleep(180)
                     continue
-            print('We finished downloading everything')
+            print('Downloading finished')
 
             error = False
             for fn in os.listdir(csv_dir):
@@ -190,25 +194,22 @@ def main(year, scrape=True):
     subdistricts = subdistricts.set_index('NAME')
     for fn in os.listdir(csv_dir):
         state, district, tehsil = fn.replace('.csv', '').split('-')
+        with open(os.path.join(csv_dir, fn), 'r') as f:
+            contents = f.read().split('\n\n')
+        df = pd.read_csv(StringIO(contents[2]))
+        size_classes = df['field4']
+        areas_total = df['area_total1']
+        ns_total = df['no_total1']
+
         tehsil_shp_name = tehsil_2_shapefile[tehsil]
-        subdistricts.at[tehsil_shp_name.title(), 'matched'] = True
+        for size_class, area, n in zip(size_classes, areas_total, ns_total):
+            subdistricts.at[tehsil_shp_name.title(), f'{size_class}_area'] = area
+            subdistricts.at[tehsil_shp_name.title(), f'{size_class}_n'] = n
+        subdistricts.at[tehsil_shp_name.title(), f'matched'] = True
 
-    print(subdistricts['matched'])
+    assert (subdistricts['matched'] == True).all()
 
-    subdistricts.plot(column='matched', vmin=0, vmax=1)
-    plt.show()
-
-    return
-    
-    mask_fn = os.path.join(INPUT, "areamaps", "mask.shp")
-    farm_size_shapefile = create_shapefile_and_clip_to_study_region(mask_fn)
-
-    # copy size classes for enclaved Hyderabad from surounding Ranga Reddy district
-    for size_class in SIZE_CLASSES:
-        # farm_size_shapefile.loc[farm_size_shapefile['GID_2'] == 'IND.32.2_1', size_class] = int(farm_size_shapefile.loc[farm_size_shapefile['GID_2'] == 'IND.32.9_1', size_class])
-        assert (farm_size_shapefile[size_class] != -1).all()  # make sure all are filled now
-
-    export_farm_sizes(farm_size_shapefile, root_dir)
+    subdistricts.to_file(os.path.join(root_dir, 'size.geojson'))
 
 
 if __name__ == '__main__':
