@@ -259,8 +259,7 @@ if __name__ == '__main__':
     chromedriver_autoinstaller.install()
     scrape = True
     headless = False
-    # for year in ('2000-01', '2010-11', '2015-16'):
-    for year in ('2010-11', '2015-16'):
+    for year in ('2000-01', '2010-11', '2015-16'):
         main(
             url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
             kind='crops',
