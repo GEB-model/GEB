@@ -201,10 +201,10 @@ def RunModel(args):
 		print("run_id: "+str(run_id)+" File: "+ Qsim_tss)
 		raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
 	
-	simulated_streamflow = pd.read_csv(Qsim_tss,sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
+	simulated_streamflow = pd.read_csv(Qsim_tss, sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
 	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
 
-	simulated_dates = [template['general']['start_time']]
+	simulated_dates = [config['start_date']]
 	for _ in range(len(simulated_streamflow) - 1):
 		simulated_dates.append(simulated_dates[-1] + timedelta(days=1))
 	simulated_streamflow = simulated_streamflow[1]
@@ -212,6 +212,8 @@ def RunModel(args):
 	simulated_streamflow.name = 'simulated'
 
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
+	print(streamflows.head())
+	print(streamflows.tail())
 	streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
 

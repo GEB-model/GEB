@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import re
+from isort import stream
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import yaml
@@ -259,11 +260,12 @@ def scenarios():
     plt.savefig('plot/output/hydro_stats_per_scenario.svg')
     plt.show()
 
-def obs_vs_sim(scenario):
+def obs_vs_sim(scenario, monthly=False, start_date=None):
     fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
     plt.subplots_adjust(left=0.1, right=0.97, bottom=0.07, top=0.92)
     dates, simulated_discharge = get_discharge(scenario, False)
     observed_discharge = get_observed_discharge(dates)
+
     ax.plot(dates, observed_discharge, color='black', linestyle='-', linewidth=LINEWIDTH, label='observed')
     ax.plot(dates, simulated_discharge, color='blue', linestyle='-', linewidth=LINEWIDTH, label='simulated')
     ax.set_xlim(dates[0], dates[-1] + timedelta(days=2))
@@ -275,8 +277,15 @@ def obs_vs_sim(scenario):
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=12))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
 
-    KGE_score = round(KGE(simulated_discharge, observed_discharge), 3)
-    corr_score = round(correlation(simulated_discharge, observed_discharge), 3)
+    streamflows = pd.DataFrame({'simulated': simulated_discharge, 'observed': observed_discharge}, index=[pd.Timestamp(d) for d in dates])
+    streamflows['simulated'] += 0.0001
+    if monthly:
+        streamflows['date'] = streamflows.index
+        streamflows = streamflows.resample('M', on='date').mean()
+    if start_date:
+        streamflows = streamflows[streamflows.index > start_date]
+    KGE_score = round(KGE(streamflows['simulated'], streamflows['observed']), 3)
+    corr_score = round(correlation(streamflows['simulated'], streamflows['observed']), 3)
 
     ax.text(
         0.85,
@@ -289,9 +298,9 @@ def obs_vs_sim(scenario):
     )
     plt.savefig('plot/output/obs_vs_sim.png')
     plt.savefig('plot/output/obs_vs_sim.svg')
-    # plt.show()
+    plt.show()
 
 
 if __name__ == '__main__':
-    scenarios()
-    # obs_vs_sim('base')
+    # scenarios()
+    obs_vs_sim('base', monthly=True, start_date=datetime(2006, 1, 1))
