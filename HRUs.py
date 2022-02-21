@@ -75,7 +75,7 @@ class Grid(BaseVariables):
         self.scaling = 1
         mask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'mask.tif')
         with rasterio.open(mask_fn) as mask_src:
-            self.mask = mask_src.read(1).astype(np.bool)
+            self.mask = mask_src.read(1).astype(bool)
             self.gt = mask_src.transform.to_gdal()
             self.bounds = mask_src.bounds
             self.cell_size = mask_src.transform.a
