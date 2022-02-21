@@ -204,18 +204,22 @@ def RunModel(args):
 	simulated_streamflow = pd.read_csv(Qsim_tss, sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
 	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
 
-	simulated_dates = [config['start_date']]
+	simulated_dates = [config['spinup_start']]
 	for _ in range(len(simulated_streamflow) - 1):
 		simulated_dates.append(simulated_dates[-1] + timedelta(days=1))
 	simulated_streamflow = simulated_streamflow[1]
 	simulated_streamflow.index = [pd.Timestamp(date) for date in simulated_dates]
 	simulated_streamflow.name = 'simulated'
 
+	print(1, streamflows.head())
+	print(1, streamflows.tail())
+
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
-	print(streamflows.head())
-	print(streamflows.tail())
-	streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
+	streamflows = streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
+
+	print(2, streamflows.head())
+	print(2, streamflows.tail())
 
 	if config['monthly']:
 		streamflows['date'] = streamflows.index
