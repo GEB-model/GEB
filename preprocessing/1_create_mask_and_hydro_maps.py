@@ -278,7 +278,9 @@ def create_mask_shapefile() -> None:
 
 if __name__ == '__main__':
     UPSCALE_FACTOR = 20
-    mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(75.896042,17.370451))
+    # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(75.896042,17.370451))  # Bhima
+    mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(73.98727,19.00464))  # Bhimashankar north
+    # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(73.86242,18.87037))  # Bhimashankar south
     create_mask_shapefile()
     create_cell_area_map(mask_profile)
     create_cell_area_map(submask_profile, prefix='sub_')

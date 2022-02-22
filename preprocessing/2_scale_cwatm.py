@@ -33,8 +33,8 @@ def scale(files: list[str]) -> None:
         transform = profile['transform']
 
     # +.5 * cell size because NetCDF uses center of cell, while transform uses upper left corner
-    newlon = np.linspace(transform.c + .5 * transform.a, transform.c + (profile['width'] + .5) * transform.a, profile['width'])
-    newlat = np.linspace(transform.f + .5 * transform.e, transform.f + (profile['height'] + .5) * transform.e, profile['height'])
+    newlon = np.linspace(transform.c + .5 * transform.a, transform.c + (profile['width'] - .5) * transform.a, profile['width'])
+    newlat = np.linspace(transform.f + .5 * transform.e, transform.f + (profile['height'] - .5) * transform.e, profile['height'])
 
     assert newlon.size == profile['width']
     assert newlat.size == profile['height']
