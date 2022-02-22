@@ -105,7 +105,7 @@ def plot_basins(outline):
     plt.subplots_adjust(bottom=0.15, top=1)
 
     minx, miny, maxx, maxy = outline.bounds
-    border = 1
+    border = .5
     ax.set_extent((minx - border, maxx + border, miny - border, maxy + border))
 
     lakes = gpd.GeoDataFrame.from_file("DataDrive/GEB/input/routing/lakesreservoirs/hydrolakes.shp")
@@ -115,8 +115,8 @@ def plot_basins(outline):
     command_areas.plot(ax=ax, legend=True, color="#D1A106")
 
     patches = [
-        mpatches.Patch(color='#3B94DB', label="water bodies"),
-        mpatches.Patch(color="#D1A106", label="command areas"),
+        mpatches.Patch(color='#3B94DB', label="Water bodies"),
+        mpatches.Patch(color="#D1A106", label="Reservoir command areas"),
     ]
     legend = ax.legend(
         handles=patches,

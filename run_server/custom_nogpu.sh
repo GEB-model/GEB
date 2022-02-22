@@ -2,6 +2,7 @@
 #SBATCH --job-name=custom
 #SBATCH --output=custom.out
 #SBATCH --ntasks=1
+#SBATCH --partition=ivm
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=3

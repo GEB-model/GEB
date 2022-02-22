@@ -3,7 +3,7 @@ import os
 import re
 from isort import stream
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import yaml
 import pandas as pd
 import sys
@@ -11,6 +11,7 @@ import numpy as np
 import matplotlib.dates as mdates
 from matplotlib.lines import Line2D
 from plot import read_npy
+import matplotlib.transforms as transforms
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
@@ -260,11 +261,15 @@ def scenarios():
     plt.savefig('plot/output/hydro_stats_per_scenario.svg')
     plt.show()
 
-def obs_vs_sim(scenario, monthly=False, start_date=None):
+def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
     fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
     plt.subplots_adjust(left=0.1, right=0.97, bottom=0.07, top=0.92)
     dates, simulated_discharge = get_discharge(scenario, False)
     observed_discharge = get_observed_discharge(dates)
+
+    print('remove this!!!!!')
+    simulated_discharge = simulated_discharge[:observed_discharge.size]
+    dates = dates[:observed_discharge.size]
 
     ax.plot(dates, observed_discharge, color='black', linestyle='-', linewidth=LINEWIDTH, label='observed')
     ax.plot(dates, simulated_discharge, color='blue', linestyle='-', linewidth=LINEWIDTH, label='simulated')
@@ -272,10 +277,21 @@ def obs_vs_sim(scenario, monthly=False, start_date=None):
     ax.set_title('Observed vs simulated discharge $(m^3s^{-1})$', **TITLE_FORMATTER)
     ax.set_ylim(0, ax.get_ylim()[1])
     ax.ticklabel_format(useOffset=False, axis='y')
-    ax.tick_params(axis='both', labelsize='x-small', pad=1)
+    ax.tick_params(axis='both', labelsize='xx-small', pad=1)
+    ax.tick_params(axis='y', labelsize='xx-small', pad=5, rotation=90)
     ax.legend(fontsize=6, frameon=False, handlelength=2, borderpad=1, loc=2)
-    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=12))
+    ax.xaxis.set_major_locator(mdates.YearLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    # ax.set_yticklabels(ax.get_yticklabels())#, rotation=40)#, ha=ha[n])
+    plt.setp(ax.get_yticklabels(), rotation=90, 
+         ha="center", rotation_mode="anchor")
+    ax.set_ylabel('$m^3/s$', size='x-small')
+    
+    ax.axvline(x=calibration_line, ymin=0, ymax=1, color='black', linestyle='--', linewidth=.6)
+    trans = transforms.blended_transform_factory(ax.transData, ax.transAxes)
+    offset = timedelta(days=50)
+    ax.text(calibration_line - offset, .98, 'calibration', fontsize='xx-small', rotation=90, ha='center', va='top', transform=trans)
+    ax.text(calibration_line + offset, .98, 'test', fontsize='xx-small', rotation=90, ha='center', va='top', transform=trans)
 
     streamflows = pd.DataFrame({'simulated': simulated_discharge, 'observed': observed_discharge}, index=[pd.Timestamp(d) for d in dates])
     streamflows['simulated'] += 0.0001
@@ -303,4 +319,4 @@ def obs_vs_sim(scenario, monthly=False, start_date=None):
 
 if __name__ == '__main__':
     # scenarios()
-    obs_vs_sim('base', monthly=True, start_date=datetime(2006, 1, 1))
+    obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_date=datetime(2006, 1, 1))

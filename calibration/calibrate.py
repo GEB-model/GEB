@@ -19,11 +19,13 @@ Please see his book "Python in Hydrology"   http://greenteapress.com/pythonhydro
 
 """
 from datetime import datetime, timedelta
+from multiprocessing.sharedctypes import Value
 import os
 import shutil
 import hydroStats
 import array
 import random
+import string
 import numpy as np
 from deap import algorithms
 from deap import base
@@ -142,54 +144,63 @@ def RunModel(args):
 
 	config_path = os.path.join(directory_run, 'config.yml')
 	if runmodel:
-		os.mkdir(directory_run)
+		while True:
+			os.mkdir(directory_run)
+			with open('GEB.yml', 'r') as f:
+				template = yaml.load(f, Loader=yaml.FullLoader)
 
-		with open('GEB.yml', 'r') as f:
-			template = yaml.load(f, Loader=yaml.FullLoader)
+			template['general']['spinup_start'] = config['spinup_start']
+			template['general']['start_time'] = config['end_date']
+			template['general']['export_inital_on_spinup'] = False
+			template['report'] = {}  # no other reporting than discharge required.
+			template['report_cwatm'] = {}  # no other reporting than discharge required.
 
-		template['general']['spinup_start'] = config['spinup_start']
-		template['general']['start_time'] = config['end_date']
-		template['general']['export_inital_on_spinup'] = False
-		template['report'] = {}  # no other reporting than discharge required.
-		template['report_cwatm'] = {}  # no other reporting than discharge required.
+			for _, row in values[['Key', 'value']].iterrows():
+				multi_set(template, row['value'], *row['Key'].split('.'))
 
-		for _, row in values[['Key', 'value']].iterrows():
-			multi_set(template, row['value'], *row['Key'].split('.'))
+			template['general']['report_folder'] = directory_run
 
-		template['general']['report_folder'] = directory_run
+			with open(config_path, 'w') as f:
+				yaml.dump(template, f)
 
-		with open(config_path, 'w') as f:
-			yaml.dump(template, f)
-
-		with current_gpu_use_count.get_lock():
-			if current_gpu_use_count.value < n_gpus:
-				use_gpu = current_gpu_use_count.value
-				current_gpu_use_count.value += 1
-				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
-			else:
-				use_gpu = False
-				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
-		
-		command = f"python run.py --config {config_path} --headless --scenario spinup"
-		if use_gpu is not False:
-			command += f' --GPU --gpu_device {use_gpu}'
-		print(command)
-
-		p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
-		output, errors = p.communicate()
-		
-		if use_gpu is not False:
 			with current_gpu_use_count.get_lock():
-				current_gpu_use_count.value -= 1
-				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
-		
-		with open(os.path.join(LOG_FOLDER, f"log{run_id}.txt"), 'w') as f:
-			content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
-			f.write(content)
+				if current_gpu_use_count.value < n_gpus:
+					use_gpu = current_gpu_use_count.value
+					current_gpu_use_count.value += 1
+					print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+				else:
+					use_gpu = False
+					print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+			
+			command = f"python run.py --config {config_path} --headless --scenario spinup"
+			if use_gpu is not False:
+				command += f' --GPU --gpu_device {use_gpu}'
+			print(command)
 
-		modflow_folder = os.path.join(directory_run, 'spinup', 'modflow_model')
-		if os.path.exists(modflow_folder):
-			shutil.rmtree(modflow_folder)
+			p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
+			output, errors = p.communicate()
+
+			
+			if use_gpu is not False:
+				with current_gpu_use_count.get_lock():
+					current_gpu_use_count.value -= 1
+					print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+			
+			if p.returncode == 0:
+				with open(os.path.join(LOG_FOLDER, f"log{run_id}.txt"), 'w') as f:
+					content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
+					f.write(content)
+				modflow_folder = os.path.join(directory_run, 'spinup', 'modflow_model')
+				if os.path.exists(modflow_folder):
+					shutil.rmtree(modflow_folder)
+				break
+			elif p.returncode == 1:
+				with open(os.path.join(LOG_FOLDER, f"log{run_id}_{''.join((random.choice(string.ascii_lowercase) for x in range(10)))}.txt"), 'w') as f:
+					content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
+					f.write(content)
+				shutil.rmtree(directory_run)
+			else:
+				raise ValueError
 	
 	else:
 		with open(config_path, 'r') as f:
