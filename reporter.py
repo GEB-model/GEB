@@ -7,6 +7,7 @@ import os
 import pandas as pd
 from collections.abc import Iterable
 import numpy as np
+import re
 try:
     import cupy as cp
 except ImportError:
@@ -54,7 +55,12 @@ class CWatMReporter(ABMReporter):
         
                 >>> get_array(data.grid.discharge, decompress=True)
         """
-        array = attrgetter(attr)(self.model)
+        slicer = re.search('\[([0-9]+)\]$', attr)
+        if slicer:
+            array = attrgetter(attr[:slicer.span(0)[0]])(self.model)
+            array = array[int(slicer.group(1))]
+        else:
+            array = attrgetter(attr)(self.model)
         if decompress:
             decompressed_array = attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
             return array, decompressed_array
