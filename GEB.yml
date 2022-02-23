@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2000-01-20
+  start_time: 2010-01-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2006-01-05
+  end_time: 2018-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_start: 2000-01-01
+  spinup_start: 2005-01-01
   ###
   # base folder where to report output data to
   CWatM_settings: CWatM_GEB_Bhima.ini

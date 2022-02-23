@@ -113,10 +113,6 @@ class Farmers(AgentBaseClass):
         self.irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'irrigating.npy'))
         self._groundwater_irrigating = np.zeros(self.max_n, dtype=bool)
         self.groundwater_irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'is_groundwater_irrigating.npy'))
-        self._planting_scheme = np.zeros(self.max_n, dtype=np.int8)
-        self.planting_scheme = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'planting_scheme.npy'))
-        self._unit_code = np.zeros(self.max_n, dtype=np.int32)
-        self.unit_code = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmer_unit_codes.npy'))
         if self.model.args.use_gpu:
             self._is_paddy_irrigated = cp.zeros(self.max_n, dtype=np.bool_)
         else:
@@ -133,13 +129,6 @@ class Farmers(AgentBaseClass):
         self._groundwater_abstraction_m3_by_farmer = np.zeros(self.max_n, dtype=np.float32)
         self._water_availability_by_farmer = np.zeros(self.max_n, dtype=np.float32)
         self._n_water_limited_days = np.zeros(self.max_n, dtype=np.int32)
-
-        self.planting_schemes = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'planting_schemes.npy'))
-        
-        # Set planting scheme for sugarcane in all regions.
-        self.planting_schemes[:, :, 11, 0, 0, 0] = 1
-        self.planting_schemes[:, :, 11, 0, 0, 1] = 12
-        self.planting_schemes[:, :, 11, 0, 0, 2] = 1
 
         self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
         self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
@@ -455,24 +444,6 @@ class Farmers(AgentBaseClass):
         }
         return yield_factors
 
-    @property
-    def start_day_per_month(self) -> np.ndarray:
-        """Get starting day for each month of year
-        
-        Returns:
-            starting_day_per_month: Starting day of each month of year.
-        """
-        return np.cumsum(np.array([1, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30]))
-
-    @property
-    def current_day_of_year(self) -> int:
-        """Gets the current day of the year.
-        
-        Returns:
-            day: current day of the year.
-        """
-        return self.model.current_time.timetuple().tm_yday
-
     @staticmethod
     @njit
     def get_yield_ratio_numba(crop_map: np.array, evap_ratios: np.array, alpha: np.array, beta: np.array, P0: np.array, P1: np.array) -> float:
@@ -645,7 +616,11 @@ class Farmers(AgentBaseClass):
         self.var.land_use_type[self.var.land_use_type == 2] = 1
         self.var.land_use_type[self.var.land_use_type == 3] = 1
 
-        crop_age_days, crop_harvest_age_days, next_plant_day, n_multicrop_periods, next_multicrop_index = self.get_crop_age_and_harvest_day_initial(self.n, self.model.current_time.month, self.current_day_of_year, self.planting_schemes, self.crop, self.irrigating, self.unit_code, self.planting_scheme, self.start_day_per_month)
+        print('This is hugely simplified')
+        next_plant_day = np.full(self.n, 2)  # plant all crops on 2nd day
+        crop_age_days = np.full(self.n, -1)
+        crop_harvest_age_days = np.full(self.n, -1)
+
         assert np.logical_xor((next_plant_day == -1), (crop_harvest_age_days == -1)).all()
         if self.model.args.use_gpu:
             crop_age_days = cp.array(crop_age_days)
@@ -661,8 +636,6 @@ class Farmers(AgentBaseClass):
         self.var.crop_age_days_map = self.by_field(crop_age_days)
         self.var.crop_harvest_age_days_map = self.by_field(crop_harvest_age_days)
         self.var.next_plant_day = self.by_field(next_plant_day)
-        self.var.n_multicrop_periods = self.by_field(n_multicrop_periods)
-        self.var.next_multicrop_index = self.by_field(next_multicrop_index)
                 
         assert (self.var.crop_harvest_age_days_map[self.var.crop_age_days_map >= 0] != -1).all()
         assert self.var.crop_map.shape == self.var.crop_age_days_map.shape == self.var.crop_harvest_age_days_map.shape
@@ -677,23 +650,12 @@ class Farmers(AgentBaseClass):
     @njit
     def harvest_numba(
         n: np.ndarray,
-        start_day_per_month: np.ndarray,
         field_indices_per_farmer: np.ndarray,
         field_indices: np.ndarray,
         crop_map: np.ndarray,
         crop_age_days: np.ndarray,
         crop_harvest_age_days: np.ndarray,
-        n_water_limited_days: np.ndarray,
         next_plant_day: np.ndarray,
-        next_multicrop_index: np.ndarray,
-        n_multicrop_periods: np.ndarray,
-        planting_schemes: np.ndarray,
-        irrigating: np.ndarray,
-        unit_code: np.ndarray,
-        crop: np.ndarray,
-        planting_scheme: np.ndarray,
-        switch_crops: bool,
-        field_size_per_farmer: np.ndarray,
     ) -> np.ndarray:
         """This function determines whether crops are ready to be harvested by comparing the crop harvest age to the current age of the crop. If the crop is harvested, the crops next multicrop index and next plant day are determined.
 
@@ -726,11 +688,10 @@ class Farmers(AgentBaseClass):
         Returns:
             harvest: Boolean subarray map of fields to be harvested.
         """
+        print('This function is hugely simplified. All crops planted on day 2 of year.')
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
-            switch_if_not_limited = random() <= .3
             farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_i)
-            n_water_limited_days_farmer = n_water_limited_days[farmer_i]
             for field in farmer_fields:
                 crop_age = crop_age_days[field]
                 if crop_age >= 0:
@@ -738,19 +699,7 @@ class Farmers(AgentBaseClass):
                     assert crop_harvest_age_days[field] != -1
                     if crop_age == crop_harvest_age_days[field]:
                         harvest[field] = True
-                        
-                        if switch_crops:
-                            if n_water_limited_days_farmer < .5 * crop_harvest_age_days[field] and field_size_per_farmer[farmer_i] > 5000 and switch_if_not_limited:  # switch to sugar cane
-                                crop[farmer_i] = 11
-                                planting_scheme[farmer_i] = 0
-                                next_multicrop_index[field] = 0
-                                n_multicrop_periods[field] = 1
-                        
-                        next_multicrop_index[field] = (next_multicrop_index[field] + 1) % n_multicrop_periods[field]
-                        assert next_multicrop_index[field] < n_multicrop_periods[field] 
-                        next_plant_month = planting_schemes[irrigating[farmer_i], unit_code[farmer_i], crop[farmer_i], planting_scheme[farmer_i], next_multicrop_index[field]]
-                        assert next_plant_month[0] != -1
-                        next_plant_day[field] = start_day_per_month[next_plant_month - 1][0]
+                        next_plant_day[field] = 2  # this is again hugely simplified
                 else:
                     assert crop_map[field] == -1
                     assert crop_harvest_age_days[field] == -1
@@ -766,23 +715,12 @@ class Farmers(AgentBaseClass):
         crop_harvest_age_days = self.var.crop_harvest_age_days_map.get() if self.model.args.use_gpu else self.var.crop_harvest_age_days_map
         harvest = self.harvest_numba(
             self.n,
-            self.start_day_per_month,
             self.field_indices_per_farmer,
             self.field_indices,
             crop_map,
             crop_age_days,
             crop_harvest_age_days,
-            self.n_water_limited_days,
             self.var.next_plant_day,
-            self.var.next_multicrop_index,
-            self.var.n_multicrop_periods,
-            self.planting_schemes,
-            self.irrigating,
-            self.unit_code,
-            self.crop,
-            self.planting_scheme,
-            self.model.args.switch_crops,
-            self.field_size_per_farmer,
         )
         if np.count_nonzero(harvest):
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
@@ -815,18 +753,11 @@ class Farmers(AgentBaseClass):
     @njit
     def plant_numba(
         n: int,
-        start_day_per_month: np.ndarray,
         current_day: int,
         next_plant_day: np.ndarray,
         crop: np.ndarray,
         field_indices_per_farmer: np.ndarray,
         field_indices: np.ndarray,
-        planting_schemes: np.ndarray,
-        irrigating: np.ndarray,
-        n_water_limited_days: np.ndarray,
-        unit_code: np.ndarray,
-        planting_scheme: np.ndarray,
-        next_multicrop_index: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
         
@@ -862,9 +793,7 @@ class Farmers(AgentBaseClass):
             for field in farmer_fields:
                 if next_plant_day[field] != -1 and next_plant_day[field] == current_day:
                     plant[field] = crop[i]
-                    crop_data = planting_schemes[irrigating[i], unit_code[i], crop[i], planting_scheme[i], next_multicrop_index[field]]
-                    crop_harvest_age_days[field] = (start_day_per_month[crop_data[1] - 1] - start_day_per_month[crop_data[0] - 1]) % 365
-                    n_water_limited_days[i] = 0
+                    crop_harvest_age_days[field] = 100
         return plant, crop_harvest_age_days
 
     def plant(self) -> None:
@@ -872,18 +801,11 @@ class Farmers(AgentBaseClass):
         """
         plant_map, crop_harvest_age_days = self.plant_numba(
             self.n,
-            self.start_day_per_month,
             self.current_day_of_year,
             self.var.next_plant_day,
             self.crop,
             self.field_indices_per_farmer,
             self.field_indices,
-            self.planting_schemes,
-            self.irrigating,
-            self.n_water_limited_days,
-            self.unit_code,
-            self.planting_scheme,
-            self.var.next_multicrop_index
         )
         if self.model.args.use_gpu:
             plant_map = cp.array(plant_map)
@@ -1087,6 +1009,15 @@ class Farmers(AgentBaseClass):
 
         self.harvest()
         self.plant()
+
+    @property
+    def current_day_of_year(self) -> int:
+        """Gets the current day of the year.
+        
+        Returns:
+            day: current day of the year.
+        """
+        return self.model.current_time.timetuple().tm_yday
         
     def add_agents(self):
         """This function can be used to add new farmers, but is not yet implemented."""
