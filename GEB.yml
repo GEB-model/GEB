@@ -53,7 +53,7 @@ draw:
   # Here, you can specify which types of agents are to be drawn. In addition, you can specify options on how those agents will be drawn. These options must correspond to method arguments in the artists.
   draw_agents:
     farmers:
-      draw_every_nth: 100
+      draw_every_nth: 1
   ###
   # Specify the colors and names of the crops to use here. The indices must match the indices the crop factors file (DataDrive/GEB/input/crop_data/crop_factors.csv).
   crop_data:
