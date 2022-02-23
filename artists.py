@@ -147,7 +147,7 @@ class Artists(HyveArtists):
         if 'type' not in options:
             if array.dtype in (np.float16, np.float32, np.float64):
                 options['type'] = 'continuous'
-            elif array.dtype in (np.bool, np.int8, np.int16, np.int32, np.int64):
+            elif array.dtype in (bool, np.int8, np.int16, np.int32, np.int64):
                 if np.unique(array).size < 30:
                     options['type'] = 'categorical'
                 else:
