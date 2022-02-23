@@ -111,7 +111,7 @@ class Farmers(AgentBaseClass):
         self._crop = np.load(crop_file)
         self._irrigating = np.zeros(self.max_n, dtype=np.int8)
         self.irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'irrigating.npy'))
-        self._groundwater_irrigating = np.zeros(self.max_n, dtype=np.bool)
+        self._groundwater_irrigating = np.zeros(self.max_n, dtype=bool)
         self.groundwater_irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'is_groundwater_irrigating.npy'))
         self._planting_scheme = np.zeros(self.max_n, dtype=np.int8)
         self.planting_scheme = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'planting_scheme.npy'))
@@ -125,7 +125,7 @@ class Farmers(AgentBaseClass):
 
         self._yield_ratio_per_farmer = np.zeros(self.max_n, dtype=np.float32)
 
-        self._is_water_efficient = np.zeros(self.max_n, dtype=np.bool)
+        self._is_water_efficient = np.zeros(self.max_n, dtype=bool)
         self._latest_harvests = np.zeros((self.max_n, 3), dtype=np.float32)
 
         self._channel_abstraction_m3_by_farmer = np.zeros(self.max_n, dtype=np.float32)
