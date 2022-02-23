@@ -199,15 +199,19 @@ class Artists(HyveArtists):
                 if nanvalue is not None:
                     unique_values = unique_values[unique_values != nanvalue]
                 unique_values = unique_values.tolist()
-                if 'colors' in options:
-                    colors = np.array(options['colors'])[np.array(unique_values)].tolist()
-                    colors = [self.hex_to_rgb(color) for color in colors]
+                if unique_values:  # no data to be shown on map
+                    if 'colors' in options:
+                        colors = np.array(options['colors'])[np.array(unique_values)].tolist()
+                        colors = [self.hex_to_rgb(color) for color in colors]
+                    else:
+                        colors = self.generate_distinct_colors(len(unique_values), mode='rgb')
+                    if 'names' in options:
+                        names = np.array(options['names'])[np.array(unique_values)].tolist()
+                    else:
+                        names = unique_values
                 else:
-                    colors = self.generate_distinct_colors(len(unique_values), mode='rgb')
-                if 'names' in options:
-                    names = np.array(options['names'])[np.array(unique_values)].tolist()
-                else:
-                    names = unique_values
+                    colors = []
+                    names = []
                 channels = (0, 1, 2)
                 background[:,:,3][array != nanvalue] = 255
             elif options['type'] == 'discrete':
@@ -221,14 +225,15 @@ class Artists(HyveArtists):
             else:
                 raise ValueError
             
-            for channel in channels:
-                channel_colors = np.array([color[channel] * 255 for color in colors])
-                color_array_size = unique_values[-1] + 1
-                if unique_values[0] < 0:
-                    color_array_size += abs(unique_values[0])
-                color_array = np.zeros(color_array_size, dtype=np.float32)
-                color_array[unique_values] = channel_colors
-                background[:, :, channel] = color_array[array]
+            if unique_values:
+                for channel in channels:
+                    channel_colors = np.array([color[channel] * 255 for color in colors])
+                    color_array_size = unique_values[-1] + 1
+                    if unique_values[0] < 0:
+                        color_array_size += abs(unique_values[0])
+                    color_array = np.zeros(color_array_size, dtype=np.float32)
+                    color_array[unique_values] = channel_colors
+                    background[:, :, channel] = color_array[array]
             
             legend = {
                 'type': 'legend',
