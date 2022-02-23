@@ -62,7 +62,7 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
     df = pd.read_excel(os.path.join(ORIGINAL_DATA, 'reservoir_capacity.xlsx'))
     df = df[df['Hylak_id'] != -1].set_index('Hylak_id')
 
-    reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy()
+    reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy() * 1_000_000
     for hylak_id, capacity in df['Gross_capacity_BCM'].items():
         capacity *= 1_000_000_000  # BCM to m3
         reservoir_volumes.loc[hylak_id] = capacity
