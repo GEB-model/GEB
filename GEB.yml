@@ -217,6 +217,11 @@ report_cwatm:
     function: sum
     format: csv
     save: save
+  discharge:
+    varname: data.grid.discharge
+    function: sample,25,54
+    format: csv
+    save: save
 
 parameters:
   SnowMeltCoef: 0.004

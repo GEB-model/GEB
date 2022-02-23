@@ -43,9 +43,9 @@ if __name__ == '__main__':
         #     {"name": "reservoir irrigation", "color": "#FFFF00"},
         #     {"name": "groundwater irrigation", "color": "#000000"},
         # ],
-        # [
-        #     {"name": "reservoir storage", "color": "#FF0000"},
-        # ],
+        [
+            {"name": "reservoir storage", "color": "#FF0000"},
+        ],
         # [
         #     {"name": "w1", "color": "#FF0000"},
         #     {"name": "w2", "color": "#FFAA00"},
@@ -55,6 +55,9 @@ if __name__ == '__main__':
         # ],
         [
             {"name": "hydraulic head", "color": "#FF0000"},
+        ],
+        [
+            {"name": "discharge", "color": "#FF0000"},
         ],
         # [
         #     {"name": "precipitation", "color": "#FF0000"},

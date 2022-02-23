@@ -39,6 +39,19 @@ class CWatMReporter(ABMReporter):
             self.variables[name] = []
         self.step()  # report on inital state
 
+    def decompress(self, attr: str, array: np.ndarray) -> np.ndarray:
+        """This function decompresses an array for given attribute.
+        
+        Args:
+            attr: Attribute which was used to get array.
+            array: The array itself.
+
+        Returns:
+            decompressed_array: The decompressed array.
+        """
+        return attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
+
+
     def get_array(self, attr: str, decompress: bool=False) -> np.ndarray:
         """This function retrieves a NumPy array from the model based the name of the variable. Optionally decompresses the array.
 
@@ -62,7 +75,7 @@ class CWatMReporter(ABMReporter):
         else:
             array = attrgetter(attr)(self.model)
         if decompress:
-            decompressed_array = attrgetter('.'.join(attr.split('.')[:-1]))(self.model).decompress(array)
+            decompressed_array = self.decompress(attr, array)
             return array, decompressed_array
 
         assert isinstance(array, (np.ndarray, cp.ndarray))
@@ -84,22 +97,27 @@ class CWatMReporter(ABMReporter):
                 if array.size == 0:
                     value = None
                 else:
-                    if conf['function'] == 'mean':
+                    function, *args = conf['function'].split(',')
+                    if function == 'mean':
                         value = np.mean(array)
                         if np.isnan(value):
                             value = None
-                    elif conf['function'] == 'nanmean':
+                    elif function == 'nanmean':
                         value = np.nanmean(array)
                         if np.isnan(value):
                             value = None
-                    elif conf['function'] == 'sum':
+                    elif function == 'sum':
                         value = np.sum(array)
                         if np.isnan(value):
                             value = None
-                    elif conf['function'] == 'nansum':
+                    elif function == 'nansum':
                         value = np.nansum(array)
                         if np.isnan(value):
                             value = None
+                    elif function == 'sample':
+                        decompressed_array = self.decompress(conf['varname'], array)
+                        value = decompressed_array[int(args[0]), int(args[1])]
+                        assert not np.isnan(value)
                     else:
                         raise ValueError()
                 self.report_value(name, value, conf)
