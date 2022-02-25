@@ -110,9 +110,7 @@ class Farmers(AgentBaseClass):
         crop_file = os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy')
         self._crop = np.load(crop_file)
         self._irrigating = np.zeros(self.max_n, dtype=np.int8)
-        self.irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'irrigating.npy'))
         self._groundwater_irrigating = np.zeros(self.max_n, dtype=bool)
-        self.groundwater_irrigating = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'is_groundwater_irrigating.npy'))
         if self.model.args.use_gpu:
             self._is_paddy_irrigated = cp.zeros(self.max_n, dtype=np.bool_)
         else:
@@ -439,10 +437,9 @@ class Farmers(AgentBaseClass):
         """
         df = pd.read_csv(os.path.join(self.model.config['general']['input_folder'], 'crop_data', 'yield_ratios.csv'))
         yield_factors = df[['alpha', 'beta', 'P0', 'P1']].to_dict(orient='list')
-        yield_factors = {
+        return {
             key: np.array(value) for key, value in yield_factors.items()
         }
-        return yield_factors
 
     @staticmethod
     @njit
@@ -617,7 +614,7 @@ class Farmers(AgentBaseClass):
         self.var.land_use_type[self.var.land_use_type == 3] = 1
 
         print('This is hugely simplified')
-        next_plant_day = np.full(self.n, 2)  # plant all crops on 2nd day
+        next_plant_day = np.full(self.n, 150)  # plant all crops on 2nd day
         crop_age_days = np.full(self.n, -1)
         crop_harvest_age_days = np.full(self.n, -1)
 
@@ -688,7 +685,7 @@ class Farmers(AgentBaseClass):
         Returns:
             harvest: Boolean subarray map of fields to be harvested.
         """
-        print('This function is hugely simplified. All crops planted on day 2 of year.')
+        print('This function is hugely simplified. All crops planted on day 150 of year.')
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
             farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_i)
@@ -699,7 +696,7 @@ class Farmers(AgentBaseClass):
                     assert crop_harvest_age_days[field] != -1
                     if crop_age == crop_harvest_age_days[field]:
                         harvest[field] = True
-                        next_plant_day[field] = 2  # this is again hugely simplified
+                        next_plant_day[field] = 150  # this is again hugely simplified
                 else:
                     assert crop_map[field] == -1
                     assert crop_harvest_age_days[field] == -1
@@ -821,6 +818,37 @@ class Farmers(AgentBaseClass):
         field_is_paddy_irrigated = self.by_field(self.is_paddy_irrigated, nofieldvalue=0)
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
+
+    @staticmethod
+    @njit
+    def invest_numba(n, field_indices, field_indices_per_farmer, HRU_to_grid, irrigating, channel_storage_m3, reservoir_command_areas):
+        for farmer_idx in range(n):
+            farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_idx)
+            channel_storage_farmer_m3 = 0
+            in_reservoir_command_area = False
+            for field in farmer_fields:
+                grid_cell = HRU_to_grid[field]
+                channel_storage_farmer_m3 += channel_storage_m3[grid_cell]
+                if reservoir_command_areas[field] >= 0:
+                    in_reservoir_command_area = True
+
+            if channel_storage_farmer_m3 > 100:
+                irrigating[farmer_idx] = 1
+
+            if in_reservoir_command_area:
+                irrigating[farmer_idx] = 1
+            
+
+    def invest(self) -> None:
+        self.invest_numba(
+            self.n,
+            self.field_indices,
+            self.field_indices_per_farmer,
+            self.model.data.HRU.HRU_to_grid,
+            self.irrigating,
+            self.model.data.grid.channelStorageM3,
+            self.model.data.HRU.reservoir_command_areas
+        )
     
     @property
     def locations(self):
@@ -1008,6 +1036,7 @@ class Farmers(AgentBaseClass):
             self.diffuse_water_efficiency_knowledge()
 
         self.harvest()
+        self.invest()
         self.plant()
 
     @property

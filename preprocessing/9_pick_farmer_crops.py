@@ -154,6 +154,7 @@ def get_crop_and_irrigation_per_farmer() -> tuple[np.ndarray, np.ndarray]:
         bounds=bounds
     )
     irrigating_farmers = irrigated_land.sample_coords(locations)
+    irrigating_farmers.fill(True)
 
     groundwater_irrigated = ArrayReader(
         fp=os.path.join(INPUT, 'agents', 'irrigation_source', '2010-11', 'irrigation_source.tif'),
@@ -173,13 +174,10 @@ def get_crop_and_irrigation_per_farmer() -> tuple[np.ndarray, np.ndarray]:
     groundwater_irrigated_farmers = is_groundwater_irrigating(irrigating_farmers, groundwater_irrigation_probabilities, farm_sizes_ha)
     groundwater_irrigated_farmers = np.random.binomial(1, groundwater_irrigated_farmers)
 
-    np.save(os.path.join(OUTPUT_FOLDER, 'is_groundwater_irrigating.npy'), groundwater_irrigated_farmers)
-
     crop_per_farmer[:] = 0  # all farmers grow wheat
     # just make sure all farmers were assigned a crop
     assert not (crop_per_farmer == -1).any()
     np.save(os.path.join(OUTPUT_FOLDER, 'crop.npy'), crop_per_farmer)
-    np.save(os.path.join(OUTPUT_FOLDER, 'irrigating.npy'), irrigating_farmers)
 
     return crop_per_farmer, irrigating_farmers
 

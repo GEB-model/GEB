@@ -33,11 +33,11 @@ class Artists(HyveArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if not hasattr(model, 'legend') and hasattr(model, 'HRU'):
-            crops = model.data.HRU.crop_data['Crop']
-            self.legend = {crop: color for crop, color in zip(crops, model.data.HRU.crop_data['Color'])}
-        color = self.custom_plot['data.HRU.crop_map']['colors'][agents.crop[idx].item()]
-        return {"type": "shape", "shape": "circle", "r": 1, "filled": True, "color": color}
+        if agents.irrigating[idx].item():
+            color = 'blue'
+        else:
+            color = 'red'
+        return {"type": "shape", "shape": "circle", "r": .5, "filled": True, "color": color}
 
     def draw_rivers(self) -> dict:
         """Returns portrayal of river.
