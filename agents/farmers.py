@@ -117,8 +117,6 @@ class Farmers(AgentBaseClass):
             self._is_paddy_irrigated = np.zeros(self.max_n, dtype=np.bool_)
         self.is_paddy_irrigated[self.crop == 2] = True  # set rice to paddy-irrigated
 
-        self._yield_ratio_per_farmer = np.zeros(self.max_n, dtype=np.float32)
-
         self._is_water_efficient = np.zeros(self.max_n, dtype=bool)
         self._latest_harvests = np.zeros((self.max_n, 3), dtype=np.float32)
 
@@ -127,6 +125,7 @@ class Farmers(AgentBaseClass):
         self._groundwater_abstraction_m3_by_farmer = np.zeros(self.max_n, dtype=np.float32)
         self._water_availability_by_farmer = np.zeros(self.max_n, dtype=np.float32)
         self._n_water_limited_days = np.zeros(self.max_n, dtype=np.int32)
+        self._wealth = np.zeros(self.max_n, dtype=np.float32)
 
         self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
         self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
@@ -436,7 +435,7 @@ class Farmers(AgentBaseClass):
             yield_factors: dictonary with np.ndarray of values per crop for each variable.
         """
         df = pd.read_csv(os.path.join(self.model.config['general']['input_folder'], 'crop_data', 'yield_ratios.csv'))
-        yield_factors = df[['alpha', 'beta', 'P0', 'P1']].to_dict(orient='list')
+        yield_factors = df[['alpha', 'beta', 'P0', 'P1', 'yield']].to_dict(orient='list')
         return {
             key: np.array(value) for key, value in yield_factors.items()
         }
@@ -457,7 +456,7 @@ class Farmers(AgentBaseClass):
         Returns:
             yield_ratios: yield ratio (as ratio of maximum obtainable yield) per harvested crop.
         """
-        yield_ratios = np.empty(evap_ratios.size, dtype=np.float32)
+        yield_ratios = np.full(evap_ratios.size, -1, dtype=np.float32)
 
         assert crop_map.size == evap_ratios.size
         
@@ -488,7 +487,7 @@ class Farmers(AgentBaseClass):
         Returns:
             yield_ratio: Map of yield ratio.
         """
-        return self.get_yield_ratio_numba(
+        yield_ratio = self.get_yield_ratio_numba(
             crop_map[harvest],
             actual_transpiration[harvest] / potential_transpiration[harvest],
             self.crop_yield_factors['alpha'],
@@ -496,15 +495,17 @@ class Farmers(AgentBaseClass):
             self.crop_yield_factors['P0'],
             self.crop_yield_factors['P1'],
         )
+        assert not np.isnan(yield_ratio).any()
+        return yield_ratio
 
-    def save_harvest(self, harvesting_farmers: np.ndarray) -> None:
+    def save_harvest(self, harvesting_farmers: np.ndarray, crop_yield_per_farmer: np.ndarray) -> None:
         """Saves the current harvest for harvesting farmers in a 2-dimensional array. The first dimension is the different farmers, while the second dimension are the previous harvests. First the previous harvests are moved by 1 column (dropping old harvests when they don't visit anymore) to make room for the new harvest. Then, the new harvest is placed in the array.
         
         Args:
             harvesting_farmers: farmers that harvest in this timestep.
         """
         self.latest_harvests[harvesting_farmers, 1:] = self.latest_harvests[harvesting_farmers, 0:-1]
-        self.latest_harvests[harvesting_farmers, 0] = self.yield_ratio_per_farmer[harvesting_farmers]
+        self.latest_harvests[harvesting_farmers, 0] = crop_yield_per_farmer[harvesting_farmers]
 
     def invest_in_water_efficiency(self, harvesting_farmers: np.ndarray) -> None:
         """In the scenario `self_investments` farmers invest in water saving techniques when their harvest starts dropping. Concretely if their harvest is lower than the previous harvests, they do so.
@@ -705,6 +706,7 @@ class Farmers(AgentBaseClass):
     def harvest(self):
         """This function determines which crops needs to be harvested, based on the current age of the crops and the harvest age of the crop. First a helper function is used to obtain the harvest map. Then, if at least 1 field is harvested, the yield ratio is obtained for all fields using the ratio of actual to potential evapotranspiration, saves the harvest per farmer and potentially invests in water saving techniques.
         """
+        crop_prices_per_gram = np.full(26, 1/1000, dtype=np.float32)  # TODO: make this per crop + dynamic
         actual_transpiration = self.var.actual_transpiration_crop.get() if self.model.args.use_gpu else self.var.actual_transpiration_crop
         potential_transpiration = self.var.potential_transpiration_crop.get() if self.model.args.use_gpu else self.var.potential_transpiration_crop
         crop_map = self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map
@@ -722,13 +724,20 @@ class Farmers(AgentBaseClass):
         if np.count_nonzero(harvest):
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
             harvesting_farmer_fields = self.var.land_owners[harvest]
-            self.yield_ratio_per_farmer = np.bincount(harvesting_farmer_fields, weights=yield_ratio, minlength=self.n)
+            harvested_area = self.var.cellArea[harvest]
+            harvested_crops = crop_map[harvest]
+            max_yield_per_crop = np.take(self.crop_yield_factors['yield'], harvested_crops)
+            crop_yield = harvested_area * yield_ratio * max_yield_per_crop
+            crop_yield_per_farmer = np.bincount(harvesting_farmer_fields, weights=crop_yield, minlength=self.n)
             harvesting_farmers = np.unique(harvesting_farmer_fields)
             if self.model.current_timestep > 365:
-                self.save_harvest(harvesting_farmers)
+                self.save_harvest(harvesting_farmers, crop_yield_per_farmer)
+            profit = crop_yield * np.take(crop_prices_per_gram, harvested_crops)
+            profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
+            self.wealth += profit_per_farmer
+
             self.invest_in_water_efficiency(harvesting_farmers)
-        else:
-            self.yield_ratio_per_farmer = np.zeros(self.n, dtype=np.float32)
+
         if self.model.args.use_gpu:
             harvest = cp.array(harvest)
         
@@ -790,7 +799,7 @@ class Farmers(AgentBaseClass):
             for field in farmer_fields:
                 if next_plant_day[field] != -1 and next_plant_day[field] == current_day:
                     plant[field] = crop[i]
-                    crop_harvest_age_days[field] = 100
+                    crop_harvest_age_days[field] = 10
         return plant, crop_harvest_age_days
 
     def plant(self) -> None:
@@ -865,14 +874,6 @@ class Farmers(AgentBaseClass):
     @is_paddy_irrigated.setter
     def is_paddy_irrigated(self, value):
         self._is_paddy_irrigated[:self.n] = value
-
-    @property
-    def yield_ratio_per_farmer(self):
-        return self._yield_ratio_per_farmer[:self.n]
-
-    @yield_ratio_per_farmer.setter
-    def yield_ratio_per_farmer(self, value):
-        self._yield_ratio_per_farmer[:self.n] = value
 
     @property
     def crop(self):
@@ -978,6 +979,14 @@ class Farmers(AgentBaseClass):
     def n_water_limited_days(self, value):      
         self._n_water_limited_days[:self.n] = value
 
+    @property
+    def wealth(self):
+        return self._wealth[:self.n]
+
+    @wealth.setter
+    def wealth(self, value):      
+        self._wealth[:self.n] = value
+
     @staticmethod
     @njit
     def field_size_per_farmer_numba(field_indices_per_farmer: np.ndarray, field_indices: np.ndarray, cell_area: np.ndarray) -> np.ndarray:
@@ -1009,22 +1018,6 @@ class Farmers(AgentBaseClass):
             self.field_indices,
             self.var.cellArea.get() if self.model.args.use_gpu else self.var.cellArea
         )
-
-    def diffuse_water_efficiency_knowledge(self) -> None:
-        """
-        When this method is called, all farmers that have a high water efficiency, spread knowledge to a maximum of three other farmers within 5000 meter.
-        """
-        water_efficient_farmers = np.where(self.is_water_efficient)[0]
-        neighbors = find_neighbors(
-            self.locations,
-            5000,
-            1,
-            29,
-            grid='longlat',
-            search_ids=np.random.choice(water_efficient_farmers, size=water_efficient_farmers.size // 100, replace=False),
-        )
-        neighbors = neighbors[neighbors != -1]
-        self.is_water_efficient[neighbors] = True
 
     def step(self) -> None:
         """

@@ -3,7 +3,7 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2010-04-01
+  start_time: 2010-05-25
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
@@ -13,9 +13,9 @@ general:
   spinup_start: 2005-04-01
   ###
   # base folder where to report output data to
-  CWatM_settings: CWatM_GEB_Bhima.ini
+  CWatM_settings: CWatM.ini
   input_folder: DataDrive/GEB_Bhima/input/
-  report_folder: DataDrive/GEB_Bhima/report/
+  report_folder: report/
   initial_conditions_folder: DataDrive/GEB_Bhima/initial
   init_water_table: DataDrive/GEB_Bhima/report/init/water_table.npy
   ###
