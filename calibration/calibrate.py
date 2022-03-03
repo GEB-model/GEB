@@ -222,8 +222,8 @@ def RunModel(args):
 	simulated_streamflow.index = [pd.Timestamp(date) for date in simulated_dates]
 	simulated_streamflow.name = 'simulated'
 
-	print(1, streamflows.head())
-	print(1, streamflows.tail())
+	print(1, simulated_streamflow.head())
+	print(1, simulated_streamflow.tail())
 
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
 	streamflows = streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
