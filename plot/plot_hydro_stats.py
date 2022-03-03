@@ -147,7 +147,9 @@ def add_patches_legend(ax, labels, colors, ncol):
 
 def get_observed_discharge(dates):
     df = pd.read_csv('DataDrive/GEB/calibration/observations.csv', parse_dates=['Dates'])
-    return df[df['Dates'].isin(dates)]['flow'].to_numpy()
+    df = df[df['Dates'].isin(dates)]
+    df = df.set_index('Dates').resample('1D').mean()
+    return df['flow'].to_numpy()
 
 def read_crop_data(dates, scenario, switch_crop):
     surgar_cane = np.zeros(len(dates), dtype=np.float32)
@@ -265,11 +267,8 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
     fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
     plt.subplots_adjust(left=0.1, right=0.97, bottom=0.07, top=0.92)
     dates, simulated_discharge = get_discharge(scenario, False)
+    
     observed_discharge = get_observed_discharge(dates)
-
-    print('remove this!!!!!')
-    simulated_discharge = simulated_discharge[:observed_discharge.size]
-    dates = dates[:observed_discharge.size]
 
     ax.plot(dates, observed_discharge, color='black', linestyle='-', linewidth=LINEWIDTH, label='observed')
     ax.plot(dates, simulated_discharge, color='blue', linestyle='-', linewidth=LINEWIDTH, label='simulated')
@@ -294,12 +293,13 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
     ax.text(calibration_line + offset, .98, 'test', fontsize='xx-small', rotation=90, ha='center', va='top', transform=trans)
 
     streamflows = pd.DataFrame({'simulated': simulated_discharge, 'observed': observed_discharge}, index=[pd.Timestamp(d) for d in dates])
+    streamflows = streamflows[~np.isnan(streamflows['observed'])]
     streamflows['simulated'] += 0.0001
     if monthly:
         streamflows['date'] = streamflows.index
         streamflows = streamflows.resample('M', on='date').mean()
-    if start_date:
-        streamflows = streamflows[streamflows.index > start_date]
+    if calibration_line:
+        streamflows = streamflows[streamflows.index > calibration_line]
     KGE_score = round(KGE(streamflows['simulated'], streamflows['observed']), 3)
     corr_score = round(correlation(streamflows['simulated'], streamflows['observed']), 3)
 
@@ -319,4 +319,5 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
 
 if __name__ == '__main__':
     # scenarios()
-    obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_date=datetime(2006, 1, 1))
+    obs_vs_sim('base', calibration_line=datetime(2012, 1, 1), monthly=True)
+    # obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_date=None)
