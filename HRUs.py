@@ -53,7 +53,6 @@ class BaseVariables:
         return array / self.cellArea
 
     def load_initial(self, name, default=.0, gpu=False):
-        return default
         if self.model.load_initial:
             fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npy")
             if gpu:
