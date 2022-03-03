@@ -190,7 +190,7 @@ class HRUs(BaseVariables):
         return self.land_use_type.size
 
     @staticmethod
-    @njit()
+    @njit(cache=True)
     def create_HRUs_numba(farms, land_use_classes, mask, scaling) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Numba helper function to create HRUs.
         
@@ -451,7 +451,7 @@ class Data:
         self.modflow = Modflow(self, model)
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def to_HRU_numba(data, var_to_HRU, land_use_ratio, fn=None):
         """Numba helper function to convert from grid to HRU.
         
@@ -515,7 +515,7 @@ class Data:
         return outdata
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def to_grid_numba(data, var_to_HRU, land_use_ratio, fn='mean'):
         """Numba helper function to convert from HRU to grid.
         

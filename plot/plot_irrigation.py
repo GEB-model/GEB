@@ -230,7 +230,7 @@ class Plot:
         self.design_plot(ax, title)
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def _plot_by_activation_order(areas, inverse, counts, activation_order):
         activation_order_per_area = {}
         for i in range(areas.size):
@@ -252,7 +252,7 @@ class Plot:
         return activation_order_per_area
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def is_upper_part_area(activation_order, area_geometries, mean_activation_order_per_area):
         is_upper_part = np.full(activation_order.size, -1, dtype=np.int32)
         for i in range(activation_order.size):

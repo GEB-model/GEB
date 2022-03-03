@@ -2,11 +2,14 @@
 from typing import Union
 from hyve.artists import Artists as HyveArtists
 import numpy as np
+import inspect
 from operator import attrgetter
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
+
+from agents.farmers import Farmers
 
 class Artists(HyveArtists):
     """This class is used to configure how the display environment works.
@@ -18,7 +21,7 @@ class Artists(HyveArtists):
         HyveArtists.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
-        self.background_variable = "data.HRU.crop_map"  # set initial background iamge.
+        self.background_variable = "agents.farmers.surface_irrigated"  # set initial background iamge.
         self.custom_plot = self.get_custom_plot()
         self.set_variables()
 
@@ -33,10 +36,10 @@ class Artists(HyveArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if agents.irrigating[idx].item():
+        if agents.surface_irrigated[idx].item():
             color = 'blue'
         else:
-            color = 'red'
+            color = 'blue'
         return {"type": "shape", "shape": "circle", "r": .5, "filled": True, "color": color}
 
     def draw_rivers(self) -> dict:
@@ -94,7 +97,7 @@ class Artists(HyveArtists):
         """
         self.variables_dict = {}
 
-        def add_var(attr):
+        def add_CWatM_var(attr):
             attributes = attrgetter(attr)(self.model)
             compressed_size = attributes.compressed_size
             for varname, variable in vars(attributes).items():
@@ -109,8 +112,12 @@ class Artists(HyveArtists):
                     else:
                         continue
         
-        add_var('data.grid')
-        add_var('data.HRU')
+        add_CWatM_var('data.grid')
+        add_CWatM_var('data.HRU')
+
+        farmer_properties = inspect.getmembers(Farmers, lambda o: isinstance(o, property))
+        for name, prop in farmer_properties:
+            self.variables_dict['agents.farmers.' + name] = (self.model.agents.farmers, name)
 
     def get_background_variables(self) -> list:
         """This function gets a list of variables that can be used to show in the background.
@@ -145,24 +152,32 @@ class Artists(HyveArtists):
         else:
             options = {}
         if 'type' not in options:
-            if array.dtype in (np.float16, np.float32, np.float64):
+            if np.issubsctype(array, np.floating):
                 options['type'] = 'continuous'
-            elif array.dtype in (bool, np.int8, np.int16, np.int32, np.int64):
+                options['nanvalue'] = np.nan
+            elif np.issubsctype(array, np.integer):
                 if np.unique(array).size < 30:
                     options['type'] = 'categorical'
+                    options['nanvalue'] = -1
                 else:
                     print("Type for array might be categorical, but more than 30 categories were found, so rendering as continous.")
                     options['type'] = 'continuous'
                     array = array.astype(np.float64)
+            elif np.issubsctype(array, bool):
+                options['type'] = 'bool'
+                options['nanvalue'] = -1
             else:
                 raise ValueError
-        
-        if not maxvalue:
-            maxvalue = np.nanmax(array[~mask]).item()
-        if not minvalue:
-            minvalue = np.nanmin(array[~mask]).item()
-        if np.isnan(maxvalue):  # minvalue must be nan as well
-            minvalue, maxvalue = 0, 0
+
+        if options['type'] == 'bool':
+            minvalue, maxvalue = 0, 1
+        else:
+            if not maxvalue:
+                maxvalue = np.nanmax(array[~mask]).item()
+            if not minvalue:
+                minvalue = np.nanmin(array[~mask]).item()
+            if np.isnan(maxvalue):  # minvalue must be nan as well
+                minvalue, maxvalue = 0, 0
         
         background = np.zeros((*array.shape, 4), dtype=np.uint8)
         if options['type'] == 'continuous':
@@ -222,18 +237,24 @@ class Artists(HyveArtists):
                     names = unique_values
                 colors = self.generate_discrete_colors(len(unique_values), self.hex_to_rgb(color), mode='rgb', min_alpha=0.4)
                 channels = (0, 1, 2, 3)
+            elif options['type'] == 'bool':
+                unique_values = [False, True]
+                names = ['False', 'True']
+                channels = (0, 1, 2, 3)
+                colors = [(1, 0, 0, 1), (0, 1, 0, 1)]
             else:
                 raise ValueError
-            
+
             if unique_values:
+                assert np.all(np.diff(unique_values) > 0)  # check if array is sorted
                 for channel in channels:
                     channel_colors = np.array([color[channel] * 255 for color in colors])
                     color_array_size = unique_values[-1] + 1
                     if unique_values[0] < 0:
                         color_array_size += abs(unique_values[0])
                     color_array = np.zeros(color_array_size, dtype=np.float32)
-                    color_array[unique_values] = channel_colors
-                    background[:, :, channel] = color_array[array]
+                    color_array[np.array(unique_values).astype(np.int32)] = channel_colors
+                    background[:, :, channel] = color_array[array.astype(np.int32)]
             
             legend = {
                 'type': 'legend',

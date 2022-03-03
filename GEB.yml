@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2010-05-25
+  start_time: 2010-05-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
   end_time: 2018-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_start: 2005-04-01
+  spinup_start: 2005-05-01
   ###
   # base folder where to report output data to
   CWatM_settings: CWatM.ini

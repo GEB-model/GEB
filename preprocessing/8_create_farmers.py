@@ -11,7 +11,7 @@ from config import INPUT
 import faulthandler
 faulthandler.enable()
 
-@njit
+@njit(cache=True)
 def create_farms(cultivated_land: np.ndarray, gt: tuple[float], farm_size_probabilities: np.ndarray, farm_size_choices: np.ndarray, cell_area: np.ndarray):
     """
     Creates random farms considering the farm size distribution.

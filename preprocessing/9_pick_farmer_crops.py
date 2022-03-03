@@ -87,7 +87,7 @@ def get_farm_sizes():
     assert (farm_sizes > 0).all()
     return farm_sizes
 
-@njit
+@njit(cache=True)
 def is_groundwater_irrigating(irrigating_farmers, groundwater_irrigation_probabilities, farms_size_ha):
     """
     Below 0.5

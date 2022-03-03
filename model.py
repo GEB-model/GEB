@@ -125,13 +125,13 @@ class GEBModel(ABM_Model, CWatM_Model):
         else:
             n = step_size
         for _ in range(n):
-            print(self.current_time)
+            # print(self.current_time)
             t0 = time()
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
             self.reporter.step()
             t1 = time()
-            print(t1-t0, 'seconds')
+            # print(t1-t0, 'seconds')
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""

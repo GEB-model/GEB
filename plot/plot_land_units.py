@@ -69,7 +69,7 @@ def neighbors(shape, conn=1):
     acc = np.cumprod((1,)+shape[::-1][:-1])
     return np.dot(idx, acc[::-1])
 
-@njit
+@njit(cache=True)
 def search_regions(img, nbs):
     line = img.ravel()
     rst = np.zeros((line.size, nbs.size), img.dtype)
