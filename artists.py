@@ -21,7 +21,7 @@ class Artists(HyveArtists):
         HyveArtists.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
-        self.background_variable = "agents.farmers.surface_irrigated"  # set initial background iamge.
+        self.background_variable = "agents.farmers.crop"  # set initial background iamge.
         self.custom_plot = self.get_custom_plot()
         self.set_variables()
 

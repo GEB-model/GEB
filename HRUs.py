@@ -7,7 +7,9 @@ import numpy as np
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
-    cp = np
+    pass
+
+import matplotlib.pyplot as plt
 
 
 class BaseVariables:
@@ -53,7 +55,6 @@ class BaseVariables:
         return array / self.cellArea
 
     def load_initial(self, name, default=.0, gpu=False):
-        return default
         if self.model.load_initial:
             fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npy")
             if gpu:
@@ -172,10 +173,11 @@ class HRUs(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 20
+        self.gt = (self.data.grid.gt[0], self.data.grid.gt[1] / self.scaling, self.data.grid.gt[2], self.data.grid.gt[3], self.data.grid.gt[4], self.data.grid.gt[5] / self.scaling)
 
         self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.grid.cell_size / self.scaling
-        self.land_use_type, self.land_use_ratio, self.land_owners, self.HRU_to_grid, self.var_to_HRU, self.var_to_HRU_uncompressed, self.unmerged_HRU_indices = self.create_HRUs()
+        self.land_use_type, self.land_use_ratio, self.land_owners, self.HRU_to_grid, self.grid_to_HRU, self.unmerged_HRU_indices = self.create_HRUs()
         if self.model.args.use_gpu:
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
@@ -205,17 +207,15 @@ class HRUs(BaseVariables):
             land_use_ratio: Relative size of HRU to grid.
             land_use_owner: Owner of HRU.
             HRU_to_grid: Maps HRUs to index of compressed cell index.
-            var_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-            var_to_HRU_uncompressed: Array of size of the grid cells. Each value maps to the index of the first unit of the next cell.
-            unmerged_HRU_indices: The index of the HRU to the subcell.
+            grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+            unmerged_HRU_indices: The index of the HRU to the grid cell.
         """
         assert farms.size == mask.size * scaling * scaling
         assert farms.size == land_use_classes.size
         ysize, xsize = mask.shape
 
         n_nonmasked_cells = mask.size - mask.sum()
-        var_to_HRU = np.full(n_nonmasked_cells, -1, dtype=np.int32)
-        var_to_HRU_uncompressed = np.full(mask.size, -1, dtype=np.int32)
+        grid_to_HRU = np.full(n_nonmasked_cells, -1, dtype=np.int32)
         HRU_to_grid = np.full(farms.size, -1, dtype=np.int32)
         land_use_array = np.full(farms.size, -1, dtype=np.int32)
         land_use_size = np.full(farms.size, -1, dtype=np.int32)
@@ -289,9 +289,8 @@ class HRUs(BaseVariables):
                         unmerged_HRU_indices[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
                         l += 1
 
-                    var_to_HRU[var_cell_count_compressed] = j
+                    grid_to_HRU[var_cell_count_compressed] = j
                     var_cell_count_compressed += 1
-                var_to_HRU_uncompressed[var_cell_count_uncompressed] = j
                 var_cell_count_uncompressed += 1
         
         land_use_size = land_use_size[:j]
@@ -302,7 +301,7 @@ class HRUs(BaseVariables):
         assert int(land_use_size.sum()) == n_nonmasked_cells * (scaling ** 2)
         
         land_use_ratio = land_use_size / (scaling ** 2)
-        return land_use_array, land_use_ratio, land_use_owner, HRU_to_grid, var_to_HRU, var_to_HRU_uncompressed, unmerged_HRU_indices
+        return land_use_array, land_use_ratio, land_use_owner, HRU_to_grid, grid_to_HRU, unmerged_HRU_indices
 
     def create_HRUs(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Function to create HRUs.
@@ -312,8 +311,7 @@ class HRUs(BaseVariables):
             land_use_ratio: Relative size of HRU to grid.
             land_use_owner: Owner of HRU.
             HRU_to_grid: Maps HRUs to index of compressed cell index.
-            var_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-            var_to_HRU_uncompressed: Array of size of the grid cells. Each value maps to the index of the first unit of the next cell.
+            grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             unmerged_HRU_indices: The index of the HRU to the subcell.
             """
         with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as farms_src:
@@ -359,7 +357,7 @@ class HRUs(BaseVariables):
 
         Args:
             HRU_array: HRU_array.
-            unmerged_HRU_indices: The index of the HRU to the subcell.
+            unmerged_HRU_indices: The index of the HRU to the grid cell.
             scaling: The scaling used for map between cells and HRUs.
             mask: Mask of study area.
             nanvalue: Value to use for values outside the mask.
@@ -452,31 +450,31 @@ class Data:
 
     @staticmethod
     @njit(cache=True)
-    def to_HRU_numba(data, var_to_HRU, land_use_ratio, fn=None):
+    def to_HRU_numba(data, grid_to_HRU, land_use_ratio, fn=None):
         """Numba helper function to convert from grid to HRU.
         
         Args:
             data: The grid data to be converted.
-            var_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+            grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             land_use_ratio: Relative size of HRU to grid.
             fn: Name of function to apply to data. None if data should be directly inserted into HRUs - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
 
         Returns:
             ouput_data: Data converted to HRUs.
         """
-        assert var_to_HRU[-1] == land_use_ratio.size
-        assert data.shape == var_to_HRU.shape
+        assert grid_to_HRU[-1] == land_use_ratio.size
+        assert data.shape == grid_to_HRU.shape
         output_data = np.zeros(land_use_ratio.size, dtype=data.dtype)
         prev_index = 0
 
         if fn is None:
-            for i in range(var_to_HRU.size):
-                cell_index = var_to_HRU[i]
+            for i in range(grid_to_HRU.size):
+                cell_index = grid_to_HRU[i]
                 output_data[prev_index:cell_index] = data[i]
                 prev_index = cell_index
         elif fn == 'mean':
-            for i in range(var_to_HRU.size):
-                cell_index = var_to_HRU[i]
+            for i in range(grid_to_HRU.size):
+                cell_index = grid_to_HRU[i]
                 cell_sizes = land_use_ratio[prev_index:cell_index]
                 output_data[prev_index:cell_index] = data[i] / cell_sizes.sum() * cell_sizes
                 prev_index = cell_index
@@ -504,7 +502,7 @@ class Data:
         if isinstance(data, (float, int)):  # check if data is simple float. Otherwise should be numpy array.
             outdata = data
         else:
-            outdata = self.to_HRU_numba(data, self.HRU.var_to_HRU, self.HRU.land_use_ratio, fn=fn)
+            outdata = self.to_HRU_numba(data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn=fn)
             if self.model.args.use_gpu:
                 outdata = cp.asarray(outdata)
         
@@ -516,24 +514,24 @@ class Data:
 
     @staticmethod
     @njit(cache=True)
-    def to_grid_numba(data, var_to_HRU, land_use_ratio, fn='mean'):
+    def to_grid_numba(data, grid_to_HRU, land_use_ratio, fn='mean'):
         """Numba helper function to convert from HRU to grid.
         
         Args:
             data: The grid data to be converted.
-            var_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+            grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             land_use_ratio: Relative size of HRU to grid.
             fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
 
         Returns:
             ouput_data: Data converted to HRUs.
         """
-        output_data = np.empty(var_to_HRU.size, dtype=data.dtype)
-        assert var_to_HRU[-1] == land_use_ratio.size
+        output_data = np.empty(grid_to_HRU.size, dtype=data.dtype)
+        assert grid_to_HRU[-1] == land_use_ratio.size
 
         prev_index = 0
-        for i in range(var_to_HRU.size):
-            cell_index = var_to_HRU[i]
+        for i in range(grid_to_HRU.size):
+            cell_index = grid_to_HRU[i]
             if fn == 'mean':
                 values = data[prev_index:cell_index]
                 weights = land_use_ratio[prev_index:cell_index]
@@ -573,7 +571,7 @@ class Data:
         else:
             if self.model.args.use_gpu and isinstance(HRU_data, cp.ndarray):
                 HRU_data = HRU_data.get()
-            outdata = self.to_grid_numba(HRU_data, self.HRU.var_to_HRU, self.HRU.land_use_ratio, fn)
+            outdata = self.to_grid_numba(HRU_data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn)
 
         if varname:
             if delete:
@@ -581,95 +579,113 @@ class Data:
             setattr(self.var, varname, outdata)
         return outdata
 
-    def split_HRU_data(self, a, i, att=None):
-        assert att is None or (att > 0 and att < 1)
-        assert att is None or np.issubdtype(a.dtype, np.floating)
-        if isinstance(a, cp.ndarray):
+    def split_HRU_data(self, a, i, ratio=None):
+        assert ratio is None or (ratio > 0 and ratio < 1)
+        assert ratio is None or np.issubdtype(a.dtype, np.floating)
+        if self.model.args.use_gpu and isinstance(a, cp.ndarray):
             is_cupy = True
             a = a.get()
         else:
             is_cupy = False
         if a.ndim == 1:
-            a = np.insert(a, i, a[i] * (att or 1), axis=0)
+            a = np.insert(a, i, a[i] * (ratio or 1), axis=0)
         elif a.ndim == 2:
-            a = np.insert(a, i, a[:, i] * (att or 1), axis=1)
+            a = np.insert(a, i, a[:, i] * (ratio or 1), axis=1)
         else:
             raise NotImplementedError
-        if att is not None:
-            a[i+1] = (1 - att) * a[i+1]
+        if ratio is not None:
+            a[i+1] = (1 - ratio) * a[i+1]
         if is_cupy:
             a = cp.array(a)
         return a
 
-    def split_HRU(self, index):
-        att = .50
-        subcell_indices = np.where(self.HRU.unmerged_HRU_indices == 0)[0]
-        split_loc = int(subcell_indices.size * att)
-        assert split_loc > 0 and split_loc < subcell_indices.size
-        att = split_loc / subcell_indices.size
+    @property
+    def grid_to_HRU_uncompressed(self):
+        return self.grid.decompress(self.HRU.grid_to_HRU, fillvalue=-1).ravel()
+
+    def split(self, HRU_indices):
+        HRU = self.HRU.unmerged_HRU_indices[HRU_indices]
+        assert (HRU == HRU[0]).all()  # assert all indices belong to same HRU - so only works for single grid cell at this moment
+        HRU = HRU[0]
+
+        # outarray = np.zeros_like(self.HRU.mask, dtype=np.int32)
+        # i = 0
+        # for y in range(self.grid.mask.shape[0]):
+        #     for x in range(self.grid.mask.shape[1]):
+        #         is_masked = self.grid.mask[y, x]
+        #         if not is_masked:
+        #             for ys in range(self.HRU.scaling):
+        #                 for xs in range(self.HRU.scaling):
+        #                     # outarray[y * self.HRU.scaling + ys, x * self.HRU.scaling + xs] = HRU_array[unmerged_HRU_indices[i]]
+        #                     outarray[y * self.HRU.scaling + ys, x * self.HRU.scaling + xs] = 1
+        #                     if i in HRU_indices:
+        #                         outarray[y * self.HRU.scaling + ys, x * self.HRU.scaling + xs] = 2
+        #                     i += 1
+
+        all_HRU_indices = np.where(self.HRU.unmerged_HRU_indices == HRU)[0]  # this could probably be speed up
+        ratio = HRU_indices.size / all_HRU_indices.size
+
+        self.HRU.unmerged_HRU_indices[self.HRU.unmerged_HRU_indices > HRU] += 1
+        self.HRU.unmerged_HRU_indices[HRU_indices] += 1
+
+        # self.grid_to_HRU_uncompressed,
+
+        # plt.imshow(outarray[:100, 150:400])
+        # plt.savefig('test.png')
+        # exit()
+        # # plt.show()
+
+        self.HRU.HRU_to_grid = self.split_HRU_data(self.HRU.HRU_to_grid, HRU)
+        self.HRU.grid_to_HRU[self.HRU.HRU_to_grid[HRU]:] += 1
         
-        self.HRU.unmerged_HRU_indices[self.HRU.unmerged_HRU_indices > index] += 1
-        self.HRU.unmerged_HRU_indices[subcell_indices[split_loc:]] += 1
-        self.HRU.HRU_to_grid = self.split_HRU_data(self.HRU.HRU_to_grid, index)
-        self.HRU.var_to_HRU[self.HRU.HRU_to_grid[index]:] += 1
-        
-        self.HRU.land_owners = self.split_HRU_data(self.HRU.land_owners, index)
+        self.HRU.land_owners = self.split_HRU_data(self.HRU.land_owners, HRU)
         self.model.agents.farmers.update_field_indices()
 
-        # self.model.agents.farmers.field_indices[self.model.agents.farmers.field_indices >= self.model.agents.farmers.field_indices[index]] += 1
-        # self.model.agents.farmers.field_indices = np.insert(self.model.agents.farmers.field_indices, index, self.model.agents.farmers.field_indices[index] - 1)
-        # np.array_equal(self.model.agents.farmers.field_indices, self.model.agents.farmers.create_field_indices(self.HRU.land_owners)[1])
-                
-        self.model.agents.farmers.field_indices_per_farmer
-        self.model.agents.farmers.field_indices
-        self.model.agents.farmers.field_indices = self.split_HRU_data(self.model.agents.farmers.field_indices, index)
+        self.model.agents.farmers.field_indices = self.split_HRU_data(self.model.agents.farmers.field_indices, HRU)
         
-        self.HRU.land_use_type = self.split_HRU_data(self.HRU.land_use_type, index)
-        self.HRU.land_use_ratio = self.split_HRU_data(self.HRU.land_use_ratio, index, att=att)
-        self.HRU.cellArea = self.split_HRU_data(self.HRU.cellArea, index, att=att)
-        self.HRU.crop_map = self.split_HRU_data(self.HRU.crop_map, index)
-        self.HRU.crop_age_days_map = self.split_HRU_data(self.HRU.crop_age_days_map, index)
-        self.HRU.crop_harvest_age_days_map = self.split_HRU_data(self.HRU.crop_harvest_age_days_map, index)
-        self.HRU.next_plant_day = self.split_HRU_data(self.HRU.next_plant_day, index)
-        self.HRU.n_multicrop_periods = self.split_HRU_data(self.HRU.n_multicrop_periods, index)
-        self.HRU.next_multicrop_index = self.split_HRU_data(self.HRU.next_multicrop_index, index)
-        self.HRU.Precipitation = self.split_HRU_data(self.HRU.Precipitation, index)
-        self.HRU.SnowCoverS = self.split_HRU_data(self.HRU.SnowCoverS, index)
-        self.HRU.DeltaTSnow = self.split_HRU_data(self.HRU.DeltaTSnow, index)
-        self.HRU.FrostIndex = self.split_HRU_data(self.HRU.FrostIndex, index)
-        self.HRU.percolationImp = self.split_HRU_data(self.HRU.percolationImp, index)
-        self.HRU.cropGroupNumber = self.split_HRU_data(self.HRU.cropGroupNumber, index)
-        self.HRU.capriseindex = self.split_HRU_data(self.HRU.capriseindex, index)
-        self.HRU.actBareSoilEvap = self.split_HRU_data(self.HRU.actBareSoilEvap, index)
-        self.HRU.actTransTotal = self.split_HRU_data(self.HRU.actTransTotal, index)
-        self.HRU.KSat1 = self.split_HRU_data(self.HRU.KSat1, index)
-        self.HRU.KSat2 = self.split_HRU_data(self.HRU.KSat2, index)
-        self.HRU.KSat3 = self.split_HRU_data(self.HRU.KSat3, index)
-        self.HRU.lambda1 = self.split_HRU_data(self.HRU.lambda1, index)
-        self.HRU.lambda2 = self.split_HRU_data(self.HRU.lambda2, index)
-        self.HRU.lambda3 = self.split_HRU_data(self.HRU.lambda3, index)
-        self.HRU.wwp1 = self.split_HRU_data(self.HRU.wwp1, index)
-        self.HRU.wwp2 = self.split_HRU_data(self.HRU.wwp2, index)
-        self.HRU.wwp3 = self.split_HRU_data(self.HRU.wwp3, index)
-        self.HRU.ws1 = self.split_HRU_data(self.HRU.ws1, index)
-        self.HRU.ws2 = self.split_HRU_data(self.HRU.ws2, index)
-        self.HRU.ws3 = self.split_HRU_data(self.HRU.ws3, index)
-        self.HRU.wres1 = self.split_HRU_data(self.HRU.wres1, index)
-        self.HRU.wres2 = self.split_HRU_data(self.HRU.wres2, index)
-        self.HRU.wres3 = self.split_HRU_data(self.HRU.wres3, index)
-        self.HRU.wfc1 = self.split_HRU_data(self.HRU.wfc1, index)
-        self.HRU.wfc2 = self.split_HRU_data(self.HRU.wfc2, index)
-        self.HRU.wfc3 = self.split_HRU_data(self.HRU.wfc3, index)
-        self.HRU.kunSatFC12 = self.split_HRU_data(self.HRU.kunSatFC12, index)
-        self.HRU.kunSatFC23 = self.split_HRU_data(self.HRU.kunSatFC23, index)
-        self.HRU.adjRoot = self.split_HRU_data(self.HRU.adjRoot, index)
-        self.HRU.arnoBeta = self.split_HRU_data(self.HRU.arnoBeta, index)
-        self.HRU.w1 = self.split_HRU_data(self.HRU.w1, index)
-        self.HRU.w2 = self.split_HRU_data(self.HRU.w2, index)
-        self.HRU.w3 = self.split_HRU_data(self.HRU.w3, index)
-        self.HRU.topwater = self.split_HRU_data(self.HRU.topwater, index)
-        self.HRU.totAvlWater = self.split_HRU_data(self.HRU.totAvlWater, index)
-        self.HRU.minInterceptCap = self.split_HRU_data(self.HRU.minInterceptCap, index)
-        self.HRU.interceptStor = self.split_HRU_data(self.HRU.interceptStor, index)
-        self.HRU.potential_transpiration_crop = self.split_HRU_data(self.HRU.potential_transpiration_crop, index)
-        self.HRU.actual_transpiration_crop = self.split_HRU_data(self.HRU.actual_transpiration_crop, index)
+        self.HRU.land_use_type = self.split_HRU_data(self.HRU.land_use_type, HRU)
+        self.HRU.land_use_ratio = self.split_HRU_data(self.HRU.land_use_ratio, HRU, ratio=ratio)
+        self.HRU.cellArea = self.split_HRU_data(self.HRU.cellArea, HRU, ratio=ratio)
+        self.HRU.crop_map = self.split_HRU_data(self.HRU.crop_map, HRU)
+        self.HRU.crop_age_days_map = self.split_HRU_data(self.HRU.crop_age_days_map, HRU)
+        self.HRU.Precipitation = self.split_HRU_data(self.HRU.Precipitation, HRU)
+        self.HRU.SnowCoverS = self.split_HRU_data(self.HRU.SnowCoverS, HRU)
+        self.HRU.DeltaTSnow = self.split_HRU_data(self.HRU.DeltaTSnow, HRU)
+        self.HRU.FrostIndex = self.split_HRU_data(self.HRU.FrostIndex, HRU)
+        self.HRU.percolationImp = self.split_HRU_data(self.HRU.percolationImp, HRU)
+        self.HRU.cropGroupNumber = self.split_HRU_data(self.HRU.cropGroupNumber, HRU)
+        self.HRU.capriseindex = self.split_HRU_data(self.HRU.capriseindex, HRU)
+        self.HRU.actBareSoilEvap = self.split_HRU_data(self.HRU.actBareSoilEvap, HRU)
+        self.HRU.actTransTotal = self.split_HRU_data(self.HRU.actTransTotal, HRU)
+        self.HRU.KSat1 = self.split_HRU_data(self.HRU.KSat1, HRU)
+        self.HRU.KSat2 = self.split_HRU_data(self.HRU.KSat2, HRU)
+        self.HRU.KSat3 = self.split_HRU_data(self.HRU.KSat3, HRU)
+        self.HRU.lambda1 = self.split_HRU_data(self.HRU.lambda1, HRU)
+        self.HRU.lambda2 = self.split_HRU_data(self.HRU.lambda2, HRU)
+        self.HRU.lambda3 = self.split_HRU_data(self.HRU.lambda3, HRU)
+        self.HRU.wwp1 = self.split_HRU_data(self.HRU.wwp1, HRU)
+        self.HRU.wwp2 = self.split_HRU_data(self.HRU.wwp2, HRU)
+        self.HRU.wwp3 = self.split_HRU_data(self.HRU.wwp3, HRU)
+        self.HRU.ws1 = self.split_HRU_data(self.HRU.ws1, HRU)
+        self.HRU.ws2 = self.split_HRU_data(self.HRU.ws2, HRU)
+        self.HRU.ws3 = self.split_HRU_data(self.HRU.ws3, HRU)
+        self.HRU.wres1 = self.split_HRU_data(self.HRU.wres1, HRU)
+        self.HRU.wres2 = self.split_HRU_data(self.HRU.wres2, HRU)
+        self.HRU.wres3 = self.split_HRU_data(self.HRU.wres3, HRU)
+        self.HRU.wfc1 = self.split_HRU_data(self.HRU.wfc1, HRU)
+        self.HRU.wfc2 = self.split_HRU_data(self.HRU.wfc2, HRU)
+        self.HRU.wfc3 = self.split_HRU_data(self.HRU.wfc3, HRU)
+        self.HRU.kunSatFC12 = self.split_HRU_data(self.HRU.kunSatFC12, HRU)
+        self.HRU.kunSatFC23 = self.split_HRU_data(self.HRU.kunSatFC23, HRU)
+        self.HRU.adjRoot = self.split_HRU_data(self.HRU.adjRoot, HRU)
+        self.HRU.arnoBeta = self.split_HRU_data(self.HRU.arnoBeta, HRU)
+        self.HRU.w1 = self.split_HRU_data(self.HRU.w1, HRU)
+        self.HRU.w2 = self.split_HRU_data(self.HRU.w2, HRU)
+        self.HRU.w3 = self.split_HRU_data(self.HRU.w3, HRU)
+        self.HRU.topwater = self.split_HRU_data(self.HRU.topwater, HRU)
+        self.HRU.totAvlWater = self.split_HRU_data(self.HRU.totAvlWater, HRU)
+        self.HRU.minInterceptCap = self.split_HRU_data(self.HRU.minInterceptCap, HRU)
+        self.HRU.interceptStor = self.split_HRU_data(self.HRU.interceptStor, HRU)
+        self.HRU.potential_transpiration_crop = self.split_HRU_data(self.HRU.potential_transpiration_crop, HRU)
+        self.HRU.actual_transpiration_crop = self.split_HRU_data(self.HRU.actual_transpiration_crop, HRU)
+        return HRU

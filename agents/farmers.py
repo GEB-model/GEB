@@ -14,7 +14,7 @@ from numba import njit
 from hyve.library.mapIO import ArrayReader
 from hyve.library.neighbors import find_neighbors
 from hyve.agents import AgentBaseClass
-
+from hyve.library.raster import pixel_to_coord
 
 @njit(cache=True)
 def is_currently_growing(plant_month: int, harvest_month: int, current_month: int, current_day: int, start_day_per_month: np.ndarray) -> int:
@@ -65,6 +65,26 @@ class Farmers(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
+    __slots__ = ["model", "agents", "var", "redundancy", "crop_data", "crop_yield_factors", "harvest_age", "elevation_map",
+    "plant_day", "field_indices_per_farmer", "field_indices", "n", "max_n", "activation_order_by_elevation_fixed"]
+    agent_attributes = [
+        "_locations",
+        "_elevation",
+        "_crop",
+        "_surface_irrigated",
+        "_groundwater_irrigated",
+        "_is_paddy_irrigated",
+        "_wealth",
+        "_is_water_efficient",
+        "_n_water_limited_days",
+        "_water_availability_by_farmer",
+        "_channel_abstraction_m3_by_farmer",
+        "_groundwater_abstraction_m3_by_farmer",
+        "_reservoir_abstraction_m3_by_farmer",
+        "_latest_harvests"
+    ]
+    __slots__.extend(agent_attributes)
+
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
         self.agents = agents
@@ -73,6 +93,8 @@ class Farmers(AgentBaseClass):
         self.crop_yield_factors = self.get_crop_yield_factors()
         self.harvest_age = np.full(26, 10)  # harvest all crops on 10th day
         self.plant_day = np.full(26, 125)  # plant on 125th day of year
+        self.plant_day[11] = 1
+        self.harvest_age[11] = 200
         self.initiate_agents()
 
     def initiate_agents(self) -> None:
@@ -103,14 +125,16 @@ class Farmers(AgentBaseClass):
         """
         This function is used to initiate all agent attributes, such as crop type, irrigiation type and elevation.
         """
-        elevation_map = ArrayReader(
+        self.elevation_map = ArrayReader(
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
             bounds=self.model.bounds
         )
         self._elevation = np.zeros(self.max_n, dtype=np.float32)
-        self.elevation = elevation_map.sample_coords(self.locations)
+        self.elevation = self.elevation_map.sample_coords(self.locations)
         crop_file = os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy')
-        self._crop = np.load(crop_file)
+        self._crop = np.zeros(self.max_n, dtype=np.int32)
+        self.crop = np.load(crop_file)
+        self.crop = np.random.randint(0, 26, self.crop.size)
         self._surface_irrigated = np.zeros(self.max_n, dtype=bool)
         self._groundwater_irrigated = np.zeros(self.max_n, dtype=bool)
         if self.model.args.use_gpu:
@@ -181,8 +205,8 @@ class Farmers(AgentBaseClass):
         """
         # if activation order is fixed. Get the random state, and set a fixed seet.
         if self.model.config['agent_settings']['fix_activation_order']:
-            if hasattr(self, 'activation_order_by_elevation_fixed'):
-                return self.activation_order_by_elevation_fixed
+            if hasattr(self, 'activation_order_by_elevation_fixed') and self.activation_order_by_elevation_fixed[0] == self.n:
+                return self.activation_order_by_elevation_fixed[1]
             random_state = np.random.get_state()
             np.random.seed(42)
         elevation = self.elevation
@@ -202,12 +226,13 @@ class Farmers(AgentBaseClass):
         ranks = np.empty_like(argsort_agend_ids)
         ranks[argsort_agend_ids] = np.arange(argsort_agend_ids.size)
         if self.model.config['agent_settings']['fix_activation_order']:
-            self.activation_order_by_elevation_fixed = ranks
+            self.activation_order_by_elevation_fixed = (self.n, ranks)
         return ranks
 
     @staticmethod
-    @njit(cache=True)
+    # @njit(cache=True)
     def abstract_water_numba(
+        n: int,
         activation_order: np.ndarray,
         field_indices_per_farmer: np.ndarray,
         field_indices: np.ndarray,
@@ -256,6 +281,7 @@ class Farmers(AgentBaseClass):
             returnFlowIrr_m: Return flow in meters.
             addtoevapotrans_m: Evaporated irrigation water in meters.
         """
+        assert n == activation_order.size
         
         land_unit_array_size = cell_area.size
         water_withdrawal_m = np.zeros(land_unit_array_size, dtype=np.float32)
@@ -332,8 +358,8 @@ class Farmers(AgentBaseClass):
                     
                         assert irrigation_water_demand_field >= -1e15  # Make sure irrigation water demand is zero, or positive. Allow very small error.
 
-                    if irrigation_water_demand_field > 1e-15:
-                        farmer_is_water_limited = True
+                        if irrigation_water_demand_field > 1e-15:
+                            farmer_is_water_limited = True
 
                     water_consumption_m[field] = water_withdrawal_m[field] * efficiency
                     irrigation_loss_m = water_withdrawal_m[field] - water_consumption_m[field]
@@ -385,7 +411,7 @@ class Farmers(AgentBaseClass):
             returnFlowIrr_m: return flow in meters
             addtoevapotrans_m: evaporated irrigation water in meters
         """
-        activation_order = self.activation_order_by_elevation
+        print('ho')
         (
             self.channel_abstraction_m3_by_farmer,
             self.reservoir_abstraction_m3_by_farmer,
@@ -395,7 +421,8 @@ class Farmers(AgentBaseClass):
             returnFlowIrr_m,
             addtoevapotrans_m
         ) = self.abstract_water_numba(
-            activation_order,
+            self.n,
+            self.activation_order_by_elevation,
             self.field_indices_per_farmer,
             self.field_indices,
             self.n_water_limited_days,
@@ -735,8 +762,7 @@ class Farmers(AgentBaseClass):
             if wealth[farmer_idx] > 50000 and not groundwater_irrigated[farmer_idx]:
                 groundwater_irrigated[farmer_idx] = True
                 wealth[farmer_idx] -= 50000
-
-            crop[farmer_idx] = 2
+                crop[farmer_idx] = 11
 
     def invest(self) -> None:
         self.invest_numba(
@@ -909,6 +935,8 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.invest()
         self.plant()
+        if self.model.current_timestep == 1:
+            self.add_agents()
 
     @property
     def current_day_of_year(self) -> int:
@@ -921,4 +949,21 @@ class Farmers(AgentBaseClass):
         
     def add_agents(self):
         """This function can be used to add new farmers, but is not yet implemented."""
-        raise NotImplementedError
+        for attr in self.agent_attributes:
+            assert attr.startswith('_')
+            assert getattr(self, attr[1:]).shape[0] == self.n
+        # self.n += 1  # increment number of agents
+        HRU = self.model.data.split(np.array([1784, 1804, 1805]))
+        self.n += 1
+        
+        print('adding agent')
+        self.var.land_owners[HRU] = self.n
+        # TODO: Speed up field index updating.
+        self.update_field_indices()
+
+        self.locations[self.n] = pixel_to_coord(0, 0, self.model.data.HRU.gt)
+
+        for attr in self.agent_attributes:
+            assert getattr(self, attr).shape[0] == self.n
+
+        # raise NotImplementedError
