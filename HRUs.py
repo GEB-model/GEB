@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from typing import Union
+from typing import Any, Union
 from numba import njit
 import rasterio
 import os
@@ -16,6 +16,10 @@ class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
     def __init__(self):
         pass
+
+    @property
+    def shape(self):
+        return self.mask.shape
 
     def plot(self, data: np.ndarray, ax=None) -> None:
         """Create a simple plot for data.
@@ -220,9 +224,9 @@ class HRUs(BaseVariables):
         land_use_array = np.full(farms.size, -1, dtype=np.int32)
         land_use_size = np.full(farms.size, -1, dtype=np.int32)
         land_use_owner = np.full(farms.size, -1, dtype=np.int32)
-        unmerged_HRU_indices = np.full(farms.size, -1, dtype=np.uint32)
+        unmerged_HRU_indices = np.full(farms.shape, -1, dtype=np.int32)
 
-        j = 0
+        HRU = 0
         var_cell_count_compressed = 0
         l = 0
         var_cell_count_uncompressed = 0
@@ -246,20 +250,20 @@ class HRUs(BaseVariables):
                         if farm == -1:  # if area is not a farm
                             continue
                         if farm != prev_farm:
-                            assert land_use_array[j] == -1
-                            land_use_array[j] = land_use
-                            assert land_use_size[j] == -1
-                            land_use_size[j] = 1
-                            land_use_owner[j] = farm
+                            assert land_use_array[HRU] == -1
+                            land_use_array[HRU] = land_use
+                            assert land_use_size[HRU] == -1
+                            land_use_size[HRU] = 1
+                            land_use_owner[HRU] = farm
 
-                            HRU_to_grid[j] = var_cell_count_compressed
+                            HRU_to_grid[HRU] = var_cell_count_compressed
 
                             prev_farm = farm
-                            j += 1
+                            HRU += 1
                         else:
-                            land_use_size[j-1] += 1
+                            land_use_size[HRU-1] += 1
 
-                        unmerged_HRU_indices[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
+                        unmerged_HRU_indices[y * scaling + sort_idx[i] // scaling, x * scaling + sort_idx[i] % scaling] = HRU - 1
                         l += 1
 
                     sort_idx = np.argsort(cell_land_use_classes)
@@ -274,31 +278,30 @@ class HRUs(BaseVariables):
                         if farm != -1:
                             continue
                         if land_use != prev_land_use:
-                            assert land_use_array[j] == -1
-                            land_use_array[j] = land_use
-                            assert land_use_size[j] == -1
-                            land_use_size[j] = 1
+                            assert land_use_array[HRU] == -1
+                            land_use_array[HRU] = land_use
+                            assert land_use_size[HRU] == -1
+                            land_use_size[HRU] = 1
                             prev_land_use = land_use
 
-                            HRU_to_grid[j] = var_cell_count_compressed
+                            HRU_to_grid[HRU] = var_cell_count_compressed
 
-                            j += 1
+                            HRU += 1
                         else:
-                            land_use_size[j-1] += 1
+                            land_use_size[HRU-1] += 1
 
-                        unmerged_HRU_indices[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
+                        unmerged_HRU_indices[y * scaling + sort_idx[i] // scaling, x * scaling + sort_idx[i] % scaling] = HRU - 1
                         l += 1
 
-                    grid_to_HRU[var_cell_count_compressed] = j
+                    grid_to_HRU[var_cell_count_compressed] = HRU
                     var_cell_count_compressed += 1
                 var_cell_count_uncompressed += 1
         
-        land_use_size = land_use_size[:j]
-        land_use_array = land_use_array[:j]
-        land_use_owner = land_use_owner[:j]
-        HRU_to_grid = HRU_to_grid[:j]
-        unmerged_HRU_indices = unmerged_HRU_indices[:var_cell_count_compressed * (scaling ** 2)]
-        assert int(land_use_size.sum()) == n_nonmasked_cells * (scaling ** 2)
+        land_use_size = land_use_size[:HRU]
+        land_use_array = land_use_array[:HRU]
+        land_use_owner = land_use_owner[:HRU]
+        HRU_to_grid = HRU_to_grid[:HRU]
+        assert int(land_use_size.sum()) == n_nonmasked_cells * scaling * scaling
         
         land_use_ratio = land_use_size / (scaling ** 2)
         return land_use_array, land_use_ratio, land_use_owner, HRU_to_grid, grid_to_HRU, unmerged_HRU_indices
@@ -350,34 +353,6 @@ class HRUs(BaseVariables):
         else:
             return np.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
 
-    @staticmethod
-    @njit(cache=True)
-    def decompress_HRU_numba(HRU_array: np.ndarray, outarray: np.ndarray, unmerged_HRU_indices: np.ndarray, mask: np.ndarray, scaling: int, ysize: int, xsize: int) -> np.ndarray:
-        """Numba helper function to decompress HRU array.
-
-        Args:
-            HRU_array: HRU_array.
-            unmerged_HRU_indices: The index of the HRU to the grid cell.
-            scaling: The scaling used for map between cells and HRUs.
-            mask: Mask of study area.
-            nanvalue: Value to use for values outside the mask.
-
-        Returns:
-            outarray: Decompressed HRU_array.
-        """  
-        i = 0
-        
-        for y in range(ysize):
-            for x in range(xsize):
-                is_masked = mask[y, x]
-                if not is_masked:
-                    for ys in range(scaling):
-                        for xs in range(scaling):
-                            outarray[y * scaling + ys, x * scaling + xs] = HRU_array[unmerged_HRU_indices[i]]
-                            i += 1
-
-        return outarray
-
     def decompress(self, HRU_array: np.ndarray) -> np.ndarray:
         """Decompress HRU array.
 
@@ -393,17 +368,9 @@ class HRUs(BaseVariables):
             nanvalue = -1
         else:
             nanvalue = np.nan
-        ysize, xsize = self.model.data.grid.mask.shape
-        decompresssed = np.full((ysize * self.scaling, xsize * self.scaling), nanvalue, dtype=HRU_array.dtype)
-        return self.decompress_HRU_numba(
-            HRU_array,
-            outarray=decompresssed,
-            unmerged_HRU_indices=self.unmerged_HRU_indices,
-            mask=self.model.data.grid.mask,
-            scaling=self.scaling,
-            ysize=ysize,
-            xsize=xsize
-        )
+        outarray = HRU_array[self.unmerged_HRU_indices]
+        outarray[self.mask] = nanvalue
+        return outarray
 
     def plot(self, HRU_array: np.ndarray, ax=None, show: bool=True):
         """Function to plot HRU data.
@@ -607,6 +574,7 @@ class Data:
         HRU = self.HRU.unmerged_HRU_indices[HRU_indices]
         assert (HRU == HRU[0]).all()  # assert all indices belong to same HRU - so only works for single grid cell at this moment
         HRU = HRU[0]
+        assert HRU != -1
 
         # outarray = np.zeros_like(self.HRU.mask, dtype=np.int32)
         # i = 0
@@ -622,8 +590,9 @@ class Data:
         #                         outarray[y * self.HRU.scaling + ys, x * self.HRU.scaling + xs] = 2
         #                     i += 1
 
-        all_HRU_indices = np.where(self.HRU.unmerged_HRU_indices == HRU)[0]  # this could probably be speed up
-        ratio = HRU_indices.size / all_HRU_indices.size
+        all_HRU_indices = np.where(self.HRU.unmerged_HRU_indices == HRU)  # this could probably be speed up
+        assert all_HRU_indices[0].size > HRU_indices[0].size  # ensure that not all indices are split off
+        ratio = HRU_indices[0].size / all_HRU_indices[0].size
 
         self.HRU.unmerged_HRU_indices[self.HRU.unmerged_HRU_indices > HRU] += 1
         self.HRU.unmerged_HRU_indices[HRU_indices] += 1

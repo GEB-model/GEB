@@ -36,11 +36,13 @@ class Artists(HyveArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if agents.surface_irrigated[idx].item():
-            color = 'blue'
+        if idx == self.model.agents.farmers.n-1:
+            color = 'red'
+            r = 3
         else:
             color = 'blue'
-        return {"type": "shape", "shape": "circle", "r": .5, "filled": True, "color": color}
+            r = .1
+        return {"type": "shape", "shape": "circle", "r": r, "filled": True, "color": color}
 
     def draw_rivers(self) -> dict:
         """Returns portrayal of river.
