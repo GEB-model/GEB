@@ -12,31 +12,9 @@ except (ModuleNotFoundError, ImportError):
 from numba import njit
 
 from hyve.library.mapIO import ArrayReader
-from hyve.library.neighbors import find_neighbors
 from hyve.agents import AgentBaseClass
-from hyve.library.raster import pixel_to_coord
+from hyve.library.raster import pixels_to_coords
 
-@njit(cache=True)
-def is_currently_growing(plant_month: int, harvest_month: int, current_month: int, current_day: int, start_day_per_month: np.ndarray) -> int:
-    """Checks whether a crop is currently growing based on the plant month, harvest month, and current model date. Used for initalization of the model.
-
-    Args:
-        plant_month: month that the crop is planted.
-        harvest_month: month that the crop is harvested.
-        current_month: Current month.
-        current_day: Current day year.
-        start_day_per_month: 1d NumPy array with starting day per month [31, ..., 31]
-
-    Returns:
-        crop_age_days: Crop age in days at current day. Returns -1 when crop is not currently growing.
-    """
-    if harvest_month < plant_month:
-        harvest_month += 12
-    if current_month >= plant_month and current_month < harvest_month:
-        crop_age_days = (current_day - start_day_per_month[plant_month - 1]) % 365
-    else:
-        crop_age_days = -1
-    return crop_age_days
 
 @njit(cache=True)
 def get_farmer_fields(field_indices: np.ndarray, field_indices_per_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -66,7 +44,7 @@ class Farmers(AgentBaseClass):
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
     __slots__ = ["model", "agents", "var", "redundancy", "crop_data", "crop_yield_factors", "harvest_age", "elevation_map",
-    "plant_day", "field_indices_per_farmer", "field_indices", "n", "max_n", "activation_order_by_elevation_fixed"]
+    "plant_day", "field_indices_per_farmer", "field_indices", "n", "max_n", "activation_order_by_elevation_fixed", "agent_attributes_meta"]
     agent_attributes = [
         "_locations",
         "_elevation",
@@ -95,6 +73,53 @@ class Farmers(AgentBaseClass):
         self.plant_day = np.full(26, 125)  # plant on 125th day of year
         self.plant_day[11] = 1
         self.harvest_age[11] = 200
+
+        self.agent_attributes_meta = {
+            "_locations": {
+                "nodata": [np.nan, np.nan]
+            },
+            "_elevation": {
+                "nodata": np.nan
+            },
+            "_crop": {
+                "nodata": -1
+            },
+            "_surface_irrigated": {
+                "nodata": -1
+            },
+            "_groundwater_irrigated": {
+                "nodata": -1
+            },
+            "_is_paddy_irrigated": {
+                "nodata": -1
+            },
+            "_wealth": {
+                "nodata": -1
+            },
+            "_is_water_efficient": {
+                "nodata": -1
+            },
+            "_n_water_limited_days": {
+                "nodata": -1
+            },
+            "_water_availability_by_farmer": {
+                "nodata": np.nan
+            },
+            "_channel_abstraction_m3_by_farmer": {
+                "nodata": np.nan
+            },
+            "_groundwater_abstraction_m3_by_farmer": {
+                "nodata": np.nan
+            },
+            "_reservoir_abstraction_m3_by_farmer": {
+                "nodata": np.nan
+            },
+            "_latest_harvests": {
+                "nodata": [np.nan, np.nan, np.nan],
+                "nodatacheck": False
+            }
+        }
+
         self.initiate_agents()
 
     def initiate_agents(self) -> None:
@@ -118,7 +143,7 @@ class Farmers(AgentBaseClass):
         self.max_n = math.ceil(self.n * (1 + self.redundancy))
         assert self.max_n < 4294967295 # max value of uint32, consider replacing with uint64
         
-        self._locations = np.zeros((self.max_n, 2))
+        self._locations = np.full((self.max_n, 2), np.nan, dtype=np.float32)
         self.locations = agent_locations
 
     def initiate_attributes(self) -> None:
@@ -129,32 +154,48 @@ class Farmers(AgentBaseClass):
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
             bounds=self.model.bounds
         )
-        self._elevation = np.zeros(self.max_n, dtype=np.float32)
+        self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
         self.elevation = self.elevation_map.sample_coords(self.locations)
         crop_file = os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy')
-        self._crop = np.zeros(self.max_n, dtype=np.int32)
+        self._crop = np.full(self.max_n, -1, dtype=np.int32)
         self.crop = np.load(crop_file)
-        self.crop = np.random.randint(0, 26, self.crop.size)
-        self._surface_irrigated = np.zeros(self.max_n, dtype=bool)
-        self._groundwater_irrigated = np.zeros(self.max_n, dtype=bool)
+        self.crop[:] = 1
+        # self.crop = np.random.randint(0, 26, self.crop.size)
+        self._surface_irrigated = np.full(self.max_n, -1, dtype=np.int8)
+        self._groundwater_irrigated = np.full(self.max_n, -1, dtype=np.int8)
+        self.surface_irrigated[:] = False
+        self.groundwater_irrigated[:] = False
         if self.model.args.use_gpu:
-            self._is_paddy_irrigated = cp.zeros(self.max_n, dtype=bool)
+            self._is_paddy_irrigated = cp.full(self.max_n, -1, dtype=np.int8)
         else:
-            self._is_paddy_irrigated = np.zeros(self.max_n, dtype=bool)
+            self._is_paddy_irrigated = np.full(self.max_n, -1, dtype=np.int8)
+        self.is_paddy_irrigated[self.crop == 1] = False  # set non-rice to non paddy-irrigated
         self.is_paddy_irrigated[self.crop == 2] = True  # set rice to paddy-irrigated
 
-        self._is_water_efficient = np.zeros(self.max_n, dtype=bool)
-        self._latest_harvests = np.zeros((self.max_n, 3), dtype=np.float32)
+        self._is_water_efficient = np.full(self.max_n, -1, dtype=np.int8)
+        self.is_water_efficient[:] = 0
+        self._latest_harvests = np.full((self.max_n, 3), np.nan, dtype=np.float32)
 
-        self._channel_abstraction_m3_by_farmer = np.zeros(self.max_n, dtype=np.float32)
-        self._reservoir_abstraction_m3_by_farmer = np.zeros(self.max_n, dtype=np.float32)
-        self._groundwater_abstraction_m3_by_farmer = np.zeros(self.max_n, dtype=np.float32)
-        self._water_availability_by_farmer = np.zeros(self.max_n, dtype=np.float32)
-        self._n_water_limited_days = np.zeros(self.max_n, dtype=np.int32)
-        self._wealth = np.zeros(self.max_n, dtype=np.float32)
+        self._channel_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+        self.channel_abstraction_m3_by_farmer[:] = 0
+        self._reservoir_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+        self.reservoir_abstraction_m3_by_farmer[:] = 0
+        self._groundwater_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+        self.groundwater_abstraction_m3_by_farmer[:] = 0
+        self._water_availability_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+        self.water_availability_by_farmer[:] = 0
+        self._n_water_limited_days = np.full(self.max_n, -1, dtype=np.int32)
+        self.n_water_limited_days[:] = 0
+        self._wealth = np.full(self.max_n, -1, dtype=np.float32)
+        self.wealth[:] = 0
 
         self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
         self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
+
+        for attr in self.agent_attributes:
+            assert getattr(self, attr[1:]).shape[0] == self.n
+            if "nodatacheck" not in self.agent_attributes_meta[attr] or self.agent_attributes_meta[attr]['nodatacheck'] is True:
+                assert (getattr(self, attr[1:]) != self.agent_attributes_meta[attr]['nodata']).all(axis=-1).all()
 
     @staticmethod
     @njit(cache=True)
@@ -230,7 +271,7 @@ class Farmers(AgentBaseClass):
         return ranks
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def abstract_water_numba(
         n: int,
         activation_order: np.ndarray,
@@ -411,7 +452,6 @@ class Farmers(AgentBaseClass):
             returnFlowIrr_m: return flow in meters
             addtoevapotrans_m: evaporated irrigation water in meters
         """
-        print('ho')
         (
             self.channel_abstraction_m3_by_farmer,
             self.reservoir_abstraction_m3_by_farmer,
@@ -562,7 +602,7 @@ class Farmers(AgentBaseClass):
 
     @property
     def mask(self):
-        mask = self.model.data.HRU.mask
+        mask = self.model.data.HRU.mask.copy()
         mask[self.decompress(self.var.land_owners) == -1] = True
         return mask
         
@@ -948,22 +988,39 @@ class Farmers(AgentBaseClass):
         return self.model.current_time.timetuple().tm_yday
         
     def add_agents(self):
-        """This function can be used to add new farmers, but is not yet implemented."""
+        """This function can be used to add new farmers."""
         for attr in self.agent_attributes:
             assert attr.startswith('_')
             assert getattr(self, attr[1:]).shape[0] == self.n
-        # self.n += 1  # increment number of agents
-        HRU = self.model.data.split(np.array([1784, 1804, 1805]))
-        self.n += 1
+            assert np.array_equal(getattr(self, attr)[self.n], self.agent_attributes_meta[attr]['nodata'], equal_nan=True)
         
-        print('adding agent')
+        indices = np.array([310, 309]), np.array([69, 69])
+        HRU = self.model.data.split(indices)
+
         self.var.land_owners[HRU] = self.n
         # TODO: Speed up field index updating.
         self.update_field_indices()
 
-        self.locations[self.n] = pixel_to_coord(0, 0, self.model.data.HRU.gt)
+        pixels = np.column_stack(indices)[:,[1, 0]]
+        agent_location = np.mean(pixels_to_coords(pixels + .5, self.var.gt), axis=0)  # +.5 to use center of pixels
+
+        self.n += 1  # increment number of agents
+        self.locations[self.n-1] = agent_location
+        self.elevation[self.n-1] = self.elevation_map.sample_coords(np.expand_dims(agent_location, axis=0))
+        self.crop[self.n-1] = 1
+        self.surface_irrigated[self.n-1] = False
+        self.groundwater_irrigated[self.n-1] = False
+        self.is_paddy_irrigated[self.n-1] = False
+        self.wealth[self.n-1] = 0
+        self.is_water_efficient[self.n-1] = False
+        self.n_water_limited_days[self.n-1] = 0
+        self.water_availability_by_farmer[self.n-1] = 0
+        self.channel_abstraction_m3_by_farmer[self.n-1] = 0
+        self.groundwater_abstraction_m3_by_farmer[self.n-1] = 0
+        self.reservoir_abstraction_m3_by_farmer[self.n-1] = 0
+        self.latest_harvests[self.n-1] = [np.nan, np.nan, np.nan]
 
         for attr in self.agent_attributes:
-            assert getattr(self, attr).shape[0] == self.n
-
-        # raise NotImplementedError
+            assert getattr(self, attr[1:]).shape[0] == self.n
+            if "nodatacheck" not in self.agent_attributes_meta[attr] or self.agent_attributes_meta[attr]['nodatacheck'] is True:
+                assert not np.array_equal(getattr(self, attr)[self.n-1], self.agent_attributes_meta[attr]['nodata'], equal_nan=True)

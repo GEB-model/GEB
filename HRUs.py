@@ -207,8 +207,9 @@ class HRUs(BaseVariables):
             land_use_ratio: Relative size of HRU to grid.
             land_use_owner: Owner of HRU.
             HRU_to_grid: Maps HRUs to index of compressed cell index.
-            grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-            unmerged_HRU_indices: The index of the HRU to the grid cell.
+            var_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+            # var_to_HRU_uncompressed: Array of size of the grid cells. Each value maps to the index of the first unit of the next cell.
+            unmerged_HRU_indices: The index of the HRU to the subcell.
         """
         assert farms.size == mask.size * scaling * scaling
         assert farms.size == land_use_classes.size
@@ -216,13 +217,14 @@ class HRUs(BaseVariables):
 
         n_nonmasked_cells = mask.size - mask.sum()
         grid_to_HRU = np.full(n_nonmasked_cells, -1, dtype=np.int32)
+        # var_to_HRU_uncompressed = np.full(mask.size, -1, dtype=np.int32)
         HRU_to_grid = np.full(farms.size, -1, dtype=np.int32)
         land_use_array = np.full(farms.size, -1, dtype=np.int32)
         land_use_size = np.full(farms.size, -1, dtype=np.int32)
         land_use_owner = np.full(farms.size, -1, dtype=np.int32)
-        unmerged_HRU_indices = np.full(farms.size, -1, dtype=np.uint32)
+        unmerged_HRU_indices = np.full(farms.shape, -1, dtype=np.int32)
 
-        j = 0
+        HRU = 0
         var_cell_count_compressed = 0
         l = 0
         var_cell_count_uncompressed = 0
@@ -246,20 +248,20 @@ class HRUs(BaseVariables):
                         if farm == -1:  # if area is not a farm
                             continue
                         if farm != prev_farm:
-                            assert land_use_array[j] == -1
-                            land_use_array[j] = land_use
-                            assert land_use_size[j] == -1
-                            land_use_size[j] = 1
-                            land_use_owner[j] = farm
+                            assert land_use_array[HRU] == -1
+                            land_use_array[HRU] = land_use
+                            assert land_use_size[HRU] == -1
+                            land_use_size[HRU] = 1
+                            land_use_owner[HRU] = farm
 
-                            HRU_to_grid[j] = var_cell_count_compressed
+                            HRU_to_grid[HRU] = var_cell_count_compressed
 
                             prev_farm = farm
-                            j += 1
+                            HRU += 1
                         else:
-                            land_use_size[j-1] += 1
+                            land_use_size[HRU-1] += 1
 
-                        unmerged_HRU_indices[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
+                        unmerged_HRU_indices[y * scaling + sort_idx[i] // scaling, x * scaling + sort_idx[i] % scaling] = HRU - 1
                         l += 1
 
                     sort_idx = np.argsort(cell_land_use_classes)
@@ -274,31 +276,31 @@ class HRUs(BaseVariables):
                         if farm != -1:
                             continue
                         if land_use != prev_land_use:
-                            assert land_use_array[j] == -1
-                            land_use_array[j] = land_use
-                            assert land_use_size[j] == -1
-                            land_use_size[j] = 1
+                            assert land_use_array[HRU] == -1
+                            land_use_array[HRU] = land_use
+                            assert land_use_size[HRU] == -1
+                            land_use_size[HRU] = 1
                             prev_land_use = land_use
 
-                            HRU_to_grid[j] = var_cell_count_compressed
+                            HRU_to_grid[HRU] = var_cell_count_compressed
 
-                            j += 1
+                            HRU += 1
                         else:
-                            land_use_size[j-1] += 1
+                            land_use_size[HRU-1] += 1
 
-                        unmerged_HRU_indices[sort_idx[i] + var_cell_count_compressed * (scaling ** 2)] = j - 1
+                        unmerged_HRU_indices[y * scaling + sort_idx[i] // scaling, x * scaling + sort_idx[i] % scaling] = HRU - 1
                         l += 1
 
-                    grid_to_HRU[var_cell_count_compressed] = j
+                    grid_to_HRU[var_cell_count_compressed] = HRU
                     var_cell_count_compressed += 1
+                # var_to_HRU_uncompressed[var_cell_count_uncompressed] = HRU
                 var_cell_count_uncompressed += 1
         
-        land_use_size = land_use_size[:j]
-        land_use_array = land_use_array[:j]
-        land_use_owner = land_use_owner[:j]
-        HRU_to_grid = HRU_to_grid[:j]
-        unmerged_HRU_indices = unmerged_HRU_indices[:var_cell_count_compressed * (scaling ** 2)]
-        assert int(land_use_size.sum()) == n_nonmasked_cells * (scaling ** 2)
+        land_use_size = land_use_size[:HRU]
+        land_use_array = land_use_array[:HRU]
+        land_use_owner = land_use_owner[:HRU]
+        HRU_to_grid = HRU_to_grid[:HRU]
+        assert int(land_use_size.sum()) == n_nonmasked_cells * scaling * scaling
         
         land_use_ratio = land_use_size / (scaling ** 2)
         return land_use_array, land_use_ratio, land_use_owner, HRU_to_grid, grid_to_HRU, unmerged_HRU_indices
@@ -350,34 +352,6 @@ class HRUs(BaseVariables):
         else:
             return np.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
 
-    @staticmethod
-    @njit(cache=True)
-    def decompress_HRU_numba(HRU_array: np.ndarray, outarray: np.ndarray, unmerged_HRU_indices: np.ndarray, mask: np.ndarray, scaling: int, ysize: int, xsize: int) -> np.ndarray:
-        """Numba helper function to decompress HRU array.
-
-        Args:
-            HRU_array: HRU_array.
-            unmerged_HRU_indices: The index of the HRU to the grid cell.
-            scaling: The scaling used for map between cells and HRUs.
-            mask: Mask of study area.
-            nanvalue: Value to use for values outside the mask.
-
-        Returns:
-            outarray: Decompressed HRU_array.
-        """  
-        i = 0
-        
-        for y in range(ysize):
-            for x in range(xsize):
-                is_masked = mask[y, x]
-                if not is_masked:
-                    for ys in range(scaling):
-                        for xs in range(scaling):
-                            outarray[y * scaling + ys, x * scaling + xs] = HRU_array[unmerged_HRU_indices[i]]
-                            i += 1
-
-        return outarray
-
     def decompress(self, HRU_array: np.ndarray) -> np.ndarray:
         """Decompress HRU array.
 
@@ -393,17 +367,10 @@ class HRUs(BaseVariables):
             nanvalue = -1
         else:
             nanvalue = np.nan
-        ysize, xsize = self.model.data.grid.mask.shape
-        decompresssed = np.full((ysize * self.scaling, xsize * self.scaling), nanvalue, dtype=HRU_array.dtype)
-        return self.decompress_HRU_numba(
-            HRU_array,
-            outarray=decompresssed,
-            unmerged_HRU_indices=self.unmerged_HRU_indices,
-            mask=self.model.data.grid.mask,
-            scaling=self.scaling,
-            ysize=ysize,
-            xsize=xsize
-        )
+        outarray = HRU_array[self.unmerged_HRU_indices]
+        outarray[self.mask] = nanvalue
+        return outarray
+
 
     def plot(self, HRU_array: np.ndarray, ax=None, show: bool=True):
         """Function to plot HRU data.
@@ -607,33 +574,14 @@ class Data:
         HRU = self.HRU.unmerged_HRU_indices[HRU_indices]
         assert (HRU == HRU[0]).all()  # assert all indices belong to same HRU - so only works for single grid cell at this moment
         HRU = HRU[0]
+        assert HRU != -1
 
-        # outarray = np.zeros_like(self.HRU.mask, dtype=np.int32)
-        # i = 0
-        # for y in range(self.grid.mask.shape[0]):
-        #     for x in range(self.grid.mask.shape[1]):
-        #         is_masked = self.grid.mask[y, x]
-        #         if not is_masked:
-        #             for ys in range(self.HRU.scaling):
-        #                 for xs in range(self.HRU.scaling):
-        #                     # outarray[y * self.HRU.scaling + ys, x * self.HRU.scaling + xs] = HRU_array[unmerged_HRU_indices[i]]
-        #                     outarray[y * self.HRU.scaling + ys, x * self.HRU.scaling + xs] = 1
-        #                     if i in HRU_indices:
-        #                         outarray[y * self.HRU.scaling + ys, x * self.HRU.scaling + xs] = 2
-        #                     i += 1
-
-        all_HRU_indices = np.where(self.HRU.unmerged_HRU_indices == HRU)[0]  # this could probably be speed up
-        ratio = HRU_indices.size / all_HRU_indices.size
+        all_HRU_indices = np.where(self.HRU.unmerged_HRU_indices == HRU)  # this could probably be speed up
+        assert all_HRU_indices[0].size > HRU_indices[0].size  # ensure that not all indices are split off
+        ratio = HRU_indices[0].size / all_HRU_indices[0].size
 
         self.HRU.unmerged_HRU_indices[self.HRU.unmerged_HRU_indices > HRU] += 1
         self.HRU.unmerged_HRU_indices[HRU_indices] += 1
-
-        # self.grid_to_HRU_uncompressed,
-
-        # plt.imshow(outarray[:100, 150:400])
-        # plt.savefig('test.png')
-        # exit()
-        # # plt.show()
 
         self.HRU.HRU_to_grid = self.split_HRU_data(self.HRU.HRU_to_grid, HRU)
         self.HRU.grid_to_HRU[self.HRU.HRU_to_grid[HRU]:] += 1
