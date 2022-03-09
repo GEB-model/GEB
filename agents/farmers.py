@@ -15,7 +15,6 @@ from hyve.library.mapIO import ArrayReader
 from hyve.agents import AgentBaseClass
 from hyve.library.raster import pixels_to_coords
 
-
 @njit(cache=True)
 def get_farmer_fields(field_indices: np.ndarray, field_indices_per_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
     """Gets indices of field for given farmer.
@@ -69,11 +68,10 @@ class Farmers(AgentBaseClass):
         self.var = model.data.HRU
         self.redundancy = reduncancy
         self.crop_yield_factors = self.get_crop_yield_factors()
-        self.harvest_age = np.full(26, 10)  # harvest all crops on 10th day
+        self.harvest_age = np.full(26, 50)  # harvest all crops on 10th day
         self.plant_day = np.full(26, 125)  # plant on 125th day of year
         self.plant_day[11] = 1
         self.harvest_age[11] = 200
-
         self.agent_attributes_meta = {
             "_locations": {
                 "nodata": [np.nan, np.nan]
@@ -119,7 +117,6 @@ class Farmers(AgentBaseClass):
                 "nodatacheck": False
             }
         }
-
         self.initiate_agents()
 
     def initiate_agents(self) -> None:
@@ -349,7 +346,7 @@ class Farmers(AgentBaseClass):
             else:
                 efficiency = 0.6
             
-            if surface_irrigated[farmer] or groundwater_irrigated[farmer]:
+            if surface_irrigated[farmer] == 1 or groundwater_irrigated[farmer] == 1:
                 farmer_is_water_limited = False
                 for field in farmer_fields:
                     if crop_map[field] != -1:

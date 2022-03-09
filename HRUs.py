@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from typing import Union
+from typing import Any, Union
 from numba import njit
 import rasterio
 import os
@@ -16,6 +16,10 @@ class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
     def __init__(self):
         pass
+
+    @property
+    def shape(self):
+        return self.mask.shape
 
     def plot(self, data: np.ndarray, ax=None) -> None:
         """Create a simple plot for data.
@@ -370,7 +374,6 @@ class HRUs(BaseVariables):
         outarray = HRU_array[self.unmerged_HRU_indices]
         outarray[self.mask] = nanvalue
         return outarray
-
 
     def plot(self, HRU_array: np.ndarray, ax=None, show: bool=True):
         """Function to plot HRU data.
