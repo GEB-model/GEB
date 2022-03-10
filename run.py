@@ -44,6 +44,18 @@ if __name__ == '__main__':
         #     {"name": "groundwater irrigation", "color": "#000000"},
         # ],
         [
+            {"name": "crop_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+        ],
+        [
+            {"name": "surface_irrigated_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+        ],
+        [
+            {"name": "groundwater_irrigated_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+        ],
+        [
+            {"name": "wealth_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+        ],
+        [
             {"name": "reservoir storage", "color": "#FF0000"},
         ],
         # [

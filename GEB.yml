@@ -148,6 +148,26 @@ draw:
 #   - **initial_only**: if true only save the data for the first timestep.
 #   - **save**: save variable in model run, or export, or both (save/save+export/export).
 report:
+  crop_sample:
+    type: farmers
+    function: sample
+    varname: crop
+    save: save
+  surface_irrigated_sample:
+    type: farmers
+    function: sample
+    varname: surface_irrigated
+    save: save
+  groundwater_irrigated_sample:
+    type: farmers
+    function: sample
+    varname: groundwater_irrigated
+    save: save
+  wealth_sample:
+    type: farmers
+    function: sample
+    varname: wealth
+    save: save
   activation order:
     type: farmers
     function: null

@@ -36,11 +36,17 @@ class Artists(HyveArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if idx == self.model.agents.farmers.n-1:
-            color = 'red'
+        if idx == self.model.agents.farmers.sample[0]:
+            color = '#ff0000'
+            r = 3
+        elif idx == self.model.agents.farmers.sample[1]:
+            color = '#00ff00'
+            r = 3
+        elif idx == self.model.agents.farmers.sample[2]:
+            color = '#0000ff'
             r = 3
         else:
-            color = 'blue'
+            color = '#ffffff'
             r = .1
         return {"type": "shape", "shape": "circle", "r": r, "filled": True, "color": color}
 

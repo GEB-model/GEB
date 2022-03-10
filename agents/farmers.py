@@ -42,7 +42,7 @@ class Farmers(AgentBaseClass):
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
     __slots__ = ["model", "agents", "var", "redundancy", "crop_data", "crop_yield_factors", "harvest_age", "elevation_map",
-    "plant_day", "field_indices", "_field_indices_by_farmer", "n", "max_n", "activation_order_by_elevation_fixed", "agent_attributes_meta"]
+    "plant_day", "field_indices", "_field_indices_by_farmer", "n", "max_n", "activation_order_by_elevation_fixed", "agent_attributes_meta", "sample"]
     agent_attributes = [
         "_locations",
         "_elevation",
@@ -64,6 +64,7 @@ class Farmers(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
         self.agents = agents
+        self.sample = [2000, 5500, 10000]
         self.var = model.data.HRU
         self.redundancy = reduncancy
         self.crop_yield_factors = self.get_crop_yield_factors()
