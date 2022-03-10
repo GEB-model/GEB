@@ -16,17 +16,17 @@ from hyve.agents import AgentBaseClass
 from hyve.library.raster import pixels_to_coords
 
 @njit(cache=True)
-def get_farmer_fields(field_indices: np.ndarray, field_indices_per_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
+def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
     """Gets indices of field for given farmer.
     
     Args:
-        field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
         field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
 
     Returns:
         field_indices_for_farmer: the indices of the fields for the given farmer.
     """
-    return field_indices[field_indices_per_farmer[farmer_index, 0]: field_indices_per_farmer[farmer_index, 1]]
+    return field_indices[field_indices_by_farmer[farmer_index, 0]: field_indices_by_farmer[farmer_index, 1]]
 
 def take_with_ignore(a, indices, ignore_index, ignore_value=np.nan):
     array = np.take(a, indices)
@@ -43,7 +43,7 @@ class Farmers(AgentBaseClass):
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
     __slots__ = ["model", "agents", "var", "redundancy", "crop_data", "crop_yield_factors", "harvest_age", "elevation_map",
-    "plant_day", "field_indices_per_farmer", "field_indices", "n", "max_n", "activation_order_by_elevation_fixed", "agent_attributes_meta"]
+    "plant_day", "field_indices", "_field_indices_by_farmer", "n", "max_n", "activation_order_by_elevation_fixed", "agent_attributes_meta"]
     agent_attributes = [
         "_locations",
         "_elevation",
@@ -58,7 +58,7 @@ class Farmers(AgentBaseClass):
         "_channel_abstraction_m3_by_farmer",
         "_groundwater_abstraction_m3_by_farmer",
         "_reservoir_abstraction_m3_by_farmer",
-        "_latest_harvests"
+        "_latest_harvests",
     ]
     __slots__.extend(agent_attributes)
 
@@ -115,15 +115,13 @@ class Farmers(AgentBaseClass):
             "_latest_harvests": {
                 "nodata": [np.nan, np.nan, np.nan],
                 "nodatacheck": False
-            }
+            },
         }
         self.initiate_agents()
 
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
         """
-        self.update_field_indices()
-        
         self.initiate_locations()
         self.initiate_attributes()
         self.plant_initial()
@@ -151,6 +149,8 @@ class Farmers(AgentBaseClass):
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
             bounds=self.model.bounds
         )
+        self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
+        self.update_field_indices()
         self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
         self.elevation = self.elevation_map.sample_coords(self.locations)
         crop_file = os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy')
@@ -197,13 +197,13 @@ class Farmers(AgentBaseClass):
     @staticmethod
     @njit(cache=True)
     def update_field_indices_numba(land_owners: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Creates `field_indices_per_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer.
+        """Creates `field_indices_by_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer.
 
         Args:
             land_owners: Array of the land owners. Each unique ID is a different land owner. -1 means the land is not owned by anyone.
 
         Returns:
-            field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+            field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
         """
         agents = np.unique(land_owners)
@@ -211,7 +211,7 @@ class Farmers(AgentBaseClass):
             n_agents = agents.size -1
         else:
             n_agents = agents.size
-        field_indices_per_farmer = np.full((n_agents, 2), -1, dtype=np.int32)
+        field_indices_by_farmer = np.full((n_agents, 2), -1, dtype=np.int32)
         field_indices = np.full(land_owners.size, -1, dtype=np.int32)
 
         land_owners_sort_idx = np.argsort(land_owners)
@@ -224,16 +224,16 @@ class Farmers(AgentBaseClass):
             land_owner = land_owners[land_owners_sort_idx[i]]
             if land_owner != -1:
                 if land_owner != prev_land_owner:
-                    field_indices_per_farmer[land_owner, 0] = i - last_not_owned
-                field_indices_per_farmer[land_owner, 1] = i + 1 - last_not_owned
+                    field_indices_by_farmer[land_owner, 0] = i - last_not_owned
+                field_indices_by_farmer[land_owner, 1] = i + 1 - last_not_owned
                 field_indices[i - last_not_owned] = land_owners_sort_idx[i]
                 prev_land_owner = land_owner
         field_indices = field_indices[:-last_not_owned]
-        return field_indices_per_farmer, field_indices
+        return field_indices_by_farmer, field_indices
 
     def update_field_indices(self) -> None:
-        """Creates `field_indices_per_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer."""
-        self.field_indices_per_farmer, self.field_indices = self.update_field_indices_numba(self.var.land_owners)
+        """Creates `field_indices_by_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer."""
+        self.field_indices_by_farmer, self.field_indices = self.update_field_indices_numba(self.var.land_owners)
     
     @property
     def activation_order_by_elevation(self):
@@ -272,7 +272,7 @@ class Farmers(AgentBaseClass):
     def abstract_water_numba(
         n: int,
         activation_order: np.ndarray,
-        field_indices_per_farmer: np.ndarray,
+        field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
         water_limited_days: np.ndarray,
         is_water_efficient: np.ndarray,
@@ -294,7 +294,7 @@ class Farmers(AgentBaseClass):
 
         Args:
             activation_order: Order in which the agents are activated. Agents that are activated first get a first go at extracting water, leaving less water for other farmers.
-            field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+            field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
             water_limited_days: Current number of days where farmer has been water limited.
             is_water_efficient: Boolean array that specifies whether the specific farmer is efficient with water use.
@@ -340,7 +340,7 @@ class Farmers(AgentBaseClass):
         
         for activated_farmer_index in range(activation_order.size):
             farmer = activation_order[activated_farmer_index]
-            farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer)
+            farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
             if is_water_efficient[farmer]:
                 efficiency = 0.8
             else:
@@ -460,7 +460,7 @@ class Farmers(AgentBaseClass):
         ) = self.abstract_water_numba(
             self.n,
             self.activation_order_by_elevation,
-            self.field_indices_per_farmer,
+            self.field_indices_by_farmer,
             self.field_indices,
             self.n_water_limited_days,
             self.is_water_efficient,
@@ -634,7 +634,7 @@ class Farmers(AgentBaseClass):
     @njit(cache=True)
     def harvest_numba(
         n: np.ndarray,
-        field_indices_per_farmer: np.ndarray,
+        field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
         crop_map: np.ndarray,
         crop_age_days: np.ndarray,
@@ -645,7 +645,7 @@ class Farmers(AgentBaseClass):
         Args:
             n: Number of farmers.
             start_day_per_month: Array containing the starting day of each month.
-            field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+            field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
             crop_map: Subarray map of crops.
             crop_age_days: Subarray map of current crop age in days.
@@ -658,7 +658,7 @@ class Farmers(AgentBaseClass):
         """
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
-            farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_i)
+            farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_i)
             for field in farmer_fields:
                 crop_age = crop_age_days[field]
                 if crop_age >= 0:
@@ -680,7 +680,7 @@ class Farmers(AgentBaseClass):
         crop_age_days = self.var.crop_age_days_map.get() if self.model.args.use_gpu else self.var.crop_age_days_map
         harvest = self.harvest_numba(
             self.n,
-            self.field_indices_per_farmer,
+            self.field_indices_by_farmer,
             self.field_indices,
             crop_map,
             crop_age_days,
@@ -727,7 +727,7 @@ class Farmers(AgentBaseClass):
         crop_map: np.ndarray,
         crop: np.ndarray,
         plant_day: np.ndarray,
-        field_indices_per_farmer: np.ndarray,
+        field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
@@ -737,7 +737,7 @@ class Farmers(AgentBaseClass):
             start_day_per_month: Starting day of each month of year.
             current_day: Current day.
             crop: Crops grown by each farmer. 
-            field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+            field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices. 
 
         Returns:
@@ -745,7 +745,7 @@ class Farmers(AgentBaseClass):
         """
         plant = np.full_like(crop_map, -1, dtype=np.int32)
         for farmer_idx in range(n):
-            farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_idx)
+            farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
             for field in farmer_fields:
                 farmer_crop = crop[farmer_idx]
                 if plant_day[farmer_crop] == current_day:
@@ -762,7 +762,7 @@ class Farmers(AgentBaseClass):
             self.var.crop_map,
             self.crop,
             self.plant_day,
-            self.field_indices_per_farmer,
+            self.field_indices_by_farmer,
             self.field_indices,
         )
         if self.model.args.use_gpu:
@@ -779,9 +779,9 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit(cache=True)
-    def invest_numba(n, field_indices, field_indices_per_farmer, HRU_to_grid, crop, surface_irrigated, groundwater_irrigated, wealth, n_water_limited_days, channel_storage_m3, reservoir_command_areas):
+    def invest_numba(n, field_indices, field_indices_by_farmer, HRU_to_grid, crop, surface_irrigated, groundwater_irrigated, wealth, n_water_limited_days, channel_storage_m3, reservoir_command_areas):
         for farmer_idx in range(n):
-            farmer_fields = get_farmer_fields(field_indices, field_indices_per_farmer, farmer_idx)
+            farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
             channel_storage_farmer_m3 = 0
             in_reservoir_command_area = False
             for field in farmer_fields:
@@ -805,7 +805,7 @@ class Farmers(AgentBaseClass):
         self.invest_numba(
             self.n,
             self.field_indices,
-            self.field_indices_per_farmer,
+            self.field_indices_by_farmer,
             self.model.data.HRU.HRU_to_grid,
             self.crop,
             self.surface_irrigated,
@@ -928,22 +928,30 @@ class Farmers(AgentBaseClass):
     def wealth(self, value):      
         self._wealth[:self.n] = value
 
+    @property
+    def field_indices_by_farmer(self):
+        return self._field_indices_by_farmer[:self.n]
+
+    @field_indices_by_farmer.setter
+    def field_indices_by_farmer(self, value):      
+        self._field_indices_by_farmer[:self.n] = value
+
     @staticmethod
     @njit(cache=True)
-    def field_size_per_farmer_numba(field_indices_per_farmer: np.ndarray, field_indices: np.ndarray, cell_area: np.ndarray) -> np.ndarray:
+    def field_size_per_farmer_numba(field_indices_by_farmer: np.ndarray, field_indices: np.ndarray, cell_area: np.ndarray) -> np.ndarray:
         """Gets the field size for each farmer.
 
         Args:
-            field_indices_per_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+            field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
             cell_area: Subarray of cell_area.
 
         Returns:
             field_size_per_farmer: Field size for each farmer in m2.
         """
-        field_size_per_farmer = np.zeros(field_indices_per_farmer.shape[0], dtype=np.float32)
-        for farmer in range(field_indices_per_farmer.shape[0]):
-            for field in get_farmer_fields(field_indices, field_indices_per_farmer, farmer):
+        field_size_per_farmer = np.zeros(field_indices_by_farmer.shape[0], dtype=np.float32)
+        for farmer in range(field_indices_by_farmer.shape[0]):
+            for field in get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer):
                 field_size_per_farmer[farmer] += cell_area[field]
         return field_size_per_farmer
 
@@ -955,7 +963,7 @@ class Farmers(AgentBaseClass):
             field_size_per_farmer: Field size for each farmer in m2.
         """
         return self.field_size_per_farmer_numba(
-            self.field_indices_per_farmer,
+            self.field_indices_by_farmer,
             self.field_indices,
             self.var.cellArea.get() if self.model.args.use_gpu else self.var.cellArea
         )
@@ -973,7 +981,8 @@ class Farmers(AgentBaseClass):
         self.invest()
         self.plant()
         if self.model.current_timestep == 1:
-            self.add_agents()
+            self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
+            self.remove_agent(farmer_idx=1000)
 
     @property
     def current_day_of_year(self) -> int:
@@ -983,25 +992,58 @@ class Farmers(AgentBaseClass):
             day: current day of the year.
         """
         return self.model.current_time.timetuple().tm_yday
+
+    def remove_agent(self, farmer_idx: int) -> np.ndarray:
+        last_farmer_HRUs = get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, self.n-1)
+        last_farmer_field_size = self.field_size_per_farmer[self.n-1]
+        for name, values in self.agent_attributes_meta.items():
+            # get agent attribute
+            attribute = getattr(self, name[1:])
+            # move data of last agent to the agent that is to be removed, effectively removing that agent.
+            attribute[farmer_idx] = attribute[self.n-1]
+            # set value for last agent (which was now moved) to nodata
+            attribute[self.n - 1] = values['nodata']
+
+        # disown the farmer.
+        HRUs_farmer_to_be_removed = get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, farmer_idx)
+        self.var.land_owners[HRUs_farmer_to_be_removed] = -1
+        HRUs_farmer_moved = get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, self.n-1)
+        self.var.land_owners[HRUs_farmer_moved] = farmer_idx
         
-    def add_agents(self):
+        # reduce number of agents
+        self.n -= 1
+        # TODO: Speed up field index updating.
+        self.update_field_indices()
+
+        assert last_farmer_HRUs == get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, farmer_idx)
+        assert last_farmer_field_size == self.field_size_per_farmer[farmer_idx]
+
+        for attr in self.agent_attributes:
+            assert attr.startswith('_')
+            assert getattr(self, attr[1:]).shape[0] == self.n
+            assert np.array_equal(getattr(self, attr)[self.n], self.agent_attributes_meta[attr]['nodata'], equal_nan=True)
+
+        assert (self.var.land_owners[HRUs_farmer_to_be_removed] == -1).all()
+        return HRUs_farmer_to_be_removed
+
+    def add_agent(self, indices):
         """This function can be used to add new farmers."""
         for attr in self.agent_attributes:
             assert attr.startswith('_')
             assert getattr(self, attr[1:]).shape[0] == self.n
             assert np.array_equal(getattr(self, attr)[self.n], self.agent_attributes_meta[attr]['nodata'], equal_nan=True)
         
-        indices = np.array([310, 309]), np.array([69, 69])
         HRU = self.model.data.split(indices)
-
         self.var.land_owners[HRU] = self.n
-        # TODO: Speed up field index updating.
-        self.update_field_indices()
 
+        self.n += 1  # increment number of agents
+        
         pixels = np.column_stack(indices)[:,[1, 0]]
         agent_location = np.mean(pixels_to_coords(pixels + .5, self.var.gt), axis=0)  # +.5 to use center of pixels
 
-        self.n += 1  # increment number of agents
+        # TODO: Speed up field index updating.
+        self.update_field_indices()
+        
         self.locations[self.n-1] = agent_location
         self.elevation[self.n-1] = self.elevation_map.sample_coords(np.expand_dims(agent_location, axis=0))
         self.crop[self.n-1] = 1
