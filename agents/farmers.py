@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
 import math
-from random import random
 import numpy as np
 import pandas as pd
 try:
@@ -970,18 +969,16 @@ class Farmers(AgentBaseClass):
 
     def step(self) -> None:
         """
-        This function is called at the beginning of each timestep. First, in the `ngo_training` scenario water efficiency knowledge diffuses through the farmer population. Only occurs each year on January 1st.
+        This function is called at the beginning of each timestep.
 
         Then, farmers harvest and plant crops.
         """
-        if self.model.args.scenario == 'ngo_training':
-            self.diffuse_water_efficiency_knowledge()
-
         self.harvest()
         self.invest()
         self.plant()
-        if self.model.current_timestep == 1:
+        if self.model.current_timestep == 100:
             self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
+        if self.model.current_timestep == 105:
             self.remove_agent(farmer_idx=1000)
 
     @property
