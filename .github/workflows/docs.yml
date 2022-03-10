@@ -1,9 +1,9 @@
 name: sphinx
-on: [ push, workflow_dispatch ]
 on:
   push:
     branches:
       - master
+  workflow_dispatch:
 
 env:
   DEFAULT_BRANCH: "main"
