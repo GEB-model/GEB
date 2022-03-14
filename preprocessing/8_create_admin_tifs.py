@@ -9,7 +9,7 @@ from rasterio.features import rasterize
 from config import ORIGINAL_DATA, INPUT
 
 def cut_bhima():
-    output_file = os.path.join(ORIGINAL_DATA, 'subdistricts', 'subdistricts_bhima.shp')
+    output_file = os.path.join(INPUT, 'areamaps', 'subdistricts_bhima.shp')
     if not os.path.exists(output_file):
         subdistricts = gpd.read_file(os.path.join(ORIGINAL_DATA, 'subdistricts', 'subdistricts.shp')).to_crs(epsg=32643)
         study_area = gpd.read_file(os.path.join(ORIGINAL_DATA, 'study_region.geojson'))
@@ -31,7 +31,7 @@ def create_tif():
     # if not os.path.exists(output_file):
         with rasterio.open(os.path.join(os.path.join(INPUT, 'areamaps', 'submask.tif')), 'r') as src:
             profile = src.profile
-        gdf = gpd.read_file(os.path.join(ORIGINAL_DATA, 'subdistricts', 'subdistricts_bhima.shp')).to_crs(profile['crs'])
+        gdf = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts_bhima.shp')).to_crs(profile['crs'])
         geometries = [
             (shapely.geometry.mapping(geom), value)
             for value, geom

@@ -50,13 +50,8 @@ class Artists(HyveArtists):
             r = .1
         return {"type": "shape", "shape": "circle", "r": r, "filled": True, "color": color}
 
-    def draw_rivers(self) -> dict:
-        """Returns portrayal of river.
-        
-        Returns:
-            portrayal: portrayal of river.
-        """
-        return {"type": "shape", "shape": "line", "color": "Blue"}
+    def draw_tehsil(self, properties):
+        return {"type": "shape", "shape": "polygon", "filled": False, "color": properties['color'], "edge": True}
 
     def get_custom_plot(self) -> dict[dict]:
         """Here you can specify custom options for plotting the background.

@@ -2,6 +2,9 @@
 import cProfile
 from pstats import Stats
 import geopandas as gpd
+import os
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 from hyve.visualization.ModularVisualization import ModularServer
 from hyve.visualization.modules import ChartModule
@@ -20,6 +23,32 @@ parser.add_argument('--profiling', dest='profiling', default=False, action='stor
 parser.add_argument('--GPU', dest='use_gpu', default=False, action='store_true', help="Whether a GPU can be used to run the model. This requires CuPy to be installed.")
 parser.add_argument('--config', dest='config', default='GEB.yml', help="Path of the model configuration file.")
 
+TEHSILS = [26, 30, 34, 35]
+
+def get_study_area():
+    study_area = {
+        "name": "Bhima basin"
+    }
+    gdf = gpd.read_file(os.path.join('DataDrive', 'GEB_Bhima', 'input', 'areamaps', 'subdistricts_bhima.shp')).to_crs(epsg=4326)
+    gdf = gdf[gdf['ID'].isin(TEHSILS)]
+    gdf['scaled'] = gdf.scale(.99, .99)
+    tehsils = []
+    color_map = plt.get_cmap('gist_rainbow')
+    colors = {}
+    for i, (_, tehsil) in enumerate(gdf.iterrows()):
+        color = mcolors.rgb2hex(color_map(i / len(gdf)))
+        tehsils.append({
+            'geometry': tehsil['scaled'].__geo_interface__,
+            'properties': {
+                'id': tehsil['ID'],
+                'color': color
+            }
+        })
+        colors[tehsil['ID']] = color
+    study_area['tehsil'] = tehsils
+    return study_area, colors
+
+
 if __name__ == '__main__':
     args = parser.parse_args()
     if args.use_gpu:
@@ -30,6 +59,7 @@ if __name__ == '__main__':
     faulthandler.enable()
 
     MODEL_NAME = 'GEB'
+    study_area, colors = get_study_area()
 
     series_to_plot = [
         # crop_series,
@@ -61,7 +91,7 @@ if __name__ == '__main__':
         #     for admin in study_area['admin']
         # ],
         [
-            {"name": "surface_irrigated_per_district", "IDs": [26, 30, 34, 35], "color": ["#ff0000", "#00ff00", "#0000ff", "#000000"]},
+            {"name": "surface_irrigated_per_district", "IDs": TEHSILS, "color": [colors[tehsil] for tehsil in TEHSILS]},
         ],
         [
             {"name": "wealth_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
@@ -90,6 +120,7 @@ if __name__ == '__main__':
     model_params = {
         "GEB_config_path": args.config,
         "args": args,
+        "study_area": study_area
     }
 
     if args.headless:
