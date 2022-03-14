@@ -42,9 +42,10 @@ class Farmers(AgentBaseClass):
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
     __slots__ = ["model", "agents", "var", "redundancy", "crop_data", "crop_yield_factors", "harvest_age", "elevation_map",
-    "plant_day", "field_indices", "_field_indices_by_farmer", "n", "max_n", "activation_order_by_elevation_fixed", "agent_attributes_meta", "sample"]
+    "plant_day", "field_indices", "_field_indices_by_farmer", "n", "max_n", "activation_order_by_elevation_fixed", "agent_attributes_meta", "sample", "tehsil_map"]
     agent_attributes = [
         "_locations",
+        "_tehsil",
         "_elevation",
         "_crop",
         "_surface_irrigated",
@@ -75,6 +76,9 @@ class Farmers(AgentBaseClass):
         self.agent_attributes_meta = {
             "_locations": {
                 "nodata": [np.nan, np.nan]
+            },
+            "_tehsil": {
+                "nodata": -1
             },
             "_elevation": {
                 "nodata": np.nan
@@ -149,13 +153,17 @@ class Farmers(AgentBaseClass):
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
             bounds=self.model.bounds
         )
+        self.tehsil_map = ArrayReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'tehsils.tif'),
+            bounds=self.model.bounds
+        )
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
+        self._tehsil = np.full(self.max_n, -1, dtype=np.int32)
+        self.tehsil = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmer_tehsils.npy'))
         self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
         self.elevation = self.elevation_map.sample_coords(self.locations)
-        crop_file = os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy')
         self._crop = np.full(self.max_n, -1, dtype=np.int32)
-        self.crop = np.load(crop_file)
         self.crop[:] = 1
         # self.crop = np.random.randint(0, 26, self.crop.size)
         self._surface_irrigated = np.full(self.max_n, -1, dtype=np.int8)
@@ -929,6 +937,14 @@ class Farmers(AgentBaseClass):
         self._wealth[:self.n] = value
 
     @property
+    def tehsil(self):
+        return self._tehsil[:self.n]
+
+    @tehsil.setter
+    def tehsil(self, value):      
+        self._tehsil[:self.n] = value
+
+    @property
     def field_indices_by_farmer(self):
         return self._field_indices_by_farmer[:self.n]
 
@@ -1044,6 +1060,7 @@ class Farmers(AgentBaseClass):
         
         self.locations[self.n-1] = agent_location
         self.elevation[self.n-1] = self.elevation_map.sample_coords(np.expand_dims(agent_location, axis=0))
+        self.tehsil[self.n-1] = self.tehsil_map.sample_coords(np.expand_dims(agent_location, axis=0))
         self.crop[self.n-1] = 1
         self.surface_irrigated[self.n-1] = False
         self.groundwater_irrigated[self.n-1] = False

@@ -153,11 +153,12 @@ report:
     function: sample
     varname: crop
     save: save
-  surface_irrigated_sample:
+  surface_irrigated_per_district:
     type: farmers
-    function: sample
+    function: mean
     varname: surface_irrigated
     save: save
+    groupby: tehsil
   groundwater_irrigated_sample:
     type: farmers
     function: sample

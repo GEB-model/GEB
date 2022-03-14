@@ -6,7 +6,7 @@ import numpy as np
 from numba import njit
 from random import random
 
-from config import INPUT
+from config import INPUT, ORIGINAL_DATA
 
 import faulthandler
 faulthandler.enable()
@@ -25,7 +25,7 @@ def create_farms(cultivated_land: np.ndarray, gt: tuple[float], farm_size_probab
 
     Returns:
         farms: map of farms. Each unique ID is land owned by a single farmer. Non-cultivated land is represented by -1.
-        farmer_locs: 2 dimensional numpy array of farmer locations. First dimension corresponds to the IDs of `farms`, and the second dimension are longitude and latitude.
+        farmer_coords: 2 dimensional numpy array of farmer locations. First dimension corresponds to the IDs of `farms`, and the second dimension are longitude and latitude.
     """
 
     assert farm_size_choices.shape[1] == 2
@@ -36,8 +36,9 @@ def create_farms(cultivated_land: np.ndarray, gt: tuple[float], farm_size_probab
     cur_farm_count = 0
     farms = np.where(cultivated_land == True, -1, -2).astype(np.int32)
     # pre-allocate an array of size 1000. This array is later expanded when more farms are created.
-    farmer_locs = np.empty((1000, 2), dtype=np.float32)
-    farmer_locs_length = farmer_locs.shape[0]
+    farmer_coords = np.empty((1000, 2), dtype=np.float32)
+    farmer_coords_length = farmer_coords.shape[0]
+    farmer_pixels = np.empty((1000, 2), dtype=np.int32)
     ysize, xsize = farms.shape
     for y in range(farms.shape[0]):
         for x in range(farms.shape[1]):
@@ -99,25 +100,30 @@ def create_farms(cultivated_land: np.ndarray, gt: tuple[float], farm_size_probab
                         xsearch = 0
 
                 px, py = int((xmin + xmax) / 2), int((ymin + ymax) / 2)
+                farmer_pixels[cur_farm_count] = [py, px]
                 lon_min, lat_max = pixel_to_coord(px, py, gt)
                 lon_max, lat_min = pixel_to_coord(px+1, py+1, gt)
-                farmer_locs[cur_farm_count, 0] = np.random.uniform(lon_min, lon_max)
-                farmer_locs[cur_farm_count, 1] = np.random.uniform(lat_min, lat_max)
+                farmer_coords[cur_farm_count, 0] = np.random.uniform(lon_min, lon_max)
+                farmer_coords[cur_farm_count, 1] = np.random.uniform(lat_min, lat_max)
                 
 
                 cur_farm_count += 1
 
-                # procedure to increase the size of the pre-alloated farmer_locs array
-                if cur_farm_count >= farmer_locs_length:
-                    farmer_locs_new = np.empty((int(farmer_locs_length * 1.5), 2), dtype=np.float32)  # increase size by 50%
-                    farmer_locs_new[:farmer_locs_length] = farmer_locs
-                    farmer_locs_length = farmer_locs_new.shape[0]
-                    farmer_locs = farmer_locs_new
+                # procedure to increase the size of the pre-alloated farmer_coords array
+                if cur_farm_count >= farmer_coords_length:
+                    farmer_coords_new = np.empty((int(farmer_coords_length * 1.5), 2), dtype=farmer_coords.dtype)  # increase size by 50%
+                    farmer_coords_new[:farmer_coords_length] = farmer_coords
+                    farmer_pixels_new = np.empty((int(farmer_coords_length * 1.5), 2), dtype=farmer_pixels.dtype)  # increase size by 50%
+                    farmer_pixels_new[:farmer_coords_length] = farmer_pixels
+                    farmer_coords_length = farmer_coords_new.shape[0]
+                    farmer_coords = farmer_coords_new
+                    farmer_pixels = farmer_pixels_new
 
-    farmer_locs = farmer_locs[:cur_farm_count]
+    farmer_coords = farmer_coords[:cur_farm_count]
+    farmer_pixels = farmer_pixels[:cur_farm_count]
     assert np.count_nonzero(farms == -1) == 0
     farms = np.where(farms != -2, farms, -1)
-    return farms, farmer_locs
+    return farms, farmer_pixels, farmer_coords
 
 def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np.ndarray) -> None:
     """
@@ -135,13 +141,19 @@ def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np
     with rasterio.open(os.path.join(INPUT, 'landsurface', "cultivated_land.tif"), 'r') as src_cultivated_land:
         cultivated_land = src_cultivated_land.read(1)
 
-    farms, farmer_locs = create_farms(cultivated_land, gt, farm_size_probabilities, farm_size_choices_m2, cell_area)
+    farms, farmer_pixels, farmer_coords = create_farms(cultivated_land, gt, farm_size_probabilities, farm_size_choices_m2, cell_area)
     farms = farms.astype(np.int32)
 
     assert ((farms >= 0) == (cultivated_land == 1)).all()
+
+    with rasterio.open(os.path.join(INPUT, 'tehsils.tif'), 'r') as src:
+        subdistricts = src.read(1)
+
+    farmer_subdistricts = subdistricts[(farmer_pixels[:,0], farmer_pixels[:,1])]
     
     farmer_folder = os.path.join(INPUT, 'agents')
-    np.save(os.path.join(farmer_folder, 'farmer_locations.npy'), farmer_locs)
+    np.save(os.path.join(farmer_folder, 'farmer_locations.npy'), farmer_coords)
+    np.save(os.path.join(farmer_folder, 'farmer_tehsils.npy'), farmer_subdistricts)
 
     profile = dict(cell_area_profile)
     profile['dtype'] = farms.dtype

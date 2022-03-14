@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import cProfile
 from pstats import Stats
+import geopandas as gpd
 
 from hyve.visualization.ModularVisualization import ModularServer
 from hyve.visualization.modules import ChartModule
@@ -43,14 +44,24 @@ if __name__ == '__main__':
         #     {"name": "reservoir irrigation", "color": "#FFFF00"},
         #     {"name": "groundwater irrigation", "color": "#000000"},
         # ],
+        # [
+        #     {"name": "crop_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+        # ],
+        # [
+        #     {"name": "surface_irrigated_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+        # ],
+        # [
+        #     {"name": "groundwater_irrigated_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+        # ],
+        # [
+        #     {
+        #         "name": "groundwater_irrigated_tehsil",
+        #         "ID": f"{admin['properties']['id']}"
+        #     }
+        #     for admin in study_area['admin']
+        # ],
         [
-            {"name": "crop_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
-        ],
-        [
-            {"name": "surface_irrigated_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
-        ],
-        [
-            {"name": "groundwater_irrigated_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+            {"name": "surface_irrigated_per_district", "IDs": [26, 30, 34, 35], "color": ["#ff0000", "#00ff00", "#0000ff", "#000000"]},
         ],
         [
             {"name": "wealth_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
