@@ -3,7 +3,7 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2010-05-01
+  start_time: 2005-06-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
@@ -155,22 +155,26 @@ report:
     function: sample
     varname: crop
     save: save
+    format: csv
   surface_irrigated_per_district:
     type: farmers
     function: mean
     varname: surface_irrigated
     save: save
+    format: csv
     groupby: tehsil
   groundwater_irrigated_sample:
     type: farmers
     function: sample
     varname: groundwater_irrigated
     save: save
+    format: csv
   wealth_sample:
     type: farmers
     function: sample
     varname: wealth
     save: save
+    format: csv
   activation order:
     type: farmers
     function: null

@@ -31,14 +31,13 @@ def get_study_area():
     }
     gdf = gpd.read_file(os.path.join('DataDrive', 'GEB_Bhima', 'input', 'areamaps', 'subdistricts_bhima.shp')).to_crs(epsg=4326)
     gdf = gdf[gdf['ID'].isin(TEHSILS)]
-    gdf['scaled'] = gdf.scale(.99, .99)
     tehsils = []
     color_map = plt.get_cmap('gist_rainbow')
     colors = {}
     for i, (_, tehsil) in enumerate(gdf.iterrows()):
         color = mcolors.rgb2hex(color_map(i / len(gdf)))
         tehsils.append({
-            'geometry': tehsil['scaled'].__geo_interface__,
+            'geometry': tehsil.geometry.__geo_interface__,
             'properties': {
                 'id': tehsil['ID'],
                 'color': color

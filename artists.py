@@ -51,7 +51,7 @@ class Artists(HyveArtists):
         return {"type": "shape", "shape": "circle", "r": r, "filled": True, "color": color}
 
     def draw_tehsil(self, properties):
-        return {"type": "shape", "shape": "polygon", "filled": False, "color": properties['color'], "edge": True}
+        return {"type": "shape", "shape": "polygon", "filled": False, "color": properties['color'], "edge": True, "linewidth": 2}
 
     def get_custom_plot(self) -> dict[dict]:
         """Here you can specify custom options for plotting the background.
