@@ -1,9 +1,9 @@
 spinup_start: 1998-01-01
-start_date: 2000-01-01
-end_date: 2006-01-01
+start_date: 1998-03-01
+end_date: 1998-12-31
 subcatchmentpath: runs
 parameter_ranges: parameter_ranges.csv
-gpus: 2
+gpus: 0
 monthly: true
 forward: true
 
@@ -17,7 +17,7 @@ options:
 DEAP:
   use_multiprocessing: True
   maximize: True
-  ngen: 10 # 10
-  mu: 120 # 120
-  lambda_: 24 # 24
-  select_best: 10
+  ngen: 3 # 10
+  mu: 10 # 120
+  lambda_: 3 # 24
+  select_best: 3

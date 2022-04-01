@@ -24,6 +24,7 @@ import shutil
 import hydroStats
 import array
 import random
+import string
 import numpy as np
 from deap import algorithms
 from deap import base
@@ -50,7 +51,7 @@ args = parser.parse_args()
 with open(args.config, 'r') as f:
 	config = yaml.load(f, Loader=yaml.FullLoader)
 
-ROOT = 'DataDrive/GEB/calibration'
+ROOT = 'DataDrive/GEB_Bhima/calibration'
 OBJECTIVE = 'KGE'
 
 LOG_FOLDER = os.path.join(ROOT, 'logs')
@@ -117,7 +118,7 @@ def multi_set(dict_obj, value, *attrs):
 		raise KeyError(f"Key {attrs} does not exist in config file.")
 	d[attrs[-1]] = value
 
-def RunModel(args):
+def run_model(args):
 	individual, run_id = args
 	individual = np.array(individual.tolist())
 	assert (individual >= 0).all() and (individual <= 1).all()
@@ -142,26 +143,26 @@ def RunModel(args):
 
 	config_path = os.path.join(directory_run, 'config.yml')
 	if runmodel:
-		os.mkdir(directory_run)
+		while True:
+			os.mkdir(directory_run)
+			with open('GEB.yml', 'r') as f:
+				template = yaml.load(f, Loader=yaml.FullLoader)
 
-		with open('GEB.yml', 'r') as f:
-			template = yaml.load(f, Loader=yaml.FullLoader)
+			template['general']['spinup_start'] = config['spinup_start']
+			template['general']['start_time'] = config['end_date']
+			template['general']['export_inital_on_spinup'] = False
+			template['report'] = {}  # no other reporting than discharge required.
+			template['report_cwatm'] = {}  # no other reporting than discharge required.
 
-		template['general']['spinup_start'] = config['spinup_start']
-		template['general']['start_time'] = config['end_date']
-		template['general']['export_inital_on_spinup'] = False
-		template['report'] = {}  # no other reporting than discharge required.
-		template['report_cwatm'] = {}  # no other reporting than discharge required.
+			for _, row in values[['Key', 'value']].iterrows():
+				multi_set(template, row['value'], *row['Key'].split('.'))
 
-		for _, row in values[['Key', 'value']].iterrows():
-			multi_set(template, row['value'], *row['Key'].split('.'))
+			template['general']['report_folder'] = directory_run
 
-		template['general']['report_folder'] = directory_run
-
-		with open(config_path, 'w') as f:
-			yaml.dump(template, f)
-
-		with current_gpu_use_count.get_lock():
+			with open(config_path, 'w') as f:
+				yaml.dump(template, f)
+			
+			lock.acquire()
 			if current_gpu_use_count.value < n_gpus:
 				use_gpu = current_gpu_use_count.value
 				current_gpu_use_count.value += 1
@@ -169,27 +170,36 @@ def RunModel(args):
 			else:
 				use_gpu = False
 				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
-		
-		command = f"python run.py --config {config_path} --headless --scenario spinup"
-		if use_gpu is not False:
-			command += f' --GPU --gpu_device {use_gpu}'
-		print(command)
+			lock.release()
+			
+			command = f"python run.py --config {config_path} --headless --scenario spinup"
+			if use_gpu is not False:
+				command += f' --GPU --gpu_device {use_gpu}'
+			print(command)
 
-		p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
-		output, errors = p.communicate()
-		
-		if use_gpu is not False:
-			with current_gpu_use_count.get_lock():
+			p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
+			output, errors = p.communicate()
+
+			if use_gpu is not False:
+				lock.acquire()
 				current_gpu_use_count.value -= 1
+				lock.release()
 				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
-		
-		with open(os.path.join(LOG_FOLDER, f"log{run_id}.txt"), 'w') as f:
-			content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
-			f.write(content)
-
-		modflow_folder = os.path.join(directory_run, 'spinup', 'modflow_model')
-		if os.path.exists(modflow_folder):
-			shutil.rmtree(modflow_folder)
+			if p.returncode == 0:
+				with open(os.path.join(LOG_FOLDER, f"log{run_id}.txt"), 'w') as f:
+					content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
+					f.write(content)
+				modflow_folder = os.path.join(directory_run, 'spinup', 'modflow_model')
+				if os.path.exists(modflow_folder):
+					shutil.rmtree(modflow_folder)
+				break
+			elif p.returncode == 1:
+				with open(os.path.join(LOG_FOLDER, f"log{run_id}_{''.join((random.choice(string.ascii_lowercase) for x in range(10)))}.txt"), 'w') as f:
+					content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
+					f.write(content)
+				shutil.rmtree(directory_run)
+			else:
+				raise ValueError
 	
 	else:
 		with open(config_path, 'r') as f:
@@ -201,10 +211,10 @@ def RunModel(args):
 		print("run_id: "+str(run_id)+" File: "+ Qsim_tss)
 		raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
 	
-	simulated_streamflow = pd.read_csv(Qsim_tss,sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
+	simulated_streamflow = pd.read_csv(Qsim_tss, sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
 	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
 
-	simulated_dates = [template['general']['start_time']]
+	simulated_dates = [config['spinup_start']]
 	for _ in range(len(simulated_streamflow) - 1):
 		simulated_dates.append(simulated_dates[-1] + timedelta(days=1))
 	simulated_streamflow = simulated_streamflow[1]
@@ -212,7 +222,7 @@ def RunModel(args):
 	simulated_streamflow.name = 'simulated'
 
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
-	streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
+	streamflows = streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
 
 	if config['monthly']:
@@ -276,7 +286,7 @@ def checkBounds(min, max):
 		return wrappper
 	return decorator
 
-toolbox.register("evaluate", RunModel)
+toolbox.register("evaluate", run_model)
 toolbox.register("mate", tools.cxBlend, alpha=0.15)
 toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
 toolbox.register("select", tools.selNSGA2)
@@ -286,23 +296,28 @@ history = tools.History()
 toolbox.decorate("mate", checkBounds(0, 1))
 toolbox.decorate("mutate", checkBounds(0, 1))
 
-if __name__ == "__main__":
+def init(manager_current_gpu_use_count, manager_lock, gpus):
+	global lock
+	global current_gpu_use_count
+	global n_gpus
+	n_gpus = gpus
+	lock = manager_lock
+	current_gpu_use_count = manager_current_gpu_use_count
 
+if __name__ == "__main__":
 	t = time.time()
 
-	n_gpus = config['gpus']
-
-	current_gpu_use_count = multiprocessing.Value('i')
-	def get_gpu_counter():
-		global current_gpu_use_count
-		current_gpu_use_count = multiprocessing.Value('i')
-		current_gpu_use_count.value = 0
+	manager = multiprocessing.Manager()
+	current_gpu_use_count = manager.Value('i', 0)
+	manager_lock = manager.Lock()
 
 	if use_multiprocessing is True:
-		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK') or 1)
+		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK') or 4)
 		print(f'Pool size: {pool_size}')
-		pool = multiprocessing.Pool(processes=pool_size)
+		pool = multiprocessing.Pool(processes=pool_size, initializer=init, initargs=(current_gpu_use_count, manager_lock, config['gpus']))
 		toolbox.register("map", pool.map)
+	else:
+		init(current_gpu_use_count, manager_lock, config['gpus'])
 	
 	# For someone reason, if sum of cxpb and mutpb is not one, a lot less Pareto optimal solutions are produced
 	cxpb = 0.7  # The probability of mating two individuals
@@ -370,6 +385,7 @@ if __name__ == "__main__":
 			effmin[0,ii] = np.amin([halloffame[x].fitness.values[ii] for x in range(len(halloffame))])
 			effavg[0,ii] = np.average([halloffame[x].fitness.values[ii] for x in range(len(halloffame))])
 			effstd[0,ii] = np.std([halloffame[x].fitness.values[ii] for x in range(len(halloffame))])
+		
 		gen = 0
 		print(">> gen: " + str(gen) + ", effmax_KGE: " + "{0:.3f}".format(effmax[gen,0]))
 		#history.update(population)
@@ -389,10 +405,9 @@ if __name__ == "__main__":
 
 			run_indices = [gen * 1000 + ii + 1 for ii in range(lambda_)]
 
-
 		# saving population
 		populationall[gen] = population.copy()
-		cp = dict(populationall=populationall,population=population, generation=gen, rndstate=random.getstate(), offspring=offspring, halloffame=halloffame, run_indices=run_indices)
+		cp = dict(populationall=populationall, population=population, generation=gen, rndstate=random.getstate(), offspring=offspring, halloffame=halloffame, run_indices=run_indices)
 		with open(checkpoint, "wb") as cp_file:
 			pickle.dump(cp, cp_file)
 		cp_file.close()
@@ -419,6 +434,7 @@ if __name__ == "__main__":
 			effmin[gen,ii] = np.amin([halloffame[x].fitness.values[ii] for x in range(len(halloffame))])
 			effavg[gen,ii] = np.average([halloffame[x].fitness.values[ii] for x in range(len(halloffame))])
 			effstd[gen,ii] = np.std([halloffame[x].fitness.values[ii] for x in range(len(halloffame))])
+		
 		print(">> gen: "+str(gen)+", effmax_KGE: "+"{0:.3f}".format(effmax[gen,0]))
 
 		# Terminate the optimization after ngen generations
