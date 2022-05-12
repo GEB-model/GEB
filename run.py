@@ -6,10 +6,10 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-from hyve.visualization.ModularVisualization import ModularServer
-from hyve.visualization.modules import ChartModule
-from hyve.visualization.canvas import Canvas
-from hyve.argparse import parser  
+from honeybees.visualization.ModularVisualization import ModularServer
+from honeybees.visualization.modules import ChartModule
+from honeybees.visualization.canvas import Canvas
+from honeybees.argparse import parser  
 from model import GEBModel
 
 import faulthandler
@@ -89,11 +89,14 @@ if __name__ == '__main__':
         #     }
         #     for admin in study_area['admin']
         # ],
+        # [
+        #     {"name": "surface_irrigated_per_district", "IDs": TEHSILS, "color": [colors[tehsil] for tehsil in TEHSILS]},
+        # ],
+        # [
+        #     {"name": "wealth_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+        # ],
         [
-            {"name": "surface_irrigated_per_district", "IDs": TEHSILS, "color": [colors[tehsil] for tehsil in TEHSILS]},
-        ],
-        [
-            {"name": "wealth_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
+            {"name": "discharge", "color": "#FF0000"},
         ],
         [
             {"name": "reservoir storage", "color": "#FF0000"},
@@ -107,9 +110,6 @@ if __name__ == '__main__':
         # ],
         [
             {"name": "hydraulic head", "color": "#FF0000"},
-        ],
-        [
-            {"name": "discharge", "color": "#FF0000"},
         ],
         # [
         #     {"name": "precipitation", "color": "#FF0000"},

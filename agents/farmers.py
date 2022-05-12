@@ -10,9 +10,9 @@ except (ModuleNotFoundError, ImportError):
 
 from numba import njit
 
-from hyve.library.mapIO import ArrayReader
-from hyve.agents import AgentBaseClass
-from hyve.library.raster import pixels_to_coords
+from honeybees.library.mapIO import ArrayReader
+from honeybees.agents import AgentBaseClass
+from honeybees.library.raster import pixels_to_coords
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -26,12 +26,6 @@ def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarr
         field_indices_for_farmer: the indices of the fields for the given farmer.
     """
     return field_indices[field_indices_by_farmer[farmer_index, 0]: field_indices_by_farmer[farmer_index, 1]]
-
-def take_with_ignore(a, indices, ignore_index, ignore_value=np.nan):
-    array = np.take(a, indices)
-    array[indices == ignore_index] = ignore_value
-    return array
-
 
 class Farmers(AgentBaseClass):
     """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
@@ -766,7 +760,7 @@ class Farmers(AgentBaseClass):
         """
         plant_map = self.plant_numba(
             self.n,
-            self.current_day_of_year,
+            self.model.current_time.timetuple().tm_yday,  # current day of year
             self.var.crop_map,
             self.crop,
             self.plant_day,
@@ -997,15 +991,6 @@ class Farmers(AgentBaseClass):
             self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         if self.model.current_timestep == 105:
             self.remove_agent(farmer_idx=1000)
-
-    @property
-    def current_day_of_year(self) -> int:
-        """Gets the current day of the year.
-        
-        Returns:
-            day: current day of the year.
-        """
-        return self.model.current_time.timetuple().tm_yday
 
     def remove_agent(self, farmer_idx: int) -> np.ndarray:
         last_farmer_HRUs = get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, self.n-1)

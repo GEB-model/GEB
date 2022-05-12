@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from typing import Union
-from hyve.artists import Artists as HyveArtists
+from honeybees.artists import Artists as honeybeesArtists
 import numpy as np
 import inspect
 from operator import attrgetter
@@ -11,14 +11,14 @@ except (ModuleNotFoundError, ImportError):
 
 from agents.farmers import Farmers
 
-class Artists(HyveArtists):
+class Artists(honeybeesArtists):
     """This class is used to configure how the display environment works.
     
     Args:
         model: The GEB model.
     """
     def __init__(self, model) -> None:
-        HyveArtists.__init__(self, model)
+        honeybeesArtists.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
         self.background_variable = "agents.farmers.crop"  # set initial background iamge.
@@ -36,18 +36,18 @@ class Artists(HyveArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if idx == self.model.agents.farmers.sample[0]:
-            color = '#ff0000'
-            r = 3
-        elif idx == self.model.agents.farmers.sample[1]:
-            color = '#00ff00'
-            r = 3
-        elif idx == self.model.agents.farmers.sample[2]:
-            color = '#0000ff'
-            r = 3
-        else:
-            color = '#ffffff'
-            r = .1
+        # if idx == self.model.agents.farmers.sample[0]:
+        #     color = '#ff0000'
+        #     r = 3
+        # elif idx == self.model.agents.farmers.sample[1]:
+        #     color = '#00ff00'
+        #     r = 3
+        # elif idx == self.model.agents.farmers.sample[2]:
+        #     color = '#0000ff'
+        #     r = 3
+        # else:
+        color = '#ff0000'
+        r = .5
         return {"type": "shape", "shape": "circle", "r": r, "filled": True, "color": color}
 
     def draw_tehsil(self, properties):
@@ -89,7 +89,7 @@ class Artists(HyveArtists):
                 'type': 'categorical',
                 'nanvalue': -1,
                 'names': ["forest", "grassland/non-irrigated", "paddy-irrigated", "non-paddy irrigated", "sealed", "water"],
-                'colors': ["#274e2e", "#8ff40b", "#8555aa", "#d66a29", "#7e8180", "#2636d9"],
+                'colors': ["#274e2e", "#adffbc", "#8555aa", "#007d13", "#7e8180", "#2636d9"]
             },
         }
 

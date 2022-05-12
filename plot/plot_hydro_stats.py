@@ -78,7 +78,7 @@ def get_discharge(scenario, switch_crop):
     except FileNotFoundError:
         return None
 
-def get_hyve_data(varname, scenario, switch_crop, fileformat='csv'):
+def get_honeybees_data(varname, scenario, switch_crop, fileformat='csv'):
     subfolder = scenario
     if switch_crop:
         subfolder += '_switch_crops'
@@ -205,7 +205,7 @@ def scenarios():
             PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
-            res = get_hyve_data('hydraulic head', scenario=scenario, switch_crop=switch_crop)
+            res = get_honeybees_data('hydraulic head', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, head = res
                 ax2.plot(dates, head, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
@@ -213,7 +213,7 @@ def scenarios():
             PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
-            res = get_hyve_data('reservoir storage', scenario=scenario, switch_crop=switch_crop)
+            res = get_honeybees_data('reservoir storage', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, reservoir_storage = res
                 reservoir_storage /= 1e9
@@ -222,7 +222,7 @@ def scenarios():
             PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
-            res = get_hyve_data('is water aware', scenario=scenario, switch_crop=switch_crop)
+            res = get_honeybees_data('is water aware', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, efficient = res
                 efficient = efficient.astype(np.float64)

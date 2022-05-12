@@ -10,7 +10,7 @@ import time
 from tqdm import tqdm
 from io import StringIO
 
-from config import ORIGINAL_DATA
+from config import ORIGINAL_DATA, INPUT
 
 SIZE_CLASSES = [
     "Below 0.5", "0.5-1.0", "1.0-2.0", "2.0-3.0", "3.0-4.0",
@@ -163,6 +163,53 @@ class CensusScraper:
         print(exc_type, exc_val)
         self.driver.quit()
 
+def process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_class_column, fields, kind, subtype):
+    output_folder = os.path.join(ORIGINAL_DATA, 'census', 'output')
+    os.makedirs(output_folder, exist_ok=True)
+    if subtype:
+        output_folder = os.path.join(output_folder, kind)
+        os.makedirs(output_folder, exist_ok=True)
+    if 'csv' in os.listdir(folder):
+        csv_folder = os.path.join(folder, 'csv')
+    else:
+        csv_folder = folder
+    for fn in os.listdir(csv_folder):
+        state, district, tehsil = fn.replace('.csv', '').split('-')
+        with open(os.path.join(csv_folder, fn), 'r') as f:
+            contents = f.read()
+        tehsil_shp_name = tehsil_2_shapefile[tehsil]
+        subdistricts.at[tehsil_shp_name.title(), f'matched'] = True
+
+        if len(contents) > 0:
+            df = pd.read_csv(StringIO(contents.split('\n\n')[response_block]))
+            if len(df) > 0:
+                df[size_class_column] = df[size_class_column].str.replace(' - ', '-')
+                df_sub = df[df[size_class_column].isin(SIZE_CLASSES)]
+                assert len(df_sub) == len(SIZE_CLASSES)
+                size_classes = df_sub[[size_class_column] + list(fields.keys())]
+
+                for size_class in size_classes.itertuples():
+                    for field_src, field_dst in fields.items():
+                        subdistricts.at[tehsil_shp_name.title(), f'{getattr(size_class, size_class_column)}_{field_dst}'] = getattr(size_class, field_src)
+            else:
+                for size_class in SIZE_CLASSES:
+                    for field in fields.values():
+                        subdistricts.at[tehsil_shp_name.title(), f'{size_class}_{field}'] = None
+        else:
+            for size_class in SIZE_CLASSES:
+                for field in fields.values():
+                    subdistricts.at[tehsil_shp_name.title(), f'{size_class}_{field}'] = None
+
+    assert (subdistricts['matched'] == True).all()
+    fn = kind
+    if subtype:
+        print(subtype)
+        fn = kind + f'_{subtype}'
+    fn += f'_{year}.geojson'
+    print(fn)
+    subdistricts.to_file(os.path.join(output_folder, fn))
+    print("Created map")
+
 def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_class_column='SizeClass', scrape=True, headless=True, response_block=0):
     print('')
     print(kind, year)
@@ -202,64 +249,45 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
             print('Downloading finished')
             break
 
-            # error = False
-            # for fn in os.listdir(csv_dir):
-            #     fp = os.path.join(csv_dir, fn)
-            #     if not os.path.getsize(fp) > 0:
-            #         os.remove(os.path.join(csv_dir, fn))
-            #         error = True
-            #         print(f"Error occured for {fn}. Removing file and restarting.")
-            # if not error:
-            #     break
-
-    return
-
-    subdistricts = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'subdistricts.shp'))
+    subdistricts = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'subdistricts', 'subdistricts.shp'))
     study_region = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'study_region.geojson')).to_crs(subdistricts.crs)
     subdistricts = gpd.sjoin(subdistricts, study_region, predicate='intersects')
     subdistricts['matched'] = False
     subdistricts = subdistricts.set_index('NAME')
-    for fn in os.listdir(root_dir):
-        state, district, tehsil = fn.replace('.csv', '').split('-')
-        with open(os.path.join(root_dir, fn), 'r') as f:
-            contents = f.read()
-        tehsil_shp_name = tehsil_2_shapefile[tehsil]
-        subdistricts.at[tehsil_shp_name.title(), f'matched'] = True
 
-        if len(contents) > 0:
-            df = pd.read_csv(StringIO(contents.split('\n\n')[response_block]))
-            if len(df) > 0:
-                df[size_class_column] = df[size_class_column].str.replace(' - ', '-')
-                df_sub = df[df[size_class_column].isin(SIZE_CLASSES)]
-                assert len(df_sub) == len(SIZE_CLASSES)
-                size_classes = df_sub[[size_class_column] + list(fields.keys())]
-
-                for size_class in size_classes.itertuples():
-                    for field_src, field_dst in fields.items():
-                        subdistricts.at[tehsil_shp_name.title(), f'{getattr(size_class, size_class_column)}_{field_dst}'] = getattr(size_class, field_src)
-            else:
-                for size_class in SIZE_CLASSES:
-                    for field in fields.values():
-                        subdistricts.at[tehsil_shp_name.title(), f'{size_class}_{field}'] = None
-        else:
-            for size_class in SIZE_CLASSES:
-                for field in fields.values():
-                    subdistricts.at[tehsil_shp_name.title(), f'{size_class}_{field}'] = None
-
-    assert (subdistricts['matched'] == True).all()
-    fn = kind
     if subtype:
-        fn = kind + f'_{subtype}'
-    fn += f'_{year}.geojson'
-    subdistricts.to_file(os.path.join(ORIGINAL_DATA, 'census', fn))
-    print("Created map")
+        for subtype_name in os.listdir(root_dir):
+            folder = os.path.join(root_dir, subtype_name)
+            print(folder)
+            process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_class_column, fields, kind, subtype_name)
+    else:
+        process_csv(root_dir, tehsil_2_shapefile, subdistricts, response_block, size_class_column, fields, kind, subtype)
     
 
 if __name__ == '__main__':
     chromedriver_autoinstaller.install()
-    scrape = True
+    scrape = False
     headless = False
     for year in ('2000-01', '2010-11', '2015-16'):
+        main(
+            url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
+            kind='farm_size',
+            year=year,
+            dropdowns=[
+                ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
+                ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+                ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
+            ],
+            download_name='TehsilT1table1.csv',
+            size_class_column='field4',
+            fields={
+                'area_total1': "area_total",
+                'no_total1': "n_total"
+            },
+            scrape=scrape,
+            headless=headless,
+            response_block=2
+        )
         main(
             url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
             kind='crops',
@@ -279,116 +307,97 @@ if __name__ == '__main__':
             scrape=scrape,
             headless=headless
         )
-        # main(
-        #     url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
-        #     kind='farm_size',
-        #     year=year,
-        #     dropdowns=[
-        #         ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
-        #         ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-        #         ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
-        #     ],
-        #     download_name='TehsilT1table1.csv',
-        #     size_class_column='field4',
-        #     fields={
-        #         'area_total1': "area_total",
-        #         'no_total1': "n_total"
-        #     },
-        #     scrape=scrape,
-        #     headless=headless,
-        #     response_block=2
-        # )
-        # main(
-        #     url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-        #     kind='irrigation_status',
-        #     year=year,
-        #     dropdowns=[
-        #         ("_ctl0_ContentPlaceHolder1_ddlTables", 'IRRIGATION STATUS'),
-        #         ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-        #     ],
-        #     download_name='tktabledisplay4.csv',
-        #     fields={
-        #         'total_hold': 'total_holdings',
-        #         'total_area': 'total_area',
-        #         'wl_irr_hd': 'wholy_irrigated_holdings',
-        #         'wl_irr_ar': 'wholy_irrigated_area',
-        #         'wl_unir_hd': 'wholy_unirrigated_holdings',
-        #         'wl_unir_ar': 'wholy_unirrigated_area',
-        #         'pl_irr_hd': 'partly_irrigated_holdings',
-        #         'pl_area': 'partly_irrigated_area',
-        #     },
-        #     scrape=scrape,
-        #     headless=headless
-        # )
-        # if year != '2015-16': 
-        #     main(
-        #         url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-        #         kind='irrigation_source',
-        #         year=year,
-        #         dropdowns=[
-        #             ("_ctl0_ContentPlaceHolder1_ddlTables", 'SOURCES OF IRRIGATION'),
-        #             ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-        #         ],
-        #         download_name='tktabledisplay5a.csv',
-        #         fields={
-        #             'total_hold': 'total_holdings',
-        #             'total_area': 'total_area',
-        #             'canal_hd': 'canals_holdings',
-        #             'canal_ar': 'canals_area',
-        #             'tank_hd': 'tank_holdings',
-        #             'tank_ar': 'tank_area',
-        #             'well_hd': 'well_holdings',
-        #             'well_ar': 'well_area',
-        #             'tubewel_hd': 'tubewell_holdings',
-        #             'tubewel_ar': 'tubewell_area',
-        #             'oth_hd': 'other_holdings',
-        #             'oth_ar': 'other_area',
-        #             'irri_hd': 'irrigated_holdings',
-        #             'nt_irri_ar': 'irrigated_area'
-        #         },
-        #         scrape=scrape,
-        #         headless=headless
-        #     )
-        #     main(
-        #         url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-        #         kind='wells_and_tubewells',
-        #         year=year,
-        #         dropdowns=[
-        #             ("_ctl0_ContentPlaceHolder1_ddlTables", 'WELLS AND TUBEWELLS'),
-        #             ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-        #         ],
-        #         download_name='tktabledisplay5b.csv',
-        #         fields={
-        #             'total_hold': 'total_holdings',
-        #             'total_area': 'total_area',
-        #             'wells_ep': 'well_electric_pumpset',
-        #             'well_dp': 'well_diesel_pumpset',
-        #             'Total_Pumps': 'well_total',
-        #             'well_wp': 'well_without_pumpset',
-        #             'wells_nuse': 'well_not_in_use',
-        #             'tubewel_e': 'tubewell_electric',
-        #             'tubewel_d': 'tubewell_diesel',
-        #             'tubewells': 'tubewell_total'
-        #         },
-        #         scrape=scrape,
-        #         headless=headless
-        #     )
-        # main(
-        #     url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-        #     kind='cropped_area',
-        #     year=year,
-        #     dropdowns=[
-        #         ("_ctl0_ContentPlaceHolder1_ddlTables", 'GROSS CROPPED AREA'),
-        #         ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-        #     ],
-        #     download_name='tktabledisplay6a.csv',
-        #     fields={
-        #         'total_hold': 'total_holdings',
-        #         'total_area': 'total_area',
-        #         'Gr_irr_ar': 'gross_cropped_irrigated_area',
-        #         'Gr_unirr_ar': 'gross_cropped_unirrigated_area',
-        #         'Gross_ar': 'gross_cropped_area'
-        #     },
-        #     scrape=scrape,
-        #     headless=headless
-        # )
+        main(
+            url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+            kind='irrigation_status',
+            year=year,
+            dropdowns=[
+                ("_ctl0_ContentPlaceHolder1_ddlTables", 'IRRIGATION STATUS'),
+                ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+            ],
+            download_name='tktabledisplay4.csv',
+            fields={
+                'total_hold': 'total_holdings',
+                'total_area': 'total_area',
+                'wl_irr_hd': 'wholy_irrigated_holdings',
+                'wl_irr_ar': 'wholy_irrigated_area',
+                'wl_unir_hd': 'wholy_unirrigated_holdings',
+                'wl_unir_ar': 'wholy_unirrigated_area',
+                'pl_irr_hd': 'partly_irrigated_holdings',
+                'pl_area': 'partly_irrigated_area',
+            },
+            scrape=scrape,
+            headless=headless
+        )
+        if year != '2015-16': 
+            main(
+                url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+                kind='irrigation_source',
+                year=year,
+                dropdowns=[
+                    ("_ctl0_ContentPlaceHolder1_ddlTables", 'SOURCES OF IRRIGATION'),
+                    ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+                ],
+                download_name='tktabledisplay5a.csv',
+                fields={
+                    'total_hold': 'total_holdings',
+                    'total_area': 'total_area',
+                    'canal_hd': 'canals_holdings',
+                    'canal_ar': 'canals_area',
+                    'tank_hd': 'tank_holdings',
+                    'tank_ar': 'tank_area',
+                    'well_hd': 'well_holdings',
+                    'well_ar': 'well_area',
+                    'tubewel_hd': 'tubewell_holdings',
+                    'tubewel_ar': 'tubewell_area',
+                    'oth_hd': 'other_holdings',
+                    'oth_ar': 'other_area',
+                    'irri_hd': 'irrigated_holdings',
+                    'nt_irri_ar': 'irrigated_area'
+                },
+                scrape=scrape,
+                headless=headless
+            )
+            main(
+                url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+                kind='wells_and_tubewells',
+                year=year,
+                dropdowns=[
+                    ("_ctl0_ContentPlaceHolder1_ddlTables", 'WELLS AND TUBEWELLS'),
+                    ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+                ],
+                download_name='tktabledisplay5b.csv',
+                fields={
+                    'total_hold': 'total_holdings',
+                    'total_area': 'total_area',
+                    'wells_ep': 'well_electric_pumpset',
+                    'well_dp': 'well_diesel_pumpset',
+                    'Total_Pumps': 'well_total',
+                    'well_wp': 'well_without_pumpset',
+                    'wells_nuse': 'well_not_in_use',
+                    'tubewel_e': 'tubewell_electric',
+                    'tubewel_d': 'tubewell_diesel',
+                    'tubewells': 'tubewell_total'
+                },
+                scrape=scrape,
+                headless=headless
+            )
+        main(
+            url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+            kind='cropped_area',
+            year=year,
+            dropdowns=[
+                ("_ctl0_ContentPlaceHolder1_ddlTables", 'GROSS CROPPED AREA'),
+                ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+            ],
+            download_name='tktabledisplay6a.csv',
+            fields={
+                'total_hold': 'total_holdings',
+                'total_area': 'total_area',
+                'Gr_irr_ar': 'gross_cropped_irrigated_area',
+                'Gr_unirr_ar': 'gross_cropped_unirrigated_area',
+                'Gross_ar': 'gross_cropped_area'
+            },
+            scrape=scrape,
+            headless=headless
+        )

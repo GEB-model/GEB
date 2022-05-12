@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import numpy as np
-from hyve.agents import AgentBaseClass
+from honeybees.agents import AgentBaseClass
 
 class Government(AgentBaseClass):
     """This class is used to simulate the government.

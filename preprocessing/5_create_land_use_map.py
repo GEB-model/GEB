@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import rasterio
-from hyve.library.raster import clip_to_other, upscale
+from honeybees.library.raster import clip_to_other, upscale
 import numpy as np
 from rasterio.warp import reproject, Resampling
 from rasterio.merge import merge

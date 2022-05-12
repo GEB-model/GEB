@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from datetime import timedelta, date
-from hyve.library.helpers import timeprint
-from hyve.area import Area
+from honeybees.library.helpers import timeprint
+from honeybees.area import Area
 from reporter import Reporter
-from hyve.model import Model as ABM_Model
+from honeybees.model import Model as ABM_Model
 from agents import Agents
 from artists import Artists
 from HRUs import Data
@@ -149,4 +149,3 @@ class GEBModel(ABM_Model, CWatM_Model):
                 fp = os.path.join(self.initial_conditions_folder, f"{initvar}.npy")
                 values = attrgetter(initvar)(self.data)
                 np.save(fp, values)
-
