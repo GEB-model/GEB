@@ -158,8 +158,8 @@ class Farmers(AgentBaseClass):
         self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
         self.elevation = self.elevation_map.sample_coords(self.locations)
         self._crop = np.full(self.max_n, -1, dtype=np.int32)
-        self.crop[:] = 1
-        # self.crop = np.random.randint(0, 26, self.crop.size)
+        # self.crop[:] = 1
+        self.crop = np.random.randint(0, 26, self.n)
         self._surface_irrigated = np.full(self.max_n, -1, dtype=np.int8)
         self._groundwater_irrigated = np.full(self.max_n, -1, dtype=np.int8)
         self.surface_irrigated[:] = False
@@ -168,7 +168,7 @@ class Farmers(AgentBaseClass):
             self._is_paddy_irrigated = cp.full(self.max_n, -1, dtype=np.int8)
         else:
             self._is_paddy_irrigated = np.full(self.max_n, -1, dtype=np.int8)
-        self.is_paddy_irrigated[self.crop == 1] = False  # set non-rice to non paddy-irrigated
+        self.is_paddy_irrigated[self.crop != 2] = False  # set non-rice to non paddy-irrigated
         self.is_paddy_irrigated[self.crop == 2] = True  # set rice to paddy-irrigated
 
         self._is_water_efficient = np.full(self.max_n, -1, dtype=np.int8)

@@ -3,7 +3,7 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2008-06-01
+  start_time: 2005-05-10
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
@@ -163,6 +163,13 @@ report:
     save: save
     format: csv
     groupby: tehsil
+  crops_per_district:
+    type: farmers
+    function: groupcount
+    varname: crop
+    save: save
+    format: csv
+    groupby: tehsil
   groundwater_irrigated_sample:
     type: farmers
     function: sample
@@ -200,13 +207,6 @@ report:
     type: farmers
     function: null
     varname: channel_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  is water aware:
-    type: farmers
-    function: null
-    varname: is_water_efficient
     frequency: per_timestep
     format: npy
     save: export
