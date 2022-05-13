@@ -26,6 +26,7 @@ import array
 import random
 import string
 import numpy as np
+import signal
 from deap import algorithms
 from deap import base
 from deap import creator
@@ -45,7 +46,7 @@ global gen
 gen = 0
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--config', dest='config', type=str, required=True)
+parser.add_argument('--config', dest='config', type=str, default='calibration/config.yml')
 args = parser.parse_args()
 
 with open(args.config, 'r') as f:
@@ -297,6 +298,7 @@ toolbox.decorate("mate", checkBounds(0, 1))
 toolbox.decorate("mutate", checkBounds(0, 1))
 
 def init(manager_current_gpu_use_count, manager_lock, gpus):
+	signal.signal(signal.SIGINT, signal.SIG_IGN)
 	global lock
 	global current_gpu_use_count
 	global n_gpus
@@ -371,7 +373,7 @@ if __name__ == "__main__":
 		if not config['forward']:
 			invalid_ind = invalid_ind[::-1]
 			run_indices = run_indices[::-1]
-		fitnesses = toolbox.map(toolbox.evaluate, zip(invalid_ind, run_indices))
+		fitnesses = toolbox.map_async(toolbox.evaluate, zip(invalid_ind, run_indices))
 		for ind, fit in zip(invalid_ind, fitnesses):
 			ind.fitness.values = fit
 
