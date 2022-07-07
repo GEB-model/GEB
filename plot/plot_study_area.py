@@ -5,6 +5,7 @@ try:
 except ImportError:
     raise ImportError("Matplotlib not found, could not create plot")
 
+from mpl_toolkits.axes_grid.inset_locator import InsetPosition
 from cartopy.io.img_tiles import OSM
 import cartopy.crs as ccrs
 import matplotlib.patches as mpatches
@@ -13,6 +14,8 @@ import cartopy.feature as cfeature
 import geopandas as gpd
 import cartopy.crs as ccrs
 import numpy as np
+
+from shapely.geometry import Polygon
 
 import matplotlib as mpl
 
@@ -33,7 +36,7 @@ def scale_bar(ax, length=None, location=(0.5, 0.05), linewidth=3):
     #vertically at scale bar location
     sbllx = (llx1 + llx0) / 2
     sblly = lly0 + (lly1 - lly0) * location[1]
-    tmc = ccrs.TransverseMercator(sbllx, sblly)
+    tmc = ccrs.TransverseMercator(sbllx, sblly, approx=False)
     #Get the extent of the plotted area in coordinates in metres
     x0, x1, y0, y1 = ax.get_extent(tmc)
     #Turn the specified scalebar location into coordinates in metres
@@ -68,9 +71,7 @@ def create_figure(outline):
     return ax, crs
 
 
-def plot(outline):
-    from mpl_toolkits.axes_grid.inset_locator import (inset_axes, InsetPosition,
-                                                    mark_inset)
+def plot_location(outline):
     minx, miny, maxx, maxy = outline.bounds
     imagery = OSM()
 
@@ -140,10 +141,34 @@ def plot_basins(outline):
     plt.savefig('plot/output/bhima_basin_water_bodies_command_areas.eps')
     plt.show()
 
+def plot_cutout(outline):
+    minx, miny, maxx, maxy = outline.bounds
+    imagery = OSM()
+
+    ax, crs = create_figure(outline)
+
+    border = 1
+    minx -= border
+    maxx += border
+    miny -= border
+    maxy += border
+    ax.set_extent((minx, maxx, miny, maxy))
+
+    plot_border = Polygon([[minx, miny], [minx, maxy], [maxx, maxy], [maxx, miny], [minx, miny]])
+    plot_border = gpd.GeoDataFrame(geometry=[plot_border])
+    mask = plot_border.overlay(gpd.GeoDataFrame(geometry=[outline]), how='difference')
+    mask.plot(ax=ax, edgecolor='none', facecolor='white')
+
+    ax.add_image(imagery, 8, interpolation='spline36', regrid_shape=5_000)
+
+    # plt.show()
+    plt.savefig('plot/output/cutout.png', dpi=300)
+
 
 if __name__ == '__main__':
     study_area = 'DataDrive/GEB/input/areamaps/mask.shp'
     outline = gpd.GeoDataFrame.from_file(study_area).iloc[2].geometry
-    # plot(outline)
+    # plot_location(outline)
+    plot_cutout(outline)
 
-    plot_basins(outline)
+    # plot_basins(outline)

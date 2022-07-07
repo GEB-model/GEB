@@ -7,7 +7,7 @@ general:
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2006-01-05
-  end_time: 2018-12-31
+  end_time: 2017-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   spinup_start: 2004-01-01
@@ -25,16 +25,14 @@ general:
 ###
 # This section can contain settings to change the behavior or the agents.
 agent_settings:
-  ###
-  # If this setting is set to true, the farmers in the model are activated in a set order, allowing for better reproducability of the model.
+  farmers:
+    return_fraction: 0.4460215975470637
   fix_activation_order: true
   reservoir_operators:
-    max_reservoir_release_factor: 0.03
     MinOutflowQ: 0.0
-    NormalOutflowQ: .1
     NonDamagingOutflowQ: 4.0
-  farmers:
-    return_fraction: .5
+    NormalOutflowQ: 0.1
+    max_reservoir_release_factor: 0.0224074528066592
 
 ###
 # This sections contains settings for logging of the model. 
@@ -220,12 +218,12 @@ report_cwatm:
 
 parameters:
   SnowMeltCoef: 0.004
-  arnoBeta_add: 0.18781855039414305
-  factor_interflow: 1.5507514321846023
-  lakeAFactor: 0.8654560453843747
-  lakeEvaFactor: 1.471582423324509
-  manningsN: 2.058737439843661
+  arnoBeta_add: 0.5283859523272518
+  factor_interflow: 2.2714847321130502
+  lakeAFactor: 5.0
+  lakeEvaFactor: 2.7034975449638337
+  manningsN: 1.2332481366804147
   normalStorageLimit: 0.645563228322237
-  preferentialFlowConstant: 6.1010022638948005
-  recessionCoeff_factor: 6.959587883563559
-  soildepth_factor: 1.1880513031716229
+  preferentialFlowConstant: 7.586785721511567
+  recessionCoeff_factor: 4.243009086644265
+  soildepth_factor: 1.2284173773948035

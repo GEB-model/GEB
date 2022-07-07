@@ -16,7 +16,7 @@ source ~/.bashrc
 SCRIPT_DIR="/scistor/ivm/jbn271/Packages/GEB/"
 cd $SCRIPT_DIR
 
-conda activate abm  # activate conda environment
+conda activate a  # activate conda environment
 
 python run.py --headless --scenario spinup
 python run.py --headless --scenario base

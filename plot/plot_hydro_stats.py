@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
 import re
-from isort import stream
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, date
 import yaml
@@ -12,6 +11,8 @@ import matplotlib.dates as mdates
 from matplotlib.lines import Line2D
 from plot import read_npy
 import matplotlib.transforms as transforms
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+import matplotlib.dates as mdates
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
@@ -175,8 +176,73 @@ def scenarios():
     fig, axes = plt.subplots(3, 2, sharex=True, figsize=(5, 6), dpi=300)
     plt.subplots_adjust(left=0.065, right=0.98, bottom=0.08, top=0.96, wspace=0.15, hspace=0.15)
     ((ax0, ax1), (ax2, ax3), (ax4, ax5)) = axes
+    # ax1_position = ax1.get_position()
     fig.delaxes(ax1)
+    # ax3_2 = fig.add_subplot(3, 2, 4, facecolor='none')
+    # ax3_2.get_shared_x_axes().join(ax1, ax3_2)
     axes = (ax0, ax2, ax3, ax4, ax5)
+    # ax3_position = ax3.get_position()
+    # ax3_position.y1 = ax1_position.y1
+    # ax3.set_position(ax3_position)
+
+    ax0.set_ylim(0, 10_000)
+    # start_date = mdates.date2num(date(2007, 1, 1))
+    # end_date = mdates.date2num(date(2007, 6, 1))
+    ax3.set_ylim(0, 41)
+    
+    axins1 = ax0.inset_axes([.74, .20, .13, .70], transform=ax0.transAxes)
+    axins1.set_xlim(date(2015, 1, 1), date(2015, 8, 1)) # apply the x-limits
+    axins1.set_ylim(0, 250) # apply the y-limits
+    axins1.get_xaxis().set_visible(False)
+    axins1.get_yaxis().set_visible(False)
+    for axis in ['top','bottom','left','right']:
+        axins1.spines[axis].set_linewidth(.5)
+    mark_inset(ax0, axins1, loc1=3, loc2=4, fc="none", ec="black", linewidth=.5)
+
+    axins4 = ax0.inset_axes([.50, .45, .10, .50], transform=ax0.transAxes)
+    axins4.set_xlim(date(2011, 9, 10), date(2011, 9, 13)) # apply the x-limits
+    axins4.set_ylim(7000, 7800) # apply the y-limits
+    axins4.get_xaxis().set_visible(False)
+    axins4.get_yaxis().set_visible(False)
+    for axis in ['top','bottom','left','right']:
+        axins4.spines[axis].set_linewidth(.5)
+    mark_inset(ax0, axins4, loc1=3, loc2=2, fc="none", ec="black", linewidth=.5)
+
+    axins = ax3.inset_axes([.03, .01, .2, .25], transform=ax3.transAxes)
+    axins.set_xlim(date(2009, 3, 1), date(2009, 8, 1)) # apply the x-limits
+    axins.set_ylim(8, 15) # apply the y-limits
+    axins.get_xaxis().set_visible(False)
+    axins.get_yaxis().set_visible(False)
+    for axis in ['top','bottom','left','right']:
+        axins.spines[axis].set_linewidth(.5)
+    mark_inset(ax3, axins, loc1=2, loc2=4, fc="none", ec="black", linewidth=.5)
+
+    axins2 = ax3.inset_axes([.33, .01, .2, .22], transform=ax3.transAxes)
+    axins2.set_xlim(date(2012, 3, 1), date(2012, 8, 1)) # apply the x-limits
+    axins2.set_ylim(7, 15) # apply the y-limits
+    axins2.get_xaxis().set_visible(False)
+    axins2.get_yaxis().set_visible(False)
+    for axis in ['top','bottom','left','right']:
+        axins2.spines[axis].set_linewidth(.5)
+    mark_inset(ax3, axins2, loc1=2, loc2=4, fc="none", ec="black", linewidth=.5)
+    # ax0.set_yscale('log')
+
+    # space = .05
+    # upper_box = ax3.get_position()
+    # size = upper_box.y1 - upper_box.y0
+    # upper_box.y0 = upper_box.y0 + size * (.75 + space / 2)
+    # lower_box = ax3_2.get_position()
+    # lower_box.y1 = lower_box.y1 - size * (.25 + space / 2)
+    # ax3.set_position(upper_box)
+    # ax3_2.set_position(lower_box)
+    
+    # ax3.set_ylim(35, 40)
+    # ax3_2.set_ylim(2.5, 15)
+    # ax3.spines.bottom.set_visible(False)
+    # ax3_2.spines.top.set_visible(False)
+    # ax3.xaxis.tick_top()
+    # ax3.tick_params(labeltop=False)  # don't put tick labels at the top
+    # ax3_2.xaxis.tick_bottom()
 
     add_patches_legend(
         ax3,
@@ -204,6 +270,8 @@ def scenarios():
             if res:
                 dates, discharge = res
                 ax0.plot(dates, discharge, label=scenario, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)
+                axins1.plot(dates, discharge, label=scenario, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)
+                axins4.plot(dates, discharge, label=scenario, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)
                 discharges.append(discharge)
             n += 1
             PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
@@ -222,6 +290,8 @@ def scenarios():
                 dates, reservoir_storage = res
                 reservoir_storage /= 1e9
                 ax3.plot(dates, reservoir_storage, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
+                axins.plot(dates, reservoir_storage, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
+                axins2.plot(dates, reservoir_storage, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
             n += 1
             PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
@@ -243,12 +313,13 @@ def scenarios():
                 ax5.plot(dates, sugar_cane, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)  # observed is 0
             n += 1
             PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
+
     
-    ax0.set_title('discharge $(m^3s^{-1})$', **TITLE_FORMATTER)
-    ax2.set_title('mean hydraulic head $(m)$', **TITLE_FORMATTER)
-    ax3.set_title('reservoir storage $(billion\ m^3)$', **TITLE_FORMATTER)
-    ax4.set_title('farmers with high irrigation efficiency $(\%)$', **TITLE_FORMATTER)
-    ax5.set_title('farmers with sugar cane $(\%)$', **TITLE_FORMATTER)
+    ax0.set_title('A - discharge $(m^3s^{-1})$', **TITLE_FORMATTER)
+    ax2.set_title('B - mean hydraulic head $(m)$', **TITLE_FORMATTER)
+    ax3.set_title('C - reservoir storage $(billion\ m^3)$', **TITLE_FORMATTER)
+    ax4.set_title('D - farmers with high irrigation efficiency $(\%)$', **TITLE_FORMATTER)
+    ax5.set_title('E - farmers with sugar cane $(\%)$', **TITLE_FORMATTER)
     ax0.set_ylim(0, ax0.get_ylim()[1])
     ax4.set_ylim(0, 100)
     ax5.set_ylim(0, 100)
@@ -256,12 +327,14 @@ def scenarios():
         ax.set_xlim(dates[0], dates[-1] + timedelta(days=1))
         ax.ticklabel_format(useOffset=False, axis='y')
         ax.tick_params(axis='both', labelsize=5, pad=1)
-        ax.xaxis.set_major_locator(mdates.YearLocator())
+        # ax.xaxis.set_tick_params(labelsize=5)
+        ax.xaxis.set_major_locator(mdates.YearLocator(2))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    # ax3_2.set_xticklabels([])
 
-    plt.savefig('plot/output/hydro_stats_per_scenario.png')
-    plt.savefig('plot/output/hydro_stats_per_scenario.svg')
-    plt.show()
+    plt.savefig('hydro_stats_per_scenario.png')
+    plt.savefig('hydro_stats_per_scenario.svg')
+    # plt.show()
 
 def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
     fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
@@ -290,7 +363,7 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
     trans = transforms.blended_transform_factory(ax.transData, ax.transAxes)
     offset = timedelta(days=50)
     ax.text(calibration_line - offset, .98, 'calibration', fontsize='xx-small', rotation=90, ha='center', va='top', transform=trans)
-    ax.text(calibration_line + offset, .98, 'test', fontsize='xx-small', rotation=90, ha='center', va='top', transform=trans)
+    ax.text(calibration_line + offset + timedelta(days=15), .98, 'test', fontsize='xx-small', rotation=90, ha='center', va='top', transform=trans)
 
     streamflows = pd.DataFrame({'simulated': simulated_discharge, 'observed': observed_discharge}, index=[pd.Timestamp(d) for d in dates])
     streamflows = streamflows[~np.isnan(streamflows['observed'])]
@@ -312,12 +385,12 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
         transform=ax.transAxes,
         fontsize=5
     )
-    plt.savefig('plot/output/obs_vs_sim.png')
-    plt.savefig('plot/output/obs_vs_sim.svg')
-    plt.show()
+    plt.savefig('D:/OneDrive - IIASA/Paper/figures/obs_vs_sim.png')
+    plt.savefig('D:/OneDrive - IIASA/Paper/figures/obs_vs_sim.svg')
+    # plt.show()
 
 
 if __name__ == '__main__':
-    # scenarios()
+    scenarios()
     obs_vs_sim('base', calibration_line=datetime(2012, 1, 1), monthly=True)
     # obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_date=None)

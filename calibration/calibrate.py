@@ -175,14 +175,17 @@ def RunModel(args):
 			command = f"python run.py --config {config_path} --headless --scenario spinup"
 			if use_gpu is not False:
 				command += f' --GPU --gpu_device {use_gpu}'
-			print(command)
+			print(command, flush=True)
 
 			p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
 			output, errors = p.communicate()
 
-			
 			if use_gpu is not False:
 				with current_gpu_use_count.get_lock():
+					from numba import cuda 
+					device = cuda.select_device(use_gpu)
+					device.reset()
+
 					current_gpu_use_count.value -= 1
 					print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 			
@@ -222,15 +225,15 @@ def RunModel(args):
 	simulated_streamflow.index = [pd.Timestamp(date) for date in simulated_dates]
 	simulated_streamflow.name = 'simulated'
 
-	print(1, simulated_streamflow.head())
-	print(1, simulated_streamflow.tail())
+	# print(1, simulated_streamflow.head())
+	# print(1, simulated_streamflow.tail())
 
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
 	streamflows = streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
 
-	print(2, streamflows.head())
-	print(2, streamflows.tail())
+	# print(2, streamflows.head())
+	# print(2, streamflows.tail())
 
 	if config['monthly']:
 		streamflows['date'] = streamflows.index

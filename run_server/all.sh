@@ -19,7 +19,7 @@ SCRIPT_DIR="/scistor/ivm/jbn271/Packages/GEB/"
 cd $SCRIPT_DIR
 
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
-conda activate abm  # activate conda environment
+conda activate a  # activate conda environment
 
 for scenario in base self_investment ngo_training government_subsidies;
 do

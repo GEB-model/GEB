@@ -27,8 +27,10 @@ class Government(AgentBaseClass):
         if indices_not_yet_water_efficient.size <= n_farmers_to_upgrade:
             self.agents.farmers.is_water_efficient[:] = True
         else:
-            total_water_use_m_not_yet_water_efficient = total_water_use_m[~self.agents.farmers.is_water_efficient]
-            self.agents.farmers.is_water_efficient[indices_not_yet_water_efficient[np.argpartition(-total_water_use_m_not_yet_water_efficient, n_farmers_to_upgrade)[:n_farmers_to_upgrade]]] = True
+            # upgrade least water efficient farmers
+            # total_water_use_m_not_yet_water_efficient = total_water_use_m[~self.agents.farmers.is_water_efficient]
+            # self.agents.farmers.is_water_efficient[indices_not_yet_water_efficient[np.argpartition(-total_water_use_m_not_yet_water_efficient, n_farmers_to_upgrade)[:n_farmers_to_upgrade]]] = True
+            self.agents.farmers.is_water_efficient[np.random.choice(indices_not_yet_water_efficient, size=n_farmers_to_upgrade, replace=False)] = True
 
     def request_flood_cushions(self, reservoirIDs):
         pass

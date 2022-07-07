@@ -17,7 +17,7 @@ SCRIPT_DIR="/scistor/ivm/jbn271/Packages/GEB/"
 cd $SCRIPT_DIR
 
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
-conda activate abm  # activate conda environment
+conda activate a  # activate conda environment
 
 python run.py --GPU --headless --scenario spinup
 python run.py --GPU --headless --scenario base
