@@ -1,4 +1,4 @@
-Hello! Welcome to GEB! You can find full documentation on: [https://jensdebruijn.github.io/GEB/index.html](jensdebruijn.github.io/GEB)
+Hello! Welcome to GEB! You can find full documentation on: [jensdebruijn.github.io/GEB](https://jensdebruijn.github.io/GEB/index.html)
 
 ## Overview
 GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.
