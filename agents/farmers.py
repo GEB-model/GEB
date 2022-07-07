@@ -11,9 +11,9 @@ except (ModuleNotFoundError, ImportError):
 
 from numba import njit
 
-from hyve.library.mapIO import ArrayReader
-from hyve.library.neighbors import find_neighbors
-from hyve.agents import AgentBaseClass
+from honeybees.library.mapIO import ArrayReader
+from honeybees.library.neighbors import find_neighbors
+from honeybees.agents import AgentBaseClass
 
 
 @njit

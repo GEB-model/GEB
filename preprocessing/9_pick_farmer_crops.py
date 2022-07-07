@@ -8,8 +8,8 @@ import scipy.interpolate
 from itertools import combinations
 from scipy.ndimage import zoom
 
-from hyve.library.raster import sample_from_map
-from hyve.library.mapIO import ArrayReader, NetCDFReader
+from honeybees.library.raster import sample_from_map
+from honeybees.library.mapIO import ArrayReader, NetCDFReader
 from random import choices
 
 from config import INPUT, ORIGINAL_DATA

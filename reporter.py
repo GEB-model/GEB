@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in Hyve's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `GEB.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`). 
+"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in Honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `GEB.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`). 
 
 """
 
@@ -14,7 +14,7 @@ except ImportError:
 from operator import attrgetter
 
 
-from hyve.reporter import Reporter as ABMReporter
+from honeybees.reporter import Reporter as ABMReporter
 
 class CWatMReporter(ABMReporter):
     """This class is used to report CWatM data to disk. On initialization the export folder is created if it does not yet exist. Then all variables to report are on read from the configuration folder, and the datastructures to save the data are created.

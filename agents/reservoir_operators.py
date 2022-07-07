@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from hyve.agents import AgentBaseClass
+from honeybees.agents import AgentBaseClass
 import os
 import numpy as np
 import pandas as pd

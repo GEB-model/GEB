@@ -2,10 +2,10 @@
 import cProfile
 from pstats import Stats
 
-from hyve.visualization.ModularVisualization import ModularServer
-from hyve.visualization.modules import ChartModule
-from hyve.visualization.canvas import Canvas
-from hyve.argparse import parser  
+from honeybees.visualization.ModularVisualization import ModularServer
+from honeybees.visualization.modules import ChartModule
+from honeybees.visualization.canvas import Canvas
+from honeybees.argparse import parser  
 from model import GEBModel
 
 import faulthandler

@@ -2,7 +2,7 @@
 import os
 import rasterio
 import numpy as np
-from hyve.library.raster import clip_to_xy_bounds, clip_to_other, upscale
+from honeybees.library.raster import clip_to_xy_bounds, clip_to_other, upscale
 import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
