@@ -1,0 +1,23 @@
+spinup_start: 1998-01-01
+start_date: 2000-01-01
+end_date: 2006-01-01
+subcatchmentpath: runs
+parameter_ranges: parameter_ranges.csv
+gpus: 0
+monthly: true
+forward: false
+
+observed_data:
+  path: observations.csv
+  column: flow
+
+options:
+  define_first_run: False
+
+DEAP:
+  use_multiprocessing: True
+  maximize: True
+  ngen: 10 # 10
+  mu: 120 # 120
+  lambda_: 24 # 24
+  select_best: 10

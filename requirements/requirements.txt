@@ -1,0 +1,9 @@
+rasterio
+numba
+tbb
+pandas
+openpyxl
+geopandas
+numpy
+git+https://github.com/jensdebruijn/honeybees.git
+git+https://github.com/jensdebruijn/ABCWatM.git
