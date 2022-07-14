@@ -207,7 +207,7 @@ def process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_c
         fn = kind + f'_{subtype}'
     fn += f'_{year}.geojson'
     print(fn)
-    subdistricts.to_file(os.path.join(output_folder, fn))
+    subdistricts.to_file(os.path.join(output_folder, fn), driver='GeoJSON')
     print("Created map")
 
 def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_class_column='SizeClass', scrape=True, headless=True, response_block=0):
@@ -251,7 +251,7 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
 
     subdistricts = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'subdistricts', 'subdistricts.shp'))
     study_region = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'study_region.geojson')).to_crs(subdistricts.crs)
-    subdistricts = gpd.sjoin(subdistricts, study_region, predicate='intersects')
+    subdistricts = gpd.sjoin(subdistricts, study_region, op='intersects')
     subdistricts['matched'] = False
     subdistricts = subdistricts.set_index('NAME')
 

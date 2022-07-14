@@ -31,8 +31,10 @@ from deap import algorithms
 from deap import base
 from deap import creator
 from deap import tools
+import networkx as nx
 import pandas as pd
 import yaml
+from functools import wraps
 
 import multiprocessing
 import time
@@ -52,22 +54,21 @@ args = parser.parse_args()
 with open(args.config, 'r') as f:
 	config = yaml.load(f, Loader=yaml.FullLoader)
 
-ROOT = 'DataDrive/GEB_Bhima/calibration'
 OBJECTIVE = 'KGE'
 
-LOG_FOLDER = os.path.join(ROOT, 'logs')
+LOG_FOLDER = config['logs']
 if not os.path.exists(LOG_FOLDER):
 	os.makedirs(LOG_FOLDER)
 
 dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
 
-ParamRangesPath = os.path.join(ROOT, config['parameter_ranges'])
-SubCatchmentPath = os.path.join(ROOT, config['subcatchmentpath'])
-if not os.path.exists(SubCatchmentPath):
-	os.makedirs(SubCatchmentPath)
+ParamRangesPath = config['parameter_ranges']
+export_path = config['export_path']
+if not os.path.exists(export_path):
+	os.makedirs(export_path)
 
-Qtss_csv = os.path.join(ROOT, config['observed_data']['path'])
-Qtss_col = config['observed_data']['column']
+Qtss_csv = config['observations']['discharge']['path']
+Qtss_col = config['observations']['discharge']['column']
 
 use_multiprocessing = config['DEAP']['use_multiprocessing']
 
@@ -107,9 +108,26 @@ if define_first_run:
 
 ii = 1
 
-########################################################################
-#   Function for running the model, returns objective function scores
-########################################################################
+def handle_ctrl_c(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        global ctrl_c_entered
+        if not ctrl_c_entered:
+            signal.signal(signal.SIGINT, default_sigint_handler) # the default
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                ctrl_c_entered = True
+                return KeyboardInterrupt()
+            finally:
+                signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+        else:
+            return KeyboardInterrupt()
+    return wrapper
+
+def pool_ctrl_c_handler(*args, **kwargs):
+    global ctrl_c_entered
+    ctrl_c_entered = True
 
 def multi_set(dict_obj, value, *attrs):
 	d = dict_obj
@@ -119,19 +137,15 @@ def multi_set(dict_obj, value, *attrs):
 		raise KeyError(f"Key {attrs} does not exist in config file.")
 	d[attrs[-1]] = value
 
+@handle_ctrl_c
 def run_model(args):
 	individual, run_id = args
-	individual = np.array(individual.tolist())
-	assert (individual >= 0).all() and (individual <= 1).all()
-	values = ParamRanges.copy()
-	values['scale'] = individual
-	values['value'] = values['MinValue'] + (values['MaxValue'] - values['MinValue']) * values['scale']
 
 	# Random number is appended to settings and .bat files to avoid simultaneous editing
 	run_id = str(run_id//1000).zfill(2) + "_" + str(run_id%1000).zfill(3)
 	print('working on:', run_id)
 
-	directory_run = os.path.join(SubCatchmentPath, run_id)
+	directory_run = os.path.join(export_path, run_id)
 
 	if os.path.isdir(directory_run):
 		if os.path.exists(os.path.join(directory_run, dischargetss)):
@@ -142,8 +156,13 @@ def run_model(args):
 	else:
 		runmodel = True
 
-	config_path = os.path.join(directory_run, 'config.yml')
 	if runmodel:
+		individual = np.array(individual.tolist())
+		assert (individual >= 0).all() and (individual <= 1).all()
+		values = ParamRanges.copy()
+		values['scale'] = individual
+		values['value'] = values['MinValue'] + (values['MaxValue'] - values['MinValue']) * values['scale']
+		config_path = os.path.join(directory_run, 'config.yml')
 		while True:
 			os.mkdir(directory_run)
 			with open('GEB.yml', 'r') as f:
@@ -152,8 +171,17 @@ def run_model(args):
 			template['general']['spinup_start'] = config['spinup_start']
 			template['general']['start_time'] = config['end_date']
 			template['general']['export_inital_on_spinup'] = False
-			template['report'] = {}  # no other reporting than discharge required.
-			template['report_cwatm'] = {}  # no other reporting than discharge required.
+			template['report'] = {
+				"crops_per_district": {
+					"type": "farmers",
+					"function": "groupcount",
+					"varname": "crop",
+					"save": "save",
+					"format": "csv",
+					"groupby": "tehsil"
+				}
+			}
+			template['report_cwatm'] = {}
 
 			for _, row in values[['Key', 'value']].iterrows():
 				multi_set(template, row['value'], *row['Key'].split('.'))
@@ -201,10 +229,6 @@ def run_model(args):
 				shutil.rmtree(directory_run)
 			else:
 				raise ValueError
-	
-	else:
-		with open(config_path, 'r') as f:
-			template = yaml.load(f, Loader=yaml.FullLoader)
 
 	Qsim_tss = os.path.join(directory_run, dischargetss)
 	
@@ -234,7 +258,7 @@ def run_model(args):
 		# Compute objective function score
 		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])
 		print("run_id: "+str(run_id)+", KGE: "+"{0:.3f}".format(KGE))
-		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
+		with open(os.path.join(export_path,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id)+","+str(KGE)+"\n")
 		score = KGE, # If using just one objective function, put a comma at the end!!!
 
@@ -242,14 +266,14 @@ def run_model(args):
 
 		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'])
 		print("run_id: "+str(run_id)+", COR "+"{0:.3f}".format(COR))
-		with open(os.path.join(SubCatchmentPath,"runs_log.csv"), "a") as myfile:
+		with open(os.path.join(export_path,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id)+","+str(COR)+"\n")
 		score = COR, # If using just one objective function, put a comma at the end!!!
 
 	elif OBJECTIVE == 'NSE':
 		NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'])
 		print("run_id: " + str(run_id) + ", NSE: " + "{0:.3f}".format(NSE))
-		with open(os.path.join(SubCatchmentPath, "runs_log.csv"), "a") as myfile:
+		with open(os.path.join(export_path, "runs_log.csv"), "a") as myfile:
 			myfile.write(str(run_id) + "," + str(NSE) + "\n")
 		score = NSE,  # If using just one objective function, put a comma at the end!!!
 	else:
@@ -297,8 +321,13 @@ history = tools.History()
 toolbox.decorate("mate", checkBounds(0, 1))
 toolbox.decorate("mutate", checkBounds(0, 1))
 
-def init(manager_current_gpu_use_count, manager_lock, gpus):
-	signal.signal(signal.SIGINT, signal.SIG_IGN)
+def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
+	# set global variable for each process in the pool:
+	global ctrl_c_entered
+	global default_sigint_handler
+	ctrl_c_entered = False
+	default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+
 	global lock
 	global current_gpu_use_count
 	global n_gpus
@@ -316,10 +345,11 @@ if __name__ == "__main__":
 	if use_multiprocessing is True:
 		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK') or 4)
 		print(f'Pool size: {pool_size}')
-		pool = multiprocessing.Pool(processes=pool_size, initializer=init, initargs=(current_gpu_use_count, manager_lock, config['gpus']))
+		signal.signal(signal.SIGINT, signal.SIG_IGN)
+		pool = multiprocessing.Pool(processes=pool_size, initializer=init_pool, initargs=(current_gpu_use_count, manager_lock, config['gpus']))
 		toolbox.register("map", pool.map)
 	else:
-		init(current_gpu_use_count, manager_lock, config['gpus'])
+		init_pool(current_gpu_use_count, manager_lock, config['gpus'])
 	
 	# For someone reason, if sum of cxpb and mutpb is not one, a lot less Pareto optimal solutions are produced
 	cxpb = 0.7  # The probability of mating two individuals
@@ -331,7 +361,7 @@ if __name__ == "__main__":
 	effstd = np.full((ngen + 1, 1), np.nan)
 
 	startlater = False
-	checkpoint = os.path.join(SubCatchmentPath, "checkpoint.pkl")
+	checkpoint = os.path.join(export_path, "checkpoint.pkl")
 	if os.path.exists(os.path.join(checkpoint)):
 		with open(checkpoint, "rb" ) as cp_file:
 			cp = pickle.load(cp_file)
@@ -339,6 +369,7 @@ if __name__ == "__main__":
 			population = cp["population"]
 			start_gen = cp["generation"]
 			run_indices = cp["run_indices"]
+			parameter2runindex = cp["parameter2runindex"]
 			random.setstate(cp["rndstate"])
 			if start_gen > 0:
 				offspring = cp["offspring"]
@@ -351,6 +382,7 @@ if __name__ == "__main__":
 		population = toolbox.population(n=mu)
 		# Numbering of runs
 		run_indices = [gen * 1000 + ii + 1 for ii in range(mu)]
+		parameter2runindex = {}
 
 		#first run parameter set:
 		if define_first_run:
@@ -363,17 +395,17 @@ if __name__ == "__main__":
 		# saving population
 		populationall = {}
 		populationall[0] = population.copy()
-		cp = dict(populationall=populationall, population=population, generation=gen, rndstate=random.getstate(), run_indices=run_indices)
 		with open(checkpoint, "wb") as cp_file:
-			pickle.dump(cp, cp_file)
-		cp_file.close()
+			pickle.dump(dict(populationall=populationall, population=population, generation=gen, rndstate=random.getstate(), run_indices=run_indices, parameter2runindex=parameter2runindex), cp_file)
 
 		# Evaluate the individuals with an invalid fitness
 		invalid_ind = [ind for ind in population if not ind.fitness.valid]
-		if not config['forward']:
-			invalid_ind = invalid_ind[::-1]
-			run_indices = run_indices[::-1]
-		fitnesses = toolbox.map_async(toolbox.evaluate, zip(invalid_ind, run_indices))
+		for index, run_id in zip(invalid_ind, run_indices):
+			parameter2runindex[tuple(index)] = run_id
+		fitnesses = list(toolbox.map(toolbox.evaluate, zip(invalid_ind, run_indices)))
+		if any(map(lambda x: isinstance(x, KeyboardInterrupt), fitnesses)):
+			raise KeyboardInterrupt
+
 		for ind, fit in zip(invalid_ind, fitnesses):
 			ind.fitness.values = fit
 
@@ -409,7 +441,7 @@ if __name__ == "__main__":
 
 		# saving population
 		populationall[gen] = population.copy()
-		cp = dict(populationall=populationall, population=population, generation=gen, rndstate=random.getstate(), offspring=offspring, halloffame=halloffame, run_indices=run_indices)
+		cp = dict(populationall=populationall, population=population, generation=gen, rndstate=random.getstate(), offspring=offspring, halloffame=halloffame, run_indices=run_indices, parameter2runindex=parameter2runindex)
 		with open(checkpoint, "wb") as cp_file:
 			pickle.dump(cp, cp_file)
 		cp_file.close()
@@ -417,7 +449,12 @@ if __name__ == "__main__":
 
 		# Evaluate the individuals with an invalid fitness
 		invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-		fitnesses = toolbox.map(toolbox.evaluate, zip(invalid_ind, run_indices))
+		assert len(invalid_ind) == len(run_indices)
+		for index, run_id in zip(invalid_ind, run_indices):
+			parameter2runindex[tuple(index)] = run_id
+		fitnesses = list(toolbox.map(toolbox.evaluate, zip(invalid_ind, run_indices)))
+		if any(map(lambda x: isinstance(x, KeyboardInterrupt), fitnesses)):
+			raise KeyboardInterrupt
 		for ind, fit in zip(invalid_ind, fitnesses):
 			ind.fitness.values = fit
 
@@ -448,43 +485,45 @@ if __name__ == "__main__":
 		# Copied and modified from algorithms.py eaMuPlusLambda until here
 
 	# Finito
-	if use_multiprocessing == True:
+	if use_multiprocessing is True:
 		pool.close()
+	global ctrl_c_entered
+	global default_sigint_handler
+	ctrl_c_entered = False
+	default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
 	#elapsed = time.time() - t
 	#print(">> Time elapsed: "+"{0:.2f}".format(elapsed)+" s")
 
 	########################################################################
 	#   Save calibration results
 	########################################################################
-	#print ("make history graph")
-	#graph = nx.DiGraph(history.genealogy_tree)
-	#graph = graph.reverse()
-	# Make the graph top-down
-	#color =[]
-	#for i in graph:
-	#	color.append(toolbox.evaluate(history.genealogy_history[i])[0])
+	# print ("make history graph")
+	# graph = nx.DiGraph(history.genealogy_tree)
+	# graph = graph.reverse()
+	# # Make the graph top-down
+	# color = []
+	# for i in graph:
+	# 	individual = history.genealogy_history[i]
+	# 	color.append(toolbox.evaluate((individual, parameter2runindex[tuple(individual)]))[0])
 
-	#colors = [toolbox.evaluate(history.genealogy_history[i])[0] for i in graph]
-	#nx.draw(graph, node_color=color)
-	#G.add_node(1, color='red', style='filled', fillcolor='blue', shape='square')
+	# colors = [toolbox.evaluate(history.genealogy_history[i])[0] for i in graph]
+	# nx.draw(graph, node_color=color)
+	# G.add_node(1, color='red', style='filled', fillcolor='blue', shape='square')
 
-	#A = nx.nx_agraph.to_agraph(graph)
+	# A = nx.nx_agraph.to_agraph(graph)
 
-	#A.node_attr['style'] = 'filled'
-	#A.node_attr['shape'] = 'circle'
-	#A.node_attr['gradientangle'] = 90
+	# A.node_attr['style'] = 'filled'
+	# A.node_attr['shape'] = 'circle'
+	# A.node_attr['gradientangle'] = 90
 
+	# for i in A.nodes():
+	# 	n = A.get_node(i)
+	# 	n.attr['fillcolor'] = 'green;0.5:yellow'
+	# 	n.attr['fillcolor'] = color
 
-	#for i in A.nodes():
-		#n = A.get_node(i)
-		#n.attr['fillcolor'] = 'green;0.5:yellow'
-		#n.attr['fillcolor'] = color
-
-	#A.layout(prog='dot')
-	#A.draw('test.png',prog='dot')
-
+	# A.layout(prog='dot')
+	# #A.draw('test.png',prog='dot')
 	# -----------------------------------------------------------------
-
 	# Save history of the change in objective function scores during calibration to csv file
 	print(">> Saving optimization history (front_history.csv)")
 	front_history = pd.DataFrame({'gen':list(range(gen)),
@@ -493,7 +532,7 @@ if __name__ == "__main__":
 									  'effstd_R':effstd[:,0],
 									  'effavg_R':effavg[:,0],
 									  })
-	front_history.to_csv(os.path.join(SubCatchmentPath, "front_history.csv"),',')
+	front_history.to_csv(os.path.join(export_path, "front_history.csv"),',')
 	# as numpy  numpy.asarray  ; numpy.savetxt("foo.csv", a, delimiter=","); a.tofile('foo.csv',sep=',',format='%10.5f')
 
 	# Compute overall efficiency scores from the objective function scores for the
@@ -508,7 +547,7 @@ if __name__ == "__main__":
 	paramvals[:] = np.NaN
 	for kk in range(len(halloffame)):
 		for ii in range(len(ParamRanges)):
-			paramvals[kk][ii] = halloffame[kk][ii]*(float(ParamRanges.iloc[ii,1])-float(ParamRanges.iloc[ii,0]))+float(ParamRanges.iloc[ii,0])
+			paramvals[kk][ii] = halloffame[kk][ii]*(float(ParamRanges.iloc[ii]['MaxValue'])-float(ParamRanges.iloc[ii]['MinValue']))+float(ParamRanges.iloc[ii]['MinValue'])
 
 	# Save Pareto optimal solutions to csv file
 	# The table is sorted by overall efficiency score
@@ -517,4 +556,4 @@ if __name__ == "__main__":
 	pareto_front = pd.DataFrame({'effover':effover[ind],'R':front[ind,0]})
 	for ii in range(len(ParamRanges)):
 		pareto_front["param_"+str(ii).zfill(2)+"_"+ParamRanges.index[ii]] = paramvals[ind,ii]
-	pareto_front.to_csv(os.path.join(SubCatchmentPath, "pareto_front.csv"))
+	pareto_front.to_csv(os.path.join(export_path, "pareto_front.csv"))

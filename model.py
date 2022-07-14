@@ -58,6 +58,8 @@ class GEBModel(ABM_Model, CWatM_Model):
         np.save(os.path.join(areamaps_folder, 'unmerged_HRU_indices.npy'), self.data.HRU.unmerged_HRU_indices)
         np.save(os.path.join(areamaps_folder, 'scaling.npy'), self.data.HRU.scaling)
 
+        self.running = True
+
     def __init_ABM__(self, config_path: str, study_area: dict, args: argparse.Namespace, coordinate_system: str) -> None:
         """Initializes the agent-based model.
         

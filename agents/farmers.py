@@ -63,7 +63,7 @@ class Farmers(AgentBaseClass):
         self.var = model.data.HRU
         self.redundancy = reduncancy
         self.crop_yield_factors = self.get_crop_yield_factors()
-        self.harvest_age = np.full(26, 50)  # harvest all crops on 10th day
+        self.harvest_age = np.full(26, 10)  # harvest all crops on 10th day
         self.plant_day = np.full(26, 125)  # plant on 125th day of year
         self.plant_day[11] = 1
         self.harvest_age[11] = 200
@@ -158,8 +158,7 @@ class Farmers(AgentBaseClass):
         self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
         self.elevation = self.elevation_map.sample_coords(self.locations)
         self._crop = np.full(self.max_n, -1, dtype=np.int32)
-        # self.crop[:] = 1
-        self.crop = np.random.randint(0, 26, self.n)
+        self.crop = np.random.choice([0, 11], size=self.n, replace=True, p=[.5, .5])
         self._surface_irrigated = np.full(self.max_n, -1, dtype=np.int8)
         self._groundwater_irrigated = np.full(self.max_n, -1, dtype=np.int8)
         self.surface_irrigated[:] = False
@@ -675,7 +674,6 @@ class Farmers(AgentBaseClass):
     def harvest(self):
         """This function determines which crops needs to be harvested, based on the current age of the crops and the harvest age of the crop. First a helper function is used to obtain the harvest map. Then, if at least 1 field is harvested, the yield ratio is obtained for all fields using the ratio of actual to potential evapotranspiration, saves the harvest per farmer and potentially invests in water saving techniques.
         """
-        crop_prices_per_gram = np.full(26, 1/1000, dtype=np.float32)  # TODO: make this per crop + dynamic
         actual_transpiration = self.var.actual_transpiration_crop.get() if self.model.args.use_gpu else self.var.actual_transpiration_crop
         potential_transpiration = self.var.potential_transpiration_crop.get() if self.model.args.use_gpu else self.var.potential_transpiration_crop
         crop_map = self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map
@@ -699,7 +697,7 @@ class Farmers(AgentBaseClass):
             harvesting_farmers = np.unique(harvesting_farmer_fields)
             if self.model.current_timestep > 365:
                 self.save_harvest(harvesting_farmers, crop_yield_per_farmer)
-            profit = crop_yield * np.take(crop_prices_per_gram, harvested_crops)
+            profit = crop_yield * np.take(self.get_crop_prices(), harvested_crops)
             profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
             self.wealth += profit_per_farmer
 
@@ -977,6 +975,13 @@ class Farmers(AgentBaseClass):
             self.field_indices,
             self.var.cellArea.get() if self.model.args.use_gpu else self.var.cellArea
         )
+
+    def get_crop_prices(self):
+        # make dynamic based on https://agmarknet.gov.in/PriceTrends/SA_Pri_MonthD.aspx
+        prices = np.full(26, np.nan, dtype=np.float32)
+        prices[0] = 2.1
+        prices[11] = 0.29
+        return prices
 
     def step(self) -> None:
         """

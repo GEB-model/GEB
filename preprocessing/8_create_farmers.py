@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
-from honeybees.library.raster import pixel_to_coord
-import rasterio
 import os
-import numpy as np
-from numba import njit
 from random import random
+import faulthandler
+
+import numpy as np
+import shapely
+import rasterio
+import geopandas as gpd
+from rasterio.features import rasterize
+from numba import njit
+from honeybees.library.raster import pixel_to_coord
 
 from config import INPUT, ORIGINAL_DATA
 
-import faulthandler
 faulthandler.enable()
 
 @njit(cache=True)
@@ -161,6 +165,7 @@ def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np
         dst.write(farms, 1)
 
 if __name__ == '__main__':
+    YEAR = '2000-01'
     FARM_SIZE_CHOICES_M2 = np.array([
         [0.25, 0.5],
         [0.5, 1],
@@ -173,8 +178,38 @@ if __name__ == '__main__':
         [10, 20],
         [20, 40],
     ]) * 10_000  # Ha to m2
-    
-    with rasterio.open(os.path.join(INPUT, 'agents', 'farm_size', '2010-11', 'farmsize.tif'), 'r') as src_farm_size:
-        FARM_SIZE_PROBABILITIES = src_farm_size.read()
 
-    create_farmers(FARM_SIZE_PROBABILITIES, FARM_SIZE_CHOICES_M2)
+    SIZE_CLASSES = (
+        'Below 0.5_n_total',
+        '0.5-1.0_n_total',
+        '1.0-2.0_n_total',
+        '2.0-3.0_n_total',
+        '3.0-4.0_n_total',
+        '4.0-5.0_n_total',
+        '5.0-7.5_n_total',
+        '7.5-10.0_n_total',
+        '10.0-20.0_n_total',
+        '20.0 & ABOVE_n_total',
+    )
+
+    with rasterio.open(os.path.join(INPUT, "areamaps", "submask.tif")) as src:
+        profile = src.profile
+        transform = src.profile['transform']
+        shape = src.profile['height'], src.profile['width']
+        profile['nodata'] = -1
+        profile['count'] = len(SIZE_CLASSES)
+        profile['dtype'] = np.float32
+
+    farm_size_shapefile = gpd.read_file(os.path.join(ORIGINAL_DATA, 'census', 'farm_size', YEAR, 'farm_size.geojson'))
+    farm_size_probabilities = np.full((len(SIZE_CLASSES), shape[0], shape[1]), -1, dtype=profile['dtype'])
+    farm_size_shapefile['total'] = farm_size_shapefile[list(SIZE_CLASSES)].sum(axis=1)
+    for i, size_class in enumerate(SIZE_CLASSES):
+        farm_size_shapefile[size_class] = farm_size_shapefile[size_class] / farm_size_shapefile['total']
+
+        geometries = [(shapely.geometry.mapping(geom), value) for value, geom in zip(farm_size_shapefile[size_class].tolist(), farm_size_shapefile['geometry'].tolist())]
+        farm_size_probabilities[i] = rasterize(geometries, out_shape=shape, fill=-1, transform=transform, dtype=profile['dtype'], all_touched=True)
+    
+    with open(os.path.join(INPUT, 'agents', 'farmsize.txt'), 'w') as f:
+        f.write("\n".join(SIZE_CLASSES))
+
+    create_farmers(farm_size_probabilities, FARM_SIZE_CHOICES_M2)
