@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-from multiprocessing.sharedctypes import Value
 import os
 import time 
 import re
 import calendar
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 import matplotlib.pyplot as plt
 import urllib3 as ul 
@@ -15,6 +15,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.by import By
 import chromedriver_autoinstaller
+import selenium
 
 from config import ORIGINAL_DATA
 
@@ -26,18 +27,28 @@ SCRAPE_PATH = os.path.join(BASE_PATH, 'scraped')
 os.makedirs(SCRAPE_PATH, exist_ok=True)
 
 class Scraper:
-    def __init__(self):
+    def __init__(self, i=None, headless=True):
+        self.i = i
+        self.headless = headless
+        self.download_dir = os.path.abspath(os.path.join(os.path.join(SCRAPE_PATH, 'downloads'), str(self.i)) if self.i else os.path.join(SCRAPE_PATH, 'downloads'))
+
+    def __enter__(self):
         self.link = 'http://agmarknet.gov.in/PriceTrends/SA_Pri_Month.aspx'
         
         ul.PoolManager().request('GET', self.link)
 
         chrome_options = webdriver.ChromeOptions() 
-        prefs = {'download.default_directory': os.path.abspath(SCRAPE_PATH)}
+        prefs = {'download.default_directory': self.download_dir}
         chrome_options.add_experimental_option('prefs', prefs)
         chrome_options.add_argument("--start-maximized")
-        chrome_options.add_argument('--headless')
+        if self.headless:
+            chrome_options.add_argument('--headless')
         self.driver = webdriver.Chrome(options=chrome_options)
         self.driver.get(self.link) #opening the link in the driver .
+        return self
+
+    def __exit__(self):
+        self.driver.quit()
 
     def get_commodity_select(self, path):
         commodity_element = self.driver.find_element(By.XPATH, path)
@@ -65,6 +76,7 @@ class Scraper:
 
         def year_select_updated(driver):
             try:
+                # print(driver.find_element(By.XPATH, '//select[@id="cphBody_Year_list"]').text)
                 year_list.text
             except StaleElementReferenceException:
                 return True
@@ -122,7 +134,8 @@ class Scraper:
 
     def submit_download(self, commodity_name, year, month):
         self.select_month_option(month)
-        download_file = os.path.join(SCRAPE_PATH, 'Agmarknet_State_wise_Wholesale_Prices_Monthly_Analysis.xls')
+        path = f'Agmarknet_State_wise_Wholesale_Prices_Monthly_Analysis.xls'
+        download_file = os.path.join(self.download_dir, path)
         if os.path.exists(download_file):  # just make sure no old file exists
             os.remove(download_file)
         self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -130,9 +143,9 @@ class Scraper:
         self.driver.find_element(By.ID, "cphBody_Button1").click()
         while not os.path.exists(download_file):
             time.sleep(1)
-        self.rename(download_file, commodity_name, year, month)
+        self.rename(download_file, commodity_name.replace("/", '.'), year, month)
 
-    def go(self):
+    def lets_go(self):
         commody_select = '//select[@id="cphBody_Commodity_list"]'
 
         commodity_select = self.get_commodity_select(commody_select)
@@ -140,6 +153,10 @@ class Scraper:
         commodity_names = [o.text for o in commodity_select.options[1:]]
 
         commodities = list(zip(commodity_values, commodity_names))
+        if self.i:
+            commodities = commodities[self.i::N_WORKERS]
+
+        errors = 0
 
         for commodity_value, commodity_name in commodities:
             done_file = os.path.join(SCRAPE_PATH, commodity_name, 'done.txt')
@@ -159,7 +176,7 @@ class Scraper:
                         months = self.select_year_option(year)
                         month_values =  [ '%s' % o.get_attribute('value') for o in months.options[1:] ]
                         for month in month_values:
-                            if os.path.exists(os.path.join(SCRAPE_PATH, commodity_name, f'{year}_{month}.html')):
+                            if os.path.exists(os.path.join(SCRAPE_PATH, commodity_name.replace('/', '.'), f'{year}_{month}.html')):
                                 continue
                             w += 1
                             if w != 1:
@@ -167,6 +184,7 @@ class Scraper:
                                 self.select_year_option(year)
                             self.select_month_option(month)
                             self.submit_download(commodity_name, year, month)
+                            errors = 0
                             k=k+1
                             self.driver.get(self.link)
                             path = '//select[@id="cphBody_Commodity_list"]'
@@ -176,9 +194,12 @@ class Scraper:
                         pass
                     break
                 except Exception as e:
+                    errors += 1
                     print(e)
                     print('going to sleep for a bit')
                     time.sleep(30)
+                    if errors > 10:
+                        raise Exception
 
 def parse(state):
     fig, ax = plt.subplots(1)
@@ -209,8 +230,18 @@ def parse(state):
     plt.legend()
     plt.show()
 
+def workwork(i=None):
+    while True:
+        try:
+            with Scraper(i=i, headless=True) as scraper:
+                scraper.lets_go()
+            return
+        except Exception as e:
+            print(e)
+
 if __name__ == '__main__':
-    scraper = Scraper()
-    scraper.go()
+    N_WORKERS = 5
+    with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
+        done = executor.map(workwork, list(range(1, N_WORKERS+1)))
     state = 'Maharashtra'
     parse(state)
