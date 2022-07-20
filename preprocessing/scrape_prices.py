@@ -7,7 +7,6 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 import matplotlib.pyplot as plt
-import urllib3 as ul 
 import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.support.ui import Select
@@ -15,7 +14,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.by import By
 import chromedriver_autoinstaller
-import selenium
 
 from config import ORIGINAL_DATA
 
@@ -31,23 +29,21 @@ class Scraper:
         self.i = i
         self.headless = headless
         self.download_dir = os.path.abspath(os.path.join(os.path.join(SCRAPE_PATH, 'downloads'), str(self.i)) if self.i else os.path.join(SCRAPE_PATH, 'downloads'))
+        self.link = 'http://agmarknet.gov.in/PriceTrends/SA_Pri_Month.aspx'
 
     def __enter__(self):
-        self.link = 'http://agmarknet.gov.in/PriceTrends/SA_Pri_Month.aspx'
-        
-        ul.PoolManager().request('GET', self.link)
-
         chrome_options = webdriver.ChromeOptions() 
         prefs = {'download.default_directory': self.download_dir}
         chrome_options.add_experimental_option('prefs', prefs)
+        chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
         chrome_options.add_argument("--start-maximized")
         if self.headless:
             chrome_options.add_argument('--headless')
         self.driver = webdriver.Chrome(options=chrome_options)
-        self.driver.get(self.link) #opening the link in the driver .
+        self.driver.get(self.link)
         return self
 
-    def __exit__(self):
+    def __exit__(self, exception_type, exception_value, traceback):
         self.driver.quit()
 
     def get_commodity_select(self, path):
@@ -126,7 +122,6 @@ class Scraper:
 
     def rename(self, download_file, commodity_name, year, month):
         folder = os.path.join(SCRAPE_PATH, commodity_name)
-        os.makedirs(folder, exist_ok=True)
         os.rename(
             download_file,
             os.path.join(folder, f'{year}_{month}.html')
@@ -159,7 +154,9 @@ class Scraper:
         errors = 0
 
         for commodity_value, commodity_name in commodities:
-            done_file = os.path.join(SCRAPE_PATH, commodity_name, 'done.txt')
+            folder = os.path.join(SCRAPE_PATH, commodity_name.replace('/', '.'))
+            os.makedirs(folder, exist_ok=True)
+            done_file = os.path.join(folder, 'done.txt')
             if os.path.exists(done_file):
                 print(f"{commodity_name} already done! Let's continue..")
                 continue
