@@ -251,7 +251,7 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
 
     subdistricts = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'subdistricts', 'subdistricts.shp'))
     study_region = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'study_region.geojson')).to_crs(subdistricts.crs)
-    subdistricts = gpd.sjoin(subdistricts, study_region, op='intersects')
+    subdistricts = gpd.sjoin(subdistricts, study_region, op='intersects').drop('index_right', axis=1)
     subdistricts['matched'] = False
     subdistricts = subdistricts.set_index('NAME')
 
