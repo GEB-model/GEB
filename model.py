@@ -151,3 +151,12 @@ class GEBModel(ABM_Model, CWatM_Model):
                 fp = os.path.join(self.initial_conditions_folder, f"{initvar}.npy")
                 values = attrgetter(initvar)(self.data)
                 np.save(fp, values)
+
+    @property
+    def current_day_of_year(self) -> int:
+        """Gets the current day of the year.
+        
+        Returns:
+            day: current day of the year.
+        """
+        return self.current_time.timetuple().tm_yday

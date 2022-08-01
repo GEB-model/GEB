@@ -102,7 +102,7 @@ def get_crop_and_irrigation_per_farmer() -> tuple[np.ndarray, np.ndarray]:
         elif irrigation_type == 2:
             well_irrigated[i] = True
 
-    crops = np.full(locations.shape[0], 2, dtype=np.int32)
+    crops = np.full(locations.shape[0], 0, dtype=np.int32)
 
     np.save(os.path.join(OUTPUT_FOLDER, 'crop.npy'), crops)
     np.save(os.path.join(OUTPUT_FOLDER, 'canal_irrigated.npy'), canal_irrigated)

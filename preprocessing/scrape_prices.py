@@ -4,8 +4,9 @@ import time
 import re
 import calendar
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 from concurrent.futures import ThreadPoolExecutor
-
+import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from selenium import webdriver
@@ -15,7 +16,7 @@ from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.by import By
 import chromedriver_autoinstaller
 
-from config import ORIGINAL_DATA
+from config import ORIGINAL_DATA, INPUT
 
 chromedriver_autoinstaller.install() 
 
@@ -158,11 +159,11 @@ class Scraper:
             os.makedirs(folder, exist_ok=True)
             done_file = os.path.join(folder, 'done.txt')
             if os.path.exists(done_file):
-                print(f"{commodity_name} already done! Let's continue..")
+                # print(f"{commodity_name} already done! Let's continue..")
                 continue
             while True:
                 try:
-                    print(f"Working on {commodity_name}")
+                    print(f"Process {self.i} - Working on {commodity_name}")
                     k = 1
                     years = self.select_commodity_option(commody_select, commodity_value)
                     years_values =  [ '%s' % o.get_attribute('value') for o in years.options[1:] ]
@@ -197,35 +198,56 @@ class Scraper:
                     time.sleep(30)
                     if errors > 10:
                         raise Exception
+        print(f'Process {self.i} - finished')
 
 def parse(state):
-    fig, ax = plt.subplots(1)
-    for commodity in os.listdir(SCRAPE_PATH):
-        commody_prices = []
-        commodity_folder = os.path.join(SCRAPE_PATH, commodity)
-        for fn in os.listdir(commodity_folder):
-            if not fn.endswith('.html'):
-                continue
-            date = re.match("([0-9]{4})_([0-9]{1,2})\.html", fn)
-            year = int(date.group(1))
-            month = int(date.group(2))
-            date = datetime(year, month, 1)  # set first day of month
-            if month == 2:  # there is a typo in the downloaded data from Agmarknet
-                month_name = "Febraury"
-            else:
-                month_name = calendar.month_name[month]
-            column_name = f"Prices {month_name}, {year}"
-            fp = os.path.join(commodity_folder, fn)
-            try:
-                df = pd.read_html(fp, header=0, index_col=0)[0]
-            except ValueError:
-                continue
-            if state in df.index:
-                commody_prices.append((date, df.loc[state, column_name]))
-        commody_prices = sorted(commody_prices, key=lambda x: x[0])
-        ax.plot(*zip(*commody_prices), label=commodity)
-    plt.legend()
-    plt.show()
+    print(f"Parsing {state}")
+
+    output_path = os.path.join(INPUT, "crop_prices_rs_per_g.xlsx")
+    if not os.path.exists(output_path):
+
+        dates = [datetime(2000, 1, 1)]
+        while dates[-1] < datetime.utcnow():
+            dates.append(dates[-1] + relativedelta(months=1))
+
+        output = pd.DataFrame(index=dates)
+        for commodity in os.listdir(SCRAPE_PATH):
+            print(commodity)
+            commody_prices = []
+            commodity_folder = os.path.join(SCRAPE_PATH, commodity)
+            for fn in os.listdir(commodity_folder):
+                if not fn.endswith('.html'):
+                    continue
+                date = re.match("([0-9]{4})_([0-9]{1,2})\.html", fn)
+                year = int(date.group(1))
+                month = int(date.group(2))
+                date = datetime(year, month, 1)  # set first day of month
+                if month == 2:  # there is a typo in the downloaded data from Agmarknet
+                    month_name = "Febraury"
+                else:
+                    month_name = calendar.month_name[month]
+                column_name = f"Prices {month_name}, {year}"
+                fp = os.path.join(commodity_folder, fn)
+                try:
+                    df = pd.read_html(fp, header=0, index_col=0)[0]
+                except ValueError:
+                    continue
+                if state in df.index:
+                    commody_prices.append((date, df.loc[state, column_name]))
+            commody_prices = sorted(commody_prices, key=lambda x: x[0])
+            if commody_prices:
+                value_dates, values = zip(*commody_prices)
+                output[commodity] = np.nan
+                output.loc[value_dates, commodity] = values
+        output = output / 100 / 1000  # rs / quintal -> rs / g
+        output.to_excel(output_path)
+    else:
+        output = pd.read_excel(output_path, index_col=0)
+    print(output)
+    # fig, ax = plt.subplots(1)
+    # ax.plot(value_dates, values, label=commodity)
+    # plt.legend()
+    # plt.show()
 
 def workwork(i=None):
     while True:
@@ -237,8 +259,8 @@ def workwork(i=None):
             print(e)
 
 if __name__ == '__main__':
-    N_WORKERS = 5
-    with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
-        done = executor.map(workwork, list(range(1, N_WORKERS+1)))
+    N_WORKERS = 10
+    # with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
+    #     done = executor.map(workwork, list(range(1, N_WORKERS+1)))
     state = 'Maharashtra'
     parse(state)

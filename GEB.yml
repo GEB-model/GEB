@@ -3,7 +3,7 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2008-05-10
+  start_time: 2008-05-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
@@ -170,10 +170,10 @@ report:
     save: save
     format: csv
     groupby: tehsil
-  groundwater_irrigated_sample:
+  well_irrigated_sample:
     type: farmers
     function: sample
-    varname: groundwater_irrigated
+    varname: well_irrigated
     save: save
     format: csv
   wealth_sample:
