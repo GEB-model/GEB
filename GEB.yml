@@ -150,12 +150,12 @@ draw:
 #   - **initial_only**: if true only save the data for the first timestep.
 #   - **save**: save variable in model run, or export, or both (save/save+export/export).
 report:
-  crop_sample:
-    type: farmers
-    function: sample
-    varname: crop
-    save: save
-    format: csv
+  # crop_sample:
+  #   type: farmers
+  #   function: sample
+  #   varname: crop
+  #   save: save
+  #   format: csv
   surface_irrigated_per_district:
     type: farmers
     function: mean
@@ -170,18 +170,18 @@ report:
     save: save
     format: csv
     groupby: tehsil
-  well_irrigated_sample:
-    type: farmers
-    function: sample
-    varname: well_irrigated
-    save: save
-    format: csv
-  wealth_sample:
-    type: farmers
-    function: sample
-    varname: wealth
-    save: save
-    format: csv
+  # well_irrigated_sample:
+  #   type: farmers
+  #   function: sample
+  #   varname: well_irrigated
+  #   save: save
+  #   format: csv
+  # wealth_sample:
+  #   type: farmers
+  #   function: sample
+  #   varname: wealth
+  #   save: save
+  #   format: csv
   activation order:
     type: farmers
     function: null

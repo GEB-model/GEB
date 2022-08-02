@@ -16,7 +16,8 @@ os.makedirs(output_folder, exist_ok=True)
 def parse():
     costs = {}
     for year in YEARS:
-        costs[year] = {}
+        cropping_season = f"{year}_{year+1}"
+        costs[cropping_season] = {}
         year_end = year + 1
         if year < 2017:
             extension = 'xls'
@@ -47,7 +48,7 @@ def parse():
                     insecticides = split_costs['11.6']
                     farm_deprecation = split_costs['12.4']
 
-                    costs[year][(state, crop)] = animal_labour + machine_labour + seeds + fertilizer + manure + insecticides + farm_deprecation
+                    costs[cropping_season][(state, crop)] = (animal_labour + machine_labour + seeds + fertilizer + manure + insecticides + farm_deprecation) / 10_000  # rs / ha -> rs / m2
 
     return pd.DataFrame.from_dict(costs, orient='index')
 

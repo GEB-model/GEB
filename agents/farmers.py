@@ -191,7 +191,7 @@ class Farmers(AgentBaseClass):
         self._n_water_limited_days = np.full(self.max_n, -1, dtype=np.int32)
         self.n_water_limited_days[:] = 0
         self._wealth = np.full(self.max_n, -1, dtype=np.float32)
-        self.wealth[:] = 0
+        self.wealth[:] = 10000
 
         self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
         self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
@@ -581,9 +581,12 @@ class Farmers(AgentBaseClass):
             self.is_water_efficient[harvesting_farmers] |= invest
 
     def by_field(self, var, nofieldvalue=-1):
-        by_field = np.take(var, self.var.land_owners)
-        by_field[self.var.land_owners == -1] = nofieldvalue
-        return by_field
+        if self.n:
+            by_field = np.take(var, self.var.land_owners)
+            by_field[self.var.land_owners == -1] = nofieldvalue
+            return by_field
+        else:
+            return np.full_like(self.var.land_owners, nofieldvalue)
 
     def decompress(self, array):
         if np.issubsctype(array, np.floating):
@@ -727,9 +730,12 @@ class Farmers(AgentBaseClass):
         current_day: int,
         crop_map: np.ndarray,
         crop: np.ndarray,
+        cultivation_cost_per_crop: np.ndarray,
         plant_day: np.ndarray,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
+        field_size_per_farmer: np.ndarray,
+        wealth: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
         
@@ -740,32 +746,50 @@ class Farmers(AgentBaseClass):
             crop: Crops grown by each farmer. 
             field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices. 
+            field_size_per_farmer: Field size per farmer in m2
 
         Returns:
             plant: Subarray map of what crops are plantn this day.
         """
         plant = np.full_like(crop_map, -1, dtype=np.int32)
+        sell_land = np.zeros(wealth.size, dtype=np.bool_)
         for farmer_idx in range(n):
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
-            for field in farmer_fields:
-                farmer_crop = crop[farmer_idx]
-                if plant_day[farmer_crop] == current_day:
-                    farmer_crop = crop[farmer_idx]
-                    plant[field] = farmer_crop
-        return plant
+            farmer_crop = crop[farmer_idx]
+            if plant_day[farmer_crop] == current_day:
+                cultivation_cost = cultivation_cost_per_crop[farmer_crop] * field_size_per_farmer[farmer_idx]
+                if wealth[farmer_idx] > cultivation_cost:
+                    wealth[farmer_idx] -= cultivation_cost
+                    for field in farmer_fields:
+                        plant[field] = farmer_crop
+                else:
+                    sell_land[farmer_idx] = True
+        return plant, sell_land
 
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU.
         """
-        plant_map = self.plant_numba(
+        year = self.model.current_time.year
+        month = self.model.current_time.month
+        if month < 7:  # Agricultural year in India runs from June to July.
+            agricultural_year = f"{year-1}_{year}"
+        else:
+            agricultural_year = f"{year}_{year+1}"
+        year_index = self.cultivation_costs[0][agricultural_year]
+        cultivation_cost_per_crop = self.cultivation_costs[1][year_index]
+        plant_map, farmers_sell_land = self.plant_numba(
             self.n,
             self.model.current_time.timetuple().tm_yday,  # current day of year
             self.var.crop_map,
             self.crop,
+            cultivation_cost_per_crop,
             self.plant_day,
             self.field_indices_by_farmer,
             self.field_indices,
+            self.field_size_per_farmer,
+            self.wealth
         )
+        self.remove_agents(np.where(farmers_sell_land)[0])
         if self.model.args.use_gpu:
             plant_map = cp.array(plant_map)
 
@@ -986,10 +1010,16 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.invest()
         self.plant()
-        if self.model.current_timestep == 100:
-            self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
-        if self.model.current_timestep == 105:
-            self.remove_agent(farmer_idx=1000)
+        # if self.model.current_timestep == 100:
+        #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
+        # if self.model.current_timestep == 105:
+        #     self.remove_agent(farmer_idx=1000)
+
+    def remove_agents(self, farmer_indices: list[int]):
+        if farmer_indices.size > 0:
+            farmer_indices = np.sort(farmer_indices)[::-1]
+            for idx in farmer_indices:
+                self.remove_agent(idx)
 
     def remove_agent(self, farmer_idx: int) -> np.ndarray:
         last_farmer_HRUs = get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, self.n-1)
@@ -1005,16 +1035,24 @@ class Farmers(AgentBaseClass):
         # disown the farmer.
         HRUs_farmer_to_be_removed = get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, farmer_idx)
         self.var.land_owners[HRUs_farmer_to_be_removed] = -1
-        HRUs_farmer_moved = get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, self.n-1)
-        self.var.land_owners[HRUs_farmer_moved] = farmer_idx
-        
+
         # reduce number of agents
         self.n -= 1
+
+        if self.n != farmer_idx:  # only move agent when agent was not the last agent
+            HRUs_farmer_moved = get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, self.n)
+            self.var.land_owners[HRUs_farmer_moved] = farmer_idx
+        
         # TODO: Speed up field index updating.
         self.update_field_indices()
-
-        assert last_farmer_HRUs == get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, farmer_idx)
-        assert last_farmer_field_size == self.field_size_per_farmer[farmer_idx]
+        if self.n == farmer_idx:
+            assert get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, farmer_idx).size == 0
+        else:
+            assert np.array_equal(
+                np.sort(last_farmer_HRUs),
+                np.sort(get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, farmer_idx))
+            )
+            assert math.isclose(last_farmer_field_size, self.field_size_per_farmer[farmer_idx], abs_tol=0.01)
 
         for attr in self.agent_attributes:
             assert attr.startswith('_')

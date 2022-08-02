@@ -176,9 +176,9 @@ class Artists(honeybeesArtists):
             minvalue, maxvalue = 0, 1
         else:
             if not maxvalue:
-                maxvalue = np.nanmax(array[~mask]).item()
+                maxvalue = np.nanmax(array[~mask], initial=0).item()
             if not minvalue:
-                minvalue = np.nanmin(array[~mask]).item()
+                minvalue = np.nanmin(array[~mask], initial=0).item()
             if np.isnan(maxvalue):  # minvalue must be nan as well
                 minvalue, maxvalue = 0, 0
         
