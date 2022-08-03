@@ -3,7 +3,7 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2008-05-01
+  start_time: 2006-05-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
@@ -163,9 +163,16 @@ report:
     save: save
     format: csv
     groupby: tehsil
+  well_irrigated_per_district:
+    type: farmers
+    function: mean
+    varname: well_irrigated
+    save: save
+    format: csv
+    groupby: tehsil
   crops_per_district:
     type: farmers
-    function: groupcount
+    function: groupcount,0,1
     varname: crop
     save: save
     format: csv
@@ -182,48 +189,48 @@ report:
   #   varname: wealth
   #   save: save
   #   format: csv
-  activation order:
-    type: farmers
-    function: null
-    varname: activation_order_by_elevation
-    format: npy
-    frequency: initial_only
-    save: export
-  reservoir irrigation:
-    type: farmers
-    function: null
-    varname: reservoir_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  groundwater irrigation:
-    type: farmers
-    function: null
-    varname: groundwater_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  channel irrigation:
-    type: farmers
-    function: null
-    varname: channel_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  is water aware:
-    type: farmers
-    function: sum
-    varname: is_water_efficient
-    frequency: per_timestep
-    format: csv
-    save: save
-  crop:
-    type: farmers
-    function: null
-    varname: crop
-    format: npy
-    frequency: per_timestep
-    save: export
+  # activation order:
+  #   type: farmers
+  #   function: null
+  #   varname: activation_order_by_elevation
+  #   format: npy
+  #   frequency: initial_only
+  #   save: export
+  # reservoir irrigation:
+  #   type: farmers
+  #   function: null
+  #   varname: reservoir_abstraction_m3_by_farmer
+  #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # groundwater irrigation:
+  #   type: farmers
+  #   function: null
+  #   varname: groundwater_abstraction_m3_by_farmer
+  #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # channel irrigation:
+  #   type: farmers
+  #   function: null
+  #   varname: channel_abstraction_m3_by_farmer
+  #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # is water aware:
+  #   type: farmers
+  #   function: sum
+  #   varname: is_water_efficient
+  #   frequency: per_timestep
+  #   format: csv
+  #   save: save
+  # crop:
+  #   type: farmers
+  #   function: null
+  #   varname: crop
+  #   format: npy
+  #   frequency: per_timestep
+  #   save: export
 
 ###
 # In this section you can configure what CWatM data is saved, such as the groundwater head in each timestep, as follows:

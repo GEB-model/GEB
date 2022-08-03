@@ -59,7 +59,7 @@ class BaseVariables:
         return array / self.cellArea
 
     def load_initial(self, name, default=.0, gpu=False):
-        if self.model.load_initial:
+        if self.model.load_initial_data:
             fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npy")
             if gpu:
                 return cp.load(fp)
@@ -181,7 +181,22 @@ class HRUs(BaseVariables):
 
         self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.grid.cell_size / self.scaling
-        self.land_use_type, self.land_use_ratio, self.land_owners, self.HRU_to_grid, self.grid_to_HRU, self.unmerged_HRU_indices = self.create_HRUs()
+        if self.model.load_initial_data:
+            self.land_use_type = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_type.npy'))
+            self.land_use_ratio = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_ratio.npy'))
+            self.land_owners = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_owners.npy'))
+            self.HRU_to_grid = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.HRU_to_grid.npy'))
+            self.grid_to_HRU = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.grid_to_HRU.npy'))
+            self.unmerged_HRU_indices  = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.unmerged_HRU_indices.npy'))
+        else:
+            (
+                self.land_use_type,
+                self.land_use_ratio,
+                self.land_owners,
+                self.HRU_to_grid,
+                self.grid_to_HRU,
+                self.unmerged_HRU_indices
+            ) = self.create_HRUs()
         if self.model.args.use_gpu:
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)

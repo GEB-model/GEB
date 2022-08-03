@@ -42,11 +42,30 @@ class GEBModel(ABM_Model, CWatM_Model):
             cp.cuda.Device(self.args.gpu_device).use()
         
         self.config = self.setup_config(GEB_config_path)
+
+        self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
+        if args.scenario == 'spinup':
+            end_time = self.config['general']['start_time']
+            current_time = self.config['general']['spinup_start']
+            self.load_initial_data = False
+            self.save_initial_data = self.config['general']['export_inital_on_spinup'] 
+        else:
+            current_time = self.config['general']['start_time']
+            end_time = self.config['general']['end_time']
+            self.load_initial_data = True
+            self.save_initial_data = False
+
+        assert isinstance(end_time, date)
+        assert isinstance(current_time, date)
+        
+        timestep_length = timedelta(days=1)
+        n_timesteps = (end_time - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
         
         self.data = Data(self)
 
-        self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
-        self.__init_ABM__(GEB_config_path, study_area, args, coordinate_system)
+        self.__init_ABM__(GEB_config_path, study_area, args, current_time, timestep_length, n_timesteps, coordinate_system)
         self.__init_hydromodel__(self.config['general']['CWatM_settings'])
 
         self.reporter = Reporter(self)
@@ -60,7 +79,7 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.running = True
 
-    def __init_ABM__(self, config_path: str, study_area: dict, args: argparse.Namespace, coordinate_system: str) -> None:
+    def __init_ABM__(self, config_path: str, study_area: dict, args, current_time, timestep_length, n_timesteps, coordinate_system: str) -> None:
         """Initializes the agent-based model.
         
         Args:
@@ -69,24 +88,6 @@ class GEBModel(ABM_Model, CWatM_Model):
             args: Run arguments.
             coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
         """
-
-        with open(config_path, 'r') as f:
-            config = yaml.load(f, Loader=yaml.FullLoader)
-
-        timestep_length = timedelta(days=1)
-        if args.scenario == 'spinup':
-            end_time = config['general']['start_time']
-            current_time = config['general']['spinup_start']
-        else:
-            current_time = config['general']['start_time']
-            end_time = config['general']['end_time']
-
-        assert isinstance(end_time, date)
-        assert isinstance(current_time, date)
-        
-        n_timesteps = (end_time - current_time) / timestep_length
-        assert n_timesteps.is_integer()
-        n_timesteps = int(n_timesteps)
 
         ABM_Model.__init__(self, current_time, timestep_length, config_path, args=args, n_timesteps=n_timesteps)
         
@@ -140,16 +141,44 @@ class GEBModel(ABM_Model, CWatM_Model):
         for _ in range(self.n_timesteps):
             self.step()
 
-        if self.save_initial:
-            
-            initCondVar = ['HRU.w1', 'HRU.w2', 'HRU.w3', 'HRU.topwater', 'HRU.interceptStor', 'HRU.SnowCoverS', 'HRU.FrostIndex', 'grid.channelStorageM3', 'grid.discharge', 'grid.lakeInflow', 'grid.lakeStorage', 'grid.reservoirStorage', 'grid.lakeVolume', 'grid.outLake', 'grid.lakeOutflow', 'modflow.head']
+        if self.save_initial_data:
+            initCondVar = [
+                'HRU.land_use_type',
+                'HRU.land_use_ratio',
+                'HRU.land_owners',
+                'HRU.HRU_to_grid',
+                'HRU.grid_to_HRU',
+                'HRU.unmerged_HRU_indices',
+                'HRU.w1',
+                'HRU.w2',
+                'HRU.w3',
+                'HRU.topwater',
+                'HRU.interceptStor',
+                'HRU.SnowCoverS',
+                'HRU.FrostIndex',
+                'grid.channelStorageM3',
+                'grid.discharge',
+                'grid.lakeInflow',
+                'grid.lakeStorage',
+                'grid.reservoirStorage',
+                'grid.lakeVolume',
+                'grid.outLake', 
+                'grid.lakeOutflow', 
+                'modflow.head',
+            ]
             # self.initCondVar.extend(['grid.smalllakeInflow', 'grid.smalllakeStorage', 'grid.smalllakeOutflow', 'grid.smalllakeInflowOld', 'grid.smalllakeVolumeM3'])
 
             if not os.path.exists(self.initial_conditions_folder):
                 os.makedirs(self.initial_conditions_folder)
+            
             for initvar in initCondVar:
                 fp = os.path.join(self.initial_conditions_folder, f"{initvar}.npy")
                 values = attrgetter(initvar)(self.data)
+                np.save(fp, values)
+
+            for attribute in self.agents.farmers.agent_attributes:
+                fp = os.path.join(self.initial_conditions_folder, f"farmers.{attribute}.npy")
+                values = attrgetter(attribute)(self.agents.farmers)
                 np.save(fp, values)
 
     @property

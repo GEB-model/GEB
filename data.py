@@ -22,7 +22,8 @@ def load_crop_prices():
     date_index = dict(((date, i) for i, date in enumerate(df.index.date)))
     crop_prices = np.full((len(date_index), 2), np.nan, dtype=np.float32)  # first index for date, second index for crops
     crop_prices[:, 0] = df['Wheat']
-    crop_prices[:, 1] = df['Sugarcane']
+    print("Set proper prices based on mill price for Sugar cane")
+    crop_prices[:, 1] = 0.04 # df['Sugarcane']
     return date_index, crop_prices
 
 def load_crop_yield_factors() -> dict[np.ndarray]:

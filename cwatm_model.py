@@ -35,13 +35,6 @@ class CWatM_Model(CWATModel):
         # calibration
         for parameter, value in self.config['parameters'].items():
             binding[parameter] = value
-
-        if self.args.scenario == 'spinup':
-            self.load_initial = False
-            self.save_initial = self.config['general']['export_inital_on_spinup'] 
-        else:
-            self.load_initial = True
-            self.save_initial = False
         
         # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
         binding['StepStart'] = start_date.strftime('%d/%m/%Y')

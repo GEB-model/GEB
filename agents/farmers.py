@@ -2,6 +2,7 @@
 import os
 import math
 from datetime import date
+from tkinter import E
 
 import numpy as np
 import pandas as pd
@@ -69,6 +70,16 @@ class Farmers(AgentBaseClass):
         self.crop_yield_factors = load_crop_yield_factors()
         self.cultivation_costs = load_cultivation_costs()
         self.crop_prices = load_crop_prices()
+
+        self.elevation_map = ArrayReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
+            bounds=self.model.bounds
+        )
+        self.tehsil_map = ArrayReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'tehsils.tif'),
+            bounds=self.model.bounds
+        )
+
         self.harvest_age = np.full(26, 10)  # harvest all crops on 10th day
         self.plant_day = np.full(26, 125)  # plant on 125th day of year
         self.plant_day[11] = 1
@@ -122,79 +133,65 @@ class Farmers(AgentBaseClass):
             },
         }
         self.initiate_agents()
+        self.plant_initial()
 
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
         """
-        self.initiate_locations()
-        self.initiate_attributes()
-        self.plant_initial()
-        print(f'initialized {self.n} agents')
+        if self.model.load_initial_data:
+            for attribute in self.agent_attributes:
+                fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npy")
+                values = np.load(fp)
+                setattr(self, attribute, values)
+            self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
+            self.max_n = self._locations.shape[0]
+        else:
+            agent_locations = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmer_locations.npy'))
 
-    def initiate_locations(self) -> None:
-        """
-        Loads locations of the farmers from .npy-file and saves to self.locations. Sets self.n to the current numbers of farmers, and sets self.max_n to the maximum number of farmers that can be expected in the model (model will fail if more than max_n farmers.) considering reducancy parameter.
-        """
-        agent_locations = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmer_locations.npy'))
+            self.n = agent_locations.shape[0]
+            assert self.n > 0
+            self.max_n = math.ceil(self.n * (1 + self.redundancy))
+            assert self.max_n < 4294967295 # max value of uint32, consider replacing with uint64
 
-        self.n = agent_locations.shape[0]
-        assert self.n > 0
-        self.max_n = math.ceil(self.n * (1 + self.redundancy))
-        assert self.max_n < 4294967295 # max value of uint32, consider replacing with uint64
-        
-        self._locations = np.full((self.max_n, 2), np.nan, dtype=np.float32)
-        self.locations = agent_locations
+            self._locations = np.full((self.max_n, 2), np.nan, dtype=np.float32)
+            self.locations = agent_locations
 
-    def initiate_attributes(self) -> None:
-        """
-        This function is used to initiate all agent attributes, such as crop type, irrigiation type and elevation.
-        """
-        self.elevation_map = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
-            bounds=self.model.bounds
-        )
-        self.tehsil_map = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'tehsils.tif'),
-            bounds=self.model.bounds
-        )
+            self._tehsil = np.full(self.max_n, -1, dtype=np.int32)
+            self.tehsil = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmer_tehsils.npy'))
+            self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.elevation = self.elevation_map.sample_coords(self.locations)
+            self._crop = np.full(self.max_n, -1, dtype=np.int32)
+            self.crop = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy'))
+            self._surface_irrigated = np.full(self.max_n, -1, dtype=np.int8)
+            self._well_irrigated = np.full(self.max_n, -1, dtype=np.int8)
+            self.surface_irrigated[:] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'canal_irrigated.npy'))
+            self.well_irrigated[:] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'well_irrigated.npy'))
+            if self.model.args.use_gpu:
+                self._is_paddy_irrigated = cp.full(self.max_n, -1, dtype=np.int8)
+            else:
+                self._is_paddy_irrigated = np.full(self.max_n, -1, dtype=np.int8)
+            self.is_paddy_irrigated[self.crop != 2] = False  # set non-rice to non paddy-irrigated
+            self.is_paddy_irrigated[self.crop == 2] = True  # set rice to paddy-irrigated
+
+            self._is_water_efficient = np.full(self.max_n, -1, dtype=np.int8)
+            self.is_water_efficient[:] = 0
+            self._latest_harvests = np.full((self.max_n, 3), np.nan, dtype=np.float32)
+
+            self._channel_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.channel_abstraction_m3_by_farmer[:] = 0
+            self._reservoir_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.reservoir_abstraction_m3_by_farmer[:] = 0
+            self._groundwater_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.groundwater_abstraction_m3_by_farmer[:] = 0
+            self._water_availability_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.water_availability_by_farmer[:] = 0
+            self._n_water_limited_days = np.full(self.max_n, -1, dtype=np.int32)
+            self.n_water_limited_days[:] = 0
+            self._wealth = np.full(self.max_n, -1, dtype=np.float32)
+            self.wealth[:] = 10000
+
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
-        self._tehsil = np.full(self.max_n, -1, dtype=np.int32)
-        self.tehsil = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmer_tehsils.npy'))
-        self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
-        self.elevation = self.elevation_map.sample_coords(self.locations)
-        self._crop = np.full(self.max_n, -1, dtype=np.int32)
-        self.crop = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'crop.npy'))
-        self._surface_irrigated = np.full(self.max_n, -1, dtype=np.int8)
-        self._well_irrigated = np.full(self.max_n, -1, dtype=np.int8)
-        self.surface_irrigated[:] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'canal_irrigated.npy'))
-        self.well_irrigated[:] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'well_irrigated.npy'))
-        if self.model.args.use_gpu:
-            self._is_paddy_irrigated = cp.full(self.max_n, -1, dtype=np.int8)
-        else:
-            self._is_paddy_irrigated = np.full(self.max_n, -1, dtype=np.int8)
-        self.is_paddy_irrigated[self.crop != 2] = False  # set non-rice to non paddy-irrigated
-        self.is_paddy_irrigated[self.crop == 2] = True  # set rice to paddy-irrigated
-
-        self._is_water_efficient = np.full(self.max_n, -1, dtype=np.int8)
-        self.is_water_efficient[:] = 0
-        self._latest_harvests = np.full((self.max_n, 3), np.nan, dtype=np.float32)
-
-        self._channel_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
-        self.channel_abstraction_m3_by_farmer[:] = 0
-        self._reservoir_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
-        self.reservoir_abstraction_m3_by_farmer[:] = 0
-        self._groundwater_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
-        self.groundwater_abstraction_m3_by_farmer[:] = 0
-        self._water_availability_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
-        self.water_availability_by_farmer[:] = 0
-        self._n_water_limited_days = np.full(self.max_n, -1, dtype=np.int32)
-        self.n_water_limited_days[:] = 0
-        self._wealth = np.full(self.max_n, -1, dtype=np.float32)
-        self.wealth[:] = 10000
-
-        self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
-        self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
 
         for attr in self.agent_attributes:
             assert getattr(self, attr[1:]).shape[0] == self.n
@@ -604,6 +601,8 @@ class Farmers(AgentBaseClass):
     def plant_initial(self) -> None:
         """When the model is initalized, crops are already growing. This function first finds out which farmers are already growing crops, how old these are, as well as the multicrop indices. Then, these arrays per farmer are converted to the field array.
         """
+        self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
+        self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
 
         self.var.land_use_type[self.var.land_use_type == 2] = 1
         self.var.land_use_type[self.var.land_use_type == 3] = 1
@@ -824,7 +823,7 @@ class Farmers(AgentBaseClass):
             if wealth[farmer_idx] > 50000 and not well_irrigated[farmer_idx]:
                 well_irrigated[farmer_idx] = True
                 wealth[farmer_idx] -= 50000
-                crop[farmer_idx] = 11
+                crop[farmer_idx] = 1
 
     def invest(self) -> None:
         self.invest_numba(
