@@ -1,6 +1,7 @@
-spinup_start: 1998-01-01
-start_date: 1998-01-03
-end_date: 1998-01-10
+spinup_start: 2010-06-01
+start_date: 2010-07-01
+end_date: 2010-07-10
+# end_date: 2015-07-01
 export_path: calibration/report/runs
 parameter_ranges: calibration/parameter_ranges.csv
 logs: calibration/report/logs
@@ -16,9 +17,8 @@ options:
   define_first_run: False
 
 DEAP:
-  use_multiprocessing: True
-  maximize: True
+  use_multiprocessing: False
   ngen: 3 # 10
-  mu: 10 # 120
+  mu: 5 # 120
   lambda_: 3 # 24
   select_best: 3
