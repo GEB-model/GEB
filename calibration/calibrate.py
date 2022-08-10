@@ -18,7 +18,7 @@ Sat Kumar Tomer (modified by Hylke Beck)
 Please see his book "Python in Hydrology"   http://greenteapress.com/pythonhydro/pythonhydro.pdf
 
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 import shutil
 import hydroStats
@@ -132,6 +132,9 @@ def multi_set(dict_obj, value, *attrs):
 	d[attrs[-1]] = value
 
 def get_irrigation_equipment_score(run_directory, individual):
+	fp = os.path.join(run_directory, 'spinup', 'well_irrigated_per_district.csv')
+	df = pd.read_csv(fp, index_col=0, parse_dates=True)
+	df.at[pd.Timestamp(2010, 6, 1), '30']
 	return random.random()
 
 def get_discharge_score(run_directory, individual):
@@ -217,7 +220,15 @@ def run_model(individual):
 					"save": "save",
 					"format": "csv",
 					"groupby": "tehsil"
-				}
+				},
+				"well_irrigated_per_district": {
+					"type": "farmers",
+					"function": "mean",
+					"varname": "well_irrigated",
+					"save": "save",
+					"format": "csv",
+					"groupby": "tehsil"
+				},
 			}
 			template['report_cwatm'] = {}
 
@@ -433,8 +444,7 @@ if __name__ == "__main__":
 
 	# Begin the generational process
 	# from gen 1 .....
-	conditions = {"ngen" : False, "StallFit" : False}
-	while not any(conditions.values()):
+	while generation < ngen:
 		if not skip_first_gen:
 			# Vary the population
 			offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
@@ -473,14 +483,8 @@ if __name__ == "__main__":
 		print(">> gen: "+str(generation) + ", effmax_KGE: "+"{0:.3f}".format(effmax[generation, 0]))
 		print(">> gen: "+str(generation) + ", effmax_irrigation_equipment: "+"{0:.3f}".format(effmax[generation, 1]))
 
-		# Terminate the optimization after ngen generations
-		if generation >= ngen:
-			print(">> Termination criterion ngen fulfilled.")
-			conditions["ngen"] = True
-
 		generation += 1
-		# Copied and modified from algorithms.py eaMuPlusLambda until here
-
+	
 	# Finito
 	if use_multiprocessing is True:
 		pool.close()

@@ -177,8 +177,8 @@ def process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_c
         state, district, tehsil = fn.replace('.csv', '').split('-')
         with open(os.path.join(csv_folder, fn), 'r') as f:
             contents = f.read()
-        tehsil_shp_name = tehsil_2_shapefile[tehsil]
-        subdistricts.at[tehsil_shp_name.title(), f'matched'] = True
+        district_shp_name, tehsil_shp_name = tehsil_2_shapefile[(state, district, tehsil)]
+        subdistricts.loc[(subdistricts['State'] == state.title()) & (subdistricts['District'] == district_shp_name.title()) & (subdistricts['Tehsil'] == tehsil_shp_name.title()), 'matched'] = True
 
         if len(contents) > 0:
             df = pd.read_csv(StringIO(contents.split('\n\n')[response_block]))
@@ -190,17 +190,18 @@ def process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_c
 
                 for size_class in size_classes.itertuples():
                     for field_src, field_dst in fields.items():
-                        subdistricts.at[tehsil_shp_name.title(), f'{getattr(size_class, size_class_column)}_{field_dst}'] = getattr(size_class, field_src)
+                        subdistricts.loc[(subdistricts['State'] == state.title()) & (subdistricts['District'] == district.title()) & (subdistricts['Tehsil'] == tehsil_shp_name.title()), f'{getattr(size_class, size_class_column)}_{field_dst}'] = getattr(size_class, field_src)
             else:
                 for size_class in SIZE_CLASSES:
                     for field in fields.values():
-                        subdistricts.at[tehsil_shp_name.title(), f'{size_class}_{field}'] = None
+                        subdistricts.loc[(subdistricts['State'] == state.title()) & (subdistricts['District'] == district.title()) & (subdistricts['Tehsil'] == tehsil_shp_name.title()), f'{size_class}_{field}'] = None
         else:
             for size_class in SIZE_CLASSES:
                 for field in fields.values():
-                    subdistricts.at[tehsil_shp_name.title(), f'{size_class}_{field}'] = None
+                    subdistricts.loc[(subdistricts['State'] == state.title()) & (subdistricts['District'] == district.title()) & (subdistricts['Tehsil'] == tehsil_shp_name.title()), f'{size_class}_{field}'] = None
 
     assert (subdistricts['matched'] == True).all()
+    subdistricts = subdistricts.drop('matched', axis=1)
     fn = kind
     if subtype:
         print(subtype)
@@ -222,17 +223,17 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
     tehsil_2_shapefile = {}
     to_download = {}
     n = 0
-    with open(os.path.join(ORIGINAL_DATA, 'census', f'subdistricts_Bhima_{year}.csv')) as f:
-        for row in f.readlines():
-            row = row.strip()
-            state, district, tehsil, shapefile_tehsil_name = row.split(',')
-            tehsil_2_shapefile[tehsil] = shapefile_tehsil_name
-            if state not in to_download:
-                to_download[state] = {}
-            if district not in to_download[state]:
-                to_download[state][district] = []
-            to_download[state][district].append(tehsil)
-            n += 1
+    subdistricts = pd.read_csv(os.path.join(ORIGINAL_DATA, 'census', f'subdistricts_Bhima_{year}.csv'))
+    for _, data in subdistricts.iterrows():
+        state, district_name_census, shapefile_district_name, tehsil_name_census, shapefile_tehsil_name = data['State'], data['District_census'], data['District'], data['Tehsil_census'], data['Tehsil']
+        assert tehsil_name_census not in tehsil_2_shapefile
+        tehsil_2_shapefile[(state, district_name_census, tehsil_name_census)] = (shapefile_district_name, shapefile_tehsil_name)
+        if state not in to_download:
+            to_download[state] = {}
+        if district_name_census not in to_download[state]:
+            to_download[state][district_name_census] = []
+        to_download[state][district_name_census].append(tehsil_name_census)
+        n += 1
 
     if scrape:
         while True:
@@ -249,11 +250,8 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
             print('Downloading finished')
             break
 
-    subdistricts = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'subdistricts', 'subdistricts.shp'))
-    study_region = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'study_region.geojson')).to_crs(subdistricts.crs)
-    subdistricts = gpd.sjoin(subdistricts, study_region, op='intersects').drop('index_right', axis=1)
+    subdistricts = gpd.GeoDataFrame.from_file(os.path.join(INPUT, 'tehsils.geojson'))
     subdistricts['matched'] = False
-    subdistricts = subdistricts.set_index('NAME')
 
     if subtype:
         for subtype_name in os.listdir(root_dir):

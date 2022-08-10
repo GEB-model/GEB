@@ -203,7 +203,7 @@ class Scraper:
 def parse(state):
     print(f"Parsing {state}")
 
-    output_path = os.path.join(INPUT, "crop_prices_rs_per_g.xlsx")
+    output_path = os.path.join(INPUT, 'crops', "crop_prices_rs_per_g.xlsx")
     if not os.path.exists(output_path):
 
         dates = [datetime(2000, 1, 1)]
