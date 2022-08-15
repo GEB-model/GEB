@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 import pandas as pd
 import geopandas as gpd
 
@@ -24,6 +25,10 @@ folder = os.path.join(ORIGINAL_DATA, 'census', 'output', 'crops')
 def parse(x):
     if x is None:
         return 0
+    elif pd.isnull(x):
+        return 0
+    elif isinstance(x, float):
+        return x
     elif x.isdigit():
         return int(x)
     elif x == 'Neg':
@@ -33,6 +38,7 @@ def parse(x):
         exit()
 
 crop_area_csv = os.path.join(INPUT, 'crops', 'area.csv')
+os.remove(crop_area_csv)
 if not os.path.exists(crop_area_csv):
     os.makedirs(os.path.join(INPUT, 'crops'), exist_ok=True)
     with open(crop_area_csv, 'w') as f:
@@ -47,16 +53,21 @@ if not os.path.exists(crop_area_csv):
                 continue
             if crop.startswith('TOTAL'):
                 continue
+            if crop == 'FODDER & GREEN MANURES': # Same as other fodder crops
+                continue
             fp = os.path.join(folder, fn)
             gdf = gpd.read_file(fp)
+            gdf = gdf.loc[(gdf['State'] == 'Maharashtra') & (gdf['District'] == 'Pune') & (gdf['Tehsil'] == 'Junnar')]
+            # gdf = gdf.loc[(gdf['State'] == 'Maharashtra')]
             crop_area = 0
             for size_class in SIZE_CLASSES:
                 crop_area += gdf[f"{size_class}_total_area"].apply(lambda x: parse(x)).sum()
             f.write(f"{crop},{crop_area}\n")
-else:
-    df = pd.read_csv(crop_area_csv)
 
+df = pd.read_csv(crop_area_csv)
+print(df[df['area'] != 0])
 total_area = df['area'].sum()
+print('total area', total_area)
 df['area_percentage'] = df['area'] / total_area * 100
 more_than_2_percent = df[df['area_percentage'] > 2]
 print(more_than_2_percent)

@@ -7,7 +7,7 @@ from config import ORIGINAL_DATA, INPUT
 
 def prefilter():
     df = pd.read_csv(os.path.join(ORIGINAL_DATA, 'ICPSR_22626', 'DS0002', '22626-0002-Data.tsv'), delimiter='\t')
-    df = df[df['STATEID'] == 27]  # select households from Maharashtra
+    # df = df[df['STATEID'] == 27]  # select households from Maharashtra
     df = df[df['FM3'] == 1]  # select only households where primary income is farm.
     print(f'preselected {len(df)} households')
     return df
@@ -181,31 +181,9 @@ def rename_parameters(households):
 
     return households
 
-def get_size_class(households):
-    size_classes = (
-        ('Below 0.5', 0.5),
-        ('0.5-1.0', 1),
-        ('1.0-2.0', 2),
-        ('2.0-3.0', 3),
-        ('3.0-4.0', 4),
-        ('4.0-5.0', 5),
-        ('5.0-7.5', 7.5),
-        ('7.5-10.0', 10),
-        ('10.0-20.0', 20),
-        ('20.0 & ABOVE', np.inf),
-    )
-    for idx, household in households.iterrows():
-        area = household['area owned & cultivated']
-        for size_class_name, size in size_classes:
-            if area < size:
-                households.loc[idx, 'size class'] = size_class_name
-                break
-    return households
-
 if __name__ == '__main__':
     households = prefilter()
     crops = read_crops()
     households = process(households, crops)
     households = rename_parameters(households)
-    households = get_size_class(households)
     households.to_csv(os.path.join(INPUT, 'agents', 'IHDS_I.csv'), index=False)

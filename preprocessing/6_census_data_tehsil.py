@@ -254,12 +254,13 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
     subdistricts['matched'] = False
 
     if subtype:
+        subdistricts['matched'] = True
         for subtype_name in os.listdir(root_dir):
             folder = os.path.join(root_dir, subtype_name)
             print(folder)
-            process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_class_column, fields, kind, subtype_name)
+            process_csv(folder, tehsil_2_shapefile, subdistricts.copy(), response_block, size_class_column, fields, kind, subtype_name)
     else:
-        process_csv(root_dir, tehsil_2_shapefile, subdistricts, response_block, size_class_column, fields, kind, subtype)
+        process_csv(root_dir, tehsil_2_shapefile, subdistricts.copy(), response_block, size_class_column, fields, kind, subtype)
     
 
 if __name__ == '__main__':
@@ -267,25 +268,25 @@ if __name__ == '__main__':
     scrape = False
     headless = False
     for year in ('2000-01', '2010-11', '2015-16'):
-        main(
-            url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
-            kind='farm_size',
-            year=year,
-            dropdowns=[
-                ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
-                ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-                ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
-            ],
-            download_name='TehsilT1table1.csv',
-            size_class_column='field4',
-            fields={
-                'area_total1': "area_total",
-                'no_total1': "n_total"
-            },
-            scrape=scrape,
-            headless=headless,
-            response_block=2
-        )
+        # main(
+        #     url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
+        #     kind='farm_size',
+        #     year=year,
+        #     dropdowns=[
+        #         ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
+        #         ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+        #         ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
+        #     ],
+        #     download_name='TehsilT1table1.csv',
+        #     size_class_column='field4',
+        #     fields={
+        #         'area_total1': "area_total",
+        #         'no_total1': "n_total"
+        #     },
+        #     scrape=scrape,
+        #     headless=headless,
+        #     response_block=2
+        # )
         main(
             url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
             kind='crops',
@@ -305,97 +306,97 @@ if __name__ == '__main__':
             scrape=scrape,
             headless=headless
         )
-        main(
-            url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-            kind='irrigation_status',
-            year=year,
-            dropdowns=[
-                ("_ctl0_ContentPlaceHolder1_ddlTables", 'IRRIGATION STATUS'),
-                ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-            ],
-            download_name='tktabledisplay4.csv',
-            fields={
-                'total_hold': 'total_holdings',
-                'total_area': 'total_area',
-                'wl_irr_hd': 'wholy_irrigated_holdings',
-                'wl_irr_ar': 'wholy_irrigated_area',
-                'wl_unir_hd': 'wholy_unirrigated_holdings',
-                'wl_unir_ar': 'wholy_unirrigated_area',
-                'pl_irr_hd': 'partly_irrigated_holdings',
-                'pl_area': 'partly_irrigated_area',
-            },
-            scrape=scrape,
-            headless=headless
-        )
-        if year != '2015-16': 
-            main(
-                url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-                kind='irrigation_source',
-                year=year,
-                dropdowns=[
-                    ("_ctl0_ContentPlaceHolder1_ddlTables", 'SOURCES OF IRRIGATION'),
-                    ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-                ],
-                download_name='tktabledisplay5a.csv',
-                fields={
-                    'total_hold': 'total_holdings',
-                    'total_area': 'total_area',
-                    'canal_hd': 'canals_holdings',
-                    'canal_ar': 'canals_area',
-                    'tank_hd': 'tank_holdings',
-                    'tank_ar': 'tank_area',
-                    'well_hd': 'well_holdings',
-                    'well_ar': 'well_area',
-                    'tubewel_hd': 'tubewell_holdings',
-                    'tubewel_ar': 'tubewell_area',
-                    'oth_hd': 'other_holdings',
-                    'oth_ar': 'other_area',
-                    'irri_hd': 'irrigated_holdings',
-                    'nt_irri_ar': 'irrigated_area'
-                },
-                scrape=scrape,
-                headless=headless
-            )
-            main(
-                url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-                kind='wells_and_tubewells',
-                year=year,
-                dropdowns=[
-                    ("_ctl0_ContentPlaceHolder1_ddlTables", 'WELLS AND TUBEWELLS'),
-                    ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-                ],
-                download_name='tktabledisplay5b.csv',
-                fields={
-                    'total_hold': 'total_holdings',
-                    'total_area': 'total_area',
-                    'wells_ep': 'well_electric_pumpset',
-                    'well_dp': 'well_diesel_pumpset',
-                    'Total_Pumps': 'well_total',
-                    'well_wp': 'well_without_pumpset',
-                    'wells_nuse': 'well_not_in_use',
-                    'tubewel_e': 'tubewell_electric',
-                    'tubewel_d': 'tubewell_diesel',
-                    'tubewells': 'tubewell_total'
-                },
-                scrape=scrape,
-                headless=headless
-            )
-        main(
-            url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-            kind='cropped_area',
-            year=year,
-            dropdowns=[
-                ("_ctl0_ContentPlaceHolder1_ddlTables", 'GROSS CROPPED AREA'),
-                ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-            ],
-            download_name='tktabledisplay6a.csv',
-            fields={
-                'total_hold': 'total_holdings',
-                'total_area': 'total_area',
-                'Gr_irr_ar': 'gross_cropped_irrigated_area',
-                'Gr_unirr_ar': 'gross_cropped_unirrigated_area',
-                'Gross_ar': 'gross_cropped_area'
-            },
-            scrape=scrape,
-            headless=headless
-        )
+        # main(
+        #     url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+        #     kind='irrigation_status',
+        #     year=year,
+        #     dropdowns=[
+        #         ("_ctl0_ContentPlaceHolder1_ddlTables", 'IRRIGATION STATUS'),
+        #         ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+        #     ],
+        #     download_name='tktabledisplay4.csv',
+        #     fields={
+        #         'total_hold': 'total_holdings',
+        #         'total_area': 'total_area',
+        #         'wl_irr_hd': 'wholy_irrigated_holdings',
+        #         'wl_irr_ar': 'wholy_irrigated_area',
+        #         'wl_unir_hd': 'wholy_unirrigated_holdings',
+        #         'wl_unir_ar': 'wholy_unirrigated_area',
+        #         'pl_irr_hd': 'partly_irrigated_holdings',
+        #         'pl_area': 'partly_irrigated_area',
+        #     },
+        #     scrape=scrape,
+        #     headless=headless
+        # )
+        # if year != '2015-16': 
+        #     main(
+        #         url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+        #         kind='irrigation_source',
+        #         year=year,
+        #         dropdowns=[
+        #             ("_ctl0_ContentPlaceHolder1_ddlTables", 'SOURCES OF IRRIGATION'),
+        #             ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+        #         ],
+        #         download_name='tktabledisplay5a.csv',
+        #         fields={
+        #             'total_hold': 'total_holdings',
+        #             'total_area': 'total_area',
+        #             'canal_hd': 'canals_holdings',
+        #             'canal_ar': 'canals_area',
+        #             'tank_hd': 'tank_holdings',
+        #             'tank_ar': 'tank_area',
+        #             'well_hd': 'well_holdings',
+        #             'well_ar': 'well_area',
+        #             'tubewel_hd': 'tubewell_holdings',
+        #             'tubewel_ar': 'tubewell_area',
+        #             'oth_hd': 'other_holdings',
+        #             'oth_ar': 'other_area',
+        #             'irri_hd': 'irrigated_holdings',
+        #             'nt_irri_ar': 'irrigated_area'
+        #         },
+        #         scrape=scrape,
+        #         headless=headless
+        #     )
+        #     main(
+        #         url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+        #         kind='wells_and_tubewells',
+        #         year=year,
+        #         dropdowns=[
+        #             ("_ctl0_ContentPlaceHolder1_ddlTables", 'WELLS AND TUBEWELLS'),
+        #             ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+        #         ],
+        #         download_name='tktabledisplay5b.csv',
+        #         fields={
+        #             'total_hold': 'total_holdings',
+        #             'total_area': 'total_area',
+        #             'wells_ep': 'well_electric_pumpset',
+        #             'well_dp': 'well_diesel_pumpset',
+        #             'Total_Pumps': 'well_total',
+        #             'well_wp': 'well_without_pumpset',
+        #             'wells_nuse': 'well_not_in_use',
+        #             'tubewel_e': 'tubewell_electric',
+        #             'tubewel_d': 'tubewell_diesel',
+        #             'tubewells': 'tubewell_total'
+        #         },
+        #         scrape=scrape,
+        #         headless=headless
+        #     )
+        # main(
+        #     url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+        #     kind='cropped_area',
+        #     year=year,
+        #     dropdowns=[
+        #         ("_ctl0_ContentPlaceHolder1_ddlTables", 'GROSS CROPPED AREA'),
+        #         ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+        #     ],
+        #     download_name='tktabledisplay6a.csv',
+        #     fields={
+        #         'total_hold': 'total_holdings',
+        #         'total_area': 'total_area',
+        #         'Gr_irr_ar': 'gross_cropped_irrigated_area',
+        #         'Gr_unirr_ar': 'gross_cropped_unirrigated_area',
+        #         'Gross_ar': 'gross_cropped_area'
+        #     },
+        #     scrape=scrape,
+        #     headless=headless
+        # )
