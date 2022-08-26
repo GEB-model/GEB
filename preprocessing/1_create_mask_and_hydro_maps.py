@@ -2,11 +2,15 @@
 import os
 import rasterio
 import numpy as np
-from honeybees.library.raster import clip_to_xy_bounds, clip_to_other, upscale
 import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
 import geopandas as gpd
+
+from honeybees.library.raster import clip_to_xy_bounds, clip_to_other, upscale
+
+from methods import create_cell_area_map
+
 from config import ORIGINAL_DATA, INPUT
 from typing import Union
 
@@ -76,34 +80,6 @@ def create_mask(basin_id: int, upscale_factor: int, poor_point: Union[None, tupl
             submask_clipped_src.write(submask.astype(submask_profile['dtype']), 1)
 
         return mask_profile, submask_profile
-
-
-def create_cell_area_map(mask_profile: rasterio.profiles.Profile, prefix: str='') -> None:
-    """Create cell area map for given rasterio profile. 
-    
-    Args:
-        mask_profile: Rasterio profile of basin mask
-        prefix: Filename prefix
-    """
-    cell_area_path = os.path.join(INPUT, 'areamaps', f'{prefix}cell_area.tif')
-    RADIUS_EARTH_EQUATOR = 40075017  # m
-    distance_1_degree_latitude = RADIUS_EARTH_EQUATOR / 360
-
-    profile = dict(mask_profile)
-
-    affine = profile['transform']
-
-    lat_idx = np.arange(0, profile['width']).repeat(profile['height']).reshape((profile['width'], profile['height']))
-    lat = (lat_idx + 0.5) * affine.e + affine.f
-    width_m = distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine.a)
-    height_m = distance_1_degree_latitude * abs(affine.e)
-
-    area_m = width_m * height_m
-
-    profile['dtype'] = np.float32
-
-    with rasterio.open(cell_area_path, 'w', **profile) as cell_area_dst:
-        cell_area_dst.write(area_m.astype(np.float32), 1)
 
 def create_ldd(mask_profile: rasterio.profiles.Profile) -> None:
     """Clip ldd, and convert ArcGIS D8 convention to pcraster LDD convention. 
@@ -277,7 +253,7 @@ def create_mask_shapefile() -> None:
     gdf.to_file(mask_file.replace('.tif', '.shp'))
 
 if __name__ == '__main__':
-    UPSCALE_FACTOR = 20
+    UPSCALE_FACTOR = 40
     # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(75.896042,17.370451))  # Bhima
     mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(73.98727,19.00464))  # Bhimashankar north
     # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(73.86242,18.87037))  # Bhimashankar south

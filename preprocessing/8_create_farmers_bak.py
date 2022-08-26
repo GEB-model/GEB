@@ -4,11 +4,12 @@ from random import random
 import faulthandler
 
 import numpy as np
-import pandas as pd
+import shapely
 import rasterio
 import geopandas as gpd
+from rasterio.features import rasterize
 from numba import njit
-from honeybees.library.raster import pixel_to_coord, clip_to_xy_bounds
+from honeybees.library.raster import pixel_to_coord
 
 from config import INPUT, ORIGINAL_DATA
 
@@ -165,46 +166,50 @@ def create_farmers(farm_size_probabilities: np.ndarray, farm_size_choices_m2: np
 
 if __name__ == '__main__':
     YEAR = '2000-01'
+    FARM_SIZE_CHOICES_M2 = np.array([
+        [0.25, 0.5],
+        [0.5, 1],
+        [1, 2],
+        [2, 3],
+        [3, 4],
+        [4, 5],
+        [5, 7.5],
+        [7.5, 10],
+        [10, 20],
+        [20, 40],
+    ]) * 10_000  # Ha to m2
 
     SIZE_CLASSES = (
-        'Below 0.5',
-        '0.5-1.0',
-        '1.0-2.0',
-        '2.0-3.0',
-        '3.0-4.0',
-        '4.0-5.0',
-        '5.0-7.5',
-        '7.5-10.0',
-        '10.0-20.0',
-        '20.0 & ABOVE',
+        'Below 0.5_n_total',
+        '0.5-1.0_n_total',
+        '1.0-2.0_n_total',
+        '2.0-3.0_n_total',
+        '3.0-4.0_n_total',
+        '4.0-5.0_n_total',
+        '5.0-7.5_n_total',
+        '7.5-10.0_n_total',
+        '10.0-20.0_n_total',
+        '20.0 & ABOVE_n_total',
     )
 
-    tehsils_shapefile = gpd.read_file(os.path.join(INPUT, 'tehsils.geojson')).set_index('ID')
-
-    with rasterio.open(os.path.join(INPUT, "tehsils.tif")) as src:
+    with rasterio.open(os.path.join(INPUT, "areamaps", "submask.tif")) as src:
         profile = src.profile
         transform = src.profile['transform']
-        tehsils = src.read(1)
+        shape = src.profile['height'], src.profile['width']
+        profile['nodata'] = -1
+        profile['count'] = len(SIZE_CLASSES)
+        profile['dtype'] = np.float32
 
-        tehsil_codes = np.unique(tehsils)
-        tehsil_codes = list(tehsil_codes[tehsil_codes != -1])
+    farm_size_shapefile = gpd.read_file(os.path.join(ORIGINAL_DATA, 'census', 'farm_size', YEAR, 'farm_size.geojson'))
+    farm_size_probabilities = np.full((len(SIZE_CLASSES), shape[0], shape[1]), -1, dtype=profile['dtype'])
+    farm_size_shapefile['total'] = farm_size_shapefile[list(SIZE_CLASSES)].sum(axis=1)
+    for i, size_class in enumerate(SIZE_CLASSES):
+        farm_size_shapefile[size_class] = farm_size_shapefile[size_class] / farm_size_shapefile['total']
 
-        for tehsil_code in tehsil_codes:
-            tehsil_name = tehsils_shapefile.loc[tehsil_code]
+        geometries = [(shapely.geometry.mapping(geom), value) for value, geom in zip(farm_size_shapefile[size_class].tolist(), farm_size_shapefile['geometry'].tolist())]
+        farm_size_probabilities[i] = rasterize(geometries, out_shape=shape, fill=-1, transform=transform, dtype=profile['dtype'], all_touched=True)
+    
+    with open(os.path.join(INPUT, 'agents', 'farmsize.txt'), 'w') as f:
+        f.write("\n".join(SIZE_CLASSES))
 
-            agents = {}
-            for size_class in SIZE_CLASSES:
-                agents[size_class] = pd.read_csv(
-                    os.path.join(INPUT, 'agents', 'population', f'{tehsil_name["State"]}_{tehsil_name["District"]}_{tehsil_name["Tehsil"]}_{size_class}.csv')
-                )
-
-
-            nontehsilx = np.where(~(tehsils != tehsil_code).all(axis=0))[0]
-            xmin, xmax = nontehsilx[0], nontehsilx[-1] + 1
-            nontehsily = np.where(~(tehsils != tehsil_code).all(axis=1))[0]
-            ymin, ymax = nontehsily[0], nontehsily[-1] + 1
-
-            tehsil_profile, tehsil = clip_to_xy_bounds(src, dict(profile), tehsils, xmin, xmax, ymin, ymax)
-            tehsil = tehsil == tehsil_code
-            
-            create_farmers(agents, tehsil, tehsil_profile)
+    create_farmers(farm_size_probabilities, FARM_SIZE_CHOICES_M2)
