@@ -73,10 +73,12 @@ class IPL(object):
                 table_update = tables[inc + 1]
                 table_current = tables[inc]
 
+            count_feature = isinstance(table_current[feature].iloc[0], tuple)
+
             xijk = aggregates[inc]
 
             feat_l = []
-            if xijk.sum() > self.n:
+            if count_feature:
                 table_sel = table_current[feature]
                 items = [item for item in list(itertools.chain(*table_sel)) if item is not None]
                 unique_items = np.unique(items)
@@ -102,7 +104,7 @@ class IPL(object):
 
                 tmp = table_current.groupby(feature)[weight_col].sum()
 
-            if xijk.sum() > self.n:
+            if count_feature:
                 update_table = pd.DataFrame(1, index=table_update.index, columns=list(product(*feat_l)))
                 for characteristic in product(*feat_l):
                     den = tmp.loc[characteristic]
@@ -141,7 +143,8 @@ class IPL(object):
         inc = 0
         for aggregate in aggregates:
             feature = aggregate.name
-            if xijk.sum() > self.n:
+            count_feature = isinstance(table_current[feature].iloc[0], tuple)
+            if count_feature:
                 tmp = pd.Series(
                     0,
                     index=unique_items,
@@ -159,6 +162,7 @@ class IPL(object):
             if temp_conv > max_conv:
                 max_conv = temp_conv
             inc += 1
+        
         return table_update, max_conv
 
     def iteration(self):

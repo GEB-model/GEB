@@ -159,5 +159,6 @@ if __name__ == '__main__':
     fn = os.path.join(INPUT, 'tehsils.geojson')
     census_data = gpd.read_file(fn)
     census_df = census_data[['State', 'District', 'Tehsil']]
+    get_farm_size_table(census_df)
     get_farm_count_table(census_df)
     get_crop_table(census_df)

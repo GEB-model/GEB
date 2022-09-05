@@ -112,7 +112,7 @@ survey_data['crops'] = list(zip(
 ))
 # survey_data['size_class'] = survey_data['size_class'].map(size_class_convert)
 
-folder = os.path.join(INPUT, 'agents', 'population')
+folder = os.path.join(INPUT, 'agents', 'ipl')
 os.makedirs(folder, exist_ok=True)
 
 for (state, district, tehsil, size_class), crop_frequencies in crop_data.groupby(crop_data.index):
@@ -133,21 +133,22 @@ for (state, district, tehsil, size_class), crop_frequencies in crop_data.groupby
         n=n,
         learning_rate=1
     ).iteration()
-    ipl['n'] = ipl['weight'] // 1
-    missing = n - int(ipl['n'].sum())
-    
-    index = list(zip(ipl.index, ipl['weight'] % 1))
-    missing_pop = sorted(index, key=lambda x: x[1], reverse=True)[:missing]
-    missing_pop = [p[0] for p in missing_pop]
-    ipl.loc[missing_pop, 'n'] += 1
-
-    assert ipl['n'].sum() == n
-
-    cutoff_value = np.sort(ipl['weight'] % 1)[::-1][missing]
-    missing_pop = np.where(ipl['weight'] > cutoff_value)[0]
-
-    population = ipl.loc[ipl.index.repeat(ipl['n'])]
-    population = population.drop(['crops', 'weight'], axis=1)
 
     fp = os.path.join(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
-    population.to_csv(fp, index=False)
+    ipl.to_csv(fp, index=False)
+
+    # ipl['n'] = ipl['weight'] // 1
+    # missing = n - int(ipl['n'].sum())
+    
+    # index = list(zip(ipl.index, ipl['weight'] % 1))
+    # missing_pop = sorted(index, key=lambda x: x[1], reverse=True)[:missing]
+    # missing_pop = [p[0] for p in missing_pop]
+    # ipl.loc[missing_pop, 'n'] += 1
+
+    # assert ipl['n'].sum() == n
+
+    # population = ipl.loc[ipl.index.repeat(ipl['n'])]
+    # population = population.drop(['crops', 'weight'], axis=1)
+
+    # fp = os.path.join(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
+    # population.to_csv(fp, index=False)

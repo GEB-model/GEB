@@ -8,7 +8,7 @@ from rasterio.merge import merge
 
 from config import ORIGINAL_DATA, INPUT
 
-def get_rivers(threshold: int):
+def get_rivers(threshold: int, template: str):
     """Creates a river map at the resolution of the submask. All cells with at least `threshold` number of upstream cells are considered river. The function loads number of upstream cells from files that end with `_upg` from `DataDrive/GEB/original_data/merit_hydro_03sec`.
     
     Args:
@@ -36,20 +36,20 @@ def get_rivers(threshold: int):
 
     rivers = upcells > threshold
 
-    with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif')) as submask_src:
+    with rasterio.open(template) as submask_src:
         rivers, riverprofile = upscale(rivers, up_cells_profile_org, 2)
         rivers, riverprofile = clip_to_other(rivers, riverprofile, submask_src.profile)
 
         return rivers
             
 
-def merge_GLC30() -> np.ndarray:
+def merge_GLC30(template) -> np.ndarray:
     """Merges GLC30 data and scales to the resolution of the submask, using nearest sampling
     
     Returns:
         GLC30: Raster map of the land use type per GLC30 at the resolution of the submask.
     """
-    with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif'), 'r') as mask_src:
+    with rasterio.open(template, 'r') as mask_src:
         mask_transform = mask_src.transform
         mask_crs = mask_src.profile['crs']
         mask = mask_src.read(1)
@@ -90,7 +90,7 @@ def merge_GLC30() -> np.ndarray:
     return GLC30
 
 
-def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray) -> None:
+def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray, template: str, prefix: str=None) -> None:
     """Converts GLC30 data to 6 land use classes of CWatM. Rivers are also burned in. In addition a map of cultivated land is created.
 
     Args:
@@ -113,7 +113,7 @@ def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray) -> None:
 
     CWatM[rivers == True] = 5
 
-    with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif')) as submask_src:
+    with rasterio.open(template) as submask_src:
         submask = submask_src.read(1)
         submask_profile = submask_src.profile
     
@@ -124,17 +124,25 @@ def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray) -> None:
     CWatM_land_use_profile = dict(submask_profile)
     CWatM_land_use_profile['dtype'] = CWatM.dtype
     CWatM_land_use_profile['nodata'] = -1
-    with rasterio.open(os.path.join(INPUT, 'landsurface', 'land_use_classes.tif'), 'w', **CWatM_land_use_profile) as dst:
+    with rasterio.open(os.path.join(INPUT, 'landsurface', f'{prefix}land_use_classes.tif'), 'w', **CWatM_land_use_profile) as dst:
         dst.write(CWatM, 1)
 
     cultivated_land = np.zeros_like(GLC30, dtype=np.int8)
     cultivated_land[(GLC30 == 10) & (CWatM == 1)] = True
     profile = dict(CWatM_land_use_profile)
     profile['dtype'] = cultivated_land.dtype
-    with rasterio.open(os.path.join(INPUT, "landsurface", "cultivated_land.tif"), 'w', **profile) as dst:
+    with rasterio.open(os.path.join(INPUT, "landsurface", f"{prefix}cultivated_land.tif"), 'w', **profile) as dst:
         dst.write(cultivated_land, 1)
 
 if __name__ == '__main__':
-    rivers = get_rivers(100)
-    GLC30 = merge_GLC30()
-    create_cwatm_land_use(GLC30, rivers)
+    # prefix = ""
+    # template = os.path.join(INPUT, 'areamaps', 'submask.tif')
+    # rivers = get_rivers(100, template)
+    # GLC30 = merge_GLC30(template)
+    # create_cwatm_land_use(GLC30, rivers, template, prefix)
+
+    prefix = "full_tehsils_"
+    template = os.path.join(INPUT, 'tehsils.tif')
+    rivers = get_rivers(100, template)
+    GLC30 = merge_GLC30(template)
+    create_cwatm_land_use(GLC30, rivers, template, prefix)
