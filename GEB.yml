@@ -156,17 +156,10 @@ report:
   #   varname: crop
   #   save: save
   #   format: csv
-  surface_irrigated_per_district:
+  irrigated_per_district:
     type: farmers
     function: mean
-    varname: surface_irrigated
-    save: save
-    format: csv
-    groupby: tehsil
-  well_irrigated_per_district:
-    type: farmers
-    function: mean
-    varname: well_irrigated
+    varname: irrigated
     save: save
     format: csv
     groupby: tehsil

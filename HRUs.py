@@ -216,7 +216,7 @@ class HRUs(BaseVariables):
         return self.land_use_type.size
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def create_HRUs_numba(farms, land_use_classes, mask, scaling) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Numba helper function to create HRUs.
         
@@ -340,11 +340,9 @@ class HRUs(BaseVariables):
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             unmerged_HRU_indices: The index of the HRU to the subcell.
             """
-        with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as farms_src:
-            farms = farms_src.read()[0]
         with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'land_use_classes.tif'), 'r') as src:
             land_use_classes = src.read()[0]
-        return self.create_HRUs_numba(farms, land_use_classes, self.data.grid.mask, self.scaling)
+        return self.create_HRUs_numba(self.data.farms, land_use_classes, self.data.grid.mask, self.scaling)
 
     def zeros(self, size, dtype, *args, **kwargs) -> np.ndarray:
         """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
@@ -433,6 +431,10 @@ class Data:
     """
     def __init__(self, model):
         self.model = model
+
+        with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as farms_src:
+            self.farms = farms_src.read()[0]
+
         self.grid = Grid(self, model)
         self.HRU = HRUs(self, model)
         self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn='mean')

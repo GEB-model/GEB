@@ -387,6 +387,7 @@ def main():
                 assert population['farm_size'].sum() == farm_cells_size_class.at[size_class, 'whole_cells']
 
             agents = pd.concat(agents.values(), ignore_index=True)
+            agents['tehsil code'] = tehsil_code
             
             farms_tehsil = create_farmers(agents, cultivated_land_tehsil, tehsil, tehsil_profile)
 
@@ -409,11 +410,15 @@ def main():
         profile['dtype'] = farms.dtype
         with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif'), 'r') as submask_src:
             farms_clipped, farms_clipped_profile = clip_to_other(farms, profile, submask_src.profile)
+            submask = submask_src.read(1)
+
+        farms_clipped[submask == True] = -1
 
         # remove farms that have been reduced in size because they were cut off
-        clipped_farms_sizes = np.unique(farms_clipped, return_counts=True)
+        clipped_farms_sizes = np.unique(farms_clipped, return_counts=True)  # seems correct
         farms_sizes = np.unique(farms[np.isin(farms, clipped_farms_sizes[0])], return_counts=True)
         clipped_farms = clipped_farms_sizes[0][(farms_sizes[1] > clipped_farms_sizes[1])]
+        clipped_farms = clipped_farms[clipped_farms != -1]
         farms_clipped[np.isin(farms_clipped, clipped_farms)] = -1
 
         unique_farms = np.unique(farms_clipped)
@@ -422,20 +427,28 @@ def main():
         converter = np.full(unique_farms.max() + 2, -1, dtype=np.int32) # +1 because 0 is also a farm, +1 because no farm is -1, set to -1 in next step
         converter[unique_farms] = ids
         converter[-1] = -1
-        farms = converter[farms_clipped]
+        converted_farms = converter[farms_clipped]
 
         all_agents = all_agents[np.isin(all_agents.index, unique_farms)]
+        farm_ids, farm_sizes = np.unique(converted_farms, return_counts=True)
+        farm_sizes = farm_sizes[farm_ids != -1]
+        assert np.array_equal(farm_sizes, all_agents['farm_size'])
         all_agents.index = ids
 
-        farm_ids, farm_sizes = np.unique(farms, return_counts=True)
-        farm_sizes = farm_sizes[farm_ids != -1]
-
         assert np.array_equal(farm_sizes, all_agents['farm_size'])
+
+        crop_convert = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('CENSUS')['ID'].to_dict()
+
+        for season in ['Kharif', 'Rabi', 'Summer']:
+            assert set(all_agents[f'{season}: Crop: Name'][~pd.isnull(all_agents[f'{season}: Crop: Name'])]).issubset(set(crop_convert.keys()))
+            all_agents[f'{season}: Crop: Name'] = all_agents[f'{season}: Crop: Name'].apply(lambda crop: crop_convert[crop] if isinstance(crop, str) else -1)
+            all_agents[f'{season}: Crop: Irrigation'] = all_agents[f'{season}: Crop: Irrigation'].apply(lambda irr: {'rain': 0, 'irr': 1}[irr] if not pd.isna(irr) else -1)
 
         farmer_folder = os.path.join(INPUT, 'agents')
         attribute_folder = os.path.join(farmer_folder, 'attributes')
         os.makedirs(attribute_folder, exist_ok=True)
 
+        np.save(os.path.join(attribute_folder, 'tehsil_code.npy'), all_agents['tehsil code'])
         np.save(os.path.join(attribute_folder, 'household_size.npy'), all_agents['household size'])
         np.save(os.path.join(attribute_folder, 'tubewell.npy'), all_agents['Own: Tubewells'])
         np.save(os.path.join(attribute_folder, 'electric pump.npy'), all_agents['Own: Electric Pumps'])
@@ -448,7 +461,7 @@ def main():
         np.save(os.path.join(attribute_folder, 'summer irrigation.npy'), all_agents['Summer: Crop: Irrigation'])
 
         with rasterio.open(os.path.join(farmer_folder, 'farms.tif'), 'w', **farms_clipped_profile) as dst:
-            dst.write(farms, 1)
+            dst.write(converted_farms, 1)
 
 
 if __name__ == '__main__':
