@@ -176,7 +176,12 @@ class HRUs(BaseVariables):
     def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
-        self.scaling = 20
+        submask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'submask.tif')
+        with rasterio.open(submask_fn) as mask_src:
+            submask_height = mask_src.profile['height']
+            submask_width = mask_src.profile['width']
+        self.scaling = submask_height // self.data.grid.shape[0]
+        assert submask_width // self.data.grid.shape[1] == self.scaling
         self.gt = (self.data.grid.gt[0], self.data.grid.gt[1] / self.scaling, self.data.grid.gt[2], self.data.grid.gt[3], self.data.grid.gt[4], self.data.grid.gt[5] / self.scaling)
 
         self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
@@ -211,7 +216,7 @@ class HRUs(BaseVariables):
         return self.land_use_type.size
 
     @staticmethod
-    @njit(cache=True)
+    # @njit(cache=True)
     def create_HRUs_numba(farms, land_use_classes, mask, scaling) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Numba helper function to create HRUs.
         
