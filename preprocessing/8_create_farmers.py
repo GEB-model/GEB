@@ -8,9 +8,8 @@ import pandas as pd
 import rasterio
 import geopandas as gpd
 from numba import njit
-import matplotlib.pyplot as plt
 
-from honeybees.library.raster import clip_to_xy_bounds
+from honeybees.library.raster import clip_to_xy_bounds, clip_to_other
 
 from config import INPUT
 
@@ -404,7 +403,34 @@ def main():
         all_agents = pd.concat(all_agents, ignore_index=True)
         assert len(all_agents) == all_agents.index.max() + 1 == farms.max() + 1
 
-        all_agents = all_agents.drop(['State code', 'District code', 'PSU: village/neighborhood code', 'Household ID', 'Split household ID', 'Full household ID', 'area owned & cultivated', 'farm_size'], axis=1)
+        all_agents = all_agents.drop(['State code', 'District code', 'PSU: village/neighborhood code', 'Household ID', 'Split household ID', 'Full household ID', 'area owned & cultivated'], axis=1)
+
+        profile = dict(profile)
+        profile['dtype'] = farms.dtype
+        with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif'), 'r') as submask_src:
+            farms_clipped, farms_clipped_profile = clip_to_other(farms, profile, submask_src.profile)
+
+        # remove farms that have been reduced in size because they were cut off
+        clipped_farms_sizes = np.unique(farms_clipped, return_counts=True)
+        farms_sizes = np.unique(farms[np.isin(farms, clipped_farms_sizes[0])], return_counts=True)
+        clipped_farms = clipped_farms_sizes[0][(farms_sizes[1] > clipped_farms_sizes[1])]
+        farms_clipped[np.isin(farms_clipped, clipped_farms)] = -1
+
+        unique_farms = np.unique(farms_clipped)
+        unique_farms = unique_farms[unique_farms != -1]
+        ids = np.arange(unique_farms.size)
+        converter = np.full(unique_farms.max() + 2, -1, dtype=np.int32) # +1 because 0 is also a farm, +1 because no farm is -1, set to -1 in next step
+        converter[unique_farms] = ids
+        converter[-1] = -1
+        farms = converter[farms_clipped]
+
+        all_agents = all_agents[np.isin(all_agents.index, unique_farms)]
+        all_agents.index = ids
+
+        farm_ids, farm_sizes = np.unique(farms, return_counts=True)
+        farm_sizes = farm_sizes[farm_ids != -1]
+
+        assert np.array_equal(farm_sizes, all_agents['farm_size'])
 
         farmer_folder = os.path.join(INPUT, 'agents')
         attribute_folder = os.path.join(farmer_folder, 'attributes')
@@ -421,9 +447,7 @@ def main():
         np.save(os.path.join(attribute_folder, 'summer crop.npy'), all_agents['Summer: Crop: Name'])
         np.save(os.path.join(attribute_folder, 'summer irrigation.npy'), all_agents['Summer: Crop: Irrigation'])
 
-        profile = dict(profile)
-        profile['dtype'] = farms.dtype
-        with rasterio.open(os.path.join(farmer_folder, 'farms.tif'), 'w', **profile) as dst:
+        with rasterio.open(os.path.join(farmer_folder, 'farms.tif'), 'w', **farms_clipped_profile) as dst:
             dst.write(farms, 1)
 
 
