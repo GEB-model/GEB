@@ -273,6 +273,7 @@ class HRUs(BaseVariables):
                             continue
                         if farm != prev_farm:
                             assert land_use_array[HRU] == -1
+                            assert land_use == 1  # must be one because farm
                             land_use_array[HRU] = land_use
                             assert land_use_size[HRU] == -1
                             land_use_size[HRU] = 1

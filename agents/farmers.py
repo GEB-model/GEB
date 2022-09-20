@@ -17,7 +17,7 @@ from honeybees.library.mapIO import ArrayReader
 from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_yield_factors, load_crop_names
+from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -40,14 +40,35 @@ class Farmers(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
-    __slots__ = ["model", "agents", "var", "redundancy", "crop_data", "crop_yield_factors", "harvest_age", "elevation_map",
-    "plant_day", "field_indices", "_field_indices_by_farmer", "n", "max_n", "activation_order_by_elevation_fixed",
-    "agent_attributes_meta", "sample", "tehsil_map", "crop_names", "cultivation_costs", "crop_prices"]
+    __slots__ = [
+        "model",
+        "agents",
+        "var",
+        "redundancy",
+        "crop_stage_lengths",
+        "crop_factors",
+        "crop_yield_factors",
+        "reference_yield",
+        "harvest_age",
+        "elevation_map",
+        "plant_day",
+        "field_indices",
+        "_field_indices_by_farmer",
+        "n",
+        "max_n",
+        "activation_order_by_elevation_fixed",
+        "agent_attributes_meta",
+        "sample",
+        "tehsil_map",
+        "crop_names",
+        "cultivation_costs",
+        "crop_prices",
+    ]
     agent_attributes = [
         "_locations",
         "_tehsil",
         "_elevation",
-        "_crop",
+        "_crops",
         "_irrigated",
         "_wealth",
         "_irrigation_efficiency",
@@ -68,7 +89,7 @@ class Farmers(AgentBaseClass):
         self.redundancy = reduncancy
 
         self.crop_names = load_crop_names()
-        self.crop_yield_factors = load_crop_yield_factors()
+        self.crop_stage_lengths, self.crop_factors, self.crop_yield_factors, self.reference_yield = load_crop_factors()
         self.cultivation_costs = load_cultivation_costs()
         self.crop_prices = load_crop_prices()
 
@@ -82,8 +103,6 @@ class Farmers(AgentBaseClass):
         )
 
         self.harvest_age = np.full(26, 10)  # harvest all crops on 10th day
-        self.plant_day = np.full(26, 125)  # plant on 125th day of year
-        self.plant_day[11] = 1
         self.harvest_age[11] = 200
         self.agent_attributes_meta = {
             "_locations": {
@@ -95,16 +114,12 @@ class Farmers(AgentBaseClass):
             "_elevation": {
                 "nodata": np.nan
             },
-            "_crop": {
+            "_crops": {
                 "nodata": [-1, -1, -1],
                 "nodatacheck": False
             },
             "_irrigated": {
-                "nodata": [-1, -1, -1],
-                "nodatacheck": False
-            },
-            "_is_paddy_irrigated": {
-                "nodata": -1
+                "nodata": -1,
             },
             "_wealth": {
                 "nodata": -1
@@ -168,15 +183,18 @@ class Farmers(AgentBaseClass):
             self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
             self.elevation = self.elevation_map.sample_coords(self.locations)
             
-            self._crop = np.full((self.max_n, 3), -1, dtype=np.int32)  # kharif, rabi, summer
-            self.crop[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif crop.npy'))
-            self.crop[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi crop.npy'))
-            self.crop[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer crop.npy'))
+            self._crops = np.full((self.max_n, 3), -1, dtype=np.int32)  # kharif, rabi, summer
+            self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif crop.npy'))
+            self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi crop.npy'))
+            self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer crop.npy'))
             
-            self._irrigated = np.full((self.max_n, 3), -1, dtype=np.int8)  # kharif, rabi, summer
-            self.irrigated[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif irrigation.npy'))
-            self.irrigated[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi irrigation.npy'))
-            self.irrigated[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer irrigation.npy'))
+            irrigated = np.full((self.n, 3), -1, dtype=np.int8)  # kharif, rabi, summer
+            irrigated[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif irrigation.npy'))
+            irrigated[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi irrigation.npy'))
+            irrigated[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer irrigation.npy'))
+            
+            self._irrigated = np.full(self.max_n, -1, dtype=np.int8)
+            self.irrigated = irrigated.any(axis=1)
 
             self._irrigation_efficiency = np.full(self.max_n, -1, dtype=np.float32)
             self.irrigation_efficiency[:] = .70
@@ -474,8 +492,8 @@ class Farmers(AgentBaseClass):
             self.field_indices,
             self.n_water_limited_days,
             self.irrigation_efficiency,
-            self.surface_irrigated,
-            self.well_irrigated,
+            self.irrigated,
+            self.irrigated,
             cell_area,
             HRU_to_grid,
             self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map,
@@ -495,8 +513,7 @@ class Farmers(AgentBaseClass):
         )
 
     @staticmethod
-    @njit(cache=True)
-    def get_yield_ratio_numba(crop_map: np.array, evap_ratios: np.array, alpha: np.array, beta: np.array, P0: np.array, P1: np.array) -> float:
+    def get_yield_ratio_numba(crop_map: np.array, evap_ratios: np.array, KyT) -> float:
         """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031
         
         Args:
@@ -517,15 +534,7 @@ class Farmers(AgentBaseClass):
         for i in range(evap_ratios.size):
             evap_ratio = evap_ratios[i]
             crop = crop_map[i]
-            if alpha[crop] * evap_ratio + beta[crop] > 1:
-                yield_ratio = 1
-            elif P0[crop] < evap_ratio < P1[crop]:
-                yield_ratio = alpha[crop] * P1[crop] + beta[crop] - (P1[crop] - evap_ratio) * (alpha[crop] * P1[crop] + beta[crop]) / (P1[crop] - P0[crop])
-            elif evap_ratio < P0[crop]:
-                yield_ratio = 0
-            else:
-                yield_ratio = alpha[crop] * evap_ratio + beta[crop]
-            yield_ratios[i] = yield_ratio
+            yield_ratios[i] = 1 - KyT[crop] * (1 - evap_ratio)
         
         return yield_ratios
 
@@ -540,14 +549,13 @@ class Farmers(AgentBaseClass):
 
         Returns:
             yield_ratio: Map of yield ratio.
+
+        TODO: Implement GAEZ crop stage function
         """
         yield_ratio = self.get_yield_ratio_numba(
             crop_map[harvest],
             actual_transpiration[harvest] / potential_transpiration[harvest],
-            self.crop_yield_factors['alpha'],
-            self.crop_yield_factors['beta'],
-            self.crop_yield_factors['P0'],
-            self.crop_yield_factors['P1'],
+            self.crop_yield_factors['KyT'],
         )
         assert not np.isnan(yield_ratio).any()
         return yield_ratio
@@ -609,9 +617,9 @@ class Farmers(AgentBaseClass):
             crop_age_days = cp.array(crop_age_days)
 
         if self.model.args.use_gpu:
-            plant = cp.array(self.crop)
+            plant = cp.array(self.crops)
         else:
-            plant = self.crop.copy()
+            plant = self.crops.copy()
         plant[crop_age_days == -1] = -1
         
         self.var.crop_map = self.by_field(plant)
@@ -684,7 +692,7 @@ class Farmers(AgentBaseClass):
             harvesting_farmer_fields = self.var.land_owners[harvest]
             harvested_area = self.var.cellArea[harvest]
             harvested_crops = crop_map[harvest]
-            max_yield_per_crop = np.take(self.crop_yield_factors['yield_gr_m2'], harvested_crops)
+            max_yield_per_crop = np.take(self.reference_yield, harvested_crops)
             crop_yield_gr = harvested_area * yield_ratio * max_yield_per_crop
             crop_yield_per_farmer = np.bincount(harvesting_farmer_fields, weights=crop_yield_gr, minlength=self.n)
             harvesting_farmers = np.unique(harvesting_farmer_fields)
@@ -723,11 +731,11 @@ class Farmers(AgentBaseClass):
     @njit(cache=True)
     def plant_numba(
         n: int,
-        current_day: int,
+        month: int,
+        day: int,
         crop_map: np.ndarray,
-        crop: np.ndarray,
+        crops: np.ndarray,
         cultivation_cost_per_crop: np.ndarray,
-        plant_day: np.ndarray,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
         field_size_per_farmer: np.ndarray,
@@ -751,15 +759,21 @@ class Farmers(AgentBaseClass):
         sell_land = np.zeros(wealth.size, dtype=np.bool_)
         for farmer_idx in range(n):
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
-            farmer_crop = crop[farmer_idx]
-            if plant_day[farmer_crop] == current_day:
-                cultivation_cost = cultivation_cost_per_crop[farmer_crop] * field_size_per_farmer[farmer_idx]
-                if wealth[farmer_idx] > cultivation_cost:
-                    wealth[farmer_idx] -= cultivation_cost
-                    for field in farmer_fields:
-                        plant[field] = farmer_crop
-                else:
-                    sell_land[farmer_idx] = True
+            if month == 6 and day == 1:  # Kharif
+                farmer_crop = crops[farmer_idx, 0]
+            elif month == 11 and day == 1:  # Rabi
+                farmer_crop = crops[farmer_idx, 1]
+            elif month == 3 and day == 1:  # Summer
+                farmer_crop = crops[farmer_idx, 2]
+            else:
+                continue
+            cultivation_cost = cultivation_cost_per_crop[farmer_crop] * field_size_per_farmer[farmer_idx]
+            if wealth[farmer_idx] > cultivation_cost:
+                wealth[farmer_idx] -= cultivation_cost
+                for field in farmer_fields:
+                    plant[field] = farmer_crop
+            else:
+                sell_land[farmer_idx] = True
         return plant, sell_land
 
     def plant(self) -> None:
@@ -775,11 +789,11 @@ class Farmers(AgentBaseClass):
         cultivation_cost_per_crop = self.cultivation_costs[1][year_index]
         plant_map, farmers_sell_land = self.plant_numba(
             self.n,
-            self.model.current_time.timetuple().tm_yday,  # current day of year
+            self.model.current_time.month,
+            self.model.current_time.day,
             self.var.crop_map,
-            self.crop,
+            self.crops,
             cultivation_cost_per_crop,
-            self.plant_day,
             self.field_indices_by_farmer,
             self.field_indices,
             self.field_size_per_farmer,
@@ -794,13 +808,13 @@ class Farmers(AgentBaseClass):
 
         assert (self.var.crop_age_days_map[self.var.crop_map > 0] >= 0).all()
 
-        field_is_paddy_irrigated = self.by_field(self.is_paddy_irrigated, nofieldvalue=0)
+        field_is_paddy_irrigated = (self.var.crop_map == self.crop_names['Paddy'])
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
 
     @staticmethod
     @njit(cache=True)
-    def invest_numba(n, field_indices, field_indices_by_farmer, HRU_to_grid, crop, surface_irrigated, well_irrigated, wealth, n_water_limited_days, channel_storage_m3, reservoir_command_areas):
+    def invest_numba(n, field_indices, field_indices_by_farmer, HRU_to_grid, surface_irrigated, wealth, n_water_limited_days, channel_storage_m3, reservoir_command_areas):
         for farmer_idx in range(n):
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
             channel_storage_farmer_m3 = 0
@@ -817,26 +831,18 @@ class Farmers(AgentBaseClass):
             if in_reservoir_command_area and not surface_irrigated[farmer_idx]:
                 surface_irrigated[farmer_idx] = True
 
-            if wealth[farmer_idx] > 50000 and not well_irrigated[farmer_idx]:
-                well_irrigated[farmer_idx] = True
-                wealth[farmer_idx] -= 50000
-                crop[farmer_idx] = 1
-
     def invest(self) -> None:
-        pass
-        # self.invest_numba(
-        #     self.n,
-        #     self.field_indices,
-        #     self.field_indices_by_farmer,
-        #     self.model.data.HRU.HRU_to_grid,
-        #     self.crop,
-        #     self.surface_irrigated,
-        #     self.well_irrigated,
-        #     self.wealth,
-        #     self.n_water_limited_days,
-        #     self.model.data.grid.channelStorageM3,
-        #     self.model.data.HRU.reservoir_command_areas
-        # )
+        self.invest_numba(
+            self.n,
+            self.field_indices,
+            self.field_indices_by_farmer,
+            self.model.data.HRU.HRU_to_grid,
+            self.irrigated,
+            self.wealth,
+            self.n_water_limited_days,
+            self.model.data.grid.channelStorageM3,
+            self.model.data.HRU.reservoir_command_areas
+        )
     
     @property
     def locations(self):
@@ -847,12 +853,12 @@ class Farmers(AgentBaseClass):
         self._locations[:self.n] = value
 
     @property
-    def crop(self):
-        return self._crop[:self.n]
+    def crops(self):
+        return self._crops[:self.n]
 
-    @crop.setter
-    def crop(self, value):      
-        self._crop[:self.n] = value
+    @crops.setter
+    def crops(self, value):      
+        self._crops[:self.n] = value
 
     @property
     def latest_harvests(self):
@@ -1054,7 +1060,7 @@ class Farmers(AgentBaseClass):
         self.var.land_owners[HRU] = self.n
 
         self.n += 1  # increment number of agents
-        
+
         pixels = np.column_stack(indices)[:,[1, 0]]
         agent_location = np.mean(pixels_to_coords(pixels + .5, self.var.gt), axis=0)  # +.5 to use center of pixels
 
@@ -1064,7 +1070,7 @@ class Farmers(AgentBaseClass):
         self.locations[self.n-1] = agent_location
         self.elevation[self.n-1] = self.elevation_map.sample_coords(np.expand_dims(agent_location, axis=0))
         self.tehsil[self.n-1] = self.tehsil_map.sample_coords(np.expand_dims(agent_location, axis=0))
-        self.crop[self.n-1] = 1
+        self.crops[self.n-1] = 1
         self.irrigated[self.n-1] = False
         self.wealth[self.n-1] = 0
         self.irrigation_efficiency[self.n-1] = False

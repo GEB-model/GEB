@@ -129,20 +129,27 @@ def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray, template: str, 
 
     cultivated_land = np.zeros_like(GLC30, dtype=np.int8)
     cultivated_land[(GLC30 == 10) & (CWatM == 1)] = True
-    profile = dict(CWatM_land_use_profile)
-    profile['dtype'] = cultivated_land.dtype
-    with rasterio.open(os.path.join(INPUT, "landsurface", f"{prefix}cultivated_land.tif"), 'w', **profile) as dst:
+    cultivated_land_profile = dict(CWatM_land_use_profile)
+    cultivated_land_profile['dtype'] = cultivated_land.dtype
+    with rasterio.open(os.path.join(INPUT, "landsurface", f"{prefix}cultivated_land.tif"), 'w', **cultivated_land_profile) as dst:
         dst.write(cultivated_land, 1)
 
-if __name__ == '__main__':
-    # prefix = ""
-    # template = os.path.join(INPUT, 'areamaps', 'submask.tif')
-    # rivers = get_rivers(100, template)
-    # GLC30 = merge_GLC30(template)
-    # create_cwatm_land_use(GLC30, rivers, template, prefix)
+    return ((CWatM_land_use_profile, CWatM), (cultivated_land_profile, cultivated_land))
 
+if __name__ == '__main__':
     prefix = "full_tehsils_"
     template = os.path.join(INPUT, 'tehsils.tif')
     rivers = get_rivers(100, template)
     GLC30 = merge_GLC30(template)
-    create_cwatm_land_use(GLC30, rivers, template, prefix)
+    ((CWatM_land_use_profile, CWatM), (cultivated_land_profile, cultivated_land)) = create_cwatm_land_use(GLC30, rivers, template, prefix)
+
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif'), 'r') as submask_src:
+        submask_profile = submask_src.profile
+
+    CWatM_cut, CWatM_cut_profile = clip_to_other(CWatM, CWatM_land_use_profile, submask_profile)
+    with rasterio.open(os.path.join(INPUT, 'landsurface', 'land_use_classes.tif'), 'w', **CWatM_cut_profile) as dst:
+        dst.write(CWatM_cut, 1)
+
+    cultivated_land_cut, cultivated_land_cut_profile = clip_to_other(cultivated_land, cultivated_land_profile, submask_profile)
+    with rasterio.open(os.path.join(INPUT, 'landsurface', 'cultivated_land.tif'), 'w', **cultivated_land_cut_profile) as dst:
+        dst.write(cultivated_land_cut, 1)

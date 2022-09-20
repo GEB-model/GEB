@@ -413,13 +413,18 @@ def main():
             submask = submask_src.read(1)
 
         farms_clipped[submask == True] = -1
+        all_agents = all_agents[np.isin(all_agents.index, np.unique(farms_clipped))]
 
         # remove farms that have been reduced in size because they were cut off
-        clipped_farms_sizes = np.unique(farms_clipped, return_counts=True)  # seems correct
+        clipped_farms_sizes = np.unique(farms_clipped[farms_clipped != -1], return_counts=True)  # seems correct
         farms_sizes = np.unique(farms[np.isin(farms, clipped_farms_sizes[0])], return_counts=True)
+        assert np.array_equal(clipped_farms_sizes[0], farms_sizes[0])
         clipped_farms = clipped_farms_sizes[0][(farms_sizes[1] > clipped_farms_sizes[1])]
-        clipped_farms = clipped_farms[clipped_farms != -1]
+        
         farms_clipped[np.isin(farms_clipped, clipped_farms)] = -1
+        all_agents = all_agents.drop(clipped_farms)
+
+        assert np.array_equal(np.unique(farms_clipped, return_counts=True)[1][1:], all_agents['farm_size'])
 
         unique_farms = np.unique(farms_clipped)
         unique_farms = unique_farms[unique_farms != -1]
