@@ -63,6 +63,11 @@ class Farmers(AgentBaseClass):
         "crop_names",
         "cultivation_costs",
         "crop_prices",
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
     ]
     agent_attributes = [
         "_locations",
@@ -129,6 +134,24 @@ class Farmers(AgentBaseClass):
             },
             "_n_water_limited_days": {
                 "nodata": -1
+            },
+            "_self_efficacy": {
+                "nodata": [np.nan, np.nan]
+            },
+            "_intention_to_adapt": {
+                "nodata": np.nan
+            },
+            "_coping_appraisal": {
+                "nodata": np.nan
+            },
+            "_adaptation_efficiency": {
+                "nodata": np.nan
+            },
+            "_cost_perception": {
+                "nodata": [np.nan, np.nan]
+            },
+            "_risk_perception": {
+                "nodata": np.nan
             },
             "_water_availability_by_farmer": {
                 "nodata": np.nan
@@ -213,6 +236,31 @@ class Farmers(AgentBaseClass):
             self.n_water_limited_days[:] = 0
             self._wealth = np.full(self.max_n, -1, dtype=np.float32)
             self.wealth[:] = 10000
+
+            self.alpha = np.random.uniform(1/3, 2/3, size=1)
+            self.beta = 1 - self.alpha
+            self.gamma = np.random.uniform(.25, .5, size=1)
+            self.delta = np.random.uniform(.25, .5, size=1)
+            self.epsilon = 1 - self.gamma - self.delta
+
+            self._self_efficacy = np.full((self.max_n, 2), np.nan, dtype=np.float32)
+            self.self_efficacy[:, 0] = np.random.uniform(0, 1, size=self.n)
+            self.self_efficacy[:, 1] = np.random.uniform(0, 1, size=self.n)
+
+            self._intention_to_adapt = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.intention_to_adapt = 0
+            self._coping_appraisal = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.coping_appraisal = 0
+
+            self._adaptation_efficiency = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.adaptation_efficiency = np.random.uniform(0, 1, size=self.n)
+
+            self._cost_perception = np.full((self.max_n, 2), np.nan, dtype=np.float32)
+            self.cost_perception[:, 0] = np.random.uniform(0, 1, size=self.n)
+            self.cost_perception[:, 1] = np.random.uniform(0, 1, size=self.n)
+
+            self._risk_perception = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.risk_perception = np.random.uniform(0, 1, size=self.n)
 
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
@@ -939,6 +987,54 @@ class Farmers(AgentBaseClass):
     @wealth.setter
     def wealth(self, value):      
         self._wealth[:self.n] = value
+
+    @property
+    def self_efficacy(self):
+        return self._self_efficacy[:self.n]
+
+    @self_efficacy.setter
+    def self_efficacy(self, value):
+        self._self_efficacy[:self.n] = value
+
+    @property
+    def intention_to_adapt(self):
+        return self._intention_to_adapt[:self.n]
+
+    @intention_to_adapt.setter
+    def intention_to_adapt(self, value):
+        self._intention_to_adapt[:self.n] = value
+
+    @property
+    def coping_appraisal(self):
+        return self._coping_appraisal[:self.n]
+
+    @coping_appraisal.setter
+    def coping_appraisal(self, value):      
+        self._coping_appraisal[:self.n] = value
+
+    @property
+    def adaptation_efficiency(self):
+        return self._adaptation_efficiency[:self.n]
+
+    @adaptation_efficiency.setter
+    def adaptation_efficiency(self, value):      
+        self._adaptation_efficiency[:self.n] = value
+
+    @property
+    def cost_perception(self):
+        return self._cost_perception[:self.n]
+
+    @cost_perception.setter
+    def cost_perception(self, value):      
+        self._cost_perception[:self.n] = value
+
+    @property
+    def risk_perception(self):
+        return self._risk_perception[:self.n]
+
+    @risk_perception.setter
+    def risk_perception(self, value):      
+        self._risk_perception[:self.n] = value
 
     @property
     def tehsil(self):
