@@ -16,6 +16,7 @@ from numba import njit
 from honeybees.library.mapIO import ArrayReader
 from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords
+from honeybees.library.neighbors import find_neighbors
 
 from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names
 
@@ -82,7 +83,8 @@ class Farmers(AgentBaseClass):
         "_channel_abstraction_m3_by_farmer",
         "_groundwater_abstraction_m3_by_farmer",
         "_reservoir_abstraction_m3_by_farmer",
-        "_latest_harvests",
+        "_latest_profits",
+        "_latest_potential_profits",
     ]
     __slots__.extend(agent_attributes)
 
@@ -135,23 +137,8 @@ class Farmers(AgentBaseClass):
             "_n_water_limited_days": {
                 "nodata": -1
             },
-            "_self_efficacy": {
-                "nodata": [np.nan, np.nan]
-            },
-            "_intention_to_adapt": {
-                "nodata": np.nan
-            },
-            "_coping_appraisal": {
-                "nodata": np.nan
-            },
-            "_adaptation_efficiency": {
-                "nodata": np.nan
-            },
-            "_cost_perception": {
-                "nodata": [np.nan, np.nan]
-            },
-            "_risk_perception": {
-                "nodata": np.nan
+            "_has_well": {
+                "nodata": False
             },
             "_water_availability_by_farmer": {
                 "nodata": np.nan
@@ -165,9 +152,13 @@ class Farmers(AgentBaseClass):
             "_reservoir_abstraction_m3_by_farmer": {
                 "nodata": np.nan
             },
-            "_latest_harvests": {
+            "_latest_profits": {
                 "nodata": [np.nan, np.nan, np.nan],
-                "nodatacheck": False
+                # "nodatacheck": False
+            },
+            "_latest_potential_profits": {
+                "nodata": [np.nan, np.nan, np.nan],
+                # "nodatacheck": False
             },
         }
         self.initiate_agents()
@@ -219,10 +210,16 @@ class Farmers(AgentBaseClass):
             self._irrigated = np.full(self.max_n, -1, dtype=np.int8)
             self.irrigated = irrigated.any(axis=1)
 
+            irrigation_type = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation type.npy'))
+
+            self._has_well= np.full(self.max_n, 0, dtype=bool)
+            self.has_well[:] = (irrigation_type == 1).any(axis=1)
+
             self._irrigation_efficiency = np.full(self.max_n, -1, dtype=np.float32)
             self.irrigation_efficiency[:] = .70
 
-            self._latest_harvests = np.full((self.max_n, 3), np.nan, dtype=np.float32)
+            self._latest_profits = np.full((self.max_n, 3), np.nan, dtype=np.float32)
+            self._latest_potential_profits = np.full((self.max_n, 3), np.nan, dtype=np.float32)
 
             self._channel_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.channel_abstraction_m3_by_farmer[:] = 0
@@ -236,31 +233,6 @@ class Farmers(AgentBaseClass):
             self.n_water_limited_days[:] = 0
             self._wealth = np.full(self.max_n, -1, dtype=np.float32)
             self.wealth[:] = 10000
-
-            self.alpha = np.random.uniform(1/3, 2/3, size=1)
-            self.beta = 1 - self.alpha
-            self.gamma = np.random.uniform(.25, .5, size=1)
-            self.delta = np.random.uniform(.25, .5, size=1)
-            self.epsilon = 1 - self.gamma - self.delta
-
-            self._self_efficacy = np.full((self.max_n, 2), np.nan, dtype=np.float32)
-            self.self_efficacy[:, 0] = np.random.uniform(0, 1, size=self.n)
-            self.self_efficacy[:, 1] = np.random.uniform(0, 1, size=self.n)
-
-            self._intention_to_adapt = np.full(self.max_n, np.nan, dtype=np.float32)
-            self.intention_to_adapt = 0
-            self._coping_appraisal = np.full(self.max_n, np.nan, dtype=np.float32)
-            self.coping_appraisal = 0
-
-            self._adaptation_efficiency = np.full(self.max_n, np.nan, dtype=np.float32)
-            self.adaptation_efficiency = np.random.uniform(0, 1, size=self.n)
-
-            self._cost_perception = np.full((self.max_n, 2), np.nan, dtype=np.float32)
-            self.cost_perception[:, 0] = np.random.uniform(0, 1, size=self.n)
-            self.cost_perception[:, 1] = np.random.uniform(0, 1, size=self.n)
-
-            self._risk_perception = np.full(self.max_n, np.nan, dtype=np.float32)
-            self.risk_perception = np.random.uniform(0, 1, size=self.n)
 
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
@@ -608,26 +580,17 @@ class Farmers(AgentBaseClass):
         assert not np.isnan(yield_ratio).any()
         return yield_ratio
 
-    def save_harvest(self, harvesting_farmers: np.ndarray, crop_yield_per_farmer: np.ndarray) -> None:
+    def save_profit(self, harvesting_farmers: np.ndarray, crop_yield_per_farmer: np.ndarray, potential_crop_yield_per_farmer: np.ndarray) -> None:
         """Saves the current harvest for harvesting farmers in a 2-dimensional array. The first dimension is the different farmers, while the second dimension are the previous harvests. First the previous harvests are moved by 1 column (dropping old harvests when they don't visit anymore) to make room for the new harvest. Then, the new harvest is placed in the array.
         
         Args:
             harvesting_farmers: farmers that harvest in this timestep.
         """
-        self.latest_harvests[harvesting_farmers, 1:] = self.latest_harvests[harvesting_farmers, 0:-1]
-        self.latest_harvests[harvesting_farmers, 0] = crop_yield_per_farmer[harvesting_farmers]
-
-    def invest_in_water_efficiency(self, harvesting_farmers: np.ndarray) -> None:
-        """In the scenario `self_investments` farmers invest in water saving techniques when their harvest starts dropping. Concretely if their harvest is lower than the previous harvests, they do so.
+        self.latest_profits[harvesting_farmers, 1:] = self.latest_profits[harvesting_farmers, 0:-1]
+        self.latest_profits[harvesting_farmers, 0] = crop_yield_per_farmer[harvesting_farmers]
         
-        Args:
-            harvesting_farmers: farmers that harvest in this timestep.
-        """
-        if self.model.args.scenario == 'self_investment':
-            invest = (
-                self.latest_harvests[harvesting_farmers, 0] * 1.1 < np.mean(self.latest_harvests[harvesting_farmers, 1:], axis=1)
-            )
-            self.irrigation_efficiency[harvesting_farmers] |= invest
+        self.latest_potential_profits[harvesting_farmers, 1:] = self.latest_potential_profits[harvesting_farmers, 0:-1]
+        self.latest_potential_profits[harvesting_farmers, 0] = potential_crop_yield_per_farmer[harvesting_farmers]
 
     def by_field(self, var, nofieldvalue=-1):
         if self.n:
@@ -737,15 +700,11 @@ class Farmers(AgentBaseClass):
         )
         if np.count_nonzero(harvest):  # Check if any harvested fields. Otherwise we don't need to run this.
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
+
             harvesting_farmer_fields = self.var.land_owners[harvest]
             harvested_area = self.var.cellArea[harvest]
             harvested_crops = crop_map[harvest]
             max_yield_per_crop = np.take(self.reference_yield, harvested_crops)
-            crop_yield_gr = harvested_area * yield_ratio * max_yield_per_crop
-            crop_yield_per_farmer = np.bincount(harvesting_farmer_fields, weights=crop_yield_gr, minlength=self.n)
-            harvesting_farmers = np.unique(harvesting_farmer_fields)
-            if self.model.current_timestep > 365:
-                self.save_harvest(harvesting_farmers, crop_yield_per_farmer)
             
             year = self.model.current_time.year
             month = self.model.current_time.month
@@ -753,11 +712,23 @@ class Farmers(AgentBaseClass):
             crop_prices = self.crop_prices[1][crop_price_index]
             assert not np.isnan(crop_prices).any()
 
+            harvesting_farmers = np.unique(harvesting_farmer_fields)
+
+            # get potential crop profit per farmer
+            crop_yield_gr = harvested_area * yield_ratio * max_yield_per_crop
             profit = crop_yield_gr * np.take(crop_prices, harvested_crops)
             profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
+
+            # get potential crop profit per farmer
+            potential_crop_yield = harvested_area * max_yield_per_crop
+            potential_profit = potential_crop_yield * np.take(crop_prices, harvested_crops)
+            potential_profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
+            
+            self.save_profit(harvesting_farmers, profit_per_farmer, potential_profit_per_farmer)
+            
             self.wealth += profit_per_farmer
 
-            self.invest_in_water_efficiency(harvesting_farmers)
+            self.invest(harvesting_farmers)
 
         if self.model.args.use_gpu:
             harvest = cp.array(harvest)
@@ -860,31 +831,87 @@ class Farmers(AgentBaseClass):
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
 
-    @staticmethod
-    @njit(cache=True)
-    def invest_numba(n, field_indices, field_indices_by_farmer, HRU_to_grid, surface_irrigated, wealth, n_water_limited_days, channel_storage_m3, reservoir_command_areas):
-        for farmer_idx in range(n):
-            farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
-            channel_storage_farmer_m3 = 0
-            in_reservoir_command_area = False
-            for field in farmer_fields:
-                grid_cell = HRU_to_grid[field]
-                channel_storage_farmer_m3 += channel_storage_m3[grid_cell]
-                if reservoir_command_areas[field] >= 0:
-                    in_reservoir_command_area = True
+    # @staticmethod
+    # @njit(cache=True)
+    def invest_numba(self, n, field_indices, field_indices_by_farmer, HRU_to_grid, harvesting_farmers, surface_irrigated, wealth, n_water_limited_days, channel_storage_m3, reservoir_command_areas):
+        farmers_with_well = np.where(self.has_well)[0]
+        nbits = 19
+        # from honeybees.library.geohash import window
+        # width_lon, height_lat = window(nbits, *self.model.bounds)
+        neighbors_with_well = find_neighbors(
+            self.locations,
+            radius=5_000,
+            n_neighbor=5,
+            bits=nbits,
+            minx=self.model.bounds[0],
+            maxx=self.model.bounds[1],
+            miny=self.model.bounds[2],
+            maxy=self.model.bounds[3],
+            # search_ids=farmers_with_well,
+            search_target_ids=farmers_with_well
+        )
 
-            if channel_storage_farmer_m3 > 100 and not surface_irrigated[farmer_idx]:
-                surface_irrigated[farmer_idx] = True
+        # import matplotlib.pyplot as plt
+        # colors = ['red', 'blue', 'green', 'yellow', 'orange']
+        # for i in range(5):
+        #     own_location = self.locations[farmers_with_well[i]]
+        #     plt.scatter(own_location[0], own_location[1], c=colors[i])
+        #     agent_neighbours = neighbors_with_well[i]
+        #     plt.scatter(self.locations[agent_neighbours][:,0], self.locations[agent_neighbours][:,1], c=colors[i], alpha=.5)
+        # plt.show()
 
-            if in_reservoir_command_area and not surface_irrigated[farmer_idx]:
-                surface_irrigated[farmer_idx] = True
+        assert self.has_well[neighbors_with_well].all()
+        
+        invest_time = 30
+        investment_cost = 10_000
+        yearly_cost = 1_000
 
-    def invest(self) -> None:
+        for farmer_idx in harvesting_farmers:
+            if not self.has_well[farmer_idx]:
+
+                latest_profit = self.latest_profits[farmer_idx, 0]
+                latest_potential_profit = self.latest_potential_profits[farmer_idx, 0]
+
+                # profit_ratio = latest_profit / latest_potential_profit
+                latest_profits_neighbors = self.latest_profits[neighbors_with_well[farmer_idx], 0]
+                latest_potential_profits_neighbors = self.latest_potential_profits[neighbors_with_well[farmer_idx], 0]
+                profit_ratio_neighbors = latest_profits_neighbors / latest_potential_profits_neighbors
+                profit_ratio_neighbors = profit_ratio_neighbors[~np.isnan(profit_ratio_neighbors)]
+                profit_ratio_neighbors = np.mean(profit_ratio_neighbors)
+
+                profit_with_neighbor_efficiency = latest_potential_profit * profit_ratio_neighbors
+
+                potential_benefit = profit_with_neighbor_efficiency - latest_profit
+                potential_benefit_over_investment_time = potential_benefit / invest_time
+                print(potential_benefit_over_investment_time)
+                total_cost_over_investment_time = investment_cost + yearly_cost * invest_time
+                if potential_benefit_over_investment_time > total_cost_over_investment_time and wealth[farmer_idx] > investment_cost + yearly_cost:  # ensure farmer has at least enough money to pay for the investment and first year of operation.
+                    self.has_well[farmer_idx] = True
+                    print("Farmer has invested in a well.")
+                    self.wealth[farmer_idx] -= investment_cost
+
+            # farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
+            # channel_storage_farmer_m3 = 0
+            # in_reservoir_command_area = False
+            # for field in farmer_fields:
+            #     grid_cell = HRU_to_grid[field]
+            #     channel_storage_farmer_m3 += channel_storage_m3[grid_cell]
+            #     if reservoir_command_areas[field] >= 0:
+            #         in_reservoir_command_area = True
+
+            # if channel_storage_farmer_m3 > 100 and not surface_irrigated[farmer_idx]:
+            #     surface_irrigated[farmer_idx] = True
+
+            # if in_reservoir_command_area and not surface_irrigated[farmer_idx]:
+            #     surface_irrigated[farmer_idx] = True
+
+    def invest(self, harvesting_farmers) -> None:
         self.invest_numba(
             self.n,
             self.field_indices,
             self.field_indices_by_farmer,
             self.model.data.HRU.HRU_to_grid,
+            harvesting_farmers,
             self.irrigated,
             self.wealth,
             self.n_water_limited_days,
@@ -909,12 +936,20 @@ class Farmers(AgentBaseClass):
         self._crops[:self.n] = value
 
     @property
-    def latest_harvests(self):
-        return self._latest_harvests[:self.n]
+    def latest_profits(self):
+        return self._latest_profits[:self.n]
 
-    @latest_harvests.setter
-    def latest_harvests(self, value):      
-        self._latest_harvests[:self.n] = value
+    @latest_profits.setter
+    def latest_profits(self, value):      
+        self._latest_profits[:self.n] = value
+
+    @property
+    def latest_potential_profits(self):
+        return self._latest_potential_profits[:self.n]
+
+    @latest_potential_profits.setter
+    def latest_potential_profits(self, value):      
+        self._latest_potential_profits[:self.n] = value
 
     @property
     def irrigated(self):
@@ -989,52 +1024,12 @@ class Farmers(AgentBaseClass):
         self._wealth[:self.n] = value
 
     @property
-    def self_efficacy(self):
-        return self._self_efficacy[:self.n]
+    def has_well(self):
+        return self._has_well[:self.n]
 
-    @self_efficacy.setter
-    def self_efficacy(self, value):
-        self._self_efficacy[:self.n] = value
-
-    @property
-    def intention_to_adapt(self):
-        return self._intention_to_adapt[:self.n]
-
-    @intention_to_adapt.setter
-    def intention_to_adapt(self, value):
-        self._intention_to_adapt[:self.n] = value
-
-    @property
-    def coping_appraisal(self):
-        return self._coping_appraisal[:self.n]
-
-    @coping_appraisal.setter
-    def coping_appraisal(self, value):      
-        self._coping_appraisal[:self.n] = value
-
-    @property
-    def adaptation_efficiency(self):
-        return self._adaptation_efficiency[:self.n]
-
-    @adaptation_efficiency.setter
-    def adaptation_efficiency(self, value):      
-        self._adaptation_efficiency[:self.n] = value
-
-    @property
-    def cost_perception(self):
-        return self._cost_perception[:self.n]
-
-    @cost_perception.setter
-    def cost_perception(self, value):      
-        self._cost_perception[:self.n] = value
-
-    @property
-    def risk_perception(self):
-        return self._risk_perception[:self.n]
-
-    @risk_perception.setter
-    def risk_perception(self, value):      
-        self._risk_perception[:self.n] = value
+    @has_well.setter
+    def has_well(self, value):
+        self._has_well[:self.n] = value
 
     @property
     def tehsil(self):
@@ -1091,7 +1086,6 @@ class Farmers(AgentBaseClass):
         Then, farmers harvest and plant crops.
         """
         self.harvest()
-        self.invest()
         self.plant()
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
@@ -1175,7 +1169,8 @@ class Farmers(AgentBaseClass):
         self.channel_abstraction_m3_by_farmer[self.n-1] = 0
         self.groundwater_abstraction_m3_by_farmer[self.n-1] = 0
         self.reservoir_abstraction_m3_by_farmer[self.n-1] = 0
-        self.latest_harvests[self.n-1] = [np.nan, np.nan, np.nan]
+        self.latest_profits[self.n-1] = [np.nan, np.nan, np.nan]
+        self.latest_potential_profits[self.n-1] = [np.nan, np.nan, np.nan]
 
         for attr in self.agent_attributes:
             assert getattr(self, attr[1:]).shape[0] == self.n

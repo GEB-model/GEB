@@ -77,22 +77,16 @@ def process(households, crops):
     return households
 
 def rename_parameters(households):
-    households['Irrigation type 1'] = households['Irrigation type 1'].map({
+    irrigation_map = {
         '1': 'Tubewell',
         '2': 'Other well',
         '3': 'Government',
         '4': 'Private canal',
         '5': 'Tank/pond/nala',
         '6': 'Other',
-    })
-    households['Irrigation type 2'] = households['Irrigation type 2'].map({
-        '1': 'Tubewell',
-        '2': 'Other well',
-        '3': 'Government',
-        '4': 'Private canal',
-        '5': 'Tank/pond/nala',
-        '6': 'Other',
-    })
+    }
+    households['Irrigation type 1'] = households['Irrigation type 1'].map(irrigation_map)
+    households['Irrigation type 2'] = households['Irrigation type 2'].map(irrigation_map)
     households['Seeds Homegrown'] = households['Seeds Homegrown'].map({
         '1': 'Home grown',
         '2': 'Purchased',
