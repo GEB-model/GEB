@@ -273,7 +273,6 @@ def main():
     with rasterio.open(os.path.join(INPUT, 'areamaps', 'sub_cell_area.tif'), 'r') as src:
         avg_cell_area = np.mean(src.read(1))
 
-
     with rasterio.open(os.path.join(INPUT, "tehsils.tif")) as src_tehsils, rasterio.open(os.path.join(INPUT, 'landsurface', "full_tehsils_cultivated_land.tif"), 'r') as src_cultivated_land:
         profile = src_tehsils.profile
         tehsils = src_tehsils.read(1)
@@ -362,12 +361,17 @@ def main():
                 n = round(farm_cells_size_class.at[size_class, 'whole_cells'] / mean_cells)
                 offset = farm_cells_size_class.at[size_class, 'whole_cells'] - n * mean_cells
 
-                ipls[size_class]['n'] = (ipls[size_class]['weight'] // 1).astype(int)
+                if n == 0:
+                    ipls[size_class]['adjusted_weight'] = ipls[size_class]['weight']
+                else:
+                    ipls[size_class]['adjusted_weight'] = ipls[size_class]['weight'] / ipls[size_class]['weight'].sum() * n
+                ipls[size_class]['n'] = (ipls[size_class]['adjusted_weight'] // 1).astype(int)
 
                 missing = n - int(ipls[size_class]['n'].sum())
-                
-                index = list(zip(ipls[size_class].index, ipls[size_class]['weight'] % 1))
-                missing_pop = sorted(index, key=lambda x: x[1], reverse=True)[:missing]
+                index = list(zip(ipls[size_class].index, ipls[size_class]['adjusted_weight'] % 1))
+                sorted_index = sorted(index, key=lambda x: x[1], reverse=True)
+                assert missing >= 0
+                missing_pop = sorted_index[:missing]
                 missing_pop = [p[0] for p in missing_pop]
                 ipls[size_class].loc[missing_pop, 'n'] += 1
 
@@ -478,6 +482,8 @@ def main():
         np.save(os.path.join(attribute_folder, 'rabi irrigation.npy'), all_agents['Rabi: Crop: Irrigation'])
         np.save(os.path.join(attribute_folder, 'summer crop.npy'), all_agents['Summer: Crop: Name'])
         np.save(os.path.join(attribute_folder, 'summer irrigation.npy'), all_agents['Summer: Crop: Irrigation'])
+        np.save(os.path.join(attribute_folder, 'non farm income.npy'), all_agents['Salaried income Rs'] + all_agents['Business income Rs'] + all_agents['Government benefits Rs'] + all_agents['Income property Rs'] + all_agents['Other income Rs'])
+        np.save(os.path.join(attribute_folder, 'daily consumption per capita.npy'), all_agents['Monthly consumption per capita Rs'] / 12)
 
         with rasterio.open(os.path.join(farmer_folder, 'farms.tif'), 'w', **farms_clipped_profile) as dst:
             dst.write(converted_farms, 1)

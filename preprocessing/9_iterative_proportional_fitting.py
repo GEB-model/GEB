@@ -1,8 +1,14 @@
+import os
+
 import numpy as np
 import pandas as pd
-from itertools import product
-import itertools
+import geopandas as gpd
+import rasterio
+from itertools import product, chain
 
+from methods import create_cell_area_map
+
+from config import INPUT
 
 class IPL(object):
     def __init__(self, original, aggregates, weight_col='weight', n=None, learning_rate=1,
@@ -80,7 +86,7 @@ class IPL(object):
             feat_l = []
             if count_feature:
                 table_sel = table_current[feature]
-                items = [item for item in list(itertools.chain(*table_sel)) if item is not None]
+                items = [item for item in list(chain(*table_sel)) if item is not None]
                 unique_items = np.unique(items)
                 feat_l.append(unique_items)
                 table_update.set_index(feature, inplace=True)
@@ -202,49 +208,147 @@ class IPL(object):
         else:
             raise(ValueError(f'wrong verbose input, must be either 0, 1 or 2 but got {self.verbose}'))
 
+SEASONS = ['Kharif', 'Rabi', 'Summer']
+SIZE_CLASSES = (
+    'Below 0.5',
+    '0.5-1.0',
+    '1.0-2.0',
+    '2.0-3.0',
+    '3.0-4.0',
+    '4.0-5.0',
+    '5.0-7.5',
+    '7.5-10.0',
+    '10.0-20.0',
+    '20.0 & ABOVE',
+)
+CROPS = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))
+SIZE_GROUP = {
+    'Below 0.5': ['Below 0.5', '0.5-1.0'],
+    '0.5-1.0': ['Below 0.5', '0.5-1.0'],
+    '1.0-2.0': ['1.0-2.0'],
+    '2.0-3.0': ['2.0-3.0', '3.0-4.0'],
+    '3.0-4.0': ['2.0-3.0', '3.0-4.0'],
+    '4.0-5.0': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
+    '5.0-7.5': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
+    '7.5-10.0': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
+    '10.0-20.0': ['10.0-20.0', '20.0 & ABOVE'],
+    '20.0 & ABOVE': ['10.0-20.0', '20.0 & ABOVE'],
+}
 
-if __name__ == '__main__':
-        age = [30, 30, 30, 30, 40, 40, 40, 40, 50, 50, 50, 50]
-        distance = [10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40]
-        weights = [8., 4., 6., 7., 3., 6., 5., 2., 9., 11., 3., 1.]
-        df = pd.DataFrame()
-        df['distance'] = distance
-        df['age'] = age
-        df['crops'] = [('corn', 'rice'), (None, 'corn'), ('wheat', None), ('rice', 'corn'), (None, 'rice'), ('wheat', None), (None, 'rice'), ('wheat', 'rye'), ('wheat', None), (None, 'rice'), ('wheat', 'rye'), (None, 'rice')]
-        df['weight'] = weights
+with rasterio.open(os.path.join(INPUT, 'tehsils.tif'), 'r') as src:
+    tehsils_tif = src.read(1)
+    cell_area = create_cell_area_map(src.profile, write_to_disk=True)
 
-        aggregates = [
-            # pd.Series([20, 18, 22], index=[30, 40, 50], name=('age')),
-            # pd.Series([10, 10, 18, 22], index=[10, 20, 30, 40], name=('distance')),
-            pd.Series([30, 10, 15, 30], index=['wheat', 'rice', 'corn', 'rye'], name='crops'),
-        ]
+tehsils_shape = gpd.read_file(os.path.join(INPUT, 'tehsils.geojson')).set_index(['State', 'District', 'Tehsil'])
+avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
+crop_data = pd.read_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'), index_col=(0, 1, 2, 3))
+for (state, district, tehsil), tehsil_crop_data in crop_data.groupby(level=[0, 1, 2]):
+    # tehsil_farm_size = avg_farm_size.loc[(state, district, tehsil)]
+    farms_per_size_class = tehsil_crop_data.droplevel([0, 1, 2]).sum(axis=1)
 
-        ipl = IPL(df, aggregates, n=60, rate_tolerance=1e-1000, convergence_rate=1e-100, max_iteration=500)
-        for _ in range(1):
-            df = ipl.iteration()
+    # assert (tehsil_farm_size.index == farms_per_size_class.index).all()
 
-        print('done')
-        print(df)
-        print(df['weight'].sum())
-        # print(df.groupby('age')['weight'].sum())
-        # print(df.groupby('age')['weight'].sum().sum())
-        # print(df.groupby('crops')['weight'].sum())
-        # print(df.groupby('crops')['weight'].sum().sum())
+    # area_per_size_class = tehsil_farm_size * farms_per_size_class
+    # census_farm_area = area_per_size_class.sum()
 
-        crops = {
-            'wheat': 0,
-            'rice': 0,
-            'corn': 0,
-            'rye': 0,
-        }
-        for i, row in df.iterrows():
-            crop1, crop2 = row['crops']
-            if crop1:
-                crops[crop1] += row['weight']
-            if crop2:
-                crops[crop2] += row['weight']
+    tehsil_ID = tehsils_shape.at[(state, district, tehsil), 'ID']
+    tehsil_area = cell_area[tehsils_tif == tehsil_ID].sum()
 
-        print(crops)
-        print(sum(crops.values()))
+columns = [f'{crop}_irr_holdings' for crop in CROPS['CENSUS'].tolist() + ['All crops']] + [f'{crop}_rain_holdings' for crop in CROPS['CENSUS'].tolist() + ['All crops']]
+crop_data = crop_data[columns]
+crop_data = crop_data.rename(columns={
+    column: column.replace('_holdings', '')
+    for column in columns
+})
 
+n_farms = pd.read_excel(os.path.join(INPUT, 'census', 'n_farms.xlsx'), index_col=(0, 1, 2))
 
+size_class_convert = {
+    "Below 0.5": 0,
+    "0.5-1.0": 1,
+    "1.0-2.0": 2,
+    "2.0-3.0": 3,
+    "3.0-4.0": 4,
+    "4.0-5.0": 5,
+    "5.0-7.5": 6,
+    "7.5-10.0": 7,
+    "10.0-20.0": 8,
+    "20.0 & ABOVE": 9,
+}
+
+def assign_size_classes(survey):
+    size_classes = (
+        ('Below 0.5', 0.5),
+        ('0.5-1.0', 1),
+        ('1.0-2.0', 2),
+        ('2.0-3.0', 3),
+        ('3.0-4.0', 4),
+        ('4.0-5.0', 5),
+        ('5.0-7.5', 7.5),
+        ('7.5-10.0', 10),
+        ('10.0-20.0', 20),
+        ('20.0 & ABOVE', np.inf),
+    )
+    for idx, household in survey.iterrows():
+        area = household['area owned & cultivated']
+        for size_class_name, size in size_classes:
+            if area < size:
+                survey.loc[idx, 'size_class'] = size_class_name
+                break
+    return survey
+
+survey_data = pd.read_csv(os.path.join(INPUT, 'agents', 'IHDS_I.csv'))
+survey_data = assign_size_classes(survey_data)
+survey_data[~(survey_data['Kharif: Crop: Name'].isnull() & survey_data['Rabi: Crop: Name'].isnull() & survey_data['Summer: Crop: Name'].isnull())]
+
+for season in SEASONS:
+    survey_data[f'{season}: Crop: Irrigation'] = survey_data[f'{season}: Crop: Irrigation'].map({'Yes': 'irr', 'No': 'rain'})
+
+crop_convert = CROPS.set_index('IHDS')['CENSUS'].to_dict()
+for season in SEASONS:
+    survey_data[f'{season}: Crop: Name'] = survey_data[f'{season}: Crop: Name'].map(crop_convert)
+
+print("Also remove households where other crops are grown?")
+survey_data = survey_data[~(survey_data['Kharif: Crop: Name'].isnull() & survey_data['Rabi: Crop: Name'].isnull() & survey_data['Summer: Crop: Name'].isnull())]
+
+# Check if irrigation is assigned to all crops
+for season in SEASONS:
+    assert (survey_data[~(survey_data[f'{season}: Crop: Name'].isnull())][f'{season}: Crop: Irrigation'].isnull() == False).all()
+
+survey_data['crops'] = list(zip(
+    list(np.where(survey_data['Kharif: Crop: Name'].isnull(), None, survey_data['Kharif: Crop: Name'] + '_' + survey_data['Kharif: Crop: Irrigation'])),
+    list(np.where(survey_data['Rabi: Crop: Name'].isnull(), None, survey_data['Rabi: Crop: Name'] + '_' + survey_data['Rabi: Crop: Irrigation'])),
+    list(np.where(survey_data['Summer: Crop: Name'].isnull(), None, survey_data['Summer: Crop: Name'] + '_' + survey_data['Summer: Crop: Irrigation'])),
+))
+# survey_data['size_class'] = survey_data['size_class'].map(size_class_convert)
+
+folder = os.path.join(INPUT, 'agents', 'ipl')
+os.makedirs(folder, exist_ok=True)
+
+def fit(ipl_group):
+    (state, district, tehsil, size_class), crop_frequencies = ipl_group
+    print(state, district, tehsil, size_class)
+    survey_data_size_class = survey_data[survey_data['size_class'].isin(SIZE_GROUP[size_class])]
+    survey_data_size_class = survey_data_size_class.reset_index(drop=True)
+
+    crops = crop_frequencies.iloc[0]
+    crops.name = 'crops'
+    aggregates = [crops]
+
+    n = int(n_farms.loc[(state, district, tehsil), size_class])
+    ipl = IPL(
+        original=survey_data_size_class,
+        aggregates=aggregates,
+        n=n,
+        learning_rate=.1
+    ).iteration()
+
+    fp = os.path.join(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
+    ipl.to_csv(fp, index=False)
+
+ipl_groups = crop_data.groupby(crop_data.index)
+for ipl_group in ipl_groups:
+    fit(ipl_group=ipl_group)
+# from multiprocessing import Pool
+# with Pool(8) as pool:
+#     pool.map(fit, ipl_groups)

@@ -44,11 +44,21 @@ def process(households, crops):
         'FM32B': 'Own: Electric Pumps',
         'FM32C': 'Own: Diesel Pumps',
         'FM32H': 'New farm equipt Rs',
+        'INCSALARY': 'Salaried income Rs',
+        'INCBUS': 'Business income Rs',
+        'INCBENEFITS': 'Government benefits Rs',
+        'INCPROP': 'Income property Rs',
+        'incother': 'Other income Rs',
+        'COPC': 'Monthly consumption per capita Rs',
     }
     households = households[select_households.keys()].rename(columns=select_households)
     households = households[households['area owned & cultivated'] != ' ']
     households['area owned & cultivated'] = households['area owned & cultivated'].astype(float)
     households = households[households['area owned & cultivated'] > 0]
+
+    for column in ['Hired farm labour Rs', 'Salaried income Rs', 'Business income Rs', 'Government benefits Rs', 'Income property Rs', 'Other income Rs', 'Seeds Rs', 'Fertilizers Rs', 'Pesticides Rs', 'Irrigation water Rs', 'Hired Equipt/Animals Rs', 'Ag loan repayment Rs', 'Farm miscellaneous Rs', 'New farm equipt Rs']:
+        households[households[column] == ' '] = 0
+        households[column] = households[column].astype(int)
     
     select_crops = {
         'idhfp': 'Full household ID',

@@ -38,16 +38,25 @@ def load_crop_factors() -> dict[np.ndarray]:
     """
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['GAEZ'].to_dict()
     df = pd.read_excel(os.path.join(INPUT, 'crops', 'GAEZ.xlsx'), index_col=0).loc[crops.values()]
+    
+    growth_length = np.full((len(crops), 3), np.nan, dtype=np.float32)
+    growth_length[:, 0] = df['kharif_d']
+    growth_length[:, 1] = df['rabi_d']
+    growth_length[:, 2] = df['summer_d']
+    assert not np.isnan(growth_length).any()
+    
     stage_lengths = np.full((len(crops), 4), np.nan, dtype=np.float32)
     stage_lengths[:,0] = df['d1']
     stage_lengths[:,1] = df['d2a'] + df['d2b']
     stage_lengths[:,2] = df['d3a'] + df['d3b']
     stage_lengths[:,3] = df['d4']
+    assert not np.isnan(stage_lengths).any()
 
     crop_factors = np.full((len(crops), 3), np.nan, dtype=np.float32)
     crop_factors[:,0] = df['Kc1']
     crop_factors[:,1] = df['Kc3']
     crop_factors[:,2] = df['Kc5']
+    assert not np.isnan(crop_factors).any()
 
     yield_factors = {
         'Ky1': df['Ky1'].to_numpy(),
@@ -57,10 +66,10 @@ def load_crop_factors() -> dict[np.ndarray]:
         'KyT': df['KyT'].to_numpy(),
     }
 
-    print('replace with real yields')
-    reference_yield = np.array([1, 1, 1, 1, 1, 1, 1, 1])  # gr / m2
+    print('replace with GAEZ yields, currently MIRCA2000')
+    reference_yield = np.array([800, 850, 1500, 1200, 15000, 4000, 1000])  # gr / m2
     
-    return stage_lengths, crop_factors, yield_factors, reference_yield
+    return growth_length, stage_lengths, crop_factors, yield_factors, reference_yield
 
 def load_crop_names():
     return pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('CENSUS')['ID'].to_dict()
