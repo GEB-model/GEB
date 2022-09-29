@@ -482,7 +482,7 @@ def main():
         np.save(os.path.join(attribute_folder, 'rabi irrigation.npy'), all_agents['Rabi: Crop: Irrigation'])
         np.save(os.path.join(attribute_folder, 'summer crop.npy'), all_agents['Summer: Crop: Name'])
         np.save(os.path.join(attribute_folder, 'summer irrigation.npy'), all_agents['Summer: Crop: Irrigation'])
-        np.save(os.path.join(attribute_folder, 'non farm income.npy'), all_agents['Salaried income Rs'] + all_agents['Business income Rs'] + all_agents['Government benefits Rs'] + all_agents['Income property Rs'] + all_agents['Other income Rs'])
+        np.save(os.path.join(attribute_folder, 'daily non farm income family.npy'), (all_agents['Salaried income Rs'] + all_agents['Business income Rs'] + all_agents['Government benefits Rs'] + all_agents['Income property Rs'] + all_agents['Other income Rs']) / 365.25)
         np.save(os.path.join(attribute_folder, 'daily consumption per capita.npy'), all_agents['Monthly consumption per capita Rs'] / 12)
 
         with rasterio.open(os.path.join(farmer_folder, 'farms.tif'), 'w', **farms_clipped_profile) as dst:

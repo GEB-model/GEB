@@ -76,7 +76,10 @@ class Farmers(AgentBaseClass):
         "_elevation",
         "_crops",
         "_irrigated",
+        "_household_size",
         "_wealth",
+        "_daily_non_farm_income",
+        "_daily_expenses_per_capita",
         "_irrigation_efficiency",
         "_n_water_limited_days",
         "_water_availability_by_farmer",
@@ -126,7 +129,16 @@ class Farmers(AgentBaseClass):
             "_irrigated": {
                 "nodata": -1,
             },
+            "_household_size": {
+                "nodata": -1,
+            },
             "_wealth": {
+                "nodata": -1
+            },
+            "_daily_non_farm_income": {
+                "nodata": -1
+            },
+            "_daily_expenses_per_capita": {
                 "nodata": -1
             },
             "_irrigation_efficiency": {
@@ -229,8 +241,18 @@ class Farmers(AgentBaseClass):
             self.water_availability_by_farmer[:] = 0
             self._n_water_limited_days = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_limited_days[:] = 0
+
             self._wealth = np.full(self.max_n, -1, dtype=np.float32)
             self.wealth[:] = 10000
+
+            self._household_size = np.full(self.max_n, -1, dtype=np.int32)
+            self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'household size.npy'))
+
+            self._daily_non_farm_income = np.full(self.max_n, -1, dtype=np.float32)
+            self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily non farm income family.npy'))
+
+            self._daily_expenses_per_capita = np.full(self.max_n, -1, dtype=np.float32)
+            self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
 
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
@@ -1034,6 +1056,30 @@ class Farmers(AgentBaseClass):
         self._wealth[:self.n] = value
 
     @property
+    def household_size(self):
+        return self._household_size[:self.n]
+
+    @household_size.setter
+    def household_size(self, value):
+        self._household_size[:self.n] = value
+
+    @property
+    def daily_expenses_per_capita(self):
+        return self._daily_expenses_per_capita[:self.n]
+
+    @daily_expenses_per_capita.setter
+    def daily_expenses_per_capita(self, value):
+        self._daily_expenses_per_capita[:self.n] = value
+
+    @property
+    def daily_non_farm_income(self):
+        return self._daily_non_farm_income[:self.n]
+
+    @daily_non_farm_income.setter
+    def daily_non_farm_income(self, value):
+        self._daily_non_farm_income[:self.n] = value
+
+    @property
     def has_well(self):
         return self._has_well[:self.n]
 
@@ -1089,6 +1135,11 @@ class Farmers(AgentBaseClass):
             self.var.cellArea.get() if self.model.args.use_gpu else self.var.cellArea
         )
 
+    def expenses_and_income(self):
+        self.wealth += self.daily_non_farm_income
+        self.wealth -= self.daily_expenses_per_capita * self.household_size
+        self.wealth[self.wealth < 0] = 0  # for now, weassume that farmers cannot go into debt
+
     def step(self) -> None:
         """
         This function is called at the beginning of each timestep.
@@ -1104,8 +1155,11 @@ class Farmers(AgentBaseClass):
             self.current_season = 'Summer'
         else:
             raise ValueError(f"Invalid month: {month}")
+        
         self.harvest()
         self.plant()
+        self.expenses_and_income()
+
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         # if self.model.current_timestep == 105:
