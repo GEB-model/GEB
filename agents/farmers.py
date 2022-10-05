@@ -18,7 +18,7 @@ from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names
+from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -64,11 +64,7 @@ class Farmers(AgentBaseClass):
         "crop_names",
         "cultivation_costs",
         "crop_prices",
-        "alpha",
-        "beta",
-        "gamma",
-        "delta",
-        "epsilon",
+        "inflation"
     ]
     agent_attributes = [
         "_locations",
@@ -77,7 +73,11 @@ class Farmers(AgentBaseClass):
         "_crops",
         "_irrigated",
         "_household_size",
-        "_wealth",
+        "_disposable_income",
+        "_loan_amount",
+        "_loan_interest",
+        "_loan_duration",
+        "_loan_end_year",
         "_daily_non_farm_income",
         "_daily_expenses_per_capita",
         "_irrigation_efficiency",
@@ -102,6 +102,12 @@ class Farmers(AgentBaseClass):
         self.growth_length, self.crop_stage_lengths, self.crop_factors, self.crop_yield_factors, self.reference_yield = load_crop_factors()
         self.cultivation_costs = load_cultivation_costs()
         self.crop_prices = load_crop_prices()
+        
+        self.inflation_rate = load_inflation_rates('India')
+        self.well_price = 10_000
+        self.well_upkeep_price = 1_000
+        self.well_investment_time = 30
+        self.interest_rate = 0.10
 
         self.elevation_map = ArrayReader(
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
@@ -132,8 +138,24 @@ class Farmers(AgentBaseClass):
             "_household_size": {
                 "nodata": -1,
             },
-            "_wealth": {
+            "_disposable_income": {
                 "nodata": -1
+            },
+            "_loan_amount": {
+                "nodata": -1,
+                "nodatacheck": False
+            },
+            "_loan_interest": {
+                "nodata": -1,
+                "nodatacheck": False
+            },
+            "_loan_end_year": {
+                "nodata": -1,
+                "nodatacheck": False
+            },
+            "_loan_duration": {
+                "nodata": -1,
+                "nodatacheck": False
             },
             "_daily_non_farm_income": {
                 "nodata": -1
@@ -242,8 +264,13 @@ class Farmers(AgentBaseClass):
             self._n_water_limited_days = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_limited_days[:] = 0
 
-            self._wealth = np.full(self.max_n, -1, dtype=np.float32)
-            self.wealth[:] = 10000
+            self._disposable_income = np.full(self.max_n, -1, dtype=np.float32)
+            self.disposable_income[:] = 0
+
+            self._loan_amount = np.full(self.max_n, 0, dtype=np.float32)
+            self._loan_interest = np.full(self.max_n, 0, dtype=np.float32)
+            self._loan_duration = np.full(self.max_n, -1, dtype=np.int32)
+            self._loan_end_year = np.full(self.max_n, -1, dtype=np.int32)
 
             self._household_size = np.full(self.max_n, -1, dtype=np.int32)
             self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'household size.npy'))
@@ -553,6 +580,7 @@ class Farmers(AgentBaseClass):
         )
 
     @staticmethod
+    @njit
     def get_yield_ratio_numba(crop_map: np.array, evap_ratios: np.array, KyT) -> float:
         """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031
   
@@ -574,7 +602,7 @@ class Farmers(AgentBaseClass):
         for i in range(evap_ratios.size):
             evap_ratio = evap_ratios[i]
             crop = crop_map[i]
-            yield_ratios[i] = 1 - KyT[crop] * (1 - evap_ratio)
+            yield_ratios[i] = max(1 - KyT[crop] * (1 - evap_ratio), 0)  # Yield ratio is never lower than 0.
   
         return yield_ratios
 
@@ -600,17 +628,20 @@ class Farmers(AgentBaseClass):
         assert not np.isnan(yield_ratio).any()
         return yield_ratio
 
-    def save_profit(self, harvesting_farmers: np.ndarray, crop_yield_per_farmer: np.ndarray, potential_crop_yield_per_farmer: np.ndarray) -> None:
+    def save_profit(self, harvesting_farmers: np.ndarray, profit_per_farmer: np.ndarray, potential_profit_per_farmer: np.ndarray) -> None:
         """Saves the current harvest for harvesting farmers in a 2-dimensional array. The first dimension is the different farmers, while the second dimension are the previous harvests. First the previous harvests are moved by 1 column (dropping old harvests when they don't visit anymore) to make room for the new harvest. Then, the new harvest is placed in the array.
   
         Args:
             harvesting_farmers: farmers that harvest in this timestep.
         """
+        assert (profit_per_farmer >= 0).all()
+        assert (potential_profit_per_farmer >= 0).all()
+
         self.latest_profits[harvesting_farmers, 1:] = self.latest_profits[harvesting_farmers, 0:-1]
-        self.latest_profits[harvesting_farmers, 0] = crop_yield_per_farmer[harvesting_farmers]
+        self.latest_profits[harvesting_farmers, 0] = profit_per_farmer[harvesting_farmers]
   
         self.latest_potential_profits[harvesting_farmers, 1:] = self.latest_potential_profits[harvesting_farmers, 0:-1]
-        self.latest_potential_profits[harvesting_farmers, 0] = potential_crop_yield_per_farmer[harvesting_farmers]
+        self.latest_potential_profits[harvesting_farmers, 0] = potential_profit_per_farmer[harvesting_farmers]
 
     def by_field(self, var, nofieldvalue=-1):
         if self.n:
@@ -658,13 +689,12 @@ class Farmers(AgentBaseClass):
           
         assert self.var.crop_map.shape == self.var.crop_age_days_map.shape
 
-        print("check if this is properly working")
         field_is_paddy_irrigated = (self.var.crop_map == self.crop_names['Paddy'])
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def harvest_numba(
         season: str,
         n: np.ndarray,
@@ -697,7 +727,7 @@ class Farmers(AgentBaseClass):
         elif season == 'Summer':
             season_idx = 2
         else:
-            raise ValueError(f"Unknown season: {season}")
+            raise ValueError
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_i)
@@ -730,6 +760,7 @@ class Farmers(AgentBaseClass):
         )
         if np.count_nonzero(harvest):  # Check if any harvested fields. Otherwise we don't need to run this.
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
+            assert (yield_ratio >= 0).all()
 
             harvesting_farmer_fields = self.var.land_owners[harvest]
             harvested_area = self.var.cellArea[harvest]
@@ -746,7 +777,10 @@ class Farmers(AgentBaseClass):
 
             # get potential crop profit per farmer
             crop_yield_gr = harvested_area * yield_ratio * max_yield_per_crop
+            assert (crop_yield_gr >= 0).all()
             profit = crop_yield_gr * np.take(crop_prices, harvested_crops)
+            assert (profit >= 0).all()
+            
             profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
 
             # get potential crop profit per farmer
@@ -756,9 +790,7 @@ class Farmers(AgentBaseClass):
       
             self.save_profit(harvesting_farmers, profit_per_farmer, potential_profit_per_farmer)
       
-            self.wealth += profit_per_farmer
-
-            self.invest(harvesting_farmers)
+            self.disposable_income += profit_per_farmer
 
         if self.model.args.use_gpu:
             harvest = cp.array(harvest)
@@ -788,7 +820,7 @@ class Farmers(AgentBaseClass):
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
         field_size_per_farmer: np.ndarray,
-        wealth: np.ndarray
+        disposable_income: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
   
@@ -805,7 +837,7 @@ class Farmers(AgentBaseClass):
             plant: Subarray map of what crops are plantn this day.
         """
         plant = np.full_like(crop_map, -1, dtype=np.int32)
-        sell_land = np.zeros(wealth.size, dtype=np.bool_)
+        sell_land = np.zeros(disposable_income.size, dtype=np.bool_)
         for farmer_idx in range(n):
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
             if month == 6 and day == 1:  # Kharif
@@ -817,10 +849,13 @@ class Farmers(AgentBaseClass):
             else:
                 continue
             cultivation_cost = cultivation_cost_per_crop[farmer_crop] * field_size_per_farmer[farmer_idx]
-            if wealth[farmer_idx] > cultivation_cost:
-                wealth[farmer_idx] -= cultivation_cost
-                for field in farmer_fields:
-                    plant[field] = farmer_crop
+            disposable_income[farmer_idx] -= cultivation_cost
+            for field in farmer_fields:
+                plant[field] = farmer_crop
+            # if disposable_income[farmer_idx] > cultivation_cost:
+            #     disposable_income[farmer_idx] -= cultivation_cost
+            #     for field in farmer_fields:
+            #         plant[field] = farmer_crop
             # else:
             #     sell_land[farmer_idx] = True
         return plant, sell_land
@@ -846,7 +881,7 @@ class Farmers(AgentBaseClass):
             self.field_indices_by_farmer,
             self.field_indices,
             self.field_size_per_farmer,
-            self.wealth
+            self.disposable_income
         )
         self.remove_agents(np.where(farmers_sell_land)[0])
         if self.model.args.use_gpu:
@@ -861,66 +896,74 @@ class Farmers(AgentBaseClass):
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
 
-    # @staticmethod
-    # @njit(cache=True)
-    def invest_numba(self, n, field_indices, field_indices_by_farmer, HRU_to_grid, harvesting_farmers, surface_irrigated, wealth, n_water_limited_days, channel_storage_m3, reservoir_command_areas):
-        farmers_with_well = np.where(self.has_well)[0]
-        nbits = 19
-        # from honeybees.library.geohash import window
-        # width_lon, height_lat = window(nbits, *self.model.bounds)
-        neighbors_with_well = find_neighbors(
-            self.locations,
-            radius=5_000,
-            n_neighbor=10,
-            bits=nbits,
-            minx=self.model.bounds[0],
-            maxx=self.model.bounds[1],
-            miny=self.model.bounds[2],
-            maxy=self.model.bounds[3],
-            search_target_ids=farmers_with_well
-        )
+    @staticmethod
+    @njit(cache=True)
+    def invest_numba(
+        year,
+        farmers_without_well,
+        has_well,
+        neighbors_with_well,
+        latest_profits,
+        latest_potential_profits,
+        loan_interest,
+        loan_amount,
+        loan_duration,
+        loan_end_year,
+        well_price,
+        well_upkeep_price,
+        well_investment_time,
+        interest_rate,
+        disposable_income,
+        disposable_income_threshold: int=0
+    ):  
+        neighbor_nan_value = np.iinfo(neighbors_with_well.dtype).max
+        for i, farmer_idx in enumerate(farmers_without_well):
+            assert not has_well[farmer_idx]
 
-        # import matplotlib.pyplot as plt
-        # colors = ['red', 'blue', 'green', 'yellow', 'orange']
-        # for i in range(5):
-        #     own_location = self.locations[farmers_with_well[i]]
-        #     plt.scatter(own_location[0], own_location[1], c=colors[i])
-        #     agent_neighbours = neighbors_with_well[i]
-        #     plt.scatter(self.locations[agent_neighbours][:,0], self.locations[agent_neighbours][:,1], c=colors[i], alpha=.5)
-        # plt.show()
+            latest_profit = latest_profits[farmer_idx, 0]
+            latest_potential_profit = latest_potential_profits[farmer_idx, 0]
 
-        assert self.has_well[neighbors_with_well].all()
-  
-        invest_time = 30
-        investment_cost = 10_000
-        yearly_cost = 1_000
-
-        for farmer_idx in harvesting_farmers:
-            if not self.has_well[farmer_idx]:
-
-                latest_profit = self.latest_profits[farmer_idx, 0]
-                latest_potential_profit = self.latest_potential_profits[farmer_idx, 0]
-
-                # profit_ratio = latest_profit / latest_potential_profit
-                latest_profits_neighbors = self.latest_profits[neighbors_with_well[farmer_idx], 0]
-                latest_potential_profits_neighbors = self.latest_potential_profits[neighbors_with_well[farmer_idx], 0]
+            farmer_neighbors_with_well = neighbors_with_well[i]
+            farmer_neighbors_with_well = farmer_neighbors_with_well[farmer_neighbors_with_well != neighbor_nan_value]
+            if farmer_neighbors_with_well.size > 0:
+                latest_profits_neighbors = latest_profits[farmer_neighbors_with_well, 0]
+                latest_potential_profits_neighbors = latest_potential_profits[farmer_neighbors_with_well, 0]
                 profit_ratio_neighbors = latest_profits_neighbors / latest_potential_profits_neighbors
                 profit_ratio_neighbors = profit_ratio_neighbors[~np.isnan(profit_ratio_neighbors)]
+                
+                if profit_ratio_neighbors.size == 0:
+                    continue
+                
                 profit_ratio_neighbors = np.mean(profit_ratio_neighbors)
-
                 profit_with_neighbor_efficiency = latest_potential_profit * profit_ratio_neighbors
 
                 potential_benefit = profit_with_neighbor_efficiency - latest_profit
-                potential_benefit_over_investment_time = potential_benefit * invest_time
-                # print(potential_benefit_over_investment_time)
-                total_cost_over_investment_time = investment_cost + yearly_cost * invest_time
-                if potential_benefit_over_investment_time > total_cost_over_investment_time and wealth[farmer_idx] > investment_cost + yearly_cost:  # ensure farmer has at least enough money to pay for the investment and first year of operation.
-                    self.has_well[farmer_idx] = True
+                potential_benefit_over_investment_time = potential_benefit * well_investment_time
+                total_cost_over_investment_time = well_price + well_upkeep_price * well_investment_time
 
-                    # set profits to nan, just to make sure that only profits with new adaptation measure are used.
-                    self.latest_profits[farmer_idx] = np.nan
-                    self.latest_potential_profits[farmer_idx] = np.nan
-                    self.wealth[farmer_idx] -= investment_cost
+                if potential_benefit_over_investment_time <= total_cost_over_investment_time:
+                    continue
+                    
+                # assume linear loan
+                money_left_for_investment = disposable_income[farmer_idx] - well_upkeep_price
+                well_loan_duration = 30
+                loan_size = well_price
+                yearly_payment = loan_size / well_loan_duration + loan_size * interest_rate
+
+                if money_left_for_investment < yearly_payment + disposable_income_threshold:
+                    continue
+
+                print("farmer has invested in well")
+                has_well[farmer_idx] = True
+                
+                loan_interest[farmer_idx] = interest_rate
+                loan_amount[farmer_idx] = loan_size
+                loan_duration[farmer_idx] = well_loan_duration
+                loan_end_year[farmer_idx] = year + well_loan_duration
+
+                # set profits to nan, just to make sure that only profits with new adaptation measure are used.
+                latest_profits[farmer_idx] = np.nan
+                latest_potential_profits[farmer_idx] = np.nan
 
             # farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
             # channel_storage_farmer_m3 = 0
@@ -937,19 +980,60 @@ class Farmers(AgentBaseClass):
             # if in_reservoir_command_area and not surface_irrigated[farmer_idx]:
             #     surface_irrigated[farmer_idx] = True
 
-    def invest(self, harvesting_farmers) -> None:
-        self.invest_numba(
-            self.n,
-            self.field_indices,
-            self.field_indices_by_farmer,
-            self.model.data.HRU.HRU_to_grid,
-            harvesting_farmers,
-            self.irrigated,
-            self.wealth,
-            self.n_water_limited_days,
-            self.model.data.grid.channelStorageM3,
-            self.model.data.HRU.reservoir_command_areas
-        )
+    def invest(self) -> None:
+        nbits = 19
+
+        # from honeybees.library.geohash import window
+        # width_lon, height_lat = window(nbits, *self.model.bounds)
+        # import matplotlib.pyplot as plt
+        # colors = ['red', 'blue', 'green', 'yellow', 'orange']
+        # for i in range(5):
+        #     own_location = self.locations[farmers_with_well[i]]
+        #     plt.scatter(own_location[0], own_location[1], c=colors[i])
+        #     agent_neighbours = neighbors_with_well[i]
+        #     plt.scatter(self.locations[agent_neighbours][:,0], self.locations[agent_neighbours][:,1], c=colors[i], alpha=.5)
+        # plt.show()
+
+        for crop_option in np.unique(self.crops, axis=0):
+            
+            farmers_with_crop_option = np.where((self.crops==crop_option[None, ...]).all(axis=1))[0]
+            
+            farmers_with_well = np.where(self.has_well[farmers_with_crop_option] == True)[0]
+            farmers_without_well = np.where(self.has_well[farmers_with_crop_option] == False)[0]
+            farmers_without_well_indices = farmers_with_crop_option[farmers_without_well]
+
+            if farmers_without_well.size > 0 and farmers_with_well.size > 0:
+
+                neighbors_with_well = find_neighbors(
+                    self.locations[farmers_with_crop_option],
+                    radius=5_000,
+                    n_neighbor=10,
+                    bits=nbits,
+                    minx=self.model.bounds[0],
+                    maxx=self.model.bounds[1],
+                    miny=self.model.bounds[2],
+                    maxy=self.model.bounds[3],
+                    search_ids=farmers_without_well,
+                    search_target_ids=farmers_with_well
+                )
+
+                self.invest_numba(
+                    self.model.current_time.year,
+                    farmers_without_well_indices,
+                    self.has_well,
+                    neighbors_with_well,
+                    self.latest_profits,
+                    self.latest_potential_profits,
+                    self.loan_interest,
+                    self.loan_amount,
+                    self.loan_duration,
+                    self.loan_end_year,
+                    self.well_price,
+                    self.well_upkeep_price,
+                    self.well_investment_time,
+                    self.interest_rate,
+                    self.disposable_income,
+                )
     
     @property
     def locations(self):
@@ -1048,12 +1132,60 @@ class Farmers(AgentBaseClass):
         self._n_water_limited_days[:self.n] = value
 
     @property
-    def wealth(self):
-        return self._wealth[:self.n]
+    def disposable_income(self):
+        return self._disposable_income[:self.n]
 
-    @wealth.setter
-    def wealth(self, value):
-        self._wealth[:self.n] = value
+    @disposable_income.setter
+    def disposable_income(self, value):
+        self._disposable_income[:self.n] = value
+
+    @property
+    def loan_amount(self):
+        return self._loan_amount[:self.n]
+
+    @loan_amount.setter
+    def loan_amount(self, value):
+        self._loan_amount[:self.n] = value
+
+    @property
+    def loan_interest(self):
+        return self._loan_interest[:self.n]
+
+    @loan_interest.setter
+    def loan_interest(self, value):
+        self._loan_interest[:self.n] = value
+
+    @property
+    def loan_duration(self):
+        return self._loan_duration[:self.n]
+
+    @loan_duration.setter
+    def loan_duration(self, value):
+        self._loan_duration[:self.n] = value
+
+    @property
+    def loan_interest(self):
+        return self._loan_interest[:self.n]
+
+    @loan_interest.setter
+    def loan_interest(self, value):
+        self._loan_interest[:self.n] = value
+
+    @property
+    def loan_interest(self):
+        return self._loan_interest[:self.n]
+
+    @loan_interest.setter
+    def loan_interest(self, value):
+        self._loan_interest[:self.n] = value
+
+    @property
+    def loan_end_year(self):
+        return self._loan_end_year[:self.n]
+
+    @loan_end_year.setter
+    def loan_end_year(self, value):
+        self._loan_end_year[:self.n] = value
 
     @property
     def household_size(self):
@@ -1136,9 +1268,27 @@ class Farmers(AgentBaseClass):
         )
 
     def expenses_and_income(self):
-        self.wealth += self.daily_non_farm_income
-        self.wealth -= self.daily_expenses_per_capita * self.household_size
-        self.wealth[self.wealth < 0] = 0  # for now, weassume that farmers cannot go into debt
+        self.disposable_income += self.daily_non_farm_income
+        self.disposable_income -= self.daily_expenses_per_capita * self.household_size
+        self.disposable_income[self.disposable_income < 0] = 0  # for now, weassume that farmers cannot go into debt
+
+    def adjust_prices_inflation(self):
+        self.well_price *= self.inflation_rate[self.model.current_time.year]
+        self.well_upkeep_price *= self.inflation_rate[self.model.current_time.year]
+
+    def upkeep_assets(self):
+        self.disposable_income -= self.well_upkeep_price * self.has_well
+
+    def make_loan_payment(self):
+        has_loan = self.loan_amount > 0
+        years_left = self.loan_end_year[has_loan] - self.model.current_time.year
+        loan_payoff = self.loan_amount[has_loan] / years_left
+        loan_interest = self.loan_amount[has_loan] * self.loan_interest[has_loan]
+        loan_payment = loan_payoff + loan_interest
+
+        self.loan_amount[has_loan] -= loan_payoff
+        self.disposable_income[has_loan] -= loan_payment
+        self.disposable_income[self.disposable_income < 0] = 0  # for now, we assume that farmers don't have negative disposable income
 
     def step(self) -> None:
         """
@@ -1159,6 +1309,13 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.expenses_and_income()
+        if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+            self.adjust_prices_inflation()
+            self.upkeep_assets()
+            self.make_loan_payment()
+            self.invest()
+            # reset disposable income
+            self.disposable_income[:] = 0
 
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))

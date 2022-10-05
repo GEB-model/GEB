@@ -21,7 +21,7 @@ class Artists(honeybeesArtists):
         honeybeesArtists.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
-        self.background_variable = "agents.farmers.crop"  # set initial background iamge.
+        self.background_variable = "agents.farmers.has_well"  # set initial background iamge.
         self.custom_plot = self.get_custom_plot()
         self.set_variables()
 
@@ -36,6 +36,10 @@ class Artists(honeybeesArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
+        if self.model.agents.farmers.has_well[idx] is True:
+            color = '#0000ff'
+        else:
+            color = '#ff0000'
         # if idx == self.model.agents.farmers.sample[0]:
         #     color = '#ff0000'
         #     r = 3

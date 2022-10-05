@@ -74,8 +74,16 @@ def load_crop_factors() -> dict[np.ndarray]:
 def load_crop_names():
     return pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('CENSUS')['ID'].to_dict()
 
+def load_inflation_rates(country):
+    fp = os.path.join(INPUT, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
+    inflation_series = pd.read_csv(fp, index_col=0, skiprows=4).loc[country]
+    inflation = {}
+    for year in range(1960, 2022):
+        inflation[year] = 1 + inflation_series[str(year)] / 100
+    return inflation
+
 if __name__ == '__main__':
-    cultivation_costs = load_cultivation_costs()
-    crop_prices = load_crop_prices()
-    crop_yield_factors = load_crop_factors()
-    print(crop_yield_factors)
+    # cultivation_costs = load_cultivation_costs()
+    # crop_prices = load_crop_prices()
+    # crop_yield_factors = load_crop_factors()
+    load_inflation_rates('India')
