@@ -2,7 +2,7 @@ import os
 
 import pandas as pd
 
-from config import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, INPUT
 
 def prefilter():
     fp = os.path.join(INPUT, 'IHDS.csv')

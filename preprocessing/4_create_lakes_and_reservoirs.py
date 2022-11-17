@@ -7,7 +7,7 @@ import pandas as pd
 import geopandas as gpd
 from rasterio.features import rasterize
 
-from config import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, INPUT
 
 output_folder = os.path.join(INPUT, 'routing', 'lakesreservoirs')
 if not os.path.exists(output_folder):
@@ -65,14 +65,16 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
     reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy() * 1_000_000
     for hylak_id, capacity in df['Gross_capacity_BCM'].items():
         capacity *= 1_000_000_000  # BCM to m3
-        reservoir_volumes.loc[hylak_id] = capacity
+        if hylak_id in reservoir_volumes:
+            reservoir_volumes.loc[hylak_id] = capacity
 
-    basin_lakes['reservoir_volume'] = reservoir_volumes.values
+    basin_lakes['reservoir_volume'] = reservoir_volumes
 
     reservoir_FLR = reservoir_volumes.copy()
     for hylak_id, capacity in df['Capacity_FLR_BCM'].items():
         capacity *= 1_000_000_000  # BCM to m3
-        reservoir_FLR.loc[hylak_id] = capacity
+        if hylak_id in reservoir_FLR:
+            reservoir_FLR.loc[hylak_id] = capacity
 
     basin_lakes['flood_volume'] = reservoir_FLR.values
 
@@ -151,7 +153,7 @@ def create_command_area_raster() -> list[int]:
     
     Returns:
         hydrolake_ids: A list of hydrolake ids which link to a command area."""
-    shpfile = os.path.join(output_folder, 'command_areas.shp')
+    shpfile = os.path.join(ORIGINAL_DATA, 'command_areas', 'command_areas_with_ids.shp')
     command_areas = gpd.GeoDataFrame.from_file(shpfile)
     # remove command areas not associated with a reservoir
     command_areas = command_areas[~command_areas['Hylak_id'].isnull()]

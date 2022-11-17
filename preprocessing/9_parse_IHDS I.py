@@ -1,9 +1,7 @@
 import os
-
-import numpy as np
 import pandas as pd
 
-from config import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, INPUT
 
 def prefilter():
     df = pd.read_csv(os.path.join(ORIGINAL_DATA, 'ICPSR_22626', 'DS0002', '22626-0002-Data.tsv'), delimiter='\t')
@@ -190,4 +188,6 @@ if __name__ == '__main__':
     crops = read_crops()
     households = process(households, crops)
     households = rename_parameters(households)
-    households.to_csv(os.path.join(INPUT, 'agents', 'IHDS_I.csv'), index=False)
+    folder = os.path.join(INPUT, 'agents')
+    os.makedirs(folder, exist_ok=True)
+    households.to_csv(os.path.join(folder, 'IHDS_I.csv'), index=False)

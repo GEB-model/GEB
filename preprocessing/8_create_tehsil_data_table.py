@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
-from config import ORIGINAL_DATA, INPUT
+import warnings
+
+warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
+
+from preconfig import ORIGINAL_DATA, INPUT
 
 YEAR = '2000-01'
 SIZE_CLASSES = (
@@ -20,19 +24,25 @@ SIZE_CLASSES = (
     '20.0 & ABOVE',
 )
 
+def read_census_data(fn):
+    census_data = gpd.read_file(fn)
+    subdistricts = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp'))
+    census_data = census_data[census_data.set_index(['state_name', 'district_n', 'sub_dist_1']).index.isin(subdistricts.set_index(['state_name', 'district_n', 'sub_dist_1']).index)]
+    return census_data
+
 def get_crop_table(census_df):
     CROPS = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))['CENSUS'].tolist() + ['Other fodder crops'] + ['All crops']
     df = census_df.copy()
     n = len(df)
     df = df.loc[df.index.repeat(len(SIZE_CLASSES))]
     df['size_class'] = SIZE_CLASSES * n
-    df = df.set_index(['State', 'District', 'Tehsil', 'size_class'])
+    df = df.set_index(['state_name', 'district_n', 'sub_dist_1', 'size_class'])
 
     for crop in CROPS:
         fn = os.path.join(ORIGINAL_DATA, 'census', 'output', 'crops', f'crops_{crop.upper()}_{YEAR}.geojson')
-        census_data = gpd.read_file(fn)
+        census_data = read_census_data(fn)
         for _, row in census_data.iterrows():
-            state, district, tehsil = row['State'], row['District'], row['Tehsil']
+            state, district, tehsil = row['state_name'], row['district_n'], row['sub_dist_1']
             for size_class in SIZE_CLASSES:
                 total_holdings = row[f'{size_class}_total_holdings']
                 irrigated_area = row[f'{size_class}_irrigated_area']
@@ -51,7 +61,7 @@ def get_crop_table(census_df):
                         irrigated_holdings = 0
                     elif isinstance(rainfed_area, str):
                         if rainfed_area == 'Neg' and irrigated_area == 0:
-                            assert total_holdings < 20
+                            assert total_holdings < 100
                             rainfed_holdings = total_holdings
                             irrigated_holdings = 0
                         elif rainfed_area == 'Neg' and irrigated_area > 0:
@@ -61,7 +71,7 @@ def get_crop_table(census_df):
                             raise ValueError
                     elif isinstance(irrigated_area, str):
                         if irrigated_area == 'Neg' and rainfed_area == 0:
-                            assert total_holdings < 20
+                            assert total_holdings < 100
                             irrigated_holdings = total_holdings
                             rainfed_holdings = 0
                         elif irrigated_area == 'Neg' and rainfed_area > 0:
@@ -76,8 +86,8 @@ def get_crop_table(census_df):
                     
                     assert irrigated_holdings + rainfed_holdings == total_holdings
                 
-                df.at[(state, district, tehsil, size_class), crop + '_irr_holdings'] = irrigated_holdings
-                df.at[(state, district, tehsil, size_class), crop + '_rain_holdings'] = rainfed_holdings
+                df.loc[(state, district, tehsil, size_class), crop + '_irr_holdings'] = irrigated_holdings
+                df.loc[(state, district, tehsil, size_class), crop + '_rain_holdings'] = rainfed_holdings
 
                 if irrigated_area is None:
                     irrigated_area = 0
@@ -105,8 +115,8 @@ def get_crop_table(census_df):
                     else:
                         raise ValueError
                 
-                df.at[(state, district, tehsil, size_class), crop + '_irr_area'] = irrigated_area
-                df.at[(state, district, tehsil, size_class), crop + '_rain_area'] = rainfed_area
+                df.loc[(state, district, tehsil, size_class), crop + '_irr_area'] = irrigated_area
+                df.loc[(state, district, tehsil, size_class), crop + '_rain_area'] = rainfed_area
 
                 del irrigated_holdings
                 del rainfed_holdings
@@ -125,40 +135,45 @@ def get_crop_table(census_df):
 
 def get_farm_size_table(census_df):
     df = census_df.copy()
-    df = df.set_index(['State', 'District', 'Tehsil'])
+    df = df.set_index(['state_name', 'district_n', 'sub_dist_1'])
     fn = os.path.join(ORIGINAL_DATA, 'census', 'output', f'farm_size_{YEAR}.geojson')
-    census_data = gpd.read_file(fn)
+    census_data = read_census_data(fn)
+    for size_class in SIZE_CLASSES:
+        df[size_class] = np.nan
     
     for _, row in census_data.iterrows():
-        state, district, tehsil = row['State'], row['District'], row['Tehsil']
+        state, district, tehsil = row['state_name'], row['district_n'], row['sub_dist_1']
 
         for size_class in SIZE_CLASSES:
-            avg_area = row[f'{size_class}_area_total'] / row[f'{size_class}_n_total'] * 10_000  # ha -> m2
-            df.at[(state, district, tehsil), size_class] = avg_area
+            area_total = row[f'{size_class}_area_total']
+            if area_total == 0:
+                avg_area = np.nan
+            else:
+                avg_area = row[f'{size_class}_area_total'] / row[f'{size_class}_n_total'] * 10_000  # ha -> m2
+            df.loc[(state, district, tehsil), size_class] = avg_area
 
     df.to_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'))
 
-
 def get_farm_count_table(census_df):
     df = census_df.copy()
-    df = df.set_index(['State', 'District', 'Tehsil'])
+    df = df.set_index(['state_name', 'district_n', 'sub_dist_1'])
     fn = os.path.join(ORIGINAL_DATA, 'census', 'output', f'farm_size_{YEAR}.geojson')
-    census_data = gpd.read_file(fn)
+    census_data = read_census_data(fn)
     
     for _, row in census_data.iterrows():
-        state, district, tehsil = row['State'], row['District'], row['Tehsil']
+        state, district, tehsil = row['state_name'], row['district_n'], row['sub_dist_1']
 
         for size_class in SIZE_CLASSES:
-            df.at[(state, district, tehsil), size_class] = row[f'{size_class}_n_total']
+            df.loc[(state, district, tehsil), size_class] = row[f'{size_class}_n_total']
 
     df.to_excel(os.path.join(INPUT, 'census', 'n_farms.xlsx'))
 
 
 if __name__ == '__main__':
     os.makedirs(os.path.join(INPUT, 'census'), exist_ok=True)
-    fn = os.path.join(INPUT, 'tehsils.geojson')
+    fn = os.path.join(INPUT, 'areamaps', 'subdistricts.shp')
     census_data = gpd.read_file(fn)
-    census_df = census_data[['State', 'District', 'Tehsil']]
+    census_df = census_data[['state_name', 'district_n', 'sub_dist_1']]
     get_farm_size_table(census_df)
     get_farm_count_table(census_df)
     get_crop_table(census_df)

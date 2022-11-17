@@ -1,9 +1,8 @@
 import os
-
 import pandas as pd
 import geopandas as gpd
 
-from config import INPUT, ORIGINAL_DATA
+from preconfig import INPUT, ORIGINAL_DATA
 
 YEAR = '2000-01'
 SIZE_CLASSES = (
@@ -19,7 +18,7 @@ SIZE_CLASSES = (
     '20.0 & ABOVE',
 )
 
-folder = os.path.join(ORIGINAL_DATA, 'census', 'output', 'crops')
+census_folder = os.path.join(ORIGINAL_DATA, 'census')
 
 def parse(x):
     if x is None:
@@ -37,12 +36,12 @@ def parse(x):
         exit()
 
 crop_area_csv = os.path.join(INPUT, 'crops', 'area.csv')
-os.remove(crop_area_csv)
 if not os.path.exists(crop_area_csv):
     os.makedirs(os.path.join(INPUT, 'crops'), exist_ok=True)
     with open(crop_area_csv, 'w') as f:
         f.write('crop,area\n')
-        for fn in os.listdir(folder):
+        output_folder = os.path.join(census_folder, 'output', 'crops')
+        for fn in os.listdir(output_folder):
             if YEAR not in fn:
                 continue
             crop = fn[6:-16]
@@ -54,13 +53,14 @@ if not os.path.exists(crop_area_csv):
                 continue
             if crop == 'FODDER & GREEN MANURES': # Same as other fodder crops
                 continue
-            fp = os.path.join(folder, fn)
+            fp = os.path.join(output_folder, fn)
             gdf = gpd.read_file(fp)
-            gdf = gdf.loc[(gdf['State'] == 'Maharashtra') & (gdf['District'] == 'Pune') & (gdf['Tehsil'] == 'Junnar')]
-            # gdf = gdf.loc[(gdf['State'] == 'Maharashtra')]
             crop_area = 0
             for size_class in SIZE_CLASSES:
-                crop_area += gdf[f"{size_class}_total_area"].apply(lambda x: parse(x)).sum()
+                column = f"{size_class}_total_area"
+                if column not in gdf.columns:
+                    continue
+                crop_area += gdf[column].apply(lambda x: parse(x)).sum()
             f.write(f"{crop},{crop_area}\n")
 
 df = pd.read_csv(crop_area_csv)

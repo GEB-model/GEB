@@ -3,7 +3,7 @@ import os
 import rasterio
 import numpy as np
 
-from config import INPUT
+from preconfig import INPUT
 
 def create_cell_area_map(mask_profile: rasterio.profiles.Profile, prefix: str='', write_to_disk=True) -> None:
     """Create cell area map for given rasterio profile. 

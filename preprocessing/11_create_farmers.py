@@ -11,7 +11,7 @@ from numba import njit
 
 from honeybees.library.raster import clip_to_xy_bounds, clip_to_other
 
-from config import INPUT
+from preconfig import INPUT
 
 faulthandler.enable()
 
@@ -192,6 +192,10 @@ def get_farm_distribution(n, x0, x1, mean, offset):
     if n == 0:
         n_farms = np.zeros(n_farm_sizes, dtype=np.int32)
     
+    elif n == 1:
+        farm_sizes = np.array([mean + offset])
+        n_farms = np.array([1])
+    
     elif mean == x0:
         n_farms = np.zeros(n_farm_sizes, dtype=np.int32)
         n_farms[0] = n
@@ -266,7 +270,7 @@ def main():
         '20.0 & ABOVE': (200_000, 400_000),
     }
 
-    tehsils_shapefile = gpd.read_file(os.path.join(INPUT, 'tehsils.geojson')).set_index('ID')
+    tehsils_shapefile = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp')).set_index('ID')
 
     avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
 
@@ -291,7 +295,7 @@ def main():
 
         for tehsil_code in tehsil_codes:
             tehsil_name = tehsils_shapefile.loc[tehsil_code]
-            state, district, tehsil = tehsil_name["State"], tehsil_name["District"], tehsil_name["Tehsil"]
+            state, district, tehsil = tehsil_name["state_name"], tehsil_name["district_n"], tehsil_name["sub_dist_1"]
             print(state, district, tehsil)
 
             ipls = {}

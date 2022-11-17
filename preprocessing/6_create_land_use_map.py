@@ -5,8 +5,9 @@ from honeybees.library.raster import clip_to_other, upscale
 import numpy as np
 from rasterio.warp import reproject, Resampling
 from rasterio.merge import merge
+import matplotlib.pyplot as plt
 
-from config import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, INPUT
 
 def get_rivers(threshold: int, template: str):
     """Creates a river map at the resolution of the submask. All cells with at least `threshold` number of upstream cells are considered river. The function loads number of upstream cells from files that end with `_upg` from `DataDrive/GEB/original_data/merit_hydro_03sec`.
@@ -117,7 +118,7 @@ def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray, template: str, 
         submask = submask_src.read(1)
         submask_profile = submask_src.profile
     
-    CWatM[submask == True] = -1
+    CWatM[submask == -1] = -1
 
     assert ((CWatM[submask == False] == 0) | (CWatM[submask == False] == 1) | (CWatM[submask == False] == 4) | (CWatM[submask == False] == 5)).all()
 

@@ -4,7 +4,7 @@ import xarray as xr
 import numpy as np
 import rasterio
 
-from config import INPUT, INPUT_5MIN
+from preconfig import INPUT, ORIGINAL_DATA
 
 def list_files(dir: str) -> list[str]:
     """This function gets a list of all files in all subdirectories of given folder.
@@ -44,7 +44,7 @@ def scale(files: list[str]) -> None:
         extension = os.path.splitext(f)[1]
         if extension != '.nc':
             continue
-        ds = xr.open_dataset(os.path.join(INPUT_5MIN, f))
+        ds = xr.open_dataset(os.path.join(os.path.join(ORIGINAL_DATA, 'input_5min'), f))
 
         # Interpolate
         data_set_interp = ds.interp(lat=newlat, lon=newlon, method='nearest')
@@ -55,5 +55,6 @@ def scale(files: list[str]) -> None:
         data_set_interp.to_netcdf(output_file, mode='w')
 
 if __name__ == '__main__':
-    files = list_files(INPUT_5MIN)
+    input_5min = os.path.join(ORIGINAL_DATA, 'input_5min')
+    files = list_files(input_5min)
     scale(files)

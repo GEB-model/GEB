@@ -13,11 +13,14 @@ general:
   spinup_start: 2005-05-01
   ###
   # base folder where to report output data to
+  upscale_factor: 20
+  basin_id: 450000005
   CWatM_settings: CWatM.ini
-  input_folder: DataDrive/GEB_Bhima/input/
+  input_folder: DataDrive/GEB_Krishna/input/
+  original_data: DataDrive/GEB/original_data/
   report_folder: report/
-  initial_conditions_folder: DataDrive/GEB_Bhima/initial
-  init_water_table: DataDrive/GEB_Bhima/report/init/water_table.npy
+  initial_conditions_folder: DataDrive/GEB_Krishna/initial
+  init_water_table: DataDrive/GEB_Krishna/report/init/water_table.npy
   ###
   #
   export_inital_on_spinup: true

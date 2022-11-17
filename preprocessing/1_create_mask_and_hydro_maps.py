@@ -11,7 +11,14 @@ from honeybees.library.raster import clip_to_xy_bounds, clip_to_other, upscale
 
 from methods import create_cell_area_map
 
-from config import ORIGINAL_DATA, INPUT
+from preconfig import config, ORIGINAL_DATA, INPUT
+
+UPSCALE_FACTOR = config['general']['upscale_factor']
+BASIN_ID = config['general']['basin_id']
+if 'poor_point' in config['general']:
+    POOR_POINT = config['general']['poor_point']['lon'], config['general']['poor_point']['lat']
+else:
+    POOR_POINT = None
 from typing import Union
 
 if not os.path.exists(os.path.join(INPUT, 'areamaps')):
@@ -36,7 +43,6 @@ def create_mask(basin_id: int, upscale_factor: int, poor_point: Union[None, tupl
     """
     mask_fn = os.path.join(INPUT, 'areamaps', 'mask.tif')
     submask_fn = os.path.join(INPUT, 'areamaps', 'submask.tif')
-
     with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_basids.tif'), 'r') as src:
         basins = src.read(1)
         mask = basins != basin_id  # mask anything that is not basin id
@@ -253,9 +259,9 @@ def create_mask_shapefile() -> None:
     gdf.to_file(mask_file.replace('.tif', '.shp'))
 
 if __name__ == '__main__':
-    UPSCALE_FACTOR = 40
+    
     # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(75.896042,17.370451))  # Bhima
-    mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(73.98727,19.00464))  # Bhimashankar north
+    mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=POOR_POINT)  # Bhimashankar north
     # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(73.86242,18.87037))  # Bhimashankar south
     create_mask_shapefile()
     create_cell_area_map(mask_profile)

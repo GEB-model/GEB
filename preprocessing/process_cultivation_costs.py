@@ -5,7 +5,7 @@ import statistics
 import numpy as np
 import pandas as pd
 
-from config import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, INPUT
 
 STATES = ['Maharashtra']
 YEARS = list(range(2004, 2019))

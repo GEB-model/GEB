@@ -6,9 +6,14 @@ import geopandas as gpd
 import rasterio
 from itertools import product, chain
 
+import warnings
+warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
+
+from tqdm import tqdm
+
 from methods import create_cell_area_map
 
-from config import INPUT
+from preconfig import INPUT
 
 class IPL(object):
     def __init__(self, original, aggregates, weight_col='weight', n=None, learning_rate=1,
@@ -239,7 +244,7 @@ with rasterio.open(os.path.join(INPUT, 'tehsils.tif'), 'r') as src:
     tehsils_tif = src.read(1)
     cell_area = create_cell_area_map(src.profile, write_to_disk=True)
 
-tehsils_shape = gpd.read_file(os.path.join(INPUT, 'tehsils.geojson')).set_index(['State', 'District', 'Tehsil'])
+tehsils_shape = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp')).set_index(['state_name', 'district_n', 'sub_dist_1'])
 avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
 crop_data = pd.read_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'), index_col=(0, 1, 2, 3))
 for (state, district, tehsil), tehsil_crop_data in crop_data.groupby(level=[0, 1, 2]):
@@ -251,7 +256,7 @@ for (state, district, tehsil), tehsil_crop_data in crop_data.groupby(level=[0, 1
     # area_per_size_class = tehsil_farm_size * farms_per_size_class
     # census_farm_area = area_per_size_class.sum()
 
-    tehsil_ID = tehsils_shape.at[(state, district, tehsil), 'ID']
+    tehsil_ID = tehsils_shape.loc[(state, district, tehsil), 'ID']
     tehsil_area = cell_area[tehsils_tif == tehsil_ID].sum()
 
 columns = [f'{crop}_irr_holdings' for crop in CROPS['CENSUS'].tolist() + ['All crops']] + [f'{crop}_rain_holdings' for crop in CROPS['CENSUS'].tolist() + ['All crops']]
@@ -327,7 +332,12 @@ os.makedirs(folder, exist_ok=True)
 
 def fit(ipl_group):
     (state, district, tehsil, size_class), crop_frequencies = ipl_group
-    print(state, district, tehsil, size_class)
+    if tehsil == '0':
+        return
+    fp = os.path.join(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
+    if os.path.exists(fp):
+        return
+    # print(state, district, tehsil, size_class)
     survey_data_size_class = survey_data[survey_data['size_class'].isin(SIZE_GROUP[size_class])]
     survey_data_size_class = survey_data_size_class.reset_index(drop=True)
 
@@ -335,7 +345,11 @@ def fit(ipl_group):
     crops.name = 'crops'
     aggregates = [crops]
 
-    n = int(n_farms.loc[(state, district, tehsil), size_class])
+    n = n_farms.loc[(state, district, tehsil), size_class]
+    if np.isnan(n):
+        n = 0
+    else:
+        n = int(n)
     ipl = IPL(
         original=survey_data_size_class,
         aggregates=aggregates,
@@ -343,11 +357,10 @@ def fit(ipl_group):
         learning_rate=.1
     ).iteration()
 
-    fp = os.path.join(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
     ipl.to_csv(fp, index=False)
 
 ipl_groups = crop_data.groupby(crop_data.index)
-for ipl_group in ipl_groups:
+for i, ipl_group in enumerate(tqdm(ipl_groups)):
     fit(ipl_group=ipl_group)
 # from multiprocessing import Pool
 # with Pool(8) as pool:
