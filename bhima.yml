@@ -20,6 +20,7 @@ general:
     lat: 17.370473
   CWatM_settings: CWatM.ini
   input_folder: DataDrive/GEB_Bhima/input/
+  data_folder: DataDrive/
   original_data: DataDrive/GEB/original_data/
   report_folder: report/
   initial_conditions_folder: DataDrive/GEB_Bhima/initial

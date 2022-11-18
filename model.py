@@ -10,7 +10,6 @@ from HRUs import Data
 import argparse
 from cwatm_model import CWatM_Model
 from typing import Union
-import yaml
 import os
 from operator import attrgetter
 import numpy as np

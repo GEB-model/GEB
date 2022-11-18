@@ -3,12 +3,12 @@ import os
 import numpy as np
 import pandas as pd
 
-from config import INPUT
+from config import INPUT, ORIGINAL_DATA
 
 def load_cultivation_costs():
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['CULTIVATION_COST'].to_dict()
     
-    fp = os.path.join(INPUT, 'crops', 'cultivation_costs.xlsx')
+    fp = os.path.join(ORIGINAL_DATA, 'crops', 'cultivation_costs.xlsx')
     df = pd.read_excel(fp, index_col=0, header=(0, 1))['Maharashtra']
     date_index = dict(((year, i) for i, year in enumerate(df.index)))
 
@@ -20,7 +20,7 @@ def load_cultivation_costs():
 
 def load_crop_prices():
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['PRICE'].to_dict()
-    fp = os.path.join(INPUT, 'crops', 'crop_prices_rs_per_g.xlsx')
+    fp = os.path.join(ORIGINAL_DATA, 'crops', 'crop_prices_rs_per_g.xlsx')
     # TODO: Could do more sophisticated interpolation or obtain data from other states.
     df = pd.read_excel(fp, index_col=0).fillna(method='ffill').fillna(method='bfill')
     date_index = dict(((date, i) for i, date in enumerate(df.index.date)))
@@ -37,7 +37,7 @@ def load_crop_factors() -> dict[np.ndarray]:
         yield_factors: dictonary with np.ndarray of values per crop for each variable.
     """
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['GAEZ'].to_dict()
-    df = pd.read_excel(os.path.join(INPUT, 'crops', 'GAEZ.xlsx'), index_col=0).loc[crops.values()]
+    df = pd.read_excel(os.path.join(ORIGINAL_DATA, 'crops', 'GAEZ.xlsx'), index_col=0).loc[crops.values()]
     
     growth_length = np.full((len(crops), 3), np.nan, dtype=np.float32)
     growth_length[:, 0] = df['kharif_d']
@@ -75,7 +75,7 @@ def load_crop_names():
     return pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('CENSUS')['ID'].to_dict()
 
 def load_inflation_rates(country):
-    fp = os.path.join(INPUT, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
+    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
     inflation_series = pd.read_csv(fp, index_col=0, skiprows=4).loc[country]
     inflation = {}
     for year in range(1960, 2022):

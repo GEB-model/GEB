@@ -29,7 +29,7 @@ def get_study_area():
     study_area = {
         "name": "Bhima basin"
     }
-    gdf = gpd.read_file(os.path.join('DataDrive', 'GEB_Bhima', 'input', 'areamaps', 'subdistricts_bhima.shp')).to_crs(epsg=4326)
+    gdf = gpd.read_file(os.path.join('DataDrive', 'GEB_Bhima', 'input', 'areamaps', 'subdistricts.shp')).to_crs(epsg=4326)
     gdf = gdf[gdf['ID'].isin(TEHSILS)]
     tehsils = []
     color_map = plt.get_cmap('gist_rainbow')
