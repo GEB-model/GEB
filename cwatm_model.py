@@ -66,7 +66,7 @@ class CWatM_Model(CWATModel):
         groundwater_path = os.path.join(INPUT, 'groundwater')
         modflow_path = os.path.join(INPUT, 'groundwater', 'modflow')
         binding['PathGroundwaterModflow'] = modflow_path
-        water_demand_path = os.path.join(INPUT, 'demand')
+        water_demand_path = os.path.join(DATA_FOLDER, 'GEB', 'input', 'demand')
         routing_path = os.path.join(INPUT, 'routing')
         res_lakes_path = os.path.join(INPUT, 'routing', 'lakesreservoirs')
         

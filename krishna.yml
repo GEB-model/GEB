@@ -18,6 +18,7 @@ general:
   CWatM_settings: CWatM.ini
   input_folder: DataDrive/GEB_Krishna/input/
   original_data: DataDrive/GEB/original_data/
+  data_folder: DataDrive/
   report_folder: report/
   initial_conditions_folder: DataDrive/GEB_Krishna/initial
   init_water_table: DataDrive/GEB_Krishna/report/init/water_table.npy
