@@ -68,7 +68,8 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
         if hylak_id in reservoir_volumes:
             reservoir_volumes.loc[hylak_id] = capacity
 
-    basin_lakes['reservoir_volume'] = reservoir_volumes
+    basin_lakes['reservoir_volume'] = reservoir_volumes.values
+    assert not basin_lakes['reservoir_volume'].isna().any()
 
     reservoir_FLR = reservoir_volumes.copy()
     for hylak_id, capacity in df['Capacity_FLR_BCM'].items():
@@ -77,6 +78,7 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
             reservoir_FLR.loc[hylak_id] = capacity
 
     basin_lakes['flood_volume'] = reservoir_FLR.values
+    assert not basin_lakes['flood_volume'].isna().any()
 
     assert (basin_lakes['Hylak_id'] > 0).all()
     pd.DataFrame(basin_lakes.drop(columns='geometry')).to_excel(os.path.join(output_folder, 'basin_lakes_data.xlsx'))
