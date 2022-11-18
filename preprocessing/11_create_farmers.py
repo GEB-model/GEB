@@ -8,6 +8,7 @@ import pandas as pd
 import rasterio
 import geopandas as gpd
 from numba import njit
+from tqdm import tqdm
 
 from honeybees.library.raster import clip_to_xy_bounds, clip_to_other
 
@@ -160,7 +161,11 @@ def fits(n, estimate, farm_sizes, mean, offset, stalled=False):
                 for i in range(len(n_farms)):
                     if n_farms[i] > 0:
                         n_farms[i] -= 1
-                        n_farms[min(i+difference, len(n_farms)-1)] += 1
+                        if i == n_farms.size - 1:
+                            farm_sizes = np.append(farm_sizes, farm_sizes[i] + 1)
+                            n_farms = np.append(n_farms, 1)
+                        else:
+                            n_farms[min(i+difference, len(n_farms)-1)] += 1
                         break
             else:
                 for i in range(len(n_farms)-1, -1, -1):
@@ -186,36 +191,52 @@ def get_farm_distribution(n, x0, x1, mean, offset):
     assert mean >= x0
     assert mean <= x1
 
+    target_area = n * mean + offset
     farm_sizes = np.arange(x0, x1+1)
     n_farm_sizes = farm_sizes.size
 
     if n == 0:
         n_farms = np.zeros(n_farm_sizes, dtype=np.int32)
+        assert target_area == (n_farms * farm_sizes).sum()
     
     elif n == 1:
         farm_sizes = np.array([mean + offset])
         n_farms = np.array([1])
+        assert target_area == (n_farms * farm_sizes).sum()
     
     elif mean == x0:
         n_farms = np.zeros(n_farm_sizes, dtype=np.int32)
         n_farms[0] = n
-        if offset:
+        if offset > 0:
+            if offset < n_farms[0]:
+                n_farms[0] -= offset
+                n_farms[1] += offset
+            else:
+                raise NotImplementedError
+        elif offset < 0:
             n_farms[0] -= 1
             n_farms = np.insert(n_farms, 0, 1)
             farm_sizes = np.insert(farm_sizes, 0, farm_sizes[0] + offset)
             assert (farm_sizes > 0).all()
+        assert target_area == (n_farms * farm_sizes).sum()
 
     elif mean == x1:
         n_farms = np.zeros(n_farm_sizes, dtype=np.int32)
         n_farms[-1] = n
-        if offset:
+        if offset < 0:
+            if n_farms[-1] > -offset:
+                n_farms[-1] += offset
+                n_farms[-2] -= offset
+            else:
+                raise NotImplementedError
+        elif offset > 0:
             n_farms[-1] -= 1
             n_farms = np.insert(n_farms, 0, 1)
-            farm_sizes = np.insert(farm_sizes, 0, farm_sizes[0] + offset)
+            farm_sizes = np.insert(farm_sizes, 0, farm_sizes[-1] + offset)
             assert (farm_sizes > 0).all()
+        assert target_area == (n_farms * farm_sizes).sum()
     
     else:
-        total_area = n * mean + offset
         growth_factor = 1
 
         while True:
@@ -232,13 +253,13 @@ def get_farm_distribution(n, x0, x1, mean, offset):
             
             if res is not None:
                 n_farms, farm_sizes = res
-                target_area = n * mean + offset
                 estimated_area_int = (n_farms * farm_sizes).sum()
                 assert estimated_area_int == target_area
                 assert (n_farms >= 0).all()
+                assert target_area == (n_farms * farm_sizes).sum()
                 break
             
-            difference = (total_area / estimated_area) ** (1 / (n_farm_sizes - 1))
+            difference = (target_area / estimated_area) ** (1 / (n_farm_sizes - 1))
             growth_factor *= difference
 
     return n_farms, farm_sizes
@@ -293,10 +314,12 @@ def main():
         all_agents = []
         agent_count = 0
 
-        for tehsil_code in tehsil_codes:
+        for i, tehsil_code in enumerate(tqdm(tehsil_codes)):
+            # if i < 140 or i > 145:
+            #     continue
             tehsil_name = tehsils_shapefile.loc[tehsil_code]
             state, district, tehsil = tehsil_name["state_name"], tehsil_name["district_n"], tehsil_name["sub_dist_1"]
-            print(state, district, tehsil)
+            # print(state, district, tehsil)
 
             ipls = {}
             ipl_area = {}
@@ -312,7 +335,11 @@ def main():
 
                 avg_farm_size_size_class = avg_farm_size.loc[(state, district, tehsil), size_class]
                 ipl_n_farms = ipls[size_class]['weight'].sum()
+                if np.isnan(avg_farm_size_size_class):
+                    assert ipl_n_farms == 0
+                    avg_farm_size_size_class = 0
                 ipl_area[size_class] = avg_farm_size_size_class * ipl_n_farms
+                del avg_farm_size_size_class
 
             cultivated_land_ipl = sum(ipl_area.values())
 
@@ -330,85 +357,101 @@ def main():
 
             cultivated_land_map = cultivated_land_tehsil.sum() * avg_cell_area
 
+            total_ipl_weight = 0
             farm_cells_size_class = pd.DataFrame(index=SIZE_CLASSES)
             for size_class in SIZE_CLASSES:
                 ipls[size_class]['weight'] = ipls[size_class]['weight'] / cultivated_land_ipl * cultivated_land_map
-                farm_cells_size_class.loc[size_class, 'n_cells'] = ipls[size_class]['weight'].sum() * avg_farm_size.loc[(state, district, tehsil), size_class] / avg_cell_area
-
-            assert math.isclose(cultivated_land_tehsil.sum(), farm_cells_size_class['n_cells'].sum())
-            farm_cells_size_class['whole_cells'] = (farm_cells_size_class['n_cells'] // 1).astype(int)
-            farm_cells_size_class['leftover'] = farm_cells_size_class['n_cells'] % 1
-            whole_cells = farm_cells_size_class['whole_cells'].sum()
-            missing = cultivated_land_tehsil.sum() - whole_cells
-            assert missing <= len(SIZE_CLASSES)
-
-            index = list(zip(farm_cells_size_class.index, farm_cells_size_class['n_cells'] % 1))
-            add_cells = sorted(index, key=lambda x: x[1], reverse=True)[:missing]
-            add_cells = [p[0] for p in add_cells]
-            farm_cells_size_class.loc[add_cells, 'whole_cells'] += 1
-
-            assert farm_cells_size_class['whole_cells'].sum() == cultivated_land_tehsil.sum()
-
-            agents = {}
-            for size_class in SIZE_CLASSES:
-                min_size_m2, max_size_m2 = SIZE_CLASSES_BOUNDARIES[size_class]
-
-                min_size_cells = int(min_size_m2 // avg_cell_area)
-                max_size_cells = int(max_size_m2 // avg_cell_area) - 1  # otherwise they overlap with next size class
-                mean_cells = int(avg_farm_size_size_class // avg_cell_area)
-
-                if mean_cells < min_size_cells or mean_cells > max_size_cells:  # there must be an error in the data, thus assume centred
-                    mean_cells = (min_size_cells + max_size_cells) // 2
-
-                avg_farm_size_size_class = avg_farm_size.loc[(state, district, tehsil), size_class]
-
-                n = round(farm_cells_size_class.at[size_class, 'whole_cells'] / mean_cells)
-                offset = farm_cells_size_class.at[size_class, 'whole_cells'] - n * mean_cells
-
-                if n == 0:
-                    ipls[size_class]['adjusted_weight'] = ipls[size_class]['weight']
+                total_size_class_weight = ipls[size_class]['weight'].sum()
+                total_ipl_weight += total_size_class_weight
+                if total_size_class_weight == 0:
+                    farm_cells_size_class.loc[size_class, 'n_cells'] = 0
                 else:
-                    ipls[size_class]['adjusted_weight'] = ipls[size_class]['weight'] / ipls[size_class]['weight'].sum() * n
-                ipls[size_class]['n'] = (ipls[size_class]['adjusted_weight'] // 1).astype(int)
-
-                missing = n - int(ipls[size_class]['n'].sum())
-                index = list(zip(ipls[size_class].index, ipls[size_class]['adjusted_weight'] % 1))
-                sorted_index = sorted(index, key=lambda x: x[1], reverse=True)
-                assert missing >= 0
-                missing_pop = sorted_index[:missing]
-                missing_pop = [p[0] for p in missing_pop]
-                ipls[size_class].loc[missing_pop, 'n'] += 1
-
-                assert ipls[size_class]['n'].sum() == n
-
-                population = ipls[size_class].loc[ipls[size_class].index.repeat(ipls[size_class]['n'])]
-                population = population.drop(['crops', 'weight', 'size_class', 'n'], axis=1)
-
-                n_farms_size_class, farm_sizes_size_class = get_farm_distribution(n, min_size_cells, max_size_cells, mean_cells, offset)
-                assert (farm_sizes_size_class > 0).all()
-                assert (n_farms_size_class * farm_sizes_size_class).sum() == farm_cells_size_class.at[size_class, 'whole_cells']
-                farm_sizes = farm_sizes_size_class.repeat(n_farms_size_class)
-                np.random.shuffle(farm_sizes)
-                population['farm_size'] = farm_sizes
-                agents[size_class] = population
-
-                assert population['farm_size'].sum() == farm_cells_size_class.at[size_class, 'whole_cells']
-
-            agents = pd.concat(agents.values(), ignore_index=True)
-            agents['tehsil code'] = tehsil_code
+                    n_cells = total_size_class_weight * avg_farm_size.loc[(state, district, tehsil), size_class] / avg_cell_area
+                    assert not np.isnan(n_cells)
+                    farm_cells_size_class.loc[size_class, 'n_cells'] = n_cells
             
-            farms_tehsil = create_farmers(agents, cultivated_land_tehsil, tehsil, tehsil_profile)
+            if total_ipl_weight > 0:
+                assert math.isclose(cultivated_land_tehsil.sum(), farm_cells_size_class['n_cells'].sum())
+                farm_cells_size_class['whole_cells'] = (farm_cells_size_class['n_cells'] // 1).astype(int)
+                farm_cells_size_class['leftover'] = farm_cells_size_class['n_cells'] % 1
+                whole_cells = farm_cells_size_class['whole_cells'].sum()
+                missing = cultivated_land_tehsil.sum() - whole_cells
+                assert missing <= len(SIZE_CLASSES)
 
-            assert farms_tehsil.max() + 1 == len(agents)
+                index = list(zip(farm_cells_size_class.index, farm_cells_size_class['n_cells'] % 1))
+                add_cells = sorted(index, key=lambda x: x[1], reverse=True)[:missing]
+                add_cells = [p[0] for p in add_cells]
+                farm_cells_size_class.loc[add_cells, 'whole_cells'] += 1
 
-            agents.index += agent_count
-            farms_tehsil[farms_tehsil != -1] += agent_count
+                assert farm_cells_size_class['whole_cells'].sum() == cultivated_land_tehsil.sum()
 
-            all_agents.append(agents)
-            farms[ymin: ymax, xmin: xmax][tehsil_mask] = farms_tehsil[tehsil_mask]
+                agents = {}
+                for size_class in SIZE_CLASSES:
+                    # if no cells for this size class, just continue
+                    if farm_cells_size_class.at[size_class, 'whole_cells'] == 0:
+                        continue
+                    
+                    min_size_m2, max_size_m2 = SIZE_CLASSES_BOUNDARIES[size_class]
 
-            agent_count += len(agents)
+                    avg_farm_size_size_class = avg_farm_size.loc[(state, district, tehsil), size_class]
 
+                    min_size_cells = int(min_size_m2 // avg_cell_area)
+                    max_size_cells = int(max_size_m2 // avg_cell_area) - 1  # otherwise they overlap with next size class
+                    mean_cells = int(avg_farm_size_size_class // avg_cell_area)
+
+                    if mean_cells < min_size_cells or mean_cells > max_size_cells:  # there must be an error in the data, thus assume centred
+                        mean_cells = (min_size_cells + max_size_cells) // 2
+
+                    n = round(farm_cells_size_class.at[size_class, 'whole_cells'] / mean_cells)
+                    if n == 0 and farm_cells_size_class.at[size_class, 'whole_cells'] > 0:
+                        n = 1
+                    offset = farm_cells_size_class.at[size_class, 'whole_cells'] - n * mean_cells
+
+                    if n == 0:
+                        ipls[size_class]['adjusted_weight'] = ipls[size_class]['weight']
+                    else:
+                        ipls[size_class]['adjusted_weight'] = ipls[size_class]['weight'] / ipls[size_class]['weight'].sum() * n
+                    ipls[size_class]['n'] = (ipls[size_class]['adjusted_weight'] // 1).astype(int)
+
+                    missing = n - int(ipls[size_class]['n'].sum())
+                    index = list(zip(ipls[size_class].index, ipls[size_class]['adjusted_weight'] % 1))
+                    sorted_index = sorted(index, key=lambda x: x[1], reverse=True)
+                    assert missing >= 0
+                    missing_pop = sorted_index[:missing]
+                    missing_pop = [p[0] for p in missing_pop]
+                    ipls[size_class].loc[missing_pop, 'n'] += 1
+
+                    assert ipls[size_class]['n'].sum() == n
+
+                    population = ipls[size_class].loc[ipls[size_class].index.repeat(ipls[size_class]['n'])]
+                    population = population.drop(['crops', 'weight', 'size_class', 'n'], axis=1)
+
+                    n_farms_size_class, farm_sizes_size_class = get_farm_distribution(n, min_size_cells, max_size_cells, mean_cells, offset)
+                    assert (farm_sizes_size_class > 0).all()
+                    assert (n_farms_size_class * farm_sizes_size_class).sum() == farm_cells_size_class.at[size_class, 'whole_cells']
+                    farm_sizes = farm_sizes_size_class.repeat(n_farms_size_class)
+                    np.random.shuffle(farm_sizes)
+                    population['farm_size'] = farm_sizes
+                    agents[size_class] = population
+
+                    assert population['farm_size'].sum() == farm_cells_size_class.at[size_class, 'whole_cells']
+
+                agents = pd.concat(agents.values(), ignore_index=True)
+                agents['tehsil code'] = tehsil_code
+                
+                farms_tehsil = create_farmers(agents, cultivated_land_tehsil, tehsil, tehsil_profile)
+
+                assert farms_tehsil.max() + 1 == len(agents)
+
+                agents.index += agent_count
+                farms_tehsil[farms_tehsil != -1] += agent_count
+
+                all_agents.append(agents)
+                farms[ymin: ymax, xmin: xmax][tehsil_mask] = farms_tehsil[tehsil_mask]
+
+                agent_count += len(agents)
+
+        print("Collecting and exporting data...")
         all_agents = pd.concat(all_agents, ignore_index=True)
         assert len(all_agents) == all_agents.index.max() + 1 == farms.max() + 1
 
