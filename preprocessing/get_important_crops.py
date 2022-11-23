@@ -68,7 +68,7 @@ print(df[df['area'] != 0])
 total_area = df['area'].sum()
 print('total area', total_area)
 df['area_percentage'] = df['area'] / total_area * 100
-more_than_2_percent = df[df['area_percentage'] > 2]
+more_than_2_percent = df[df['area_percentage'] > 2].reset_index(drop=True)
 print(more_than_2_percent)
 print(len(more_than_2_percent))
 print(more_than_2_percent['area_percentage'].sum())
