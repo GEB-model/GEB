@@ -5,7 +5,7 @@ import statistics
 import numpy as np
 import pandas as pd
 
-from preconfig import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA
 
 STATES = ['Maharashtra']
 YEARS = list(range(2004, 2019))
@@ -142,7 +142,7 @@ if __name__ == '__main__':
     costs = add_tomatoes_maharashtra(costs)
 
     print(costs)
-    folder = os.path.join(INPUT, 'crops')
+    folder = os.path.join(ORIGINAL_DATA, 'crops')
     os.makedirs(folder, exist_ok=True)
     fp = os.path.join(folder, 'cultivation_costs.xlsx')
     costs.to_excel(fp)

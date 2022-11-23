@@ -15,6 +15,9 @@ general:
   # base folder where to report output data to
   upscale_factor: 20
   basin_id: 450000005
+  gauges:
+    lon: 80.0731
+    lat: 16.7942
   CWatM_settings: CWatM.ini
   input_folder: DataDrive/GEB_Krishna/input/
   original_data: DataDrive/GEB/original_data/

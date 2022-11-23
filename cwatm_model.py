@@ -40,7 +40,10 @@ class CWatM_Model(CWATModel):
         
         # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
         binding['MaskMap'] = os.path.join(INPUT, 'areamaps', 'mask.tif')
-        binding['Gauges'] = f"{self.config['general']['poor_point']['lon']} {self.config['general']['poor_point']['lat']}"
+        if 'gauges' in self.config['general']:
+            binding['Gauges'] = f"{self.config['general']['gauges']['lon']} {self.config['general']['gauges']['lat']}"
+        else:
+            binding['Gauges'] = f"{self.config['general']['poor_point']['lon']} {self.config['general']['poor_point']['lat']}"
         binding['StepStart'] = start_date.strftime('%d/%m/%Y')
         binding['SpinUp'] = '0'
         binding['StepEnd'] = str(n_steps)
