@@ -11,12 +11,12 @@ import matplotlib.dates as mdates
 from matplotlib.lines import Line2D
 from plot import read_npy
 
+from plotconfig import config, ORIGINAL_DATA, INPUT
+
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
 TIMEDELTA = timedelta(days=1)
-OUTPUT_FOLDER = os.path.join('DataDrive', 'GEB', 'report')
-with open('GEB.yml', 'r') as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
+OUTPUT_FOLDER = config['general']['report_folder']
 LINEWIDTH = .5
 TITLE_FORMATTER = {'size': 5, 'fontweight': 'bold', 'pad': 2}
 
@@ -161,11 +161,11 @@ def read_crop_data(dates, scenario, switch_crop):
 
     return dates, surgar_cane
 
-def scenarios():
-    n_agents = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farmer_locations.npy')).shape[0]
+def plot_scenarios(scenarios):
+    n_agents = np.load(os.path.join(INPUT, 'agents',  'attributes', 'household size.npy')).shape[0]
 
-    scenarios = ('base', 'ngo_training', 'government_subsidies')
-    labels = ('No irrigation adaptation', 'NGO adaptation', 'Government subsidies')
+    # labels = ('No irrigation adaptation', 'NGO adaptation', 'Government subsidies')
+    labels = ('No irrigation adaptation', )
     colors = ['black', 'blue', 'orange', 'red']
     colors = colors[:len(scenarios) + 1]
     fig, axes = plt.subplots(3, 2, sharex=True, figsize=(5, 6), dpi=300)
@@ -222,7 +222,7 @@ def scenarios():
             PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
-            res = get_honeybees_data('is water aware', scenario=scenario, switch_crop=switch_crop)
+            res = get_honeybees_data('well_irrigated', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, efficient = res
                 efficient = efficient.astype(np.float64)
@@ -243,7 +243,7 @@ def scenarios():
     ax0.set_title('discharge $(m^3s^{-1})$', **TITLE_FORMATTER)
     ax2.set_title('mean hydraulic head $(m)$', **TITLE_FORMATTER)
     ax3.set_title('reservoir storage $(billion\ m^3)$', **TITLE_FORMATTER)
-    ax4.set_title('farmers with high irrigation efficiency $(\%)$', **TITLE_FORMATTER)
+    ax4.set_title('farmers with irrigation well $(\%)$', **TITLE_FORMATTER)
     ax5.set_title('farmers with sugar cane $(\%)$', **TITLE_FORMATTER)
     ax0.set_ylim(0, ax0.get_ylim()[1])
     ax4.set_ylim(0, 100)
@@ -289,9 +289,11 @@ def obs_vs_sim(scenario):
     )
     plt.savefig('plot/output/obs_vs_sim.png')
     plt.savefig('plot/output/obs_vs_sim.svg')
-    # plt.show()
+    plt.show()
 
 
 if __name__ == '__main__':
-    scenarios()
-    obs_vs_sim('base')
+    # scenarios = ('base', 'ngo_training', 'government_subsidies')
+    scenarios = ('base', )
+    plot_scenarios(scenarios)
+    # obs_vs_sim('base')

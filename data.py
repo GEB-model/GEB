@@ -37,7 +37,7 @@ def load_crop_factors() -> dict[np.ndarray]:
         yield_factors: dictonary with np.ndarray of values per crop for each variable.
     """
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['GAEZ'].to_dict()
-    df = pd.read_excel(os.path.join(INPUT, 'crops', 'GAEZ.xlsx'), index_col=0).loc[crops.values()]
+    df = pd.read_excel(os.path.join(ORIGINAL_DATA, 'crops', 'GAEZ.xlsx'), index_col=0).loc[crops.values()]
     
     growth_length = np.full((len(crops), 3), np.nan, dtype=np.float32)
     growth_length[:, 0] = df['kharif_d']

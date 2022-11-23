@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2010-05-01
+  start_time: 2006-01-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2018-12-31
+  end_time: 2007-01-01
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_start: 2005-05-01
+  spinup_start: 2005-01-01
   ###
   # base folder where to report output data to
   upscale_factor: 40
@@ -22,7 +22,7 @@ general:
   input_folder: DataDrive/GEB_Sanctuary/input/
   data_folder: DataDrive/
   original_data: DataDrive/GEB/original_data/
-  report_folder: report/
+  report_folder: report/sanctuary/
   initial_conditions_folder: DataDrive/GEB_Sanctuary/initial
   init_water_table: DataDrive/GEB_Sanctuary/report/init/water_table.npy
   ###
@@ -122,12 +122,13 @@ report:
     save: save
     format: csv
     groupby: tehsil
-  # well_irrigated_sample:
-  #   type: farmers
-  #   function: sample
-  #   varname: well_irrigated
-  #   save: save
-  #   format: csv
+  well_irrigated:
+    type: farmers
+    function: sum
+    varname: has_well
+    frequency: per_timestep
+    save: save
+    format: csv
   # wealth_sample:
   #   type: farmers
   #   function: sample

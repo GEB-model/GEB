@@ -72,6 +72,7 @@ class Farmers(AgentBaseClass):
         "_elevation",
         "_crops",
         "_irrigated",
+        "_has_well",
         "_household_size",
         "_disposable_income",
         "_loan_amount",
@@ -104,8 +105,8 @@ class Farmers(AgentBaseClass):
         self.crop_prices = load_crop_prices()
         
         self.inflation_rate = load_inflation_rates('India')
-        self.well_price = 10_000
-        self.well_upkeep_price = 1_000
+        self.well_price = 100_000
+        self.well_upkeep_price = 10_000
         self.well_investment_time = 30
         self.interest_rate = 0.10
 
@@ -170,7 +171,8 @@ class Farmers(AgentBaseClass):
                 "nodata": -1
             },
             "_has_well": {
-                "nodata": False
+                "nodata": False,
+                "nodatacheck": False
             },
             "_water_availability_by_farmer": {
                 "nodata": np.nan
@@ -206,6 +208,8 @@ class Farmers(AgentBaseClass):
                 setattr(self, attribute, values)
             self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
             self.max_n = self._locations.shape[0]
+            self.latest_profits.fill(np.nan)
+            self.latest_potential_profits.fill(np.nan)
         else:
             farms = self.model.data.farms
             onlyfarms = farms[farms != -1]
@@ -953,7 +957,6 @@ class Farmers(AgentBaseClass):
                 if money_left_for_investment < yearly_payment + disposable_income_threshold:
                     continue
 
-                print("farmer has invested in well")
                 has_well[farmer_idx] = True
                 
                 loan_interest[farmer_idx] = interest_rate
@@ -993,6 +996,10 @@ class Farmers(AgentBaseClass):
         #     agent_neighbours = neighbors_with_well[i]
         #     plt.scatter(self.locations[agent_neighbours][:,0], self.locations[agent_neighbours][:,1], c=colors[i], alpha=.5)
         # plt.show()
+
+        # do not invest during spinup
+        if self.model.args == 'spinup':
+            return
 
         for crop_option in np.unique(self.crops, axis=0):
             

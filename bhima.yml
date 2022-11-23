@@ -22,7 +22,7 @@ general:
   input_folder: DataDrive/GEB_Bhima/input/
   data_folder: DataDrive/
   original_data: DataDrive/GEB/original_data/
-  report_folder: report/
+  report_folder: report/bhima/
   initial_conditions_folder: DataDrive/GEB_Bhima/initial
   init_water_table: DataDrive/GEB_Bhima/report/init/water_table.npy
   ###
