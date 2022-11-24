@@ -53,6 +53,72 @@ logging:
   # The loglevel, choose from: DEBUG, INFO, WARNING, ERROR, CRITICAL
   loglevel: DEBUG
 
+calibration:
+  spinup_start: 2010-06-01
+  start_date: 2010-07-01
+  end_date: 2010-07-10
+  # end_date: 2015-07-01
+  path: DataDrive/GEB_Sanctuary/calibration/
+  gpus: 0
+  monthly: false
+
+  observations:
+    discharge:
+      path: calibration/data/observations.csv
+      column: flow
+
+  options:
+    define_first_run: False
+
+  DEAP:
+    use_multiprocessing: False
+    ngen: 3 # 10
+    mu: 5 # 120
+    lambda_: 3 # 24
+    select_best: 3
+
+  parameters:
+    soildepth_factor:
+        variable: parameters.soildepth_factor
+        min: 0.8
+        max: 1.8
+    preferentialFlowConstant:
+        variable: parameters.preferentialFlowConstant
+        min: 0.5
+        max: 8
+    arnoBeta_add:
+        variable: parameters.arnoBeta_add
+        min: 0.01
+        max: 1.0
+    factor_interflow:
+        variable: parameters.factor_interflow
+        min: 0.33
+        max: 3.0
+    recessionCoeff_factor:
+        variable: parameters.recessionCoeff_factor
+        min: 0.05
+        max: 10
+    manningsN:
+        variable: parameters.manningsN
+        min: 0.1
+        max: 10.0
+    lakeAFactor:
+        variable: parameters.lakeAFactor
+        min: 0.333
+        max: 5.0
+    lakeEvaFactor:
+        variable: parameters.lakeEvaFactor
+        min: 0.8
+        max: 3.0
+    max_reservoir_release_factor:
+        variable: agent_settings.reservoir_operators.max_reservoir_release_factor
+        min: 0.01
+        max: 0.05
+    return_fraction:
+        variable: agent_settings.farmers.return_fraction
+        min: 0.3
+        max: 0.8
+
 ###
 # This section is only used for the visual interface. This section closely works together with the `artists`.
 draw:

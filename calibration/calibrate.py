@@ -39,32 +39,21 @@ import multiprocessing
 import time
 from subprocess import Popen, PIPE
 
-import argparse
 import pickle
+from calconfig import config, args
 
-## Set global parameter
-global gen
-generation = 0
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--config', dest='config', type=str, default='calibration/config.yml')
-args = parser.parse_args()
-
-with open(args.config, 'r') as f:
-	config = yaml.load(f, Loader=yaml.FullLoader)
+config = config['calibration']
 
 OBJECTIVE = 'KGE'
 
-LOG_FOLDER = config['logs']
-if not os.path.exists(LOG_FOLDER):
-	os.makedirs(LOG_FOLDER)
-
 dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
 
-ParamRangesPath = config['parameter_ranges']
-export_path = config['export_path']
-if not os.path.exists(export_path):
-	os.makedirs(export_path)
+calibration_path = config['path']
+os.makedirs(calibration_path, exist_ok=True)
+runs_path = os.path.join(calibration_path, 'runs')
+os.makedirs(runs_path, exist_ok=True)
+logs_path = os.path.join(calibration_path, 'logs')
+os.makedirs(logs_path, exist_ok=True)
 
 Qtss_csv = config['observations']['discharge']['path']
 Qtss_col = config['observations']['discharge']['column']
@@ -77,30 +66,11 @@ ngen = config['DEAP']['ngen']
 mu = config['DEAP']['mu']
 lambda_ = config['DEAP']['lambda_']
 
-
-define_first_run = config['options']['define_first_run']
-if define_first_run:
-	raise NotImplementedError
-
-########################################################################
-#   Preparation for calibration
-########################################################################
-
-# Load parameter range file
-ParamRanges = pd.read_csv(ParamRangesPath, sep=";", index_col=0)
-ParamRanges = ParamRanges[ParamRanges['Use'] == True].drop('Use', axis=1)
-
 # Load observed streamflow
 streamflow_data = pd.read_csv(Qtss_csv, sep=",", parse_dates=True, index_col=0)
 observed_streamflow = streamflow_data[Qtss_col]
 observed_streamflow.name = 'observed'
 assert (observed_streamflow >= 0).all()
-
-# first standard parameter set
-if define_first_run:
-	raise NotImplementedError
-
-ii = 1
 
 def handle_ctrl_c(func):
     @wraps(func)
@@ -165,20 +135,19 @@ def get_discharge_score(run_directory, individual):
 		# Compute objective function score
 		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])
 		print("run_id: "+str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
-		with open(os.path.join(export_path,"runs_log.csv"), "a") as myfile:
+		with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(individual.label)+","+str(KGE)+"\n")
 		return KGE
 	elif OBJECTIVE == 'COR':
-
 		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'])
 		print("run_id: "+str(individual.label)+", COR "+"{0:.3f}".format(COR))
-		with open(os.path.join(export_path,"runs_log.csv"), "a") as myfile:
+		with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
 			myfile.write(str(individual.label)+","+str(COR)+"\n")
 		return COR
 	elif OBJECTIVE == 'NSE':
 		NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'])
 		print("run_id: " + str(individual.label) + ", NSE: " + "{0:.3f}".format(NSE))
-		with open(os.path.join(export_path, "runs_log.csv"), "a") as myfile:
+		with open(os.path.join(calibration_path, "runs_log.csv"), "a") as myfile:
 			myfile.write(str(individual.label) + "," + str(NSE) + "\n")
 		return NSE
 	else:
@@ -186,7 +155,7 @@ def get_discharge_score(run_directory, individual):
 
 @handle_ctrl_c
 def run_model(individual):
-	run_directory = os.path.join(export_path, individual.label)
+	run_directory = os.path.join(runs_path, individual.label)
 
 	if os.path.isdir(run_directory):
 		if os.path.exists(os.path.join(run_directory, dischargetss)):
@@ -198,33 +167,37 @@ def run_model(individual):
 		runmodel = True
 
 	if runmodel:
-		individual_parameters = np.array(individual.tolist())
-		assert (individual_parameters >= 0).all() and (individual_parameters <= 1).all()
-		values = ParamRanges.copy()
-		values['scale'] = individual_parameters
-		values['value'] = values['MinValue'] + (values['MaxValue'] - values['MinValue']) * values['scale']
+		individual_parameter_ratio = individual.tolist()
+		assert (np.array(individual_parameter_ratio) >= 0).all() and (np.array(individual_parameter_ratio) <= 1).all()
+		calibration_parameters = config['parameters']
+		
+		individual_parameters = {}
+		for i, parameter_data in enumerate(calibration_parameters.values()):
+			individual_parameters[parameter_data['variable']] = \
+				parameter_data['min'] + individual_parameter_ratio[i] * (parameter_data['max'] - parameter_data['min'])
+		
 		config_path = os.path.join(run_directory, 'config.yml')
 		while True:
 			os.mkdir(run_directory)
-			with open('GEB.yml', 'r') as f:
+			with open(args.config, 'r') as f:
 				template = yaml.load(f, Loader=yaml.FullLoader)
 
 			template['general']['spinup_start'] = config['spinup_start']
 			template['general']['start_time'] = config['end_date']
 			template['general']['export_inital_on_spinup'] = False
 			template['report'] = {
-				"crops_per_district": {
-					"type": "farmers",
-					"function": "groupcount",
-					"varname": "crop",
-					"save": "save",
-					"format": "csv",
-					"groupby": "tehsil"
-				},
+				# "crops_per_district": {
+				# 	"type": "farmers",
+				# 	"function": "groupcount",
+				# 	"varname": "crop",
+				# 	"save": "save",
+				# 	"format": "csv",
+				# 	"groupby": "tehsil"
+				# },
 				"well_irrigated_per_district": {
 					"type": "farmers",
 					"function": "mean",
-					"varname": "well_irrigated",
+					"varname": "has_well",
 					"save": "save",
 					"format": "csv",
 					"groupby": "tehsil"
@@ -232,8 +205,8 @@ def run_model(individual):
 			}
 			template['report_cwatm'] = {}
 
-			for _, row in values[['Key', 'value']].iterrows():
-				multi_set(template, row['value'], *row['Key'].split('.'))
+			for parameter, value in individual_parameters.items():
+				multi_set(template, value, *parameter.split('.'))
 
 			template['general']['report_folder'] = run_directory
 
@@ -264,7 +237,7 @@ def run_model(individual):
 				lock.release()
 				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 			if p.returncode == 0:
-				with open(os.path.join(LOG_FOLDER, f"log{individual.label}.txt"), 'w') as f:
+				with open(os.path.join(logs_path, f"log{individual.label}.txt"), 'w') as f:
 					content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
 					f.write(content)
 				modflow_folder = os.path.join(run_directory, 'spinup', 'modflow_model')
@@ -272,19 +245,17 @@ def run_model(individual):
 					shutil.rmtree(modflow_folder)
 				break
 			elif p.returncode == 1:
-				with open(os.path.join(LOG_FOLDER, f"log{individual.label}_{''.join((random.choice(string.ascii_lowercase) for x in range(10)))}.txt"), 'w') as f:
+				with open(os.path.join(logs_path, f"log{individual.label}_{''.join((random.choice(string.ascii_lowercase) for x in range(10)))}.txt"), 'w') as f:
 					content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
 					f.write(content)
 				shutil.rmtree(run_directory)
 			else:
 				raise ValueError
 
-	score = (
+	return (
 		get_discharge_score(run_directory, individual),
-		get_irrigation_equipment_score(run_directory, individual),
+		# get_irrigation_equipment_score(run_directory, individual),
 	)
-	
-	return score
 
 def export_front_history(calibration_values, effmax, effmin, effstd, effavg):
 	# Save history of the change in objective function scores during calibration to csv file
@@ -299,68 +270,63 @@ def export_front_history(calibration_values, effmax, effmin, effstd, effavg):
 		})
 	front_history = pd.DataFrame(
 		front_history,
-		index=list(range(generation))
+		index=list(range(ngen))
 	)
-	front_history.to_excel(os.path.join(export_path, "front_history.xlsx"))
-
-########################################################################
-#   Perform calibration using the DEAP module
-########################################################################
-
-creator.create("FitnessMulti", base.Fitness, weights=(1, 1))
-creator.create("Individual", array.array, typecode='d', fitness=creator.FitnessMulti)
-
-toolbox = base.Toolbox()
-
-# Attribute generator
-toolbox.register("attr_float", random.uniform, 0, 1)
-toolbox.register("select", tools.selBest)
-# Structure initializers
-toolbox.register("Individual", tools.initRepeat, creator.Individual, toolbox.attr_float, len(ParamRanges))
-toolbox.register("population", tools.initRepeat, list, toolbox.Individual)
-
-def checkBounds(min, max):
-	def decorator(func):
-		def wrappper(*args, **kargs):
-			offspring = func(*args, **kargs)
-			for child in offspring:
-				for i in range(len(child)):
-					if child[i] > max:
-						child[i] = max
-					elif child[i] < min:
-						child[i] = min
-			return offspring
-		return wrappper
-	return decorator
-
-toolbox.register("evaluate", run_model)
-toolbox.register("mate", tools.cxBlend, alpha=0.15)
-toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
-toolbox.register("select", tools.selNSGA2)
-
-history = tools.History()
-
-toolbox.decorate("mate", checkBounds(0, 1))
-toolbox.decorate("mutate", checkBounds(0, 1))
-
-def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
-	# set global variable for each process in the pool:
-	global ctrl_c_entered
-	global default_sigint_handler
-	ctrl_c_entered = False
-	default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-
-	global lock
-	global current_gpu_use_count
-	global n_gpus
-	n_gpus = gpus
-	lock = manager_lock
-	current_gpu_use_count = manager_current_gpu_use_count
+	front_history.to_excel(os.path.join(calibration_path, "front_history.xlsx"))
 
 if __name__ == "__main__":
-	t = time.time()
+	calibration_values = ['KGE']
+	weights = (1, )
+	
+	creator.create("FitnessMulti", base.Fitness, weights=weights)
+	creator.create("Individual", array.array, typecode='d', fitness=creator.FitnessMulti)
 
-	calibration_values = ['KGE', 'irrigation_equipment']
+	toolbox = base.Toolbox()
+
+	# Attribute generator
+	toolbox.register("attr_float", random.uniform, 0, 1)
+	toolbox.register("select", tools.selBest)
+	# Structure initializers
+	toolbox.register("Individual", tools.initRepeat, creator.Individual, toolbox.attr_float, len(config['parameters']))
+	toolbox.register("population", tools.initRepeat, list, toolbox.Individual)
+
+	def checkBounds(min, max):
+		def decorator(func):
+			def wrappper(*args, **kargs):
+				offspring = func(*args, **kargs)
+				for child in offspring:
+					for i in range(len(child)):
+						if child[i] > max:
+							child[i] = max
+						elif child[i] < min:
+							child[i] = min
+				return offspring
+			return wrappper
+		return decorator
+
+	toolbox.register("evaluate", run_model)
+	toolbox.register("mate", tools.cxBlend, alpha=0.15)
+	toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
+	toolbox.register("select", tools.selNSGA2)
+
+	history = tools.History()
+
+	toolbox.decorate("mate", checkBounds(0, 1))
+	toolbox.decorate("mutate", checkBounds(0, 1))
+
+	def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
+		# set global variable for each process in the pool:
+		global ctrl_c_entered
+		global default_sigint_handler
+		ctrl_c_entered = False
+		default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+
+		global lock
+		global current_gpu_use_count
+		global n_gpus
+		n_gpus = gpus
+		lock = manager_lock
+		current_gpu_use_count = manager_current_gpu_use_count
 
 	manager = multiprocessing.Manager()
 	current_gpu_use_count = manager.Value('i', 0)
@@ -375,16 +341,16 @@ if __name__ == "__main__":
 	else:
 		init_pool(current_gpu_use_count, manager_lock, config['gpus'])
 	
-	# For someone reason, if sum of cxpb and mutpb is not one, a lot less Pareto optimal solutions are produced
-	cxpb = 0.7  # The probability of mating two individuals
-	mutpb = 0.3 # The probability of mutating an individual.
+	cxpb = 0.7 # The probability of mating two individuals
+	mutpb = 0.3 # The probability of mutating an individual
+	assert cxpb + mutpb == 1, "cxpb + mutpb must be equal to 1"
 
-	effmax = np.full((ngen + 1, len(calibration_values)), np.nan)
-	effmin = np.full((ngen + 1, len(calibration_values)), np.nan)
-	effavg = np.full((ngen + 1, len(calibration_values)), np.nan)
-	effstd = np.full((ngen + 1, len(calibration_values)), np.nan)
+	effmax = np.full((ngen, len(calibration_values)), np.nan)
+	effmin = np.full((ngen, len(calibration_values)), np.nan)
+	effavg = np.full((ngen, len(calibration_values)), np.nan)
+	effstd = np.full((ngen, len(calibration_values)), np.nan)
 
-	checkpoint = os.path.join(export_path, "checkpoint.pkl")
+	checkpoint = os.path.join(calibration_path, "checkpoint.pkl")
 	if os.path.exists(os.path.join(checkpoint)):
 		with open(checkpoint, "rb" ) as cp_file:
 			cp = pickle.load(cp_file)
@@ -393,71 +359,33 @@ if __name__ == "__main__":
 			random.setstate(cp["rndstate"])
 			if start_gen > 0:
 				offspring = cp["offspring"]
-				pareto_front =  cp["pareto_front"]
-				skip_first_gen = True
-				generation = start_gen
-			else:
-				skip_first_gen = False
+			pareto_front =  cp["pareto_front"]
 	else:
-		skip_first_gen = False
+		start_gen = 0
 		population = toolbox.population(n=mu)
 		for i, individual in enumerate(population):
-			individual.label = str(generation % 1000).zfill(2) + '_' + str(i % 1000).zfill(3)
-
-	if not skip_first_gen:
+			individual.label = str(start_gen % 1000).zfill(2) + '_' + str(i % 1000).zfill(3)
 		pareto_front = tools.ParetoFront()
 		history.update(population)
 
-		# saving population
-		with open(checkpoint, "wb") as cp_file:
-			pickle.dump(dict(population=population, generation=generation, rndstate=random.getstate()), cp_file)
-
-		# Evaluate the individuals with an invalid fitness
-		individuals_to_evaluate = [ind for ind in population if not ind.fitness.valid]
-		fitnesses = list(toolbox.map(toolbox.evaluate, individuals_to_evaluate))
-		if any(map(lambda x: isinstance(x, KeyboardInterrupt), fitnesses)):
-			raise KeyboardInterrupt
-
-		for ind, fit in zip(individuals_to_evaluate, fitnesses):
-			ind.fitness.values = fit
-
-		pareto_front.update(population)
-
-		# Loop through the different objective functions and calculate some statistics
-		# from the Pareto optimal population
-
-		generation = 0
-		for ii in range(len(calibration_values)):
-			effmax[generation, ii] = np.amax([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
-			effmin[generation, ii] = np.amin([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
-			effavg[generation, ii] = np.average([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
-			effstd[generation, ii] = np.std([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
-		
-		print(">> gen: "+str(generation) + ", effmax_KGE: "+"{0:.3f}".format(effmax[generation, 0]))
-		print(">> gen: "+str(generation) + ", effmax_irrigation_equipment: "+"{0:.3f}".format(effmax[generation, 1]))
-
-		history.update(population)
-		population[:] = toolbox.select(population, lambda_)
-
-		# select best  population - child number (lambda_) from initial population
-		generation = 1
-
-	# Begin the generational process
-	# from gen 1 .....
-	while generation < ngen:
-		if not skip_first_gen:
+	for generation in range(start_gen, ngen):
+		if generation == 0:
+			cp = dict(population=population, generation=generation, rndstate=random.getstate(), pareto_front=pareto_front)
+		else:
 			# Vary the population
 			offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
 			for i, child in enumerate(offspring):
 				child.label = str(generation % 1000).zfill(2) + '_' + str(i % 1000).zfill(3)
+			cp = dict(population=population, generation=generation, rndstate=random.getstate(), offspring=offspring, pareto_front=pareto_front)
 
-		# saving population
-		cp = dict(population=population, generation=generation, rndstate=random.getstate(), offspring=offspring, pareto_front=pareto_front)
 		with open(checkpoint, "wb") as cp_file:
 			pickle.dump(cp, cp_file)
 
 		# Evaluate the individuals with an invalid fitness
-		individuals_to_evaluate = [ind for ind in offspring if not ind.fitness.valid]
+		if generation == 0:
+			individuals_to_evaluate = [ind for ind in population if not ind.fitness.valid]
+		else:
+			individuals_to_evaluate = [ind for ind in offspring if not ind.fitness.valid]
 		fitnesses = list(toolbox.map(toolbox.evaluate, individuals_to_evaluate))
 		if any(map(lambda x: isinstance(x, KeyboardInterrupt), fitnesses)):
 			raise KeyboardInterrupt
@@ -466,10 +394,14 @@ if __name__ == "__main__":
 			ind.fitness.values = fit
 
 		# Update the hall of fame with the generated individuals
-		pareto_front.update(offspring)
+		if generation == 0:
+			pareto_front.update(population)
+			population[:] = toolbox.select(population, lambda_)
+		else:
+			pareto_front.update(offspring)
+			population[:] = toolbox.select(population + offspring, select_best)
 
 		# Select the next generation population
-		population[:] = toolbox.select(population + offspring, select_best)
 		history.update(population)
 
 		# Loop through the different objective functions and calculate some statistics
@@ -481,10 +413,8 @@ if __name__ == "__main__":
 			effstd[generation, ii] = np.std([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 		
 		print(">> gen: "+str(generation) + ", effmax_KGE: "+"{0:.3f}".format(effmax[generation, 0]))
-		print(">> gen: "+str(generation) + ", effmax_irrigation_equipment: "+"{0:.3f}".format(effmax[generation, 1]))
+		# print(">> gen: "+str(generation) + ", effmax_irrigation_equipment: "+"{0:.3f}".format(effmax[generation, 1]))
 
-		generation += 1
-	
 	# Finito
 	if use_multiprocessing is True:
 		pool.close()
@@ -502,11 +432,12 @@ if __name__ == "__main__":
 	# best = toolbox.select(pareto_front, 1)[0]
 
 	# Convert the scaled parameter values of pareto_front ranging from 0 to 1 to unscaled parameter values
-	pareto_front_df = pd.DataFrame(columns=calibration_values + ParamRanges.index.tolist(), index=range(len(pareto_front)))
-	for i, individual in enumerate(pareto_front):
-		for j, calibration_value in enumerate(calibration_values):
-			pareto_front_df.iloc[i][calibration_value] = individual.fitness.values[j]
-		for j, (variable_name, values) in enumerate(ParamRanges.iterrows()):
-			pareto_front_df.iloc[i][variable_name] = individual[j] * (values['MaxValue'] - values['MinValue']) + values['MinValue']
+	
+	# pareto_front_df = pd.DataFrame(columns=calibration_values + ParamRanges.index.tolist(), index=range(len(pareto_front)))
+	# for i, individual in enumerate(pareto_front):
+	# 	for j, calibration_value in enumerate(calibration_values):
+	# 		pareto_front_df.iloc[i][calibration_value] = individual.fitness.values[j]
+	# 	for j, (variable_name, values) in enumerate(ParamRanges.iterrows()):
+	# 		pareto_front_df.iloc[i][variable_name] = individual[j] * (values['MaxValue'] - values['MinValue']) + values['MinValue']
 
-	pareto_front_df.to_excel(os.path.join(export_path, "pareto_front.xlsx"))
+	# pareto_front_df.to_excel(os.path.join(calibration_path, "pareto_front.xlsx"))
