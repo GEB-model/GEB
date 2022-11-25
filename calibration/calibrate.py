@@ -80,11 +80,11 @@ def handle_ctrl_c(func):
                 return func(*args, **kwargs)
             except KeyboardInterrupt:
                 ctrl_c_entered = True
-                return KeyboardInterrupt()
+                return KeyboardInterrupt
             finally:
                 signal.signal(signal.SIGINT, pool_ctrl_c_handler)
         else:
-            return KeyboardInterrupt()
+            return KeyboardInterrupt
     return wrapper
 
 def pool_ctrl_c_handler(*args, **kwargs):
@@ -224,7 +224,7 @@ def run_model(individual):
 			command = f"python run.py --config {config_path} --headless --scenario spinup"
 			if use_gpu is not False:
 				command += f' --GPU --gpu_device {use_gpu}'
-			print(command)
+			print(command, flush=True)
 
 			p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
 			output, errors = p.communicate()

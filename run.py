@@ -154,3 +154,8 @@ if __name__ == '__main__':
 
         server = ModularServer(MODEL_NAME, GEBModel, server_elements, DISPLAY_TIMESTEPS, model_params=model_params, port=None)
         server.launch(port=args.port, browser=args.browser)
+
+    if args.use_gpu:
+        from numba import cuda 
+        device = cuda.get_current_device()
+        device.reset()

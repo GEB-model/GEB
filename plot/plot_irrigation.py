@@ -217,10 +217,10 @@ class Plot:
             cmap=cmap,
             show=False
         )
-        axins2.set_xlim(2050+910-25, 2050+960+25) # apply the x-limits
-        axins2.set_ylim(6000+550+25, 6000+500-25) # apply the y-limits
         axins2.axes.xaxis.set_visible(False)
         axins2.axes.yaxis.set_visible(False)
+        axins2.set_xlim(2050+910-25, 2050+960+25) # apply the x-limits
+        axins2.set_ylim(6000+550+25, 6000+500-25) # apply the y-limits
         _, pp3, pp4 = mark_inset(axins, axins2, loc1=1, loc2=3, fc="none", ec="black", linewidth=0.3)
         pp3.loc1 = 2
         pp3.loc2 = 3
