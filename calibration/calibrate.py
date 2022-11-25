@@ -18,7 +18,6 @@ Sat Kumar Tomer (modified by Hylke Beck)
 Please see his book "Python in Hydrology"   http://greenteapress.com/pythonhydro/pythonhydro.pdf
 
 """
-from datetime import datetime, timedelta, date
 import os
 import shutil
 import hydroStats
@@ -27,47 +26,46 @@ import random
 import string
 import numpy as np
 import signal
-from deap import algorithms
-from deap import base
-from deap import creator
-from deap import tools
+import deap
 import pandas as pd
 import yaml
+from datetime import datetime, timedelta
 from functools import wraps
 
 import multiprocessing
-import time
 from subprocess import Popen, PIPE
 
 import pickle
 from calconfig import config, args
 
-config = config['calibration']
+calibration_config = config['calibration']
 
 OBJECTIVE = 'KGE'
 
 dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
 
-calibration_path = config['path']
+calibration_path = calibration_config['path']
 os.makedirs(calibration_path, exist_ok=True)
 runs_path = os.path.join(calibration_path, 'runs')
 os.makedirs(runs_path, exist_ok=True)
 logs_path = os.path.join(calibration_path, 'logs')
 os.makedirs(logs_path, exist_ok=True)
 
-Qtss_csv = config['observations']['discharge']['path']
-Qtss_col = config['observations']['discharge']['column']
+Qtss_csv = calibration_config['observations']['discharge']['path']
+Qtss_col = calibration_config['observations']['discharge']['column']
 
-use_multiprocessing = config['DEAP']['use_multiprocessing']
+use_multiprocessing = calibration_config['DEAP']['use_multiprocessing']
 
-select_best = config['DEAP']['select_best']
+select_best = calibration_config['DEAP']['select_best']
 
-ngen = config['DEAP']['ngen']
-mu = config['DEAP']['mu']
-lambda_ = config['DEAP']['lambda_']
+ngen = calibration_config['DEAP']['ngen']
+mu = calibration_config['DEAP']['mu']
+lambda_ = calibration_config['DEAP']['lambda_']
 
 # Load observed streamflow
-streamflow_data = pd.read_csv(Qtss_csv, sep=",", parse_dates=True, index_col=0)
+gauges = config['general']['gauges']
+streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
+streamflow_data = pd.read_csv(streamflow_path, sep=",", parse_dates=True, index_col=0)
 observed_streamflow = streamflow_data[Qtss_col]
 observed_streamflow.name = 'observed'
 assert (observed_streamflow >= 0).all()
@@ -116,7 +114,7 @@ def get_discharge_score(run_directory, individual):
 	simulated_streamflow = pd.read_csv(Qsim_tss, sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
 	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
 
-	simulated_dates = [config['spinup_start']]
+	simulated_dates = [calibration_config['spinup_start']]
 	for _ in range(len(simulated_streamflow) - 1):
 		simulated_dates.append(simulated_dates[-1] + timedelta(days=1))
 	simulated_streamflow = simulated_streamflow[1]
@@ -124,10 +122,10 @@ def get_discharge_score(run_directory, individual):
 	simulated_streamflow.name = 'simulated'
 
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
-	streamflows = streamflows[(streamflows.index > datetime.combine(config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(config['end_date'], datetime.min.time()))]
+	streamflows = streamflows[(streamflows.index > datetime.combine(calibration_config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(calibration_config['end_date'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
 
-	if config['monthly']:
+	if calibration_config['monthly']:
 		streamflows['date'] = streamflows.index
 		streamflows = streamflows.resample('M', on='date').mean()
 
@@ -169,7 +167,7 @@ def run_model(individual):
 	if runmodel:
 		individual_parameter_ratio = individual.tolist()
 		assert (np.array(individual_parameter_ratio) >= 0).all() and (np.array(individual_parameter_ratio) <= 1).all()
-		calibration_parameters = config['parameters']
+		calibration_parameters = calibration_config['parameters']
 		
 		individual_parameters = {}
 		for i, parameter_data in enumerate(calibration_parameters.values()):
@@ -182,8 +180,8 @@ def run_model(individual):
 			with open(args.config, 'r') as f:
 				template = yaml.load(f, Loader=yaml.FullLoader)
 
-			template['general']['spinup_start'] = config['spinup_start']
-			template['general']['start_time'] = config['end_date']
+			template['general']['spinup_start'] = calibration_config['spinup_start']
+			template['general']['start_time'] = calibration_config['end_date']
 			template['general']['export_inital_on_spinup'] = False
 			template['report'] = {
 				# "crops_per_district": {
@@ -278,17 +276,17 @@ if __name__ == "__main__":
 	calibration_values = ['KGE']
 	weights = (1, )
 	
-	creator.create("FitnessMulti", base.Fitness, weights=weights)
-	creator.create("Individual", array.array, typecode='d', fitness=creator.FitnessMulti)
+	deap.creator.create("FitnessMulti", deap.base.Fitness, weights=weights)
+	deap.creator.create("Individual", array.array, typecode='d', fitness=deap.creator.FitnessMulti)
 
-	toolbox = base.Toolbox()
+	toolbox = deap.base.Toolbox()
 
 	# Attribute generator
 	toolbox.register("attr_float", random.uniform, 0, 1)
-	toolbox.register("select", tools.selBest)
+	toolbox.register("select", deap.tools.selBest)
 	# Structure initializers
-	toolbox.register("Individual", tools.initRepeat, creator.Individual, toolbox.attr_float, len(config['parameters']))
-	toolbox.register("population", tools.initRepeat, list, toolbox.Individual)
+	toolbox.register("Individual", deap.tools.initRepeat, deap.creator.Individual, toolbox.attr_float, len(calibration_config['parameters']))
+	toolbox.register("population", deap.tools.initRepeat, list, toolbox.Individual)
 
 	def checkBounds(min, max):
 		def decorator(func):
@@ -305,11 +303,11 @@ if __name__ == "__main__":
 		return decorator
 
 	toolbox.register("evaluate", run_model)
-	toolbox.register("mate", tools.cxBlend, alpha=0.15)
-	toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
-	toolbox.register("select", tools.selNSGA2)
+	toolbox.register("mate", deap.tools.cxBlend, alpha=0.15)
+	toolbox.register("mutate", deap.tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
+	toolbox.register("select", deap.tools.selNSGA2)
 
-	history = tools.History()
+	history = deap.tools.History()
 
 	toolbox.decorate("mate", checkBounds(0, 1))
 	toolbox.decorate("mutate", checkBounds(0, 1))
@@ -336,10 +334,10 @@ if __name__ == "__main__":
 		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK') or 4)
 		print(f'Pool size: {pool_size}')
 		signal.signal(signal.SIGINT, signal.SIG_IGN)
-		pool = multiprocessing.Pool(processes=pool_size, initializer=init_pool, initargs=(current_gpu_use_count, manager_lock, config['gpus']))
+		pool = multiprocessing.Pool(processes=pool_size, initializer=init_pool, initargs=(current_gpu_use_count, manager_lock, calibration_config['gpus']))
 		toolbox.register("map", pool.map)
 	else:
-		init_pool(current_gpu_use_count, manager_lock, config['gpus'])
+		init_pool(current_gpu_use_count, manager_lock, calibration_config['gpus'])
 	
 	cxpb = 0.7 # The probability of mating two individuals
 	mutpb = 0.3 # The probability of mutating an individual
@@ -365,7 +363,7 @@ if __name__ == "__main__":
 		population = toolbox.population(n=mu)
 		for i, individual in enumerate(population):
 			individual.label = str(start_gen % 1000).zfill(2) + '_' + str(i % 1000).zfill(3)
-		pareto_front = tools.ParetoFront()
+		pareto_front = deap.tools.ParetoFront()
 		history.update(population)
 
 	for generation in range(start_gen, ngen):
@@ -373,7 +371,7 @@ if __name__ == "__main__":
 			cp = dict(population=population, generation=generation, rndstate=random.getstate(), pareto_front=pareto_front)
 		else:
 			# Vary the population
-			offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
+			offspring = deap.algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
 			for i, child in enumerate(offspring):
 				child.label = str(generation % 1000).zfill(2) + '_' + str(i % 1000).zfill(3)
 			cp = dict(population=population, generation=generation, rndstate=random.getstate(), offspring=offspring, pareto_front=pareto_front)
