@@ -19,12 +19,12 @@ general:
     lon: 75.895273
     lat: 17.370473
   CWatM_settings: CWatM.ini
-  input_folder: DataDrive/GEB_Bhima/input/
-  data_folder: DataDrive/
-  original_data: DataDrive/GEB/original_data/
+  input_folder: ../DataDrive/GEB_Bhima/input/
+  data_folder: ../DataDrive/
+  original_data: ../DataDrive/GEB/original_data/
   report_folder: report/bhima/
-  initial_conditions_folder: DataDrive/GEB_Bhima/initial
-  init_water_table: DataDrive/GEB_Bhima/report/init/water_table.npy
+  initial_conditions_folder: ../DataDrive/GEB_Bhima/initial
+  init_water_table: ../DataDrive/GEB_Bhima/report/init/water_table.npy
   ###
   #
   export_inital_on_spinup: true
@@ -48,7 +48,7 @@ calibration:
   start_date: 2010-07-01
   end_date: 2010-07-10
   # end_date: 2015-07-01
-  path: DataDrive/GEB_Sanctuary/calibration/
+  path: ../DataDrive/GEB_Sanctuary/calibration/
   gpus: 0
   monthly: false
 
@@ -132,7 +132,7 @@ draw:
       properties:
         color: red
   ###
-  # Specify the colors and names of the crops to use here. The indices must match the indices the crop factors file (DataDrive/GEB/input/crop_data/crop_factors.csv).
+  # Specify the colors and names of the crops to use here. The indices must match the indices the crop factors file (../DataDrive/GEB/input/crop_data/crop_factors.csv).
   crop_data:
     0:
       name: Bajra

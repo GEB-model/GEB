@@ -11,9 +11,7 @@ tests/benchmarks/
 tests/files/
 .benchmarks
 *.npy
-DataDrive
 .DS_Store
-tmp/*
 *.cprof
 .prof_stats
 

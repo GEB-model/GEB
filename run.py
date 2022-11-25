@@ -3,6 +3,7 @@ import cProfile
 from pstats import Stats
 import geopandas as gpd
 import os
+import yaml
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
@@ -25,11 +26,11 @@ parser.add_argument('--config', dest='config', default='GEB.yml', help="Path of 
 
 TEHSILS = [26, 30, 34, 35]
 
-def get_study_area():
+def get_study_area(input_folder):
     study_area = {
         "name": "Bhima basin"
     }
-    gdf = gpd.read_file(os.path.join('DataDrive', 'GEB_Bhima', 'input', 'areamaps', 'subdistricts.shp')).to_crs(epsg=4326)
+    gdf = gpd.read_file(os.path.join(input_folder, 'areamaps', 'subdistricts.shp')).to_crs(epsg=4326)
     gdf = gdf[gdf['ID'].isin(TEHSILS)]
     tehsils = []
     color_map = plt.get_cmap('gist_rainbow')
@@ -47,7 +48,6 @@ def get_study_area():
     study_area['tehsil'] = tehsils
     return study_area, colors
 
-
 if __name__ == '__main__':
     args = parser.parse_args()
     if args.use_gpu:
@@ -58,7 +58,8 @@ if __name__ == '__main__':
     faulthandler.enable()
 
     MODEL_NAME = 'GEB'
-    study_area, colors = get_study_area()
+    config = yaml.load(open(os.path.join(os.path.dirname(__file__), args.config), 'r'), Loader=yaml.FullLoader)
+    study_area, colors = get_study_area(config['general']['input_folder'])
 
     series_to_plot = [
         # crop_series,
