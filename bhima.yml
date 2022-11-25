@@ -48,7 +48,7 @@ calibration:
   start_date: 2010-07-01
   end_date: 2010-07-10
   # end_date: 2015-07-01
-  path: ../DataDrive/GEB_Sanctuary/calibration/
+  path: ../DataDrive/GEB_Bhima/calibration/
   gpus: 0
   monthly: false
 

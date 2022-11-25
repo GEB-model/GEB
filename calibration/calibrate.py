@@ -26,9 +26,9 @@ import random
 import string
 import numpy as np
 import signal
-import deap
 import pandas as pd
 import yaml
+from deap import creator, base, tools, algorithms
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -276,17 +276,17 @@ if __name__ == "__main__":
 	calibration_values = ['KGE']
 	weights = (1, )
 	
-	deap.creator.create("FitnessMulti", deap.base.Fitness, weights=weights)
-	deap.creator.create("Individual", array.array, typecode='d', fitness=deap.creator.FitnessMulti)
+	creator.create("FitnessMulti", base.Fitness, weights=weights)
+	creator.create("Individual", array.array, typecode='d', fitness=creator.FitnessMulti)
 
-	toolbox = deap.base.Toolbox()
+	toolbox = base.Toolbox()
 
 	# Attribute generator
 	toolbox.register("attr_float", random.uniform, 0, 1)
-	toolbox.register("select", deap.tools.selBest)
+	toolbox.register("select", tools.selBest)
 	# Structure initializers
-	toolbox.register("Individual", deap.tools.initRepeat, deap.creator.Individual, toolbox.attr_float, len(calibration_config['parameters']))
-	toolbox.register("population", deap.tools.initRepeat, list, toolbox.Individual)
+	toolbox.register("Individual", tools.initRepeat, creator.Individual, toolbox.attr_float, len(calibration_config['parameters']))
+	toolbox.register("population", tools.initRepeat, list, toolbox.Individual)
 
 	def checkBounds(min, max):
 		def decorator(func):
@@ -303,11 +303,11 @@ if __name__ == "__main__":
 		return decorator
 
 	toolbox.register("evaluate", run_model)
-	toolbox.register("mate", deap.tools.cxBlend, alpha=0.15)
-	toolbox.register("mutate", deap.tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
-	toolbox.register("select", deap.tools.selNSGA2)
+	toolbox.register("mate", tools.cxBlend, alpha=0.15)
+	toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
+	toolbox.register("select", tools.selNSGA2)
 
-	history = deap.tools.History()
+	history = tools.History()
 
 	toolbox.decorate("mate", checkBounds(0, 1))
 	toolbox.decorate("mutate", checkBounds(0, 1))
@@ -363,7 +363,7 @@ if __name__ == "__main__":
 		population = toolbox.population(n=mu)
 		for i, individual in enumerate(population):
 			individual.label = str(start_gen % 1000).zfill(2) + '_' + str(i % 1000).zfill(3)
-		pareto_front = deap.tools.ParetoFront()
+		pareto_front = tools.ParetoFront()
 		history.update(population)
 
 	for generation in range(start_gen, ngen):
@@ -371,7 +371,7 @@ if __name__ == "__main__":
 			cp = dict(population=population, generation=generation, rndstate=random.getstate(), pareto_front=pareto_front)
 		else:
 			# Vary the population
-			offspring = deap.algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
+			offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
 			for i, child in enumerate(offspring):
 				child.label = str(generation % 1000).zfill(2) + '_' + str(i % 1000).zfill(3)
 			cp = dict(population=population, generation=generation, rndstate=random.getstate(), offspring=offspring, pareto_front=pareto_front)
