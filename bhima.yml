@@ -44,28 +44,19 @@ agent_settings:
     return_fraction: .5
 
 calibration:
-  spinup_start: 2010-06-01
-  start_date: 2010-07-01
-  end_date: 2010-07-10
-  # end_date: 2015-07-01
-  path: ../DataDrive/GEB_Bhima/calibration/
+  spinup_start: 2004-01-01
+  start_date: 2006-01-01
+  end_date: 2012-12-31
+  path: ../DataDrive/GEB_Krishna/calibration/
   gpus: 0
   monthly: false
 
-  observations:
-    discharge:
-      path: calibration/data/observations.csv
-      column: flow
-
-  options:
-    define_first_run: False
-
   DEAP:
-    use_multiprocessing: False
-    ngen: 3 # 10
-    mu: 5 # 120
-    lambda_: 3 # 24
-    select_best: 3
+    use_multiprocessing: True
+    ngen: 10
+    mu: 60
+    lambda_: 12
+    select_best: 10
 
   parameters:
     soildepth_factor:
