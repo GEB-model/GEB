@@ -13,10 +13,10 @@
 
 source ~/.bashrc
 
-SCRIPT_DIR="/scistor/ivm/jbn271/GEB/GEB_private/"
+SCRIPT_DIR="$HOME/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
-conda activate abm  # activate conda environment
+conda activate GEB  # activate conda environment
 
 python run.py --GPU --headless --scenario spinup --config krishna.yml

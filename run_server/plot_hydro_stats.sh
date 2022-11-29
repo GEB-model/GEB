@@ -12,9 +12,9 @@
 
 source ~/.bashrc
 
-SCRIPT_DIR="/scistor/ivm/jbn271/GEB/GEB_private/"
+SCRIPT_DIR="$HOME/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
-conda activate abm  # activate conda environment
+conda activate GEB  # activate conda environment
 
 python plot/plot_hydro_stats.py
