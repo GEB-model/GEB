@@ -5,7 +5,7 @@ import statistics
 import numpy as np
 import pandas as pd
 
-from preconfig import ORIGINAL_DATA
+from preconfig import ORIGINAL_DATA, DATA_FOLDER
 
 STATES = ['Maharashtra']
 YEARS = list(range(2004, 2019))
@@ -135,14 +135,31 @@ def add_tomatoes_maharashtra(costs):
     return costs
 
 
+def load_inflation_rates(country):
+    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
+    inflation_series = pd.read_csv(fp, index_col=0, skiprows=4).loc[country]
+    inflation = {}
+    for year in range(1960, 2022):
+        inflation[year] = 1 + inflation_series[str(year)] / 100
+    return inflation
+
+
+def process_additional_years(costs, lower_bound):
+    inflation = load_inflation_rates('India')
+    for year in range(YEARS[0], lower_bound[0], -1):
+        costs.loc[f"{lower_bound[0]}-{lower_bound[1]}"] = costs.loc[f"{lower_bound[0]+1}-{lower_bound[1]+1}"] / inflation[year]
+    return costs
+
+
 if __name__ == '__main__':
     costs = parse()
     costs = get_changes(costs)
     costs = inter_and_extrapolate(costs)
     costs = add_tomatoes_maharashtra(costs)
+    costs = process_additional_years(costs, lower_bound=(2003, 2004))
 
     print(costs)
-    folder = os.path.join(ORIGINAL_DATA, 'crops')
+    folder = os.path.join(DATA_FOLDER, 'GEB', 'input', 'crops')
     os.makedirs(folder, exist_ok=True)
     fp = os.path.join(folder, 'cultivation_costs.xlsx')
     costs.to_excel(fp)

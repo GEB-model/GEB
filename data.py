@@ -3,12 +3,12 @@ import os
 import numpy as np
 import pandas as pd
 
-from config import INPUT, ORIGINAL_DATA
+from config import INPUT, ORIGINAL_DATA, DATA_FOLDER
 
 def load_cultivation_costs():
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['CULTIVATION_COST'].to_dict()
     
-    fp = os.path.join(ORIGINAL_DATA, 'crops', 'cultivation_costs.xlsx')
+    fp = os.path.join(DATA_FOLDER, 'GEB', 'input', 'crops', 'cultivation_costs.xlsx')
     df = pd.read_excel(fp, index_col=0, header=(0, 1))['Maharashtra']
     date_index = dict(((year, i) for i, year in enumerate(df.index)))
 
