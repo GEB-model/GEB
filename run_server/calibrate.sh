@@ -1,12 +1,12 @@
 #!/bin/bash
+#SBATCH --partition=defq
 #SBATCH --job-name=calibrate
 #SBATCH --output=calibrate.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=12
-#SBATCH --gres=gpu:2
-#SBATCH --mem-per-cpu=16G
-#SBATCH --time=200:00:00
+#SBATCH --cpus-per-task=30
+#SBATCH --mem=480G
+#SBATCH --time=336:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jens.de.bruijn@vu.nl
 
@@ -14,8 +14,6 @@ source ~/.bashrc
 
 SCRIPT_DIR="$HOME/GEB/GEB_private/"
 cd $SCRIPT_DIR
-
-module load cuda10.2/toolkit/10.2.89  # load cuda environment
 
 conda activate GEB  # activate conda environment
 

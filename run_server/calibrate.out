@@ -1,0 +1,65 @@
+
+The following have been reloaded with a version change:
+  1) slurm/bazis/current => slurm/bazis/20.02.7
+
+Pool size: 30
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_011/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_010/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_005/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_020/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_007/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_013/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_002/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_003/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_006/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_008/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_026/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_009/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_017/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_016/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_025/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_027/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_018/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_024/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_001/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_012/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_000/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_029/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_014/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_015/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_019/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_021/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_028/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_004/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_023/config.yml --headless --scenario spinup
+Not using GPU, current_counter: 0/0
+python run.py --config ../DataDrive/GEB_Krishna/calibration/runs/00_022/config.yml --headless --scenario spinup
