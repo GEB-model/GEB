@@ -13,7 +13,7 @@
 
 source ~/.bashrc
 
-SCRIPT_DIR="/scistor/ivm/jbn271/Packages/GEB/"
+SCRIPT_DIR="/scistor/ivm/jbn271/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
 module load cuda10.2/toolkit/10.2.89  # load cuda environment

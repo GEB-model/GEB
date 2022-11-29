@@ -12,11 +12,11 @@
 
 source ~/.bashrc
 
-SCRIPT_DIR="/scistor/ivm/jbn271/Packages/GEB/"
+SCRIPT_DIR="/scistor/ivm/jbn271/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 
 conda activate abm  # activate conda environment
 
-python calibration/calibrate.py --config calibration/config_ivm_partition.yml
+python calibration/calibrate.py --config krishna.yml

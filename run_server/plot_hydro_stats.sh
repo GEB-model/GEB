@@ -12,7 +12,7 @@
 
 source ~/.bashrc
 
-SCRIPT_DIR="/scistor/ivm/jbn271/Packages/GEB/"
+SCRIPT_DIR="/scistor/ivm/jbn271/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
 conda activate abm  # activate conda environment
