@@ -51,9 +51,6 @@ os.makedirs(runs_path, exist_ok=True)
 logs_path = os.path.join(calibration_path, 'logs')
 os.makedirs(logs_path, exist_ok=True)
 
-Qtss_csv = calibration_config['observations']['discharge']['path']
-Qtss_col = calibration_config['observations']['discharge']['column']
-
 use_multiprocessing = calibration_config['DEAP']['use_multiprocessing']
 
 select_best = calibration_config['DEAP']['select_best']
@@ -66,7 +63,7 @@ lambda_ = calibration_config['DEAP']['lambda_']
 gauges = config['general']['gauges']
 streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
 streamflow_data = pd.read_csv(streamflow_path, sep=",", parse_dates=True, index_col=0)
-observed_streamflow = streamflow_data[Qtss_col]
+observed_streamflow = streamflow_data["flow"]
 observed_streamflow.name = 'observed'
 assert (observed_streamflow >= 0).all()
 
