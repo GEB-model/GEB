@@ -1316,7 +1316,7 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.expenses_and_income()
-        if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+        if self.model.current_time.month == 1 and self.model.current_time.day == 1 and self.model.args.scenario != 'spinup':
             self.adjust_prices_inflation()
             self.upkeep_assets()
             self.make_loan_payment()
