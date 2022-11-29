@@ -19,4 +19,4 @@ module load cuda10.2/toolkit/10.2.89  # load cuda environment
 
 conda activate abm  # activate conda environment
 
-python calibration/calibrate.py --config calibration/config.yml
+python calibration/calibrate.py --config krishna.yml
