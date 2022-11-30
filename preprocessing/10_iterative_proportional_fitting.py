@@ -1,4 +1,5 @@
 import os
+import argparse
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,10 @@ from tqdm import tqdm
 from methods import create_cell_area_map
 
 from preconfig import INPUT
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--n_jobs', '-n', type=int, default=1)
+args = parser.parse_known_args()[0]
 
 class IPL(object):
     def __init__(self, original, aggregates, weight_col='weight', n=None, learning_rate=1,
@@ -362,8 +367,9 @@ def fit(ipl_group):
 
 ipl_groups = crop_data.groupby(crop_data.index)
 
-# for i, ipl_group in enumerate(tqdm(ipl_groups)):
-#     fit(ipl_group=ipl_group)
-
-from tqdm.contrib.concurrent import process_map
-process_map(fit, ipl_groups, max_workers=8)
+if args.n_jobs == 1:
+    for ipl_group in tqdm(ipl_groups):
+        fit(ipl_group)
+else:
+    from tqdm.contrib.concurrent import process_map
+    process_map(fit, ipl_groups, max_workers=args.n_jobs)
