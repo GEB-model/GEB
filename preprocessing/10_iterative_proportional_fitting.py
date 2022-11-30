@@ -361,8 +361,9 @@ def fit(ipl_group):
     ipl.to_csv(fp, index=False)
 
 ipl_groups = crop_data.groupby(crop_data.index)
-for i, ipl_group in enumerate(tqdm(ipl_groups)):
-    fit(ipl_group=ipl_group)
-# from multiprocessing import Pool
-# with Pool(8) as pool:
-#     pool.map(fit, ipl_groups)
+
+# for i, ipl_group in enumerate(tqdm(ipl_groups)):
+#     fit(ipl_group=ipl_group)
+
+from tqdm.contrib.concurrent import process_map
+process_map(fit, ipl_groups, max_workers=8)
