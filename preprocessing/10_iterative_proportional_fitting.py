@@ -247,7 +247,8 @@ with rasterio.open(os.path.join(INPUT, 'tehsils.tif'), 'r') as src:
 tehsils_shape = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp')).set_index(['state_name', 'district_n', 'sub_dist_1'])
 avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
 crop_data = pd.read_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'), index_col=(0, 1, 2, 3))
-for (state, district, tehsil), tehsil_crop_data in crop_data.groupby(level=[0, 1, 2]):
+print("Getting tehsil areas")
+for (state, district, tehsil), tehsil_crop_data in tqdm(crop_data.groupby(level=[0, 1, 2])):
     # tehsil_farm_size = avg_farm_size.loc[(state, district, tehsil)]
     farms_per_size_class = tehsil_crop_data.droplevel([0, 1, 2]).sum(axis=1)
 
@@ -335,8 +336,8 @@ def fit(ipl_group):
     if tehsil == '0':
         return
     fp = os.path.join(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
-    if os.path.exists(fp):
-        return
+    # if os.path.exists(fp):
+    #     return
     # print(state, district, tehsil, size_class)
     survey_data_size_class = survey_data[survey_data['size_class'].isin(SIZE_GROUP[size_class])]
     survey_data_size_class = survey_data_size_class.reset_index(drop=True)
