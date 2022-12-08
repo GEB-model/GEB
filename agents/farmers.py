@@ -880,7 +880,7 @@ class Farmers(AgentBaseClass):
             self.n,
             self.model.current_time.month,
             self.model.current_time.day,
-            self.var.crop_map,
+            self.var.crop_map if not self.model.args.use_gpu else self.var.crop_map.get(),
             self.crops,
             cultivation_cost_per_crop,
             self.field_indices_by_farmer,
@@ -888,6 +888,8 @@ class Farmers(AgentBaseClass):
             self.field_size_per_farmer,
             self.disposable_income
         )
+        if self.model.args.use_gpu:
+            plant_map = cp.array(plant_map)
         self.remove_agents(np.where(farmers_sell_land)[0])
         if self.model.args.use_gpu:
             plant_map = cp.array(plant_map)
