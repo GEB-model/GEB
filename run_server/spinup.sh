@@ -19,4 +19,4 @@ cd $SCRIPT_DIR
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate GEB  # activate conda environment
 
-python run.py --headless --scenario spinup --config sanctuary.yml
+python run.py --headless --scenario spinup --config krishna.yml
