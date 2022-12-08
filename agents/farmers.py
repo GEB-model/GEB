@@ -769,6 +769,8 @@ class Farmers(AgentBaseClass):
 
             harvesting_farmer_fields = self.var.land_owners[harvest]
             harvested_area = self.var.cellArea[harvest]
+            if self.model.args.use_gpu:
+                harvested_area = harvested_area.get()
             harvested_crops = crop_map[harvest]
             max_yield_per_crop = np.take(self.reference_yield, harvested_crops)
       
