@@ -201,6 +201,7 @@ class Farmers(AgentBaseClass):
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
         """
+        # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
         if self.model.load_initial_data:
             for attribute in self.agent_attributes:
                 fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npy")
@@ -212,49 +213,60 @@ class Farmers(AgentBaseClass):
             self.latest_potential_profits.fill(np.nan)
         else:
             farms = self.model.data.farms
-            onlyfarms = farms[farms != -1]
 
-            self.n = np.unique(onlyfarms).size
+            # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
+            self.n = np.unique(farms[farms != -1]).size
             self.max_n = math.ceil(self.n * (1 + self.redundancy))
             assert self.max_n < 4294967295 # max value of uint32, consider replacing with uint64
 
+            # The code below obtains the coordinates of the farmers' locations.
+            # First the horizontal and vertical indices of the pixels that are not -1 are obtained. Then, for each farmer the
+            # average of the horizontal and vertical indices is calculated. This is done by using the bincount function.
+            # Finally, the coordinates are obtained by adding .5 to the pixels and converting them to coordinates using pixel_to_coord.
             vertical_index = np.arange(farms.shape[0]).repeat(farms.shape[1]).reshape(farms.shape)[farms != -1]
             horizontal_index = np.tile(np.arange(farms.shape[1]), farms.shape[0]).reshape(farms.shape)[farms != -1]
-
             pixels = np.zeros((self.n, 2))
-            pixels[:,0] = np.round(np.bincount(onlyfarms, horizontal_index) / np.bincount(onlyfarms)).astype(int)
-            pixels[:,1] = np.round(np.bincount(onlyfarms, vertical_index) / np.bincount(onlyfarms)).astype(int)
-
+            pixels[:,0] = np.round(np.bincount(farms[farms != -1], horizontal_index) / np.bincount(farms[farms != -1])).astype(int)
+            pixels[:,1] = np.round(np.bincount(farms[farms != -1], vertical_index) / np.bincount(farms[farms != -1])).astype(int)
             self._locations = np.full((self.max_n, 2), np.nan, dtype=np.float32)
             self.locations = pixels_to_coords(pixels + .5, self.var.gt)
 
+            # Load the tehsil code of each farmer.
             self._tehsil = np.full(self.max_n, -1, dtype=np.int32)
             self.tehsil = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'tehsil_code.npy'))
+
+            # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
             self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
             self.elevation = self.elevation_map.sample_coords(self.locations)
       
+            # Load the crops planted for each farmer in the Kharif, Rabi and Summer seasons.
             self._crops = np.full((self.max_n, 3), -1, dtype=np.int32)  # kharif, rabi, summer
             self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif crop.npy'))
             self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi crop.npy'))
             self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer crop.npy'))
             assert self.crops.max() < len(self.crop_names)
       
+            # Load the irrigation status of each farmer. This is a boolean array with three columns, one for each season.      
             irrigated = np.full((self.n, 3), -1, dtype=np.int8)  # kharif, rabi, summer
             irrigated[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif irrigation.npy'))
             irrigated[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi irrigation.npy'))
             irrigated[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer irrigation.npy'))
       
+            # Assume that a farmer that is irrigated in one season, is also irrigated in the other seasons. Thus using any to get the irrigation status
+            # for all seasons.
             self._irrigated = np.full(self.max_n, -1, dtype=np.int8)
             self.irrigated = irrigated.any(axis=1)
 
+            # Load the irrigation type from file and assign all farmers with irrigation type 1 (well) a well.
             irrigation_type = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation type.npy'))
-
             self._has_well= np.full(self.max_n, 0, dtype=bool)
             self.has_well[:] = (irrigation_type == 1).any(axis=1)
 
+            # Set irrigation efficiency to 70% for all farmers.
             self._irrigation_efficiency = np.full(self.max_n, -1, dtype=np.float32)
             self.irrigation_efficiency[:] = .70
 
+            # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
             self._latest_profits = np.full((self.max_n, 3), np.nan, dtype=np.float32)
             self._latest_potential_profits = np.full((self.max_n, 3), np.nan, dtype=np.float32)
 
@@ -288,6 +300,8 @@ class Farmers(AgentBaseClass):
 
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
+
+        print(f'Loaded {self.n} farmer agents')
 
         for attr in self.agent_attributes:
             assert getattr(self, attr[1:]).shape[0] == self.n

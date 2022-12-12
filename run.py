@@ -28,7 +28,7 @@ TEHSILS = [26, 30, 34, 35]
 
 def get_study_area(input_folder):
     study_area = {
-        "name": "Bhima basin"
+        "name": "GEB"
     }
     gdf = gpd.read_file(os.path.join(input_folder, 'areamaps', 'subdistricts.shp')).to_crs(epsg=4326)
     gdf = gdf[gdf['ID'].isin(TEHSILS)]
