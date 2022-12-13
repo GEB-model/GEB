@@ -922,23 +922,48 @@ class Farmers(AgentBaseClass):
     @staticmethod
     @njit(cache=True)
     def invest_numba(
-        year,
-        farmers_without_well,
-        has_well,
-        neighbors_with_well,
-        latest_profits,
-        latest_potential_profits,
-        loan_interest,
-        loan_amount,
-        loan_duration,
-        loan_end_year,
-        well_price,
-        well_upkeep_price,
-        well_investment_time,
-        interest_rate,
-        disposable_income,
+        year: int,
+        farmers_without_well: np.ndarray,
+        has_well: np.ndarray,
+        neighbors_with_well: np.ndarray,
+        latest_profits: np.ndarray,
+        latest_potential_profits: np.ndarray,
+        loan_interest: np.ndarray,
+        loan_amount: np.ndarray,
+        loan_duration: np.ndarray,
+        loan_end_year: np.ndarray,
+        well_price: int,
+        well_upkeep_price: int,
+        well_investment_time: int,
+        interest_rate: float,
+        disposable_income: np.ndarray,
         disposable_income_threshold: int=0
     ):  
+        """Determines whether a farmer without a well invests in an irrigation well and takes a loan. Each farmer has
+        a probability of investing in a well based on the following factors:
+            - The farmer's latest profit ratio (latest profit / latest potential profit)
+            - The profit ratio of the farmer's neighbors with wells (average of neighbors' latest profit / latest potential profit)
+            - Whether farmer disposable income is sufficient to pay for a loan for a well as well as the yearly upkeep cost
+            - The farmer's disposable income relative to the minimum disposable income required to invest in a well
+  
+        Args:
+            year: the current year
+            farmers_without_well: farmers currently without a well
+            has_well: farmers currently with a will (collary of farmers_without_well)
+            neighbors_with_well: the neighbors of each farmer without a well that does have a well
+            latest_profits: the latest profits of each farmer
+            latest_potential_profits: the latest potential profits of each farmer
+            loan_interest: current interest rate of each farmer's loan
+            loan_amount: current loan amount for each farmer
+            loan_duration: total loan duration for each farmer
+            loan_end_year: the year the loan ends for each farmer
+            well_price: the price of a well
+            well_upkeep_price: the yearly upkeep price of a well
+            well_investment_time: the time farmers consider when investing in a well / time that well is expected to be in operation
+            interest_rate: current interest rate
+            disposable_income: disposable income of each farmer
+            disposable_income_threshold: the minimum disposable income required to invest in a well after considering total well cost
+        """
         neighbor_nan_value = np.iinfo(neighbors_with_well.dtype).max
         for i, farmer_idx in enumerate(farmers_without_well):
             assert not has_well[farmer_idx]
