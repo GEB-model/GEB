@@ -182,8 +182,8 @@ def plot_scenarios(scenarios):
     # ax3.set_position(ax3_position)
 
     ax0.set_ylim(0, 10_000)
-    # start_date = mdates.date2num(date(2007, 1, 1))
-    # end_date = mdates.date2num(date(2007, 6, 1))
+    # start_time = mdates.date2num(date(2007, 1, 1))
+    # end_time = mdates.date2num(date(2007, 6, 1))
     ax3.set_ylim(0, 41)
     
     axins1 = ax0.inset_axes([.74, .20, .13, .70], transform=ax0.transAxes)
@@ -332,7 +332,7 @@ def plot_scenarios(scenarios):
     plt.savefig('hydro_stats_per_scenario.svg')
     # plt.show()
 
-def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
+def obs_vs_sim(scenario, calibration_line, monthly=False, start_time=None):
     fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
     plt.subplots_adjust(left=0.1, right=0.97, bottom=0.07, top=0.92)
     dates, simulated_discharge = get_discharge(scenario, False)
@@ -389,4 +389,4 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
 if __name__ == '__main__':
     scenarios()
     obs_vs_sim('base', calibration_line=datetime(2012, 1, 1), monthly=True)
-    # obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_date=None)
+    # obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_time=None)

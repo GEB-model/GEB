@@ -111,7 +111,7 @@ def get_discharge_score(run_directory, individual):
 	simulated_streamflow = pd.read_csv(Qsim_tss, sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
 	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
 
-	simulated_dates = [calibration_config['spinup_start']]
+	simulated_dates = [calibration_config['spinup_time']]
 	for _ in range(len(simulated_streamflow) - 1):
 		simulated_dates.append(simulated_dates[-1] + timedelta(days=1))
 	simulated_streamflow = simulated_streamflow[1]
@@ -119,7 +119,7 @@ def get_discharge_score(run_directory, individual):
 	simulated_streamflow.name = 'simulated'
 
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
-	streamflows = streamflows[(streamflows.index > datetime.combine(calibration_config['start_date'], datetime.min.time())) & (streamflows.index < datetime.combine(calibration_config['end_date'], datetime.min.time()))]
+	streamflows = streamflows[(streamflows.index > datetime.combine(calibration_config['start_time'], datetime.min.time())) & (streamflows.index < datetime.combine(calibration_config['end_time'], datetime.min.time()))]
 	streamflows['simulated'] += 0.0001
 
 	if calibration_config['monthly']:
@@ -177,8 +177,8 @@ def run_model(individual):
 			with open(args.config, 'r') as f:
 				template = yaml.load(f, Loader=yaml.FullLoader)
 
-			template['general']['spinup_start'] = calibration_config['spinup_start']
-			template['general']['start_time'] = calibration_config['end_date']
+			template['general']['spinup_time'] = calibration_config['spinup_time']
+			template['general']['start_time'] = calibration_config['end_time']
 			template['general']['export_inital_on_spinup'] = False
 			template['report'] = {
 				# "crops_per_district": {

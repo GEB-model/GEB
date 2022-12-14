@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2006-01-01
+  start_time: 2010-07-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
   end_time: 2012-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_start: 2004-01-01
+  spinup_time: 2004-05-01
   ###
   # base folder where to report output data to
   upscale_factor: 40
@@ -54,9 +54,9 @@ logging:
   loglevel: DEBUG
 
 calibration:
-  spinup_start: 2004-01-01
-  start_date: 2006-01-01
-  end_date: 2012-12-31
+  spinup_time: 2004-01-01
+  start_time: 2006-01-01
+  end_time: 2012-12-31
   path: ../DataDrive/GEB_Krishna/calibration/
   gpus: 0
   monthly: false

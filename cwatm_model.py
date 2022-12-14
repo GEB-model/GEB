@@ -17,12 +17,12 @@ class CWatM_Model(CWATModel):
     This class is used to initalize the CWatM model from GEB. Several static configuration files are read first, then several dynamic parameters are set based on the configuration of GEB. Then, the model frame is created that can then later be used to iteratate.
 
     Args:
-        start_date: Start date of the model.
+        start_time: Start date of the model.
         n_steps: Number of steps that the model will run for.
         settings: Filepath of the CWatM settingsfile. For full configuration options please refer to the `CWatM documentation <https://cwatm.iiasa.ac.at/>`.
         use_gpu: Whether the model can use a GPU.
     """
-    def __init__(self, start_date: datetime.datetime, n_steps: int, settings: str) -> None:
+    def __init__(self, start_time: datetime.datetime, n_steps: int, settings: str) -> None:
         self.init_water_table_file = os.path.join(self.config['general']['init_water_table'])
 
         settingsfile.append(settings)
@@ -44,7 +44,7 @@ class CWatM_Model(CWATModel):
             binding['Gauges'] = f"{self.config['general']['gauges']['lon']} {self.config['general']['gauges']['lat']}"
         else:
             binding['Gauges'] = f"{self.config['general']['poor_point']['lon']} {self.config['general']['poor_point']['lat']}"
-        binding['StepStart'] = start_date.strftime('%d/%m/%Y')
+        binding['StepStart'] = start_time.strftime('%d/%m/%Y')
         binding['SpinUp'] = '0'
         binding['StepEnd'] = str(n_steps)
         binding['Modflow_resolution'] = 1000

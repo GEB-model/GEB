@@ -45,7 +45,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
         if args.scenario == 'spinup':
             end_time = self.config['general']['start_time']
-            current_time = self.config['general']['spinup_start']
+            current_time = self.config['general']['spinup_time']
             self.load_initial_data = False
             self.save_initial_data = self.config['general']['export_inital_on_spinup'] 
         else:

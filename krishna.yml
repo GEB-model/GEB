@@ -10,7 +10,7 @@ general:
   end_time: 2012-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_start: 2004-01-01
+  spinup_time: 2004-01-01
   ###
   # base folder where to report output data to
   upscale_factor: 20
@@ -44,9 +44,9 @@ agent_settings:
     return_fraction: .5
 
 calibration:
-  spinup_start: 2004-01-01
-  start_date: 2006-01-01
-  end_date: 2012-12-31
+  spinup_time: 2004-01-01
+  start_time: 2006-01-01
+  end_time: 2012-12-31
   path: ../DataDrive/GEB_Krishna/calibration/
   gpus: 0
   monthly: false
@@ -117,7 +117,7 @@ draw:
   # Here, you can specify which types of agents are to be drawn. In addition, you can specify options on how those agents will be drawn. These options must correspond to method arguments in the artists.
   draw_agents:
     farmers:
-      draw_every_nth: 1
+      draw_every_nth: 100
   draw_geography:
     tehsil:
       properties:
