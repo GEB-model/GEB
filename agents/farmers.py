@@ -17,7 +17,7 @@ from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates
+from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates, load_lending_rates
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -103,10 +103,10 @@ class Farmers(AgentBaseClass):
         self.cultivation_costs = load_cultivation_costs()
         
         self.inflation_rate = load_inflation_rates('India')
+        self.lending_rate = load_lending_rates('India')
         self.well_price = 100_000
         self.well_upkeep_price = 10_000
         self.well_investment_time = 30
-        self.interest_rate = 0.10
 
         self.elevation_map = ArrayReader(
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
@@ -1094,6 +1094,8 @@ class Farmers(AgentBaseClass):
                     search_target_ids=farmers_with_well
                 )
 
+                interest_rate = self.lending_rate[self.model.current_time.year]
+                assert not np.isnan(interest_rate)
                 self.invest_numba(
                     self.model.current_time.year,
                     farmers_without_well_indices,
@@ -1108,7 +1110,7 @@ class Farmers(AgentBaseClass):
                     self.well_price,
                     self.well_upkeep_price,
                     self.well_investment_time,
-                    self.interest_rate,
+                    interest_rate,
                     self.disposable_income,
                 )
     

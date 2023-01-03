@@ -99,8 +99,17 @@ def load_inflation_rates(country):
         inflation[year] = 1 + inflation_series[str(year)] / 100
     return inflation
 
+def load_lending_rates(country):
+    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB lending interest rates', 'API_FR.INR.LEND_DS2_en_csv_v2_4772904.csv')
+    lending_series = pd.read_csv(fp, index_col=0, skiprows=4).loc[country]
+    lending = {}
+    for year in range(1960, 2022):
+        lending[year] = lending_series[str(year)] / 100
+    return lending
+
 if __name__ == '__main__':
     # cultivation_costs = load_cultivation_costs()
     # crop_prices = load_crop_prices()
     # crop_yield_factors = load_crop_factors()
     load_inflation_rates('India')
+    load_lending_rates('India')
