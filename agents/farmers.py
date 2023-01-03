@@ -841,7 +841,8 @@ class Farmers(AgentBaseClass):
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
         field_size_per_farmer: np.ndarray,
-        disposable_income: np.ndarray
+        disposable_income: np.ndarray,
+        farmers_going_out_of_business: bool,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
   
@@ -870,16 +871,14 @@ class Farmers(AgentBaseClass):
             else:
                 continue
             cultivation_cost = cultivation_cost_per_crop[farmer_crop] * field_size_per_farmer[farmer_idx]
-            disposable_income[farmer_idx] -= cultivation_cost
-            for field in farmer_fields:
-                plant[field] = farmer_crop
-            # if disposable_income[farmer_idx] > cultivation_cost:
-            #     disposable_income[farmer_idx] -= cultivation_cost
-            #     for field in farmer_fields:
-            #         plant[field] = farmer_crop
-            # else:
-            #     sell_land[farmer_idx] = True
-        return plant, sell_land
+            if not farmers_going_out_of_business or disposable_income[farmer_idx] > cultivation_cost:
+                disposable_income[farmer_idx] -= cultivation_cost
+                for field in farmer_fields:
+                    plant[field] = farmer_crop
+            else:
+                sell_land[farmer_idx] = True
+        farmers_selling_land = np.where(sell_land)[0]
+        return plant, farmers_selling_land
 
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU.
@@ -892,7 +891,7 @@ class Farmers(AgentBaseClass):
             agricultural_year = f"{year}-{year+1}"
         year_index = self.cultivation_costs[0][agricultural_year]
         cultivation_cost_per_crop = self.cultivation_costs[1][year_index]
-        plant_map, farmers_sell_land = self.plant_numba(
+        plant_map, farmers_selling_land = self.plant_numba(
             self.n,
             self.model.current_time.month,
             self.model.current_time.day,
@@ -902,11 +901,16 @@ class Farmers(AgentBaseClass):
             self.field_indices_by_farmer,
             self.field_indices,
             self.field_size_per_farmer,
-            self.disposable_income
+            self.disposable_income,
+            farmers_going_out_of_business=(
+                self.model.config['agent_settings']['farmers']['farmers_going_out_of_business']
+                and not self.model.args.scenario == 'spinup'  # farmers can only go out of business when not in spinup scenario
+            )
         )
         if self.model.args.use_gpu:
             plant_map = cp.array(plant_map)
-        self.remove_agents(np.where(farmers_sell_land)[0])
+        if farmers_selling_land.size > 0:
+            self.remove_agents(farmers_selling_land)
         if self.model.args.use_gpu:
             plant_map = cp.array(plant_map)
 
