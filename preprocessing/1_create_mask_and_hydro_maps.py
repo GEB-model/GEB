@@ -263,11 +263,19 @@ if __name__ == '__main__':
     # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(75.896042,17.370451))  # Bhima
     mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=POOR_POINT)  # Bhimashankar north
     # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(73.86242,18.87037))  # Bhimashankar south
+    print("creating mask shapefile")
     create_mask_shapefile()
+    print("creating cell area map")
     create_cell_area_map(mask_profile)
+    print("creating cell area map for submask")
     create_cell_area_map(submask_profile, prefix='sub_')
+    print("creating ldd")
     create_ldd(mask_profile)
+    print("creating mannings coefficient and channel width")
     get_channel_manning_and_width(mask_profile)
+    print("get river length and channel ratio")
     get_river_length_and_channelratio(mask_profile)
+    print("geter river slope")
     get_river_slope(mask_profile)
+    print("get elevation standard deviation")
     get_elevation_std(mask_profile)
