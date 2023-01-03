@@ -26,7 +26,7 @@ SIZE_CLASSES = (
 
 def read_census_data(fn):
     census_data = gpd.read_file(fn)
-    subdistricts = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp'))
+    subdistricts = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson'))
     census_data = census_data[census_data.set_index(['state_name', 'district_n', 'sub_dist_1']).index.isin(subdistricts.set_index(['state_name', 'district_n', 'sub_dist_1']).index)]
     return census_data
 
@@ -171,7 +171,7 @@ def get_farm_count_table(census_df):
 
 if __name__ == '__main__':
     os.makedirs(os.path.join(INPUT, 'census'), exist_ok=True)
-    fn = os.path.join(INPUT, 'areamaps', 'subdistricts.shp')
+    fn = os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')
     census_data = gpd.read_file(fn)
     census_df = census_data[['state_name', 'district_n', 'sub_dist_1']]
     get_farm_size_table(census_df)

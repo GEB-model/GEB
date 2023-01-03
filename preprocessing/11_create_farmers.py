@@ -291,7 +291,7 @@ def main():
         '20.0 & ABOVE': (200_000, 400_000),
     }
 
-    tehsils_shapefile = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp')).set_index('ID')
+    tehsils_shapefile = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')).set_index('ID')
 
     avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
 

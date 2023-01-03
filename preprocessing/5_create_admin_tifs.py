@@ -11,7 +11,7 @@ from rasterio import Affine
 from preconfig import ORIGINAL_DATA, INPUT
 
 def cut(study_region_fn):
-    output_file = os.path.join(INPUT, 'areamaps', 'subdistricts.shp')
+    output_file = os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')
     study_area = gpd.read_file(study_region_fn)
     subdistricts = gpd.read_file(os.path.join(ORIGINAL_DATA, 'census', 'tehsils.geojson')).to_crs(study_area.crs)
 
@@ -28,7 +28,7 @@ def create_tif():
     output_file = os.path.join(INPUT, 'areamaps', 'tehsils.tif')
     with rasterio.open(os.path.join(os.path.join(INPUT, 'areamaps', 'submask.tif')), 'r') as src:
         profile = src.profile
-    gdf = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp')).to_crs(profile['crs'])
+    gdf = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')).to_crs(profile['crs'])
     minx, miny, maxx, maxy = gdf.total_bounds
     affine = profile['transform']
 
@@ -64,6 +64,8 @@ def create_tif():
         for value, geom
         in zip(gdf['ID'].tolist(), gdf['geometry'].tolist())
     ]
+    # replace TELENGANA with TELANGANA in 2015 states
+    gdf['15_state'] = gdf['15_state'].replace('TELENGANA', 'TELANGANA')
     # get dictionary of 2015 states for each subdistrict
     subdistrict2state = gdf.set_index('ID')['15_state'].to_dict()
     admin_areas = rasterize(
