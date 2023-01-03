@@ -42,7 +42,7 @@ agent_settings:
     NonDamagingOutflowQ: 4.0
   farmers:
     return_fraction: .5
-
+    farmers_going_out_of_business: true
 ###
 # This sections contains settings for logging of the model. 
 logging:
@@ -55,17 +55,17 @@ logging:
 
 calibration:
   spinup_time: 2004-01-01
-  start_time: 2006-01-01
-  end_time: 2012-12-31
-  path: ../DataDrive/GEB_Krishna/calibration/
+  start_time: 2004-01-02
+  end_time: 2004-01-05
+  path: ../DataDrive/GEB_Sanctuary/calibration/
   gpus: 0
   monthly: false
 
   DEAP:
-    use_multiprocessing: True
-    ngen: 10
-    mu: 60
-    lambda_: 12
+    use_multiprocessing: False
+    ngen: 3
+    mu: 10
+    lambda_: 3
     select_best: 10
 
   parameters:

@@ -15,7 +15,7 @@ general:
   # base folder where to report output data to
   upscale_factor: 40
   basin_id: 450000005
-  poor_point:
+  gauges:
     lon: 75.895273
     lat: 17.370473
   CWatM_settings: CWatM.ini
@@ -42,12 +42,13 @@ agent_settings:
     NonDamagingOutflowQ: 4.0
   farmers:
     return_fraction: .5
+    farmers_going_out_of_business: true
 
 calibration:
   spinup_time: 2004-01-01
   start_time: 2006-01-01
   end_time: 2012-12-31
-  path: ../DataDrive/GEB_Krishna/calibration/
+  path: ../DataDrive/GEB_Bhima/calibration/
   gpus: 0
   monthly: false
 

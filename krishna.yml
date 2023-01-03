@@ -7,7 +7,7 @@ general:
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2012-12-31
+  end_time: 2018-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   spinup_time: 2004-01-01
@@ -42,6 +42,7 @@ agent_settings:
     NonDamagingOutflowQ: 4.0
   farmers:
     return_fraction: .5
+    farmers_going_out_of_business: true
 
 calibration:
   spinup_time: 2004-01-01
