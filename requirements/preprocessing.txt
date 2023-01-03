@@ -4,3 +4,4 @@ chromedriver_autoinstaller
 arcgis2geojson
 scipy
 tqdm
+lxml
