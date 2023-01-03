@@ -5,3 +5,4 @@ arcgis2geojson
 scipy
 tqdm
 lxml
+html5lib
