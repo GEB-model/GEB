@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import difflib
 import geopandas as gpd
 import pandas as pd
 import os
@@ -20,7 +21,7 @@ import numpy as np
 import chromedriver_autoinstaller
 chromedriver_autoinstaller.install()
 
-from preconfig import ORIGINAL_DATA
+from preconfig import ORIGINAL_DATA, INPUT
 
 N_PROCESSES = 1
 SIZE_CLASSES = [
@@ -32,6 +33,7 @@ class CensusScraper:
     def __init__(self, url, root_dir, download_dir, dropdowns, download_name, headless=True):
         self.url = url
         self.root_dir = root_dir
+        os.makedirs(self.root_dir, exist_ok=True)
         self.root_download_dir = download_dir
         self.dropdowns = dropdowns
         self.download_name = download_name
@@ -99,11 +101,14 @@ class CensusScraper:
             for i in range (0, len(dropdownElement.find_elements(By.TAG_NAME, 'option'))):
                 if dropdownElement.find_elements(By.TAG_NAME, 'option')[i].text == text:
                     return i
-        raise Exception('No option with text: ' + text + ' was found')
+        options = [option.text for option in dropdownElement.find_elements(By.TAG_NAME, 'option')]
+        options = difflib.get_close_matches(text, options, n=len(options), cutoff=0)
+        print('No option with text: ' + text + ' was found, potential options are: ' + ", ".join(options))
+        raise ValueError('No option with text: ' + text + ' was found, potential options are: ' + ", ".join(options))
 
-    def configure_dropdown(self, ID, value):
+    def configure_dropdown(self, ID, value, sleep=1):
         # print("selecting", value)
-        time.sleep(1)
+        time.sleep(sleep)
         while True:
             try:
                 element = self.driver.find_element(By.ID, ID)
@@ -117,10 +122,14 @@ class CensusScraper:
                 break
         
         WebDriverWait(self.driver, 30).until(EC.element_to_be_clickable((By.TAG_NAME, 'option')))
-        to_select = element.find_elements(By.TAG_NAME, 'option')[self.findIndexByText(element, value)]
-        if not to_select.is_selected():
-            time.sleep(1)
-            to_select.click()
+        try:
+            to_select = element.find_elements(By.TAG_NAME, 'option')[self.findIndexByText(element, value)]
+        except ValueError:
+            raise
+        else:
+            if not to_select.is_selected():
+                time.sleep(1)
+                to_select.click()
 
     def download_file(self, new_file) -> None:
         if os.path.exists(os.path.join(self.download_dir, self.download_name)):
@@ -164,7 +173,7 @@ class CensusScraper:
         dropdown_state = self.driver.find_element(By.ID, ID)
         return [option.text for option in dropdown_state.find_elements(By.TAG_NAME, "option")]
 
-    def download(self, year, to_download, subtype=None) -> None:
+    def download(self, year, to_download, subtype=None, subset=None) -> None:
         # print("Working on", kind, '-', year)
         # Need to click the current year first because the other dropdown options change based on this
         # time.sleep(5)
@@ -181,13 +190,15 @@ class CensusScraper:
         self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlDistrict", district)
 
         for subdistrict in subdistricts:
-            # print(state, district, subdistrict)
+            print(state, district, subdistrict)
             if subtype:
                 self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlTehsil", subdistrict)
                 for ID, value in self.dropdowns:
                     self.configure_dropdown(ID, value)
                 # time.sleep(3)
                 subtype_options = self.get_options(subtype)
+                if subset:
+                    subtype_options = [option for option in subtype_options if option in subset]
                 subtype_options = sorted(subtype_options)
                 for subtype_option in subtype_options:
                     folder = os.path.join(self.root_dir, subtype_option.replace('*', '#').replace('/', '.'))
@@ -209,9 +220,16 @@ class CensusScraper:
                     fp = os.path.join(self.root_dir, state + '-' + district  + '-' + subdistrict + '.csv')
 
                 if not os.path.exists(fp):
-                    self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlTehsil", subdistrict)
+                    try:
+                        self.configure_dropdown("_ctl0_ContentPlaceHolder1_ddlTehsil", subdistrict)
+                    except ValueError:
+                        print("Skipping", state, district, subdistrict)
+                        # continue
+                        raise
                     for ID, value in self.dropdowns:
-                        self.configure_dropdown(ID, value)
+                        self.configure_dropdown(ID, value, sleep=.3)
+                    # with open(fp, 'w') as f:
+                    #     pass
                     self.download_file(fp)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -273,7 +291,7 @@ def process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_c
 
     assert (subdistricts['matched'] == True).all()
     subdistricts = subdistricts.drop('matched', axis=1)
-    subdistricts['2001_subdi'] = np.where(subdistricts['01_sub_alt'].isnull(), subdistricts['2001_subdi'], subdistricts['01_sub_alt'])
+    # subdistricts[f'{year_short_string}_subd'] = np.where(subdistricts[f'{year_short_string}_sub_alt'].isnull(), subdistricts[f'{year_short_string}_subd'], subdistricts[f'{year_short_string}_sub_alt'])
     fn = kind
     if subtype:
         fn = kind + f'_{subtype}'
@@ -283,7 +301,7 @@ def process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_c
     # import matplotlib.pyplot as plt
     # plt.show()
 
-def download(to_download, headless, url, year, root_dir, dropdowns, download_name, kind, tehsil_2_shapefile, subtype):
+def download(to_download, headless, url, year, root_dir, dropdowns, download_name, subtype, subset=None):
     download_dir = 'tmp'
     os.makedirs(download_dir, exist_ok=True)
     sleep = 900
@@ -292,7 +310,7 @@ def download(to_download, headless, url, year, root_dir, dropdowns, download_nam
             try:
                 with CensusScraper(url, root_dir, download_dir, dropdowns=dropdowns, download_name=download_name, headless=headless) as downloader:
                     # print('lets download')
-                    downloader.download(year, to_download, subtype=subtype)
+                    downloader.download(year, to_download, subtype=subtype, subset=subset)
                 break
             except (AttributeError, NoSuchElementException, TimeoutException):
                 time.sleep(sleep)
@@ -305,8 +323,10 @@ def download(to_download, headless, url, year, root_dir, dropdowns, download_nam
         # print('Downloading finished')
         break
 
-def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_class_column='SizeClass', scrape=True, headless=True, response_block=0):
-    root_dir = os.path.join(ORIGINAL_DATA, 'census', 'scraped', kind, year)
+def main(url, kind, year, dropdowns, download_name, fields, subtype=None, subset=None, size_class_column='SizeClass', scrape=True, create_file=True, headless=True, response_block=0):
+    year_short_string = str(year)[-2:]
+    year_str = f"{year}-{str(year + 1)[-2:]}"
+    root_dir = os.path.join(ORIGINAL_DATA, 'census', 'scraped', kind, year_str)
     # if subtype:
     #     root_dir = os.path.join(root_dir, subtype)
     # root_dir = os.path.join(root_dir, year)
@@ -315,24 +335,26 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
     tehsil_2_shapefile = {}
     to_download = {}
 
-    subdistricts = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'census', 'tehsils.shp')).to_crs(epsg=4326)
-    subdistricts['2001_distr'] = subdistricts['2001_distr'].str.strip().str.upper()
-    subdistricts['2001_subdi'] = subdistricts['2001_subdi'].str.strip().str.upper()
-    subdistricts = subdistricts.sort_values(['2001_state', '2001_distr', '2001_subdi'])
-    # subdistricts = subdistricts[subdistricts['2001_subdi'] == 'PAGIDYALA']
+    subdistricts = gpd.GeoDataFrame.from_file(os.path.join(ORIGINAL_DATA, 'census', 'tehsils.geojson'))
+    subdistricts[f'{year_short_string}_dist'] = subdistricts[f'{year_short_string}_dist'].str.strip().str.upper()
+    subdistricts[f'{year_short_string}_subd'] = subdistricts[f'{year_short_string}_subd'].str.strip().str.upper()
+    subdistricts = subdistricts.sort_values([f'{year_short_string}_state', f'{year_short_string}_dist', f'{year_short_string}_subd'])
+    subdistricts = subdistricts[subdistricts[f'{year_short_string}_subd'] != '']
     
     to_download = {}
-    for state_name, districts in subdistricts.groupby('2001_state'):
-        for district_name, tehsils in districts.groupby('2001_distr'):
+    for state_name, districts in subdistricts.groupby(f'{year_short_string}_state'):
+        for district_name, tehsils in districts.groupby(f'{year_short_string}_dist'):
             if district_name not in to_download:
                 to_download[(state_name, district_name)] = []
             for idx, tehsil in tehsils.iterrows():
-                tehsil_name = tehsil['2001_subdi']
-                if tehsil['value']:
-                    tehsil_name = tehsil_name, tehsil['value']
+                tehsil_name = tehsil[f'{year_short_string}_subd']
+                if tehsil[f'{year_short_string}_value']:
+                    tehsil_name = tehsil_name, tehsil[f'{year_short_string}_value']
                 tehsil_2_shapefile[(state_name, district_name, tehsil_name)] = idx
                 if tehsil_name != '0':
                     to_download[(state_name, district_name)].append(tehsil_name)
+            if len(to_download[(state_name, district_name)]) == 0:
+                del to_download[(state_name, district_name)]
 
     to_download = list(to_download.items())
 
@@ -340,7 +362,7 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
         timeout = 3600
         with ProcessPool(max_workers=1) as pool:
             for to_download_district in tqdm(to_download):
-                future = pool.submit(download, timeout, to_download_district, headless=headless, url=url, year=year, root_dir=root_dir, dropdowns=dropdowns, download_name=download_name, kind=kind, tehsil_2_shapefile=tehsil_2_shapefile, subtype=subtype)
+                future = pool.submit(download, timeout, to_download_district, headless=headless, url=url, year=year_str, root_dir=root_dir, dropdowns=dropdowns, download_name=download_name, subtype=subtype, subset=subset)
                 while True:
                     try:
                         future.result()
@@ -348,54 +370,55 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, size_c
                         break
                     except TimeoutError:
                         print('Process timed out, resubmitting.')
+                        # import subprocess
                         # subprocess.call(r"kill $(ps -A -ostat,ppid | awk '/[zZ]/ && !a[$2]++ {print $2}')", shell=True)
-                        future = pool.submit(download, timeout, to_download_district, headless=headless, url=url, year=year, root_dir=root_dir, dropdowns=dropdowns, download_name=download_name, kind=kind, tehsil_2_shapefile=tehsil_2_shapefile, subtype=subtype)
-        # if N_PROCESSES > 1:
-        #     process_map(partial(download, headless=headless, url=url, year=year, root_dir=root_dir, dropdowns=dropdowns, download_name=download_name, kind=kind, tehsil_2_shapefile=tehsil_2_shapefile, subtype=subtype), to_download, max_workers=N_PROCESSES)
-        # else:
-        #     for to_download_district in tqdm(to_download):
-        #         download(to_download_district, headless=headless, url=url, year=year, root_dir=root_dir, dropdowns=dropdowns, download_name=download_name, kind=kind, tehsil_2_shapefile=tehsil_2_shapefile, subtype=subtype)
+                        future = pool.submit(download, timeout, to_download_district, headless=headless, url=url, year=year_str, root_dir=root_dir, dropdowns=dropdowns, download_name=download_name, subtype=subtype, subset=subset)
 
-    subdistricts['matched'] = False
-    subdistricts.loc[subdistricts['2001_subdi'] == '0', 'matched'] = True
+    if create_file:
+        subdistricts['matched'] = False
+        subdistricts.loc[subdistricts[f'{year_short_string}_subd'] == '0', 'matched'] = True
 
-    if subtype:
-        subdistricts['matched'] = True
-        print('Creating geojsons')
-        for subtype_name in tqdm(os.listdir(root_dir)):
-            folder = os.path.join(root_dir, subtype_name)
-            process_csv(folder, tehsil_2_shapefile, subdistricts.copy(), response_block, size_class_column, fields, kind, subtype_name)
-    else:
-        process_csv(root_dir, tehsil_2_shapefile, subdistricts.copy(), response_block, size_class_column, fields, kind, subtype)
+        if subtype:
+            subdistricts['matched'] = True
+            print('Creating geojsons')
+            for subtype_name in tqdm(os.listdir(root_dir)):
+                folder = os.path.join(root_dir, subtype_name)
+                process_csv(folder, tehsil_2_shapefile, subdistricts.copy(), response_block, size_class_column, fields, kind, subtype_name)
+        else:
+            process_csv(root_dir, tehsil_2_shapefile, subdistricts.copy(), response_block, size_class_column, fields, kind, subtype)
     
 
 if __name__ == '__main__':
-    scrape = False
-    headless = False
-    for year in ('2000-01', ):
-    # for year in ('2000-01', '2010-11', '2015-16'):
-        main(
-            url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
-            kind='farm_size',
-            year=year,
-            dropdowns=[
-                ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
-                ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-                ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
-            ],
-            download_name='TehsilT1table1.csv',
-            size_class_column='field4',
-            fields={
-                'area_total1': "area_total",
-                'no_total1': "n_total"
-            },
-            scrape=scrape,
-            headless=headless,
-            response_block=2
-        )
+    scrape = True
+    headless = True
+    create_file = False
+    for year in (2010, 2015):
+        # main(
+        #     url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
+        #     kind='farm_size',
+        #     year=year,
+        #     dropdowns=[
+        #         ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
+        #         ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+        #         ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
+        #     ],
+        #     download_name='TehsilT1table1.csv',
+        #     size_class_column='field4',
+        #     fields={
+        #         'area_total1': "area_total",
+        #         'no_total1': "n_total"
+        #     },
+        #     scrape=scrape,
+        #     create_file=create_file,
+        #     headless=headless,
+        #     response_block=2
+        # )
+        crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))['CENSUS'].tolist()
+        crops = [crop.upper() for crop in crops]
         main(
             url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
             kind='crops',
+            subset=crops,
             subtype="_ctl0_ContentPlaceHolder1_ddlCrop",
             year=year,
             dropdowns=[
@@ -410,6 +433,7 @@ if __name__ == '__main__':
                 'total_ar': 'total_area'
             },
             scrape=scrape,
+            create_file=create_file,
             headless=headless
         )
         # main(
