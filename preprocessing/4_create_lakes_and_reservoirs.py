@@ -31,7 +31,7 @@ def lakeResIDs2raster() -> None:
     basin_lakes = gpd.GeoDataFrame.from_file(shpfile)
     geometries = [(shapely.geometry.mapping(geom), value) for value, geom in zip(basin_lakes['Hylak_id'].tolist(), basin_lakes['geometry'].tolist())]
     for type_ in ('', 'sub'):
-        with rasterio.open(os.path.join(INPUT, 'areamaps', f'{type_}mask.tif')) as src:
+        with rasterio.open(os.path.join(INPUT, 'areamaps', f'{type_}mask.tif'), 'r') as src:
             profile = src.profile
             transform = src.profile['transform']
             shape = src.profile['height'], src.profile['width']
@@ -175,7 +175,7 @@ def create_command_area_raster() -> list[int]:
     
     geometries = [(shapely.geometry.mapping(geom), value) for value, geom in zip(command_areas['Hylak_id'].tolist(), command_areas['geometry'].tolist())]
     for type_ in ('', 'sub'):
-        with rasterio.open(os.path.join(INPUT, 'areamaps', f'{type_}mask.tif')) as src:
+        with rasterio.open(os.path.join(INPUT, 'areamaps', f'{type_}mask.tif'), 'r') as src:
             profile = src.profile
             transform = src.profile['transform']
             shape = src.profile['height'], src.profile['width']

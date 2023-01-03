@@ -28,7 +28,7 @@ def scale(files: list[str]) -> None:
     Args:
         files: list of files to convert
     """
-    with rasterio.open(os.path.join(INPUT, 'areamaps', 'mask.tif')) as src:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'mask.tif'), 'r') as src:
         profile = src.profile
         transform = profile['transform']
 
