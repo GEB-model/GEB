@@ -247,7 +247,7 @@ SIZE_GROUP = {
 
 with rasterio.open(os.path.join(INPUT, 'tehsils.tif'), 'r') as src:
     tehsils_tif = src.read(1)
-    cell_area = create_cell_area_map(src.profile, write_to_disk=True)
+    cell_area = create_cell_area_map(src.profile, write_to_disk=False)
 
 tehsils_shape = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp')).set_index(['state_name', 'district_n', 'sub_dist_1'])
 avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
@@ -373,3 +373,11 @@ if args.n_jobs == 1:
 else:
     from tqdm.contrib.concurrent import process_map
     process_map(fit, ipl_groups, max_workers=args.n_jobs)
+
+# create a list of all the files in the folder
+files = os.listdir(folder)
+#iterate through the list of files
+for file in files:
+    # open files in pandas
+    df = pd.read_csv(os.path.join(folder, file))
+    
