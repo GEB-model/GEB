@@ -262,12 +262,12 @@ report_cwatm:
 
 parameters:
   SnowMeltCoef: 0.004
-  arnoBeta_add: 0.18781855039414305
-  factor_interflow: 1.5507514321846023
-  lakeAFactor: 0.8654560453843747
-  lakeEvaFactor: 1.471582423324509
-  manningsN: 2.058737439843661
+  arnoBeta_add: 0.649909530160824
+  factor_interflow: 2.3983522755389464
+  lakeAFactor: 2.266022869975258
+  lakeEvaFactor: 2.6809090698581635
+  manningsN: 1.068234835513196
   normalStorageLimit: 0.645563228322237
-  preferentialFlowConstant: 6.1010022638948005
-  recessionCoeff_factor: 6.959587883563559
-  soildepth_factor: 1.1880513031716229
+  preferentialFlowConstant: 2.179117403429014
+  recessionCoeff_factor: 3.3017546806644646
+  soildepth_factor: 1.1431318497886513
