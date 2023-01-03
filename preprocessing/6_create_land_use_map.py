@@ -139,7 +139,7 @@ def create_cwatm_land_use(GLC30: np.ndarray, rivers: np.ndarray, template: str, 
 
 if __name__ == '__main__':
     prefix = "full_tehsils_"
-    template = os.path.join(INPUT, 'tehsils.tif')
+    template = os.path.join(INPUT, 'areamaps', 'tehsils.tif')
     rivers = get_rivers(100, template)
     GLC30 = merge_GLC30(template)
     ((CWatM_land_use_profile, CWatM), (cultivated_land_profile, cultivated_land)) = create_cwatm_land_use(GLC30, rivers, template, prefix)

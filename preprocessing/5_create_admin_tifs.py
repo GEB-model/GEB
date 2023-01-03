@@ -1,5 +1,6 @@
 import os
 import math
+import json
 import rasterio
 import geopandas as gpd
 import numpy as np
@@ -12,7 +13,7 @@ from preconfig import ORIGINAL_DATA, INPUT
 def cut(study_region_fn):
     output_file = os.path.join(INPUT, 'areamaps', 'subdistricts.shp')
     study_area = gpd.read_file(study_region_fn)
-    subdistricts = gpd.read_file(os.path.join(ORIGINAL_DATA, 'census', 'tehsils.shp')).to_crs(study_area.crs)
+    subdistricts = gpd.read_file(os.path.join(ORIGINAL_DATA, 'census', 'tehsils.geojson')).to_crs(study_area.crs)
 
     merged = gpd.overlay(subdistricts, study_area).dissolve(by='objectid')
     # merged['area_overlap'] = merged.area
@@ -24,7 +25,7 @@ def cut(study_region_fn):
     overlapping_subdistricts.to_file(output_file)
 
 def create_tif():
-    output_file = os.path.join(INPUT, 'tehsils.tif')
+    output_file = os.path.join(INPUT, 'areamaps', 'tehsils.tif')
     with rasterio.open(os.path.join(os.path.join(INPUT, 'areamaps', 'submask.tif')), 'r') as src:
         profile = src.profile
     gdf = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.shp')).to_crs(profile['crs'])
@@ -63,6 +64,8 @@ def create_tif():
         for value, geom
         in zip(gdf['ID'].tolist(), gdf['geometry'].tolist())
     ]
+    # get dictionary of 2015 states for each subdistrict
+    subdistrict2state = gdf.set_index('ID')['15_state'].to_dict()
     admin_areas = rasterize(
         geometries,
         out_shape=(new_profile['height'], new_profile['width']),
@@ -73,6 +76,9 @@ def create_tif():
     )
     with rasterio.open(output_file, 'w', **new_profile) as dst:
         dst.write(admin_areas, 1)
+
+    with open(os.path.join(INPUT, 'areamaps', 'subdistrict2state.json'), 'w') as f:
+        json.dump(subdistrict2state, f)
 
 if __name__ == '__main__':
     cut(os.path.join(INPUT, 'areamaps', 'mask.shp'))

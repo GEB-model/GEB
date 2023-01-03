@@ -298,7 +298,7 @@ def main():
     with rasterio.open(os.path.join(INPUT, 'areamaps', 'sub_cell_area.tif'), 'r') as src:
         avg_cell_area = np.mean(src.read(1))
 
-    with rasterio.open(os.path.join(INPUT, "tehsils.tif")) as src_tehsils, rasterio.open(os.path.join(INPUT, 'landsurface', "full_tehsils_cultivated_land.tif"), 'r') as src_cultivated_land:
+    with rasterio.open(os.path.join(INPUT, 'areamaps', "tehsils.tif"), 'r') as src_tehsils, rasterio.open(os.path.join(INPUT, 'landsurface', "full_tehsils_cultivated_land.tif"), 'r') as src_cultivated_land:
         profile = src_tehsils.profile
         tehsils = src_tehsils.read(1)
         cultivated_land = src_cultivated_land.read(1)

@@ -245,7 +245,7 @@ SIZE_GROUP = {
     '20.0 & ABOVE': ['10.0-20.0', '20.0 & ABOVE'],
 }
 
-with rasterio.open(os.path.join(INPUT, 'tehsils.tif'), 'r') as src:
+with rasterio.open(os.path.join(INPUT, 'areamaps', 'tehsils.tif'), 'r') as src:
     tehsils_tif = src.read(1)
     cell_area = create_cell_area_map(src.profile, write_to_disk=False)
 
