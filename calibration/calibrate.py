@@ -60,7 +60,10 @@ mu = calibration_config['DEAP']['mu']
 lambda_ = calibration_config['DEAP']['lambda_']
 
 # Load observed streamflow
-gauges = config['general']['gauges']
+if 'gauges' in config['general']:
+	gauges = config['general']['gauges']
+else:
+	gauges = config['general']['poor_point']
 streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
 streamflow_data = pd.read_csv(streamflow_path, sep=",", parse_dates=True, index_col=0)
 observed_streamflow = streamflow_data["flow"]
@@ -105,7 +108,7 @@ def get_irrigation_equipment_score(run_directory, individual):
 def get_discharge_score(run_directory, individual):
 	Qsim_tss = os.path.join(run_directory, dischargetss)
 	if not os.path.isfile(Qsim_tss):
-		print("run_id: "+str(individual.label)+" File: "+ Qsim_tss)
+		print("run_id: " + str(individual.label)+" File: "+ Qsim_tss)
 		raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
 	
 	simulated_streamflow = pd.read_csv(Qsim_tss, sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
@@ -129,15 +132,15 @@ def get_discharge_score(run_directory, individual):
 	if OBJECTIVE == 'KGE':
 		# Compute objective function score
 		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])
-		print("run_id: "+str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
+		print("run_id: " + str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
 		with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
-			myfile.write(str(individual.label)+","+str(KGE)+"\n")
+			myfile.write(str(individual.label)+"," + str(KGE)+"\n")
 		return KGE
 	elif OBJECTIVE == 'COR':
 		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'])
-		print("run_id: "+str(individual.label)+", COR "+"{0:.3f}".format(COR))
+		print("run_id: " + str(individual.label)+", COR "+"{0:.3f}".format(COR))
 		with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
-			myfile.write(str(individual.label)+","+str(COR)+"\n")
+			myfile.write(str(individual.label)+"," + str(COR)+"\n")
 		return COR
 	elif OBJECTIVE == 'NSE':
 		NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'])
@@ -233,7 +236,7 @@ def run_model(individual):
 				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 			if p.returncode == 0:
 				with open(os.path.join(logs_path, f"log{individual.label}.txt"), 'w') as f:
-					content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
+					content = "OUTPUT:\n" + str(output.decode())+"\nERRORS:\n" + str(errors.decode())
 					f.write(content)
 				modflow_folder = os.path.join(run_directory, 'spinup', 'modflow_model')
 				if os.path.exists(modflow_folder):
@@ -241,7 +244,7 @@ def run_model(individual):
 				break
 			elif p.returncode == 1:
 				with open(os.path.join(logs_path, f"log{individual.label}_{''.join((random.choice(string.ascii_lowercase) for x in range(10)))}.txt"), 'w') as f:
-					content = "OUTPUT:\n"+str(output.decode())+"\nERRORS:\n"+str(errors.decode())
+					content = "OUTPUT:\n" + str(output.decode())+"\nERRORS:\n" + str(errors.decode())
 					f.write(content)
 				shutil.rmtree(run_directory)
 			else:
@@ -268,6 +271,20 @@ def export_front_history(calibration_values, effmax, effmin, effstd, effavg):
 		index=list(range(ngen))
 	)
 	front_history.to_excel(os.path.join(calibration_path, "front_history.xlsx"))
+
+def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
+	# set global variable for each process in the pool:
+	global ctrl_c_entered
+	global default_sigint_handler
+	ctrl_c_entered = False
+	default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+
+	global lock
+	global current_gpu_use_count
+	global n_gpus
+	n_gpus = gpus
+	lock = manager_lock
+	current_gpu_use_count = manager_current_gpu_use_count
 
 if __name__ == "__main__":
 	calibration_values = ['KGE']
@@ -309,19 +326,6 @@ if __name__ == "__main__":
 	toolbox.decorate("mate", checkBounds(0, 1))
 	toolbox.decorate("mutate", checkBounds(0, 1))
 
-	def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
-		# set global variable for each process in the pool:
-		global ctrl_c_entered
-		global default_sigint_handler
-		ctrl_c_entered = False
-		default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-
-		global lock
-		global current_gpu_use_count
-		global n_gpus
-		n_gpus = gpus
-		lock = manager_lock
-		current_gpu_use_count = manager_current_gpu_use_count
 
 	manager = multiprocessing.Manager()
 	current_gpu_use_count = manager.Value('i', 0)
@@ -407,8 +411,8 @@ if __name__ == "__main__":
 			effavg[generation, ii] = np.average([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 			effstd[generation, ii] = np.std([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 		
-		print(">> gen: "+str(generation) + ", effmax_KGE: "+"{0:.3f}".format(effmax[generation, 0]))
-		# print(">> gen: "+str(generation) + ", effmax_irrigation_equipment: "+"{0:.3f}".format(effmax[generation, 1]))
+		print(">> gen: " + str(generation) + ", effmax_KGE: "+"{0:.3f}".format(effmax[generation, 0]))
+		# print(">> gen: " + str(generation) + ", effmax_irrigation_equipment: "+"{0:.3f}".format(effmax[generation, 1]))
 
 	# Finito
 	if use_multiprocessing is True:
