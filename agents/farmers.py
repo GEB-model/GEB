@@ -2,10 +2,9 @@
 import os
 import math
 from datetime import date
-from tkinter import E
+import json
 
 import numpy as np
-import pandas as pd
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
@@ -60,7 +59,7 @@ class Farmers(AgentBaseClass):
         "activation_order_by_elevation_fixed",
         "agent_attributes_meta",
         "sample",
-        "tehsil_map",
+        "subdistrict_map",
         "crop_names",
         "cultivation_costs",
         "crop_prices",
@@ -102,7 +101,6 @@ class Farmers(AgentBaseClass):
         self.crop_names = load_crop_names()
         self.growth_length, self.crop_stage_lengths, self.crop_factors, self.crop_yield_factors, self.reference_yield = load_crop_factors()
         self.cultivation_costs = load_cultivation_costs()
-        self.crop_prices = load_crop_prices()
         
         self.inflation_rate = load_inflation_rates('India')
         self.well_price = 100_000
@@ -114,10 +112,30 @@ class Farmers(AgentBaseClass):
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
             bounds=self.model.bounds
         )
-        self.tehsil_map = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'tehsils.tif'),
+
+        # load map of all subdistricts
+        self.subdistrict_map = ArrayReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'tehsils.tif'),
             bounds=self.model.bounds
         )
+        # load dictionary that maps subdistricts to state names
+        with open(os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'subdistrict2state.json'), 'r') as f:
+            subdistrict2state = json.load(f)
+            subdistrict2state = {int(subdistrict): state for subdistrict, state in subdistrict2state.items()}
+            # assert that all subdistricts keys are integers
+            assert all([isinstance(subdistrict, int) for subdistrict in subdistrict2state.keys()])
+            # make sure all keys are consecutive integers starting at 0
+            assert min(subdistrict2state.keys()) == 0
+            assert max(subdistrict2state.keys()) == len(subdistrict2state) - 1
+            # load unique states
+            states = list(set(subdistrict2state.values()))
+            # create numpy array mapping subdistricts to states
+            state2int = {state: i for i, state in enumerate(states)}
+            self.subdistrict2state = np.zeros(len(subdistrict2state), dtype=np.int32)
+            for subdistrict, state in subdistrict2state.items():
+                self.subdistrict2state[subdistrict] = state2int[state]
+        
+        self.crop_prices = load_crop_prices(state2int)
 
         self.agent_attributes_meta = {
             "_locations": {
@@ -791,22 +809,26 @@ class Farmers(AgentBaseClass):
             year = self.model.current_time.year
             month = self.model.current_time.month
             crop_price_index = self.crop_prices[0][date(year, month, 1)]
-            crop_prices = self.crop_prices[1][crop_price_index]
-            assert not np.isnan(crop_prices).any()
+            crop_prices_per_state = self.crop_prices[1][crop_price_index]
+            assert not np.isnan(crop_prices_per_state).any()
+            
+            tehsil_per_field = self.tehsil[harvesting_farmer_fields]
+            state_per_field = np.take(self.subdistrict2state, tehsil_per_field)
 
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
             # get potential crop profit per farmer
             crop_yield_gr = harvested_area * yield_ratio * max_yield_per_crop
             assert (crop_yield_gr >= 0).all()
-            profit = crop_yield_gr * np.take(crop_prices, harvested_crops)
+            crop_prices_per_field = crop_prices_per_state[state_per_field, harvested_crops]
+            profit = crop_yield_gr * crop_prices_per_field
             assert (profit >= 0).all()
             
             profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
 
             # get potential crop profit per farmer
             potential_crop_yield = harvested_area * max_yield_per_crop
-            potential_profit = potential_crop_yield * np.take(crop_prices, harvested_crops)
+            potential_profit = potential_crop_yield * crop_prices_per_field
             potential_profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
       
             self.save_profit(harvesting_farmers, profit_per_farmer, potential_profit_per_farmer)
@@ -1444,7 +1466,7 @@ class Farmers(AgentBaseClass):
   
         self.locations[self.n-1] = agent_location
         self.elevation[self.n-1] = self.elevation_map.sample_coords(np.expand_dims(agent_location, axis=0))
-        self.tehsil[self.n-1] = self.tehsil_map.sample_coords(np.expand_dims(agent_location, axis=0))
+        self.tehsil[self.n-1] = self.subdistrict_map.sample_coords(np.expand_dims(agent_location, axis=0))
         self.crops[self.n-1] = 1
         self.irrigated[self.n-1] = False
         self.wealth[self.n-1] = 0

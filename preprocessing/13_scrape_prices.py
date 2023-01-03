@@ -217,7 +217,7 @@ def parse(state, crops=None):
         for commodity in os.listdir(SCRAPE_PATH):
             if crops and commodity not in crops:
                 continue
-            print(commodity)
+            print(f'\t{commodity}')
             commody_prices = []
             commodity_folder = os.path.join(SCRAPE_PATH, commodity)
             for fn in os.listdir(commodity_folder):
@@ -237,8 +237,8 @@ def parse(state, crops=None):
                     df = pd.read_html(fp, header=0, index_col=0)[0]
                 except ValueError:
                     continue
-                if state in df.index:
-                    commody_prices.append((date, df.loc[state, column_name]))
+                if state.title() in df.index:
+                    commody_prices.append((date, df.loc[state.title(), column_name]))
             commody_prices = sorted(commody_prices, key=lambda x: x[0])
             if commody_prices:
                 value_dates, values = zip(*commody_prices)
@@ -272,5 +272,4 @@ if __name__ == '__main__':
     states = set(subdistrict2state.values())
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'), index_col=0)['PRICE'].to_list()
     for state in states:
-        state = state.title()
         parse(state, crops=crops)

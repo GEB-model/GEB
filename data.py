@@ -1,5 +1,5 @@
 import os
-
+from datetime import date
 import numpy as np
 import pandas as pd
 
@@ -18,16 +18,32 @@ def load_cultivation_costs():
 
     return date_index, cultivation_costs
 
-def load_crop_prices():
-    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['PRICE'].to_dict()
-    fp = os.path.join(ORIGINAL_DATA, 'crops', 'crop_prices_rs_per_g.xlsx')
-    # TODO: Could do more sophisticated interpolation or obtain data from other states.
-    df = pd.read_excel(fp, index_col=0).fillna(method='ffill').fillna(method='bfill')
-    date_index = dict(((date, i) for i, date in enumerate(df.index.date)))
-    crop_prices = np.full((len(date_index), len(crops)), np.nan, dtype=np.float32)  # first index for date, second index for crops
+def load_crop_prices(state2int: dict) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
+    """Load crop prices per state from the input data and return a dictionary of states containing 2D array of prices.
+    
+    Returns:
+        date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
+        crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop."""
     print("Deal with sugarcane prices")
-    for ID, name in crops.items():
-        crop_prices[:, ID] = df[name]
+    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['PRICE'].to_dict()
+    folder = os.path.join(INPUT, 'crops', 'crop_prices_rs_per_g')
+    crop_prices = None
+    date_index = None
+    for fn in os.listdir(folder):
+        assert fn.endswith('.xlsx')
+        state = fn.replace('.xlsx', '')
+        state_index = state2int[state]
+        fp = os.path.join(folder, fn)
+        # TODO: Could do more sophisticated interpolation or obtain data from other states.
+        df = pd.read_excel(fp, index_col=0).fillna(method='ffill').fillna(method='bfill')
+        if not date_index:
+            date_index = dict(((date, i) for i, date in enumerate(df.index.date)))
+        else:
+            assert date_index == dict(((date, i) for i, date in enumerate(df.index.date)))
+        if crop_prices is None:
+            crop_prices = np.full((len(date_index), len(state2int), len(crops)), np.nan, dtype=np.float32)  # first index for date, second for state, third index for crops
+        for ID, name in crops.items():
+            crop_prices[:, state_index, ID] = df[name]
     return date_index, crop_prices
 
 def load_crop_factors() -> dict[np.ndarray]:
@@ -67,7 +83,7 @@ def load_crop_factors() -> dict[np.ndarray]:
     }
 
     # MIRCA2000 reference yields
-    reference_yield = df['reference_yield_gr_m2']
+    reference_yield = df['reference_yield_gr_m2'].to_numpy()
     assert not np.isnan(reference_yield).any()
     
     return growth_length, stage_lengths, crop_factors, yield_factors, reference_yield
