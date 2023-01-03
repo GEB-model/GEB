@@ -2,6 +2,7 @@
 import os
 import time 
 import re
+import json
 import calendar
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -16,7 +17,7 @@ from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.by import By
 import chromedriver_autoinstaller
 
-from preconfig import ORIGINAL_DATA
+from preconfig import ORIGINAL_DATA, INPUT
 
 chromedriver_autoinstaller.install() 
 
@@ -200,10 +201,12 @@ class Scraper:
                         raise Exception
         print(f'Process {self.i} - finished')
 
-def parse(state):
+def parse(state, crops=None):
     print(f"Parsing {state}")
 
-    output_path = os.path.join(ORIGINAL_DATA, 'crops', "crop_prices_rs_per_g.xlsx")
+    output_folder = os.path.join(INPUT, 'crops', 'crop_prices_rs_per_g')
+    os.makedirs(output_folder, exist_ok=True)
+    output_path = os.path.join(output_folder, f"{state}.xlsx")
     if not os.path.exists(output_path):
 
         dates = [datetime(2000, 1, 1)]
@@ -212,6 +215,8 @@ def parse(state):
 
         output = pd.DataFrame(index=dates)
         for commodity in os.listdir(SCRAPE_PATH):
+            if crops and commodity not in crops:
+                continue
             print(commodity)
             commody_prices = []
             commodity_folder = os.path.join(SCRAPE_PATH, commodity)
@@ -243,7 +248,7 @@ def parse(state):
         output.to_excel(output_path)
     else:
         output = pd.read_excel(output_path, index_col=0)
-    print(output)
+    # print(output)
     # fig, ax = plt.subplots(1)
     # ax.plot(value_dates, values, label=commodity)
     # plt.legend()
@@ -262,5 +267,10 @@ if __name__ == '__main__':
     N_WORKERS = 10
     # with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
     #     done = executor.map(workwork, list(range(1, N_WORKERS+1)))
-    state = 'Maharashtra'
-    parse(state)
+    with open(os.path.join(INPUT, 'areamaps', 'subdistrict2state.json'), 'r') as f:
+        subdistrict2state = json.load(f)
+    states = set(subdistrict2state.values())
+    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'), index_col=0)['PRICE'].to_list()
+    for state in states:
+        state = state.title()
+        parse(state, crops=crops)
