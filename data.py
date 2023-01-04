@@ -107,9 +107,28 @@ def load_lending_rates(country):
         lending[year] = lending_series[str(year)] / 100
     return lending
 
+def load_well_prices(inflation_rates_per_year):
+    well_price_2008 = 146_000
+    upkeep_price_2008_m2 = 3000 / 10_000  # ha to m2
+    # create dictory with prices for well_prices per year by applying inflation rates
+    well_prices = {2008: well_price_2008}
+    for year in range(2009, 2022):
+        well_prices[year] = well_prices[year-1] * inflation_rates_per_year[year]
+    for year in range(2007, 1960, -1):
+        well_prices[year] = well_prices[year+1] / inflation_rates_per_year[year+1]
+    # do the same for upkeep price
+    upkeep_prices = {2008: upkeep_price_2008_m2}
+    for year in range(2009, 2022):
+        upkeep_prices[year] = upkeep_prices[year-1] * inflation_rates_per_year[year]
+    for year in range(2007, 1960, -1):
+        upkeep_prices[year] = upkeep_prices[year+1] / inflation_rates_per_year[year+1]
+    return well_prices, upkeep_prices
+
+
 if __name__ == '__main__':
     # cultivation_costs = load_cultivation_costs()
     # crop_prices = load_crop_prices()
     # crop_yield_factors = load_crop_factors()
-    load_inflation_rates('India')
+    inflation_rates = load_inflation_rates('India')
+    well_prices = load_well_prices(inflation_rates)
     load_lending_rates('India')

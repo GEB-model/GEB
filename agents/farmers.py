@@ -104,7 +104,7 @@ class Farmers(AgentBaseClass):
         
         self.inflation_rate = load_inflation_rates('India')
         self.lending_rate = load_lending_rates('India')
-        self.well_price, self.well_upkeep_price_per_ha = load_well_prices(self.inflation_rate)
+        self.well_price, self.well_upkeep_price_per_m2 = load_well_prices(self.inflation_rate)
         self.well_investment_time = 30
 
         self.elevation_map = ArrayReader(
@@ -953,12 +953,13 @@ class Farmers(AgentBaseClass):
         neighbors_with_well: np.ndarray,
         latest_profits: np.ndarray,
         latest_potential_profits: np.ndarray,
+        farm_size_m2: np.ndarray,
         loan_interest: np.ndarray,
         loan_amount: np.ndarray,
         loan_duration: np.ndarray,
         loan_end_year: np.ndarray,
-        well_price: int,
-        well_upkeep_price: int,
+        well_price: float,
+        well_upkeep_price_per_m2: float,
         well_investment_time: int,
         interest_rate: float,
         disposable_income: np.ndarray,
@@ -978,12 +979,13 @@ class Farmers(AgentBaseClass):
             neighbors_with_well: the neighbors of each farmer without a well that does have a well
             latest_profits: the latest profits of each farmer
             latest_potential_profits: the latest potential profits of each farmer
+            farm_size_m2: the size of each farmer's farm in m2
             loan_interest: current interest rate of each farmer's loan
             loan_amount: current loan amount for each farmer
             loan_duration: total loan duration for each farmer
             loan_end_year: the year the loan ends for each farmer
             well_price: the price of a well
-            well_upkeep_price: the yearly upkeep price of a well
+            well_upkeep_price_per_m2: the yearly upkeep price of a well per m2
             well_investment_time: the time farmers consider when investing in a well / time that well is expected to be in operation
             interest_rate: current interest rate
             disposable_income: disposable income of each farmer
@@ -1012,13 +1014,13 @@ class Farmers(AgentBaseClass):
 
                 potential_benefit = profit_with_neighbor_efficiency - latest_profit
                 potential_benefit_over_investment_time = potential_benefit * well_investment_time
-                total_cost_over_investment_time = well_price + well_upkeep_price * well_investment_time
+                total_cost_over_investment_time = well_price + well_upkeep_price_per_m2 * farm_size_m2[farmer_idx] * well_investment_time
 
                 if potential_benefit_over_investment_time <= total_cost_over_investment_time:
                     continue
                     
                 # assume linear loan
-                money_left_for_investment = disposable_income[farmer_idx] - well_upkeep_price
+                money_left_for_investment = disposable_income[farmer_idx] - well_upkeep_price_per_m2 * farm_size_m2[farmer_idx]
                 well_loan_duration = 30
                 loan_size = well_price
                 yearly_payment = loan_size / well_loan_duration + loan_size * interest_rate
@@ -1079,7 +1081,6 @@ class Farmers(AgentBaseClass):
             farmers_without_well_indices = farmers_with_crop_option[farmers_without_well]
 
             if farmers_without_well.size > 0 and farmers_with_well.size > 0:
-
                 neighbors_with_well = find_neighbors(
                     self.locations[farmers_with_crop_option],
                     radius=5_000,
@@ -1102,12 +1103,13 @@ class Farmers(AgentBaseClass):
                     neighbors_with_well,
                     self.latest_profits,
                     self.latest_potential_profits,
+                    self.field_size_per_farmer,
                     self.loan_interest,
                     self.loan_amount,
                     self.loan_duration,
                     self.loan_end_year,
                     self.well_price[self.model.current_time.year],
-                    self.well_upkeep_price[self.model.current_time.year],
+                    self.well_upkeep_price_per_m2[self.model.current_time.year],
                     self.well_investment_time,
                     interest_rate,
                     self.disposable_income,
@@ -1354,7 +1356,7 @@ class Farmers(AgentBaseClass):
         pass
 
     def upkeep_assets(self):
-        self.disposable_income -= self.well_upkeep_price * self.has_well
+        self.disposable_income -= self.well_upkeep_price_per_m2[self.model.current_time.year] * self.field_size_per_farmer * self.has_well
 
     def make_loan_payment(self):
         has_loan = self.loan_amount > 0
