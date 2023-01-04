@@ -24,7 +24,8 @@ def load_crop_prices(state2int: dict) -> tuple[dict[dict[date, int]], dict[str, 
     Returns:
         date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
         crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop."""
-    print("Deal with sugarcane prices")
+    sugarcane_FRP = pd.read_excel(os.path.join(ORIGINAL_DATA, 'crop_prices', 'FRP.xlsx')).set_index('Year')  # Fair and Remunerative Price
+
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['PRICE'].to_dict()
     folder = os.path.join(INPUT, 'crops', 'crop_prices_rs_per_g')
     crop_prices = None
@@ -33,17 +34,22 @@ def load_crop_prices(state2int: dict) -> tuple[dict[dict[date, int]], dict[str, 
         assert fn.endswith('.xlsx')
         state = fn.replace('.xlsx', '')
         state_index = state2int[state]
-        fp = os.path.join(folder, fn)
         # TODO: Could do more sophisticated interpolation or obtain data from other states.
-        df = pd.read_excel(fp, index_col=0).fillna(method='ffill').fillna(method='bfill')
+        agmarknet_prices = pd.read_excel(os.path.join(folder, fn), index_col=0).fillna(method='ffill').fillna(method='bfill')
         if not date_index:
-            date_index = dict(((date, i) for i, date in enumerate(df.index.date)))
+            date_index = dict(((date, i) for i, date in enumerate(agmarknet_prices.index.date)))
         else:
-            assert date_index == dict(((date, i) for i, date in enumerate(df.index.date)))
+            assert date_index == dict(((date, i) for i, date in enumerate(agmarknet_prices.index.date)))
         if crop_prices is None:
             crop_prices = np.full((len(date_index), len(state2int), len(crops)), np.nan, dtype=np.float32)  # first index for date, second for state, third index for crops
         for ID, name in crops.items():
-            crop_prices[:, state_index, ID] = df[name]
+            if name == 'Sugarcane':
+                for month, month_idx in date_index.items():
+                    agricultural_year = f"{month.year-1}-{month.year}" if month.month < 7 else f"{month.year}-{month.year+1}"
+                    crop_prices[month_idx, state_index, ID] = sugarcane_FRP.loc[agricultural_year]
+            else:
+                crop_prices[:, state_index, ID] = agmarknet_prices[name]
+    assert not np.isnan(crop_prices).any()
     return date_index, crop_prices
 
 def load_crop_factors() -> dict[np.ndarray]:
