@@ -701,44 +701,25 @@ class Farmers(AgentBaseClass):
         return mask
   
     def plant_initial(self) -> None:
-        """When the model is initalized, crops are already growing. This function first finds out which farmers are already growing crops, how old these are, as well as the multicrop indices. Then, these arrays per farmer are converted to the field array.
-        """
         self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
         self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
 
         self.var.land_use_type[self.var.land_use_type == 2] = 1
         self.var.land_use_type[self.var.land_use_type == 3] = 1
-
-        crop_age_days = np.full(self.n, -1)
-
-        if self.model.args.use_gpu:
-            crop_age_days = cp.array(crop_age_days)
-
-        if self.model.args.use_gpu:
-            plant = cp.array(self.crops)
-        else:
-            plant = self.crops.copy()
-        plant[crop_age_days == -1] = -1
   
-        self.var.crop_map = self.by_field(plant)
-        self.var.crop_age_days_map = self.by_field(crop_age_days)
+        self.var.crop_map = np.full_like(self.var.land_owners, -1)
+        self.var.crop_age_days_map = np.full_like(self.var.land_owners, -1)
+        self.var.crop_harvest_age_days = np.full_like(self.var.crop_age_days_map, -1)
           
-        assert self.var.crop_map.shape == self.var.crop_age_days_map.shape
-
-        field_is_paddy_irrigated = (self.var.crop_map == self.crop_names['Paddy'])
-        self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
-        self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
-
     @staticmethod
-    @njit(cache=True)
+    # @njit(cache=True)
     def harvest_numba(
-        season: str,
         n: np.ndarray,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
         crop_map: np.ndarray,
         crop_age_days: np.ndarray,
-        growth_length: np.ndarray,
+        crop_harvest_age_days: np.ndarray,
     ) -> np.ndarray:
         """This function determines whether crops are ready to be harvested by comparing the crop harvest age to the current age of the crop. If the crop is harvested, the crops next multicrop index and next plant day are determined.
 
@@ -756,14 +737,6 @@ class Farmers(AgentBaseClass):
         Returns:
             harvest: Boolean subarray map of fields to be harvested.
         """
-        if season == 'Kharif':
-            season_idx = 0
-        elif season == 'Rabi':
-            season_idx = 1
-        elif season == 'Summer':
-            season_idx = 2
-        else:
-            raise ValueError
         harvest = np.zeros(crop_map.shape, dtype=np.bool_)
         for farmer_i in range(n):
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_i)
@@ -772,8 +745,9 @@ class Farmers(AgentBaseClass):
                 if crop_age >= 0:
                     crop = crop_map[field]
                     assert crop != -1
-                    if crop_age == growth_length[crop, season_idx]:
+                    if crop_age == crop_harvest_age_days[field]:
                         harvest[field] = True
+                        crop_harvest_age_days[field] = -1
                 else:
                     assert crop_map[field] == -1
         return harvest
@@ -786,13 +760,12 @@ class Farmers(AgentBaseClass):
         crop_map = self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map
         crop_age_days = self.var.crop_age_days_map.get() if self.model.args.use_gpu else self.var.crop_age_days_map
         harvest = self.harvest_numba(
-            season=self.current_season,
             n=self.n,
             field_indices_by_farmer=self.field_indices_by_farmer,
             field_indices=self.field_indices,
             crop_map=crop_map,
             crop_age_days=crop_age_days,
-            growth_length=self.growth_length,
+            crop_harvest_age_days=self.var.crop_harvest_age_days,
         )
         if np.count_nonzero(harvest):  # Check if any harvested fields. Otherwise we don't need to run this.
             yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
@@ -850,13 +823,17 @@ class Farmers(AgentBaseClass):
         # increase crop age by 1 where crops are not harvested and growing
         self.var.crop_age_days_map[(harvest == False) & (self.var.crop_map >= 0)] += 1
 
+        assert (self.var.crop_age_days_map <= self.var.crop_harvest_age_days).all()
+
     @staticmethod
-    @njit(cache=True)
+    # @njit(cache=True)
     def plant_numba(
         n: int,
-        month: int,
-        day: int,
+        season_idx: int,
+        is_first_day_of_season: bool,
+        growth_length: np.ndarray,
         crop_map: np.ndarray,
+        crop_harvest_age_days: np.ndarray,
         crops: np.ndarray,
         cultivation_cost_per_crop: np.ndarray,
         field_indices_by_farmer: np.ndarray,
@@ -883,19 +860,23 @@ class Farmers(AgentBaseClass):
         sell_land = np.zeros(disposable_income.size, dtype=np.bool_)
         for farmer_idx in range(n):
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
-            if month == 6 and day == 1:  # Kharif
-                farmer_crop = crops[farmer_idx, 0]
-            elif month == 11 and day == 1:  # Rabi
-                farmer_crop = crops[farmer_idx, 1]
-            elif month == 3 and day == 1:  # Summer
-                farmer_crop = crops[farmer_idx, 2]
+            if is_first_day_of_season:
+                farmer_crop = crops[farmer_idx, season_idx]
+                if farmer_crop == -1:
+                    continue
             else:
                 continue
+            assert farmer_crop != -1
             cultivation_cost = cultivation_cost_per_crop[farmer_crop] * field_size_per_farmer[farmer_idx]
             if not farmers_going_out_of_business or disposable_income[farmer_idx] > cultivation_cost:
                 disposable_income[farmer_idx] -= cultivation_cost
+                field_harvest_age = growth_length[farmer_crop, season_idx]
                 for field in farmer_fields:
+                    # a crop is still growing here.
+                    if crop_harvest_age_days[field] != -1:
+                        continue
                     plant[field] = farmer_crop
+                    crop_harvest_age_days[field] = field_harvest_age
             else:
                 sell_land[farmer_idx] = True
         farmers_selling_land = np.where(sell_land)[0]
@@ -913,16 +894,18 @@ class Farmers(AgentBaseClass):
         year_index = self.cultivation_costs[0][agricultural_year]
         cultivation_cost_per_crop = self.cultivation_costs[1][year_index]
         plant_map, farmers_selling_land = self.plant_numba(
-            self.n,
-            self.model.current_time.month,
-            self.model.current_time.day,
-            self.var.crop_map if not self.model.args.use_gpu else self.var.crop_map.get(),
-            self.crops,
-            cultivation_cost_per_crop,
-            self.field_indices_by_farmer,
-            self.field_indices,
-            self.field_size_per_farmer,
-            self.disposable_income,
+            n=self.n,
+            season_idx=self.current_season_idx,
+            is_first_day_of_season=self.is_first_day_of_season,
+            growth_length=self.growth_length,
+            crop_map=self.var.crop_map if not self.model.args.use_gpu else self.var.crop_map.get(),
+            crop_harvest_age_days=self.var.crop_harvest_age_days,
+            crops=self.crops,
+            cultivation_cost_per_crop=cultivation_cost_per_crop,
+            field_indices_by_farmer=self.field_indices_by_farmer,
+            field_indices=self.field_indices,
+            field_size_per_farmer=self.field_size_per_farmer,
+            disposable_income=self.disposable_income,
             farmers_going_out_of_business=(
                 self.model.config['agent_settings']['farmers']['farmers_going_out_of_business']
                 and not self.model.args.scenario == 'spinup'  # farmers can only go out of business when not in spinup scenario
@@ -1377,11 +1360,23 @@ class Farmers(AgentBaseClass):
         """
         month = self.model.current_time.month
         if month in (6, 7, 8, 9, 10):
-            self.current_season = 'Kharif'
+            self.current_season_idx = 0  # kharif
+            if month == 6 and self.model.current_time.day == 1:
+                self.is_first_day_of_season = True
+            else:
+                self.is_first_day_of_season = False
         elif month in (11, 12, 1, 2):
-            self.current_season = 'Rabi'
+            self.current_season_idx = 1  # rabi
+            if month == 11 and self.model.current_time.day == 1:
+                self.is_first_day_of_season = True
+            else:
+                self.is_first_day_of_season = False
         elif month in (3, 4, 5):
-            self.current_season = 'Summer'
+            self.current_season_idx = 2  # summer
+            if month == 3 and self.model.current_time.day == 1:
+                self.is_first_day_of_season = True
+            else:
+                self.is_first_day_of_season = False
         else:
             raise ValueError(f"Invalid month: {month}")
         
