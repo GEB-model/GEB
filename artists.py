@@ -86,8 +86,8 @@ class Artists(honeybeesArtists):
             'data.HRU.crop_map': {
                 'type': 'categorical',
                 'nanvalue': -1,
-                'names': [self.model.config['draw']['crop_data'][i]['name'] for i in range(7)],
-                'colors': [self.model.config['draw']['crop_data'][i]['color'] for i in range(7)],
+                'names': [self.model.config['draw']['crop_data'][i]['name'] for i in range(13)],
+                'colors': [self.model.config['draw']['crop_data'][i]['color'] for i in range(13)],
             },
             'data.HRU.land_use_type': {
                 'type': 'categorical',

@@ -127,25 +127,43 @@ draw:
   crop_data:
     0:
       name: Bajra
-      color: '#006400'
+      color: '#e6194b'
     1:
       name: Groundnut
-      color: '#808000'
+      color: '#3cb44b'
     2:
       name: Jowar
-      color: '#808000'
+      color: '#ffe119'
     3:
       name: Paddy
-      color: '#483d8b'
+      color: '#4363d8'
     4:
       name: Sugarcane
-      color: '#3cb371'
+      color: '#f58231'
     5:
-      name: Tomato
-      color: '#008080'
-    6:
       name: Wheat
-      color: '#4682b4'
+      color: '#911eb4'
+    6:
+      name: Cotton
+      color: '#46f0f0'
+    7:
+      name: Gram
+      color: '#f032e6'
+    8:
+      name: Maize
+      color: '#bcf60c'
+    9:
+      name: Moong
+      color: '#fabebe'
+    10:
+      name: Ragi
+      color: '#008080'
+    11:
+      name: Sunflower
+      color: '#e6beff'
+    12:
+      name: Tur (Arhar)
+      color: '#9a6324'
 
 ###
 # Here, you can configure which data should be saved from the model in the `report` folder. This should be formatted as follows:
