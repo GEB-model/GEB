@@ -42,7 +42,7 @@ agent_settings:
     NonDamagingOutflowQ: 4.0
   farmers:
     return_fraction: .5
-    farmers_going_out_of_business: true
+    farmers_going_out_of_business: false
 
 calibration:
   spinup_time: 2004-01-01
