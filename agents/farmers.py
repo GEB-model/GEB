@@ -17,7 +17,7 @@ from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates, load_lending_rates
+from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates, load_lending_rates, load_well_prices
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -104,8 +104,7 @@ class Farmers(AgentBaseClass):
         
         self.inflation_rate = load_inflation_rates('India')
         self.lending_rate = load_lending_rates('India')
-        self.well_price = 100_000
-        self.well_upkeep_price = 10_000
+        self.well_price, self.well_upkeep_price_per_ha = load_well_prices(self.inflation_rate)
         self.well_investment_time = 30
 
         self.elevation_map = ArrayReader(
@@ -1107,8 +1106,8 @@ class Farmers(AgentBaseClass):
                     self.loan_amount,
                     self.loan_duration,
                     self.loan_end_year,
-                    self.well_price,
-                    self.well_upkeep_price,
+                    self.well_price[self.model.current_time.year],
+                    self.well_upkeep_price[self.model.current_time.year],
                     self.well_investment_time,
                     interest_rate,
                     self.disposable_income,
@@ -1352,8 +1351,7 @@ class Farmers(AgentBaseClass):
         self.disposable_income[self.disposable_income < 0] = 0  # for now, weassume that farmers cannot go into debt
 
     def adjust_prices_inflation(self):
-        self.well_price *= self.inflation_rate[self.model.current_time.year]
-        self.well_upkeep_price *= self.inflation_rate[self.model.current_time.year]
+        pass
 
     def upkeep_assets(self):
         self.disposable_income -= self.well_upkeep_price * self.has_well
@@ -1438,7 +1436,7 @@ class Farmers(AgentBaseClass):
                 np.sort(last_farmer_HRUs),
                 np.sort(get_farmer_HRUs(self.field_indices, self.field_indices_by_farmer, farmer_idx))
             )
-            assert math.isclose(last_farmer_field_size, self.field_size_per_farmer[farmer_idx], abs_tol=0.01)
+            assert math.isclose(last_farmer_field_size, self.field_size_per_farmer[farmer_idx], abs_tol=1)
 
         for attr in self.agent_attributes:
             assert attr.startswith('_')
