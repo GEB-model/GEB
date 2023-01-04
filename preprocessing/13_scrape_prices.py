@@ -244,7 +244,7 @@ def parse(state, crops=None):
                 value_dates, values = zip(*commody_prices)
                 output[commodity] = np.nan
                 output.loc[value_dates, commodity] = values
-        output = output / 100 / 1000  # rs / quintal -> rs / g
+        output = output / 100 / 1000  # rs / quintal (100 kg) -> rs / g
         output.to_excel(output_path)
     else:
         output = pd.read_excel(output_path, index_col=0)
