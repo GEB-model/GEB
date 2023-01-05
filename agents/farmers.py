@@ -1335,9 +1335,6 @@ class Farmers(AgentBaseClass):
         self.disposable_income -= self.daily_expenses_per_capita * self.household_size
         self.disposable_income[self.disposable_income < 0] = 0  # for now, weassume that farmers cannot go into debt
 
-    def adjust_prices_inflation(self):
-        pass
-
     def upkeep_assets(self):
         self.disposable_income -= self.well_upkeep_price_per_m2[self.model.current_time.year] * self.field_size_per_farmer * self.has_well
 
@@ -1384,7 +1381,6 @@ class Farmers(AgentBaseClass):
         self.plant()
         self.expenses_and_income()
         if self.model.current_time.month == 1 and self.model.current_time.day == 1 and self.model.args.scenario != 'spinup':
-            self.adjust_prices_inflation()
             self.upkeep_assets()
             self.make_loan_payment()
             self.invest()
