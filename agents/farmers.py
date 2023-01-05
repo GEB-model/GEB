@@ -1349,6 +1349,20 @@ class Farmers(AgentBaseClass):
         self.disposable_income[has_loan] -= loan_payment
         self.disposable_income[self.disposable_income < 0] = 0  # for now, we assume that farmers don't have negative disposable income
 
+    @staticmethod
+    @njit(cache=True)
+    def switch_crops(sugarcane_idx, land_owners, reservoir_command_areas, crops) -> None:
+        """Switches crops for each farmer.
+
+        This function is called at the beginning of each season.
+        """
+        # get all farmers with at least one field in reservoir command area
+        farmers_in_reservoir_command_area = np.unique(land_owners[(reservoir_command_areas != -1) & (land_owners != -1)])
+        for farmer in farmers_in_reservoir_command_area:
+            # each farmer has a 20% probability of switching to sugarcane
+            if np.random.random() < .20:
+                crops[farmer] = sugarcane_idx
+
     def step(self) -> None:
         """
         This function is called at the beginning of each timestep.
@@ -1381,6 +1395,8 @@ class Farmers(AgentBaseClass):
         self.plant()
         self.expenses_and_income()
         if self.model.current_time.month == 1 and self.model.current_time.day == 1 and self.model.args.scenario != 'spinup':
+            if self.model.args.scenario == 'sugarcane':
+                self.switch_crops(self.crop_names["Sugarcane"], self.var.land_owners, self.var.reservoir_command_areas, self.crops)
             self.upkeep_assets()
             self.make_loan_payment()
             self.invest()
