@@ -123,7 +123,7 @@ if __name__ == '__main__':
         "study_area": study_area
     }
 
-    if args.headless:
+    if not args.GUI:
         model = GEBModel(**model_params)
         if args.profiling:
             with cProfile.Profile() as pr:
