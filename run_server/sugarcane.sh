@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=spinup
-#SBATCH --output=spinup.out
+#SBATCH --job-name=base
+#SBATCH --output=base.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=12G
+#SBATCH --mem=20G
 #SBATCH --time=100:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jens.de.bruijn@vu.nl
@@ -18,4 +18,4 @@ cd $SCRIPT_DIR
 # module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate GEB  # activate conda environment
 
-python run.py --scenario spinup --config krishna.yml
+python run.py --scenario sugarcane --config krishna.yml
