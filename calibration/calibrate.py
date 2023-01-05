@@ -221,7 +221,7 @@ def run_model(individual):
 				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 			lock.release()
 			
-			command = f"python run.py --config {config_path} --headless --scenario spinup"
+			command = f"python run.py --config {config_path} --scenario spinup"
 			if use_gpu is not False:
 				command += f' --GPU --gpu_device {use_gpu}'
 			print(command, flush=True)

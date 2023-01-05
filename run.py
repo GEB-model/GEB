@@ -49,6 +49,8 @@ def get_study_area(input_folder):
     return study_area, colors
 
 if __name__ == '__main__':
+    print("remove line below after calibration")
+    parser.add_argument('--headless', dest='headless', action='store_true', help=f"The model can be run with or without a visual interface. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.")
     args = parser.parse_args()
     if args.use_gpu:
         import cupy
