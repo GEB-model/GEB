@@ -7,7 +7,7 @@ general:
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2012-12-31
+  end_time: 2010-07-10
   ###
   # start of the spinup time (YYYY-MM-DD).
   spinup_time: 2004-05-01
@@ -217,27 +217,27 @@ report:
   #   format: npy
   #   frequency: initial_only
   #   save: export
-  # reservoir irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: reservoir_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npy
-  #   save: export
-  # groundwater irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: groundwater_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npy
-  #   save: export
-  # channel irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: channel_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npy
-  #   save: export
+  reservoir irrigation:
+    type: farmers
+    function: null
+    varname: reservoir_abstraction_m3_by_farmer
+    frequency: per_timestep
+    format: npy
+    save: export
+  groundwater irrigation:
+    type: farmers
+    function: null
+    varname: groundwater_abstraction_m3_by_farmer
+    frequency: per_timestep
+    format: npy
+    save: export
+  channel irrigation:
+    type: farmers
+    function: null
+    varname: channel_abstraction_m3_by_farmer
+    frequency: per_timestep
+    format: npy
+    save: export
   # is water aware:
   #   type: farmers
   #   function: sum

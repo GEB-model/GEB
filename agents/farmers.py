@@ -712,7 +712,7 @@ class Farmers(AgentBaseClass):
         self.var.crop_harvest_age_days = np.full_like(self.var.crop_age_days_map, -1)
           
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def harvest_numba(
         n: np.ndarray,
         field_indices_by_farmer: np.ndarray,

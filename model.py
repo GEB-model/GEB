@@ -69,12 +69,10 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.reporter = Reporter(self)
 
-        areamaps_folder = os.path.join(self.reporter.abm_reporter.export_folder, 'areamaps')
-        if not os.path.exists(areamaps_folder):
-            os.makedirs(areamaps_folder)
-        np.save(os.path.join(areamaps_folder, 'land_owners.npy'), self.data.HRU.land_owners)
-        np.save(os.path.join(areamaps_folder, 'unmerged_HRU_indices.npy'), self.data.HRU.unmerged_HRU_indices)
-        np.save(os.path.join(areamaps_folder, 'scaling.npy'), self.data.HRU.scaling)
+        np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'land_owners.npy'), self.data.HRU.land_owners)
+        np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'unmerged_HRU_indices.npy'), self.data.HRU.unmerged_HRU_indices)
+        np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'scaling.npy'), self.data.HRU.scaling)
+        np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'activation_order.npy'), self.agents.farmers.activation_order_by_elevation)
 
         self.running = True
 

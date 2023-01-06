@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import yaml
 
 def read_npy(report_folder, name, dt, scenario=None):
     if scenario:
