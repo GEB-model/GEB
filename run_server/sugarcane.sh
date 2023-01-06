@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=base
-#SBATCH --output=base.out
+#SBATCH --job-name=sugarcane
+#SBATCH --output=sugarcane.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
