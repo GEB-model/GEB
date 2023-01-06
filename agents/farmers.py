@@ -826,7 +826,7 @@ class Farmers(AgentBaseClass):
         assert (self.var.crop_age_days_map <= self.var.crop_harvest_age_days).all()
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def plant_numba(
         n: int,
         season_idx: int,
