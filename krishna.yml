@@ -197,12 +197,13 @@ report:
     save: save
     format: csv
     groupby: tehsil
-  # well_irrigated_sample:
-  #   type: farmers
-  #   function: sample
-  #   varname: well_irrigated
-  #   save: save
-  #   format: csv
+  well_irrigated:
+    type: farmers
+    function: sum
+    varname: has_well
+    frequency: per_timestep
+    save: save
+    format: csv
   # wealth_sample:
   #   type: farmers
   #   function: sample
@@ -216,27 +217,27 @@ report:
   #   format: npy
   #   frequency: initial_only
   #   save: export
-  # reservoir irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: reservoir_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npy
-  #   save: export
-  # groundwater irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: groundwater_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npy
-  #   save: export
-  # channel irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: channel_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npy
-  #   save: export
+  reservoir irrigation:
+    type: farmers
+    function: null
+    varname: reservoir_abstraction_m3_by_farmer
+    frequency: per_timestep
+    format: npy
+    save: export
+  groundwater irrigation:
+    type: farmers
+    function: null
+    varname: groundwater_abstraction_m3_by_farmer
+    frequency: per_timestep
+    format: npy
+    save: export
+  channel irrigation:
+    type: farmers
+    function: null
+    varname: channel_abstraction_m3_by_farmer
+    frequency: per_timestep
+    format: npy
+    save: export
   # is water aware:
   #   type: farmers
   #   function: sum
