@@ -67,6 +67,7 @@ class BaseVariables:
                 return np.load(fp)
         else:
             return default
+
 class Grid(BaseVariables):
     """This class is to store data in the 'normal' grid cells. This class works with compressed and uncompressed arrays. On initialization of the class, the mask of the study area is read from disk. This is the shape of any uncompressed array. Many values in this array, however, fall outside the stuy area as they are masked. Therefore, the array can be compressed by saving only the non-masked values.
     

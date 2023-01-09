@@ -213,7 +213,6 @@ class Farmers(AgentBaseClass):
             },
         }
         self.initiate_agents()
-        self.plant_initial()
 
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
@@ -314,6 +313,12 @@ class Farmers(AgentBaseClass):
 
             self._daily_expenses_per_capita = np.full(self.max_n, -1, dtype=np.float32)
             self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
+    
+        self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32))
+        self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32))
+        self.var.crop_map = self.var.load_initial('crop_map', default=np.full_like(self.var.land_owners, -1))
+        self.var.crop_age_days_map = self.var.load_initial('crop_age_days_map', default=np.full_like(self.var.land_owners, -1))
+        self.var.crop_harvest_age_days = self.var.load_initial('crop_harvest_age_days', default=np.full_like(self.var.land_owners, -1))
 
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
@@ -471,10 +476,7 @@ class Farmers(AgentBaseClass):
         for activated_farmer_index in range(activation_order.size):
             farmer = activation_order[activated_farmer_index]
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
-            if irrigation_efficiency[farmer]:
-                efficiency = 0.8
-            else:
-                efficiency = 0.6
+            irrigation_efficiency_farmer = irrigation_efficiency[farmer]
 
             # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
             farmer_has_access_to_irrigation_water = False
@@ -498,7 +500,7 @@ class Farmers(AgentBaseClass):
                 for field in farmer_fields:
                     if crop_map[field] != -1:
                         f_var = HRU_to_grid[field]
-                        irrigation_water_demand_field = totalPotIrrConsumption[field] / efficiency
+                        irrigation_water_demand_field = totalPotIrrConsumption[field] / irrigation_efficiency_farmer
 
                         if surface_irrigated[farmer]:
                             # channel abstraction
@@ -543,7 +545,7 @@ class Farmers(AgentBaseClass):
               
                         assert irrigation_water_demand_field >= -1e15  # Make sure irrigation water demand is zero, or positive. Allow very small error.
 
-                    water_consumption_m[field] = water_withdrawal_m[field] * efficiency
+                    water_consumption_m[field] = water_withdrawal_m[field] * irrigation_efficiency_farmer
                     irrigation_loss_m = water_withdrawal_m[field] - water_consumption_m[field]
                     returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
                     addtoevapotrans_m[field] = irrigation_loss_m * (1 - return_fraction)
@@ -709,17 +711,6 @@ class Farmers(AgentBaseClass):
         mask = self.model.data.HRU.mask.copy()
         mask[self.decompress(self.var.land_owners) == -1] = True
         return mask
-  
-    def plant_initial(self) -> None:
-        self.var.actual_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
-        self.var.potential_transpiration_crop = self.var.full_compressed(0, dtype=np.float32)
-
-        self.var.land_use_type[self.var.land_use_type == 2] = 1
-        self.var.land_use_type[self.var.land_use_type == 3] = 1
-  
-        self.var.crop_map = np.full_like(self.var.land_owners, -1)
-        self.var.crop_age_days_map = np.full_like(self.var.land_owners, -1)
-        self.var.crop_harvest_age_days = np.full_like(self.var.crop_age_days_map, -1)
           
     @staticmethod
     @njit(cache=True)
