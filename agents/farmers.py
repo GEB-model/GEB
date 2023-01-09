@@ -81,7 +81,7 @@ class Farmers(AgentBaseClass):
         "_daily_non_farm_income",
         "_daily_expenses_per_capita",
         "_irrigation_efficiency",
-        "_n_water_limited_days",
+        "_n_water_accessible_days",
         "_water_availability_by_farmer",
         "_channel_abstraction_m3_by_farmer",
         "_groundwater_abstraction_m3_by_farmer",
@@ -184,7 +184,7 @@ class Farmers(AgentBaseClass):
             "_irrigation_efficiency": {
                 "nodata": -1
             },
-            "_n_water_limited_days": {
+            "_n_water_accessible_days": {
                 "nodata": -1
             },
             "_has_well": {
@@ -279,7 +279,7 @@ class Farmers(AgentBaseClass):
             self._has_well= np.full(self.max_n, 0, dtype=bool)
             self.has_well[:] = (irrigation_type == 1).any(axis=1)
 
-            # Set irrigation efficiency to 70% for all farmers.
+            # Set aba efficiency to 70% for all farmers.
             self._irrigation_efficiency = np.full(self.max_n, -1, dtype=np.float32)
             self.irrigation_efficiency[:] = .70
 
@@ -295,8 +295,8 @@ class Farmers(AgentBaseClass):
             self.groundwater_abstraction_m3_by_farmer[:] = 0
             self._water_availability_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.water_availability_by_farmer[:] = 0
-            self._n_water_limited_days = np.full(self.max_n, -1, dtype=np.int32)
-            self.n_water_limited_days[:] = 0
+            self._n_water_accessible_days = np.full(self.max_n, -1, dtype=np.int32)
+            self.n_water_accessible_days[:] = 0
 
             self._disposable_income = np.full(self.max_n, -1, dtype=np.float32)
             self.disposable_income[:] = 0
@@ -405,7 +405,6 @@ class Farmers(AgentBaseClass):
         activation_order: np.ndarray,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
-        water_limited_days: np.ndarray,
         irrigation_efficiency: np.ndarray,
         surface_irrigated: np.ndarray,
         well_irrigated: np.ndarray,
@@ -427,7 +426,6 @@ class Farmers(AgentBaseClass):
             activation_order: Order in which the agents are activated. Agents that are activated first get a first go at extracting water, leaving less water for other farmers.
             field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
-            water_limited_days: Current number of days where farmer has been water limited.
             irrigation_efficiency: Boolean array that specifies whether the specific farmer is efficient with water use.
             irrigated: Array that specifies whether a farm is irrigated.
             well_irrigated: Array that specifies whether a farm is groundwater irrigated.
@@ -469,6 +467,7 @@ class Farmers(AgentBaseClass):
         reservoir_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
         groundwater_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
   
+        has_access_to_irrigation_water = np.zeros(activation_order.size, dtype=np.bool_)
         for activated_farmer_index in range(activation_order.size):
             farmer = activation_order[activated_farmer_index]
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
@@ -476,9 +475,26 @@ class Farmers(AgentBaseClass):
                 efficiency = 0.8
             else:
                 efficiency = 0.6
+
+            # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
+            farmer_has_access_to_irrigation_water = False
+            if well_irrigated[farmer] == 1:
+                farmer_has_access_to_irrigation_water = True
+            elif surface_irrigated[farmer] == 1:
+                for field in farmer_fields:
+                    f_var = HRU_to_grid[field]
+                    if available_channel_storage_m3[f_var] > 100:
+                        farmer_has_access_to_irrigation_water = True
+                        break
+                    command_area = command_areas[field]
+                    # -1 means no command area
+                    if command_area != -1 and available_reservoir_storage_m3[command_area] > 100:
+                        farmer_has_access_to_irrigation_water = True
+                        break
+            has_access_to_irrigation_water[activated_farmer_index] = farmer_has_access_to_irrigation_water
       
+            # Actual irrigation from surface, reservoir and groundwater
             if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
-                farmer_is_water_limited = False
                 for field in farmer_fields:
                     if crop_map[field] != -1:
                         f_var = HRU_to_grid[field]
@@ -527,18 +543,10 @@ class Farmers(AgentBaseClass):
               
                         assert irrigation_water_demand_field >= -1e15  # Make sure irrigation water demand is zero, or positive. Allow very small error.
 
-                        if irrigation_water_demand_field > 1e-15:
-                            farmer_is_water_limited = True
-
                     water_consumption_m[field] = water_withdrawal_m[field] * efficiency
                     irrigation_loss_m = water_withdrawal_m[field] - water_consumption_m[field]
                     returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
                     addtoevapotrans_m[field] = irrigation_loss_m * (1 - return_fraction)
-            else:
-                farmer_is_water_limited = True
-
-            if farmer_is_water_limited:
-                water_limited_days[farmer] += 1
   
         return (
             channel_abstraction_m3_by_farmer,
@@ -548,6 +556,7 @@ class Farmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
+            has_access_to_irrigation_water
         )
 
     def abstract_water(
@@ -587,16 +596,16 @@ class Farmers(AgentBaseClass):
             water_withdrawal_m,
             water_consumption_m,
             returnFlowIrr_m,
-            addtoevapotrans_m
+            addtoevapotrans_m,
+            has_access_to_irrigation_water
         ) = self.abstract_water_numba(
             self.n,
             self.activation_order_by_elevation,
             self.field_indices_by_farmer,
             self.field_indices,
-            self.n_water_limited_days,
             self.irrigation_efficiency,
             self.irrigated,
-            self.irrigated,
+            self.has_well,
             cell_area,
             HRU_to_grid,
             self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map,
@@ -608,6 +617,7 @@ class Farmers(AgentBaseClass):
             command_areas,
             return_fraction=self.model.config['agent_settings']['farmers']['return_fraction']
         )
+        self.n_water_accessible_days += has_access_to_irrigation_water
         return (
             water_withdrawal_m,
             water_consumption_m,
@@ -730,7 +740,7 @@ class Farmers(AgentBaseClass):
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.  
             crop_map: Subarray map of crops.
             crop_age_days: Subarray map of current crop age in days.
-            n_water_limited_days: Number of days that crop was water limited.
+            n_water_accessible_days: Number of days that crop was water limited.
             crop: Crops grown by each farmer.
             switch_crops: Whether to switch crops or not.
 
@@ -1187,12 +1197,12 @@ class Farmers(AgentBaseClass):
         self._water_availability_by_farmer[:self.n] = value
 
     @property
-    def n_water_limited_days(self):
-        return self._n_water_limited_days[:self.n]
+    def n_water_accessible_days(self):
+        return self._n_water_accessible_days[:self.n]
 
-    @n_water_limited_days.setter
-    def n_water_limited_days(self, value):
-        self._n_water_limited_days[:self.n] = value
+    @n_water_accessible_days.setter
+    def n_water_accessible_days(self, value):
+        self._n_water_accessible_days[:self.n] = value
 
     @property
     def disposable_income(self):
@@ -1351,17 +1361,14 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit(cache=True)
-    def switch_crops(sugarcane_idx, land_owners, reservoir_command_areas, crops) -> None:
+    def switch_crops(sugarcane_idx, n_water_accessible_days, crops) -> None:
         """Switches crops for each farmer.
-
-        This function is called at the beginning of each season.
         """
-        # get all farmers with at least one field in reservoir command area
-        farmers_in_reservoir_command_area = np.unique(land_owners[(reservoir_command_areas != -1) & (land_owners != -1)])
-        for farmer in farmers_in_reservoir_command_area:
-            # each farmer has a 20% probability of switching to sugarcane
-            if np.random.random() < .20:
-                crops[farmer] = sugarcane_idx
+        assert (n_water_accessible_days <= 366).all() # make sure never higher than full year
+        for farmer_idx in range(n_water_accessible_days.size):
+            # each farmer with all-year access to water has a 20% probability of switching to sugarcane
+            if n_water_accessible_days[farmer_idx] >= 365 and np.random.random() < .20:
+                crops[farmer_idx] = sugarcane_idx
 
     def step(self) -> None:
         """
@@ -1394,9 +1401,10 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.expenses_and_income()
-        if self.model.current_time.month == 1 and self.model.current_time.day == 1 and self.model.args.scenario != 'spinup':
-            if self.model.args.scenario == 'sugarcane':
-                self.switch_crops(self.crop_names["Sugarcane"], self.var.land_owners, self.var.reservoir_command_areas, self.crops)
+        if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+            if self.model.current_timestep >= 365 and self.model.args.scenario == 'sugarcane':  # 364 bacause jan 1 is timestep 0
+                self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_days, self.crops)
+            self.n_water_accessible_days[:] = 0
             self.upkeep_assets()
             self.make_loan_payment()
             self.invest()
@@ -1480,7 +1488,7 @@ class Farmers(AgentBaseClass):
         self.irrigated[self.n-1] = False
         self.wealth[self.n-1] = 0
         self.irrigation_efficiency[self.n-1] = False
-        self.n_water_limited_days[self.n-1] = 0
+        self.n_water_accessible_days[self.n-1] = 0
         self.water_availability_by_farmer[self.n-1] = 0
         self.channel_abstraction_m3_by_farmer[self.n-1] = 0
         self.groundwater_abstraction_m3_by_farmer[self.n-1] = 0
