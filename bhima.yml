@@ -205,6 +205,27 @@ report:
     frequency: per_timestep
     save: save
     format: csv
+  crops_kharif:
+    type: farmers
+    varname: crops[:,0]
+    function: null
+    frequency: per_timestep
+    save: save
+    format: csv
+  crops_rabi:
+    type: farmers
+    varname: crops[:,1]
+    function: null
+    frequency: per_timestep
+    save: save
+    format: csv
+  crops_summer:
+    type: farmers
+    varname: crops[:,2]
+    function: null
+    frequency: per_timestep
+    save: save
+    format: csv
   # wealth_sample:
   #   type: farmers
   #   function: sample
