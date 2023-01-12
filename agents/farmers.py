@@ -610,7 +610,7 @@ class Farmers(AgentBaseClass):
             self.has_well,
             cell_area,
             HRU_to_grid,
-            self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map,
+            self.var.crop_map,
             totalPotIrrConsumption,
             available_channel_storage_m3,
             available_groundwater_m3,
