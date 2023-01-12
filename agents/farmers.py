@@ -905,12 +905,8 @@ class Farmers(AgentBaseClass):
                 and not self.model.args.scenario == 'spinup'  # farmers can only go out of business when not in spinup scenario
             )
         )
-        if self.model.args.use_gpu:
-            plant_map = cp.array(plant_map)
         if farmers_selling_land.size > 0:
             self.remove_agents(farmers_selling_land)
-        if self.model.args.use_gpu:
-            plant_map = cp.array(plant_map)
 
         self.var.crop_map = np.where(plant_map >= 0, plant_map, self.var.crop_map)
         self.var.crop_age_days_map[plant_map >= 0] = 0
