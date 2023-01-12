@@ -756,27 +756,23 @@ class Farmers(AgentBaseClass):
     def harvest(self):
         """This function determines which crops needs to be harvested, based on the current age of the crops and the harvest age of the crop. First a helper function is used to obtain the harvest map. Then, if at least 1 field is harvested, the yield ratio is obtained for all fields using the ratio of actual to potential evapotranspiration, saves the harvest per farmer and potentially invests in water saving techniques.
         """
-        actual_transpiration = self.var.actual_transpiration_crop.get() if self.model.args.use_gpu else self.var.actual_transpiration_crop
-        potential_transpiration = self.var.potential_transpiration_crop.get() if self.model.args.use_gpu else self.var.potential_transpiration_crop
-        crop_map = self.var.crop_map.get() if self.model.args.use_gpu else self.var.crop_map
-        crop_age_days = self.var.crop_age_days_map.get() if self.model.args.use_gpu else self.var.crop_age_days_map
         harvest = self.harvest_numba(
             n=self.n,
             field_indices_by_farmer=self.field_indices_by_farmer,
             field_indices=self.field_indices,
-            crop_map=crop_map,
-            crop_age_days=crop_age_days,
+            crop_map=self.var.crop_map,
+            crop_age_days=self.var.crop_age_days,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
         )
         if np.count_nonzero(harvest):  # Check if any harvested fields. Otherwise we don't need to run this.
-            yield_ratio = self.get_yield_ratio(harvest, actual_transpiration, potential_transpiration, crop_map)
+            yield_ratio = self.get_yield_ratio(harvest, self.var.actual_transpiration_crop, self.var.potential_transpiration_crop, self.var.crop_map)
             assert (yield_ratio >= 0).all()
 
             harvesting_farmer_fields = self.var.land_owners[harvest]
             harvested_area = self.var.cellArea[harvest]
             if self.model.args.use_gpu:
                 harvested_area = harvested_area.get()
-            harvested_crops = crop_map[harvest]
+            harvested_crops = self.var.crop_map[harvest]
             max_yield_per_crop = np.take(self.reference_yield, harvested_crops)
       
             year = self.model.current_time.year
@@ -807,9 +803,6 @@ class Farmers(AgentBaseClass):
             self.save_profit(harvesting_farmers, profit_per_farmer, potential_profit_per_farmer)
       
             self.disposable_income += profit_per_farmer
-
-        if self.model.args.use_gpu:
-            harvest = cp.array(harvest)
   
         self.var.actual_transpiration_crop[harvest] = 0
         self.var.potential_transpiration_crop[harvest] = 0
