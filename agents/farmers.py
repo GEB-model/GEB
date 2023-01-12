@@ -804,8 +804,8 @@ class Farmers(AgentBaseClass):
       
             self.disposable_income += profit_per_farmer
   
-        self.var.actual_transpiration_crop[harvest] = 0
-        self.var.potential_transpiration_crop[harvest] = 0
+        self.var.actual_transpiration_crop[cp.asarray(harvest) if self.model.args.use_gpu else harvest] = 0
+        self.var.potential_transpiration_crop[cp.asarray(harvest) if self.model.args.use_gpu else harvest] = 0
 
         # remove crops from crop_map where they are harvested
         self.var.crop_map[harvest] = -1
