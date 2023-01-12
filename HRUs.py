@@ -361,7 +361,7 @@ class HRUs(BaseVariables):
         else:
             return np.zeros(size, dtype, *args, **kwargs)        
 
-    def full_compressed(self, fill_value, dtype, *args, **kwargs) -> np.ndarray:
+    def full_compressed(self, fill_value, dtype, gpu=None, *args, **kwargs) -> np.ndarray:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
         
         Args:
@@ -371,7 +371,9 @@ class HRUs(BaseVariables):
         Returns:
             array: Array with size of number of HRUs.
         """
-        if self.model.args.use_gpu:
+        if gpu is None:
+            gpu = self.model.args.use_gpu
+        if gpu:
             return cp.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
         else:
             return np.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
@@ -411,8 +413,10 @@ class HRUs(BaseVariables):
         if show:
             plt.show()
 
-    def load_initial(self, name, default=.0):
-        return super().load_initial('HRU.' + name, default=default, gpu=self.model.args.use_gpu)
+    def load_initial(self, name, default=.0, gpu=None):
+        if gpu is None:
+            gpu = self.model.args.use_gpu
+        return super().load_initial('HRU.' + name, default=default, gpu=gpu)
 
 
 class Modflow(BaseVariables):

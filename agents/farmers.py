@@ -314,11 +314,11 @@ class Farmers(AgentBaseClass):
             self._daily_expenses_per_capita = np.full(self.max_n, -1, dtype=np.float32)
             self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
     
-        self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32))
-        self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32))
-        self.var.crop_map = self.var.load_initial('crop_map', default=np.full_like(self.var.land_owners, -1))
-        self.var.crop_age_days_map = self.var.load_initial('crop_age_days_map', default=np.full_like(self.var.land_owners, -1))
-        self.var.crop_harvest_age_days = self.var.load_initial('crop_harvest_age_days', default=np.full_like(self.var.land_owners, -1))
+        self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32), gpu=False)
+        self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32), gpu=False)
+        self.var.crop_map = self.var.load_initial('crop_map', default=np.full_like(self.var.land_owners, -1), gpu=False)
+        self.var.crop_age_days_map = self.var.load_initial('crop_age_days_map', default=np.full_like(self.var.land_owners, -1), gpu=False)
+        self.var.crop_harvest_age_days = self.var.load_initial('crop_harvest_age_days', default=np.full_like(self.var.land_owners, -1), gpu=False)
 
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
@@ -804,8 +804,8 @@ class Farmers(AgentBaseClass):
       
             self.disposable_income += profit_per_farmer
   
-        self.var.actual_transpiration_crop[cp.asarray(harvest) if self.model.args.use_gpu else harvest] = 0
-        self.var.potential_transpiration_crop[cp.asarray(harvest) if self.model.args.use_gpu else harvest] = 0
+        self.var.actual_transpiration_crop[harvest] = 0
+        self.var.potential_transpiration_crop[harvest] = 0
 
         # remove crops from crop_map where they are harvested
         self.var.crop_map[harvest] = -1
