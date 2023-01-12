@@ -761,7 +761,7 @@ class Farmers(AgentBaseClass):
             field_indices_by_farmer=self.field_indices_by_farmer,
             field_indices=self.field_indices,
             crop_map=self.var.crop_map,
-            crop_age_days=self.var.crop_age_days,
+            crop_age_days=self.var.crop_age_days_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
         )
         if np.count_nonzero(harvest):  # Check if any harvested fields. Otherwise we don't need to run this.
