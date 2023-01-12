@@ -892,7 +892,7 @@ class Farmers(AgentBaseClass):
             season_idx=self.current_season_idx,
             is_first_day_of_season=self.is_first_day_of_season,
             growth_length=self.growth_length,
-            crop_map=self.var.crop_map if not self.model.args.use_gpu else self.var.crop_map.get(),
+            crop_map=self.var.crop_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
             crops=self.crops,
             cultivation_cost_per_crop=cultivation_cost_per_crop,
