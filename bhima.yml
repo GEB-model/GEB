@@ -210,22 +210,22 @@ report:
     varname: crops[:,0]
     function: null
     frequency: per_timestep
-    save: save
-    format: csv
+    save: export
+    format: npy
   crops_rabi:
     type: farmers
     varname: crops[:,1]
     function: null
     frequency: per_timestep
-    save: save
-    format: csv
+    save: export
+    format: npy
   crops_summer:
     type: farmers
     varname: crops[:,2]
     function: null
     frequency: per_timestep
-    save: save
-    format: csv
+    save: export
+    format: npy
   # wealth_sample:
   #   type: farmers
   #   function: sample
