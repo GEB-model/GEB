@@ -278,7 +278,7 @@ class Farmers(AgentBaseClass):
             self._has_well= np.full(self.max_n, 0, dtype=bool)
             self.has_well[:] = (irrigation_type == 1).any(axis=1)
 
-            # Set aba efficiency to 70% for all farmers.
+            # Set irrigation efficiency to 70% for all farmers.
             self._irrigation_efficiency = np.full(self.max_n, -1, dtype=np.float32)
             self.irrigation_efficiency[:] = .70
 
