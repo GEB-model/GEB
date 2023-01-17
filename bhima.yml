@@ -15,7 +15,7 @@ general:
   # base folder where to report output data to
   upscale_factor: 40
   basin_id: 450000005
-  gauges:
+  poor_point:
     lon: 75.895273
     lat: 17.370473
   CWatM_settings: CWatM.ini
