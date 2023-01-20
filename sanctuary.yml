@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2004-05-10
+  start_time: 2010-05-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2010-07-10
+  end_time: 2018-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_time: 2004-05-01
+  spinup_time: 2005-05-01
   ###
   # base folder where to report output data to
   upscale_factor: 40
