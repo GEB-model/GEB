@@ -3,6 +3,7 @@ import os
 import math
 from datetime import date
 import json
+import calendar
 
 import numpy as np
 try:
@@ -1341,13 +1342,13 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit(cache=True)
-    def switch_crops(sugarcane_idx, n_water_accessible_days, crops) -> None:
+    def switch_crops(sugarcane_idx, n_water_accessible_days, crops, days_in_year) -> None:
         """Switches crops for each farmer.
         """
-        assert (n_water_accessible_days <= 366).all() # make sure never higher than full year
+        assert (n_water_accessible_days <= days_in_year + 1).all() # make sure never higher than full year
         for farmer_idx in range(n_water_accessible_days.size):
             # each farmer with all-year access to water has a 20% probability of switching to sugarcane
-            if n_water_accessible_days[farmer_idx] >= 365 and np.random.random() < .20:
+            if n_water_accessible_days[farmer_idx] >= days_in_year and np.random.random() < .20:
                 crops[farmer_idx] = sugarcane_idx
 
     def step(self) -> None:
@@ -1382,9 +1383,11 @@ class Farmers(AgentBaseClass):
         self.plant()
         self.expenses_and_income()
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
-            if self.model.current_timestep >= 365 and self.model.args.scenario == 'sugarcane':  # 364 bacause jan 1 is timestep 0
-                self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_days, self.crops)
-            self.n_water_accessible_days[:] = 0
+            # check if current year is a leap year
+            days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
+            if self.model.current_timestep >= days_in_year and self.model.args.scenario == 'sugarcane':  # 364 bacause jan 1 is timestep 0
+                self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_days, self.crops, days_in_year)
+            self.n_water_accessible_days[:] = 0 # reset water accessible days
             self.upkeep_assets()
             self.make_loan_payment()
             self.invest()
