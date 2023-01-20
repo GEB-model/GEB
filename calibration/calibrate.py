@@ -125,7 +125,7 @@ def get_discharge_score(run_directory, individual):
 	for _ in range(len(simulated_streamflow) - 1):
 		simulated_dates.append(simulated_dates[-1] + timedelta(days=1))
 	
-	# Set the index of the simulated streamflow data to the generated dates
+	# Select only the first column (first gauge)
 	simulated_streamflow = simulated_streamflow[1]
 	simulated_streamflow.index = [pd.Timestamp(date) for date in simulated_dates]
 	simulated_streamflow.name = 'simulated'
@@ -159,7 +159,7 @@ def get_discharge_score(run_directory, individual):
 			myfile.write(str(individual.label) + "," + str(NSE) + "\n")
 		return NSE
 	else:
-	raise ValueError
+		raise ValueError
 
 
 @handle_ctrl_c
