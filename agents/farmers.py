@@ -83,6 +83,7 @@ class Farmers(AgentBaseClass):
         "_daily_expenses_per_capita",
         "_irrigation_efficiency",
         "_n_water_accessible_days",
+        "_n_water_accessible_years",
         "_water_availability_by_farmer",
         "_channel_abstraction_m3_by_farmer",
         "_groundwater_abstraction_m3_by_farmer",
@@ -186,6 +187,9 @@ class Farmers(AgentBaseClass):
                 "nodata": -1
             },
             "_n_water_accessible_days": {
+                "nodata": -1
+            },
+            "_n_water_accessible_years": {
                 "nodata": -1
             },
             "_has_well": {
@@ -297,6 +301,8 @@ class Farmers(AgentBaseClass):
             self.water_availability_by_farmer[:] = 0
             self._n_water_accessible_days = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_accessible_days[:] = 0
+            self._n_water_accessible_years = np.full(self.max_n, -1, dtype=np.int32)
+            self.n_water_accessible_years[:] = 0
 
             self._disposable_income = np.full(self.max_n, -1, dtype=np.float32)
             self.disposable_income[:] = 0
@@ -1186,6 +1192,14 @@ class Farmers(AgentBaseClass):
         self._n_water_accessible_days[:self.n] = value
 
     @property
+    def n_water_accessible_years(self):
+        return self._n_water_accessible_years[:self.n]
+
+    @n_water_accessible_years.setter
+    def n_water_accessible_years(self, value):
+        self._n_water_accessible_years[:self.n] = value
+
+    @property
     def disposable_income(self):
         return self._disposable_income[:self.n]
 
@@ -1342,13 +1356,13 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit(cache=True)
-    def switch_crops(sugarcane_idx, n_water_accessible_days, crops, days_in_year) -> None:
+    def switch_crops(sugarcane_idx, n_water_accessible_years, crops, days_in_year) -> None:
         """Switches crops for each farmer.
         """
-        assert (n_water_accessible_days <= days_in_year + 1).all() # make sure never higher than full year
-        for farmer_idx in range(n_water_accessible_days.size):
+        assert (n_water_accessible_years <= days_in_year + 1).all() # make sure never higher than full year
+        for farmer_idx in range(n_water_accessible_years.size):
             # each farmer with all-year access to water has a 20% probability of switching to sugarcane
-            if n_water_accessible_days[farmer_idx] >= days_in_year and np.random.random() < .20:
+            if n_water_accessible_years[farmer_idx] >= 3 and np.random.random() < .20:
                 crops[farmer_idx] = sugarcane_idx
 
     def step(self) -> None:
@@ -1385,9 +1399,12 @@ class Farmers(AgentBaseClass):
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
             # check if current year is a leap year
             days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
-            if self.model.current_timestep >= days_in_year and self.model.args.scenario == 'sugarcane':  # 364 bacause jan 1 is timestep 0
-                self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_days, self.crops, days_in_year)
+            has_access_to_water_all_year = self.n_water_accessible_days >= 365
+            self.n_water_accessible_years[has_access_to_water_all_year] += 1
+            self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
+            if self.model.current_timestep >= days_in_year and self.model.args.scenario == 'sugarcane':  # 364 bacause jan 1 is timestep 0
+                self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
             self.upkeep_assets()
             self.make_loan_payment()
             self.invest()
@@ -1472,6 +1489,7 @@ class Farmers(AgentBaseClass):
         self.wealth[self.n-1] = 0
         self.irrigation_efficiency[self.n-1] = False
         self.n_water_accessible_days[self.n-1] = 0
+        self.n_water_accessible_years[self.n-1] = 0
         self.water_availability_by_farmer[self.n-1] = 0
         self.channel_abstraction_m3_by_farmer[self.n-1] = 0
         self.groundwater_abstraction_m3_by_farmer[self.n-1] = 0
