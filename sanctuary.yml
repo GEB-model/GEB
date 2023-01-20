@@ -3,7 +3,7 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2010-07-01
+  start_time: 2004-05-10
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
@@ -54,9 +54,9 @@ logging:
   loglevel: DEBUG
 
 calibration:
-  spinup_time: 2004-01-01
-  start_time: 2004-01-02
-  end_time: 2004-01-05
+  spinup_time: 2014-01-01
+  start_time: 2000-01-10
+  end_time: 2010-01-15
   path: ../DataDrive/GEB_Sanctuary/calibration/
   gpus: 0
   monthly: false
@@ -199,10 +199,10 @@ report:
     groupby: tehsil
   well_irrigated:
     type: farmers
-    function: sum
+    function: null
     varname: has_well
     frequency: per_timestep
-    save: save
+    save: export
     format: npy
   crops_kharif:
     type: farmers

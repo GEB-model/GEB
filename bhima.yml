@@ -200,11 +200,11 @@ report:
     groupby: tehsil
   well_irrigated:
     type: farmers
-    function: sum
+    function: null
     varname: has_well
     frequency: per_timestep
-    save: save
-    format: csv
+    save: export
+    format: npy
   crops_kharif:
     type: farmers
     varname: crops[:,0]
