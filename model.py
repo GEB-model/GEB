@@ -86,7 +86,7 @@ class GEBModel(ABM_Model, CWatM_Model):
             coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
         """
 
-        ABM_Model.__init__(self, current_time, timestep_length, config_path, args=args, n_timesteps=n_timesteps)
+        ABM_Model.__init__(self, current_time - timestep_length, timestep_length, config_path, args=args, n_timesteps=n_timesteps)
         
         study_area.update({
             'xmin': self.data.grid.bounds.left,
@@ -111,7 +111,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         Args:
             settings: Filepath of CWatM settingsfile
         """
-        CWatM_Model.__init__(self, self.current_time, self.n_timesteps, settings)
+        CWatM_Model.__init__(self, self.current_time + self.timestep_length, self.n_timesteps, settings)
 
     def step(self, step_size: Union[int, str]=1) -> None:
         """
