@@ -2,7 +2,7 @@
 import os
 import sys
 from copy import copy
-from datetime import timedelta
+from datetime import timedelta, datetime, date
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -13,6 +13,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.features import rasterize
 import shapely
+from tqdm import tqdm
 import yaml
 # from jplot import plot_raster
 from plot import read_npy
@@ -21,41 +22,6 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
 from plotconfig import config, ORIGINAL_DATA, INPUT
-
-# @njit(cache=True)
-def _decompress_HRU(mixed_array, unmerged_HRU_indices, scaling, mask):
-    ysize, xsize = mask.shape
-    subarray = np.full((ysize * scaling, xsize * scaling), np.nan, dtype=mixed_array.dtype)
-    
-    i = 0
-    
-    for y in range(ysize):
-        for x in range(xsize):
-            is_masked = mask[y, x]
-            if not is_masked:
-                for ys in range(scaling):
-                    for xs in range(scaling):
-                        subarray[y * scaling + ys, x * scaling + xs] = mixed_array[unmerged_HRU_indices[i]]
-                        i += 1
-
-    return subarray
-
-def decompress_HRU(HRU_array: np.ndarray, unmerged_HRU_indices: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Decompress HRU array.
-
-    Args:
-        HRU_array: HRU_array.
-
-    Returns:
-        outarray: Decompressed HRU_array.
-    """  
-    if np.issubdtype(HRU_array.dtype, np.integer):
-        nanvalue = -1
-    else:
-        nanvalue = np.nan
-    outarray = HRU_array[unmerged_HRU_indices]
-    outarray[mask] = nanvalue
-    return outarray
 
 @njit(cache=True)
 def _set_fields(land_owners):
@@ -93,12 +59,14 @@ mpl.rcParams['ytick.minor.width'] = 0.5
 
 START_DATE = config['general']['start_time']
 END_DATE = config['general']['end_time']
+START_DATE = date(2017, 1, 1)
+END_DATE = date(2017, 12, 31)
 TIMEDELTA = timedelta(days=1)
 REPORT_FOLDER = config['general']['report_folder']
 
 class Plot:
-    def __init__(self):
-        report_folder = os.path.join(config['general']['report_folder'], 'base')
+    def __init__(self, scenario):
+        report_folder = os.path.join(config['general']['report_folder'], scenario)
         self.land_owners = np.load(os.path.join(report_folder, 'land_owners.npy'))
         self.field_indices, self.land_owners_per_farmer = _set_fields(self.land_owners)
 
@@ -113,6 +81,15 @@ class Plot:
         
         self.unmerged_HRU_indices = np.load(os.path.join(report_folder, 'unmerged_HRU_indices.npy'))
         self.scaling = np.load(os.path.join(report_folder, 'scaling.npy')).item()
+
+    def decompress_HRU(self, array):
+        if np.issubdtype(array.dtype, np.integer):
+            nanvalue = -1
+        else:
+            nanvalue = np.nan
+        outarray = array[self.unmerged_HRU_indices]
+        outarray[self.submask] = nanvalue
+        return outarray
 
     def read_gadm3(self):
         india_shp = os.path.join('plot', 'cache', 'gadm36_3_krishna.shp')
@@ -137,7 +114,7 @@ class Plot:
             ax.set_title(title, size=6, pad=2, fontweight='bold')
 
     def farmer_array_to_fields(self, array, nofieldvalue, correct_for_field_size=True):
-        fields_decompressed = decompress_HRU(self.land_owners, self.unmerged_HRU_indices, self.mask)
+        fields_decompressed = self.decompress_HRU(self.land_owners)
         fields_decompressed = fields_decompressed[self.submask == 0]
         is_field = np.where(fields_decompressed != -1)
         cell_area = self.cell_area[self.submask == 0]
@@ -149,7 +126,7 @@ class Plot:
 
         array = np.take(array, self.land_owners)
         array[self.land_owners == -1] = nofieldvalue
-        array = decompress_HRU(array, self.unmerged_HRU_indices, self.mask)
+        array = self.decompress_HRU(array)
         return array
 
     def plot_by_area(self, array, ax=None, title=None):
@@ -282,7 +259,7 @@ class Plot:
         return is_upper_part
             
             
-    def plot_by_activation_order(self, array, activation_order, name, ax=None):
+    def get_irrigation_by_head_and_tail_end(self, array, activation_order):
         command_areas = self.read_command_areas()
         mapping = np.full(command_areas.max() + 1, 0, dtype=np.int32)
         command_area_ids = np.unique(command_areas)
@@ -320,19 +297,20 @@ class Plot:
             head_ends.append(head_end)
             tail_ends.append(tail_end)
         
-        if ax is None:
-            fig, ax = plt.subplots(1)
+        # if ax is None:
+        #     fig, ax = plt.subplots(1)
         
-        # for each couple of tail and head end, plot a line with a circle at data point
-        for i in range(len(head_ends)):
-            ax.plot([0, 1], [head_ends[i], tail_ends[i]], color='black', linewidth=1, marker='o', markersize=5)
+        # # for each couple of tail and head end, plot a line with a circle at data point
+        # for i in range(len(head_ends)):
+        #     ax.plot([0, 1], [head_ends[i], tail_ends[i]], color='black', linewidth=1, marker='o', markersize=5)
         
-        # visualize x axis betwwen 0 and 1
-        ax.set_xlim(0, 1)
-        # visualize y axis between 0 and max of head and tail ends + 10%
-        ax.set_ylim(0, max(max(head_ends), max(tail_ends)) * 1.1)
-        # do not show x axis
-        ax.xaxis.set_visible(False)
+        # # visualize x axis betwwen 0 and 1
+        # ax.set_xlim(0, 1)
+        # # visualize y axis between 0 and max of head and tail ends + 10%
+        # ax.set_ylim(0, max(max(head_ends), max(tail_ends)) * 1.1)
+        # # do not show x axis
+        # ax.xaxis.set_visible(False)
+        # plt.show()
 
 
 def read_irrigation_data(scenario):
@@ -412,15 +390,15 @@ def add_colorbar_legend(
         # using x-label such that the title is displayed below the colorbar
         colorbar.ax.set_xlabel(legend_title, fontsize=legend_title_fontsize, labelpad=2)
 
-def plot_irrigation():
-    plotter = Plot()
+def plot_irrigation(scenario):
+    plotter = Plot(scenario=scenario)
 
-    activation_order = np.load(os.path.join(REPORT_FOLDER, 'base', 'activation_order.npy'))
-    channel_irrigation_by_farm, groundwater_irrigation, reservoir_irrigation = read_irrigation_data('base')
+    activation_order = np.load(os.path.join(REPORT_FOLDER, scenario, 'activation_order.npy'))
+    channel_irrigation_by_farm, groundwater_irrigation, reservoir_irrigation = read_irrigation_data(scenario)
     total_irrigation = channel_irrigation_by_farm + groundwater_irrigation + reservoir_irrigation
 
     fig, ax = plt.subplots(1)
-    plotter.plot_by_activation_order(reservoir_irrigation, activation_order, name='reservoir irrigation', ax=ax)
+    plotter.get_irrigation_by_head_and_tail_end(reservoir_irrigation, activation_order)
     # plotter.plot_by_activation_order(groundwater_irrigation, activation_order, name='groundwater irrigation', ax=ax)
     # plotter.plot_by_activation_order(channel_irrigation, activation_order, name='channel irrigation', ax=ax)
 
@@ -511,4 +489,4 @@ def plot_irrigation():
     # plt.show()
 
 if __name__ == '__main__':
-    plot_irrigation()
+    plot_irrigation('sugarcane')
