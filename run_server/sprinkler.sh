@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=sugarcane
-#SBATCH --output=sugarcane.out
+#SBATCH --job-name=sprinkler
+#SBATCH --output=sprinkler.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -18,4 +18,4 @@ cd $SCRIPT_DIR
 # module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate GEB  # activate conda environment
 
-python run.py --scenario sugarcane --config bhima.yml
+python run.py --scenario sprinkler --config bhima.yml
