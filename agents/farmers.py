@@ -129,9 +129,9 @@ class Farmers(AgentBaseClass):
             assert min(subdistrict2state.keys()) == 0
             assert max(subdistrict2state.keys()) == len(subdistrict2state) - 1
             # load unique states
-            states = list(set(subdistrict2state.values()))
+            self.states = list(set(subdistrict2state.values()))
             # create numpy array mapping subdistricts to states
-            state2int = {state: i for i, state in enumerate(states)}
+            state2int = {state: i for i, state in enumerate(self.states)}
             self.subdistrict2state = np.zeros(len(subdistrict2state), dtype=np.int32)
             for subdistrict, state in subdistrict2state.items():
                 self.subdistrict2state[subdistrict] = state2int[state]
@@ -1365,6 +1365,15 @@ class Farmers(AgentBaseClass):
             if n_water_accessible_years[farmer_idx] >= 3 and np.random.random() < .20:
                 crops[farmer_idx] = sugarcane_idx
 
+    def invest_in_sprinkler_irrigation(self):
+        """Invests in sprinkler irrigation."""
+        farmer_states = self.subdistrict2state[self.tehsil]
+        # invest in sprinkler irrigation if the farmer is from Maharashtra and has no sprinkler irrigation
+        farmers_without_sprinkler_irrigation_in_maharashtra = np.where((self.irrigation_efficiency < .90) & (farmer_states == self.states.index('MAHARASHTRA')))[0]
+        # each farmer without sprinkler irrigation has a 20% probability of investing in sprinkler irrigation
+        invest_in_sprinkler_irrigation = np.random.random(farmers_without_sprinkler_irrigation_in_maharashtra.size) < .20
+        self.irrigation_efficiency[farmers_without_sprinkler_irrigation_in_maharashtra[invest_in_sprinkler_irrigation]] = .90
+
     def step(self) -> None:
         """
         This function is called at the beginning of each timestep.
@@ -1410,6 +1419,10 @@ class Farmers(AgentBaseClass):
             self.invest()
             # reset disposable income
             self.disposable_income[:] = 0
+
+            # if scenario is sprinkler irrigation
+            if self.model.args.scenario == 'sprinkler':
+                self.invest_in_sprinkler_irrigation()            
 
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
