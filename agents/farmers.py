@@ -246,7 +246,7 @@ class Farmers(AgentBaseClass):
             # Finally, the coordinates are obtained by adding .5 to the pixels and converting them to coordinates using pixel_to_coord.
             vertical_index = np.arange(farms.shape[0]).repeat(farms.shape[1]).reshape(farms.shape)[farms != -1]
             horizontal_index = np.tile(np.arange(farms.shape[1]), farms.shape[0]).reshape(farms.shape)[farms != -1]
-            pixels = np.zeros((self.n, 2))
+            pixels = np.zeros((self.n, 2), dtype=np.int32)
             pixels[:,0] = np.round(np.bincount(farms[farms != -1], horizontal_index) / np.bincount(farms[farms != -1])).astype(int)
             pixels[:,1] = np.round(np.bincount(farms[farms != -1], vertical_index) / np.bincount(farms[farms != -1])).astype(int)
             self._locations = np.full((self.max_n, 2), np.nan, dtype=np.float32)
