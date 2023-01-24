@@ -6,6 +6,7 @@ import pandas as pd
 import json
 import matplotlib.pyplot as plt
 from functools import cache
+import calendar
 
 from plotconfig import config, ORIGINAL_DATA, INPUT
 
@@ -43,6 +44,8 @@ class Plot:
         self.unmerged_HRU_indices = np.load(os.path.join(self.report_folder, 'unmerged_HRU_indices.npy'))
         self.scaling = np.load(os.path.join(self.report_folder, 'scaling.npy')).item()
         self.reservoir_dependent_farmers = self.set_reservoir_dependent_farmers(2011, 2017)
+        self.non_surface_water_dependent_farmers = self.set_non_surface_water_dependent_farmers(2011, 2017)
+        self.farmers_to_analyse = self.non_surface_water_dependent_farmers
         self.command_areas = self.read_command_areas()
         self.activation_order = self.get_activation_order()
         # plt.imshow(self.activation_order)
@@ -55,6 +58,7 @@ class Plot:
             surface_irrigation_total = None
             groundwater_irrigation_total = None
             reservoir_irrigation_total = None
+            n_days = 0
             for year in range(start_year, end_year):
                 surface_irrigation = self.read_arrays(year, 'channel irrigation')
                 if surface_irrigation_total is None:
@@ -71,6 +75,12 @@ class Plot:
                     reservoir_irrigation_total = reservoir_irrigation
                 else:
                     reservoir_irrigation_total += reservoir_irrigation
+
+                n_days += 366 if calendar.isleap(year) else 365
+
+            surface_irrigation_total /= n_days
+            groundwater_irrigation_total /= n_days
+            reservoir_irrigation_total /= n_days
             # calculate the fraction of irrigation from reservoir
             reservoir_irrigation_fraction = reservoir_irrigation_total / (surface_irrigation_total + groundwater_irrigation_total + reservoir_irrigation_total)
             reservoir_irrigation_fraction[np.isnan(reservoir_irrigation_fraction)] = 0
@@ -82,6 +92,31 @@ class Plot:
         else:
             reservoir_dependent_farmers = np.load(cache_file)
         return reservoir_dependent_farmers
+
+    def set_non_surface_water_dependent_farmers(self, start_year, end_year):
+        cache_file = os.path.join(self.cache_folder, f'non_surface_water_dependent_farmers_{start_year}_{end_year}.npy')
+        if not os.path.exists(cache_file):
+            # read irrigation data from 2011 to 2017 for from surface, groundwater and reservoir
+            surface_irrigation_total = None
+            n_days = 0
+            for year in range(start_year, end_year):
+                surface_irrigation = self.read_arrays(year, 'channel irrigation')
+                if surface_irrigation_total is None:
+                    surface_irrigation_total = surface_irrigation
+                else:
+                    surface_irrigation_total += surface_irrigation
+
+                n_days += 366 if calendar.isleap(year) else 365
+
+            surface_irrigation_total /= n_days
+            # surface_irrigaton_dependent_farmers
+            non_surface_water_dependent_farmers = surface_irrigation_total < 2
+            non_surface_water_dependent_farmers = self.farmer_array_to_fields(non_surface_water_dependent_farmers, -1, correct_for_field_size=False)
+            
+            np.save(cache_file, non_surface_water_dependent_farmers)
+        else:
+            non_surface_water_dependent_farmers = np.load(cache_file)
+        return non_surface_water_dependent_farmers
 
     def read_command_areas(self):
         fp = os.path.join(INPUT, 'routing', 'lakesreservoirs', 'subcommand_areas.tif')
@@ -187,15 +222,15 @@ class Plot:
             command_areas_mapped[self.command_areas == -1] = -1
             
             array = self.farmer_array_to_fields(total, 0, correct_for_field_size=correct_for_field_size)
-            array = array[self.reservoir_dependent_farmers]
+            array = array[self.farmers_to_analyse]
             # plt.imshow(array)
             # plt.show()
 
             by_command_area = {}
             for command_area_id in command_area_ids:
                 command_area_id = command_area_id.item()
-                command_area = self.get_command_area_indices(command_area_id, subset=self.reservoir_dependent_farmers)
-                activation_order_area = self.activation_order[self.reservoir_dependent_farmers][command_area]
+                command_area = self.get_command_area_indices(command_area_id, subset=self.farmers_to_analyse)
+                activation_order_area = self.activation_order[self.farmers_to_analyse][command_area]
                 if (activation_order_area == -1).all():
                     continue
                 activation_order_area_filtered = activation_order_area[activation_order_area != -1]
@@ -303,4 +338,3 @@ START_YEAR = 2011
 END_YEAR = 2017
 
 p.create_plot(START_YEAR, END_YEAR)
-
