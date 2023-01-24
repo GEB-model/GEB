@@ -15,7 +15,7 @@ from rasterio.features import rasterize
 import shapely
 from tqdm import tqdm
 import yaml
-# from jplot import plot_raster
+from jplot import plot_raster
 from plot import read_npy
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
@@ -59,8 +59,6 @@ mpl.rcParams['ytick.minor.width'] = 0.5
 
 START_DATE = config['general']['start_time']
 END_DATE = config['general']['end_time']
-START_DATE = date(2017, 1, 1)
-END_DATE = date(2017, 12, 31)
 TIMEDELTA = timedelta(days=1)
 REPORT_FOLDER = config['general']['report_folder']
 
@@ -393,17 +391,7 @@ def add_colorbar_legend(
 def plot_irrigation(scenario):
     plotter = Plot(scenario=scenario)
 
-    activation_order = np.load(os.path.join(REPORT_FOLDER, scenario, 'activation_order.npy'))
     channel_irrigation_by_farm, groundwater_irrigation, reservoir_irrigation = read_irrigation_data(scenario)
-    total_irrigation = channel_irrigation_by_farm + groundwater_irrigation + reservoir_irrigation
-
-    fig, ax = plt.subplots(1)
-    plotter.get_irrigation_by_head_and_tail_end(reservoir_irrigation, activation_order)
-    # plotter.plot_by_activation_order(groundwater_irrigation, activation_order, name='groundwater irrigation', ax=ax)
-    # plotter.plot_by_activation_order(channel_irrigation, activation_order, name='channel irrigation', ax=ax)
-
-    plt.show()
-    return
 
     fig, (ax0, ax1, ax2) = plt.subplots(1, 3, dpi=300, figsize=(6, 2))
     plt.subplots_adjust(wspace=0.15, left=0.03, right=0.98, bottom=0.15, top=0.99)
@@ -489,4 +477,4 @@ def plot_irrigation(scenario):
     # plt.show()
 
 if __name__ == '__main__':
-    plot_irrigation('sugarcane')
+    plot_irrigation('base')
