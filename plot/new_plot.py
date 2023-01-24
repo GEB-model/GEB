@@ -340,7 +340,7 @@ class Plot:
         # plt.show()
         plt.savefig('plot.png')
 
-p = Plot('sprinkler')
+p = Plot('base')
 
 START_YEAR = 2011
 END_YEAR = 2017
