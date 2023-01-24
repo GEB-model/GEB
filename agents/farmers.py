@@ -1412,7 +1412,7 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_years[has_access_to_water_all_year] += 1
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
-            if self.model.current_timestep >= days_in_year and self.model.args.scenario == 'sugarcane':  # 364 bacause jan 1 is timestep 0
+            if self.model.current_timestep >= days_in_year and self.model.args.scenario != 'spinup':  # 364 bacause jan 1 is timestep 0
                 self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
             self.upkeep_assets()
             self.make_loan_payment()
