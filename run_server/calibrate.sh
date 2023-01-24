@@ -17,4 +17,4 @@ cd $SCRIPT_DIR
 
 conda activate GEB  # activate conda environment
 
-python calibration/calibrate.py --config krishna.yml
+python calibration/calibrate.py --config $1

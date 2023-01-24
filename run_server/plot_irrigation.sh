@@ -19,4 +19,4 @@ cd $SCRIPT_DIR
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate GEB  # activate conda environment
 
-python plot/plot_irrigation.py
+python plot/plot_irrigation.py --config $1

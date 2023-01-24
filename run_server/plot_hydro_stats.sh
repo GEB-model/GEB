@@ -17,4 +17,4 @@ cd $SCRIPT_DIR
 
 conda activate GEB  # activate conda environment
 
-python plot/plot_hydro_stats.py
+python plot/plot_hydro_stats.py --config $1

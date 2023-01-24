@@ -18,8 +18,8 @@ cd $SCRIPT_DIR
 module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate GEB  # activate conda environment
 
-python run.py --scenario spinup --config krishna.yml --GPU
-srun --exclusive --ntasks=1 --nodes=1 --cpus-per-task=$SLURM_CPUS_PER_TASK python run.py --scenario sprinkler --config krishna.yml --GPU &
-srun --exclusive --ntasks=1 --nodes=1 --cpus-per-task=$SLURM_CPUS_PER_TASK python run.py --scenario sugarcane --config krishna.yml --GPU &
+python run.py --scenario spinup --config $1 --GPU
+srun --exclusive --ntasks=1 --nodes=1 --cpus-per-task=$SLURM_CPUS_PER_TASK python run.py --scenario sprinkler --config $1 --GPU &
+srun --exclusive --ntasks=1 --nodes=1 --cpus-per-task=$SLURM_CPUS_PER_TASK python run.py --scenario sugarcane --config $1 --GPU &
 wait
-python run.py --scenario base --config krishna.yml --GPU
+python run.py --scenario base --config $1 --GPU
