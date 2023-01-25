@@ -1048,10 +1048,6 @@ class Farmers(AgentBaseClass):
         #     plt.scatter(self.locations[agent_neighbours][:,0], self.locations[agent_neighbours][:,1], c=colors[i], alpha=.5)
         # plt.show()
 
-        # do not invest during spinup
-        if self.model.args == 'spinup':
-            return
-
         for crop_option in np.unique(self.crops, axis=0):
             
             farmers_with_crop_option = np.where((self.crops==crop_option[None, ...]).all(axis=1))[0]
@@ -1412,11 +1408,12 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_years[has_access_to_water_all_year] += 1
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
-            if self.model.current_timestep >= days_in_year and self.model.args.scenario != 'spinup':  # 364 bacause jan 1 is timestep 0
+            if self.model.current_timestep >= days_in_year and self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':  # 364 bacause jan 1 is timestep 0
                 self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
             self.upkeep_assets()
             self.make_loan_payment()
-            self.invest()
+            if self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':
+                self.invest()
             # reset disposable income
             self.disposable_income[:] = 0
 
