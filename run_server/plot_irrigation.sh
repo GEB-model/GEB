@@ -1,7 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=plot
-#SBATCH --output=irrigation.out
-#SBATCH --gres=gpu:1
+#SBATCH --job-name=plot_irrigation
+#SBATCH --output=plot_irrigation.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -16,7 +15,6 @@ source ~/.bashrc
 SCRIPT_DIR="$HOME/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
-module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate GEB  # activate conda environment
 
 python plot/plot_irrigation.py --config $1
