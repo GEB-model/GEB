@@ -339,6 +339,8 @@ def plot_scenarios(scenarios):
     # plt.show()
 
 def obs_vs_sim(scenario, calibration_line, monthly=False, start_time=None):
+    output_folder = 'plots/output'
+    os.makedirs(output_folder, exist_ok=True)
     if isinstance(calibration_line, date):
         calibration_line = datetime.combine(calibration_line, datetime.min.time())
 
@@ -390,8 +392,8 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_time=None):
         transform=ax.transAxes,
         fontsize=5
     )
-    plt.savefig('plot/output/obs_vs_sim.png')
-    plt.savefig('plot/output/obs_vs_sim.svg')
+    plt.savefig(os.path.join(output_folder, 'obs_vs_sim.png'))
+    plt.savefig(os.path.join(output_folder, 'obs_vs_sim.svg'))
     # plt.show()
 
 
