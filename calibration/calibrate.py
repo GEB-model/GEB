@@ -139,6 +139,10 @@ def get_discharge_score(run_directory, individual):
 	# Add a small value to the simulated streamflow to avoid division by zero
 	streamflows['simulated'] += 0.0001
 
+	if config['calibration']['monthly'] is True:
+		# Calculate the monthly mean of the streamflow data
+		streamflows = streamflows.resample('M').mean()
+
 	# Check the specified objective function and calculate the score
 	if OBJECTIVE == 'KGE':
 		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])

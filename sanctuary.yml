@@ -59,7 +59,7 @@ calibration:
   end_time: 2010-01-15
   path: ../DataDrive/GEB_Sanctuary/calibration/
   gpus: 0
-  monthly: false
+  monthly: true
 
   DEAP:
     use_multiprocessing: False
@@ -301,12 +301,12 @@ report_cwatm:
 
 parameters:
   SnowMeltCoef: 0.004
-  arnoBeta_add: 0.6390453352785276
-  factor_interflow: 1.6608350316683285
-  lakeAFactor: 3.0791912503149046
-  lakeEvaFactor: 2.6805580542824945
-  manningsN: 0.7826710941905274
+  arnoBeta_add: 0.6653797014119323
+  factor_interflow: 1.6896506245793668
+  lakeAFactor: 3.1051495676629
+  lakeEvaFactor: 2.6777823102359894
+  manningsN: 0.8269807271111366
   normalStorageLimit: 0.645563228322237
-  preferentialFlowConstant: 3.6069505105552317
-  recessionCoeff_factor: 3.617095785731296
-  soildepth_factor: 1.0655840574108861
+  preferentialFlowConstant: 3.14300925049279
+  recessionCoeff_factor: 2.7889874934367804
+  soildepth_factor: 1.036953064771858

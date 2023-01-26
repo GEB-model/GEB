@@ -68,12 +68,14 @@ def get_discharge(scenario, switch_crop):
                 if i < 4:
                     continue
                 if len(dates) == 0:
-                    dates.append(config['general']['start_time'])
+                    dt = config['general']['start_time']
                 else:
-                    dates.append(dates[-1] + TIMEDELTA)
+                    dt = dates[-1] + TIMEDELTA
+                dates.append(dt)
                 match = re.match(r"\s+([0-9]+)\s+([0-9\.e-]+)\s*$", line)
                 value = float(match.group(2))
                 values.append(value)
+        assert len(dates) == len(values)
         return dates, np.array(values)
     except FileNotFoundError:
         return None
@@ -151,7 +153,11 @@ def get_observed_discharge(dates):
     streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
     df = pd.read_csv(streamflow_path, parse_dates=['Dates'])
     df = df[df['Dates'].isin(dates)]
-    df = df.set_index('Dates').resample('1D').mean()
+    erroneous_dates = [date(2017,12,30), date(2018,1,8), date(2018,1,9), date(2018,1,10), date(2018,1,11), date(2018,1,13), date(2018,1,16), date(2018,1,17), date(2018,1,18), date(2018,1,19)]
+    df = df[~df['Dates'].isin(erroneous_dates)]
+    # re-index dataframe to fill missing dates
+    df = df.set_index('Dates').reindex(dates)
+    assert len(df) == len(dates)
     return df['flow'].to_numpy()
 
 def read_crop_data(dates, scenario, switch_crop):
@@ -339,7 +345,7 @@ def plot_scenarios(scenarios):
     # plt.show()
 
 def obs_vs_sim(scenario, calibration_line, monthly=False, start_time=None):
-    output_folder = 'plots/output'
+    output_folder = 'plot/output'
     os.makedirs(output_folder, exist_ok=True)
     if isinstance(calibration_line, date):
         calibration_line = datetime.combine(calibration_line, datetime.min.time())
