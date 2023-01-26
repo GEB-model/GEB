@@ -2,10 +2,11 @@
 import os
 import re
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import pandas as pd
 import sys
 import numpy as np
+from matplotlib import transforms
 import matplotlib.dates as mdates
 from matplotlib.lines import Line2D
 from plot import read_npy
@@ -143,7 +144,12 @@ def add_patches_legend(ax, labels, colors, ncol):
     legend._legend_box.align = "left"
 
 def get_observed_discharge(dates):
-    df = pd.read_csv('DataDrive/GEB/calibration/observations.csv', parse_dates=['Dates'])
+    if 'gauges' in config['general']:
+        gauges = config['general']['gauges']
+    else:
+        gauges = config['general']['poor_point']
+    streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
+    df = pd.read_csv(streamflow_path, parse_dates=['Dates'])
     df = df[df['Dates'].isin(dates)]
     df = df.set_index('Dates').resample('1D').mean()
     return df['flow'].to_numpy()
@@ -333,6 +339,9 @@ def plot_scenarios(scenarios):
     # plt.show()
 
 def obs_vs_sim(scenario, calibration_line, monthly=False, start_time=None):
+    if isinstance(calibration_line, date):
+        calibration_line = datetime.combine(calibration_line, datetime.min.time())
+
     fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
     plt.subplots_adjust(left=0.1, right=0.97, bottom=0.07, top=0.92)
     dates, simulated_discharge = get_discharge(scenario, False)
@@ -381,12 +390,12 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_time=None):
         transform=ax.transAxes,
         fontsize=5
     )
-    plt.savefig('D:/OneDrive - IIASA/Paper/figures/obs_vs_sim.png')
-    plt.savefig('D:/OneDrive - IIASA/Paper/figures/obs_vs_sim.svg')
+    plt.savefig('plot/output/obs_vs_sim.png')
+    plt.savefig('plot/output/obs_vs_sim.svg')
     # plt.show()
 
 
 if __name__ == '__main__':
-    scenarios()
-    obs_vs_sim('base', calibration_line=datetime(2012, 1, 1), monthly=True)
+    # scenarios()
+    obs_vs_sim('base', calibration_line=config['calibration']['end_time'], monthly=True)
     # obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_time=None)
