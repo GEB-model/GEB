@@ -1414,12 +1414,14 @@ class Farmers(AgentBaseClass):
             self.make_loan_payment()
             if self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':
                 self.invest()
-            # reset disposable income
-            self.disposable_income[:] = 0
 
             # if scenario is sprinkler irrigation
             if self.model.args.scenario == 'sprinkler':
                 self.invest_in_sprinkler_irrigation()            
+            # reset disposable income
+
+            self.disposable_income[:] = 0
+
 
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
