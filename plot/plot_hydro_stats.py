@@ -56,14 +56,11 @@ def correlation(s,o):
     return corr
 
 
-def get_discharge(scenario, switch_crop):
+def get_discharge(scenario):
     values = []
     dates = []
-    subfolder = scenario
-    if switch_crop:
-        subfolder += '_switch_crops'
     try:
-        with open(os.path.join(OUTPUT_FOLDER, subfolder, 'var.discharge_daily.tss'), 'r') as f:
+        with open(os.path.join(OUTPUT_FOLDER, scenario, 'var.discharge_daily.tss'), 'r') as f:
             for i, line in enumerate(f):
                 if i < 4:
                     continue
