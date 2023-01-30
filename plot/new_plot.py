@@ -64,8 +64,8 @@ class Plot:
         
         self.field_size = self.get_field_size()
         
-        self.reservoir_dependent_farmers = self.set_reservoir_dependent_farmers(2011, 2017)
-        self.non_surface_water_dependent_farmers = self.set_non_surface_water_dependent_farmers(2011, 2017)
+        self.reservoir_dependent_farmers = self.set_reservoir_dependent_farmers(2011, 2018)
+        self.non_surface_water_dependent_farmers = self.set_non_surface_water_dependent_farmers(2011, 2018)
         # self.farmers_to_analyse = self.non_surface_water_dependent_farmers
         self.farmers_to_analyse = ...
         self.command_areas = self.read_command_areas()
@@ -315,7 +315,7 @@ class Plot:
         ax.plot(years, small_farmer, label='small farmer', color='red')
         ax.plot(years, large_farmer, label='large farmer', color='green')
 
-    def create_plot(self, start_year, end_year):
+    def create_new_plot(self, start_year, end_year):
         hydraulic_head, hydraulic_head_years = self.get_honeybees_data('hydraulic head', start_year=start_year, end_year=end_year)
         
         fig, ax = plt.subplots(2, 3, figsize=(20, 8))
@@ -338,11 +338,10 @@ class Plot:
         self.format_ax(ax[1][2], ylabel="mean hydraulic head")
 
         # plt.show()
-        plt.savefig('plot.png')
+        plt.savefig('plot/output/newplot.png')
+
 
 p = Plot('base')
-
 START_YEAR = 2011
-END_YEAR = 2017
-
-p.create_plot(START_YEAR, END_YEAR)
+END_YEAR = 2018
+p.create_new_plot(START_YEAR, END_YEAR)
