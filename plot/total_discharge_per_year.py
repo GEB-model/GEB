@@ -3,7 +3,7 @@ import re
 import pandas as pd
 import numpy as np
 import json
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
 import matplotlib.pyplot as plt
 
 from plotconfig import config
@@ -80,40 +80,95 @@ def get_discharge(scenario):
     discharge.index = pd.to_datetime(discharge.index)
     return discharge
 
+def get_honeybees_data(scenario, varname, start_year, end_year, fileformat='csv'):
+    df = pd.read_csv(os.path.join(config['general']['report_folder'], scenario, varname + '.' + fileformat), index_col=0)
+    dates = df.index.tolist()
+    dates = [datetime.strptime(dt, "%Y-%m-%d") for dt in dates]
+    df.index = dates
+    # filter on start and end year
+    df = df[(df.index.year >= start_year) & (df.index.year <= end_year)]
+    # get mean dataframe by year
+    df = df.groupby(df.index.year).mean()
+    # return hydraulic head as numpy array and years as list
+    return np.array(df[varname].tolist()), df.index.tolist()
 
 if __name__ == '__main__':
-    fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(20, 20))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 8), sharex=True)
+    (ax0, ax1, ax2, ax3) = axes
+    # use tight layout
+    fig.tight_layout()
     farmer_states, state_index = get_farmer_states()
-    scenarios = ['base', 'sprinkler']
+    linestyles = ['-', '--']
+    colors = ['red', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+    # scenarios = ['base', 'sprinkler']
+    scenarios = ['base']
+    
     for i, scenario in enumerate(scenarios):
         discharge = get_discharge(scenario)
         # sum discharge per year
         discharge_per_year = discharge.resample('A', label='right').sum()
         discharge_per_year.index = [discharge_per_year.index[i].year for i in range(len(discharge_per_year))]
+        # remove first year from index
+        discharge_per_year = discharge_per_year[1:]
         to_plot = pd.DataFrame(discharge_per_year, columns=['discharge'])
+        
         for year in discharge_per_year.index:
             crops = read_arrays(scenario, year, 'crops_kharif', mode='first_day_of_year')
             farmers_sugarcane = (crops == 4)
             for state_idx, state_name in enumerate(state_index):
                 # set n_farmers_sugarcane in to_plot
                 to_plot.loc[year, f'n_farmers_sugarcane_{state_name}'] = farmers_sugarcane[farmer_states == state_idx].sum()
+        
         for year in discharge_per_year.index:
             has_well = read_arrays(scenario, year, 'well_irrigated', mode='first_day_of_year')
             for state_idx, state_name in enumerate(state_index):
                 # set n_farmers_sugarcane in to_plot
-                to_plot.loc[year, f'n_farmers_irrigation_{state_name}'] = farmers_sugarcane[farmer_states == state_idx].sum()
-        # plot
-        ax0.bar(to_plot.index, to_plot['discharge'], label=scenario)
-        bottom = np.zeros(len(to_plot.index))
-        for state in state_index:
-            ax1.plot(to_plot.index, to_plot[f'n_farmers_sugarcane_{state}'], label=f'{scenario} {state.title()}')#, bottom=bottom)
-            bottom += to_plot[f'n_farmers_sugarcane_{state}']
-        bottom = np.zeros(len(to_plot.index))
-        for state in state_index:
-            ax2.plot(to_plot.index, to_plot[f'n_farmers_irrigation_{state}'], label=f'{scenario} {state.title()}')#, bottom=bottom)
-            bottom += to_plot[f'n_farmers_irrigation_{state}']
-    ax0.legend()
-    ax1.legend()
-    ax2.legend()
+                to_plot.loc[year, f'n_farmers_irrigation_{state_name}'] = has_well[farmer_states == state_idx].sum()
+
+        for year in discharge_per_year.index:
+            groundwater_depth = read_arrays(scenario, year, 'groundwater depth', mode='first_day_of_year')
+            for state_idx, state_name in enumerate(state_index):
+                # set n_farmers_sugarcane in to_plot
+                to_plot.loc[year, f'groundwater_depth_{state_name}'] = groundwater_depth[farmer_states == state_idx].mean()
+
+        hydraulic_head = get_honeybees_data(scenario, 'hydraulic head', to_plot.index[0], to_plot.index[-1], fileformat='csv')
+        to_plot['hydraulic_head'] = hydraulic_head[0]
+        
+        # plotting
+        # set linestyle
+        linestyle = linestyles[i]
+
+        # discharge
+        ax0.plot(to_plot.index, to_plot['discharge'], label=scenario, linestyle=linestyle, color='#1f77b4')
+        ax0.set_title('Discharge')
+        ax0.set_xlim(to_plot.index[0], to_plot.index[-1])
+        
+        # sugarcane farmers
+        for j, state in enumerate(state_index):
+            color = colors[j]
+            ax1.plot(to_plot.index, to_plot[f'n_farmers_sugarcane_{state}'], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        ax1.set_title('Sugarcane farmers')
+        
+        # well-irrigated farmers
+        for j, state in enumerate(state_index):
+            color = colors[j]
+            ax2.plot(to_plot.index, to_plot[f'n_farmers_irrigation_{state}'], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        ax2.set_title('Well irrigating farmers')
+
+        # groundwater depth
+        for j, state in enumerate(state_index):
+            color = colors[j]
+            ax3.plot(to_plot.index, to_plot[f'groundwater_depth_{state}'], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        # invert y axis
+        ax3.invert_yaxis()
+        ax3.set_title('Groundwater depth farmers')
+
+        # # hydraulic head
+        # ax3.plot(to_plot.index, to_plot['hydraulic_head'], label=scenario, linestyle=linestyle, color='#1f77b4')
+        # ax3.set_title('Hydraulic head')
+    
+    for ax in axes:
+        ax.legend()
+    
     plt.savefig('plot/output/total_discharge_per_year.png')
     plt.savefig('plot/output/total_discharge_per_year.svg')

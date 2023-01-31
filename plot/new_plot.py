@@ -66,8 +66,8 @@ class Plot:
         
         self.reservoir_dependent_farmers = self.set_reservoir_dependent_farmers(2011, 2018)
         self.non_surface_water_dependent_farmers = self.set_non_surface_water_dependent_farmers(2011, 2018)
-        # self.farmers_to_analyse = self.non_surface_water_dependent_farmers
-        self.farmers_to_analyse = ...
+        self.farmers_to_analyse = self.non_surface_water_dependent_farmers
+        # self.farmers_to_analyse = ...
         self.command_areas = self.read_command_areas()
         self.activation_order = self.get_activation_order()
 
@@ -121,7 +121,7 @@ class Plot:
         if not os.path.exists(cache_file):
             # read irrigation data from 2011 to 2017 for from surface, groundwater and reservoir
             surface_irrigation_total = None
-            n_days = 0
+            years = 0
             for year in range(start_year, end_year):
                 surface_irrigation = self.read_arrays(year, 'channel irrigation')
                 if surface_irrigation_total is None:
@@ -129,11 +129,13 @@ class Plot:
                 else:
                     surface_irrigation_total += surface_irrigation
 
-                n_days += 366 if calendar.isleap(year) else 365
+                years += 1
 
-            surface_irrigation_total /= n_days
+            surface_irrigation_total_per_year = surface_irrigation_total / years
+            surface_irrigation_total_m = surface_irrigation_total_per_year / self.field_size
+            surface_irrigation_total_mm = surface_irrigation_total_m * 1000
             # surface_irrigaton_dependent_farmers
-            non_surface_water_dependent_farmers = surface_irrigation_total < 2
+            non_surface_water_dependent_farmers = surface_irrigation_total_mm < .5
             
             np.save(cache_file, non_surface_water_dependent_farmers)
         else:
@@ -224,21 +226,26 @@ class Plot:
 
             assert total.size == self.n
             
-            array = total[self.farmers_to_analyse]
-
             by_command_area = {}
             for command_area_id in command_area_ids:
                 command_area_id = command_area_id.item()
                 farmers_in_command_area = self.command_area_per_farmer[self.farmers_to_analyse] == command_area_id
                 activation_order_area = self.activation_order[self.farmers_to_analyse][farmers_in_command_area]
                 activation_order_median = np.percentile(activation_order_area, 50)
-                array_command_area = array[self.farmers_to_analyse][farmers_in_command_area]
+                array_command_area = total[self.farmers_to_analyse][farmers_in_command_area]
                 
+                size_command_area = self.field_size[self.farmers_to_analyse][farmers_in_command_area]
+                assert size_command_area.size == array_command_area.size
+
                 head_end = fn(array_command_area[activation_order_area < activation_order_median])
+                head_end_size = (size_command_area[activation_order_area < activation_order_median]).sum()
                 tail_end = fn(array_command_area[activation_order_area >= activation_order_median])
+                tail_end_size = (size_command_area[activation_order_area >= activation_order_median]).sum()
                 by_command_area[command_area_id] = {
                     'head_end': head_end,
+                    'head_end_size': head_end_size,
                     'tail_end': tail_end,
+                    'tail_end_size': tail_end_size,
                 }
             with open(cache_file, 'w') as f:
                 json.dump(by_command_area, f, cls=MyEncoder)
@@ -293,12 +300,18 @@ class Plot:
             by_command_area = self.get_values_head_vs_tail(*args, year=year, **kwargs)
             year_values_tail_end = 0
             year_values_head_end = 0
+            head_end_size = 0
+            tail_end_size = 0
             for values in by_command_area.values():
-                year_values_tail_end += values['tail_end']
-                year_values_head_end += values['head_end']
-            tail_end.append(year_values_tail_end)
-            head_end.append(year_values_head_end)
+                year_values_tail_end += values['tail_end'] * values['tail_end_size']
+                year_values_head_end += values['head_end'] * values['head_end_size']
+                head_end_size += values['head_end_size']
+                tail_end_size += values['tail_end_size']
+            tail_end.append(year_values_tail_end / tail_end_size)
+            head_end.append(year_values_head_end / head_end_size)
             years.append(year)
+        print(years)
+        print(tail_end)
         ax.plot(years, tail_end, label='tail end')
         ax.plot(years, head_end, label='head end')
 
@@ -321,11 +334,11 @@ class Plot:
         fig, ax = plt.subplots(2, 3, figsize=(20, 8))
 
         self.plot_tail_vs_head_end(start_year, end_year, ax[0][0], name="reservoir irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
-        self.format_ax(ax[0][0], ylabel="reservoir irrigation (mm/day)", ymax=6)
+        self.format_ax(ax[0][0], ylabel="reservoir irrigation (mm/day)", ymax=None)
         self.plot_tail_vs_head_end(start_year, end_year, ax[0][1], name="groundwater irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
-        self.format_ax(ax[0][1], ylabel="groundwater irrigation (mm/day)", ymax=6)
+        self.format_ax(ax[0][1], ylabel="groundwater irrigation (mm/day)", ymax=None)
         self.plot_tail_vs_head_end(start_year, end_year, ax[0][2], name="channel irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
-        self.format_ax(ax[0][2], ylabel="channel irrigation (mm/day)", ymax=6)
+        self.format_ax(ax[0][2], ylabel="channel irrigation (mm/day)", ymax=None)
         
         self.plot_tail_vs_head_end(start_year, end_year, ax[1][0], name="crops_kharif", fn=sum_sugarcane, correct_for_field_size=False, mode='first_day_of_year')
         self.plot_small_vs_large_farmer(start_year, end_year, ax[1][0], name="crops_kharif", fn=sum_sugarcane, correct_for_field_size=False, mode='first_day_of_year')

@@ -271,7 +271,7 @@ def plot_scenarios(scenarios):
 
         discharges = []
         for i, scenario in enumerate(scenarios):
-            res = get_discharge(scenario, switch_crop=switch_crop)
+            res = get_discharge(scenario)
             if res:
                 dates, discharge = res
                 ax0.plot(dates, discharge, label=scenario, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)
@@ -349,7 +349,7 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_time=None):
 
     fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
     plt.subplots_adjust(left=0.1, right=0.97, bottom=0.07, top=0.92)
-    dates, simulated_discharge = get_discharge(scenario, False)
+    dates, simulated_discharge = get_discharge(scenario)
     
     observed_discharge = get_observed_discharge(dates)
 
