@@ -259,6 +259,13 @@ report:
     frequency: per_timestep
     format: npy
     save: export
+  groundwater depth:
+    type: farmers
+    function: null
+    varname: groundwater_depth
+    frequency: per_timestep
+    format: npy
+    save: export
   # is water aware:
   #   type: farmers
   #   function: sum

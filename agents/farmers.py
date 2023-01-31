@@ -90,6 +90,7 @@ class Farmers(AgentBaseClass):
         "_reservoir_abstraction_m3_by_farmer",
         "_latest_profits",
         "_latest_potential_profits",
+        "_groundwater_depth",
     ]
     __slots__.extend(agent_attributes)
 
@@ -153,6 +154,9 @@ class Farmers(AgentBaseClass):
                 "nodatacheck": False
             },
             "_irrigated": {
+                "nodata": -1,
+            },
+            "_groundwater_depth": {
                 "nodata": -1,
             },
             "_household_size": {
@@ -226,6 +230,9 @@ class Farmers(AgentBaseClass):
         if self.model.load_initial_data:
             for attribute in self.agent_attributes:
                 fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npy")
+                print("remove this")
+                if attribute == '_groundwater_depth':
+                    continue
                 values = np.load(fp)
                 setattr(self, attribute, values)
             self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
@@ -331,6 +338,9 @@ class Farmers(AgentBaseClass):
         self.update_field_indices()
 
         print(f'Loaded {self.n} farmer agents')
+
+        print("move to farmer initialization")
+        self._groundwater_depth = np.zeros(self.max_n, dtype=np.float32)
 
         for attr in self.agent_attributes:
             assert getattr(self, attr[1:]).shape[0] == self.n
@@ -478,6 +488,7 @@ class Farmers(AgentBaseClass):
         channel_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
         reservoir_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
         groundwater_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
+        hydraulic_head_per_farmer = np.zeros(activation_order.size, dtype=np.float32)
   
         has_access_to_irrigation_water = np.zeros(activation_order.size, dtype=np.bool_)
         for activated_farmer_index in range(activation_order.size):
@@ -505,8 +516,9 @@ class Farmers(AgentBaseClass):
             # Actual irrigation from surface, reservoir and groundwater
             if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
                 for field in farmer_fields:
+                    f_var = HRU_to_grid[field]
+                    hydraulic_head_per_farmer[farmer] = groundwater_head[f_var]
                     if crop_map[field] != -1:
-                        f_var = HRU_to_grid[field]
                         irrigation_water_demand_field = totalPotIrrConsumption[field] / irrigation_efficiency_farmer
 
                         if surface_irrigated[farmer]:
@@ -565,7 +577,8 @@ class Farmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
-            has_access_to_irrigation_water
+            has_access_to_irrigation_water,
+            hydraulic_head_per_farmer
         )
 
     def abstract_water(
@@ -606,7 +619,8 @@ class Farmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
-            has_access_to_irrigation_water
+            has_access_to_irrigation_water,
+            hydraulic_head_per_farmer
         ) = self.abstract_water_numba(
             self.n,
             self.activation_order_by_elevation,
@@ -627,6 +641,7 @@ class Farmers(AgentBaseClass):
             return_fraction=self.model.config['agent_settings']['farmers']['return_fraction']
         )
         self.n_water_accessible_days += has_access_to_irrigation_water
+        self.groundwater_depth = self.elevation - hydraulic_head_per_farmer
         return (
             water_withdrawal_m,
             water_consumption_m,
@@ -1034,7 +1049,7 @@ class Farmers(AgentBaseClass):
             # if in_reservoir_command_area and not surface_irrigated[farmer_idx]:
             #     surface_irrigated[farmer_idx] = True
 
-    def invest(self) -> None:
+    def invest_in_irrigation_well(self) -> None:
         nbits = 19
 
         # from honeybees.library.geohash import window
@@ -1260,6 +1275,14 @@ class Farmers(AgentBaseClass):
         self._household_size[:self.n] = value
 
     @property
+    def groundwater_depth(self):
+        return self._groundwater_depth[:self.n]
+
+    @groundwater_depth.setter
+    def groundwater_depth(self, value):
+        self._groundwater_depth[:self.n] = value
+
+    @property
     def daily_expenses_per_capita(self):
         return self._daily_expenses_per_capita[:self.n]
 
@@ -1408,18 +1431,18 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_years[has_access_to_water_all_year] += 1
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
+            
             if self.model.current_timestep >= days_in_year and self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':  # 364 bacause jan 1 is timestep 0
                 self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
+            
             self.upkeep_assets()
             self.make_loan_payment()
             if self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':
-                self.invest()
-
-            # if scenario is sprinkler irrigation
+                self.invest_in_irrigation_well()
             if self.model.args.scenario == 'sprinkler':
                 self.invest_in_sprinkler_irrigation()            
-            # reset disposable income
 
+            # reset disposable income
             self.disposable_income[:] = 0
 
 
