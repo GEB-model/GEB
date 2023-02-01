@@ -230,6 +230,8 @@ def get_elevation_std(mask_profile: rasterio.profiles.Profile) -> None:
 
     scaling = 10
     DEM, DEM_profile = clip_to_other(DEM, DEM_profile, mask_profile)
+    with rasterio.open(os.path.join(INPUT, 'landsurface/topo/elv.tif'), 'w', **DEM_profile) as dst:
+        dst.write(DEM, 1)
     _, high_res_dem_profile_target = upscale(DEM, mask_profile, scaling)
     High_res_DEM, High_res_DEM_profile = clip_to_other(High_res_DEM, High_res_DEM_profile_org, high_res_dem_profile_target)
     High_res_DEM[High_res_DEM < 0] = 0
