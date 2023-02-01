@@ -6,8 +6,12 @@ import json
 from datetime import timedelta, date, datetime
 import matplotlib.pyplot as plt
 
+plt.rcParams["font.family"] = "monospace"
+
 from plotconfig import config
 TIMEDELTA = timedelta(days=1)
+
+FARMER_MULTIPLIER = 1_000_000
 
 def get_farmer_states():
     tehsil = np.load(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'tehsil_code.npy'))
@@ -100,7 +104,7 @@ if __name__ == '__main__':
     farmer_states, state_index = get_farmer_states()
     linestyles = ['-', '--']
     colors = ['red', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
-    # scenarios = ['base', 'sprinkler']
+    scenarios = ['base', 'sprinkler']
     scenarios = ['base']
     
     for i, scenario in enumerate(scenarios):
@@ -131,42 +135,44 @@ if __name__ == '__main__':
                 # set n_farmers_sugarcane in to_plot
                 to_plot.loc[year, f'groundwater_depth_{state_name}'] = groundwater_depth[farmer_states == state_idx].mean()
 
-        hydraulic_head = get_honeybees_data(scenario, 'hydraulic head', to_plot.index[0], to_plot.index[-1], fileformat='csv')
-        to_plot['hydraulic_head'] = hydraulic_head[0]
-        
         # plotting
         # set linestyle
         linestyle = linestyles[i]
 
+        if scenario == 'base':
+            scenario = 'baseline'
+
         # discharge
         ax0.plot(to_plot.index, to_plot['discharge'], label=scenario, linestyle=linestyle, color='#1f77b4')
-        ax0.set_title('Discharge')
+        ax0.set_title('Yearly discharge')
         ax0.set_xlim(to_plot.index[0], to_plot.index[-1])
         
         # sugarcane farmers
         for j, state in enumerate(state_index):
             color = colors[j]
-            ax1.plot(to_plot.index, to_plot[f'n_farmers_sugarcane_{state}'], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
-        ax1.set_title('Sugarcane farmers')
+            ax1.plot(to_plot.index, to_plot[f'n_farmers_sugarcane_{state}'] / FARMER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        ax1.set_title(f'Sugarcane farmers (×{FARMER_MULTIPLIER})')
+        ax1.set_ylim(0, 3)
         
         # well-irrigated farmers
         for j, state in enumerate(state_index):
             color = colors[j]
-            ax2.plot(to_plot.index, to_plot[f'n_farmers_irrigation_{state}'], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
-        ax2.set_title('Well irrigating farmers')
+            ax2.plot(to_plot.index, to_plot[f'n_farmers_irrigation_{state}'] / FARMER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        ax2.set_title(f'Well irrigating farmers (×{FARMER_MULTIPLIER})')
+        ax2.set_ylim(0, 3)
 
         # groundwater depth
         for j, state in enumerate(state_index):
             color = colors[j]
             ax3.plot(to_plot.index, to_plot[f'groundwater_depth_{state}'], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
-        # invert y axis
-        ax3.invert_yaxis()
         ax3.set_title('Groundwater depth farmers')
 
         # # hydraulic head
         # ax3.plot(to_plot.index, to_plot['hydraulic_head'], label=scenario, linestyle=linestyle, color='#1f77b4')
         # ax3.set_title('Hydraulic head')
     
+    # invert y axis
+    ax3.invert_yaxis()
     for ax in axes:
         ax.legend()
     
