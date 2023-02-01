@@ -114,6 +114,10 @@ class Farmers(AgentBaseClass):
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
             bounds=self.model.bounds
         )
+        self.elevation_grid = self.model.data.grid.compress(ArrayReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'elv.tif'),
+            bounds=self.model.bounds
+        ).get_data_array())
 
         # load map of all subdistricts
         self.subdistrict_map = ArrayReader(
@@ -230,9 +234,6 @@ class Farmers(AgentBaseClass):
         if self.model.load_initial_data:
             for attribute in self.agent_attributes:
                 fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npy")
-                print("remove this")
-                if attribute == '_groundwater_depth':
-                    continue
                 values = np.load(fp)
                 setattr(self, attribute, values)
             self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
@@ -427,6 +428,7 @@ class Farmers(AgentBaseClass):
         activation_order: np.ndarray,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
+        elevation_grid: np.ndarray,
         irrigation_efficiency: np.ndarray,
         surface_irrigated: np.ndarray,
         well_irrigated: np.ndarray,
@@ -439,7 +441,8 @@ class Farmers(AgentBaseClass):
         groundwater_head: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
         command_areas: np.ndarray,
-        return_fraction: float
+        return_fraction: float,
+        well_depth: float,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation. 
@@ -498,11 +501,13 @@ class Farmers(AgentBaseClass):
 
             # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
             farmer_has_access_to_irrigation_water = False
-            if well_irrigated[farmer] == 1:
-                farmer_has_access_to_irrigation_water = True
-            elif surface_irrigated[farmer] == 1:
-                for field in farmer_fields:
-                    f_var = HRU_to_grid[field]
+            for field in farmer_fields:
+                f_var = HRU_to_grid[field]
+                if well_irrigated[farmer] == 1:
+                    if groundwater_head[f_var] - elevation_grid[f_var] < well_depth:
+                        farmer_has_access_to_irrigation_water = True
+                        break
+                elif surface_irrigated[farmer] == 1:
                     if available_channel_storage_m3[f_var] > 100:
                         farmer_has_access_to_irrigation_water = True
                         break
@@ -551,16 +556,18 @@ class Farmers(AgentBaseClass):
 
                         if well_irrigated[farmer]:
                             # groundwater irrigation
-                            available_groundwater_cell_m = available_groundwater_m3[f_var] / cell_area[field]
-                            groundwater_abstraction_cell_m = min(available_groundwater_cell_m, irrigation_water_demand_field)
-                            groundwater_abstraction_cell_m3 = groundwater_abstraction_cell_m * cell_area[field]
-                            groundwater_abstraction_m3[f_var] = groundwater_abstraction_cell_m3
-                            available_groundwater_m3[f_var] -= groundwater_abstraction_cell_m3
-                            water_withdrawal_m[field] += groundwater_abstraction_cell_m
+                            groundwater_depth = groundwater_head[f_var] - elevation_grid[f_var]
+                            if groundwater_depth < well_depth:
+                                available_groundwater_cell_m = available_groundwater_m3[f_var] / cell_area[field]
+                                groundwater_abstraction_cell_m = min(available_groundwater_cell_m, irrigation_water_demand_field)
+                                groundwater_abstraction_cell_m3 = groundwater_abstraction_cell_m * cell_area[field]
+                                groundwater_abstraction_m3[f_var] = groundwater_abstraction_cell_m3
+                                available_groundwater_m3[f_var] -= groundwater_abstraction_cell_m3
+                                water_withdrawal_m[field] += groundwater_abstraction_cell_m
 
-                            groundwater_abstraction_m3_by_farmer[farmer] += groundwater_abstraction_cell_m3
-              
-                            irrigation_water_demand_field -= groundwater_abstraction_cell_m
+                                groundwater_abstraction_m3_by_farmer[farmer] += groundwater_abstraction_cell_m3
+                
+                                irrigation_water_demand_field -= groundwater_abstraction_cell_m
               
                         assert irrigation_water_demand_field >= -1e15  # Make sure irrigation water demand is zero, or positive. Allow very small error.
 
@@ -626,6 +633,7 @@ class Farmers(AgentBaseClass):
             self.activation_order_by_elevation,
             self.field_indices_by_farmer,
             self.field_indices,
+            self.elevation_grid,
             self.irrigation_efficiency,
             self.irrigated,
             self.has_well,
@@ -638,7 +646,8 @@ class Farmers(AgentBaseClass):
             groundwater_head,
             available_reservoir_storage_m3,
             command_areas,
-            return_fraction=self.model.config['agent_settings']['farmers']['return_fraction']
+            return_fraction=self.model.config['agent_settings']['farmers']['return_fraction'],
+            well_depth=30
         )
         self.n_water_accessible_days += has_access_to_irrigation_water
         self.groundwater_depth = self.elevation - hydraulic_head_per_farmer
