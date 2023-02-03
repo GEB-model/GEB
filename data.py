@@ -83,7 +83,6 @@ def load_crop_prices(state2int: dict, inflation_rates) -> tuple[dict[dict[date, 
                 date_index = dict(((date, i) for i, date in enumerate(agmarknet_prices.index.date)))
             else:
                 assert date_index == dict(((date, i) for i, date in enumerate(agmarknet_prices.index.date)))
-            agmarknet_prices.to_excel('test.xlsx')
             if crop_prices is None:
                 crop_prices = np.full((len(date_index), len(state2int), len(crops)), np.nan, dtype=np.float32)  # first index for date, second for state, third index for crops
             
