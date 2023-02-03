@@ -156,7 +156,8 @@ if __name__ == '__main__':
     costs = get_changes(costs)
     costs = inter_and_extrapolate(costs)
     costs = add_tomatoes_maharashtra(costs)
-    costs = process_additional_years(costs, lower_bound=(2003, 2004))
+    for year in range(2003, 1959, -1):
+        costs = process_additional_years(costs, lower_bound=(year, year+1))
 
     print(costs)
     folder = os.path.join(DATA_FOLDER, 'GEB', 'input', 'crops')
