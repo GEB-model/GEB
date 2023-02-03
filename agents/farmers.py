@@ -141,7 +141,7 @@ class Farmers(AgentBaseClass):
             for subdistrict, state in subdistrict2state.items():
                 self.subdistrict2state[subdistrict] = state2int[state]
         
-        self.crop_prices = load_crop_prices(state2int)
+        self.crop_prices = load_crop_prices(state2int, self.inflation_rate)
 
         self.agent_attributes_meta = {
             "_locations": {

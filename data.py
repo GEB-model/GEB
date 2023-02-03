@@ -18,13 +18,16 @@ def load_cultivation_costs():
 
     return date_index, cultivation_costs
 
-def load_crop_prices(state2int: dict) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
+def load_crop_prices(state2int: dict, inflation_rates) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
     """Load crop prices per state from the input data and return a dictionary of states containing 2D array of prices.
     
     Returns:
         date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
         crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop."""
     sugarcane_FRP = pd.read_excel(os.path.join(ORIGINAL_DATA, 'crop_prices', 'FRP.xlsx')).set_index('Year')  # Fair and Remunerative Price
+
+    start_year = min(inflation_rates.keys())
+    end_year = max(inflation_rates.keys())
 
     crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['PRICE'].to_dict()
     folder = os.path.join(INPUT, 'crops', 'crop_prices_rs_per_g')
@@ -36,20 +39,57 @@ def load_crop_prices(state2int: dict) -> tuple[dict[dict[date, int]], dict[str, 
         if state in state2int:
             state_index = state2int[state]
             # TODO: Could do more sophisticated interpolation or obtain data from other states.
-            agmarknet_prices = pd.read_excel(os.path.join(folder, fn), index_col=0).fillna(method='ffill').fillna(method='bfill')
+            agmarknet_prices = pd.read_excel(os.path.join(folder, fn), index_col=0)
+            # select only dates before year 2020
+            agmarknet_prices = agmarknet_prices[agmarknet_prices.index.year <= end_year]
+            # reindex to include all years starting from start_year
+            agmarknet_prices = agmarknet_prices.reindex(pd.date_range(start=date(start_year, 1, 1), end=agmarknet_prices.index[-1], freq='MS'))
+            
+            sugarcane_prices = sugarcane_FRP.copy()
+            start_year_sugarcane = int(sugarcane_FRP.index[0][:4])
+            end_year_sugarcane = int(sugarcane_FRP.index[-1][-4:])
+            
+            sugarcane_prices.index = pd.date_range(start=date(start_year_sugarcane, 1, 1), end=date(end_year_sugarcane, 1, 1), freq='YS', inclusive='left') + pd.DateOffset(months=6)
+            sugarcane_prices = sugarcane_prices.reindex(pd.date_range(start=date(start_year_sugarcane, 7, 1), end=date(end_year_sugarcane, 7, 1), freq='MS', inclusive='left'))
+            sugarcane_prices = sugarcane_prices[sugarcane_prices.index.year <= end_year]
+            sugarcane_prices = sugarcane_prices.interpolate(method='ffill', axis=0)
+            # set sugarcane prices in agmarknet_prices
+            agmarknet_prices = agmarknet_prices.assign(Sugarcane=sugarcane_prices['Sugarcane'])
+
+            # interpolate missing values
+            agmarknet_prices = agmarknet_prices.interpolate(method='linear', axis=0, limit_area='inside')
+            # ensure each column has at least 12 non-missing values
+            for column in agmarknet_prices.columns:
+                if agmarknet_prices[column].count() < 12:
+                    raise ValueError(f"Column {column} has less than 12 non-missing values")
+            
+            # fill missing values, while correcting for inflation, historically
+            for column_idx, column in enumerate(agmarknet_prices.columns):
+                # find first non-missing index
+                first_non_missing_idx = agmarknet_prices.index.get_loc(agmarknet_prices[column].first_valid_index())
+                # find index value before first missing value
+                for idx in range(first_non_missing_idx, -1, -1):
+                    agmarknet_prices.iloc[idx, column_idx] = agmarknet_prices.iloc[idx + 12, column_idx] / inflation_rates[agmarknet_prices.index[idx].year+1]
+
+            # fill missing values, while correcting for inflation, future part
+            for column_idx, column in enumerate(agmarknet_prices.columns):
+                # find first non-missing index
+                last_non_missing_idx = agmarknet_prices.index.get_loc(agmarknet_prices[column].last_valid_index())
+                # find index value before first missing value
+                for idx in range(last_non_missing_idx, len(agmarknet_prices)):
+                    agmarknet_prices.iloc[idx, column_idx] = agmarknet_prices.iloc[idx - 12, column_idx] * inflation_rates[agmarknet_prices.index[idx].year]
+
             if not date_index:
                 date_index = dict(((date, i) for i, date in enumerate(agmarknet_prices.index.date)))
             else:
                 assert date_index == dict(((date, i) for i, date in enumerate(agmarknet_prices.index.date)))
+            agmarknet_prices.to_excel('test.xlsx')
             if crop_prices is None:
                 crop_prices = np.full((len(date_index), len(state2int), len(crops)), np.nan, dtype=np.float32)  # first index for date, second for state, third index for crops
+            
             for ID, name in crops.items():
-                if name == 'Sugarcane':
-                    for month, month_idx in date_index.items():
-                        agricultural_year = f"{month.year-1}-{month.year}" if month.month < 7 else f"{month.year}-{month.year+1}"
-                        crop_prices[month_idx, state_index, ID] = sugarcane_FRP.loc[agricultural_year]
-                else:
-                    crop_prices[:, state_index, ID] = agmarknet_prices[name]
+                crop_prices[:, state_index, ID] = agmarknet_prices[name]
+    
     assert not np.isnan(crop_prices).any()
     return date_index, crop_prices
 
