@@ -25,6 +25,8 @@ class ReservoirOperators(AgentBaseClass):
         assert (self.reservoirs['reservoir_volume'] > 0).all()
         self.active_reservoirs = self.reservoirs.loc[waterBodyIDs]
 
+        np.save(os.path.join(self.model.config['general']['report_folder'], self.model.args.scenario, 'active_reservoirs_waterBodyIDs.npy'), waterBodyIDs)
+
         self.reservoir_release_factors = np.full(len(self.active_reservoirs), self.model.config['agent_settings']['reservoir_operators']['max_reservoir_release_factor'])
 
         self.reservoir_volume = self.active_reservoirs['reservoir_volume'].values
