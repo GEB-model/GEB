@@ -58,8 +58,8 @@ mpl.rcParams['ytick.major.width'] = 0.5
 mpl.rcParams['ytick.minor.width'] = 0.5
 
 START_DATE = config['general']['start_time']
-END_DATE = config['general']['end_time']
 TIMEDELTA = timedelta(days=1)
+END_DATE = config['general']['end_time'] - TIMEDELTA
 REPORT_FOLDER = config['general']['report_folder']
 
 class Plot:
