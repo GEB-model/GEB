@@ -266,6 +266,13 @@ report:
     frequency: per_timestep
     format: npy
     save: export
+  profit:
+    type: farmers
+    function: null
+    varname: profit_per_farmer
+    frequency: per_timestep
+    format: npy
+    save: export
   # is water aware:
   #   type: farmers
   #   function: sum

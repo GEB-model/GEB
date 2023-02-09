@@ -173,6 +173,10 @@ class Farmers(AgentBaseClass):
                 "nodata": -1,
                 "nodatacheck": False
             },
+            "_profit_per_farmer": {
+                "nodata": np.nan,
+                "nodatacheck": False
+            },
             "_loan_interest": {
                 "nodata": -1,
                 "nodatacheck": False
@@ -240,6 +244,8 @@ class Farmers(AgentBaseClass):
             self.max_n = self._locations.shape[0]
             self.latest_profits.fill(np.nan)
             self.latest_potential_profits.fill(np.nan)
+            print("remove this later")
+            self._profit_per_farmer = np.zeros(self.max_n)
         else:
             farms = self.model.data.farms
 
@@ -312,6 +318,8 @@ class Farmers(AgentBaseClass):
             self._n_water_accessible_years = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_accessible_years[:] = 0
 
+            self._profit_per_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.profit_per_farmer[:] = 0
             self._disposable_income = np.full(self.max_n, -1, dtype=np.float32)
             self.disposable_income[:] = 0
 
@@ -824,16 +832,19 @@ class Farmers(AgentBaseClass):
             profit = crop_yield_gr * crop_prices_per_field
             assert (profit >= 0).all()
             
-            profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
+            self.profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
 
             # get potential crop profit per farmer
             potential_crop_yield = harvested_area * max_yield_per_crop
             potential_profit = potential_crop_yield * crop_prices_per_field
             potential_profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
       
-            self.save_profit(harvesting_farmers, profit_per_farmer, potential_profit_per_farmer)
+            self.save_profit(harvesting_farmers, self.profit_per_farmer, potential_profit_per_farmer)
       
-            self.disposable_income += profit_per_farmer
+            self.disposable_income += self.profit_per_farmer
+        
+        else:
+            self.profit_per_farmer = np.zeros(self.n, dtype=np.float32)
   
         self.var.actual_transpiration_crop[harvest] = 0
         self.var.potential_transpiration_crop[harvest] = 0
@@ -1314,6 +1325,14 @@ class Farmers(AgentBaseClass):
     @has_well.setter
     def has_well(self, value):
         self._has_well[:self.n] = value
+
+    @property
+    def profit_per_farmer(self):
+        return self._profit_per_farmer[:self.n]
+
+    @profit_per_farmer.setter
+    def profit_per_farmer(self, value):
+        self._profit_per_farmer[:self.n] = value
 
     @property
     def tehsil(self):

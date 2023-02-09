@@ -7,10 +7,10 @@ general:
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2006-01-05
+  end_time: 2018-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_time: 2005-12-25
+  spinup_time: 2004-01-01
   ###
   # base folder where to report output data to
   upscale_factor: 40
@@ -263,6 +263,13 @@ report:
     type: farmers
     function: null
     varname: groundwater_depth
+    frequency: per_timestep
+    format: npy
+    save: export
+  profit:
+    type: farmers
+    function: null
+    varname: profit_per_farmer
     frequency: per_timestep
     format: npy
     save: export
