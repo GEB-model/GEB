@@ -3,23 +3,20 @@ import os
 import re
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, date
-import yaml
 import pandas as pd
 import sys
 import numpy as np
+from matplotlib import transforms
 import matplotlib.dates as mdates
 from matplotlib.lines import Line2D
 from plot import read_npy
-import matplotlib.transforms as transforms
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
-import matplotlib.dates as mdates
+
+from plotconfig import config, ORIGINAL_DATA, INPUT
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
 TIMEDELTA = timedelta(days=1)
-OUTPUT_FOLDER = os.path.join('DataDrive', 'GEB', 'report')
-with open('GEB.yml', 'r') as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
+OUTPUT_FOLDER = config['general']['report_folder']
 LINEWIDTH = .5
 TITLE_FORMATTER = {'size': 5, 'fontweight': 'bold', 'pad': 2}
 
@@ -59,24 +56,23 @@ def correlation(s,o):
     return corr
 
 
-def get_discharge(scenario, switch_crop):
+def get_discharge(scenario):
     values = []
     dates = []
-    subfolder = scenario
-    if switch_crop:
-        subfolder += '_switch_crops'
     try:
-        with open(os.path.join(OUTPUT_FOLDER, subfolder, 'var.discharge_daily.tss'), 'r') as f:
+        with open(os.path.join(OUTPUT_FOLDER, scenario, 'var.discharge_daily.tss'), 'r') as f:
             for i, line in enumerate(f):
                 if i < 4:
                     continue
                 if len(dates) == 0:
-                    dates.append(config['general']['start_time'])
+                    dt = config['general']['start_time']
                 else:
-                    dates.append(dates[-1] + TIMEDELTA)
+                    dt = dates[-1] + TIMEDELTA
+                dates.append(dt)
                 match = re.match(r"\s+([0-9]+)\s+([0-9\.e-]+)\s*$", line)
                 value = float(match.group(2))
                 values.append(value)
+        assert len(dates) == len(values)
         return dates, np.array(values)
     except FileNotFoundError:
         return None
@@ -147,9 +143,18 @@ def add_patches_legend(ax, labels, colors, ncol):
     legend._legend_box.align = "left"
 
 def get_observed_discharge(dates):
-    df = pd.read_csv('DataDrive/GEB/calibration/observations.csv', parse_dates=['Dates'])
+    if 'gauges' in config['general']:
+        gauges = config['general']['gauges']
+    else:
+        gauges = config['general']['poor_point']
+    streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
+    df = pd.read_csv(streamflow_path, parse_dates=['Dates'])
     df = df[df['Dates'].isin(dates)]
-    df = df.set_index('Dates').resample('1D').mean()
+    erroneous_dates = [date(2017,12,30), date(2018,1,8), date(2018,1,9), date(2018,1,10), date(2018,1,11), date(2018,1,13), date(2018,1,16), date(2018,1,17), date(2018,1,18), date(2018,1,19)]
+    df = df[~df['Dates'].isin(erroneous_dates)]
+    # re-index dataframe to fill missing dates
+    df = df.set_index('Dates').reindex(dates)
+    assert len(df) == len(dates)
     return df['flow'].to_numpy()
 
 def read_crop_data(dates, scenario, switch_crop):
@@ -166,11 +171,11 @@ def read_crop_data(dates, scenario, switch_crop):
 
     return dates, surgar_cane
 
-def scenarios():
-    n_agents = np.load(os.path.join('DataDrive', 'GEB', 'input', 'agents', 'farmer_locations.npy')).shape[0]
+def plot_scenarios(scenarios):
+    n_agents = np.load(os.path.join(INPUT, 'agents',  'attributes', 'household size.npy')).shape[0]
 
-    scenarios = ('base', 'ngo_training', 'government_subsidies')
-    labels = ('No irrigation adaptation', 'NGO adaptation', 'Government subsidies')
+    # labels = ('No irrigation adaptation', 'NGO adaptation', 'Government subsidies')
+    labels = ('No irrigation adaptation', )
     colors = ['black', 'blue', 'orange', 'red']
     colors = colors[:len(scenarios) + 1]
     fig, axes = plt.subplots(3, 2, sharex=True, figsize=(5, 6), dpi=300)
@@ -186,8 +191,8 @@ def scenarios():
     # ax3.set_position(ax3_position)
 
     ax0.set_ylim(0, 10_000)
-    # start_date = mdates.date2num(date(2007, 1, 1))
-    # end_date = mdates.date2num(date(2007, 6, 1))
+    # start_time = mdates.date2num(date(2007, 1, 1))
+    # end_time = mdates.date2num(date(2007, 6, 1))
     ax3.set_ylim(0, 41)
     
     axins1 = ax0.inset_axes([.74, .20, .13, .70], transform=ax0.transAxes)
@@ -266,7 +271,7 @@ def scenarios():
 
         discharges = []
         for i, scenario in enumerate(scenarios):
-            res = get_discharge(scenario, switch_crop=switch_crop)
+            res = get_discharge(scenario)
             if res:
                 dates, discharge = res
                 ax0.plot(dates, discharge, label=scenario, color=colors[i], linestyle=linestyle, linewidth=LINEWIDTH, **PLOT_STYLE)
@@ -296,7 +301,7 @@ def scenarios():
             PLOT_STYLE['markevery'] = (n * MARKSTARTINT, MARKEVERY)
 
         for i, scenario in enumerate(scenarios):
-            res = get_honeybees_data('is water aware', scenario=scenario, switch_crop=switch_crop)
+            res = get_honeybees_data('well_irrigated', scenario=scenario, switch_crop=switch_crop)
             if res:
                 dates, efficient = res
                 efficient = efficient.astype(np.float64)
@@ -336,10 +341,15 @@ def scenarios():
     plt.savefig('hydro_stats_per_scenario.svg')
     # plt.show()
 
-def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
+def obs_vs_sim(scenario, calibration_line, monthly=False, start_time=None):
+    output_folder = 'plot/output'
+    os.makedirs(output_folder, exist_ok=True)
+    if isinstance(calibration_line, date):
+        calibration_line = datetime.combine(calibration_line, datetime.min.time())
+
     fig, ax = plt.subplots(1, 1, figsize=(4, 3), dpi=300)
     plt.subplots_adjust(left=0.1, right=0.97, bottom=0.07, top=0.92)
-    dates, simulated_discharge = get_discharge(scenario, False)
+    dates, simulated_discharge = get_discharge(scenario)
     
     observed_discharge = get_observed_discharge(dates)
 
@@ -385,12 +395,12 @@ def obs_vs_sim(scenario, calibration_line, monthly=False, start_date=None):
         transform=ax.transAxes,
         fontsize=5
     )
-    plt.savefig('D:/OneDrive - IIASA/Paper/figures/obs_vs_sim.png')
-    plt.savefig('D:/OneDrive - IIASA/Paper/figures/obs_vs_sim.svg')
+    plt.savefig(os.path.join(output_folder, 'obs_vs_sim.png'))
+    plt.savefig(os.path.join(output_folder, 'obs_vs_sim.svg'))
     # plt.show()
 
 
 if __name__ == '__main__':
-    scenarios()
-    obs_vs_sim('base', calibration_line=datetime(2012, 1, 1), monthly=True)
-    # obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_date=None)
+    # scenarios()
+    obs_vs_sim('base', calibration_line=config['calibration']['end_time'], monthly=True)
+    # obs_vs_sim('base', calibration_line=date(2016, 1, 1), monthly=True, start_time=None)

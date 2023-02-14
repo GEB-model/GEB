@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=spinup
 #SBATCH --output=spinup.out
-#SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -13,10 +12,10 @@
 
 source ~/.bashrc
 
-SCRIPT_DIR="/scistor/ivm/jbn271/Packages/GEB/"
+SCRIPT_DIR="$HOME/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
-module load cuda10.2/toolkit/10.2.89  # load cuda environment
-conda activate a  # activate conda environment
+# module load cuda10.2/toolkit/10.2.89  # load cuda environment
+conda activate GEB  # activate conda environment
 
-python run.py --GPU --headless --scenario spinup
+python run.py --scenario spinup --config $1

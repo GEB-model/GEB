@@ -11,4 +11,4 @@ The figure below shows a schematic overview of the model. The lower part of the 
 
 ## Research paper
 
-Hopefully available soon!
+The pre-print is now available on EGUsphere:  [https://doi.org/10.5194/egusphere-2022-664](https://doi.org/10.5194/egusphere-2022-664)

@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=plot_irrigation
-#SBATCH --output=plot_irrigation.out
+#SBATCH --job-name=new_plot
+#SBATCH --output=new_plot.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=128G
+#SBATCH --mem=16G
 #SBATCH --time=100:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jens.de.bruijn@vu.nl
@@ -16,5 +16,4 @@ SCRIPT_DIR="$HOME/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
 conda activate GEB  # activate conda environment
-
-python plot/plot_irrigation.py --config $1
+python plot/new_plot.py --config $1

@@ -2,13 +2,24 @@
 import os
 import rasterio
 import numpy as np
-from honeybees.library.raster import clip_to_xy_bounds, clip_to_other, upscale
 import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
 import geopandas as gpd
 
-from config import ORIGINAL_DATA, INPUT
+from honeybees.library.raster import clip_to_xy_bounds, clip_to_other, upscale
+
+from methods import create_cell_area_map
+
+from preconfig import config, ORIGINAL_DATA, INPUT
+
+UPSCALE_FACTOR = config['general']['upscale_factor']
+BASIN_ID = config['general']['basin_id']
+if 'poor_point' in config['general']:
+    POOR_POINT = config['general']['poor_point']['lon'], config['general']['poor_point']['lat']
+else:
+    POOR_POINT = None
+from typing import Union
 
 if not os.path.exists(os.path.join(INPUT, 'areamaps')):
     os.makedirs(os.path.join(INPUT, 'areamaps'))
@@ -18,12 +29,13 @@ if not os.path.exists(os.path.join(INPUT, 'landsurface', 'topo')):
     os.makedirs(os.path.join(INPUT, 'landsurface', 'topo'))
 
     
-def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.Profile, rasterio.profiles.Profile]:
+def create_mask(basin_id: int, upscale_factor: int, poor_point: Union[None, tuple[float, float]]=None) -> tuple[rasterio.profiles.Profile, rasterio.profiles.Profile]:
     """This function creates a mask and a submask (using global UPSCALE_FACTOR), and returns rasterio profile for both
 
     Args:
         basin_id: The basin id of the `merit_hydro_30sec/30sec_basids.tif`
         upscale_factor: The size of the subcell mask relative to the basin mask.
+        poor_point: Optional poor point of subbasin. pyflwdir must be installed to use this option.
 
     Returns:
         mask_profile: rasterio profile for mask
@@ -40,9 +52,31 @@ def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.P
         nonmaskedy = np.where(mask.all(axis=1)==False)[0]
         ymin, ymax = nonmaskedy[0], nonmaskedy[-1] + 1
 
-        mask_profile = src.profile
-        mask_profile, mask = clip_to_xy_bounds(src, mask_profile, mask, xmin, xmax, ymin, ymax)
+        mask_profile_org = src.profile
+        mask_profile, mask = clip_to_xy_bounds(src, mask_profile_org, mask, xmin, xmax, ymin, ymax)
         mask_profile['nodata'] = -1
+
+        if poor_point:
+            import pyflwdir
+            with rasterio.open(os.path.join(ORIGINAL_DATA, 'merit_hydro_30sec/30sec_flwdir.tif'), 'r') as src:
+                ldd_profile, ldd = clip_to_xy_bounds(src, mask_profile, src.read(1), xmin, xmax, ymin, ymax)
+
+            flw = pyflwdir.from_array(
+                ldd,
+                ftype="d8",
+                transform=ldd_profile['transform'],
+                latlon=ldd_profile['crs'].is_geographic,
+                cache=True,
+            )
+            subbasin_mask = ~flw.basins(xy=poor_point).astype(bool)
+            nonmaskedx = np.where(subbasin_mask.all(axis=0)==False)[0]
+            subxmin, subxmax = nonmaskedx[0], nonmaskedx[-1] + 1
+            nonmaskedy = np.where(subbasin_mask.all(axis=1)==False)[0]
+            subymin, subymax = nonmaskedy[0], nonmaskedy[-1] + 1
+
+            mask_profile, _ = clip_to_xy_bounds(src, mask_profile_org, mask, subxmin + xmin, subxmax + xmin, subymin + ymin, subymax + ymin)
+            mask = subbasin_mask[subymin: subymax, subxmin: subxmax]
+            mask_profile['nodata'] = -1
 
         with rasterio.open(mask_fn, 'w', **mask_profile) as mask_clipped_src:
             mask_clipped_src.write(mask.astype(mask_profile['dtype']), 1)
@@ -52,34 +86,6 @@ def create_mask(basin_id: int, upscale_factor: int) -> tuple[rasterio.profiles.P
             submask_clipped_src.write(submask.astype(submask_profile['dtype']), 1)
 
         return mask_profile, submask_profile
-
-
-def create_cell_area_map(mask_profile: rasterio.profiles.Profile, prefix: str='') -> None:
-    """Create cell area map for given rasterio profile. 
-    
-    Args:
-        mask_profile: Rasterio profile of basin mask
-        prefix: Filename prefix
-    """
-    cell_area_path = os.path.join(INPUT, 'areamaps', f'{prefix}cell_area.tif')
-    RADIUS_EARTH_EQUATOR = 40075017  # m
-    distance_1_degree_latitude = RADIUS_EARTH_EQUATOR / 360
-
-    profile = dict(mask_profile)
-
-    affine = profile['transform']
-
-    lat_idx = np.arange(0, profile['width']).repeat(profile['height']).reshape((profile['width'], profile['height']))
-    lat = (lat_idx + 0.5) * affine.e + affine.f
-    width_m = distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine.a)
-    height_m = distance_1_degree_latitude * abs(affine.e)
-
-    area_m = width_m * height_m
-
-    profile['dtype'] = np.float32
-
-    with rasterio.open(cell_area_path, 'w', **profile) as cell_area_dst:
-        cell_area_dst.write(area_m.astype(np.float32), 1)
 
 def create_ldd(mask_profile: rasterio.profiles.Profile) -> None:
     """Clip ldd, and convert ArcGIS D8 convention to pcraster LDD convention. 
@@ -224,6 +230,8 @@ def get_elevation_std(mask_profile: rasterio.profiles.Profile) -> None:
 
     scaling = 10
     DEM, DEM_profile = clip_to_other(DEM, DEM_profile, mask_profile)
+    with rasterio.open(os.path.join(INPUT, 'landsurface/topo/elv.tif'), 'w', **DEM_profile) as dst:
+        dst.write(DEM, 1)
     _, high_res_dem_profile_target = upscale(DEM, mask_profile, scaling)
     High_res_DEM, High_res_DEM_profile = clip_to_other(High_res_DEM, High_res_DEM_profile_org, high_res_dem_profile_target)
     High_res_DEM[High_res_DEM < 0] = 0
@@ -253,13 +261,23 @@ def create_mask_shapefile() -> None:
     gdf.to_file(mask_file.replace('.tif', '.shp'))
 
 if __name__ == '__main__':
-    UPSCALE_FACTOR = 20
-    mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR)
+    
+    # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(75.896042,17.370451))  # Bhima
+    mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=POOR_POINT)  # Bhimashankar north
+    # mask_profile, submask_profile = create_mask(450000005, UPSCALE_FACTOR, poor_point=(73.86242,18.87037))  # Bhimashankar south
+    print("creating mask shapefile")
     create_mask_shapefile()
+    print("creating cell area map")
     create_cell_area_map(mask_profile)
+    print("creating cell area map for submask")
     create_cell_area_map(submask_profile, prefix='sub_')
+    print("creating ldd")
     create_ldd(mask_profile)
+    print("creating mannings coefficient and channel width")
     get_channel_manning_and_width(mask_profile)
+    print("get river length and channel ratio")
     get_river_length_and_channelratio(mask_profile)
+    print("geter river slope")
     get_river_slope(mask_profile)
+    print("get elevation standard deviation")
     get_elevation_std(mask_profile)

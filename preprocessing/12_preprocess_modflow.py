@@ -10,7 +10,7 @@ from rasterio.warp import reproject, Resampling
 from pyproj import Transformer
 from rasterio.merge import merge
 
-from config import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, INPUT
 
 class ModflowPreprocess:
     """
@@ -114,7 +114,7 @@ class ModflowPreprocess:
 
         cwatm_gdf['cwatm_geometry'] = cwatm_gdf.geometry  # save geometry for after join
         # intersect CWatM and MODFLOW shapefiles
-        intersect = gpd.sjoin(modflow_gdf, cwatm_gdf, how='inner', op='intersects', lsuffix='modflow', rsuffix='cwatm')
+        intersect = gpd.sjoin(modflow_gdf, cwatm_gdf, how='inner', predicate='intersects', lsuffix='modflow', rsuffix='cwatm')
 
         # calculate size of intersection
         intersect['area'] = intersect.apply(lambda x: x.cwatm_geometry.intersection(x.geometry).area, axis=1)

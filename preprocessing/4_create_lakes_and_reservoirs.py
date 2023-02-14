@@ -7,7 +7,7 @@ import pandas as pd
 import geopandas as gpd
 from rasterio.features import rasterize
 
-from config import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, INPUT
 
 output_folder = os.path.join(INPUT, 'routing', 'lakesreservoirs')
 if not os.path.exists(output_folder):
@@ -31,7 +31,7 @@ def lakeResIDs2raster() -> None:
     basin_lakes = gpd.GeoDataFrame.from_file(shpfile)
     geometries = [(shapely.geometry.mapping(geom), value) for value, geom in zip(basin_lakes['Hylak_id'].tolist(), basin_lakes['geometry'].tolist())]
     for type_ in ('', 'sub'):
-        with rasterio.open(os.path.join(INPUT, 'areamaps', f'{type_}mask.tif')) as src:
+        with rasterio.open(os.path.join(INPUT, 'areamaps', f'{type_}mask.tif'), 'r') as src:
             profile = src.profile
             transform = src.profile['transform']
             shape = src.profile['height'], src.profile['width']
@@ -65,16 +65,20 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
     reservoir_volumes = basin_lakes.set_index('Hylak_id')['Vol_total'].copy() * 1_000_000
     for hylak_id, capacity in df['Gross_capacity_BCM'].items():
         capacity *= 1_000_000_000  # BCM to m3
-        reservoir_volumes.loc[hylak_id] = capacity
+        if hylak_id in reservoir_volumes:
+            reservoir_volumes.loc[hylak_id] = capacity
 
     basin_lakes['reservoir_volume'] = reservoir_volumes.values
+    assert not basin_lakes['reservoir_volume'].isna().any()
 
     reservoir_FLR = reservoir_volumes.copy()
     for hylak_id, capacity in df['Capacity_FLR_BCM'].items():
         capacity *= 1_000_000_000  # BCM to m3
-        reservoir_FLR.loc[hylak_id] = capacity
+        if hylak_id in reservoir_FLR:
+            reservoir_FLR.loc[hylak_id] = capacity
 
     basin_lakes['flood_volume'] = reservoir_FLR.values
+    assert not basin_lakes['flood_volume'].isna().any()
 
     assert (basin_lakes['Hylak_id'] > 0).all()
     pd.DataFrame(basin_lakes.drop(columns='geometry')).to_excel(os.path.join(output_folder, 'basin_lakes_data.xlsx'))
@@ -121,6 +125,24 @@ def export_other_lake_data(reservoirs: list[int], area_in_study_area: pd.Series)
         ) as dst:
             dst.write(lake_dis, 1)
 
+        res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
+        res_vol_array[basin_lakes['Hylak_id']] = reservoir_volumes
+        res_vol = np.take(res_vol_array, lake_ids, mode='clip')
+        with rasterio.open(
+            os.path.join(output_folder, 'waterBodyVolRes.tif'), 'w',
+            **{**src.profile, **{'dtype': res_vol.dtype}}
+        ) as dst:
+            dst.write(res_vol, 1)
+
+        res_vol_array = np.full(basin_lakes['Hylak_id'].max() + 1, -1, dtype=np.float32)
+        res_vol_array[basin_lakes['Hylak_id']] = reservoir_FLR
+        res_vol = np.take(res_vol_array, lake_ids, mode='clip')
+        with rasterio.open(
+            os.path.join(output_folder, 'waterBodyVolResFLR.tif'), 'w',
+            **{**src.profile, **{'dtype': res_vol.dtype}}
+        ) as dst:
+            dst.write(res_vol, 1)
+
 def export_variables_to_csv() -> None:
     """Exports the data from the hydrolakes shapefile to a csv file, while dropping the geometry columns. This simply allows the model to more rapidly read the sheet."""
     shpfile = os.path.join(output_folder, 'hydrolakes.shp')
@@ -133,7 +155,7 @@ def create_command_area_raster() -> list[int]:
     
     Returns:
         hydrolake_ids: A list of hydrolake ids which link to a command area."""
-    shpfile = os.path.join(output_folder, 'command_areas.shp')
+    shpfile = os.path.join(ORIGINAL_DATA, 'command_areas', 'command_areas_with_ids.shp')
     command_areas = gpd.GeoDataFrame.from_file(shpfile)
     # remove command areas not associated with a reservoir
     command_areas = command_areas[~command_areas['Hylak_id'].isnull()]
@@ -153,7 +175,7 @@ def create_command_area_raster() -> list[int]:
     
     geometries = [(shapely.geometry.mapping(geom), value) for value, geom in zip(command_areas['Hylak_id'].tolist(), command_areas['geometry'].tolist())]
     for type_ in ('', 'sub'):
-        with rasterio.open(os.path.join(INPUT, 'areamaps', f'{type_}mask.tif')) as src:
+        with rasterio.open(os.path.join(INPUT, 'areamaps', f'{type_}mask.tif'), 'r') as src:
             profile = src.profile
             transform = src.profile['transform']
             shape = src.profile['height'], src.profile['width']

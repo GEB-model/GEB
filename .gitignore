@@ -11,11 +11,10 @@ tests/benchmarks/
 tests/files/
 .benchmarks
 *.npy
-DataDrive
 .DS_Store
-tmp/*
 *.cprof
 .prof_stats
+*.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

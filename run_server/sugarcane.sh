@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=plot_irrigation
-#SBATCH --output=plot_irrigation.out
+#SBATCH --job-name=sugarcane
+#SBATCH --output=sugarcane.out
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=128G
+#SBATCH --mem=20G
 #SBATCH --time=100:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jens.de.bruijn@vu.nl
@@ -15,6 +15,7 @@ source ~/.bashrc
 SCRIPT_DIR="$HOME/GEB/GEB_private/"
 cd $SCRIPT_DIR
 
+# module load cuda10.2/toolkit/10.2.89  # load cuda environment
 conda activate GEB  # activate conda environment
 
-python plot/plot_irrigation.py --config $1
+python run.py --scenario sugarcane --config $1

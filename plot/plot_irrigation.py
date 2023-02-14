@@ -2,7 +2,7 @@
 import os
 import sys
 from copy import copy
-from datetime import timedelta
+from datetime import timedelta, datetime, date
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -13,6 +13,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.features import rasterize
 import shapely
+from tqdm import tqdm
 import yaml
 from jplot import plot_raster
 from plot import read_npy
@@ -20,27 +21,7 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
-
-with open('GEB.yml', 'r') as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
-
-@njit(cache=True)
-def _decompress_HRU(mixed_array, unmerged_HRU_indices, scaling, mask):
-    ysize, xsize = mask.shape
-    subarray = np.full((ysize * scaling, xsize * scaling), np.nan, dtype=mixed_array.dtype)
-    
-    i = 0
-    
-    for y in range(ysize):
-        for x in range(xsize):
-            is_masked = mask[y, x]
-            if not is_masked:
-                for ys in range(scaling):
-                    for xs in range(scaling):
-                        subarray[y * scaling + ys, x * scaling + xs] = mixed_array[unmerged_HRU_indices[i]]
-                        i += 1
-
-    return subarray
+from plotconfig import config, ORIGINAL_DATA, INPUT
 
 @njit(cache=True)
 def _set_fields(land_owners):
@@ -77,34 +58,43 @@ mpl.rcParams['ytick.major.width'] = 0.5
 mpl.rcParams['ytick.minor.width'] = 0.5
 
 START_DATE = config['general']['start_time']
-END_DATE = config['general']['end_time']
 TIMEDELTA = timedelta(days=1)
+END_DATE = config['general']['end_time'] - TIMEDELTA
 REPORT_FOLDER = config['general']['report_folder']
 
 class Plot:
-    def __init__(self):
-        areamaps_folder = os.path.join(config['general']['report_folder'], 'base', 'areamaps')
-        self.land_owners = np.load(os.path.join(areamaps_folder, 'land_owners.npy'))
+    def __init__(self, scenario):
+        report_folder = os.path.join(config['general']['report_folder'], scenario)
+        self.land_owners = np.load(os.path.join(report_folder, 'land_owners.npy'))
         self.field_indices, self.land_owners_per_farmer = _set_fields(self.land_owners)
 
-        with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'areamaps', 'mask.tif'), 'r') as src:
+        with rasterio.open(os.path.join(INPUT, 'areamaps', 'mask.tif'), 'r') as src:
             self.mask = src.read(1)
-        with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'areamaps', 'submask.tif'), 'r') as src:
+        with rasterio.open(os.path.join(INPUT, 'areamaps', 'submask.tif'), 'r') as src:
             self.submask = src.read(1)
             self.submask_transform = src.profile['transform']
         
-        with rasterio.open(os.path.join('DataDrive', 'GEB', 'input', 'areamaps', 'sub_cell_area.tif'), 'r') as src_cell_area:
+        with rasterio.open(os.path.join(INPUT, 'areamaps', 'sub_cell_area.tif'), 'r') as src_cell_area:
             self.cell_area = src_cell_area.read(1)
         
-        self.unmerged_HRU_indices = np.load(os.path.join(areamaps_folder, 'unmerged_HRU_indices.npy'))
-        self.scaling = np.load(os.path.join(areamaps_folder, 'scaling.npy')).item()
+        self.unmerged_HRU_indices = np.load(os.path.join(report_folder, 'unmerged_HRU_indices.npy'))
+        self.scaling = np.load(os.path.join(report_folder, 'scaling.npy')).item()
+
+    def decompress_HRU(self, array):
+        if np.issubdtype(array.dtype, np.integer):
+            nanvalue = -1
+        else:
+            nanvalue = np.nan
+        outarray = array[self.unmerged_HRU_indices]
+        outarray[self.submask] = nanvalue
+        return outarray
 
     def read_gadm3(self):
         india_shp = os.path.join('plot', 'cache', 'gadm36_3_krishna.shp')
         if not os.path.exists(india_shp):
             gdf = gpd.GeoDataFrame.from_file(os.path.join('DataDrive/GADM/gadm36_3.shp'))
             gdf = gdf[gdf['GID_0'] == 'IND']
-            mask = gpd.GeoDataFrame.from_file(os.path.join('DataDrive', 'GEB', 'input', 'areamaps', 'mask.shp'))
+            mask = gpd.GeoDataFrame.from_file(os.path.join(INPUT, 'areamaps', 'mask.shp'))
             gdf = gpd.clip(gdf, mask)
             gdf.to_file(india_shp)
         else:
@@ -112,7 +102,7 @@ class Plot:
         return gdf.reset_index()
 
     def read_command_areas(self):
-        fp = os.path.join('DataDrive', 'GEB', 'input', 'routing', 'lakesreservoirs', 'subcommand_areas.tif')
+        fp = os.path.join(INPUT, 'routing', 'lakesreservoirs', 'subcommand_areas.tif')
         with rasterio.open(fp, 'r') as src:
             command_areas = src.read(1)
         return command_areas
@@ -121,19 +111,20 @@ class Plot:
         if title:
             ax.set_title(title, size=6, pad=2, fontweight='bold')
 
-    def farmer_array_to_fields(self, array, nofieldvalue):
-        fields_decompressed = _decompress_HRU(self.land_owners, self.unmerged_HRU_indices, self.scaling, self.mask)
+    def farmer_array_to_fields(self, array, nofieldvalue, correct_for_field_size=True):
+        fields_decompressed = self.decompress_HRU(self.land_owners)
         fields_decompressed = fields_decompressed[self.submask == 0]
         is_field = np.where(fields_decompressed != -1)
         cell_area = self.cell_area[self.submask == 0]
-        field_size = np.bincount(fields_decompressed[is_field], weights=cell_area[is_field])
 
-        assert field_size.size == array.size
-        array /= field_size
+        if correct_for_field_size:
+            field_size = np.bincount(fields_decompressed[is_field], weights=cell_area[is_field])
+            assert field_size.size == array.size
+            array /= field_size
 
         array = np.take(array, self.land_owners)
         array[self.land_owners == -1] = nofieldvalue
-        array = _decompress_HRU(array, self.unmerged_HRU_indices, self.scaling, self.mask)
+        array = self.decompress_HRU(array)
         return array
 
     def plot_by_area(self, array, ax=None, title=None):
@@ -230,7 +221,7 @@ class Plot:
         self.design_plot(ax, title)
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def _plot_by_activation_order(areas, inverse, counts, activation_order):
         activation_order_per_area = {}
         for i in range(areas.size):
@@ -252,7 +243,7 @@ class Plot:
         return activation_order_per_area
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def is_upper_part_area(activation_order, area_geometries, mean_activation_order_per_area):
         is_upper_part = np.full(activation_order.size, -1, dtype=np.int32)
         for i in range(activation_order.size):
@@ -266,7 +257,7 @@ class Plot:
         return is_upper_part
             
             
-    def plot_by_activation_order(self, array, activation_order, name, ax=None):
+    def get_irrigation_by_head_and_tail_end(self, array, activation_order):
         command_areas = self.read_command_areas()
         mapping = np.full(command_areas.max() + 1, 0, dtype=np.int32)
         command_area_ids = np.unique(command_areas)
@@ -276,50 +267,54 @@ class Plot:
         command_areas_mapped = mapping[command_areas]
         command_areas_mapped[command_areas == -1] = -1
         
-        array = self.farmer_array_to_fields(array, 0).ravel()
-        activation_order = self.farmer_array_to_fields(activation_order, -1).ravel()
-        activation_order[activation_order < 0] = -1
-        area_geometries = command_areas_mapped.flatten()
-        assert array.size == activation_order.size == area_geometries.size
-        areas, area_inverse, area_counts = np.unique(area_geometries, return_inverse=True, return_counts=True)
-        activation_order_per_area = self._plot_by_activation_order(areas, area_inverse, area_counts, activation_order)
-        activation_order_per_area = {
-            key: value[value > 0]
-            for key, value in activation_order_per_area.items()
-        }
+        array = self.farmer_array_to_fields(array, 0)
+        activation_order = self.farmer_array_to_fields(activation_order, -1, correct_for_field_size=False)
+        # activation_order[activation_order < 0] = -1
+        # area_geometries = command_areas_mapped.flatten()
+        # assert array.size == activation_order.size == area_geometries.size
+        # areas, area_inverse, area_counts = np.unique(area_geometries, return_inverse=True, return_counts=True)
+        # activation_order_per_area = self._plot_by_activation_order(areas, area_inverse, area_counts, activation_order)
+        # activation_order_per_area = {
+        #     key: value[value > 0]
+        #     for key, value in activation_order_per_area.items()
+        # }
 
-        percentile_values = np.arange(10, 100, 10)
-        upper_values, lower_values = [], []
-        for percentile in percentile_values:
-            mean_activation_order_per_area = {
-                key: np.percentile(value, percentile) if value.size > 0 else np.nan
-                for key, value in activation_order_per_area.items()
-            }
-            mean_activation_order_per_area = np.array(list(mean_activation_order_per_area.values()))
-            # mean_activation_order_per_area = np.insert(mean_activation_order_per_area, 0, 0)
-
-            is_upper_part = self.is_upper_part_area(activation_order, area_geometries, mean_activation_order_per_area)
-
-            # -1 is neither
-            upper_array = array[(is_upper_part == 1) & (self.submask.ravel() == False)]
-            lower_array = array[(is_upper_part == 0) & (self.submask.ravel() == False)]
-
-            print('why not nice ratios?')
-            print(percentile, upper_array.size, lower_array.size)
-
-            upper_values.append(np.mean(upper_array))
-            lower_values.append(np.mean(lower_array))
+        head_ends, tail_ends = [], []
+        for command_area_id in command_area_ids:
+            command_area = command_areas == command_area_id
+            activation_order_area = activation_order[command_area]
+            if (activation_order_area == -1).all():
+                continue
+            activation_order_area_filtered = activation_order_area[activation_order_area != -1]
+            array_area = array[command_area][activation_order_area != -1]
+            # get median of activation order
+            activation_order_median = np.percentile(activation_order_area_filtered, 50)
+            
+            head_end = array_area[activation_order_area_filtered < activation_order_median].sum()
+            tail_end = array_area[activation_order_area_filtered >= activation_order_median].sum()
+            head_ends.append(head_end)
+            tail_ends.append(tail_end)
         
-        if ax is None:
-            fig, ax = plt.subplots(1)
-        ax.plot(percentile_values, lower_values, label=f'lower {name}')
-        ax.plot(percentile_values, upper_values, label=f'upper {name}')
-        ax.set_xlabel('Basin percentile counted as upper')
-        ax.legend()
+        # if ax is None:
+        #     fig, ax = plt.subplots(1)
+        
+        # # for each couple of tail and head end, plot a line with a circle at data point
+        # for i in range(len(head_ends)):
+        #     ax.plot([0, 1], [head_ends[i], tail_ends[i]], color='black', linewidth=1, marker='o', markersize=5)
+        
+        # # visualize x axis betwwen 0 and 1
+        # ax.set_xlim(0, 1)
+        # # visualize y axis between 0 and max of head and tail ends + 10%
+        # ax.set_ylim(0, max(max(head_ends), max(tail_ends)) * 1.1)
+        # # do not show x axis
+        # ax.xaxis.set_visible(False)
+        # plt.show()
+
 
 def read_irrigation_data(scenario):
     dt = copy(START_DATE)
     timesteps = (END_DATE - START_DATE) // TIMEDELTA + 1
+    print(END_DATE)
     for i in range(timesteps):
         print(dt)
         if not i % 10:
@@ -394,18 +389,10 @@ def add_colorbar_legend(
         # using x-label such that the title is displayed below the colorbar
         colorbar.ax.set_xlabel(legend_title, fontsize=legend_title_fontsize, labelpad=2)
 
-def plot_irrigation():
-    plotter = Plot()
+def plot_irrigation(scenario):
+    plotter = Plot(scenario=scenario)
 
-    channel_irrigation_by_farm, groundwater_irrigation, reservoir_irrigation = read_irrigation_data('base')
-    # total_irrigation = channel_irrigation_by_farm + groundwater_irrigation + reservoir_irrigation
-
-    # fig, ax = plt.subplots(1)
-    # plotter.plot_by_activation_order(reservoir_irrigation, activation_order, name='reservoir irrigation', ax=ax)
-    # plotter.plot_by_activation_order(groundwater_irrigation, activation_order, name='groundwater irrigation', ax=ax)
-    # plotter.plot_by_activation_order(channel_irrigation, activation_order, name='channel irrigation', ax=ax)
-
-    # plt.show()
+    channel_irrigation_by_farm, groundwater_irrigation, reservoir_irrigation = read_irrigation_data(scenario)
 
     fig, (ax0, ax1, ax2) = plt.subplots(1, 3, dpi=300, figsize=(6, 2))
     plt.subplots_adjust(wspace=0.15, left=0.03, right=0.98, bottom=0.15, top=0.99)
@@ -491,4 +478,4 @@ def plot_irrigation():
     # plt.show()
 
 if __name__ == '__main__':
-    plot_irrigation()
+    plot_irrigation('base')

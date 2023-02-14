@@ -1,24 +1,27 @@
 # -*- coding: utf-8 -*-
 from typing import Union
-from honeybees.artists import Artists as HoneybeesArtists
+from honeybees.artists import Artists as honeybeesArtists
 import numpy as np
+import inspect
 from operator import attrgetter
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
 
-class Artists(HoneybeesArtists):
+from agents.farmers import Farmers
+
+class Artists(honeybeesArtists):
     """This class is used to configure how the display environment works.
     
     Args:
         model: The GEB model.
     """
     def __init__(self, model) -> None:
-        HoneybeesArtists.__init__(self, model)
+        honeybeesArtists.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
-        self.background_variable = "data.HRU.crop_map"  # set initial background iamge.
+        self.background_variable = "agents.farmers.has_well"  # set initial background iamge.
         self.custom_plot = self.get_custom_plot()
         self.set_variables()
 
@@ -33,19 +36,26 @@ class Artists(HoneybeesArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if not hasattr(model, 'legend') and hasattr(model, 'HRU'):
-            crops = model.data.HRU.crop_data['Crop']
-            self.legend = {crop: color for crop, color in zip(crops, model.data.HRU.crop_data['Color'])}
-        color = self.custom_plot['data.HRU.crop_map']['colors'][agents.crop[idx].item()]
-        return {"type": "shape", "shape": "circle", "r": 1, "filled": True, "color": color}
+        if self.model.agents.farmers.has_well[idx] is True:
+            color = '#0000ff'
+        else:
+            color = '#ff0000'
+        # if idx == self.model.agents.farmers.sample[0]:
+        #     color = '#ff0000'
+        #     r = 3
+        # elif idx == self.model.agents.farmers.sample[1]:
+        #     color = '#00ff00'
+        #     r = 3
+        # elif idx == self.model.agents.farmers.sample[2]:
+        #     color = '#0000ff'
+        #     r = 3
+        # else:
+        color = '#ff0000'
+        r = .5
+        return {"type": "shape", "shape": "circle", "r": r, "filled": True, "color": color}
 
-    def draw_rivers(self) -> dict:
-        """Returns portrayal of river.
-        
-        Returns:
-            portrayal: portrayal of river.
-        """
-        return {"type": "shape", "shape": "line", "color": "Blue"}
+    def draw_tehsil(self, properties):
+        return {"type": "shape", "shape": "polygon", "filled": False, "color": properties['color'], "edge": True, "linewidth": 2}
 
     def get_custom_plot(self) -> dict[dict]:
         """Here you can specify custom options for plotting the background.
@@ -76,14 +86,14 @@ class Artists(HoneybeesArtists):
             'data.HRU.crop_map': {
                 'type': 'categorical',
                 'nanvalue': -1,
-                'names': [self.model.config['draw']['crop_data'][i]['name'] for i in range(26)],
-                'colors': [self.model.config['draw']['crop_data'][i]['color'] for i in range(26)],
+                'names': [self.model.config['draw']['crop_data'][i]['name'] for i in range(13)],
+                'colors': [self.model.config['draw']['crop_data'][i]['color'] for i in range(13)],
             },
             'data.HRU.land_use_type': {
                 'type': 'categorical',
                 'nanvalue': -1,
                 'names': ["forest", "grassland/non-irrigated", "paddy-irrigated", "non-paddy irrigated", "sealed", "water"],
-                'colors': ["#274e2e", "#8ff40b", "#8555aa", "#d66a29", "#7e8180", "#2636d9"],
+                'colors': ["#274e2e", "#adffbc", "#8555aa", "#007d13", "#7e8180", "#2636d9"]
             },
         }
 
@@ -94,7 +104,7 @@ class Artists(HoneybeesArtists):
         """
         self.variables_dict = {}
 
-        def add_var(attr):
+        def add_CWatM_var(attr):
             attributes = attrgetter(attr)(self.model)
             compressed_size = attributes.compressed_size
             for varname, variable in vars(attributes).items():
@@ -109,8 +119,12 @@ class Artists(HoneybeesArtists):
                     else:
                         continue
         
-        add_var('data.grid')
-        add_var('data.HRU')
+        add_CWatM_var('data.grid')
+        add_CWatM_var('data.HRU')
+
+        farmer_properties = inspect.getmembers(Farmers, lambda o: isinstance(o, property))
+        for name, prop in farmer_properties:
+            self.variables_dict['agents.farmers.' + name] = (self.model.agents.farmers, name)
 
     def get_background_variables(self) -> list:
         """This function gets a list of variables that can be used to show in the background.
@@ -145,24 +159,32 @@ class Artists(HoneybeesArtists):
         else:
             options = {}
         if 'type' not in options:
-            if array.dtype in (np.float16, np.float32, np.float64):
+            if np.issubsctype(array, np.floating):
                 options['type'] = 'continuous'
-            elif array.dtype in (np.bool, np.int8, np.int16, np.int32, np.int64):
+                options['nanvalue'] = np.nan
+            elif np.issubsctype(array, np.integer):
                 if np.unique(array).size < 30:
                     options['type'] = 'categorical'
+                    options['nanvalue'] = -1
                 else:
                     print("Type for array might be categorical, but more than 30 categories were found, so rendering as continous.")
                     options['type'] = 'continuous'
                     array = array.astype(np.float64)
+            elif np.issubsctype(array, bool):
+                options['type'] = 'bool'
+                options['nanvalue'] = -1
             else:
                 raise ValueError
-        
-        if not maxvalue:
-            maxvalue = np.nanmax(array[~mask]).item()
-        if not minvalue:
-            minvalue = np.nanmin(array[~mask]).item()
-        if np.isnan(maxvalue):  # minvalue must be nan as well
-            minvalue, maxvalue = 0, 0
+
+        if options['type'] == 'bool':
+            minvalue, maxvalue = 0, 1
+        else:
+            if not maxvalue:
+                maxvalue = np.nanmax(array[~mask], initial=0).item()
+            if not minvalue:
+                minvalue = np.nanmin(array[~mask], initial=0).item()
+            if np.isnan(maxvalue):  # minvalue must be nan as well
+                minvalue, maxvalue = 0, 0
         
         background = np.zeros((*array.shape, 4), dtype=np.uint8)
         if options['type'] == 'continuous':
@@ -199,15 +221,19 @@ class Artists(HoneybeesArtists):
                 if nanvalue is not None:
                     unique_values = unique_values[unique_values != nanvalue]
                 unique_values = unique_values.tolist()
-                if 'colors' in options:
-                    colors = np.array(options['colors'])[np.array(unique_values)].tolist()
-                    colors = [self.hex_to_rgb(color) for color in colors]
+                if unique_values:  # no data to be shown on map
+                    if 'colors' in options:
+                        colors = np.array(options['colors'])[np.array(unique_values)].tolist()
+                        colors = [self.hex_to_rgb(color) for color in colors]
+                    else:
+                        colors = self.generate_distinct_colors(len(unique_values), mode='rgb')
+                    if 'names' in options:
+                        names = np.array(options['names'])[np.array(unique_values)].tolist()
+                    else:
+                        names = unique_values
                 else:
-                    colors = self.generate_distinct_colors(len(unique_values), mode='rgb')
-                if 'names' in options:
-                    names = np.array(options['names'])[np.array(unique_values)].tolist()
-                else:
-                    names = unique_values
+                    colors = []
+                    names = []
                 channels = (0, 1, 2)
                 background[:,:,3][array != nanvalue] = 255
             elif options['type'] == 'discrete':
@@ -218,17 +244,24 @@ class Artists(HoneybeesArtists):
                     names = unique_values
                 colors = self.generate_discrete_colors(len(unique_values), self.hex_to_rgb(color), mode='rgb', min_alpha=0.4)
                 channels = (0, 1, 2, 3)
+            elif options['type'] == 'bool':
+                unique_values = [False, True]
+                names = ['False', 'True']
+                channels = (0, 1, 2, 3)
+                colors = [(1, 0, 0, 1), (0, 1, 0, 1)]
             else:
                 raise ValueError
-            
-            for channel in channels:
-                channel_colors = np.array([color[channel] * 255 for color in colors])
-                color_array_size = unique_values[-1] + 1
-                if unique_values[0] < 0:
-                    color_array_size += abs(unique_values[0])
-                color_array = np.zeros(color_array_size, dtype=np.float32)
-                color_array[unique_values] = channel_colors
-                background[:, :, channel] = color_array[array]
+
+            if unique_values:
+                assert np.all(np.diff(unique_values) > 0)  # check if array is sorted
+                for channel in channels:
+                    channel_colors = np.array([color[channel] * 255 for color in colors])
+                    color_array_size = unique_values[-1] + 1
+                    if unique_values[0] < 0:
+                        color_array_size += abs(unique_values[0])
+                    color_array = np.zeros(color_array_size, dtype=np.float32)
+                    color_array[np.array(unique_values).astype(np.int32)] = channel_colors
+                    background[:, :, channel] = color_array[array.astype(np.int32)]
             
             legend = {
                 'type': 'legend',
