@@ -314,6 +314,7 @@ class Plot:
 def read_irrigation_data(scenario):
     dt = copy(START_DATE)
     timesteps = (END_DATE - START_DATE) // TIMEDELTA + 1
+    print(END_DATE)
     for i in range(timesteps):
         print(dt)
         if not i % 10:

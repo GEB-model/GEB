@@ -66,8 +66,8 @@ class Plot:
         
         self.reservoir_dependent_farmers = self.set_reservoir_dependent_farmers(2011, 2018)
         self.non_surface_water_dependent_farmers = self.set_non_surface_water_dependent_farmers(2011, 2018)
-        self.farmers_to_analyse = self.non_surface_water_dependent_farmers
-        # self.farmers_to_analyse = ...
+        # self.farmers_to_analyse = self.non_surface_water_dependent_farmers
+        self.farmers_to_analyse = ...
         self.command_areas = self.read_command_areas()
         self.activation_order = self.get_activation_order()
 
@@ -333,12 +333,12 @@ class Plot:
         
         fig, ax = plt.subplots(2, 3, figsize=(20, 8))
 
-        self.plot_tail_vs_head_end(start_year, end_year, ax[0][0], name="reservoir irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
-        self.format_ax(ax[0][0], ylabel="reservoir irrigation (mm/day)", ymax=None)
-        self.plot_tail_vs_head_end(start_year, end_year, ax[0][1], name="groundwater irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
-        self.format_ax(ax[0][1], ylabel="groundwater irrigation (mm/day)", ymax=None)
-        self.plot_tail_vs_head_end(start_year, end_year, ax[0][2], name="channel irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
-        self.format_ax(ax[0][2], ylabel="channel irrigation (mm/day)", ymax=None)
+        self.plot_tail_vs_head_end(start_year, end_year, ax[0][0], name="channel irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
+        self.format_ax(ax[0][0], ylabel="channel irrigation (mm/day)", ymax=None)
+        self.plot_tail_vs_head_end(start_year, end_year, ax[0][1], name="reservoir irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
+        self.format_ax(ax[0][1], ylabel="reservoir irrigation (mm/day)", ymax=None)
+        self.plot_tail_vs_head_end(start_year, end_year, ax[0][2], name="groundwater irrigation", fn=irrigation_fn, correct_for_field_size=True, mode='full_year')
+        self.format_ax(ax[0][2], ylabel="groundwater irrigation (mm/day)", ymax=None)
         
         self.plot_tail_vs_head_end(start_year, end_year, ax[1][0], name="crops_kharif", fn=sum_sugarcane, correct_for_field_size=False, mode='first_day_of_year')
         self.plot_small_vs_large_farmer(start_year, end_year, ax[1][0], name="crops_kharif", fn=sum_sugarcane, correct_for_field_size=False, mode='first_day_of_year')
