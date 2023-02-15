@@ -176,6 +176,7 @@ class CWatM_Model(CWATModel):
         CWATModel.__init__(self)
         self.stCWATM = ModelFrame(self, firstTimestep=dateVar["intStart"], lastTimeStep=dateVar["intEnd"])
         self.stCWATM.initialize_run()
+        CWATModel.dateVar = dateVar
 
     def step(self, n: int) -> None:
         """Performs n number of (daily) steps in CWatM.

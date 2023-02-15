@@ -3,14 +3,15 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2006-01-01
+  start_time: 2011-01-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
   end_time: 2018-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_time: 2004-01-01
+  # spinup_time: 1999-01-01
+  spinup_time: 2010-12-25
   ###
   # base folder where to report output data to
   upscale_factor: 40
@@ -22,7 +23,7 @@ general:
   input_folder: ../DataDrive/GEB_Sanctuary/input/
   data_folder: ../DataDrive/
   original_data: ../DataDrive/GEB/original_data/
-  report_folder: report/sanctuary/
+  report_folder: ../report/sanctuary/
   initial_conditions_folder: ../DataDrive/GEB_Sanctuary/initial
   init_water_table: ../DataDrive/GEB_Sanctuary/report/init/water_table.npy
   ###
@@ -54,12 +55,48 @@ logging:
   loglevel: DEBUG
 
 calibration:
-  spinup_time: 2014-01-01
-  start_time: 2000-01-10
-  end_time: 2010-01-15
-  path: ../DataDrive/GEB_Sanctuary/calibration/
+  spinup_time: 1999-01-01
+  start_time: 2001-01-01
+  end_time: 2011-01-01
+  path: ../calibration/sanctuary/
   gpus: 0
-  monthly: true
+  scenario: base
+  monthly: false
+  target_variables:
+    report_cwatm:
+      discharge:
+        varname: data.grid.discharge
+        function: sample,25,54
+        format: csv
+        save: save
+    report:
+      well_irrigated:
+        type: farmers
+        function: null
+        varname: has_well
+        frequency:
+          every: month
+          day: 1
+        save: export
+        format: npy
+      field_size:
+        type: farmers
+        function: null
+        varname: field_size_per_farmer
+        frequency:
+          every: month
+          day: 1
+        save: export
+        format: npy
+      tehsil:
+        type: farmers
+        function: null
+        varname: tehsil
+        frequency:
+          every: month
+          day: 1
+        save: export
+        format: npy
 
   DEAP:
     use_multiprocessing: False
@@ -183,109 +220,115 @@ report:
   #   varname: crop
   #   save: save
   #   format: csv
-  irrigated_per_district:
-    type: farmers
-    function: mean
-    varname: irrigated
-    save: save
-    format: csv
-    groupby: tehsil
-  crops_per_district:
-    type: farmers
-    function: groupcount,0,1
-    varname: crops
-    save: save
-    format: csv
-    groupby: tehsil
+  # irrigated_per_district:
+  #   type: farmers
+  #   function: mean
+  #   varname: irrigated
+  #   save: save
+  #   format: csv
+  #   groupby: tehsil
+  # crops_per_district:
+  #   type: farmers
+  #   function: groupcount,0,1
+  #   varname: crops
+  #   save: save
+  #   format: csv
+  #   groupby: tehsil
   well_irrigated:
     type: farmers
     function: null
     varname: has_well
-    frequency: per_timestep
+    frequency:
+      every: month
+      day: 1
     save: export
     format: npy
-  crops_kharif:
+  field_size:
     type: farmers
-    varname: crops[:,0]
     function: null
-    frequency: per_timestep
+    varname: field_size_per_farmer
+    frequency:
+      every: month
+      day: 1
     save: export
     format: npy
-  crops_rabi:
+  field_size:
     type: farmers
-    varname: crops[:,1]
     function: null
-    frequency: per_timestep
+    varname: tehsil
+    frequency:
+      every: month
+      day: 1
     save: export
     format: npy
-  crops_summer:
-    type: farmers
-    varname: crops[:,2]
-    function: null
-    frequency: per_timestep
-    save: export
-    format: npy
+  # crops_kharif:
+  #   type: farmers
+  #   varname: crops[:,0]
+  #   function: null
+  #   frequency: per_timestep
+  #   save: export
+  #   format: npy
+  # crops_rabi:
+  #   type: farmers
+  #   varname: crops[:,1]
+  #   function: null
+  #   frequency: per_timestep
+  #   save: export
+  #   format: npy
+  # crops_summer:
+  #   type: farmers
+  #   varname: crops[:,2]
+  #   function: null
+  #   frequency: per_timestep
+  #   save: export
+  #   format: npy
   # wealth_sample:
   #   type: farmers
   #   function: sample
   #   varname: wealth
   #   save: save
   #   format: csv
-  # activation order:
+  activation order:
+    type: farmers
+    function: null
+    varname: activation_order_by_elevation
+    format: npy
+    frequency: initial
+    save: export
+  # reservoir irrigation:
   #   type: farmers
   #   function: null
-  #   varname: activation_order_by_elevation
+  #   varname: reservoir_abstraction_m3_by_farmer
+  #   frequency: per_timestep
   #   format: npy
-  #   frequency: initial_only
   #   save: export
-  reservoir irrigation:
-    type: farmers
-    function: null
-    varname: reservoir_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  groundwater irrigation:
-    type: farmers
-    function: null
-    varname: groundwater_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  channel irrigation:
-    type: farmers
-    function: null
-    varname: channel_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  groundwater depth:
-    type: farmers
-    function: null
-    varname: groundwater_depth
-    frequency: per_timestep
-    format: npy
-    save: export
-  profit:
-    type: farmers
-    function: null
-    varname: profit_per_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  # is water aware:
-  #   type: farmers
-  #   function: sum
-  #   varname: is_water_efficient
-  #   frequency: per_timestep
-  #   format: csv
-  #   save: save
-  # crop:
+  # groundwater irrigation:
   #   type: farmers
   #   function: null
-  #   varname: crop
-  #   format: npy
+  #   varname: groundwater_abstraction_m3_by_farmer
   #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # channel irrigation:
+  #   type: farmers
+  #   function: null
+  #   varname: channel_abstraction_m3_by_farmer
+  #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # groundwater depth:
+  #   type: farmers
+  #   function: null
+  #   varname: groundwater_depth
+  #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # profit:
+  #   type: farmers
+  #   function: null
+  #   varname: profit_per_farmer
+  #   frequency: per_timestep
+  #   format: npy
   #   save: export
 
 ###

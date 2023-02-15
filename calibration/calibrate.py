@@ -29,7 +29,7 @@ import signal
 import pandas as pd
 import yaml
 from deap import creator, base, tools, algorithms
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import wraps
 
 import multiprocessing
@@ -40,9 +40,10 @@ from calconfig import config, args
 
 calibration_config = config['calibration']
 
-OBJECTIVE = 'KGE'
-
-dischargetss = os.path.join('spinup', 'var.discharge_daily.tss')
+CALIBRATION_VALUES = {
+	'KGE': 1,
+	'irrigation_wells': 1
+}
 
 calibration_path = calibration_config['path']
 os.makedirs(calibration_path, exist_ok=True)
@@ -58,12 +59,17 @@ select_best_n_individuals = calibration_config['DEAP']['select_best']
 ngen = calibration_config['DEAP']['ngen']
 mu = calibration_config['DEAP']['mu']
 lambda_ = calibration_config['DEAP']['lambda_']
+SCENARIO = calibration_config['scenario']
+dischargetss = os.path.join(SCENARIO, 'discharge.csv')
+
+target_variables = calibration_config['target_variables']
 
 # Load observed streamflow
 if 'gauges' in config['general']:
 	gauges = config['general']['gauges']
 else:
 	gauges = config['general']['poor_point']
+
 streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
 streamflow_data = pd.read_csv(streamflow_path, sep=",", parse_dates=True, index_col=0)
 observed_streamflow = streamflow_data["flow"]
@@ -99,13 +105,19 @@ def multi_set(dict_obj, value, *attrs):
 		raise KeyError(f"Key {attrs} does not exist in config file.")
 	d[attrs[-1]] = value
 
-def get_irrigation_equipment_score(run_directory, individual):
-	fp = os.path.join(run_directory, 'spinup', 'well_irrigated_per_district.csv')
-	df = pd.read_csv(fp, index_col=0, parse_dates=True)
-	df.at[pd.Timestamp(2010, 6, 1), '30']
+def get_irrigation_wells_score(run_directory, individual):
+	tehsils = np.load(os.path.join(run_directory, SCENARIO, 'tehsil', '20110101.npy'))
+	field_size = np.load(os.path.join(run_directory, SCENARIO, 'field_size', '20110101.npy'))
+	well_irrigated = np.load(os.path.join(run_directory, SCENARIO, 'well_irrigated', '20110101.npy'))
+
+	# Calculate the ratio of farmers with a well per tehsil
+	farmers_per_tehsil = np.bincount(tehsils)
+	well_irrigated_per_tehsil = np.bincount(tehsils, weights=well_irrigated)
+	ratio_well_irrigated = well_irrigated_per_tehsil / farmers_per_tehsil
+
 	return random.random()
 
-def get_discharge_score(run_directory, individual):
+def get_KGE_score(run_directory, individual):
     # Get the path of the simulated streamflow file
 	Qsim_tss = os.path.join(run_directory, dischargetss)
 	
@@ -115,26 +127,14 @@ def get_discharge_score(run_directory, individual):
 		raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
 	
 	# Read the simulated streamflow data from the file
-	simulated_streamflow = pd.read_csv(Qsim_tss, sep=r"\s+", index_col=0, skiprows=4, header=None, skipinitialspace=True)
-	
-	# Replace missing data with NaN
-	simulated_streamflow[1][simulated_streamflow[1]==1e31] = np.nan
-
-	# Generate a list of dates for the simulated streamflow data
-	simulated_dates = [calibration_config['spinup_time']]
-	for _ in range(len(simulated_streamflow) - 1):
-		simulated_dates.append(simulated_dates[-1] + timedelta(days=1))
-	
-	# Select only the first column (first gauge)
-	simulated_streamflow = simulated_streamflow[1]
-	simulated_streamflow.index = [pd.Timestamp(date) for date in simulated_dates]
+	simulated_streamflow = pd.read_csv(Qsim_tss, index_col=0)
+	# parse the dates in the index
+	simulated_streamflow.index = pd.to_datetime(simulated_streamflow.index)
+	simulated_streamflow = simulated_streamflow['discharge']
 	simulated_streamflow.name = 'simulated'
 
 	# Combine the simulated and observed streamflow data
 	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
-	
-	# Filter the streamflow data to the specified start and end times
-	streamflows = streamflows[(streamflows.index > datetime.combine(calibration_config['start_time'], datetime.min.time())) & (streamflows.index < datetime.combine(calibration_config['end_time'], datetime.min.time()))]
 	
 	# Add a small value to the simulated streamflow to avoid division by zero
 	streamflows['simulated'] += 0.0001
@@ -144,26 +144,26 @@ def get_discharge_score(run_directory, individual):
 		streamflows = streamflows.resample('M').mean()
 
 	# Check the specified objective function and calculate the score
-	if OBJECTIVE == 'KGE':
-		KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])
-		print("run_id: " + str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
-		with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
-			myfile.write(str(individual.label)+"," + str(KGE)+"\n")
-		return KGE
-	elif OBJECTIVE == 'COR':
-		COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'])
-		print("run_id: " + str(individual.label)+", COR "+"{0:.3f}".format(COR))
-		with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
-			myfile.write(str(individual.label)+"," + str(COR)+"\n")
-		return COR
-	elif OBJECTIVE == 'NSE':
-		NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'])
-		print("run_id: " + str(individual.label) + ", NSE: " + "{0:.3f}".format(NSE))
-		with open(os.path.join(calibration_path, "runs_log.csv"), "a") as myfile:
-			myfile.write(str(individual.label) + "," + str(NSE) + "\n")
-		return NSE
-	else:
-		raise ValueError
+	# if OBJECTIVE == 'KGE':
+	KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])
+	print("run_id: " + str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
+	with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
+		myfile.write(str(individual.label)+"," + str(KGE)+"\n")
+	return KGE
+	# elif OBJECTIVE == 'COR':
+	# 	COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'])
+	# 	print("run_id: " + str(individual.label)+", COR "+"{0:.3f}".format(COR))
+	# 	with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
+	# 		myfile.write(str(individual.label)+"," + str(COR)+"\n")
+	# 	return COR
+	# elif OBJECTIVE == 'NSE':
+	# 	NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'])
+	# 	print("run_id: " + str(individual.label) + ", NSE: " + "{0:.3f}".format(NSE))
+	# 	with open(os.path.join(calibration_path, "runs_log.csv"), "a") as myfile:
+	# 		myfile.write(str(individual.label) + "," + str(NSE) + "\n")
+	# 	return NSE
+	# else:
+	# 	raise ValueError
 
 
 @handle_ctrl_c
@@ -213,27 +213,13 @@ def run_model(individual):
 
 			# Update the template configuration file with the individual's parameters
 			template['general']['spinup_time'] = calibration_config['spinup_time']
-			template['general']['start_time'] = calibration_config['end_time']
-			template['general']['export_inital_on_spinup'] = False
-			template['report'] = {
-				# "crops_per_district": {
-				# 	"type": "farmers",
-				# 	"function": "groupcount",
-				# 	"varname": "crop
-				# 	"save": "save",
-				# 	"format": "csv",
-				# 	"groupby": "tehsil"
-				# },
-				"well_irrigated_per_district": {
-					"type": "farmers",
-					"function": "mean",
-					"varname": "has_well",
-					"save": "save",
-					"format": "csv",
-					"groupby": "tehsil"
-				},
-			}
-			template['report_cwatm'] = {}
+			template['general']['start_time'] = calibration_config['start_time']
+			template['general']['end_time'] = calibration_config['end_time']
+
+			del template['report']
+			del template['report_cwatm']
+			
+			template.update(target_variables)
 
 			# loop through individual parameters and set them in the template
 			for parameter, value in individual_parameters.items():
@@ -241,6 +227,8 @@ def run_model(individual):
 
 			# set the report folder in the general section of the template
 			template['general']['report_folder'] = run_directory
+			template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial_conditions')
+			template['general']['export_inital_on_spinup'] = True
 
 			# write the template to the specified config file
 			with open(config_path, 'w') as f:
@@ -257,16 +245,40 @@ def run_model(individual):
 				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 			lock.release()
 
-			# build the command to run the script, including the use of a GPU if specified
-			command = f"python run.py --config {config_path} --scenario spinup"
-			if use_gpu is not False:
-				command += f' --GPU --gpu_device {use_gpu}'
-			print(command, flush=True)
+			def run_model(scenario):
+				# build the command to run the script, including the use of a GPU if specified
+				command = f"python run.py --config {config_path} --scenario {scenario}"
+				if use_gpu is not False:
+					command += f' --GPU --gpu_device {use_gpu}'
+				print(command, flush=True)
 
-			# run the command and capture the output and errors
-			p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
-			output, errors = p.communicate()
+				# run the command and capture the output and errors
+				p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
+				output, errors = p.communicate()
 
+				# check the return code of the command and handle accordingly
+				if p.returncode == 0:  # model has run successfully
+					with open(os.path.join(logs_path, f"log{individual.label}_{scenario}.txt"), 'w') as f:
+						content = "OUTPUT:\n" + str(output.decode())+"\nERRORS:\n" + str(errors.decode())
+						f.write(content)
+					modflow_folder = os.path.join(run_directory, 'spinup', 'modflow_model')
+					if os.path.exists(modflow_folder):
+						shutil.rmtree(modflow_folder)
+				
+				elif p.returncode == 1:  # model has failed
+					with open(os.path.join(logs_path, f"log{individual.label}_{scenario}_{''.join((random.choice(string.ascii_lowercase) for x in range(10)))}.txt"), 'w') as f:
+						content = "OUTPUT:\n" + str(output.decode())+"\nERRORS:\n" + str(errors.decode())
+						f.write(content)
+					shutil.rmtree(run_directory)
+				
+				else:
+					raise ValueError("Return code of run.py was not 0 or 1, but instead " + str(p.returncode) + ".")
+				
+				return p.returncode
+				
+			run_model('spinup')
+			run_model(SCENARIO)
+			
 			# release the GPU if it was used
 			if use_gpu is not False:
 				lock.acquire()
@@ -274,33 +286,19 @@ def run_model(individual):
 				lock.release()
 				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 
-			# check the return code of the command and handle accordingly
-			if p.returncode == 0:
-				with open(os.path.join(logs_path, f"log{individual.label}.txt"), 'w') as f:
-					content = "OUTPUT:\n" + str(output.decode())+"\nERRORS:\n" + str(errors.decode())
-					f.write(content)
-				modflow_folder = os.path.join(run_directory, 'spinup', 'modflow_model')
-				if os.path.exists(modflow_folder):
-					shutil.rmtree(modflow_folder)
-				break
-			elif p.returncode == 1:
-				with open(os.path.join(logs_path, f"log{individual.label}_{''.join((random.choice(string.ascii_lowercase) for x in range(10)))}.txt"), 'w') as f:
-					content = "OUTPUT:\n" + str(output.decode())+"\nERRORS:\n" + str(errors.decode())
-					f.write(content)
-				shutil.rmtree(run_directory)
-			else:
-				raise ValueError
+	scores = []
+	for score in CALIBRATION_VALUES:
+		if score == 'KGE':
+			scores.append(get_KGE_score(run_directory, individual))
+		if score == 'irrigation_wells':
+			scores.append(get_irrigation_wells_score(run_directory, individual))
+	return tuple(scores)
 
-	return (
-		get_discharge_score(run_directory, individual),
-		# get_irrigation_equipment_score(run_directory, individual),
-	)
-
-def export_front_history(calibration_values, effmax, effmin, effstd, effavg):
+def export_front_history(CALIBRATION_VALUES, effmax, effmin, effstd, effavg):
 	# Save history of the change in objective function scores during calibration to csv file
 	print(">> Saving optimization history (front_history.csv)")
 	front_history = {}
-	for i, calibration_value in enumerate(calibration_values):
+	for i, calibration_value in enumerate(CALIBRATION_VALUES):
 		front_history.update({
 			(calibration_value, 'effmax_R', ): effmax[:, i],
 			(calibration_value, 'effmin_R'): effmin[:, i],
@@ -328,12 +326,8 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
 	current_gpu_use_count = manager_current_gpu_use_count
 
 if __name__ == "__main__":
-    # Define the calibration values and weights for the fitness function
-	calibration_values = ['KGE']
-	weights = (1, )
-	
     # Create the fitness class using DEAP's creator class
-	creator.create("FitnessMulti", base.Fitness, weights=weights)
+	creator.create("FitnessMulti", base.Fitness, calibration_weights=tuple(CALIBRATION_VALUES.values()))
 	
     # Create the individual class using DEAP's creator class
     # The individual class is an array of typecode 'd' with the FitnessMulti class as its fitness attribute
@@ -427,10 +421,10 @@ if __name__ == "__main__":
 	assert cxpb + mutpb == 1, "cxpb + mutpb must be equal to 1"
 
     # Create arrays to hold statistics about the population
-	effmax = np.full((ngen, len(calibration_values)), np.nan)
-	effmin = np.full((ngen, len(calibration_values)), np.nan)
-	effavg = np.full((ngen, len(calibration_values)), np.nan)
-	effstd = np.full((ngen, len(calibration_values)), np.nan)
+	effmax = np.full((ngen, len(CALIBRATION_VALUES)), np.nan)
+	effmin = np.full((ngen, len(CALIBRATION_VALUES)), np.nan)
+	effavg = np.full((ngen, len(CALIBRATION_VALUES)), np.nan)
+	effstd = np.full((ngen, len(CALIBRATION_VALUES)), np.nan)
 
     # Define the checkpoint file path
 	checkpoint = os.path.join(calibration_path, "checkpoint.pkl")
@@ -498,7 +492,7 @@ if __name__ == "__main__":
 
 		# Loop through the different objective functions and calculate some statistics
 		# from the Pareto optimal population
-		for ii in range(len(calibration_values)):
+		for ii in range(len(CALIBRATION_VALUES)):
 			effmax[generation, ii] = np.amax([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 			effmin[generation, ii] = np.amin([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 			effavg[generation, ii] = np.average([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
@@ -516,4 +510,4 @@ if __name__ == "__main__":
 	ctrl_c_entered = False
 	default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
 
-	export_front_history(calibration_values, effmax, effmin, effstd, effavg)
+	export_front_history(CALIBRATION_VALUES, effmax, effmin, effstd, effavg)

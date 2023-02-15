@@ -91,6 +91,7 @@ class Farmers(AgentBaseClass):
         "_latest_profits",
         "_latest_potential_profits",
         "_groundwater_depth",
+        "_profit"
     ]
     __slots__.extend(agent_attributes)
 
@@ -173,7 +174,7 @@ class Farmers(AgentBaseClass):
                 "nodata": -1,
                 "nodatacheck": False
             },
-            "_profit_per_farmer": {
+            "_profit": {
                 "nodata": np.nan,
                 "nodatacheck": False
             },
@@ -244,8 +245,6 @@ class Farmers(AgentBaseClass):
             self.max_n = self._locations.shape[0]
             self.latest_profits.fill(np.nan)
             self.latest_potential_profits.fill(np.nan)
-            print("remove this later")
-            self._profit_per_farmer = np.zeros(self.max_n)
         else:
             farms = self.model.data.farms
 
@@ -317,9 +316,10 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_days[:] = 0
             self._n_water_accessible_years = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_accessible_years[:] = 0
+            self._groundwater_depth = np.zeros(self.max_n, dtype=np.float32)
 
-            self._profit_per_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
-            self.profit_per_farmer[:] = 0
+            self._profit = np.full(self.max_n, np.nan, dtype=np.float32)
+            self.profit[:] = 0
             self._disposable_income = np.full(self.max_n, -1, dtype=np.float32)
             self.disposable_income[:] = 0
 
@@ -336,6 +336,9 @@ class Farmers(AgentBaseClass):
 
             self._daily_expenses_per_capita = np.full(self.max_n, -1, dtype=np.float32)
             self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
+
+            # self._agent_class = np.full(self.max_n, -1, dtype=np.int32)
+            # self.agent_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
     
         self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
         self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
@@ -347,9 +350,6 @@ class Farmers(AgentBaseClass):
         self.update_field_indices()
 
         print(f'Loaded {self.n} farmer agents')
-
-        print("move to farmer initialization")
-        self._groundwater_depth = np.zeros(self.max_n, dtype=np.float32)
 
         for attr in self.agent_attributes:
             assert getattr(self, attr[1:]).shape[0] == self.n
@@ -715,20 +715,20 @@ class Farmers(AgentBaseClass):
         assert not np.isnan(yield_ratio).any()
         return yield_ratio
 
-    def save_profit(self, harvesting_farmers: np.ndarray, profit_per_farmer: np.ndarray, potential_profit_per_farmer: np.ndarray) -> None:
+    def save_profit(self, harvesting_farmers: np.ndarray, profit: np.ndarray, potential_profit: np.ndarray) -> None:
         """Saves the current harvest for harvesting farmers in a 2-dimensional array. The first dimension is the different farmers, while the second dimension are the previous harvests. First the previous harvests are moved by 1 column (dropping old harvests when they don't visit anymore) to make room for the new harvest. Then, the new harvest is placed in the array.
   
         Args:
             harvesting_farmers: farmers that harvest in this timestep.
         """
-        assert (profit_per_farmer >= 0).all()
-        assert (potential_profit_per_farmer >= 0).all()
+        assert (profit >= 0).all()
+        assert (potential_profit >= 0).all()
 
         self.latest_profits[harvesting_farmers, 1:] = self.latest_profits[harvesting_farmers, 0:-1]
-        self.latest_profits[harvesting_farmers, 0] = profit_per_farmer[harvesting_farmers]
+        self.latest_profits[harvesting_farmers, 0] = profit[harvesting_farmers]
   
         self.latest_potential_profits[harvesting_farmers, 1:] = self.latest_potential_profits[harvesting_farmers, 0:-1]
-        self.latest_potential_profits[harvesting_farmers, 0] = potential_profit_per_farmer[harvesting_farmers]
+        self.latest_potential_profits[harvesting_farmers, 0] = potential_profit[harvesting_farmers]
 
     def by_field(self, var, nofieldvalue=-1):
         if self.n:
@@ -832,19 +832,19 @@ class Farmers(AgentBaseClass):
             profit = crop_yield_gr * crop_prices_per_field
             assert (profit >= 0).all()
             
-            self.profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
+            self.profit = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
 
             # get potential crop profit per farmer
             potential_crop_yield = harvested_area * max_yield_per_crop
             potential_profit = potential_crop_yield * crop_prices_per_field
-            potential_profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
+            potential_profit = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
       
-            self.save_profit(harvesting_farmers, self.profit_per_farmer, potential_profit_per_farmer)
+            self.save_profit(harvesting_farmers, self.profit, potential_profit)
       
-            self.disposable_income += self.profit_per_farmer
+            self.disposable_income += self.profit
         
         else:
-            self.profit_per_farmer = np.zeros(self.n, dtype=np.float32)
+            self.profit = np.zeros(self.n, dtype=np.float32)
   
         self.var.actual_transpiration_crop[harvest] = 0
         self.var.potential_transpiration_crop[harvest] = 0
@@ -1327,12 +1327,12 @@ class Farmers(AgentBaseClass):
         self._has_well[:self.n] = value
 
     @property
-    def profit_per_farmer(self):
-        return self._profit_per_farmer[:self.n]
+    def profit(self):
+        return self._profit[:self.n]
 
-    @profit_per_farmer.setter
-    def profit_per_farmer(self, value):
-        self._profit_per_farmer[:self.n] = value
+    @profit.setter
+    def profit(self, value):
+        self._profit[:self.n] = value
 
     @property
     def tehsil(self):

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
 from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from reporter import Reporter
@@ -86,7 +86,7 @@ class GEBModel(ABM_Model, CWatM_Model):
             coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
         """
 
-        ABM_Model.__init__(self, current_time - timestep_length, timestep_length, config_path, args=args, n_timesteps=n_timesteps)
+        ABM_Model.__init__(self, current_time, timestep_length, config_path, args=args, n_timesteps=n_timesteps)
         
         study_area.update({
             'xmin': self.data.grid.bounds.left,
