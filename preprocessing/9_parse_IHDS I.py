@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import numpy as np
 
 from preconfig import ORIGINAL_DATA, INPUT
 
@@ -101,8 +102,9 @@ def rename_parameters(households):
         '3': 'Both',
     })
     irrigation_map = {
-        0: 'Yes',
-        1: 'No',
+        0: 'No',
+        1: 'Yes',
+        np.nan: 'No',
     }
     households['Kharif: Crop: Irrigation'] = households['Kharif: Crop: Irrigation'].map(irrigation_map)
     households['Rabi: Crop: Irrigation'] = households['Rabi: Crop: Irrigation'].map(irrigation_map)
@@ -180,6 +182,10 @@ def rename_parameters(households):
     households['Kharif: Crop: Name'] = households['Kharif: Crop: Name'].map(crop_map)
     households['Rabi: Crop: Name'] = households['Rabi: Crop: Name'].map(crop_map)
     households['Summer: Crop: Name'] = households['Summer: Crop: Name'].map(crop_map)
+
+    households.loc[pd.isnull(households['Kharif: Crop: Name']), 'Kharif: Crop: Irrigation'] = np.nan
+    households.loc[pd.isnull(households['Rabi: Crop: Name']), 'Rabi: Crop: Irrigation'] = np.nan
+    households.loc[pd.isnull(households['Summer: Crop: Name']), 'Summer: Crop: Irrigation'] = np.nan
 
     return households
 

@@ -21,20 +21,20 @@ parser.add_argument('--n_jobs', '-n', type=int, default=1)
 args = parser.parse_known_args()[0]
 
 class IPL(object):
-    def __init__(self, original, aggregates, weight_col='weight', n=None, learning_rate=1,
-                 convergence_rate=1e-5, max_iteration=500, verbose=0, rate_tolerance=1e-8):
+    def __init__(self, original, marginals, weight_col='weight', n=None,
+                 convergence_rate=1e-5, max_iteration=1000, verbose=0, rate_tolerance=1e-8):
         """
         Initialize the ipfn class
 
         original: numpy darray matrix or dataframe to perform the ipfn on.
 
-        aggregates: list of numpy array or darray or pandas dataframe/series. The aggregates are the same as the marginals.
+        marginals: list of numpy array or darray or pandas dataframe/series. The marginals are the same as the marginals.
         They are the target values that we want along one or several axis when aggregating along one or several axes.
 
         dimensions: list of lists with integers if working with numpy objects, or column names if working with pandas objects.
-        Preserved dimensions along which we sum to get the corresponding aggregates.
+        Preserved dimensions along which we sum to get the corresponding marginals.
 
-        convergence_rate: if there are many aggregates/marginal, it could be useful to loosen the convergence criterion.
+        convergence_rate: if there are many marginals/marginal, it could be useful to loosen the convergence criterion.
 
         max_iteration: Integer. Maximum number of iterations allowed.
 
@@ -48,10 +48,9 @@ class IPL(object):
         For examples, please open the ipfn script or look for help on functions ipfn_np and ipfn_df
         """
         self.original = original
-        self.aggregates = aggregates
+        self.marginals = marginals
         self.weight_col = weight_col
-        self.n = n or sum(aggregates[0])
-        self.learning_rate = learning_rate
+        self.n = n or sum(marginals[0])
         self.conv_rate = convergence_rate
         self.max_itr = max_iteration
         if verbose not in [0, 1, 2]:
@@ -72,16 +71,16 @@ class IPL(object):
                     idx += (np.s_[:],)
         return idx
 
-    def ipfn_df(self, df, aggregates, weight_col='weight'):
-        steps = len(aggregates)
+    def ipfn_df(self, df, marginals, weight_col='weight'):
+        steps = len(marginals)
         tables = [df]
         for inc in range(steps - 1):
             tables.append(df.copy())
 
         # Calculate the new weights for each dimension
         inc = 0
-        for aggregate in aggregates:
-            feature = aggregate.name
+        for marginal in marginals:
+            feature = marginal.name
             if inc == (steps - 1):
                 table_update = df
                 table_current = tables[inc].copy()
@@ -91,7 +90,7 @@ class IPL(object):
 
             count_feature = isinstance(table_current[feature].iloc[0], tuple)
 
-            xijk = aggregates[inc]
+            xijk = marginals[inc]
 
             feat_l = []
             if count_feature:
@@ -130,22 +129,23 @@ class IPL(object):
                     mask = np.array([characteristic[0] in idx for idx in table_update.index])
                     update_table.loc[mask, (characteristic, )] = (table_current[weight_col].astype(float) * xijk.loc[characteristic] / den)[mask == True] / table_current[weight_col].astype(float)[mask == True]
                     
-                old_value = table_current[weight_col]
                 new_value = update_table.mean(axis=1) * table_current[weight_col].astype(float)
-                table_update[weight_col] = old_value + (new_value - old_value) * self.learning_rate
+                table_update[weight_col] = new_value
             
             else:
                 for characteristic in product(*feat_l):
                     den = tmp.loc[characteristic]
-                    if den == 0:
-                        den = 1
-                    # calculate new weight for this iteration
-                    mask = table_update.index == characteristic[0]
 
-                    table_update.loc[mask, weight_col] = \
-                    old_value = table_current.loc[mask, weight_col].astype(float)
-                    new_value = old_value * xijk.loc[characteristic] / den
-                    table_current.loc[mask, weight_col] = old_value + (new_value - old_value) * self.learning_rate
+                    msk = table_update.index == characteristic[0]
+
+                    if den == 0:
+                        table_update.loc[msk, weight_col] =\
+                            table_current.loc[characteristic, weight_col] *\
+                            xijk.loc[characteristic]
+                    else:
+                        table_update.loc[msk, weight_col] = \
+                            table_current.loc[characteristic, weight_col].astype(float) * \
+                            xijk.loc[characteristic] / den
 
             table_update.reset_index(inplace=True)
             table_current.reset_index(inplace=True)
@@ -153,15 +153,15 @@ class IPL(object):
             feat_l = []
 
         table_update[weight_col] = table_update[weight_col] / table_update[weight_col].sum() * self.n
+        del tmp
 
         # Calculate the max convergence rate
         max_conv = 0
-        inc = 0
-        for aggregate in aggregates:
-            feature = aggregate.name
+        for marginal in marginals:
+            feature = marginal.name
             count_feature = isinstance(table_current[feature].iloc[0], tuple)
             if count_feature:
-                tmp = pd.Series(
+                current_counts = pd.Series(
                     0,
                     index=unique_items,
                     dtype=np.float64
@@ -169,15 +169,17 @@ class IPL(object):
                 for idx, row in table_update.set_index(feature).iterrows():
                     for item in idx:
                         if item:
-                            tmp.loc[item] += row[weight_col]
+                            current_counts.loc[item] += row[weight_col]
                 
             else:
-                tmp = table_update.groupby(feature)[weight_col].sum()
-            ori_ijk = aggregates[inc]
-            temp_conv = max(abs(tmp / ori_ijk - 1))
+                current_counts = table_update.groupby(feature)[weight_col].sum()
+            # temp_conv = max(abs(current_counts / (marginal + 1)))
+            temp_conv = abs(current_counts - marginal).sum() / self.n
+            print('\t', feature, temp_conv)
             if temp_conv > max_conv:
                 max_conv = temp_conv
-            inc += 1
+
+        print(max_conv)
         
         return table_update, max_conv
 
@@ -195,7 +197,7 @@ class IPL(object):
         # If the original data input is in pandas DataFrame format
         while ((i <= self.max_itr and conv > self.conv_rate) and (i <= self.max_itr and abs(conv - old_conv) > self.rate_tolerance)):
             old_conv = conv
-            m, conv = self.ipfn_df(m, self.aggregates, self.weight_col)
+            m, conv = self.ipfn_df(m, self.marginals, self.weight_col)
             conv_list.append(conv)
             i += 1
         converged = 1
@@ -252,6 +254,8 @@ with rasterio.open(os.path.join(INPUT, 'areamaps', 'tehsils.tif'), 'r') as src:
 tehsils_shape = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')).set_index(['state_name', 'district_n', 'sub_dist_1'])
 avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
 crop_data = pd.read_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'), index_col=(0, 1, 2, 3))
+irrigation_sources = pd.read_excel(os.path.join(INPUT, 'census', 'irrigation_sources.xlsx'), index_col=(0, 1, 2, 3))
+
 print("Getting tehsil areas")
 for (state, district, tehsil), tehsil_crop_data in tqdm(crop_data.groupby(level=[0, 1, 2])):
     # tehsil_farm_size = avg_farm_size.loc[(state, district, tehsil)]
@@ -265,11 +269,17 @@ for (state, district, tehsil), tehsil_crop_data in tqdm(crop_data.groupby(level=
     tehsil_ID = tehsils_shape.loc[(state, district, tehsil), 'ID']
     tehsil_area = cell_area[tehsils_tif == tehsil_ID].sum()
 
-columns = [f'{crop}_irr_holdings' for crop in CROPS['CENSUS'].tolist() + ['All crops']] + [f'{crop}_rain_holdings' for crop in CROPS['CENSUS'].tolist() + ['All crops']]
+columns = [f'{crop}_irr_holdings' for crop in CROPS['CENSUS'].tolist()] + [f'{crop}_rain_holdings' for crop in CROPS['CENSUS'].tolist()]
 crop_data = crop_data[columns]
 crop_data = crop_data.rename(columns={
     column: column.replace('_holdings', '')
     for column in columns
+})
+
+# remove postfix n_holdings from irrigation sources to allign with entries in survey
+irrigation_sources = irrigation_sources.rename(columns={
+    column: column.replace('_n_holdings', '')
+    for column in irrigation_sources.columns
 })
 
 n_farms = pd.read_excel(os.path.join(INPUT, 'census', 'n_farms.xlsx'), index_col=(0, 1, 2))
@@ -316,6 +326,9 @@ for season in SEASONS:
     survey_data[f'{season}: Crop: Irrigation'] = survey_data[f'{season}: Crop: Irrigation'].map({'Yes': 'irr', 'No': 'rain'})
 
 crop_convert = CROPS.set_index('IHDS')['CENSUS'].to_dict()
+# drop all farmers that grow crops that are not part of the analysed crops
+for season in SEASONS:
+    survey_data = survey_data[(survey_data[f'{season}: Crop: Name'].isin(crop_convert.keys())) | (survey_data[f'{season}: Crop: Name'].isnull())]
 for season in SEASONS:
     survey_data[f'{season}: Crop: Name'] = survey_data[f'{season}: Crop: Name'].map(crop_convert)
 
@@ -331,13 +344,23 @@ survey_data['crops'] = list(zip(
     list(np.where(survey_data['Rabi: Crop: Name'].isnull(), None, survey_data['Rabi: Crop: Name'] + '_' + survey_data['Rabi: Crop: Irrigation'])),
     list(np.where(survey_data['Summer: Crop: Name'].isnull(), None, survey_data['Summer: Crop: Name'] + '_' + survey_data['Summer: Crop: Irrigation'])),
 ))
+
 # survey_data['size_class'] = survey_data['size_class'].map(size_class_convert)
+survey_data['irrigation_source'] = survey_data['Irrigation type 1'].map({
+    'Private canal': 'canals',
+    'Other well': 'well',
+    'Tubewell': 'tubewell',
+    'Tank/pond/nala' : 'tank',
+    'Government': 'canals',
+    'Other': 'other',
+    np.nan: 'no_irrigation'
+})
 
 folder = os.path.join(INPUT, 'agents', 'ipl')
 os.makedirs(folder, exist_ok=True)
 
 def fit(ipl_group):
-    (state, district, tehsil, size_class), crop_frequencies = ipl_group
+    (state, district, tehsil, size_class), crop_frequencies, irrigation_sources = ipl_group
     if tehsil == '0':
         return
     fp = os.path.join(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
@@ -349,7 +372,9 @@ def fit(ipl_group):
 
     crops = crop_frequencies.iloc[0]
     crops.name = 'crops'
-    aggregates = [crops]
+    irrigation_sources.name = 'irrigation_source'
+    marginals = [crops, irrigation_sources]
+    # marginals = [crops]
 
     n = n_farms.loc[(state, district, tehsil), size_class]
     if np.isnan(n):
@@ -358,14 +383,18 @@ def fit(ipl_group):
         n = int(n)
     ipl = IPL(
         original=survey_data_size_class,
-        aggregates=aggregates,
+        marginals=marginals,
         n=n,
-        learning_rate=.1
     ).iteration()
 
     ipl.to_csv(fp, index=False)
 
-ipl_groups = crop_data.groupby(crop_data.index)
+def get_ipl_groups(crop_data, irrigation_sources):
+    ipl_groups = crop_data.groupby(crop_data.index)
+    for ipl_group in ipl_groups:
+        yield ipl_group[0], ipl_group[1], irrigation_sources.loc[ipl_group[0]]
+
+ipl_groups = get_ipl_groups(crop_data, irrigation_sources)
 
 if args.n_jobs == 1:
     for ipl_group in tqdm(ipl_groups):
