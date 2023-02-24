@@ -392,6 +392,11 @@ if __name__ == '__main__':
     scrape = False
     headless = False
     create_file = True
+    
+    if scrape:
+        import chromedriver_autoinstaller
+        chromedriver_autoinstaller.install()
+    
     # for year in (2000, 2010, 2015):
     for year in (2000, 2010, 2015):
         main(
