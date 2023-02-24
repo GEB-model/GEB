@@ -16,13 +16,40 @@ from methods import create_cell_area_map
 
 from preconfig import INPUT
 
+SEASONS = ['Kharif', 'Rabi', 'Summer']
+SIZE_CLASSES = (
+    'Below 0.5',
+    '0.5-1.0',
+    '1.0-2.0',
+    '2.0-3.0',
+    '3.0-4.0',
+    '4.0-5.0',
+    '5.0-7.5',
+    '7.5-10.0',
+    '10.0-20.0',
+    '20.0 & ABOVE',
+)
+CROPS = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))
+SIZE_GROUP = {
+    'Below 0.5': ['Below 0.5', '0.5-1.0'],
+    '0.5-1.0': ['Below 0.5', '0.5-1.0'],
+    '1.0-2.0': ['1.0-2.0'],
+    '2.0-3.0': ['2.0-3.0', '3.0-4.0'],
+    '3.0-4.0': ['2.0-3.0', '3.0-4.0'],
+    '4.0-5.0': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
+    '5.0-7.5': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
+    '7.5-10.0': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
+    '10.0-20.0': ['10.0-20.0', '20.0 & ABOVE'],
+    '20.0 & ABOVE': ['10.0-20.0', '20.0 & ABOVE'],
+}
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--n_jobs', '-n', type=int, default=1)
 args = parser.parse_known_args()[0]
 
 class IPL(object):
     def __init__(self, original, marginals, weight_col='weight', n=None,
-                 convergence_rate=1e-5, max_iteration=1000, verbose=0, rate_tolerance=1e-8):
+                 convergence_rate=1e-5, max_iterations=1000, verbose=0, rate_tolerance=1e-8):
         """
         Initialize the ipfn class
 
@@ -36,7 +63,7 @@ class IPL(object):
 
         convergence_rate: if there are many marginals/marginal, it could be useful to loosen the convergence criterion.
 
-        max_iteration: Integer. Maximum number of iterations allowed.
+        max_iterations: Integer. Maximum number of iterations allowed.
 
         verbose: integer 0, 1 or 2. Each case number includes the outputs of the previous case numbers.
         0: Updated matrix returned.
@@ -52,7 +79,7 @@ class IPL(object):
         self.weight_col = weight_col
         self.n = n or sum(marginals[0])
         self.conv_rate = convergence_rate
-        self.max_itr = max_iteration
+        self.max_itr = max_iterations
         if verbose not in [0, 1, 2]:
             raise(ValueError(f"wrong verbose input, must be either 0, 1 or 2 but got {verbose}"))
         self.verbose = verbose
@@ -90,7 +117,7 @@ class IPL(object):
 
             count_feature = isinstance(table_current[feature].iloc[0], tuple)
 
-            xijk = marginals[inc]
+            target = marginals[inc]
 
             feat_l = []
             if count_feature:
@@ -101,7 +128,7 @@ class IPL(object):
                 table_update.set_index(feature, inplace=True)
                 table_current.set_index(feature, inplace=True)
 
-                tmp = pd.Series(
+                current_counts = pd.Series(
                     0,
                     index=unique_items,
                     dtype=np.float64
@@ -109,7 +136,7 @@ class IPL(object):
                 for idx, row in table_update.iterrows():
                     for item in idx:
                         if item:
-                            tmp.loc[item] += row[weight_col]
+                            current_counts.loc[item] += row[weight_col]
                 
             else:
                 feat_l.append(np.unique(table_current[feature]))
@@ -117,43 +144,47 @@ class IPL(object):
                 table_update.set_index(feature, inplace=True)
                 table_current.set_index(feature, inplace=True)
 
-                tmp = table_current.groupby(feature)[weight_col].sum()
+                current_counts = table_current.groupby(feature)[weight_col].sum()
 
             if count_feature:
                 update_table = pd.DataFrame(1, index=table_update.index, columns=list(product(*feat_l)))
                 for characteristic in product(*feat_l):
-                    den = tmp.loc[characteristic]
+                    den = current_counts.loc[characteristic]
                     if den == 0:
                         den = 1
 
                     mask = np.array([characteristic[0] in idx for idx in table_update.index])
-                    update_table.loc[mask, (characteristic, )] = (table_current[weight_col].astype(float) * xijk.loc[characteristic] / den)[mask == True] / table_current[weight_col].astype(float)[mask == True]
+                    update_table.loc[mask, (characteristic, )] = target.loc[characteristic] / den
+                    # update_table.loc[mask, (characteristic, )] = (
+                    #     table_current[weight_col].astype(float) * target.loc[characteristic] / den
+                    # )[mask == True] / table_current[weight_col].astype(float)[mask == True]
                     
-                new_value = update_table.mean(axis=1) * table_current[weight_col].astype(float)
+                new_value = update_table.product(axis=1) * table_current[weight_col]
+                # new_value = (new_value - table_current[weight_col]) * 0.1 + new_value
                 table_update[weight_col] = new_value
+                table_update[weight_col] = table_update[weight_col] / table_update[weight_col].sum() * self.n
             
             else:
                 for characteristic in product(*feat_l):
-                    den = tmp.loc[characteristic]
+                    den = current_counts.loc[characteristic]
 
                     msk = table_update.index == characteristic[0]
 
                     if den == 0:
                         table_update.loc[msk, weight_col] =\
                             table_current.loc[characteristic, weight_col] *\
-                            xijk.loc[characteristic]
+                            target.loc[characteristic]
                     else:
                         table_update.loc[msk, weight_col] = \
                             table_current.loc[characteristic, weight_col].astype(float) * \
-                            xijk.loc[characteristic] / den
+                            target.loc[characteristic] / den
 
             table_update.reset_index(inplace=True)
             table_current.reset_index(inplace=True)
             inc += 1
             feat_l = []
 
-        table_update[weight_col] = table_update[weight_col] / table_update[weight_col].sum() * self.n
-        del tmp
+        del current_counts
 
         # Calculate the max convergence rate
         max_conv = 0
@@ -175,12 +206,9 @@ class IPL(object):
                 current_counts = table_update.groupby(feature)[weight_col].sum()
             # temp_conv = max(abs(current_counts / (marginal + 1)))
             temp_conv = abs(current_counts - marginal).sum() / self.n
-            print('\t', feature, temp_conv)
             if temp_conv > max_conv:
                 max_conv = temp_conv
 
-        print(max_conv)
-        
         return table_update, max_conv
 
     def iteration(self):
@@ -220,145 +248,6 @@ class IPL(object):
         else:
             raise(ValueError(f'wrong verbose input, must be either 0, 1 or 2 but got {self.verbose}'))
 
-SEASONS = ['Kharif', 'Rabi', 'Summer']
-SIZE_CLASSES = (
-    'Below 0.5',
-    '0.5-1.0',
-    '1.0-2.0',
-    '2.0-3.0',
-    '3.0-4.0',
-    '4.0-5.0',
-    '5.0-7.5',
-    '7.5-10.0',
-    '10.0-20.0',
-    '20.0 & ABOVE',
-)
-CROPS = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))
-SIZE_GROUP = {
-    'Below 0.5': ['Below 0.5', '0.5-1.0'],
-    '0.5-1.0': ['Below 0.5', '0.5-1.0'],
-    '1.0-2.0': ['1.0-2.0'],
-    '2.0-3.0': ['2.0-3.0', '3.0-4.0'],
-    '3.0-4.0': ['2.0-3.0', '3.0-4.0'],
-    '4.0-5.0': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
-    '5.0-7.5': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
-    '7.5-10.0': ['4.0-5.0', '5.0-7.5', '7.5-10.0'],
-    '10.0-20.0': ['10.0-20.0', '20.0 & ABOVE'],
-    '20.0 & ABOVE': ['10.0-20.0', '20.0 & ABOVE'],
-}
-
-with rasterio.open(os.path.join(INPUT, 'areamaps', 'tehsils.tif'), 'r') as src:
-    tehsils_tif = src.read(1)
-    cell_area = create_cell_area_map(src.profile, write_to_disk=False)
-
-tehsils_shape = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')).set_index(['state_name', 'district_n', 'sub_dist_1'])
-avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
-crop_data = pd.read_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'), index_col=(0, 1, 2, 3))
-irrigation_sources = pd.read_excel(os.path.join(INPUT, 'census', 'irrigation_sources.xlsx'), index_col=(0, 1, 2, 3))
-
-print("Getting tehsil areas")
-for (state, district, tehsil), tehsil_crop_data in tqdm(crop_data.groupby(level=[0, 1, 2])):
-    # tehsil_farm_size = avg_farm_size.loc[(state, district, tehsil)]
-    farms_per_size_class = tehsil_crop_data.droplevel([0, 1, 2]).sum(axis=1)
-
-    # assert (tehsil_farm_size.index == farms_per_size_class.index).all()
-
-    # area_per_size_class = tehsil_farm_size * farms_per_size_class
-    # census_farm_area = area_per_size_class.sum()
-
-    tehsil_ID = tehsils_shape.loc[(state, district, tehsil), 'ID']
-    tehsil_area = cell_area[tehsils_tif == tehsil_ID].sum()
-
-columns = [f'{crop}_irr_holdings' for crop in CROPS['CENSUS'].tolist()] + [f'{crop}_rain_holdings' for crop in CROPS['CENSUS'].tolist()]
-crop_data = crop_data[columns]
-crop_data = crop_data.rename(columns={
-    column: column.replace('_holdings', '')
-    for column in columns
-})
-
-# remove postfix n_holdings from irrigation sources to allign with entries in survey
-irrigation_sources = irrigation_sources.rename(columns={
-    column: column.replace('_n_holdings', '')
-    for column in irrigation_sources.columns
-})
-
-n_farms = pd.read_excel(os.path.join(INPUT, 'census', 'n_farms.xlsx'), index_col=(0, 1, 2))
-
-size_class_convert = {
-    "Below 0.5": 0,
-    "0.5-1.0": 1,
-    "1.0-2.0": 2,
-    "2.0-3.0": 3,
-    "3.0-4.0": 4,
-    "4.0-5.0": 5,
-    "5.0-7.5": 6,
-    "7.5-10.0": 7,
-    "10.0-20.0": 8,
-    "20.0 & ABOVE": 9,
-}
-
-def assign_size_classes(survey):
-    size_classes = (
-        ('Below 0.5', 0.5),
-        ('0.5-1.0', 1),
-        ('1.0-2.0', 2),
-        ('2.0-3.0', 3),
-        ('3.0-4.0', 4),
-        ('4.0-5.0', 5),
-        ('5.0-7.5', 7.5),
-        ('7.5-10.0', 10),
-        ('10.0-20.0', 20),
-        ('20.0 & ABOVE', np.inf),
-    )
-    for idx, household in survey.iterrows():
-        area = household['area owned & cultivated']
-        for size_class_name, size in size_classes:
-            if area < size:
-                survey.loc[idx, 'size_class'] = size_class_name
-                break
-    return survey
-
-survey_data = pd.read_csv(os.path.join(INPUT, 'agents', 'IHDS_I.csv'))
-survey_data = assign_size_classes(survey_data)
-survey_data[~(survey_data['Kharif: Crop: Name'].isnull() & survey_data['Rabi: Crop: Name'].isnull() & survey_data['Summer: Crop: Name'].isnull())]
-
-for season in SEASONS:
-    survey_data[f'{season}: Crop: Irrigation'] = survey_data[f'{season}: Crop: Irrigation'].map({'Yes': 'irr', 'No': 'rain'})
-
-crop_convert = CROPS.set_index('IHDS')['CENSUS'].to_dict()
-# drop all farmers that grow crops that are not part of the analysed crops
-for season in SEASONS:
-    survey_data = survey_data[(survey_data[f'{season}: Crop: Name'].isin(crop_convert.keys())) | (survey_data[f'{season}: Crop: Name'].isnull())]
-for season in SEASONS:
-    survey_data[f'{season}: Crop: Name'] = survey_data[f'{season}: Crop: Name'].map(crop_convert)
-
-print("Also remove households where other crops are grown?")
-survey_data = survey_data[~(survey_data['Kharif: Crop: Name'].isnull() & survey_data['Rabi: Crop: Name'].isnull() & survey_data['Summer: Crop: Name'].isnull())]
-
-# Check if irrigation is assigned to all crops
-for season in SEASONS:
-    assert (survey_data[~(survey_data[f'{season}: Crop: Name'].isnull())][f'{season}: Crop: Irrigation'].isnull() == False).all()
-
-survey_data['crops'] = list(zip(
-    list(np.where(survey_data['Kharif: Crop: Name'].isnull(), None, survey_data['Kharif: Crop: Name'] + '_' + survey_data['Kharif: Crop: Irrigation'])),
-    list(np.where(survey_data['Rabi: Crop: Name'].isnull(), None, survey_data['Rabi: Crop: Name'] + '_' + survey_data['Rabi: Crop: Irrigation'])),
-    list(np.where(survey_data['Summer: Crop: Name'].isnull(), None, survey_data['Summer: Crop: Name'] + '_' + survey_data['Summer: Crop: Irrigation'])),
-))
-
-# survey_data['size_class'] = survey_data['size_class'].map(size_class_convert)
-survey_data['irrigation_source'] = survey_data['Irrigation type 1'].map({
-    'Private canal': 'canals',
-    'Other well': 'well',
-    'Tubewell': 'tubewell',
-    'Tank/pond/nala' : 'tank',
-    'Government': 'canals',
-    'Other': 'other',
-    np.nan: 'no_irrigation'
-})
-
-folder = os.path.join(INPUT, 'agents', 'ipl')
-os.makedirs(folder, exist_ok=True)
-
 def fit(ipl_group):
     (state, district, tehsil, size_class), crop_frequencies, irrigation_sources = ipl_group
     if tehsil == '0':
@@ -368,6 +257,7 @@ def fit(ipl_group):
     #     return
     # print(state, district, tehsil, size_class)
     survey_data_size_class = survey_data[survey_data['size_class'].isin(SIZE_GROUP[size_class])]
+    # survey_data_size_class = survey_data.copy()
     survey_data_size_class = survey_data_size_class.reset_index(drop=True)
 
     crops = crop_frequencies.iloc[0]
@@ -385,6 +275,8 @@ def fit(ipl_group):
         original=survey_data_size_class,
         marginals=marginals,
         n=n,
+        rate_tolerance=0.001,
+        max_iterations=10_000,
     ).iteration()
 
     ipl.to_csv(fp, index=False)
@@ -394,19 +286,133 @@ def get_ipl_groups(crop_data, irrigation_sources):
     for ipl_group in ipl_groups:
         yield ipl_group[0], ipl_group[1], irrigation_sources.loc[ipl_group[0]]
 
-ipl_groups = get_ipl_groups(crop_data, irrigation_sources)
 
-if args.n_jobs == 1:
-    for ipl_group in tqdm(ipl_groups):
-        fit(ipl_group)
-else:
-    from tqdm.contrib.concurrent import process_map
-    process_map(fit, ipl_groups, max_workers=args.n_jobs)
+if __name__ == '__main__':
+    with rasterio.open(os.path.join(INPUT, 'areamaps', 'tehsils.tif'), 'r') as src:
+        tehsils_tif = src.read(1)
+        cell_area = create_cell_area_map(src.profile, write_to_disk=False)
 
-# create a list of all the files in the folder
-files = os.listdir(folder)
-#iterate through the list of files
-for file in files:
-    # open files in pandas
-    df = pd.read_csv(os.path.join(folder, file))
-    
+    tehsils_shape = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')).set_index(['state_name', 'district_n', 'sub_dist_1'])
+    avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
+    crop_data = pd.read_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'), index_col=(0, 1, 2, 3))
+    irrigation_sources = pd.read_excel(os.path.join(INPUT, 'census', 'irrigation_sources.xlsx'), index_col=(0, 1, 2, 3))
+
+    print("Getting tehsil areas")
+    for (state, district, tehsil), tehsil_crop_data in tqdm(crop_data.groupby(level=[0, 1, 2])):
+        # tehsil_farm_size = avg_farm_size.loc[(state, district, tehsil)]
+        farms_per_size_class = tehsil_crop_data.droplevel([0, 1, 2]).sum(axis=1)
+
+        # assert (tehsil_farm_size.index == farms_per_size_class.index).all()
+
+        # area_per_size_class = tehsil_farm_size * farms_per_size_class
+        # census_farm_area = area_per_size_class.sum()
+
+        tehsil_ID = tehsils_shape.loc[(state, district, tehsil), 'ID']
+        tehsil_area = cell_area[tehsils_tif == tehsil_ID].sum()
+
+    columns = [f'{crop}_irr_holdings' for crop in CROPS['CENSUS'].tolist()] + [f'{crop}_rain_holdings' for crop in CROPS['CENSUS'].tolist()]
+    crop_data = crop_data[columns]
+    crop_data = crop_data.rename(columns={
+        column: column.replace('_holdings', '')
+        for column in columns
+    })
+
+    # remove postfix n_holdings from irrigation sources to allign with entries in survey
+    irrigation_sources = irrigation_sources.rename(columns={
+        column: column.replace('_n_holdings', '')
+        for column in irrigation_sources.columns
+    })
+
+    n_farms = pd.read_excel(os.path.join(INPUT, 'census', 'n_farms.xlsx'), index_col=(0, 1, 2))
+
+    size_class_convert = {
+        "Below 0.5": 0,
+        "0.5-1.0": 1,
+        "1.0-2.0": 2,
+        "2.0-3.0": 3,
+        "3.0-4.0": 4,
+        "4.0-5.0": 5,
+        "5.0-7.5": 6,
+        "7.5-10.0": 7,
+        "10.0-20.0": 8,
+        "20.0 & ABOVE": 9,
+    }
+
+    def assign_size_classes(survey):
+        size_classes = (
+            ('Below 0.5', 0.5),
+            ('0.5-1.0', 1),
+            ('1.0-2.0', 2),
+            ('2.0-3.0', 3),
+            ('3.0-4.0', 4),
+            ('4.0-5.0', 5),
+            ('5.0-7.5', 7.5),
+            ('7.5-10.0', 10),
+            ('10.0-20.0', 20),
+            ('20.0 & ABOVE', np.inf),
+        )
+        for idx, household in survey.iterrows():
+            area = household['area owned & cultivated']
+            for size_class_name, size in size_classes:
+                if area < size:
+                    survey.loc[idx, 'size_class'] = size_class_name
+                    break
+        return survey
+
+    survey_data = pd.read_csv(os.path.join(INPUT, 'agents', 'IHDS_I.csv'))
+    survey_data = assign_size_classes(survey_data)
+    survey_data[~(survey_data['Kharif: Crop: Name'].isnull() & survey_data['Rabi: Crop: Name'].isnull() & survey_data['Summer: Crop: Name'].isnull())]
+
+    for season in SEASONS:
+        survey_data[f'{season}: Crop: Irrigation'] = survey_data[f'{season}: Crop: Irrigation'].map({'Yes': 'irr', 'No': 'rain'})
+
+    crop_convert = CROPS.set_index('IHDS')['CENSUS'].to_dict()
+    # drop all farmers that grow crops that are not part of the analysed crops
+    for season in SEASONS:
+        survey_data = survey_data[(survey_data[f'{season}: Crop: Name'].isin(crop_convert.keys())) | (survey_data[f'{season}: Crop: Name'].isnull())]
+    for season in SEASONS:
+        survey_data[f'{season}: Crop: Name'] = survey_data[f'{season}: Crop: Name'].map(crop_convert)
+
+    print("Also remove households where other crops are grown?")
+    survey_data = survey_data[~(survey_data['Kharif: Crop: Name'].isnull() & survey_data['Rabi: Crop: Name'].isnull() & survey_data['Summer: Crop: Name'].isnull())]
+
+    # Check if irrigation is assigned to all crops
+    for season in SEASONS:
+        assert (survey_data[~(survey_data[f'{season}: Crop: Name'].isnull())][f'{season}: Crop: Irrigation'].isnull() == False).all()
+
+    survey_data['crops'] = list(zip(
+        list(np.where(survey_data['Kharif: Crop: Name'].isnull(), None, survey_data['Kharif: Crop: Name'] + '_' + survey_data['Kharif: Crop: Irrigation'])),
+        list(np.where(survey_data['Rabi: Crop: Name'].isnull(), None, survey_data['Rabi: Crop: Name'] + '_' + survey_data['Rabi: Crop: Irrigation'])),
+        list(np.where(survey_data['Summer: Crop: Name'].isnull(), None, survey_data['Summer: Crop: Name'] + '_' + survey_data['Summer: Crop: Irrigation'])),
+    ))
+
+    # survey_data['size_class'] = survey_data['size_class'].map(size_class_convert)
+    survey_data['irrigation_source'] = survey_data['Irrigation type 1'].map({
+        'Private canal': 'canals',
+        'Other well': 'well',
+        'Tubewell': 'tubewell',
+        'Tank/pond/nala' : 'tank',
+        'Government': 'canals',
+        'Other': 'other',
+        np.nan: 'no_irrigation'
+    })
+
+    folder = os.path.join(INPUT, 'agents', 'ipl')
+    os.makedirs(folder, exist_ok=True)
+
+    ipl_groups = get_ipl_groups(crop_data, irrigation_sources)
+
+    if args.n_jobs == 1:
+        for ipl_group in tqdm(ipl_groups):
+            fit(ipl_group)
+    else:
+        from tqdm.contrib.concurrent import process_map
+        process_map(fit, ipl_groups, max_workers=args.n_jobs)
+
+    # create a list of all the files in the folder
+    files = os.listdir(folder)
+    #iterate through the list of files
+    for file in files:
+        # open files in pandas
+        df = pd.read_csv(os.path.join(folder, file))
+        
