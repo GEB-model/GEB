@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import os
 from random import random
 import faulthandler
@@ -504,31 +505,45 @@ def main():
         attribute_folder = os.path.join(farmer_folder, 'attributes')
         os.makedirs(attribute_folder, exist_ok=True)
 
-        irrigation_type = np.full((all_agents.shape[0], 2), -1, dtype=np.int8)
+        # irrigation_type = np.full((all_agents.shape[0], 2), -1, dtype=np.int8)
+        # irrigation_map = {
+        #     'Tubewell': 1,
+        #     'Other well': 1,
+        #     'Government': 2,
+        #     'Private canal': 3,
+        #     'Tank/pond/nala': 4,
+        #     'Other': -1,
+        #     np.nan: -1
+        # }
+        # irrigation_type[:,0] = all_agents['Irrigation type 1'].map(irrigation_map)
+
         irrigation_map = {
-            'Tubewell': 1,
-            'Other well': 1,
-            'Government': 2,
-            'Private canal': 3,
-            'Tank/pond/nala': 4,
-            'Other': -1,
-            np.nan: -1
+            'no_irrigation': 0,
+            'canals': 1,
+            'well': 2,
+            'tubewell': 3,
+            'tank': 4,
+            'other': 5,
         }
-        irrigation_type[:,0] = all_agents['Irrigation type 1'].map(irrigation_map)
-        irrigation_type[:,1] = all_agents['Irrigation type 2'].map(irrigation_map)
+
+        with open(os.path.join(attribute_folder, 'irrigation_sources.json'), 'w') as f:
+            json.dump(irrigation_map, f)
+
+        all_agents['irrigation_source'] = all_agents['irrigation_source'].map(irrigation_map)
 
         np.save(os.path.join(attribute_folder, 'tehsil_code.npy'), all_agents['tehsil code'])
         np.save(os.path.join(attribute_folder, 'household size.npy'), all_agents['household size'])
-        np.save(os.path.join(attribute_folder, 'irrigation type.npy'), irrigation_type)
-        np.save(os.path.join(attribute_folder, 'tubewell.npy'), all_agents['Own: Tubewells'])
-        np.save(os.path.join(attribute_folder, 'electric pump.npy'), all_agents['Own: Electric Pumps'])
-        np.save(os.path.join(attribute_folder, 'diesel pump.npy'), all_agents['Own: Diesel Pumps'])
+        np.save(os.path.join(attribute_folder, 'irrigation_source.npy'), all_agents['irrigation_source'])
+        # np.save(os.path.join(attribute_folder, 'irrigation type.npy'), irrigation_type)
+        # np.save(os.path.join(attribute_folder, 'tubewell.npy'), all_agents['Own: Tubewells'])
+        # np.save(os.path.join(attribute_folder, 'electric pump.npy'), all_agents['Own: Electric Pumps'])
+        # np.save(os.path.join(attribute_folder, 'diesel pump.npy'), all_agents['Own: Diesel Pumps'])
         np.save(os.path.join(attribute_folder, 'kharif crop.npy'), all_agents['Kharif: Crop: Name'])
-        np.save(os.path.join(attribute_folder, 'kharif irrigation.npy'), all_agents['Kharif: Crop: Irrigation'])
+        # np.save(os.path.join(attribute_folder, 'kharif irrigation.npy'), all_agents['Kharif: Crop: Irrigation'])
         np.save(os.path.join(attribute_folder, 'rabi crop.npy'), all_agents['Rabi: Crop: Name'])
-        np.save(os.path.join(attribute_folder, 'rabi irrigation.npy'), all_agents['Rabi: Crop: Irrigation'])
+        # np.save(os.path.join(attribute_folder, 'rabi irrigation.npy'), all_agents['Rabi: Crop: Irrigation'])
         np.save(os.path.join(attribute_folder, 'summer crop.npy'), all_agents['Summer: Crop: Name'])
-        np.save(os.path.join(attribute_folder, 'summer irrigation.npy'), all_agents['Summer: Crop: Irrigation'])
+        # np.save(os.path.join(attribute_folder, 'summer irrigation.npy'), all_agents['Summer: Crop: Irrigation'])
         np.save(os.path.join(attribute_folder, 'daily non farm income family.npy'), (all_agents['Salaried income Rs'] + all_agents['Business income Rs'] + all_agents['Government benefits Rs'] + all_agents['Income property Rs'] + all_agents['Other income Rs']) / 365.25)
         np.save(os.path.join(attribute_folder, 'daily consumption per capita.npy'), all_agents['Monthly consumption per capita Rs'] / 12)
 

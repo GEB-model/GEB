@@ -71,8 +71,7 @@ class Farmers(AgentBaseClass):
         "_tehsil",
         "_elevation",
         "_crops",
-        "_irrigated",
-        "_has_well",
+        "_irrigation_source",
         "_household_size",
         "_disposable_income",
         "_loan_amount",
@@ -120,6 +119,9 @@ class Farmers(AgentBaseClass):
             bounds=self.model.bounds
         ).get_data_array())
 
+        with open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
+            self.irrigation_source_key = json.load(f)
+
         # load map of all subdistricts
         self.subdistrict_map = ArrayReader(
             fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'tehsils.tif'),
@@ -157,9 +159,6 @@ class Farmers(AgentBaseClass):
             "_crops": {
                 "nodata": [-1, -1, -1],
                 "nodatacheck": False
-            },
-            "_irrigated": {
-                "nodata": -1,
             },
             "_groundwater_depth": {
                 "nodata": -1,
@@ -205,9 +204,8 @@ class Farmers(AgentBaseClass):
             "_n_water_accessible_years": {
                 "nodata": -1
             },
-            "_has_well": {
-                "nodata": False,
-                "nodatacheck": False
+            "_irrigation_source": {
+                "nodata": -1,
             },
             "_water_availability_by_farmer": {
                 "nodata": np.nan
@@ -279,22 +277,9 @@ class Farmers(AgentBaseClass):
             self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi crop.npy'))
             self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer crop.npy'))
             assert self.crops.max() < len(self.crop_names)
-      
-            # Load the irrigation status of each farmer. This is a boolean array with three columns, one for each season.      
-            irrigated = np.full((self.n, 3), -1, dtype=np.int8)  # kharif, rabi, summer
-            irrigated[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif irrigation.npy'))
-            irrigated[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi irrigation.npy'))
-            irrigated[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer irrigation.npy'))
-      
-            # Assume that a farmer that is irrigated in one season, is also irrigated in the other seasons. Thus using any to get the irrigation status
-            # for all seasons.
-            self._irrigated = np.full(self.max_n, -1, dtype=np.int8)
-            self.irrigated = irrigated.any(axis=1)
 
-            # Load the irrigation type from file and assign all farmers with irrigation type 1 (well) a well.
-            irrigation_type = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation type.npy'))
-            self._has_well= np.full(self.max_n, 0, dtype=bool)
-            self.has_well[:] = (irrigation_type == 1).any(axis=1)
+            self._irrigation_source = np.full(self.max_n, -1, dtype=np.int8)
+            self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation_source.npy'))
 
             # Set irrigation efficiency to 70% for all farmers.
             self._irrigation_efficiency = np.full(self.max_n, -1, dtype=np.float32)
@@ -337,8 +322,8 @@ class Farmers(AgentBaseClass):
             self._daily_expenses_per_capita = np.full(self.max_n, -1, dtype=np.float32)
             self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
 
-            # self._agent_class = np.full(self.max_n, -1, dtype=np.int32)
-            # self.agent_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
+            self._farmer_class = np.full(self.max_n, -1, dtype=np.int32)
+            self.farmer_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
     
         self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
         self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
@@ -643,17 +628,17 @@ class Farmers(AgentBaseClass):
             self.field_indices,
             self.elevation_grid,
             self.irrigation_efficiency,
-            self.irrigated,
-            self.has_well,
-            cell_area,
-            HRU_to_grid,
-            self.var.crop_map,
-            totalPotIrrConsumption,
-            available_channel_storage_m3,
-            available_groundwater_m3,
-            groundwater_head,
-            available_reservoir_storage_m3,
-            command_areas,
+            surface_irrigated=np.isin(self.irrigation_source, [self.irrigation_source_key['canals'], self.irrigation_source_key['other']]),
+            well_irrigated=np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']]),
+            cell_area=cell_area,
+            HRU_to_grid=HRU_to_grid,
+            crop_map=self.var.crop_map,
+            totalPotIrrConsumption=totalPotIrrConsumption,
+            available_channel_storage_m3=available_channel_storage_m3,
+            available_groundwater_m3=available_groundwater_m3,
+            groundwater_head=groundwater_head,
+            available_reservoir_storage_m3=available_reservoir_storage_m3,
+            command_areas=command_areas,
             return_fraction=self.model.config['agent_settings']['farmers']['return_fraction'],
             well_depth=30
         )
@@ -962,9 +947,9 @@ class Farmers(AgentBaseClass):
     @staticmethod
     @njit(cache=True)
     def invest_numba(
+        n: int,
         year: int,
         farmers_without_well: np.ndarray,
-        has_well: np.ndarray,
         neighbors_with_well: np.ndarray,
         latest_profits: np.ndarray,
         latest_potential_profits: np.ndarray,
@@ -988,6 +973,7 @@ class Farmers(AgentBaseClass):
             - The farmer's disposable income relative to the minimum disposable income required to invest in a well
   
         Args:
+            n: number of farmers
             year: the current year
             farmers_without_well: farmers currently without a well
             has_well: farmers currently with a will (collary of farmers_without_well)
@@ -1006,10 +992,9 @@ class Farmers(AgentBaseClass):
             disposable_income: disposable income of each farmer
             disposable_income_threshold: the minimum disposable income required to invest in a well after considering total well cost
         """
+        invest_in_well = np.zeros(n, dtype=np.bool_)
         neighbor_nan_value = np.iinfo(neighbors_with_well.dtype).max
         for i, farmer_idx in enumerate(farmers_without_well):
-            assert not has_well[farmer_idx]
-
             latest_profit = latest_profits[farmer_idx, 0]
             latest_potential_profit = latest_potential_profits[farmer_idx, 0]
 
@@ -1043,7 +1028,7 @@ class Farmers(AgentBaseClass):
                 if money_left_for_investment < yearly_payment + disposable_income_threshold:
                     continue
 
-                has_well[farmer_idx] = True
+                invest_in_well[farmer_idx] = True
                 
                 loan_interest[farmer_idx] = interest_rate
                 loan_amount[farmer_idx] = loan_size
@@ -1069,6 +1054,8 @@ class Farmers(AgentBaseClass):
             # if in_reservoir_command_area and not surface_irrigated[farmer_idx]:
             #     surface_irrigated[farmer_idx] = True
 
+        return invest_in_well
+
     def invest_in_irrigation_well(self) -> None:
         nbits = 19
 
@@ -1083,15 +1070,17 @@ class Farmers(AgentBaseClass):
         #     plt.scatter(self.locations[agent_neighbours][:,0], self.locations[agent_neighbours][:,1], c=colors[i], alpha=.5)
         # plt.show()
 
+        has_well = np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])
+
         for crop_option in np.unique(self.crops, axis=0):
             
             farmers_with_crop_option = np.where((self.crops==crop_option[None, ...]).all(axis=1))[0]
             
-            farmers_with_well = np.where(self.has_well[farmers_with_crop_option] == True)[0]
-            farmers_without_well = np.where(self.has_well[farmers_with_crop_option] == False)[0]
+            farmers_with_well_crop_option = np.where(has_well[farmers_with_crop_option] == True)[0]
+            farmers_without_well = np.where(has_well[farmers_with_crop_option] == False)[0]
             farmers_without_well_indices = farmers_with_crop_option[farmers_without_well]
 
-            if farmers_without_well.size > 0 and farmers_with_well.size > 0:
+            if farmers_without_well.size > 0 and farmers_with_well_crop_option.size > 0:
                 neighbors_with_well = find_neighbors(
                     self.locations[farmers_with_crop_option],
                     radius=5_000,
@@ -1102,29 +1091,30 @@ class Farmers(AgentBaseClass):
                     miny=self.model.bounds[2],
                     maxy=self.model.bounds[3],
                     search_ids=farmers_without_well,
-                    search_target_ids=farmers_with_well
+                    search_target_ids=farmers_with_well_crop_option
                 )
 
                 interest_rate = self.lending_rate[self.model.current_time.year]
                 assert not np.isnan(interest_rate)
-                self.invest_numba(
-                    self.model.current_time.year,
-                    farmers_without_well_indices,
-                    self.has_well,
-                    neighbors_with_well,
-                    self.latest_profits,
-                    self.latest_potential_profits,
-                    self.field_size_per_farmer,
-                    self.loan_interest,
-                    self.loan_amount,
-                    self.loan_duration,
-                    self.loan_end_year,
-                    self.well_price[self.model.current_time.year],
-                    self.well_upkeep_price_per_m2[self.model.current_time.year],
-                    self.well_investment_time_years,
-                    interest_rate,
-                    self.disposable_income,
+                invest_in_well = self.invest_numba(
+                    n=self.n,
+                    year=self.model.current_time.year,
+                    farmers_without_well=farmers_without_well_indices,
+                    neighbors_with_well=neighbors_with_well,
+                    latest_profits=self.latest_profits,
+                    latest_potential_profits=self.latest_potential_profits,
+                    farm_size_m2=self.field_size_per_farmer,
+                    loan_interest=self.loan_interest,
+                    loan_amount=self.loan_amount,
+                    loan_duration=self.loan_duration,
+                    loan_end_year=self.loan_end_year,
+                    well_price=self.well_price[self.model.current_time.year],
+                    well_upkeep_price_per_m2=self.well_upkeep_price_per_m2[self.model.current_time.year],
+                    well_investment_time_years=self.well_investment_time_years,
+                    interest_rate=interest_rate,
+                    disposable_income=self.disposable_income,
                 )
+                self.irrigation_source[invest_in_well] = self.irrigation_source_key['tubewell']
     
     @property
     def locations(self):
@@ -1157,14 +1147,6 @@ class Farmers(AgentBaseClass):
     @latest_potential_profits.setter
     def latest_potential_profits(self, value):
         self._latest_potential_profits[:self.n] = value
-
-    @property
-    def irrigated(self):
-        return self._irrigated[:self.n]
-
-    @irrigated.setter
-    def irrigated(self, value):
-        self._irrigated[:self.n] = value
 
     @property
     def irrigation_efficiency(self):
@@ -1319,12 +1301,12 @@ class Farmers(AgentBaseClass):
         self._daily_non_farm_income[:self.n] = value
 
     @property
-    def has_well(self):
-        return self._has_well[:self.n]
+    def irrigation_source(self):
+        return self._irrigation_source[:self.n]
 
-    @has_well.setter
-    def has_well(self, value):
-        self._has_well[:self.n] = value
+    @irrigation_source.setter
+    def irrigation_source(self, value):
+        self._irrigation_source[:self.n] = value
 
     @property
     def profit(self):
@@ -1333,6 +1315,14 @@ class Farmers(AgentBaseClass):
     @profit.setter
     def profit(self, value):
         self._profit[:self.n] = value
+
+    @property
+    def farmer_class(self):
+        return self._farmer_class[:self.n]
+
+    @farmer_class.setter
+    def farmer_class(self, value):
+        self._farmer_class[:self.n] = value
 
     @property
     def tehsil(self):
@@ -1388,7 +1378,8 @@ class Farmers(AgentBaseClass):
         self.disposable_income[self.disposable_income < 0] = 0  # for now, weassume that farmers cannot go into debt
 
     def upkeep_assets(self):
-        self.disposable_income -= self.well_upkeep_price_per_m2[self.model.current_time.year] * self.field_size_per_farmer * self.has_well
+        has_well = np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])
+        self.disposable_income -= self.well_upkeep_price_per_m2[self.model.current_time.year] * self.field_size_per_farmer * has_well
 
     def make_loan_payment(self):
         has_loan = self.loan_amount > 0
