@@ -198,10 +198,10 @@ report:
     save: save
     format: csv
     groupby: tehsil
-  well_irrigated:
+  irrigation_source:
     type: farmers
     function: null
-    varname: has_well
+    varname: irrigation_source
     frequency: per_timestep
     save: export
     format: npy

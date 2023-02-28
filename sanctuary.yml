@@ -11,7 +11,7 @@ general:
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
-  spinup_time: 2010-12-25
+  spinup_time: 2010-01-01
   ###
   # base folder where to report output data to
   upscale_factor: 40
@@ -70,10 +70,10 @@ calibration:
         format: csv
         save: save
     report:
-      well_irrigated:
+      irrigation_source:
         type: farmers
         function: null
-        varname: has_well
+        varname: irrigation_source
         frequency:
           every: month
           day: 1
@@ -234,10 +234,10 @@ report:
   #   save: save
   #   format: csv
   #   groupby: tehsil
-  well_irrigated:
+  irrigation_source:
     type: farmers
     function: null
-    varname: has_well
+    varname: irrigation_source
     frequency:
       every: month
       day: 1
