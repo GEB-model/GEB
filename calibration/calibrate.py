@@ -19,6 +19,7 @@ Please see his book "Python in Hydrology"   http://greenteapress.com/pythonhydro
 
 """
 import os
+import json
 import shutil
 import hydroStats
 import array
@@ -28,8 +29,8 @@ import numpy as np
 import signal
 import pandas as pd
 import yaml
+import geopandas as gpd
 from deap import creator, base, tools, algorithms
-from datetime import datetime
 from functools import wraps
 
 import multiprocessing
@@ -76,6 +77,37 @@ observed_streamflow = streamflow_data["flow"]
 observed_streamflow.name = 'observed'
 assert (observed_streamflow >= 0).all()
 
+with open(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
+	irrigation_source_key = json.load(f)
+
+def get_observed_well_ratio():
+	observed_irrigation_sources = gpd.read_file(os.path.join(config['general']['original_data'], 'census', 'output', 'irrigation_source_2010-2011.geojson')).to_crs(3857)
+	simulated_subdistricts = gpd.read_file(os.path.join(config['general']['input_folder'], 'areamaps', 'subdistricts.geojson'))
+	# set index to unique ID combination of state, district and subdistrict
+	observed_irrigation_sources.set_index(['state_code', 'district_c', 'sub_distri'], inplace=True)
+	simulated_subdistricts.set_index(['state_code', 'district_c', 'sub_distri'], inplace=True)
+	# select rows from observed_irrigation_sources where the index is in simulated_subdistricts
+	observed_irrigation_sources = observed_irrigation_sources.loc[simulated_subdistricts.index]
+
+	region_mask = gpd.read_file(os.path.join(config['general']['input_folder'], 'areamaps', 'mask.geojson')).to_crs(3857)
+	assert len(region_mask) == 1
+	# get overlapping areas of observed_irrigation_sources and region_mask
+	observed_irrigation_sources['area_in_region_mask'] = (gpd.overlay(observed_irrigation_sources, region_mask, how='intersection').area / observed_irrigation_sources.area.values).values
+
+	ANALYSIS_THRESHOLD = 0.5
+
+	observed_irrigation_sources = observed_irrigation_sources[observed_irrigation_sources['area_in_region_mask'] > ANALYSIS_THRESHOLD]
+	observed_irrigation_sources = observed_irrigation_sources.join(simulated_subdistricts['ID'])
+	observed_irrigation_sources.set_index('ID', inplace=True)
+
+	total_holdings_observed = observed_irrigation_sources[[c for c in observed_irrigation_sources.columns if c.endswith('total_holdings')]].sum(axis=1)
+	total_holdings_with_well_observed = (
+		observed_irrigation_sources[[c for c in observed_irrigation_sources.columns if c.endswith('well_holdings')]].sum(axis=1) +
+		observed_irrigation_sources[[c for c in observed_irrigation_sources.columns if c.endswith('tubewell_holdings')]].sum(axis=1)
+	)
+	ratio_holdings_with_well_observed = total_holdings_with_well_observed / total_holdings_observed
+	return ratio_holdings_with_well_observed
+
 def handle_ctrl_c(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -108,14 +140,25 @@ def multi_set(dict_obj, value, *attrs):
 def get_irrigation_wells_score(run_directory, individual):
 	tehsils = np.load(os.path.join(run_directory, SCENARIO, 'tehsil', '20110101.npy'))
 	field_size = np.load(os.path.join(run_directory, SCENARIO, 'field_size', '20110101.npy'))
-	well_irrigated = np.load(os.path.join(run_directory, SCENARIO, 'well_irrigated', '20110101.npy'))
-
+	irrigation_source = np.load(os.path.join(run_directory, SCENARIO, 'irrigation_source', '20110101.npy'))
+	well_irrigated = np.isin(irrigation_source, [irrigation_source_key['well'], irrigation_source_key['tubewell']])
 	# Calculate the ratio of farmers with a well per tehsil
 	farmers_per_tehsil = np.bincount(tehsils)
 	well_irrigated_per_tehsil = np.bincount(tehsils, weights=well_irrigated)
 	ratio_well_irrigated = well_irrigated_per_tehsil / farmers_per_tehsil
 
-	return random.random()
+	ratio_holdings_with_well_observed = get_observed_well_ratio()
+
+	ratio_holdings_with_well_simulated = ratio_well_irrigated[ratio_holdings_with_well_observed.index]
+	ratio_holdings_with_well_observed = ratio_holdings_with_well_observed.values
+
+	irrigation_well_score = 1 - abs(((ratio_holdings_with_well_simulated - ratio_holdings_with_well_observed) / ratio_holdings_with_well_observed))
+	irrigation_well_score = float(np.mean(irrigation_well_score))
+	print("run_id: " + str(individual.label)+", IWS: "+"{0:.3f}".format(irrigation_well_score))
+	with open(os.path.join(calibration_path,"IWS_log.csv"), "a") as myfile:
+		myfile.write(str(individual.label)+"," + str(irrigation_well_score)+"\n")
+
+	return irrigation_well_score
 
 def get_KGE_score(run_directory, individual):
     # Get the path of the simulated streamflow file
@@ -143,28 +186,11 @@ def get_KGE_score(run_directory, individual):
 		# Calculate the monthly mean of the streamflow data
 		streamflows = streamflows.resample('M').mean()
 
-	# Check the specified objective function and calculate the score
-	# if OBJECTIVE == 'KGE':
 	KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])
 	print("run_id: " + str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
-	with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
+	with open(os.path.join(calibration_path,"KGE_log.csv"), "a") as myfile:
 		myfile.write(str(individual.label)+"," + str(KGE)+"\n")
 	return KGE
-	# elif OBJECTIVE == 'COR':
-	# 	COR = hydroStats.correlation(s=streamflows['simulated'],o=streamflows['observed'])
-	# 	print("run_id: " + str(individual.label)+", COR "+"{0:.3f}".format(COR))
-	# 	with open(os.path.join(calibration_path,"runs_log.csv"), "a") as myfile:
-	# 		myfile.write(str(individual.label)+"," + str(COR)+"\n")
-	# 	return COR
-	# elif OBJECTIVE == 'NSE':
-	# 	NSE = hydroStats.NS(s=streamflows['simulated'], o=streamflows['observed'])
-	# 	print("run_id: " + str(individual.label) + ", NSE: " + "{0:.3f}".format(NSE))
-	# 	with open(os.path.join(calibration_path, "runs_log.csv"), "a") as myfile:
-	# 		myfile.write(str(individual.label) + "," + str(NSE) + "\n")
-	# 	return NSE
-	# else:
-	# 	raise ValueError
-
 
 @handle_ctrl_c
 def run_model(individual):
@@ -276,16 +302,17 @@ def run_model(individual):
 				
 				return p.returncode
 				
-			run_model('spinup')
-			run_model(SCENARIO)
-			
-			# release the GPU if it was used
-			if use_gpu is not False:
-				lock.acquire()
-				current_gpu_use_count.value -= 1
-				lock.release()
-				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
-
+			return_code = run_model('spinup')
+			if return_code == 0:
+				return_code = run_model(SCENARIO)
+				if return_code == 0:
+					# release the GPU if it was used
+					if use_gpu is not False:
+						lock.acquire()
+						current_gpu_use_count.value -= 1
+						lock.release()
+						print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+					break
 	scores = []
 	for score in CALIBRATION_VALUES:
 		if score == 'KGE':
@@ -327,7 +354,7 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
 
 if __name__ == "__main__":
     # Create the fitness class using DEAP's creator class
-	creator.create("FitnessMulti", base.Fitness, calibration_weights=tuple(CALIBRATION_VALUES.values()))
+	creator.create("FitnessMulti", base.Fitness, weights=tuple(CALIBRATION_VALUES.values()))
 	
     # Create the individual class using DEAP's creator class
     # The individual class is an array of typecode 'd' with the FitnessMulti class as its fitness attribute
