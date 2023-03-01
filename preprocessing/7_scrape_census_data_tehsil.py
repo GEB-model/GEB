@@ -11,12 +11,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
 from tqdm import tqdm
+import numpy as np
 import shutil
 from io import StringIO
 from multiprocessing import current_process
 from pebble import ProcessPool
 from concurrent.futures import TimeoutError
-import argparse
 
 from preconfig import ORIGINAL_DATA, INPUT
 
@@ -346,7 +346,8 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, subset
             for idx, tehsil in tehsils.iterrows():
                 tehsil_name = tehsil[f'{year_short_string}_subd']
                 if tehsil[f'{year_short_string}_value']:
-                    tehsil_name = tehsil_name, tehsil[f'{year_short_string}_value']
+                    if not (isinstance(tehsil[f'{year_short_string}_value'], float) and np.isnan(tehsil[f'{year_short_string}_value'])):
+                        tehsil_name = tehsil_name, tehsil[f'{year_short_string}_value']
                 tehsil_2_shapefile[(state_name, district_name, tehsil_name)] = idx
                 if tehsil_name != '0':
                     to_download[(state_name, district_name)].append(tehsil_name)
@@ -396,12 +397,13 @@ if __name__ == '__main__':
     scrape = not args.noscrape
     headless = args.headless
     create_file = not args.no_create_map
+
+    scrape = False
     
     if scrape:
         import chromedriver_autoinstaller
         chromedriver_autoinstaller.install()
     
-    # for year in (2000, 2010, 2015):
     for year in (2000, 2010, 2015):
         main(
             url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
