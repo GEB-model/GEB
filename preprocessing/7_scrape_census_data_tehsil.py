@@ -398,8 +398,6 @@ if __name__ == '__main__':
     headless = args.headless
     create_file = not args.no_create_map
 
-    scrape = False
-    
     if scrape:
         import chromedriver_autoinstaller
         chromedriver_autoinstaller.install()
