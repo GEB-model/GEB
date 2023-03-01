@@ -3,6 +3,7 @@ import os
 import math
 from datetime import date
 import json
+import random
 import calendar
 
 import numpy as np
@@ -945,7 +946,7 @@ class Farmers(AgentBaseClass):
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
 
     @staticmethod
-    @njit(cache=True)
+    # @njit(cache=True)
     def invest_numba(
         n: int,
         year: int,
@@ -963,7 +964,8 @@ class Farmers(AgentBaseClass):
         well_investment_time_years: int,
         interest_rate: float,
         disposable_income: np.ndarray,
-        disposable_income_threshold: int=0
+        disposable_income_threshold: int=0,
+        intention_behaviour_gap: int=1
     ):  
         """Determines whether a farmer without a well invests in an irrigation well and takes a loan. Each farmer has
         a probability of investing in a well based on the following factors:
@@ -991,6 +993,7 @@ class Farmers(AgentBaseClass):
             interest_rate: current interest rate
             disposable_income: disposable income of each farmer
             disposable_income_threshold: the minimum disposable income required to invest in a well after considering total well cost
+            intention_behaviour_gap: the ratio of action to intention. For example, if the intention_behaviour_gap is 1, then the farmer will always implement the measure when intended, if the intention_behaviour_gap is 0 the measure will never be implemented.
         """
         invest_in_well = np.zeros(n, dtype=np.bool_)
         neighbor_nan_value = np.iinfo(neighbors_with_well.dtype).max
@@ -1028,16 +1031,17 @@ class Farmers(AgentBaseClass):
                 if money_left_for_investment < yearly_payment + disposable_income_threshold:
                     continue
 
-                invest_in_well[farmer_idx] = True
-                
-                loan_interest[farmer_idx] = interest_rate
-                loan_amount[farmer_idx] = loan_size
-                loan_duration[farmer_idx] = well_loan_duration
-                loan_end_year[farmer_idx] = year + well_loan_duration
+                if random.random() < intention_behaviour_gap:
+                    invest_in_well[farmer_idx] = True
+                    
+                    loan_interest[farmer_idx] = interest_rate
+                    loan_amount[farmer_idx] = loan_size
+                    loan_duration[farmer_idx] = well_loan_duration
+                    loan_end_year[farmer_idx] = year + well_loan_duration
 
-                # set profits to nan, just to make sure that only profits with new adaptation measure are used.
-                latest_profits[farmer_idx] = np.nan
-                latest_potential_profits[farmer_idx] = np.nan
+                    # set profits to nan, just to make sure that only profits with new adaptation measure are used.
+                    latest_profits[farmer_idx] = np.nan
+                    latest_potential_profits[farmer_idx] = np.nan
 
             # farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
             # channel_storage_farmer_m3 = 0
@@ -1113,6 +1117,7 @@ class Farmers(AgentBaseClass):
                     well_investment_time_years=self.well_investment_time_years,
                     interest_rate=interest_rate,
                     disposable_income=self.disposable_income,
+                    intention_behaviour_gap=self.model.config['agent_settings']['farmers']['well_implementation_intention_behaviour_gap']
                 )
                 self.irrigation_source[invest_in_well] = self.irrigation_source_key['tubewell']
     

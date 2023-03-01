@@ -44,6 +44,7 @@ agent_settings:
   farmers:
     return_fraction: .5
     farmers_going_out_of_business: false
+    well_implementation_intention_behaviour_gap: .8
 ###
 # This sections contains settings for logging of the model. 
 logging:
@@ -146,6 +147,10 @@ calibration:
         variable: agent_settings.farmers.return_fraction
         min: 0.3
         max: 0.8
+    well_implementation_intention_behaviour_gap:
+        variable: agent_settings.farmers.well_implementation_intention_behaviour_gap
+        min: 0.0
+        max: 1.0
 
 ###
 # This section is only used for the visual interface. This section closely works together with the `artists`.
