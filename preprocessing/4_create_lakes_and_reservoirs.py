@@ -161,7 +161,7 @@ def create_command_area_raster() -> list[int]:
     command_areas = command_areas[~command_areas['Hylak_id'].isnull()]
     command_areas['Hylak_id'] = command_areas['Hylak_id'].astype(np.int32)
 
-    mask = gpd.read_file(os.path.join(INPUT, 'areamaps', 'mask.shp'))
+    mask = gpd.read_file(os.path.join(INPUT, 'areamaps', 'mask.geojson'))
 
     command_areas_in_study_area = gpd.overlay(command_areas, mask, how='intersection')
     command_areas_in_study_area['area'] = command_areas_in_study_area.area

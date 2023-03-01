@@ -94,7 +94,7 @@ class Plot:
         if not os.path.exists(india_shp):
             gdf = gpd.GeoDataFrame.from_file(os.path.join('DataDrive/GADM/gadm36_3.shp'))
             gdf = gdf[gdf['GID_0'] == 'IND']
-            mask = gpd.GeoDataFrame.from_file(os.path.join(INPUT, 'areamaps', 'mask.shp'))
+            mask = gpd.GeoDataFrame.from_file(os.path.join(INPUT, 'areamaps', 'mask.geojson'))
             gdf = gpd.clip(gdf, mask)
             gdf.to_file(india_shp)
         else:

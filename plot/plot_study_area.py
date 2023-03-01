@@ -166,7 +166,7 @@ def plot_cutout(outline):
 
 
 if __name__ == '__main__':
-    study_area = 'DataDrive/GEB/input/areamaps/mask.shp'
+    study_area = 'DataDrive/GEB/input/areamaps/mask.geojson'
     outline = gpd.GeoDataFrame.from_file(study_area).iloc[2].geometry
     # plot_location(outline)
     plot_cutout(outline)

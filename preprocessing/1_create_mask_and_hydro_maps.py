@@ -258,7 +258,7 @@ def create_mask_shapefile() -> None:
     geoms = list({'geometry': geom[0], 'properties': {}} for geom in shapes(mask, transform=transform, connectivity=4) if geom[1] == 0)
     gdf = gpd.GeoDataFrame.from_features(geoms).buffer(0)  # Invalid polygons are sometimes returned. Buffer(0) helps solve this issue.
     gdf = gdf.set_crs("EPSG:4326")
-    gdf.to_file(mask_file.replace('.tif', '.shp'))
+    gdf.to_file(mask_file.replace('.tif', '.geojson'), driver='GeoJSON')
 
 if __name__ == '__main__':
     

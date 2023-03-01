@@ -83,5 +83,5 @@ def create_tif():
         json.dump(subdistrict2state, f)
 
 if __name__ == '__main__':
-    cut(os.path.join(INPUT, 'areamaps', 'mask.shp'))
+    cut(os.path.join(INPUT, 'areamaps', 'mask.geojson'))
     create_tif()
