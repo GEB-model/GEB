@@ -387,7 +387,7 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, subset
 
 if __name__ == '__main__':
     # initiate argument parser
-    parser = argparse.ArgumentParser()
+    from preconfig import parser
     parser.add_argument('--noscrape', action='store_true')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--no_create_map', action='store_true')
