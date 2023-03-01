@@ -190,7 +190,7 @@ if __name__ == '__main__':
     MODFLOW_PATH = os.path.join(INPUT, 'groundwater', 'modflow')
     MODFLOW_RESOLUTION = 1000  # ModFlow model's resolution [m]
     cwatm_basin_mask_fn = os.path.join(INPUT, 'areamaps', "mask.tif")  # Mask of the CWATM model
-    MODFLOW_EPSG = 32643
+    MODFLOW_EPSG = 3857
     m = ModflowPreprocess(MODFLOW_PATH, MODFLOW_RESOLUTION, cwatm_basin_mask_fn, MODFLOW_EPSG)
     m.create_indices()
     m.create_modflow_basin()
