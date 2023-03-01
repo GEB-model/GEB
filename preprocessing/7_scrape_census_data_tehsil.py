@@ -16,6 +16,7 @@ from io import StringIO
 from multiprocessing import current_process
 from pebble import ProcessPool
 from concurrent.futures import TimeoutError
+import argparse
 
 from preconfig import ORIGINAL_DATA, INPUT
 
@@ -385,9 +386,16 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, subset
     
 
 if __name__ == '__main__':
-    scrape = False
-    headless = False
-    create_file = True
+    # initiate argument parser
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--noscrape', action='store_true')
+    parser.add_argument('--headless', action='store_true')
+    parser.add_argument('--no_create_map', action='store_true')
+    args = parser.parse_args()
+
+    scrape = not args.noscrape
+    headless = args.headless
+    create_file = not args.no_create_map
     
     if scrape:
         import chromedriver_autoinstaller
