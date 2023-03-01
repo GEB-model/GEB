@@ -164,10 +164,10 @@ def create_command_area_raster() -> list[int]:
     mask = gpd.read_file(os.path.join(INPUT, 'areamaps', 'mask.geojson'))
 
     command_areas_in_study_area = gpd.overlay(command_areas, mask, how='intersection')
-    command_areas_in_study_area['area'] = command_areas_in_study_area.area
+    command_areas_in_study_area['area'] = command_areas_in_study_area.to_crs(3857).area
     area_of_command_area_in_study_area_by_hylak_id = command_areas_in_study_area.groupby('Hylak_id')['area'].sum()
 
-    command_areas['area'] = command_areas.area
+    command_areas['area'] = command_areas.to_crs(3857).area
     area_of_command_area_by_hylak_id = command_areas.groupby('Hylak_id')['area'].sum()
 
     merge = pd.merge(left=area_of_command_area_in_study_area_by_hylak_id, right=area_of_command_area_by_hylak_id, left_index=True, right_index=True)
