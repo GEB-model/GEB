@@ -16,10 +16,6 @@ from io import StringIO
 from multiprocessing import current_process
 from pebble import ProcessPool
 from concurrent.futures import TimeoutError
-import numpy as np
-
-import chromedriver_autoinstaller
-chromedriver_autoinstaller.install()
 
 from preconfig import ORIGINAL_DATA, INPUT
 
