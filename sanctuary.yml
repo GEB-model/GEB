@@ -19,6 +19,9 @@ general:
   poor_point:
     lon: 73.98727
     lat: 19.00464
+  gauges:
+    lon: 73.98727
+    lat: 19.00464
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/GEB_Sanctuary/input/
   data_folder: ../DataDrive/

@@ -14,10 +14,13 @@ import os
 from operator import attrgetter
 import numpy as np
 from time import time
+import pandas as pd
 try:
     import cupy as cp
 except ImportError:
     pass
+
+from sfincs import SFINCS
 
 class GEBModel(ABM_Model, CWatM_Model):
     """GEB parent class.
@@ -129,6 +132,11 @@ class GEBModel(ABM_Model, CWatM_Model):
             t0 = time()
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
+
+            previous_discharges = self.stCWATM._model.routing_kinematic_module.previous_discharges
+            previous_discharges = pd.DataFrame(previous_discharges).set_index('time')
+            SFINCS(self.config, previous_discharges)
+
             self.reporter.step()
             t1 = time()
             # print(t1-t0, 'seconds')
