@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from datetime import timedelta, date, datetime
+from datetime import timedelta, date
 from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from reporter import Reporter
@@ -69,7 +69,9 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.__init_ABM__(GEB_config_path, study_area, args, current_time, timestep_length, n_timesteps, coordinate_system)
         self.__init_hydromodel__(self.config['general']['CWatM_settings'])
-
+        if self.config['general']['simulate_floods']:
+            bbox = [73.86941, 18.99371, 73.94790, 19.05860]
+            self.sfincs = SFINCS(self, self.config, bbox=bbox)
         self.reporter = Reporter(self)
 
         np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'land_owners.npy'), self.data.HRU.land_owners)
@@ -133,10 +135,15 @@ class GEBModel(ABM_Model, CWatM_Model):
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
 
-            previous_discharges = self.stCWATM._model.routing_kinematic_module.previous_discharges
-            previous_discharges = pd.DataFrame(previous_discharges).set_index('time')
-            SFINCS(self.config, previous_discharges)
-
+            if self.config['general']['simulate_floods']:
+                n_routing_steps = self.data.grid.noRoutingSteps
+                n_days = 2
+                previous_discharges = pd.DataFrame(self.data.grid.previous_discharges).set_index('time').tail(n_days * n_routing_steps)
+                print('multiplying discharge by 100 to create a flood')
+                previous_discharges *= 100
+                flood, crs, gt = self.sfincs.run(previous_discharges, lons=[73.87007], lats=[19.05390], plot=())  # plot can be basemap, forcing, max_flood_depth
+                self.agents.farmers.flood(flood, crs, gt)
+         
             self.reporter.step()
             t1 = time()
             # print(t1-t0, 'seconds')

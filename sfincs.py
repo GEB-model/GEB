@@ -1,92 +1,48 @@
 import logging
 import os
 import subprocess
-import shutil
+from datetime import datetime
+import numpy as np
 import pandas as pd
 import geopandas as gpd
-
 import matplotlib.pyplot as plt
 
-from hydromt_sfincs import SfincsModel, utils
+from hydromt_sfincs import SfincsModel
 from hydromt.config import configread
 
-SFINCS_EXE = r'../SFINCS/sfincs.exe'
-# get absolute path for sfincs executable
-SFINCS_EXE = os.path.abspath(SFINCS_EXE)
+SFINCS_EXE = os.path.abspath(r'../SFINCS/sfincs.exe')
 
 class SFINCS:
-
-    def __init__(self, config, discharges, remove_existing=True):
+    def __init__(self, model, config: dict, bbox: list[float, float, float, float]):
+        self.model = model
         # create sfincs model
-        sfincs_folder = os.path.join(config['general']['report_folder'], 'sfincs')
-        if remove_existing and os.path.exists(sfincs_folder):
-            shutil.rmtree(sfincs_folder)
-        assert not os.path.exists(sfincs_folder)
-        logger = logging.getLogger(__name__)
+        subfolder = "_".join([str(bbox[0]), str(bbox[1]), str(bbox[2]), str(bbox[3])])
+        self.sfincs_folder = os.path.join(config['general']['report_folder'], 'sfincs', subfolder)
+        if hasattr(self, 'logger'):
+            self.logger = None
+
+        self.logger = logging.getLogger(__name__)
         # set log level to debug
-        logger.setLevel(logging.DEBUG)
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s [%(levelname)s] %(message)s",
-            handlers=[
-                logging.StreamHandler()
-            ]
-        )
+        self.logger.setLevel(logging.DEBUG)
+        # set handler to print to console
+        self.logger.addHandler(logging.StreamHandler())
+        if not os.path.exists(self.sfincs_folder):
+            build_model = True
+        else:
+            build_model = False
+        self.mod = SfincsModel(root=self.sfincs_folder, data_libs=[
+            os.path.join(config['general']['original_data'], 'data_catalog.yml')
+        ], logger=self.logger, mode='w+' if build_model else 'r+')
+        if build_model:
+            self.mod.build(region={'bbox': bbox}, opt=configread(r'sfincs.ini'))
 
-        # read model config and build model
-        mod = SfincsModel(root=sfincs_folder, data_libs=None, logger=logger, mode='w')
-        mod.read_config(config_fn=r'sfincs.ini')
-        mod.build(region={'bbox': [11.97,45.78,12.28,45.94]}, opt=configread(r'sfincs.ini'))
-
-        tstart = self.to_sfincs_datetime(discharges.index[0])
-        tend = self.to_sfincs_datetime(discharges.index[-1])
-        mod.set_config("tref", tstart)
-        mod.set_config("tstart", tstart)
-        mod.set_config("tstop", tend)
-        
-        x = [264891.02]
-        y = [5083000.61]
-        pnts = gpd.points_from_xy(x, y)
-        index = [1]  # NOTE that the index should start at one
-        src = gpd.GeoDataFrame(index=index, geometry=pnts, crs=mod.crs)
-        
-        mod.set_forcing_1d(name="discharge", ts=discharges, xy=src)
-        mod.forcing["dis"]
-
-        mod.write()
-
-        mod = SfincsModel(root=sfincs_folder, data_libs=None, logger=logger, mode='r')
-        mod.read()
-
-        cur_dir = os.getcwd()
-        os.chdir(sfincs_folder)
-        subprocess.run([SFINCS_EXE], check=True)
-        os.chdir(cur_dir)
-
-        # mod.plot_basemap(
-        #     geoms=["src", "obs", "rivers"],
-        #     figsize=(14, 14 * 0.65),
-        # )
-        # plt.show()
-        # mod.plot_forcing()
-        # plt.show()
-
-        mod = SfincsModel(sfincs_folder, mode="r")
-        # we can simply read the model results (sfincs_map.nc and sfincs_his.nc) using the read_results method
-        mod.read_results()
-        # the following variables have been found
-        # print(list(mod.results.keys()))
-        mod.write_raster("results.hmax", compress="LZW")
-
-        hmin = .2 # minimum flood depth in meters
-
-        da_hmax = mod.results["hmax"]  # hmax is computed from zsmax - zb
-        da_hmax_masked = da_hmax.where(da_hmax > hmin)
+    def plot_max_flood_depth(self, flood_depth, minimum_flood_depth=.2):
+        da_hmax_masked = flood_depth.where(flood_depth > minimum_flood_depth)
         # update attributes for colorbar label later
         da_hmax_masked.attrs.update(long_name="flood depth", unit="m")
 
         # create hmax plot and save to mod.root/figs/hmax.png
-        fig, ax = mod.plot_basemap(
+        fig, ax = self.mod.plot_basemap(
             fn_out=None,
             variable=None,
             bmap="sat",
@@ -104,8 +60,65 @@ class SFINCS:
         plt.show()
         # plt.savefig(join(mod.root, 'figs', 'hmax.png'), dpi=225, bbox_inches="tight")
 
-    def to_sfincs_datetime(self, datetime):
-        return datetime.strftime('%Y%m%d %H%M%S')
+    def plot_basemap(self):
+        self.mod.plot_basemap(
+            geoms=["src", "obs", "rivers"],
+            figsize=(14, 14 * 0.65),
+        )
+        plt.show()
+
+    def plot_forcing(self):
+        self.mod.plot_forcing()
+        plt.show()
+
+    def run(self, discharges: pd.DataFrame, lons: list, lats: list, plot: tuple=()):
+        timedelta = discharges.index[1] - discharges.index[0]
+        tstart = self.to_sfincs_datetime(discharges.index[0])
+        tend = self.to_sfincs_datetime(discharges.index[-1] + timedelta)
+        
+        self.mod.set_config("tref", tstart)
+        self.mod.set_config("tstart", tstart)
+        self.mod.set_config("tstop", tend)
+        self.mod.write_config()
+
+        pnts = gpd.points_from_xy(lons, lats, crs=4326).to_crs(self.mod.crs)
+        src = gpd.GeoDataFrame(index=range(1, len(pnts) + 1), geometry=pnts)  # NOTE that the index should start at one
+        
+        self.mod.set_forcing_1d(name="discharge", ts=discharges, xy=src)
+        self.mod.write_forcing()
+
+        if 'basemap' in plot:
+            self.plot_basemap()
+        if 'forcing' in plot:
+            self.plot_forcing()
+
+        cur_dir = os.getcwd()
+        os.chdir(self.sfincs_folder)
+        subprocess.run([SFINCS_EXE], check=True)
+        os.chdir(cur_dir)
+
+        # we can simply read the model results (sfincs_map.nc and sfincs_his.nc) using the read_results method
+        self.mod.read_results()
+        # the following variables have been found
+        # print(list(mod.results.keys()))
+        # self.mod.write_raster("results.hmax", compress="LZW")
+
+        max_flood_depth = self.mod.results["hmax"]  # hmax is computed from zsmax - zb
+        if 'max_flood_depth' in plot:
+            self.plot_max_flood_depth(max_flood_depth)
+
+        crs = self.mod.crs
+        gt = self.mod.transform.to_gdal()
+        assert gt[5] < 0
+        if max_flood_depth.coords.variables['y'][0] < max_flood_depth.coords.variables['y'][-1]:
+            max_flood_depth = np.flipud(max_flood_depth.to_numpy())
+        else:
+            max_flood_depth = max_flood_depth.to_numpy()
+        max_flood_depth[max_flood_depth < 0] = np.nan
+        return max_flood_depth, crs, gt
+
+    def to_sfincs_datetime(self, dt: datetime):
+        return dt.strftime('%Y%m%d %H%M%S')
 
 
 if __name__ == '__main__':

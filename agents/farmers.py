@@ -7,16 +7,16 @@ import random
 import calendar
 
 import numpy as np
+from numba import njit
+from pyproj import Transformer
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
 
-from numba import njit
-
 from honeybees.library.mapIO import ArrayReader
 from honeybees.agents import AgentBaseClass
-from honeybees.library.raster import pixels_to_coords
+from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
 from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates, load_lending_rates, load_well_prices
@@ -322,6 +322,9 @@ class Farmers(AgentBaseClass):
 
             self._daily_expenses_per_capita = np.full(self.max_n, -1, dtype=np.float32)
             self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
+
+            self._flooded = np.full(self.max_n, False, dtype=bool)
+            self.flooded[:] = False
 
             self._farmer_class = np.full(self.max_n, -1, dtype=np.int32)
             self.farmer_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
@@ -1338,6 +1341,14 @@ class Farmers(AgentBaseClass):
         self._tehsil[:self.n] = value
 
     @property
+    def flooded(self):
+        return self._flooded[:self.n]
+
+    @flooded.setter
+    def flooded(self, value):
+        self._flooded[:self.n] = value
+
+    @property
     def field_indices_by_farmer(self):
         return self._field_indices_by_farmer[:self.n]
 
@@ -1560,3 +1571,25 @@ class Farmers(AgentBaseClass):
             assert getattr(self, attr[1:]).shape[0] == self.n
             if "nodatacheck" not in self.agent_attributes_meta[attr] or self.agent_attributes_meta[attr]['nodatacheck'] is True:
                 assert not np.array_equal(getattr(self, attr)[self.n-1], self.agent_attributes_meta[attr]['nodata'], equal_nan=True)
+
+    def flood(self, flood_depth, crs, gt):
+        transformer = Transformer.from_crs("epsg:4326", crs)
+        x, y = transformer.transform(self.locations[:, 1], self.locations[:, 0])
+
+        coordinates = np.column_stack((x, y))
+
+        map_extent = (gt[0], gt[0] + gt[1] * flood_depth.shape[1], gt[3] + gt[5] * flood_depth.shape[0], gt[3])
+        agents_in_map_extent = (coordinates[:, 0] >= map_extent[0]) & (coordinates[:, 0] <= map_extent[1]) & (coordinates[:, 1] >= map_extent[2]) & (coordinates[:, 1] <= map_extent[3])
+        
+        coordinates_in_extent = coordinates[agents_in_map_extent]
+
+        flood_depth_per_agent = sample_from_map(flood_depth, coordinates_in_extent, gt)
+
+        has_flooded = flood_depth_per_agent > 0
+
+        self.flooded[agents_in_map_extent] = has_flooded
+
+        # import matplotlib.pyplot as plt
+        # plt.scatter(coordinates_in_extent[has_flooded][:, 0], coordinates_in_extent[has_flooded][:, 1], c='red')
+        # plt.scatter(coordinates_in_extent[~has_flooded][:, 0], coordinates_in_extent[~has_flooded][:, 1], c='blue')
+        # plt.show()
