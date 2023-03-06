@@ -32,7 +32,7 @@ general:
   ###
   #
   export_inital_on_spinup: true
-  simulate_floods: false
+  simulate_floods: true
 
 ###
 # This section can contain settings to change the behavior or the agents.
@@ -104,10 +104,10 @@ calibration:
         format: npy
 
   DEAP:
-    use_multiprocessing: True
-    ngen: 10
-    mu: 60
-    lambda_: 12
+    use_multiprocessing: False
+    ngen: 3
+    mu: 10
+    lambda_: 3
     select_best: 10
 
   parameters:
