@@ -41,9 +41,10 @@ class CWatM_Model(CWATModel):
         # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
         binding['MaskMap'] = os.path.join(INPUT, 'areamaps', 'mask.tif')
         if 'gauges' in self.config['general']:
-            binding['Gauges'] = f"{self.config['general']['gauges']['lon']} {self.config['general']['gauges']['lat']}"
+            gauges = self.config['general']['gauges']
+            binding['Gauges'] = ' '.join([str(item) for sublist in gauges for item in sublist])
         else:
-            binding['Gauges'] = f"{self.config['general']['poor_point']['lon']} {self.config['general']['poor_point']['lat']}"
+            binding['Gauges'] = f"{self.config['general']['poor_point'][0]} {self.config['general']['poor_point'][1]}"
         binding['StepStart'] = start_time.strftime('%d/%m/%Y')
         binding['SpinUp'] = '0'
         binding['StepEnd'] = str(n_steps)
@@ -190,6 +191,5 @@ class CWatM_Model(CWATModel):
     def export_water_table(self) -> None:
         """Function to save required water table output to file."""
         dirname = os.path.dirname(self.init_water_table_file)
-        if not os.path.exists(dirname):
-            os.makedirs(dirname)
+        os.makedirs(dirname, exist_ok=True)
         np.save(self.init_water_table_file, self.groundwater_modflow_module.modflow.decompress(self.groundwater_modflow_module.modflow.head))

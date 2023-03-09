@@ -185,18 +185,17 @@ class GEBModel(ABM_Model, CWatM_Model):
             ]
             # self.initCondVar.extend(['grid.smalllakeInflow', 'grid.smalllakeStorage', 'grid.smalllakeOutflow', 'grid.smalllakeInflowOld', 'grid.smalllakeVolumeM3'])
 
-            if not os.path.exists(self.initial_conditions_folder):
-                os.makedirs(self.initial_conditions_folder)
+            os.makedirs(self.initial_conditions_folder, exist_ok=True)
             
             for initvar in initCondVar:
-                fp = os.path.join(self.initial_conditions_folder, f"{initvar}.npy")
+                fp = os.path.join(self.initial_conditions_folder, f"{initvar}.npz")
                 values = attrgetter(initvar)(self.data)
-                np.save(fp, values)
+                np.savez_compressed(fp, data=values)
 
             for attribute in self.agents.farmers.agent_attributes:
-                fp = os.path.join(self.initial_conditions_folder, f"farmers.{attribute}.npy")
+                fp = os.path.join(self.initial_conditions_folder, f"farmers.{attribute}.npz")
                 values = attrgetter(attribute)(self.agents.farmers)
-                np.save(fp, values)
+                np.savez_compressed(fp, data=values)
 
     @property
     def current_day_of_year(self) -> int:

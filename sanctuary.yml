@@ -251,7 +251,7 @@ report:
       every: month
       day: 1
     save: export
-    format: npy
+    format: npz
   field_size:
     type: farmers
     function: null
@@ -260,8 +260,8 @@ report:
       every: month
       day: 1
     save: export
-    format: npy
-  field_size:
+    format: npz
+  tehsil:
     type: farmers
     function: null
     varname: tehsil
@@ -269,7 +269,7 @@ report:
       every: month
       day: 1
     save: export
-    format: npy
+    format: npz
   # crops_kharif:
   #   type: farmers
   #   varname: crops[:,0]
@@ -301,7 +301,7 @@ report:
     type: farmers
     function: null
     varname: activation_order_by_elevation
-    format: npy
+    format: npz
     frequency: initial
     save: export
   # reservoir irrigation:

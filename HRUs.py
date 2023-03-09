@@ -60,11 +60,11 @@ class BaseVariables:
 
     def load_initial(self, name, default=.0, gpu=False):
         if self.model.load_initial_data:
-            fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npy")
+            fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npz")
             if gpu:
-                return cp.load(fp)
+                return cp.load(fp)['data']
             else:
-                return np.load(fp)
+                return np.load(fp)['data']
         else:
             return default
 
@@ -188,12 +188,12 @@ class HRUs(BaseVariables):
         self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.grid.cell_size / self.scaling
         if self.model.load_initial_data:
-            self.land_use_type = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_type.npy'))
-            self.land_use_ratio = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_ratio.npy'))
-            self.land_owners = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_owners.npy'))
-            self.HRU_to_grid = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.HRU_to_grid.npy'))
-            self.grid_to_HRU = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.grid_to_HRU.npy'))
-            self.unmerged_HRU_indices  = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.unmerged_HRU_indices.npy'))
+            self.land_use_type = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_type.npz'))['data']
+            self.land_use_ratio = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_ratio.npz'))['data']
+            self.land_owners = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_owners.npz'))['data']
+            self.HRU_to_grid = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.HRU_to_grid.npz'))['data']
+            self.grid_to_HRU = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.grid_to_HRU.npz'))['data']
+            self.unmerged_HRU_indices  = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.unmerged_HRU_indices.npz'))['data']
         else:
             (
                 self.land_use_type,

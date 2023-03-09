@@ -3,27 +3,32 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2006-01-01
+  start_time: 2005-12-31
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2006-01-05
+  end_time: 2006-01-10
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_time: 2005-12-25
+  spinup_time: 2005-12-30
   ###
   # base folder where to report output data to
-  upscale_factor: 40
+  upscale_factor: 20
   basin_id: 450000005
+  gauges:
+    - [75.8477777, 17.41305556]
+    - [75.008, 17.911]
+    - [74.219, 18.545]
+    - [74.000, 18.670]
+    - [75.139, 17.972]
   poor_point:
-    lon: 75.895273
-    lat: 17.370473
+    [75.895273, 17.370473]
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/GEB_Bhima/input/
-  data_folder: ../DataDrive/
   original_data: ../DataDrive/GEB/original_data/
-  report_folder: report/bhima/
-  initial_conditions_folder: ../DataDrive/GEB_Bhima/initial
+  data_folder: ../DataDrive/
+  report_folder: ../report/bhima/
+  initial_conditions_folder: ../calibration/bhima/runs\00_000\initial_conditions
   init_water_table: ../DataDrive/GEB_Bhima/report/init/water_table.npy
   ###
   #
@@ -44,17 +49,57 @@ agent_settings:
   farmers:
     return_fraction: .5
     farmers_going_out_of_business: false
+    well_implementation_intention_behaviour_gap: .8
 
 calibration:
-  spinup_time: 2004-01-01
-  start_time: 2006-01-01
-  end_time: 2012-12-31
-  path: ../DataDrive/GEB_Bhima/calibration/
-  gpus: 0
+  # spinup_time: 2004-01-01
+  # start_time: 2006-01-01
+  # end_time: 2012-12-31
+  spinup_time: 2000-01-01
+  start_time: 2005-01-01
+  end_time: 2011-01-03
+  path: ../calibration/bhima/
+  gpus: 2
+  scenario: base
   monthly: true
+  target_variables:
+    report_cwatm:
+      discharge:
+        varname: data.grid.discharge
+        function: sample,25,54
+        format: csv
+        save: save
+    report:
+      irrigation_source:
+        type: farmers
+        function: null
+        varname: irrigation_source
+        frequency:
+          every: month
+          day: 1
+        save: export
+        format: npy
+      field_size:
+        type: farmers
+        function: null
+        varname: field_size_per_farmer
+        frequency:
+          every: month
+          day: 1
+        save: export
+        format: npy
+      tehsil:
+        type: farmers
+        function: null
+        varname: tehsil
+        frequency:
+          every: month
+          day: 1
+        save: export
+        format: npy
 
   DEAP:
-    use_multiprocessing: True
+    use_multiprocessing: False
     ngen: 10
     mu: 60
     lambda_: 12
@@ -101,6 +146,10 @@ calibration:
         variable: agent_settings.farmers.return_fraction
         min: 0.3
         max: 0.8
+    well_implementation_intention_behaviour_gap:
+        variable: agent_settings.farmers.well_implementation_intention_behaviour_gap
+        min: 0.0
+        max: 1.0
 
 ###
 # This sections contains settings for logging of the model. 
@@ -166,7 +215,6 @@ draw:
     12:
       name: Tur (Arhar)
       color: '#9a6324'
-
 ###
 # Here, you can configure which data should be saved from the model in the `report` folder. This should be formatted as follows:
 #
@@ -179,115 +227,101 @@ draw:
 #   - **initial_only**: if true only save the data for the first timestep.
 #   - **save**: save variable in model run, or export, or both (save/save+export/export).
 report:
-  # crop_sample:
-  #   type: farmers
-  #   function: sample
-  #   varname: crop
-  #   save: save
-  #   format: csv
-  irrigated_per_district:
-    type: farmers
-    function: mean
-    varname: irrigated
-    save: save
-    format: csv
-    groupby: tehsil
-  crops_per_district:
-    type: farmers
-    function: groupcount,0,1
-    varname: crops
-    save: save
-    format: csv
-    groupby: tehsil
   irrigation_source:
     type: farmers
     function: null
     varname: irrigation_source
-    frequency: per_timestep
+    frequency:
+      every: month
+      day: 1
     save: export
-    format: npy
-  crops_kharif:
+    format: npz
+  field_size:
     type: farmers
-    varname: crops[:,0]
     function: null
-    frequency: per_timestep
+    varname: field_size_per_farmer
+    frequency:
+      every: month
+      day: 1
     save: export
-    format: npy
-  crops_rabi:
+    format: npz
+  tehsil:
     type: farmers
-    varname: crops[:,1]
     function: null
-    frequency: per_timestep
+    varname: tehsil
+    frequency:
+      every: month
+      day: 1
     save: export
-    format: npy
-  crops_summer:
-    type: farmers
-    varname: crops[:,2]
-    function: null
-    frequency: per_timestep
-    save: export
-    format: npy
+    format: npz
+  # crops_kharif:
+  #   type: farmers
+  #   varname: crops[:,0]
+  #   function: null
+  #   frequency: per_timestep
+  #   save: export
+  #   format: npy
+  # crops_rabi:
+  #   type: farmers
+  #   varname: crops[:,1]
+  #   function: null
+  #   frequency: per_timestep
+  #   save: export
+  #   format: npy
+  # crops_summer:
+  #   type: farmers
+  #   varname: crops[:,2]
+  #   function: null
+  #   frequency: per_timestep
+  #   save: export
+  #   format: npy
   # wealth_sample:
   #   type: farmers
   #   function: sample
   #   varname: wealth
   #   save: save
   #   format: csv
-  # activation order:
+  activation order:
+    type: farmers
+    function: null
+    varname: activation_order_by_elevation
+    format: npz
+    frequency: initial
+    save: export
+  # reservoir irrigation:
   #   type: farmers
   #   function: null
-  #   varname: activation_order_by_elevation
+  #   varname: reservoir_abstraction_m3_by_farmer
+  #   frequency: per_timestep
   #   format: npy
-  #   frequency: initial_only
   #   save: export
-  reservoir irrigation:
-    type: farmers
-    function: null
-    varname: reservoir_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  groundwater irrigation:
-    type: farmers
-    function: null
-    varname: groundwater_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  channel irrigation:
-    type: farmers
-    function: null
-    varname: channel_abstraction_m3_by_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  groundwater depth:
-    type: farmers
-    function: null
-    varname: groundwater_depth
-    frequency: per_timestep
-    format: npy
-    save: export
-  profit:
-    type: farmers
-    function: null
-    varname: profit_per_farmer
-    frequency: per_timestep
-    format: npy
-    save: export
-  # is water aware:
-  #   type: farmers
-  #   function: sum
-  #   varname: is_water_efficient
-  #   frequency: per_timestep
-  #   format: csv
-  #   save: save
-  # crop:
+  # groundwater irrigation:
   #   type: farmers
   #   function: null
-  #   varname: crop
-  #   format: npy
+  #   varname: groundwater_abstraction_m3_by_farmer
   #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # channel irrigation:
+  #   type: farmers
+  #   function: null
+  #   varname: channel_abstraction_m3_by_farmer
+  #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # groundwater depth:
+  #   type: farmers
+  #   function: null
+  #   varname: groundwater_depth
+  #   frequency: per_timestep
+  #   format: npy
+  #   save: export
+  # profit:
+  #   type: farmers
+  #   function: null
+  #   varname: profit_per_farmer
+  #   frequency: per_timestep
+  #   format: npy
   #   save: export
 
 ###
@@ -306,7 +340,7 @@ report_cwatm:
     save: save
   reservoir storage:
     varname: data.grid.reservoirStorageM3C
-    function: null
+    function: sum
     format: csv
     save: save
   discharge:

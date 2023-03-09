@@ -28,6 +28,7 @@ import string
 import numpy as np
 import signal
 import pandas as pd
+from datetime import timedelta
 import yaml
 import geopandas as gpd
 from deap import creator, base, tools, algorithms
@@ -61,21 +62,21 @@ ngen = calibration_config['DEAP']['ngen']
 mu = calibration_config['DEAP']['mu']
 lambda_ = calibration_config['DEAP']['lambda_']
 SCENARIO = calibration_config['scenario']
-dischargetss = os.path.join(SCENARIO, 'discharge.csv')
+dischargetss = os.path.join(SCENARIO, 'var.discharge_daily.tss')
 
 target_variables = calibration_config['target_variables']
 
 # Load observed streamflow
-if 'gauges' in config['general']:
-	gauges = config['general']['gauges']
-else:
-	gauges = config['general']['poor_point']
-
-streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
-streamflow_data = pd.read_csv(streamflow_path, sep=",", parse_dates=True, index_col=0)
-observed_streamflow = streamflow_data["flow"]
-observed_streamflow.name = 'observed'
-assert (observed_streamflow >= 0).all()
+gauges = [tuple(gauge) for gauge in config['general']['gauges']]
+observed_streamflow = {}
+for gauge in gauges:
+	streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauge[0]} {gauge[1]}.csv")
+	streamflow_data = pd.read_csv(streamflow_path, sep=",", parse_dates=True, index_col=0)
+	observed_streamflow[gauge] = streamflow_data["flow"]
+	# drop all rows with NaN values
+	observed_streamflow[gauge] = observed_streamflow[gauge].dropna()
+	observed_streamflow[gauge].name = 'observed'
+	assert (observed_streamflow[gauge] >= 0).all()
 
 with open(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
 	irrigation_source_key = json.load(f)
@@ -170,27 +171,39 @@ def get_KGE_score(run_directory, individual):
 		raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
 	
 	# Read the simulated streamflow data from the file
-	simulated_streamflow = pd.read_csv(Qsim_tss, index_col=0)
+	simulated_streamflow = pd.read_csv(Qsim_tss, index_col=0, skiprows=8, delim_whitespace=True, names=gauges)
 	# parse the dates in the index
-	simulated_streamflow.index = pd.to_datetime(simulated_streamflow.index)
-	simulated_streamflow = simulated_streamflow['discharge']
-	simulated_streamflow.name = 'simulated'
+	simulated_streamflow.index = pd.date_range(calibration_config['start_time'] + timedelta(days=1), calibration_config['end_time'])
 
-	# Combine the simulated and observed streamflow data
-	streamflows = pd.concat([simulated_streamflow, observed_streamflow], join='inner', axis=1)
+	def get_streamflows(simulated_streamflow, observed_streamflow, gauge):
+		simulated_streamflow_gauge = simulated_streamflow[gauge]
+		simulated_streamflow_gauge.name = 'simulated'
+		observed_streamflow_gauge = observed_streamflow[gauge]
+		observed_streamflow_gauge.name = 'observed'
+
+		# Combine the simulated and observed streamflow data
+		streamflows = pd.concat([simulated_streamflow_gauge, observed_streamflow_gauge], join='inner', axis=1)
+		
+		# Add a small value to the simulated streamflow to avoid division by zero
+		streamflows['simulated'] += 0.0001
+		return streamflows
 	
-	# Add a small value to the simulated streamflow to avoid division by zero
-	streamflows['simulated'] += 0.0001
-
+	streamflows = [get_streamflows(simulated_streamflow, observed_streamflow, gauge) for gauge in gauges]
+	streamflows = [streamflow for streamflow in streamflows if not streamflow.empty]
 	if config['calibration']['monthly'] is True:
 		# Calculate the monthly mean of the streamflow data
-		streamflows = streamflows.resample('M').mean()
+		streamflows = [streamflows.resample('M').mean() for streamflows in streamflows]
 
-	KGE = hydroStats.KGE(s=streamflows['simulated'],o=streamflows['observed'])
+	KGEs = [hydroStats.KGE(s=streamflows['simulated'], o=streamflows['observed']) for streamflows in streamflows]
+	assert KGEs  # Check if KGEs is not empty
+	KGE = np.mean(KGEs)
+	
 	print("run_id: " + str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
 	with open(os.path.join(calibration_path,"KGE_log.csv"), "a") as myfile:
 		myfile.write(str(individual.label)+"," + str(KGE)+"\n")
+
 	return KGE
+
 
 @handle_ctrl_c
 def run_model(individual):
@@ -206,7 +219,7 @@ def run_model(individual):
 	# Check if the run directory already exists
 	if os.path.isdir(run_directory):
 		# If the directory exists, check if the model was run before
-		if os.path.exists(os.path.join(run_directory, dischargetss)):
+		if os.path.exists(os.path.join(run_directory, 'done.txt')):
 			# If the model was run before, set runmodel to False
 			runmodel = False
 		else:
@@ -312,6 +325,8 @@ def run_model(individual):
 						current_gpu_use_count.value -= 1
 						lock.release()
 						print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+					with open(os.path.join(run_directory, 'done.txt'), 'w') as f:
+						f.write('done')
 					break
 	scores = []
 	for score in CALIBRATION_VALUES:

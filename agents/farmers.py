@@ -162,7 +162,7 @@ class Farmers(AgentBaseClass):
                 "nodatacheck": False
             },
             "_groundwater_depth": {
-                "nodata": -1,
+                "nodata": np.nan,
             },
             "_household_size": {
                 "nodata": -1,
@@ -237,8 +237,8 @@ class Farmers(AgentBaseClass):
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
         if self.model.load_initial_data:
             for attribute in self.agent_attributes:
-                fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npy")
-                values = np.load(fp)
+                fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npz")
+                values = np.load(fp)['data']
                 setattr(self, attribute, values)
             self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
             self.max_n = self._locations.shape[0]
@@ -302,7 +302,7 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_days[:] = 0
             self._n_water_accessible_years = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_accessible_years[:] = 0
-            self._groundwater_depth = np.zeros(self.max_n, dtype=np.float32)
+            self._groundwater_depth = np.full(self.max_n, np.nan, dtype=np.float32)
 
             self._profit = np.full(self.max_n, np.nan, dtype=np.float32)
             self.profit[:] = 0
@@ -949,7 +949,7 @@ class Farmers(AgentBaseClass):
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def invest_numba(
         n: int,
         year: int,
