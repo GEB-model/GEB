@@ -458,7 +458,7 @@ if __name__ == "__main__":
         # Create a multiprocessing pool with the specified number of processes
         # Initialize the pool with the shared variable and lock, and the number of GPUs available
 		pool = multiprocessing.Pool(processes=pool_size, initializer=init_pool, initargs=(
-			current_gpu_use_count, manager_lock, calibration_config['gpus'], calibration_config['models_per_gpu'])
+			current_gpu_use_count, manager_lock, calibration_config['DEAP']['gpus'], calibration_config['DEAP']['models_per_gpu'])
 		)
         # Register the map function to use the multiprocessing pool
 		toolbox.register("map", pool.map)
