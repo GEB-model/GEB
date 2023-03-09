@@ -26,8 +26,7 @@ class ModflowPreprocess:
         self.output_folder = os.path.join(modflow_path, f'{resolution}m')   # Folder where input maps will be saved
         self.modflow_epsg = modflow_epsg
         self.modflow_resolution = resolution
-        if not os.path.exists(self.output_folder):
-            os.makedirs(self.output_folder)
+        os.makedirs(self.output_folder, exist_ok=True)
 
         with rasterio.open(cwatm_basin_mask_fn, 'r') as src:
             self.cwatm_basin_mask = src.read(1)  # Matrix containing the studied CWATM variable

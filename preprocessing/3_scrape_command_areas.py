@@ -18,8 +18,7 @@ def download(IDs: list[int]) -> None:
     Args:
         IDs: list of command area IDs"""
     download_folder = os.path.join(COMMAND_AREAS_DIR, 'features')
-    if not os.path.exists(download_folder):
-        os.makedirs(download_folder)
+    os.makedirs(download_folder, exist_ok=True)
 
     n = len(IDs)
     for i, ID in enumerate(IDs, start=1):
@@ -57,8 +56,7 @@ def merge_and_export() -> None:
     gdf = gdf.set_crs("""PROJCS["WGS_1984_Lambert_Conformal_Conic",GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Lambert_Conformal_Conic"],PARAMETER["False_Easting",4000000.0],PARAMETER["False_Northing",4000000.0],PARAMETER["Central_Meridian",80.0],PARAMETER["Standard_Parallel_1",12.4729444],PARAMETER["Standard_Parallel_2",35.17280555],PARAMETER["Latitude_Of_Origin",24.0],UNIT["Meter",1.0]]""", allow_override=True)
     gdf = gdf.to_crs("EPSG:4326")
     folder = os.path.join(ORIGINAL_DATA, 'command_areas')
-    if not os.path.exists(folder):
-        os.makedirs(folder)
+    os.makedirs(folder, exist_ok=True)
     gdf.to_file(os.path.join(folder, 'command_areas.shp'))
 
 if __name__ == '__main__':

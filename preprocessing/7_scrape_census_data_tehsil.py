@@ -64,8 +64,7 @@ class CensusScraper:
         else:
             raise ValueError
         self.download_dir = os.path.abspath(os.path.join('tmp', current_process_identifier))
-        if not os.path.exists(self.download_dir):
-            os.makedirs(self.download_dir)
+        os.makedirs(self.download_dir, exist_ok=True)
         prefs = {'download.default_directory': self.download_dir}
         options.add_experimental_option('prefs', prefs)
         options.add_experimental_option('excludeSwitches', ['enable-logging'])

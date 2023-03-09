@@ -21,12 +21,9 @@ else:
     POOR_POINT = None
 from typing import Union
 
-if not os.path.exists(os.path.join(INPUT, 'areamaps')):
-    os.makedirs(os.path.join(INPUT, 'areamaps'))
-if not os.path.exists(os.path.join(INPUT, 'routing', 'kinematic')):
-    os.makedirs(os.path.join(INPUT, 'routing', 'kinematic'))
-if not os.path.exists(os.path.join(INPUT, 'landsurface', 'topo')):
-    os.makedirs(os.path.join(INPUT, 'landsurface', 'topo'))
+os.makedirs(os.path.join(INPUT, 'areamaps'), exist_ok=True)
+os.makedirs(os.path.join(INPUT, 'routing', 'kinematic'), exist_ok=True)
+os.makedirs(os.path.join(INPUT, 'landsurface', 'topo'), exist_ok=True)
 
     
 def create_mask(basin_id: int, upscale_factor: int, poor_point: Union[None, tuple[float, float]]=None) -> tuple[rasterio.profiles.Profile, rasterio.profiles.Profile]:
