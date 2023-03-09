@@ -276,7 +276,7 @@ def run_model(individual):
 			# acquire lock to check and set GPU usage
 			lock.acquire()
 			if current_gpu_use_count.value < n_gpus:
-				use_gpu = current_gpu_use_count.value
+				use_gpu = (current_gpu_use_count.value + 1) % calibration_config['DEAP']['models_per_gpu'] 
 				current_gpu_use_count.value += 1
 				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
 			else:
@@ -328,6 +328,14 @@ def run_model(individual):
 					with open(os.path.join(run_directory, 'done.txt'), 'w') as f:
 						f.write('done')
 					break
+
+			# release the GPU if it was used
+			if use_gpu is not False:
+				lock.acquire()
+				current_gpu_use_count.value -= 1
+				lock.release()
+				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+
 	scores = []
 	for score in CALIBRATION_VALUES:
 		if score == 'KGE':
@@ -353,7 +361,7 @@ def export_front_history(CALIBRATION_VALUES, effmax, effmin, effstd, effavg):
 	)
 	front_history.to_excel(os.path.join(calibration_path, "front_history.xlsx"))
 
-def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
+def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu):
 	# set global variable for each process in the pool:
 	global ctrl_c_entered
 	global default_sigint_handler
@@ -363,7 +371,7 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus):
 	global lock
 	global current_gpu_use_count
 	global n_gpus
-	n_gpus = gpus
+	n_gpus = gpus * models_per_gpu
 	lock = manager_lock
 	current_gpu_use_count = manager_current_gpu_use_count
 
@@ -449,12 +457,16 @@ if __name__ == "__main__":
 		signal.signal(signal.SIGINT, signal.SIG_IGN)
         # Create a multiprocessing pool with the specified number of processes
         # Initialize the pool with the shared variable and lock, and the number of GPUs available
-		pool = multiprocessing.Pool(processes=pool_size, initializer=init_pool, initargs=(current_gpu_use_count, manager_lock, calibration_config['gpus']))
+		pool = multiprocessing.Pool(processes=pool_size, initializer=init_pool, initargs=(
+			current_gpu_use_count, manager_lock, calibration_config['gpus'], calibration_config['models_per_gpu'])
+		)
         # Register the map function to use the multiprocessing pool
 		toolbox.register("map", pool.map)
 	else:
         # Initialize the pool without multiprocessing
-		init_pool(current_gpu_use_count, manager_lock, calibration_config['gpus'])
+		init_pool(
+			current_gpu_use_count,
+			manager_lock, calibration_config['DEAP']['gpus'], calibration_config['DEAP']['models_per_gpu'])
 
     # Set the probabilities of mating and mutation
 	cxpb = 0.7 # The probability of mating two individuals

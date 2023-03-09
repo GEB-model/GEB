@@ -59,7 +59,6 @@ calibration:
   start_time: 2005-01-01
   end_time: 2011-01-03
   path: ../calibration/bhima/
-  gpus: 2
   scenario: base
   monthly: true
   target_variables:
@@ -99,11 +98,13 @@ calibration:
         format: npy
 
   DEAP:
-    use_multiprocessing: False
+    use_multiprocessing: True
     ngen: 10
     mu: 60
     lambda_: 12
     select_best: 10
+    gpus: 1
+    models_per_gpu: 2
 
   parameters:
     soildepth_factor:
