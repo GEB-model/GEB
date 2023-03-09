@@ -275,13 +275,13 @@ def run_model(individual):
 
 			# acquire lock to check and set GPU usage
 			lock.acquire()
-			if current_gpu_use_count.value < n_gpus:
-				use_gpu = (current_gpu_use_count.value + 1) % calibration_config['DEAP']['models_per_gpu'] 
+			if current_gpu_use_count.value < n_gpu_spots:
+				use_gpu = int(current_gpu_use_count.value / calibration_config['DEAP']['models_per_gpu'])
 				current_gpu_use_count.value += 1
-				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 			else:
 				use_gpu = False
-				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 			lock.release()
 
 			def run_model(scenario):
@@ -324,7 +324,7 @@ def run_model(individual):
 						lock.acquire()
 						current_gpu_use_count.value -= 1
 						lock.release()
-						print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+						print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 					with open(os.path.join(run_directory, 'done.txt'), 'w') as f:
 						f.write('done')
 					break
@@ -334,7 +334,7 @@ def run_model(individual):
 				lock.acquire()
 				current_gpu_use_count.value -= 1
 				lock.release()
-				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpus}')
+				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 
 	scores = []
 	for score in CALIBRATION_VALUES:
@@ -370,8 +370,8 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
 
 	global lock
 	global current_gpu_use_count
-	global n_gpus
-	n_gpus = gpus * models_per_gpu
+	global n_gpu_spots
+	n_gpu_spots = gpus * models_per_gpu
 	lock = manager_lock
 	current_gpu_use_count = manager_current_gpu_use_count
 
