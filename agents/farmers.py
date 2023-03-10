@@ -242,8 +242,6 @@ class Farmers(AgentBaseClass):
                 setattr(self, attribute, values)
             self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
             self.max_n = self._locations.shape[0]
-            self.latest_profits.fill(np.nan)
-            self.latest_potential_profits.fill(np.nan)
         else:
             farms = self.model.data.farms
 
@@ -1408,16 +1406,43 @@ class Farmers(AgentBaseClass):
         self.disposable_income[has_loan] -= loan_payment
         self.disposable_income[self.disposable_income < 0] = 0  # for now, we assume that farmers don't have negative disposable income
 
+    # @staticmethod
+    # @njit(cache=True)
+    # def switch_crops(sugarcane_idx, n_water_accessible_years, crops, days_in_year) -> None:
+    #     """Switches crops for each farmer.
+    #     """
+    #     assert (n_water_accessible_years <= days_in_year + 1).all() # make sure never higher than full year
+    #     for farmer_idx in range(n_water_accessible_years.size):
+    #         # each farmer with all-year access to water has a 20% probability of switching to sugarcane
+    #         if n_water_accessible_years[farmer_idx] >= 3 and np.random.random() < .20:
+    #             crops[farmer_idx] = sugarcane_idx
+
     @staticmethod
-    @njit(cache=True)
-    def switch_crops(sugarcane_idx, n_water_accessible_years, crops, days_in_year) -> None:
-        """Switches crops for each farmer.
-        """
-        assert (n_water_accessible_years <= days_in_year + 1).all() # make sure never higher than full year
-        for farmer_idx in range(n_water_accessible_years.size):
-            # each farmer with all-year access to water has a 20% probability of switching to sugarcane
-            if n_water_accessible_years[farmer_idx] >= 3 and np.random.random() < .20:
-                crops[farmer_idx] = sugarcane_idx
+    @njit
+    def switch_crops_numba(n, crops, neighbours, latest_profits) -> None:
+        """Switches crops for each farmer."""
+        print('check how profit works, is it per farmer?')
+        for farmer_idx in range(n):
+            latest_profit = np.mean(latest_profits[farmer_idx])
+            neighbor_farmer = neighbours[farmer_idx]
+            neighbor_profits = np.mean(latest_profits[neighbor_farmer], axis=1)
+            neighbor_with_max_profit = np.argmax(neighbor_profits)
+            if neighbor_profits[neighbor_with_max_profit] > latest_profit:
+                crops[farmer_idx] = crops[neighbor_farmer[neighbor_with_max_profit]]
+
+    def switch_crops(self):
+        neighbors = find_neighbors(
+            self.locations,
+            radius=5_000,
+            n_neighbor=3,
+            bits=19,
+            minx=self.model.bounds[0],
+            maxx=self.model.bounds[1],
+            miny=self.model.bounds[2],
+            maxy=self.model.bounds[3],
+        )
+        self.switch_crops_numba(self.n, self.crops, neighbors, self.latest_profits)
+
 
     def invest_in_sprinkler_irrigation(self):
         """Invests in sprinkler irrigation."""
@@ -1467,8 +1492,9 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
             
-            if self.model.current_timestep >= days_in_year and self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':  # 364 bacause jan 1 is timestep 0
-                self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
+            if self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':
+                # self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
+                self.switch_crops()
             
             self.upkeep_assets()
             self.make_loan_payment()

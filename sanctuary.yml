@@ -1,9 +1,11 @@
+!include bar.yaml
+
 ###
 # This section contains several general model settings.
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2011-01-01
+  start_time: 2010-12-31
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
@@ -11,17 +13,15 @@ general:
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
-  spinup_time: 2010-01-01
+  spinup_time: 2008-01-01
   ###
   # base folder where to report output data to
   upscale_factor: 40
   basin_id: 450000005
-  poor_point:
-    lon: 73.98727
-    lat: 19.00464
   gauges:
-    lon: 73.98727
-    lat: 19.00464
+    - [73.98727, 19.00464]
+  poor_point:
+    [73.98727, 19.00464]
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/GEB_Sanctuary/input/
   data_folder: ../DataDrive/
