@@ -204,34 +204,34 @@ report:
     varname: irrigation_source
     frequency: per_timestep
     save: export
-    format: npy
+    format: npz
   crops_kharif:
     type: farmers
     varname: crops[:,0]
     function: null
     frequency: per_timestep
     save: export
-    format: npy
+    format: npz
   crops_rabi:
     type: farmers
     varname: crops[:,1]
     function: null
     frequency: per_timestep
     save: export
-    format: npy
+    format: npz
   crops_summer:
     type: farmers
     varname: crops[:,2]
     function: null
     frequency: per_timestep
     save: export
-    format: npy
+    format: npz
   groundwater depth:
     type: farmers
     function: null
     varname: groundwater_depth
     frequency: per_timestep
-    format: npy
+    format: npz
     save: export
   # wealth_sample:
   #   type: farmers
@@ -243,7 +243,7 @@ report:
   #   type: farmers
   #   function: null
   #   varname: activation_order_by_elevation
-  #   format: npy
+  #   format: npz
   #   frequency: initial_only
   #   save: export
   reservoir irrigation:
@@ -251,28 +251,28 @@ report:
     function: null
     varname: reservoir_abstraction_m3_by_farmer
     frequency: per_timestep
-    format: npy
+    format: npz
     save: export
   groundwater irrigation:
     type: farmers
     function: null
     varname: groundwater_abstraction_m3_by_farmer
     frequency: per_timestep
-    format: npy
+    format: npz
     save: export
   channel irrigation:
     type: farmers
     function: null
     varname: channel_abstraction_m3_by_farmer
     frequency: per_timestep
-    format: npy
+    format: npz
     save: export
   profit:
     type: farmers
     function: null
     varname: profit_per_farmer
     frequency: per_timestep
-    format: npy
+    format: npz
     save: export
   # is water aware:
   #   type: farmers
@@ -285,7 +285,7 @@ report:
   #   type: farmers
   #   function: null
   #   varname: crop
-  #   format: npy
+  #   format: npz
   #   frequency: per_timestep
   #   save: export
 

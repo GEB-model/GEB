@@ -74,10 +74,10 @@ class GEBModel(ABM_Model, CWatM_Model):
             self.sfincs = SFINCS(self, self.config, bbox=bbox)
         self.reporter = Reporter(self)
 
-        np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'land_owners.npy'), self.data.HRU.land_owners)
-        np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'unmerged_HRU_indices.npy'), self.data.HRU.unmerged_HRU_indices)
-        np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'scaling.npy'), self.data.HRU.scaling)
-        np.save(os.path.join(self.reporter.abm_reporter.export_folder, 'activation_order.npy'), self.agents.farmers.activation_order_by_elevation)
+        np.savez_compressed(os.path.join(self.reporter.abm_reporter.export_folder, 'land_owners.npz'), data=self.data.HRU.land_owners)
+        np.savez_compressed(os.path.join(self.reporter.abm_reporter.export_folder, 'unmerged_HRU_indices.npz'), data=self.data.HRU.unmerged_HRU_indices)
+        np.savez_compressed(os.path.join(self.reporter.abm_reporter.export_folder, 'scaling.npz'), data=self.data.HRU.scaling)
+        np.savez_compressed(os.path.join(self.reporter.abm_reporter.export_folder, 'activation_order.npz'), data=self.agents.farmers.activation_order_by_elevation)
 
         self.running = True
 

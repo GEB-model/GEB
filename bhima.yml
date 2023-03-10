@@ -62,12 +62,6 @@ calibration:
   scenario: base
   monthly: true
   target_variables:
-    report_cwatm:
-      discharge:
-        varname: data.grid.discharge
-        function: sample,25,54
-        format: csv
-        save: save
     report:
       irrigation_source:
         type: farmers
@@ -77,7 +71,7 @@ calibration:
           every: month
           day: 1
         save: export
-        format: npy
+        format: npz
       field_size:
         type: farmers
         function: null
@@ -86,7 +80,7 @@ calibration:
           every: month
           day: 1
         save: export
-        format: npy
+        format: npz
       tehsil:
         type: farmers
         function: null
@@ -95,7 +89,7 @@ calibration:
           every: month
           day: 1
         save: export
-        format: npy
+        format: npz
 
   DEAP:
     use_multiprocessing: True
@@ -261,21 +255,21 @@ report:
   #   function: null
   #   frequency: per_timestep
   #   save: export
-  #   format: npy
+  #   format: npz
   # crops_rabi:
   #   type: farmers
   #   varname: crops[:,1]
   #   function: null
   #   frequency: per_timestep
   #   save: export
-  #   format: npy
+  #   format: npz
   # crops_summer:
   #   type: farmers
   #   varname: crops[:,2]
   #   function: null
   #   frequency: per_timestep
   #   save: export
-  #   format: npy
+  #   format: npz
   # wealth_sample:
   #   type: farmers
   #   function: sample
@@ -294,35 +288,35 @@ report:
   #   function: null
   #   varname: reservoir_abstraction_m3_by_farmer
   #   frequency: per_timestep
-  #   format: npy
+  #   format: npz
   #   save: export
   # groundwater irrigation:
   #   type: farmers
   #   function: null
   #   varname: groundwater_abstraction_m3_by_farmer
   #   frequency: per_timestep
-  #   format: npy
+  #   format: npz
   #   save: export
   # channel irrigation:
   #   type: farmers
   #   function: null
   #   varname: channel_abstraction_m3_by_farmer
   #   frequency: per_timestep
-  #   format: npy
+  #   format: npz
   #   save: export
   # groundwater depth:
   #   type: farmers
   #   function: null
   #   varname: groundwater_depth
   #   frequency: per_timestep
-  #   format: npy
+  #   format: npz
   #   save: export
   # profit:
   #   type: farmers
   #   function: null
   #   varname: profit_per_farmer
   #   frequency: per_timestep
-  #   format: npy
+  #   format: npz
   #   save: export
 
 ###
