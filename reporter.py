@@ -35,8 +35,9 @@ class CWatMReporter(ABMReporter):
         self.variables = {}
         self.timesteps = []
 
-        for name in self.model.config['report_cwatm']:
-            self.variables[name] = []
+        if 'report_cwatm' in self.model.config:
+            for name in self.model.config['report_cwatm']:
+                self.variables[name] = []
         self.step()  # report on inital state
 
     def decompress(self, attr: str, array: np.ndarray) -> np.ndarray:
@@ -85,45 +86,46 @@ class CWatMReporter(ABMReporter):
     def step(self) -> None:
         """This method is called after every timestep, to collect data for reporting from the model."""
         self.timesteps.append(self.model.current_time)
-        for name, conf in self.model.config['report_cwatm'].items():
-            array = self.get_array(conf['varname'])
-            if array is None:
-                print(f"variable {name} not found at timestep {self.model.current_time}")
-                self.report_value(name, None, conf)
-            else:
-                if conf['varname'].endswith("crop"):
-                    crop_map = self.get_array('HRU.crop_map')
-                    array = array[crop_map == conf['crop']]
-                if array.size == 0:
-                    value = None
+        if 'report_cwatm' in self.model.config:
+            for name, conf in self.model.config['report_cwatm'].items():
+                array = self.get_array(conf['varname'])
+                if array is None:
+                    print(f"variable {name} not found at timestep {self.model.current_time}")
+                    self.report_value(name, None, conf)
                 else:
-                    if conf['function'] == None:
-                        value = array
+                    if conf['varname'].endswith("crop"):
+                        crop_map = self.get_array('HRU.crop_map')
+                        array = array[crop_map == conf['crop']]
+                    if array.size == 0:
+                        value = None
                     else:
-                        function, *args = conf['function'].split(',')
-                        if function == 'mean':
-                            value = np.mean(array)
-                            if np.isnan(value):
-                                value = None
-                        elif function == 'nanmean':
-                            value = np.nanmean(array)
-                            if np.isnan(value):
-                                value = None
-                        elif function == 'sum':
-                            value = np.sum(array)
-                            if np.isnan(value):
-                                value = None
-                        elif function == 'nansum':
-                            value = np.nansum(array)
-                            if np.isnan(value):
-                                value = None
-                        elif function == 'sample':
-                            decompressed_array = self.decompress(conf['varname'], array)
-                            value = decompressed_array[int(args[0]), int(args[1])]
-                            assert not np.isnan(value)
+                        if conf['function'] == None:
+                            value = array
                         else:
-                            raise ValueError()
-                self.report_value(name, value, conf)
+                            function, *args = conf['function'].split(',')
+                            if function == 'mean':
+                                value = np.mean(array)
+                                if np.isnan(value):
+                                    value = None
+                            elif function == 'nanmean':
+                                value = np.nanmean(array)
+                                if np.isnan(value):
+                                    value = None
+                            elif function == 'sum':
+                                value = np.sum(array)
+                                if np.isnan(value):
+                                    value = None
+                            elif function == 'nansum':
+                                value = np.nansum(array)
+                                if np.isnan(value):
+                                    value = None
+                            elif function == 'sample':
+                                decompressed_array = self.decompress(conf['varname'], array)
+                                value = decompressed_array[int(args[0]), int(args[1])]
+                                assert not np.isnan(value)
+                            else:
+                                raise ValueError()
+                    self.report_value(name, value, conf)
 
     def report(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
