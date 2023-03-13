@@ -11,7 +11,7 @@ general:
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
-  spinup_time: 2008-01-01
+  spinup_time: 2007-12-31
   ###
   # base folder where to report output data to
   upscale_factor: 40

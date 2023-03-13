@@ -89,9 +89,13 @@ class Farmers(AgentBaseClass):
         "_groundwater_abstraction_m3_by_farmer",
         "_reservoir_abstraction_m3_by_farmer",
         "_latest_profits",
+        "_profits_last_year",
         "_latest_potential_profits",
         "_groundwater_depth",
-        "_profit"
+        "_profit",
+        "_farmer_is_in_command_area",
+        "_farmer_class",
+        "_flooded"
     ]
     __slots__.extend(agent_attributes)
 
@@ -149,87 +153,139 @@ class Farmers(AgentBaseClass):
 
         self.agent_attributes_meta = {
             "_locations": {
+                "dtype": np.float32,
                 "nodata": [np.nan, np.nan]
             },
             "_tehsil": {
+                "dtype": np.int32,
                 "nodata": -1
             },
             "_elevation": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_crops": {
+                "dtype": np.int32,
                 "nodata": [-1, -1, -1],
                 "nodatacheck": False
             },
             "_groundwater_depth": {
+                "dtype": np.float32,
                 "nodata": np.nan,
             },
             "_household_size": {
+                "dtype": np.int32,
                 "nodata": -1,
             },
             "_disposable_income": {
-                "nodata": -1
+                "dtype": np.float32,
+                "nodata": np.nan
             },
             "_loan_amount": {
-                "nodata": -1,
+                "dtype": np.float32,
+                "nodata": np.nan,
                 "nodatacheck": False
             },
             "_profit": {
+                "dtype": np.float32,
                 "nodata": np.nan,
                 "nodatacheck": False
             },
             "_loan_interest": {
-                "nodata": -1,
+                "dtype": np.float32,
+                "nodata": np.nan,
                 "nodatacheck": False
             },
             "_loan_end_year": {
+                "dtype": np.int32,
                 "nodata": -1,
                 "nodatacheck": False
             },
             "_loan_duration": {
+                "dtype": np.int32,
                 "nodata": -1,
                 "nodatacheck": False
             },
             "_daily_non_farm_income": {
-                "nodata": -1
+                "dtype": np.float32,
+                "nodata": np.nan
             },
             "_daily_expenses_per_capita": {
-                "nodata": -1
+                "dtype": np.float32,
+                "nodata": np.nan
             },
             "_irrigation_efficiency": {
-                "nodata": -1
+                "dtype": np.float32,
+                "nodata": np.nan
             },
             "_n_water_accessible_days": {
+                "dtype": np.int32,
                 "nodata": -1
             },
             "_n_water_accessible_years": {
+                "dtype": np.int32,
                 "nodata": -1
             },
             "_irrigation_source": {
+                "dtype": np.int32,
                 "nodata": -1,
             },
             "_water_availability_by_farmer": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_channel_abstraction_m3_by_farmer": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_groundwater_abstraction_m3_by_farmer": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_reservoir_abstraction_m3_by_farmer": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_latest_profits": {
+                "dtype": np.float32,
                 "nodata": [np.nan, np.nan, np.nan],
-                # "nodatacheck": False
+            },
+            "_profits_last_year": {
+                "dtype": np.float32,
+                "nodata": np.nan,
             },
             "_latest_potential_profits": {
+                "dtype": np.float32,
                 "nodata": [np.nan, np.nan, np.nan],
-                # "nodatacheck": False
+            },
+            "_farmer_class": {
+                "dtype": np.int32,
+                "nodata": -1,
+            },
+            "_farmer_is_in_command_area": {
+                "dtype": np.bool,
+                "nodata": False,
+                "nodatacheck": False
+            },
+            "_flooded": {
+                "dtype": np.bool,
+                "nodata": False,
+                "nodatacheck": False
             },
         }
         self.initiate_agents()
+
+    @staticmethod
+    def is_in_command_area(n, command_areas, field_indices, field_indices_by_farmer):
+        farmer_is_in_command_area = np.zeros(n, dtype=np.bool)
+        for farmer_i in range(n):
+            farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_i)
+            for field in farmer_fields:
+                command_area = command_areas[field]
+                if command_area != -1:
+                    farmer_is_in_command_area[farmer_i] = True
+                    break
+        return farmer_is_in_command_area
 
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
@@ -259,73 +315,53 @@ class Farmers(AgentBaseClass):
             pixels = np.zeros((self.n, 2), dtype=np.int32)
             pixels[:,0] = np.round(np.bincount(farms[farms != -1], horizontal_index) / np.bincount(farms[farms != -1])).astype(int)
             pixels[:,1] = np.round(np.bincount(farms[farms != -1], vertical_index) / np.bincount(farms[farms != -1])).astype(int)
-            self._locations = np.full((self.max_n, 2), np.nan, dtype=np.float32)
+
+            for attribute in self.agent_attributes:
+                if isinstance(self.agent_attributes_meta[attribute]["nodata"], list):
+                    shape = (self.max_n, len(self.agent_attributes_meta[attribute]["nodata"]))
+                else:
+                    shape = self.max_n
+                setattr(self, attribute, np.full(shape, self.agent_attributes_meta[attribute]["nodata"], dtype=self.agent_attributes_meta[attribute]["dtype"]))
+
             self.locations = pixels_to_coords(pixels + .5, self.var.gt)
 
             # Load the tehsil code of each farmer.
-            self._tehsil = np.full(self.max_n, -1, dtype=np.int32)
             self.tehsil = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'tehsil_code.npy'))
 
             # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
-            self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
             self.elevation = self.elevation_map.sample_coords(self.locations)
       
             # Load the crops planted for each farmer in the Kharif, Rabi and Summer seasons.
-            self._crops = np.full((self.max_n, 3), -1, dtype=np.int32)  # kharif, rabi, summer
             self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif crop.npy'))
             self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi crop.npy'))
             self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer crop.npy'))
             assert self.crops.max() < len(self.crop_names)
 
-            self._irrigation_source = np.full(self.max_n, -1, dtype=np.int8)
             self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation_source.npy'))
 
             # Set irrigation efficiency to 70% for all farmers.
-            self._irrigation_efficiency = np.full(self.max_n, -1, dtype=np.float32)
             self.irrigation_efficiency[:] = .70
 
             # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
-            self._latest_profits = np.full((self.max_n, 3), np.nan, dtype=np.float32)
-            self._latest_potential_profits = np.full((self.max_n, 3), np.nan, dtype=np.float32)
 
-            self._channel_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.channel_abstraction_m3_by_farmer[:] = 0
-            self._reservoir_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.reservoir_abstraction_m3_by_farmer[:] = 0
-            self._groundwater_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.groundwater_abstraction_m3_by_farmer[:] = 0
-            self._water_availability_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.water_availability_by_farmer[:] = 0
-            self._n_water_accessible_days = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_accessible_days[:] = 0
-            self._n_water_accessible_years = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_accessible_years[:] = 0
-            self._groundwater_depth = np.full(self.max_n, np.nan, dtype=np.float32)
 
-            self._profit = np.full(self.max_n, np.nan, dtype=np.float32)
             self.profit[:] = 0
-            self._disposable_income = np.full(self.max_n, -1, dtype=np.float32)
+            self.profits_last_year[:] = 0
             self.disposable_income[:] = 0
-
-            self._loan_amount = np.full(self.max_n, 0, dtype=np.float32)
-            self._loan_interest = np.full(self.max_n, 0, dtype=np.float32)
-            self._loan_duration = np.full(self.max_n, -1, dtype=np.int32)
-            self._loan_end_year = np.full(self.max_n, -1, dtype=np.int32)
-
-            self._household_size = np.full(self.max_n, -1, dtype=np.int32)
             self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'household size.npy'))
-
-            self._daily_non_farm_income = np.full(self.max_n, -1, dtype=np.float32)
             self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily non farm income family.npy'))
-
-            self._daily_expenses_per_capita = np.full(self.max_n, -1, dtype=np.float32)
             self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
-
-            self._flooded = np.full(self.max_n, False, dtype=bool)
             self.flooded[:] = False
 
-            self._farmer_class = np.full(self.max_n, -1, dtype=np.int32)
             self.farmer_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
+
+            self.farmer_is_in_command_area[:] = False
     
         self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
         self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
@@ -338,6 +374,7 @@ class Farmers(AgentBaseClass):
 
         print(f'Loaded {self.n} farmer agents')
 
+        # check whether non of the attributes have nodata values
         for attr in self.agent_attributes:
             assert getattr(self, attr[1:]).shape[0] == self.n
             if "nodatacheck" not in self.agent_attributes_meta[attr] or self.agent_attributes_meta[attr]['nodatacheck'] is True:
@@ -469,6 +506,8 @@ class Farmers(AgentBaseClass):
             addtoevapotrans_m: Evaporated irrigation water in meters.
         """
         assert n == activation_order.size
+
+        print("use farmer_is_in_command_area")
   
         land_unit_array_size = cell_area.size
         water_withdrawal_m = np.zeros(land_unit_array_size, dtype=np.float32)
@@ -710,6 +749,8 @@ class Farmers(AgentBaseClass):
         """
         assert (profit >= 0).all()
         assert (potential_profit >= 0).all()
+
+        self.profits_last_year[harvesting_farmers] = profit[harvesting_farmers]
 
         self.latest_profits[harvesting_farmers, 1:] = self.latest_profits[harvesting_farmers, 0:-1]
         self.latest_profits[harvesting_farmers, 0] = profit[harvesting_farmers]
@@ -1323,6 +1364,22 @@ class Farmers(AgentBaseClass):
         self._profit[:self.n] = value
 
     @property
+    def profits_last_year(self):
+        return self._profits_last_year[:self.n]
+
+    @profits_last_year.setter
+    def profits_last_year(self, value):
+        self._profits_last_year[:self.n] = value
+
+    @property
+    def farmer_is_in_command_area(self):
+        return self._farmer_is_in_command_area[:self.n]
+
+    @farmer_is_in_command_area.setter
+    def farmer_is_in_command_area(self, value):
+        self._farmer_is_in_command_area[:self.n] = value
+
+    @property
     def farmer_class(self):
         return self._farmer_class[:self.n]
 
@@ -1419,30 +1476,38 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit
-    def switch_crops_numba(n, crops, neighbours, latest_profits) -> None:
+    def switch_crops_numba(ids, crops, neighbours, profits_last_year) -> None:
         """Switches crops for each farmer."""
-        print('check how profit works, is it per farmer?')
-        for farmer_idx in range(n):
-            latest_profit = np.mean(latest_profits[farmer_idx])
-            neighbor_farmer = neighbours[farmer_idx]
-            neighbor_profits = np.mean(latest_profits[neighbor_farmer], axis=1)
+        nodata_value_neighbors = np.iinfo(neighbours.dtype).max
+        for i, farmer_idx in enumerate(ids):
+            profit_last_year = profits_last_year[farmer_idx]
+            neighbor_farmers = neighbours[i]
+            neighbor_farmers = neighbor_farmers[neighbor_farmers != nodata_value_neighbors]  # delete farmers without neighbors
+            if neighbor_farmers.size == 0:  # no neighbors
+                continue
+
+            neighbor_profits = profits_last_year[neighbor_farmers]
             neighbor_with_max_profit = np.argmax(neighbor_profits)
-            if neighbor_profits[neighbor_with_max_profit] > latest_profit:
-                crops[farmer_idx] = crops[neighbor_farmer[neighbor_with_max_profit]]
+            if neighbor_profits[neighbor_with_max_profit] > profit_last_year:
+                crops[farmer_idx] = crops[neighbor_farmers[neighbor_with_max_profit]]
 
     def switch_crops(self):
-        neighbors = find_neighbors(
-            self.locations,
-            radius=5_000,
-            n_neighbor=3,
-            bits=19,
-            minx=self.model.bounds[0],
-            maxx=self.model.bounds[1],
-            miny=self.model.bounds[2],
-            maxy=self.model.bounds[3],
-        )
-        self.switch_crops_numba(self.n, self.crops, neighbors, self.latest_profits)
-
+        """Switches crops for each farmer."""
+        for farmer_class in np.unique(self.farmer_class):
+            ids = np.where(self.farmer_class == farmer_class)[0]
+            neighbors = find_neighbors(
+                self.locations,
+                radius=1_000,
+                n_neighbor=3,
+                bits=19,
+                minx=self.model.bounds[0],
+                maxx=self.model.bounds[1],
+                miny=self.model.bounds[2],
+                maxy=self.model.bounds[3],
+                search_ids=ids,
+                search_target_ids=ids
+            )
+            self.switch_crops_numba(ids, self.crops, neighbors, self.profits_last_year)
 
     def invest_in_sprinkler_irrigation(self):
         """Invests in sprinkler irrigation."""
@@ -1485,6 +1550,11 @@ class Farmers(AgentBaseClass):
         self.plant()
         self.expenses_and_income()
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+
+            self.farmer_is_in_command_area = self.is_in_command_area(self.n, self.var.reservoir_command_areas, self.field_indices, self.field_indices_by_farmer)
+            # for now class is only dependent on being in a command area or not
+            self.farmer_class = self.farmer_is_in_command_area.copy()
+
             # check if current year is a leap year
             days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
             has_access_to_water_all_year = self.n_water_accessible_days >= 365
@@ -1503,9 +1573,9 @@ class Farmers(AgentBaseClass):
             if self.model.args.scenario == 'sprinkler':
                 self.invest_in_sprinkler_irrigation()            
 
-            # reset disposable income
+            # reset disposable income and profits
             self.disposable_income[:] = 0
-
+            self.profits_last_year[:] = 0
 
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
