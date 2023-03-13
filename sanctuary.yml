@@ -1,5 +1,3 @@
-!include bar.yaml
-
 ###
 # This section contains several general model settings.
 general:

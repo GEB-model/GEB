@@ -255,8 +255,8 @@ def run_model(individual):
 			template['general']['start_time'] = calibration_config['start_time']
 			template['general']['end_time'] = calibration_config['end_time']
 
-			del template['report']
-			del template['report_cwatm']
+			template['report'] = {}
+			template['report_cwatm'] = {}
 			
 			template.update(target_variables)
 
