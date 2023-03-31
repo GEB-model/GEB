@@ -29,6 +29,11 @@ field_size = np.bincount(farms[is_field], weights=cell_area[is_field])
 def sum_most(x):
     return np.sum(x) / FARMER_MULTIPLIER
 
+# make a function which tallies all farms that have wells (irrigation source 2 and 3)
+def sum_irrigation_wells(x):
+    return np
+
+
 def get_farmer_states():
     tehsil = np.load(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'tehsil_code.npy'))
 
@@ -51,7 +56,6 @@ def get_farmer_states():
     return subdistrict2state_arr[tehsil], state_index
 
 def read_npy(scenario, name, dt):
-    dt -= timedelta(days=1)
     fn = os.path.join(config['general']['report_folder'], scenario, name, dt.isoformat().replace(':', '').replace('-', '') + '.npy')
     return np.load(fn)
 
@@ -182,7 +186,7 @@ if __name__ == '__main__':
         to_plot = pd.DataFrame(discharge_per_year, columns=['discharge'])
 
         for year in discharge_per_year.index:
-            small_vs_large = get_values_small_vs_large(scenario, year, sum_most, 'well_irrigated', correct_for_field_size=False, mode='first_day_of_year')
+            small_vs_large = get_values_small_vs_large(scenario, year, sum_most, 'irrigation_source', correct_for_field_size=False, mode='first_day_of_year')
             to_plot.loc[year, 'well_irrigated_small'] = small_vs_large['small']
             to_plot.loc[year, 'well_irrigated_large'] = small_vs_large['large']
 

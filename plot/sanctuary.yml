@@ -39,7 +39,7 @@ agent_settings:
   # If this setting is set to true, the farmers in the model are activated in a set order, allowing for better reproducability of the model.
   fix_activation_order: true
   reservoir_operators:
-    max_reservoir_release_factor: 0.30
+    max_reservoir_release_factor: 0.03
     MinOutflowQ: 0.0
     NormalOutflowQ: .1
     NonDamagingOutflowQ: 4.0
@@ -352,11 +352,11 @@ report_cwatm:
     function: mean
     format: csv
     save: save
-  # precipitation:
-  #   varname: data.HRU.Precipitation
-  #   function: mean
-  #   format: csv
-  #   save: save  
+  precipitation:
+    varname: data.grid.Precipitation
+    function: mean
+    format: csv
+    save: save  
   reservoir storage:
     varname: data.grid.reservoirStorageM3C
     function: null
