@@ -14,7 +14,7 @@ plt.rcParams["font.family"] = "monospace"
 from plotconfig import config
 TIMEDELTA = timedelta(days=1)
 
-FARMER_MULTIPLIER = 1_000_000
+FARMER_MULTIPLIER = 15657
 MONEY_MULTIPLIER = 1_000_000_000
 WATER_MULTIPLIER = 1_000_000
 
@@ -23,16 +23,19 @@ with rasterio.open(os.path.join(config['general']['input_folder'], 'areamaps', '
 with rasterio.open(os.path.join(config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as src:
     farms = src.read(1)
 
+
+## Field sizes are loaded in, however, the field size reports are not used 
 is_field = np.where(farms != -1)
 field_size = np.bincount(farms[is_field], weights=cell_area[is_field])
 
-def sum_most(x):
+# field_size_test = np.load(os.path.join(config['general']['report_folder'], 'irrigation_source', '20110101.npz'))
+
+def sum_all(x):
     return np.sum(x) / FARMER_MULTIPLIER
 
-# make a function which tallies all farms that have wells (irrigation source 2 and 3)
-def sum_irrigation_wells(x):
-    return np
-
+def sum_irrigation(x):
+    filtered_values = [val for val in x if val == 2 or val == 3]
+    return np.sum(filtered_values) / FARMER_MULTIPLIER
 
 def get_farmer_states():
     tehsil = np.load(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'tehsil_code.npy'))
@@ -55,9 +58,10 @@ def get_farmer_states():
 
     return subdistrict2state_arr[tehsil], state_index
 
-def read_npy(scenario, name, dt):
-    fn = os.path.join(config['general']['report_folder'], scenario, name, dt.isoformat().replace(':', '').replace('-', '') + '.npy')
-    return np.load(fn)
+def read_npz(scenario, name, dt):
+    fn = os.path.join(config['general']['report_folder'], scenario, name, dt.isoformat().replace(':', '').replace('-', '') + '.npz')
+    array = np.load(fn)['data']
+    return array[~np.isnan(array)]
 
 def read_arrays(scenario, year, name, mode='full_year'):
     if mode == 'full_year':
@@ -67,7 +71,7 @@ def read_arrays(scenario, year, name, mode='full_year'):
         n = 0
         while day < date(year + 1, 1, 1):
             # read the data
-            array = read_npy(scenario, name, day)
+            array = read_npz(scenario, name, day)
             if total is None:
                 total = array
             else:
@@ -78,10 +82,11 @@ def read_arrays(scenario, year, name, mode='full_year'):
         total /= n
     elif mode == 'first_day_of_year':
         day = date(year, 1, 1)
-        total = read_npy(scenario, name, day)
+        total = read_npz(scenario, name, day)
     else:
         raise ValueError(f'Unknown mode {mode}')
     return total
+
 
 def get_discharge(scenario):
     values = []
@@ -184,9 +189,11 @@ if __name__ == '__main__':
         # remove first year from index
         discharge_per_year = discharge_per_year[1:]
         to_plot = pd.DataFrame(discharge_per_year, columns=['discharge'])
+        
 
+        ## change the irrigation_source so that it only counts the well_irrigated farms 
         for year in discharge_per_year.index:
-            small_vs_large = get_values_small_vs_large(scenario, year, sum_most, 'irrigation_source', correct_for_field_size=False, mode='first_day_of_year')
+            small_vs_large = get_values_small_vs_large(scenario, year, sum_irrigation, 'irrigation_source', correct_for_field_size=False, mode='first_day_of_year')
             to_plot.loc[year, 'well_irrigated_small'] = small_vs_large['small']
             to_plot.loc[year, 'well_irrigated_large'] = small_vs_large['large']
 
@@ -206,10 +213,11 @@ if __name__ == '__main__':
                 to_plot.loc[year, f'n_farmers_sugarcane_{state_name}'] = farmers_sugarcane[farmer_states == state_idx].sum()
         
         for year in discharge_per_year.index:
-            has_well = read_arrays(scenario, year, 'well_irrigated', mode='first_day_of_year')
+            has_well = sum_irrigation(read_arrays(scenario, year, 'irrigation_source', mode='first_day_of_year'))
+
             for state_idx, state_name in enumerate(state_index):
-                # set n_farmers_sugarcane in to_plot
-                to_plot.loc[year, f'n_farmers_irrigation_{state_name}'] = has_well[farmer_states == state_idx].sum()
+                # set
+                to_plot.loc[year, f'n_farmers_irrigation_{state_name}'] = has_well
 
         for year in discharge_per_year.index:
             # get days in year
@@ -220,7 +228,7 @@ if __name__ == '__main__':
                 to_plot.loc[year, f'profit_{state_name}'] = profit[farmer_states == state_idx].sum()
 
         for year in discharge_per_year.index:
-            small_vs_large = get_values_small_vs_large(scenario, year, sum_most, 'profit', correct_for_field_size=False, mode='full_year')
+            small_vs_large = get_values_small_vs_large(scenario, year, sum_all, 'profit', correct_for_field_size=False, mode='full_year')
             to_plot.loc[year, 'profit_small'] = small_vs_large['small']
             to_plot.loc[year, 'profit_large'] = small_vs_large['large']
 
@@ -265,7 +273,7 @@ if __name__ == '__main__':
         # well-irrigated farmers
         for j, state in enumerate(state_index):
             color = colors[j]
-            ax2.plot(to_plot.index, to_plot[f'n_farmers_irrigation_{state}'] / FARMER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+            ax2.plot(to_plot.index, to_plot[f'n_farmers_irrigation_{state}'], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
         ax2.set_title(f'C - Well irrigating farmers (×{FARMER_MULTIPLIER})', fontsize=title_fontsize)
         ax2.set_ylim(0, 3)
 
@@ -294,7 +302,7 @@ if __name__ == '__main__':
         # profit per state
         for j, state in enumerate(state_index):
             color = colors[j]
-            ax7.plot(to_plot.index, to_plot[f'profit_{state}'] / cum_inflation, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+            ax7.plot(to_plot.index, to_plot[f'profit_{state}'] / cum_inflation[0:4,], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
         ax7.set_title('H - Profit farmers (billion 2007 rupees)', fontsize=title_fontsize)
         
         # small vs large farmers
@@ -307,10 +315,10 @@ if __name__ == '__main__':
         # profit small vs large
         for j, size in enumerate(['small', 'large']):
             color = colors[j + len(state_index)]
-            ax9.plot(to_plot.index, to_plot[f'profit_{size}'] / cum_inflation, label=f'{scenario} {size}', color=color, linestyle=linestyle)
+            ax9.plot(to_plot.index, to_plot[f'profit_{size}'] / cum_inflation[0:4,], label=f'{scenario} {size}', color=color, linestyle=linestyle)
         ax9.set_title('J - Profit farmers (billion 2007 rupees)', fontsize=title_fontsize)
 
-    to_plot.to_csv('plot/output/total_discharge_per_year.csv')
+    to_plot.to_csv('plot/sanctuary/total_discharge_per_year.csv')
 
     # invert y axis
     ax5.invert_yaxis()
@@ -318,5 +326,5 @@ if __name__ == '__main__':
         for ax in horizontal_axes:
             ax.legend()
     
-    plt.savefig('plot/output/total_discharge_per_year.png')
-    plt.savefig('plot/output/total_discharge_per_year.svg')
+    plt.savefig('plot/sanctuary/total_discharge_per_year.png')
+    plt.savefig('plot/sanctuary/total_discharge_per_year.svg')
