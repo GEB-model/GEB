@@ -144,9 +144,9 @@ if __name__ == '__main__':
     fig.tight_layout()
     plt.subplots_adjust(hspace=0.1)
     farmer_states, state_index = get_farmer_states()
-    linestyles = ['-', '--']
+    linestyles = ['-', '--', '-.']
     colors = ['red', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
-    scenarios = ['base', 'sprinkler']
+    scenarios = ['base', 'sprinkler', 'noadaptation']
     # scenarios = ['base']
     # scenarios = ['sprinkler']
 
@@ -255,6 +255,8 @@ if __name__ == '__main__':
             scenario = 'baseline'
         if scenario == 'sprinkler':
             scenario = 'drip'
+        if scenario == 'noadaptation':
+            scenario = 'No Adaptation'
 
         title_fontsize = 9
 
