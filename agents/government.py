@@ -22,6 +22,7 @@ class Government(AgentBaseClass):
         n_farmers_to_upgrade = int(self.agents.farmers.n * self.ratio_farmers_to_provide_subsidies_per_year / 365)
 
         farmer_indices = np.arange(0, self.agents.farmers.n)
+        ## Changed, not it is not an boolean array of whether they are efficient, but a percentage starting at 70%
         indices_not_yet_water_efficient = farmer_indices[~self.agents.farmers.is_water_efficient]
 
         if indices_not_yet_water_efficient.size <= n_farmers_to_upgrade:
