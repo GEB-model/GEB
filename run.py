@@ -112,9 +112,9 @@ if __name__ == '__main__':
         [
             {"name": "hydraulic head", "color": "#FF0000"},
         ],
-        # [
-        #     {"name": "precipitation", "color": "#FF0000"},
-        # ],
+        [
+            {"name": "precipitation", "color": "#FF0000"},
+        ],
     ]
 
     model_params = {
