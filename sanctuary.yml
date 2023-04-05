@@ -224,7 +224,7 @@ report:
   # crop_sample:
   #   type: farmers
   #   function: sample
-  #   varname: crop
+  #   varname: _crops
   #   save: save
   #   format: csv
   # irrigated_per_district:
@@ -268,27 +268,25 @@ report:
       day: 1
     save: export
     format: npz
-  # crops_kharif:
-  #   type: farmers
-  #   varname: crops[:,0]
-  #   function: null
-  #   frequency: per_timestep
-  #   save: export
-  #   format: npz
-  # crops_rabi:
-  #   type: farmers
-  #   varname: crops[:,1]
-  #   function: null
-  #   frequency: per_timestep
-  #   save: export
-  #   format: npz
-  # crops_summer:
-  #   type: farmers
-  #   varname: crops[:,2]
-  #   function: null
-  #   frequency: per_timestep
-  #   save: export
-  #   format: npz
+  crops_kharif:
+    type: farmers
+    varname: crops[:,0]
+    function: null
+    save: export
+    format: npz
+  crops_rabi:
+    type: farmers
+    varname: crops[:,1]
+    function: null
+    save: export
+    format: npz
+  crops_summer:
+    type: farmers
+    varname: crops[:,2]
+    function: null
+    save: export
+    format: npz
+  # Currently not in model 
   # wealth_sample:
   #   type: farmers
   #   function: sample
@@ -302,41 +300,36 @@ report:
     format: npz
     frequency: initial
     save: export
-  # reservoir irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: reservoir_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npz
-  #   save: export
-  # groundwater irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: groundwater_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npz
-  #   save: export
-  # channel irrigation:
-  #   type: farmers
-  #   function: null
-  #   varname: channel_abstraction_m3_by_farmer
-  #   frequency: per_timestep
-  #   format: npz
-  #   save: export
-  # groundwater depth:
-  #   type: farmers
-  #   function: null
-  #   varname: groundwater_depth
-  #   frequency: per_timestep
-  #   format: npz
-  #   save: export
-  # profit:
-  #   type: farmers
-  #   function: null
-  #   varname: profit_per_farmer
-  #   frequency: per_timestep
-  #   format: npz
-  #   save: export
+  reservoir irrigation:
+    type: farmers
+    function: null
+    varname: reservoir_abstraction_m3_by_farmer
+    format: npz
+    save: export
+  groundwater irrigation:
+    type: farmers
+    function: null
+    varname: groundwater_abstraction_m3_by_farmer
+    format: npz
+    save: export
+  channel irrigation:
+    type: farmers
+    function: null
+    varname: channel_abstraction_m3_by_farmer
+    format: npz
+    save: export
+  groundwater depth:
+    type: farmers
+    function: null
+    varname: groundwater_depth
+    format: npz
+    save: export
+  profit:
+    type: farmers
+    function: null
+    varname: "_profit"
+    format: npz
+    save: export
 
 ###
 # In this section you can configure what CWatM data is saved, such as the groundwater head in each timestep, as follows:
@@ -352,11 +345,6 @@ report_cwatm:
     function: mean
     format: csv
     save: save
-  # precipitation:
-  #   varname: data.HRU.Precipitation
-  #   function: mean
-  #   format: csv
-  #   save: save  
   reservoir storage:
     varname: data.grid.reservoirStorageM3C
     function: null
