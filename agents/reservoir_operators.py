@@ -29,8 +29,14 @@ class ReservoirOperators(AgentBaseClass):
 
         self.reservoir_release_factors = np.full(len(self.active_reservoirs), self.model.config['agent_settings']['reservoir_operators']['max_reservoir_release_factor'])
 
-        self.reservoir_volume = self.active_reservoirs['reservoir_volume'].values
-        self.flood_volume = self.active_reservoirs['flood_volume'].values
+        # Set reservoir volume at 0 if no reservoir scenario is used 
+        if self.model.args.scenario == 'noadaptation':
+            self.reservoir_volume = self.flood_volume = 1
+        else:
+            self.reservoir_volume = self.active_reservoirs['reservoir_volume'].values
+            self.flood_volume = self.active_reservoirs['flood_volume'].values
+        
+
         self.dis_avg = self.active_reservoirs['Dis_avg'].values
         
         self.cons_limit_ratio = 0.02
@@ -70,6 +76,11 @@ class ReservoirOperators(AgentBaseClass):
         reservoir_outflow = np.where((reservoir_outflow > 1.2 * inflowC) &
                                     (reservoir_outflow > self.normQC) &
                                     (reservoir_fill < self.flood_limit_ratio), temp, reservoir_outflow)
+        
+        # make outflow same as inflow for a scenario without a reservoir 
+        if self.model.args.scenario == 'noReservoir':
+            reservoir_outflow = inflowC
+                        
         return reservoir_outflow
 
     def get_available_water_reservoir_command_areas(self, reservoir_storage_m3):
