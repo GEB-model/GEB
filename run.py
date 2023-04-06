@@ -64,8 +64,7 @@ if __name__ == '__main__':
     series_to_plot = [
         # crop_series,
         # [
-        #     {"name": "channel abstraction M3", "color": "#FF0000"},
-        #     {"name": "reservoir abstraction M3", "color": "#FFFF00"},
+        #     {"name": "channel abstraction M3", "color": "#FF0000"},co
         #     {"name": "groundwater abstraction M3", "color": "#000000"},
         #     # {"name": "total potential irrigation consumption M3", "color": "#FF00FF"},
         # ],
