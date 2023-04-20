@@ -161,7 +161,7 @@ class CWatM_Model(CWATModel):
         binding["TminMaps"] = os.path.join(climate_path, "tmin*")
         binding["TmaxMaps"] = os.path.join(climate_path, "tmax*")
         binding["PSurfMaps"] = os.path.join(climate_path, "ps*")
-        binding["#RhsMaps"] = os.path.join(climate_path, "hurs*")
+        binding["RhsMaps"] = os.path.join(climate_path, "hurs*")
         binding["QAirMaps"] = os.path.join(climate_path, "huss*")
         binding["WindMaps"] = os.path.join(climate_path, "wind*")
         binding["RSDSMaps"] = os.path.join(climate_path, "rsds*")

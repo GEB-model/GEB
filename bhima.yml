@@ -34,6 +34,7 @@ general:
   #
   export_inital_on_spinup: true
   simulate_floods: false
+  couple_plantFATE: false
 
 ###
 # This section can contain settings to change the behavior or the agents.
