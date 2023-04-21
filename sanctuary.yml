@@ -3,15 +3,15 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2010-12-31
+  start_time: 2018-12-30
   ###
   # model end time (YYYY-MM-DD).
-  # end_time: 2010-01-01
   end_time: 2018-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
-  spinup_time: 2007-12-31
+  spinup_time: 1989-12-21
+  # spinup_time: 2007-12-31
   ###
   # base folder where to report output data to
   upscale_factor: 40
@@ -31,10 +31,10 @@ general:
   #
   export_inital_on_spinup: true
   simulate_floods: false
-  couple_plantFATE: false
+  couple_plantFATE: true
 
 ###
-# This section can contain settings to change the behavior or the agents.
+# This section can contain settings to change the behavior of the agents.
 agent_settings:
   ###
   # If this setting is set to true, the farmers in the model are activated in a set order, allowing for better reproducability of the model.
