@@ -1,0 +1,17 @@
+setup_grid:
+  hydrography_fn: merit_hydro_30sec
+  basin_index_fn: merit_hydro_index
+  sub_grid_factor: 40
+
+setup_cell_area_map:
+
+setup_mannings:
+
+setup_channel_width:
+  minimum_width: 3
+
+setup_channel_depth:
+
+setup_channel_ratio:
+
+setup_elevation_STD:

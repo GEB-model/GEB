@@ -116,11 +116,11 @@ class Farmers(AgentBaseClass):
         self.well_investment_time_years = 10
 
         self.elevation_map = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
+            fp=os.path.join(self.model.config['general']['input_folder'], 'maps', 'MERIT_grid', 'elevation.tif'),
             bounds=self.model.bounds
         )
         self.elevation_grid = self.model.data.grid.compress(ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'elv.tif'),
+            fp=os.path.join(self.model.config['general']['input_folder'], 'maps', 'grid', 'elevation.tif'),
             bounds=self.model.bounds
         ).get_data_array())
 

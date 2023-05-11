@@ -9,6 +9,10 @@ The figure below shows a schematic overview of the model. The lower part of the 
 
 ![Schematic model overview of GEB.](/docs/images/schematic_overview.svg "Schematic model overview")
 
-## Research paper
+## Creating model input
+We are currently working on making the model globally applicable using hydroMT.
 
-The pre-print is now available on EGUsphere:  [https://doi.org/10.5194/egusphere-2022-664](https://doi.org/10.5194/egusphere-2022-664)
+    hydromt build --force-overwrite geb ..\DataDrive\GEB_Sanctuary\input\ -d ..\DataDrive\GEB\original_data\data_catalog.yml -i .\hydromt.yml --region "{'subbasin': [[73.98727], [19.00465]], 'bounds': [66.55, 4.3, 93.17, 35.28]}"
+
+## Cite as
+de Bruijn, J. A., Smilovic, M., Burek, P., Guillaumot, L., Wada, Y., and Aerts, J. C. J. H.: GEB v0.1: a large-scale agent-based socio-hydrological model – simulating 10 million individual farming households in a fully distributed hydrological model, Geosci. Model Dev., 16, 2437–2454, https://doi.org/10.5194/gmd-16-2437-2023, 2023.
