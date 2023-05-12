@@ -15,3 +15,9 @@ setup_channel_depth:
 setup_channel_ratio:
 
 setup_elevation_STD:
+
+setup_soil_parameters:
+
+setup_land_use_parametsers:
+
+setup_albedo:
