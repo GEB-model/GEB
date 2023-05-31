@@ -18,6 +18,16 @@ setup_elevation_STD:
 
 setup_soil_parameters:
 
-setup_land_use_parametsers:
+setup_land_use_parameters:
 
 setup_albedo:
+
+setup_waterbodies:
+
+setup_modflow:
+  epsg: 32643
+  resolution: 1000
+
+# setup_precip_forcing:
+#   starttime: 1980-01-01
+#   endtime: 2010-12-31

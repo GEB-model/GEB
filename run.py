@@ -30,23 +30,10 @@ def get_study_area(input_folder):
     study_area = {
         "name": "GEB"
     }
-    gdf = gpd.read_file(os.path.join(input_folder, 'areamaps', 'subdistricts.geojson')).to_crs(epsg=4326)
-    gdf = gdf[gdf['ID'].isin(TEHSILS)]
-    tehsils = []
-    color_map = plt.get_cmap('gist_rainbow')
-    colors = {}
-    for i, (_, tehsil) in enumerate(gdf.iterrows()):
-        color = mcolors.rgb2hex(color_map(i / len(gdf)))
-        tehsils.append({
-            'geometry': tehsil.geometry.__geo_interface__,
-            'properties': {
-                'id': tehsil['ID'],
-                'color': color
-            }
-        })
-        colors[tehsil['ID']] = color
-    study_area['tehsil'] = tehsils
-    return study_area, colors
+    gdf = gpd.read_file(os.path.join(input_folder, 'areamaps', 'region.geojson')).to_crs(epsg=4326)
+    assert len(gdf) == 1, "There should be only one region in the region.geojson file."
+    study_area['region'] = gdf.geometry[0]
+    return study_area
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -59,7 +46,7 @@ if __name__ == '__main__':
 
     MODEL_NAME = 'GEB'
     config = yaml.load(open(os.path.join(os.path.dirname(__file__), args.config), 'r'), Loader=yaml.FullLoader)
-    study_area, colors = get_study_area(config['general']['input_folder'])
+    study_area = get_study_area(config['general']['input_folder'])
 
     series_to_plot = [
         # crop_series,
