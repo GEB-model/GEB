@@ -3,31 +3,35 @@ setup_grid:
   basin_index_fn: merit_hydro_index
   sub_grid_factor: 40
 
-setup_cell_area_map:
+# setup_cell_area_map:
 
-setup_mannings:
+# setup_mannings:
 
-setup_channel_width:
-  minimum_width: 3
+# setup_channel_width:
+#   minimum_width: 3
 
-setup_channel_depth:
+# setup_channel_depth:
 
-setup_channel_ratio:
+# setup_channel_ratio:
 
-setup_elevation_STD:
+# setup_elevation_STD:
 
-setup_soil_parameters:
+# setup_soil_parameters:
 
-setup_land_use_parameters:
+# setup_land_use_parameters:
 
-setup_albedo:
+# setup_albedo:
 
-setup_waterbodies:
+# setup_waterbodies:
 
-setup_modflow:
-  epsg: 32643
-  resolution: 1000
+# setup_modflow:
+#   epsg: 32643
+#   resolution: 1000
 
 # setup_precip_forcing:
 #   starttime: 1980-01-01
 #   endtime: 2010-12-31
+
+setup_regions_and_land_use:
+  level: 1
+  river_threshold: 100
