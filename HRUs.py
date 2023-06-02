@@ -79,7 +79,7 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        mask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'mask.tif')
+        mask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'grid_mask.tif')
         with rasterio.open(mask_fn) as mask_src:
             self.mask = mask_src.read(1).astype(bool)
             self.gt = mask_src.transform.to_gdal()
@@ -177,7 +177,7 @@ class HRUs(BaseVariables):
     def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
-        submask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'submask.tif')
+        submask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'sub_grid_mask.tif')
         with rasterio.open(submask_fn) as mask_src:
             submask_height = mask_src.profile['height']
             submask_width = mask_src.profile['width']
@@ -438,7 +438,7 @@ class Data:
     def __init__(self, model):
         self.model = model
 
-        with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as farms_src:
+        with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'farms.tif'), 'r') as farms_src:
             self.farms = farms_src.read()[0]
 
         self.grid = Grid(self, model)

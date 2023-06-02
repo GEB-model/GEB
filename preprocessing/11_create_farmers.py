@@ -105,7 +105,7 @@ def create_farms(cultivated_land, ids, farm_sizes):
     farms = np.where(farms != -2, farms, -1)
     return farms
 
-def create_farmers(agents: pd.DataFrame, cultivated_land_tehsil: np.ndarray, tehsil: np.ndarray, profile) -> None:
+def create_farmers(agents: pd.DataFrame, cultivated_land_tehsil: np.ndarray) -> None:
     """
     Takes as input an map of farm sizes of relative distribution of given farm sizes. The first band is the probability that a farm size is of size as given by the farm_size_choices_m2 argumement. The function then writes a raster of farms, where each unique ID is a field owned by a different farmer. Farms only exist on cultivated land. In addition a numpy array of the farmer locations (center of the field) is outputted.
     
@@ -440,7 +440,7 @@ def main():
                 agents = pd.concat(agents.values(), ignore_index=True)
                 agents['tehsil code'] = tehsil_code
                 
-                farms_tehsil = create_farmers(agents, cultivated_land_tehsil, tehsil, tehsil_profile)
+                farms_tehsil = create_farmers(agents, cultivated_land_tehsil)
 
                 assert farms_tehsil.max() + 1 == len(agents)
 

@@ -3,7 +3,7 @@ setup_grid:
   basin_index_fn: merit_hydro_index
   sub_grid_factor: 40
 
-# setup_cell_area_map:
+setup_cell_area_map:
 
 # setup_mannings:
 
@@ -35,3 +35,5 @@ setup_grid:
 setup_regions_and_land_use:
   level: 1
   river_threshold: 100
+
+setup_farmers:
