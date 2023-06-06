@@ -248,10 +248,10 @@ def main():
             assert (n_farms_size_class * farm_sizes_size_class).sum() == whole_cells_per_size_class[size_class]
             farm_sizes = farm_sizes_size_class.repeat(n_farms_size_class)
             np.random.shuffle(farm_sizes)
-            population['farm_size'] = farm_sizes
+            population['area_n_cells'] = farm_sizes
             region_agents.append(population)
 
-            assert population['farm_size'].sum() == whole_cells_per_size_class[size_class]
+            assert population['area_n_cells'].sum() == whole_cells_per_size_class[size_class]
 
         region_agents = pd.concat(region_agents, ignore_index=True)
         region_agents['UID'] = UID
@@ -261,7 +261,7 @@ def main():
 
     folder = os.path.join(INPUT, 'agents', 'farmers')
     os.makedirs(folder, exist_ok=True)
-    all_agents.to_csv(os.path.join(folder, 'farmers.csv'), index=False)
+    all_agents.to_csv(os.path.join(folder, 'farmers.csv'), index=True)
 
 if __name__ == '__main__':
     main()
