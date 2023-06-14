@@ -5,6 +5,220 @@ setup_grid:
 
 setup_cell_area_map:
 
+setup_crops:
+  crop_ids:
+    0: Bajra
+    1: Groundnut
+    2: Jowar
+    3: Paddy
+    4: Sugarcane
+    5: Wheat
+    6: Cotton
+    7: Gram
+    8: Maize
+    9: Moong
+    10: Ragi
+    11: Sunflower
+    12: Tur
+  crop_variables:
+    0:
+      Kc1: 115.0
+      Kc3: 115.0
+      Kc5: 115.0
+      KyT: 115.0
+      d1: 115.0
+      d2a: 115.0
+      d2b: 115.0
+      d3a: 115.0
+      d3b: 115.0
+      d4: 115.0
+      kharif_d: 115.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 115.0
+      summer_d: 115.0
+    1:
+      Kc1: 0.4
+      Kc3: 1.15
+      Kc5: 0.6
+      KyT: 0.7
+      d1: 20.0
+      d2a: 30.0
+      d2b: 0.0
+      d3a: 15.0
+      d3b: 15.0
+      d4: 20.0
+      kharif_d: 150.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 850.0
+      summer_d: 90.0
+    2:
+      Kc1: 0.3
+      Kc3: 1.05
+      Kc5: 0.55
+      KyT: 0.9
+      d1: 10.0
+      d2a: 25.0
+      d2b: 0.0
+      d3a: 40.0
+      d3b: 0.0
+      d4: 25.0
+      kharif_d: 150.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 1500.0
+      summer_d: 90.0
+    3:
+      Kc1: 1.05
+      Kc3: 1.2
+      Kc5: 0.9
+      KyT: 2.0
+      d1: 15.0
+      d2a: 10.0
+      d2b: 10.0
+      d3a: 15.0
+      d3b: 30.0
+      d4: 20.0
+      kharif_d: 150.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 1200.0
+      summer_d: 90.0
+    4:
+      Kc1: 0.4
+      Kc3: 1.25
+      Kc5: 0.75
+      KyT: 1.2
+      d1: 9.0
+      d2a: 15.0
+      d2b: 0.0
+      d3a: 47.0
+      d3b: 0.0
+      d4: 29.0
+      kharif_d: 515.0
+      rabi_d: 480.0
+      reference_yield_gr_m2: 15000.0
+      summer_d: 445.0
+    5:
+      Kc1: 0.3
+      Kc3: 1.1
+      Kc5: 0.3
+      KyT: 1.15
+      d1: 15.0
+      d2a: 25.0
+      d2b: 0.0
+      d3a: 13.0
+      d3b: 27.0
+      d4: 20.0
+      kharif_d: 150.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 1000.0
+      summer_d: 90.0
+    6:
+      Kc1: 0.35
+      Kc3: 1.15
+      Kc5: 0.7
+      KyT: 0.85
+      d1: 15.0
+      d2a: 25.0
+      d2b: 0.0
+      d3a: 33.0
+      d3b: 17.0
+      d4: 10.0
+      kharif_d: 150.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 550.0
+      summer_d: 90.0
+    7:
+      Kc1: 100.0
+      Kc3: 100.0
+      Kc5: 100.0
+      KyT: 100.0
+      d1: 100.0
+      d2a: 100.0
+      d2b: 100.0
+      d3a: 100.0
+      d3b: 100.0
+      d4: 100.0
+      kharif_d: 100.0
+      rabi_d: 100.0
+      reference_yield_gr_m2: 100.0
+      summer_d: 100.0
+    8:
+      Kc1: 0.3
+      Kc3: 1.2
+      Kc5: 0.35
+      KyT: 1.25
+      d1: 15.0
+      d2a: 30.0
+      d2b: 0.0
+      d3a: 13.0
+      d3b: 27.0
+      d4: 15.0
+      kharif_d: 150.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 2400.0
+      summer_d: 90.0
+    9:
+      Kc1: 100.0
+      Kc3: 100.0
+      Kc5: 100.0
+      KyT: 100.0
+      d1: 100.0
+      d2a: 100.0
+      d2b: 100.0
+      d3a: 100.0
+      d3b: 100.0
+      d4: 100.0
+      kharif_d: 100.0
+      rabi_d: 100.0
+      reference_yield_gr_m2: 100.0
+      summer_d: 100.0
+    10:
+      Kc1: 115.0
+      Kc3: 115.0
+      Kc5: 115.0
+      KyT: 115.0
+      d1: 115.0
+      d2a: 115.0
+      d2b: 115.0
+      d3a: 115.0
+      d3b: 115.0
+      d4: 115.0
+      kharif_d: 115.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 115.0
+      summer_d: 115.0
+    11:
+      Kc1: 0.35
+      Kc3: 1.05
+      Kc5: 0.35
+      KyT: 0.95
+      d1: 15.0
+      d2a: 16.0
+      d2b: 14.0
+      d3a: 22.0
+      d3b: 18.0
+      d4: 15.0
+      kharif_d: 150.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 400.0
+      summer_d: 90.0
+    12:
+      Kc1: 0.4
+      Kc3: 1.05
+      Kc5: 0.35
+      KyT: 1.15
+      d1: 20.0
+      d2a: 30.0
+      d2b: 0.0
+      d3a: 12.0
+      d3b: 18.0
+      d4: 20.0
+      kharif_d: 150.0
+      rabi_d: 115.0
+      reference_yield_gr_m2: 600.0
+      summer_d: 90.0
+  crop_prices: ../preprocessing/crops/crop_prices.json
+  cultivation_costs: ../preprocessing/crops/cultivation_costs.json
+
 # setup_mannings:
 
 # setup_channel_width:
@@ -33,7 +247,17 @@ setup_cell_area_map:
 #   endtime: 2010-12-31
 
 setup_regions_and_land_use:
-  level: 1
+  region_database: india_cencus
+  unique_region_id: objectid
+  # region_database: gadm_level1
+  # unique_region_id: UID
   river_threshold: 100
 
-setup_farmers:
+# setup_farmers:
+#   irrigation_sources:
+#     no_irrigation: 0
+#     canals: 1
+#     well: 2
+#     tubewell: 3
+#     tank: 4
+#     other: 5 

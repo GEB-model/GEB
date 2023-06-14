@@ -19,7 +19,7 @@ from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates, load_lending_rates, load_well_prices
+from data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_names, load_inflation_rates, load_lending_rates, load_well_prices
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -107,49 +107,52 @@ class Farmers(AgentBaseClass):
         self.redundancy = reduncancy
 
         self.crop_names = load_crop_names()
-        self.growth_length, self.crop_stage_lengths, self.crop_factors, self.crop_yield_factors, self.reference_yield = load_crop_factors()
+        self.crop_variables = load_crop_variables()
         self.cultivation_costs = load_cultivation_costs()
         
+        print('make lending and inflation rates dynamic')
         self.inflation_rate = load_inflation_rates('India')
         self.lending_rate = load_lending_rates('India')
         self.well_price, self.well_upkeep_price_per_m2 = load_well_prices(self.inflation_rate)
         self.well_investment_time_years = 10
 
-        self.elevation_map = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'maps', 'MERIT_grid', 'elevation.tif'),
+        self.elevation_subgrid = ArrayReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'sub_elevation.tif'),
             bounds=self.model.bounds
         )
         self.elevation_grid = self.model.data.grid.compress(ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'maps', 'grid', 'elevation.tif'),
+            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'elevation.tif'),
             bounds=self.model.bounds
         ).get_data_array())
 
-        with open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
+        with open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_sources.json')) as f:
             self.irrigation_source_key = json.load(f)
 
         # load map of all subdistricts
+        print('test subdistrict map')
         self.subdistrict_map = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'tehsils.tif'),
+            fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'region_subgrid.tif'),
             bounds=self.model.bounds
         )
-        # load dictionary that maps subdistricts to state names
-        with open(os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'subdistrict2state.json'), 'r') as f:
-            subdistrict2state = json.load(f)
-            subdistrict2state = {int(subdistrict): state for subdistrict, state in subdistrict2state.items()}
-            # assert that all subdistricts keys are integers
-            assert all([isinstance(subdistrict, int) for subdistrict in subdistrict2state.keys()])
-            # make sure all keys are consecutive integers starting at 0
-            assert min(subdistrict2state.keys()) == 0
-            assert max(subdistrict2state.keys()) == len(subdistrict2state) - 1
-            # load unique states
-            self.states = list(set(subdistrict2state.values()))
-            # create numpy array mapping subdistricts to states
-            state2int = {state: i for i, state in enumerate(self.states)}
-            self.subdistrict2state = np.zeros(len(subdistrict2state), dtype=np.int32)
-            for subdistrict, state in subdistrict2state.items():
-                self.subdistrict2state[subdistrict] = state2int[state]
+
+        # # load dictionary that maps subdistricts to state names
+        # with open(os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'subdistrict2state.json'), 'r') as f:
+        #     subdistrict2state = json.load(f)
+        #     subdistrict2state = {int(subdistrict): state for subdistrict, state in subdistrict2state.items()}
+        #     # assert that all subdistricts keys are integers
+        #     assert all([isinstance(subdistrict, int) for subdistrict in subdistrict2state.keys()])
+        #     # make sure all keys are consecutive integers starting at 0
+        #     assert min(subdistrict2state.keys()) == 0
+        #     assert max(subdistrict2state.keys()) == len(subdistrict2state) - 1
+        #     # load unique states
+        #     self.states = list(set(subdistrict2state.values()))
+        #     # create numpy array mapping subdistricts to states
+        #     state2int = {state: i for i, state in enumerate(self.states)}
+        #     self.subdistrict2state = np.zeros(len(subdistrict2state), dtype=np.int32)
+        #     for subdistrict, state in subdistrict2state.items():
+        #         self.subdistrict2state[subdistrict] = state2int[state]
         
-        self.crop_prices = load_crop_prices(state2int, self.inflation_rate)
+        self.crop_prices = load_crop_prices()
 
         self.agent_attributes_meta = {
             "_locations": {
@@ -326,18 +329,18 @@ class Farmers(AgentBaseClass):
             self.locations = pixels_to_coords(pixels + .5, self.var.gt)
 
             # Load the tehsil code of each farmer.
-            self.tehsil = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'tehsil_code.npy'))
+            self.region_UID = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'UID.npz'))['data']
 
             # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
-            self.elevation = self.elevation_map.sample_coords(self.locations)
+            self.elevation = self.elevation_subgrid.sample_coords(self.locations)
       
-            # Load the crops planted for each farmer in the Kharif, Rabi and Summer seasons.
-            self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif crop.npy'))
-            self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi crop.npy'))
-            self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer crop.npy'))
+            # Load the crops planted for each farmer in the season #1, season #2 and season #3.
+            self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season #1 crop.npy'))
+            self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season #2 crop.npy'))
+            self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season #3 crop.npy'))
             assert self.crops.max() < len(self.crop_names)
 
-            self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation_source.npy'))
+            self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_source.npy'))
 
             # Set irrigation efficiency to 70% for all farmers.
             self.irrigation_efficiency[:] = .70
@@ -354,9 +357,9 @@ class Farmers(AgentBaseClass):
             self.profit[:] = 0
             self.profits_last_year[:] = 0
             self.disposable_income[:] = 0
-            self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'household size.npy'))
-            self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily non farm income family.npy'))
-            self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
+            self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'household size.npy'))
+            self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily non farm income family.npy'))
+            self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily consumption per capita.npy'))
             self.flooded[:] = False
 
             self.farmer_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
@@ -848,16 +851,16 @@ class Farmers(AgentBaseClass):
             crop_prices_per_state = self.crop_prices[1][crop_price_index]
             assert not np.isnan(crop_prices_per_state).any()
             
-            tehsil_per_field = self.tehsil[harvesting_farmer_fields]
+            tehsil_per_field = self.region_UID[harvesting_farmer_fields]
             state_per_field = np.take(self.subdistrict2state, tehsil_per_field)
 
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
             # get potential crop profit per farmer
-            crop_yield_gr = harvested_area * yield_ratio * max_yield_per_crop
-            assert (crop_yield_gr >= 0).all()
+            crop_yield_kg = harvested_area * yield_ratio * max_yield_per_crop
+            assert (crop_yield_kg >= 0).all()
             crop_prices_per_field = crop_prices_per_state[state_per_field, harvested_crops]
-            profit = crop_yield_gr * crop_prices_per_field
+            profit = crop_yield_kg * crop_prices_per_field
             assert (profit >= 0).all()
             
             self.profit = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
@@ -1511,7 +1514,7 @@ class Farmers(AgentBaseClass):
 
     def invest_in_sprinkler_irrigation(self):
         """Invests in sprinkler irrigation."""
-        farmer_states = self.subdistrict2state[self.tehsil]
+        farmer_states = self.subdistrict2state[self.region_UID]
         # invest in sprinkler irrigation if the farmer is from Maharashtra and has no sprinkler irrigation
         farmers_without_sprinkler_irrigation_in_maharashtra = np.where((self.irrigation_efficiency < .90) & (farmer_states == self.states.index('MAHARASHTRA')))[0]
         # each farmer without sprinkler irrigation has a 20% probability of investing in sprinkler irrigation
@@ -1526,19 +1529,19 @@ class Farmers(AgentBaseClass):
         """
         month = self.model.current_time.month
         if month in (6, 7, 8, 9, 10):
-            self.current_season_idx = 0  # kharif
+            self.current_season_idx = 0  # season #1
             if month == 6 and self.model.current_time.day == 1:
                 self.is_first_day_of_season = True
             else:
                 self.is_first_day_of_season = False
         elif month in (11, 12, 1, 2):
-            self.current_season_idx = 1  # rabi
+            self.current_season_idx = 1  # season #2
             if month == 11 and self.model.current_time.day == 1:
                 self.is_first_day_of_season = True
             else:
                 self.is_first_day_of_season = False
         elif month in (3, 4, 5):
-            self.current_season_idx = 2  # summer
+            self.current_season_idx = 2  # season #3
             if month == 3 and self.model.current_time.day == 1:
                 self.is_first_day_of_season = True
             else:
@@ -1649,7 +1652,7 @@ class Farmers(AgentBaseClass):
   
         self.locations[self.n-1] = agent_location
         self.elevation[self.n-1] = self.elevation_map.sample_coords(np.expand_dims(agent_location, axis=0))
-        self.tehsil[self.n-1] = self.subdistrict_map.sample_coords(np.expand_dims(agent_location, axis=0))
+        self.region_UID[self.n-1] = self.subdistrict_map.sample_coords(np.expand_dims(agent_location, axis=0))
         self.crops[self.n-1] = 1
         self.irrigated[self.n-1] = False
         self.wealth[self.n-1] = 0

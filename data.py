@@ -1,141 +1,113 @@
 import os
-from datetime import date
+from datetime import date, datetime
 import numpy as np
 import pandas as pd
+import json
+from pathlib import Path
 
-from config import INPUT, ORIGINAL_DATA, DATA_FOLDER
+from config import INPUT, ORIGINAL_DATA
+
+class DateIndex:
+    def __init__(self, dates):
+        self.dates = dates
+
+    def get(self, date):
+        # find first date where date is larger or equal to date in self.dates
+        return np.searchsorted(self.dates, date, side='right') - 1
+    
+    def __len__(self):
+        return self.dates.size
 
 def load_cultivation_costs():
-    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['CULTIVATION_COST'].to_dict()
-    
-    fp = os.path.join(DATA_FOLDER, 'GEB', 'input', 'crops', 'cultivation_costs.xlsx')
-    df = pd.read_excel(fp, index_col=0, header=(0, 1))['Maharashtra']
-    date_index = dict(((year, i) for i, year in enumerate(df.index)))
+    fp = os.path.join(INPUT, 'crops', 'cultivation_costs.json')
+    with open(fp, 'r') as f:
+        costs = json.load(f)
+    dates = [datetime.strptime(d, '%Y-%m-%d').date() for d in costs['time']]
+    dates = np.array(dates, dtype='datetime64')
+    date_index = DateIndex(dates)
+    crops = costs['crops']
 
     cultivation_costs = np.full((len(date_index), len(crops)), np.nan, dtype=np.float32)  # first index for date, second index for crops
-    for ID, name in crops.items():
-        cultivation_costs[:, ID] = df[name]
-
+    for ID, data in crops.items():
+        cultivation_costs[:, int(ID)] = data
+    assert not np.isnan(cultivation_costs).any()
     return date_index, cultivation_costs
 
-def load_crop_prices(state2int: dict, inflation_rates) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
+def load_crop_prices() -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
     """Load crop prices per state from the input data and return a dictionary of states containing 2D array of prices.
     
     Returns:
         date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
         crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop."""
-    sugarcane_FRP = pd.read_excel(os.path.join(ORIGINAL_DATA, 'crop_prices', 'FRP.xlsx')).set_index('Year')  # Fair and Remunerative Price
-
-    start_year = min(inflation_rates.keys())
-    end_year = max(inflation_rates.keys())
-
-    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['PRICE'].to_dict()
-    folder = os.path.join(INPUT, 'crops', 'crop_prices_rs_per_g')
-    crop_prices = None
-    date_index = None
-    for fn in os.listdir(folder):
-        assert fn.endswith('.xlsx')
-        state = fn.replace('.xlsx', '')
-        if state in state2int:
-            state_index = state2int[state]
-            # TODO: Could do more sophisticated interpolation or obtain data from other states.
-            agmarknet_prices = pd.read_excel(os.path.join(folder, fn), index_col=0)
-            # select only dates before year 2020
-            agmarknet_prices = agmarknet_prices[agmarknet_prices.index.year <= end_year]
-            # reindex to include all years starting from start_year
-            agmarknet_prices = agmarknet_prices.reindex(pd.date_range(start=date(start_year, 1, 1), end=agmarknet_prices.index[-1], freq='MS'))
-            
-            sugarcane_prices = sugarcane_FRP.copy()
-            start_year_sugarcane = int(sugarcane_FRP.index[0][:4])
-            end_year_sugarcane = int(sugarcane_FRP.index[-1][-4:])
-            
-            sugarcane_prices.index = pd.date_range(start=date(start_year_sugarcane, 1, 1), end=date(end_year_sugarcane, 1, 1), freq='YS', inclusive='left') + pd.DateOffset(months=6)
-            sugarcane_prices = sugarcane_prices.reindex(pd.date_range(start=date(start_year_sugarcane, 7, 1), end=date(end_year_sugarcane, 7, 1), freq='MS', inclusive='left'))
-            sugarcane_prices = sugarcane_prices[sugarcane_prices.index.year <= end_year]
-            sugarcane_prices = sugarcane_prices.interpolate(method='ffill', axis=0)
-            # set sugarcane prices in agmarknet_prices
-            agmarknet_prices = agmarknet_prices.assign(Sugarcane=sugarcane_prices['Sugarcane'])
-
-            # interpolate missing values
-            agmarknet_prices = agmarknet_prices.interpolate(method='linear', axis=0, limit_area='inside')
-            # ensure each column has at least 12 non-missing values
-            for column in agmarknet_prices.columns:
-                if agmarknet_prices[column].count() < 12:
-                    raise ValueError(f"Column {column} has less than 12 non-missing values")
-            
-            # fill missing values, while correcting for inflation, historically
-            for column_idx, column in enumerate(agmarknet_prices.columns):
-                # find first non-missing index
-                first_non_missing_idx = agmarknet_prices.index.get_loc(agmarknet_prices[column].first_valid_index())
-                # find index value before first missing value
-                for idx in range(first_non_missing_idx, -1, -1):
-                    agmarknet_prices.iloc[idx, column_idx] = agmarknet_prices.iloc[idx + 12, column_idx] / inflation_rates[agmarknet_prices.index[idx].year+1]
-
-            # fill missing values, while correcting for inflation, future part
-            for column_idx, column in enumerate(agmarknet_prices.columns):
-                # find first non-missing index
-                last_non_missing_idx = agmarknet_prices.index.get_loc(agmarknet_prices[column].last_valid_index())
-                # find index value before first missing value
-                for idx in range(last_non_missing_idx, len(agmarknet_prices)):
-                    agmarknet_prices.iloc[idx, column_idx] = agmarknet_prices.iloc[idx - 12, column_idx] * inflation_rates[agmarknet_prices.index[idx].year]
-
-            if not date_index:
-                date_index = dict(((date, i) for i, date in enumerate(agmarknet_prices.index.date)))
-            else:
-                assert date_index == dict(((date, i) for i, date in enumerate(agmarknet_prices.index.date)))
-            if crop_prices is None:
-                crop_prices = np.full((len(date_index), len(state2int), len(crops)), np.nan, dtype=np.float32)  # first index for date, second for state, third index for crops
-            
-            for ID, name in crops.items():
-                crop_prices[:, state_index, ID] = agmarknet_prices[name]
     
-    assert not np.isnan(crop_prices).any()
-    return date_index, crop_prices
+    fp = Path(INPUT, 'crops', 'crop_prices.json')
+    with open(fp, 'r') as f:
+        crop_prices = json.load(f)
 
-def load_crop_factors() -> dict[np.ndarray]:
+    dates = [datetime.strptime(d, '%Y-%m-%d').date() for d in crop_prices['time']]
+    dates = np.array(dates, dtype='datetime64')
+    date_index = DateIndex(dates)
+
+    crops = crop_prices['crops']
+
+    crop_prices_array = np.full((len(date_index), len(crops)), np.nan, dtype=np.float32)  # first index for date, second index for crops
+    for ID, data in crops.items():
+        crop_prices_array[:, int(ID)] = data
+    assert not np.isnan(crop_prices_array).any()
+    
+    return date_index, crop_prices_array
+
+def load_crop_variables() -> dict[np.ndarray]:
     """Read csv-file of values for crop water depletion.
     
     Returns:
         yield_factors: dictonary with np.ndarray of values per crop for each variable.
     """
-    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['GAEZ'].to_dict()
-    df = pd.read_excel(os.path.join(ORIGINAL_DATA, 'crops', 'GAEZ.xlsx'), index_col=0).loc[crops.values()]
-    
-    growth_length = np.full((len(crops), 3), np.nan, dtype=np.float32)
-    growth_length[:, 0] = df['kharif_d']
-    growth_length[:, 1] = df['rabi_d']
-    growth_length[:, 2] = df['summer_d']
-    assert not np.isnan(growth_length).any()
-    
-    stage_lengths = np.full((len(crops), 4), np.nan, dtype=np.float32)
-    stage_lengths[:,0] = df['d1']
-    stage_lengths[:,1] = df['d2a'] + df['d2b']
-    stage_lengths[:,2] = df['d3a'] + df['d3b']
-    stage_lengths[:,3] = df['d4']
-    assert not np.isnan(stage_lengths).any()
+    with open(os.path.join(INPUT, 'crops', 'crop_variables.json'), 'r') as f:
+        crop_variables = json.load(f)
+    crop_variables = pd.DataFrame.from_dict(crop_variables, orient='index')
+    return crop_variables
 
-    crop_factors = np.full((len(crops), 3), np.nan, dtype=np.float32)
-    crop_factors[:,0] = df['Kc1']
-    crop_factors[:,1] = df['Kc3']
-    crop_factors[:,2] = df['Kc5']
-    assert not np.isnan(crop_factors).any()
-
-    yield_factors = {
-        'Ky1': df['Ky1'].to_numpy(),
-        'Ky2': ((df['Ky2a'] * df['d2a'] + df['Ky2b'] * df['d2b']) / (df['d2a'] + df['d2b'])).to_numpy(),
-        'Ky3': ((df['Ky3a'] * df['d3a'] + df['Ky3b'] * df['d3b']) / (df['d3a'] + df['d3b'])).to_numpy(),
-        'Ky4': df['Ky4'].to_numpy(),
-        'KyT': df['KyT'].to_numpy(),
-    }
-
-    # MIRCA2000 reference yields
-    reference_yield = df['reference_yield_gr_m2'].to_numpy()
-    assert not np.isnan(reference_yield).any()
     
-    return growth_length, stage_lengths, crop_factors, yield_factors, reference_yield
+    # growth_length = np.full((len(crops), 3), np.nan, dtype=np.float32)
+    # growth_length[:, 0] = df['kharif_d']
+    # growth_length[:, 1] = df['rabi_d']
+    # growth_length[:, 2] = df['summer_d']
+    # assert not np.isnan(growth_length).any()
+    
+    # stage_lengths = np.full((len(crops), 4), np.nan, dtype=np.float32)
+    # stage_lengths[:,0] = df['d1']
+    # stage_lengths[:,1] = df['d2a'] + df['d2b']
+    # stage_lengths[:,2] = df['d3a'] + df['d3b']
+    # stage_lengths[:,3] = df['d4']
+    # assert not np.isnan(stage_lengths).any()
+
+    # crop_factors = np.full((len(crops), 3), np.nan, dtype=np.float32)
+    # crop_factors[:,0] = df['Kc1']
+    # crop_factors[:,1] = df['Kc3']
+    # crop_factors[:,2] = df['Kc5']
+    # assert not np.isnan(crop_factors).any()
+
+    # yield_factors = {
+    #     # 'Ky1': df['Ky1'].to_numpy(),
+    #     # 'Ky2': ((df['Ky2a'] * df['d2a'] + df['Ky2b'] * df['d2b']) / (df['d2a'] + df['d2b'])).to_numpy(),
+    #     # 'Ky3': ((df['Ky3a'] * df['d3a'] + df['Ky3b'] * df['d3b']) / (df['d3a'] + df['d3b'])).to_numpy(),
+    #     # 'Ky4': df['Ky4'].to_numpy(),
+    #     'KyT': df['KyT'].to_numpy(),
+    # }
+
+    # # MIRCA2000 reference yields
+    # reference_yield = df['reference_yield_gr_m2'].to_numpy()
+    # assert not np.isnan(reference_yield).any()
+    
+    # return growth_length, stage_lengths, crop_factors, yield_factors, reference_yield
 
 def load_crop_names():
-    return pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('CENSUS')['ID'].to_dict()
+    with open(os.path.join(INPUT, 'crops', 'crop_ids.json'), 'r') as f:
+        crop_ids = json.load(f)
+    # convert keys to int
+    crop_ids = {int(key): value for key, value in crop_ids.items()}
+    return crop_ids
 
 def load_inflation_rates(country):
     fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
