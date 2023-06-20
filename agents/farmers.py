@@ -14,12 +14,12 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
-from honeybees.library.mapIO import ArrayReader
+from honeybees.library.mapIO import MapReader
 from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_names, load_inflation_rates, load_lending_rates, load_well_prices
+from data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_inflation_rates, load_lending_rates, load_well_prices
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -69,7 +69,7 @@ class Farmers(AgentBaseClass):
     ]
     agent_attributes = [
         "_locations",
-        "_tehsil",
+        "_region_id",
         "_elevation",
         "_crops",
         "_irrigation_source",
@@ -106,7 +106,9 @@ class Farmers(AgentBaseClass):
         self.var = model.data.HRU
         self.redundancy = reduncancy
 
-        self.crop_names = load_crop_names()
+        self.crop_ids = load_crop_ids()
+        # reverse dictionary
+        self.crop_names = {crop_name: crop_id for crop_id, crop_name in self.crop_ids.items()}
         self.crop_variables = load_crop_variables()
         self.cultivation_costs = load_cultivation_costs()
         
@@ -116,13 +118,19 @@ class Farmers(AgentBaseClass):
         self.well_price, self.well_upkeep_price_per_m2 = load_well_prices(self.inflation_rate)
         self.well_investment_time_years = 10
 
-        self.elevation_subgrid = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'sub_elevation.tif'),
-            bounds=self.model.bounds
+        self.elevation_subgrid = MapReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subgrid_elevation.tif'),
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
         )
-        self.elevation_grid = self.model.data.grid.compress(ArrayReader(
+        self.elevation_grid = self.model.data.grid.compress(MapReader(
             fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'elevation.tif'),
-            bounds=self.model.bounds
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
         ).get_data_array())
 
         with open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_sources.json')) as f:
@@ -130,9 +138,12 @@ class Farmers(AgentBaseClass):
 
         # load map of all subdistricts
         print('test subdistrict map')
-        self.subdistrict_map = ArrayReader(
+        self.subdistrict_map = MapReader(
             fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'region_subgrid.tif'),
-            bounds=self.model.bounds
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
         )
 
         # # load dictionary that maps subdistricts to state names
@@ -159,7 +170,7 @@ class Farmers(AgentBaseClass):
                 "dtype": np.float32,
                 "nodata": [np.nan, np.nan]
             },
-            "_tehsil": {
+            "_region_id": {
                 "dtype": np.int32,
                 "nodata": -1
             },
@@ -266,12 +277,12 @@ class Farmers(AgentBaseClass):
                 "nodata": -1,
             },
             "_farmer_is_in_command_area": {
-                "dtype": np.bool,
+                "dtype": bool,
                 "nodata": False,
                 "nodatacheck": False
             },
             "_flooded": {
-                "dtype": np.bool,
+                "dtype": bool,
                 "nodata": False,
                 "nodatacheck": False
             },
@@ -280,7 +291,7 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     def is_in_command_area(n, command_areas, field_indices, field_indices_by_farmer):
-        farmer_is_in_command_area = np.zeros(n, dtype=np.bool)
+        farmer_is_in_command_area = np.zeros(n, dtype=bool)
         for farmer_i in range(n):
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_i)
             for field in farmer_fields:
@@ -328,19 +339,19 @@ class Farmers(AgentBaseClass):
 
             self.locations = pixels_to_coords(pixels + .5, self.var.gt)
 
-            # Load the tehsil code of each farmer.
-            self.region_UID = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'UID.npz'))['data']
+            # Load the region_code of each farmer.
+            self.region_id = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'region_id.npz'))['data']
 
             # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
             self.elevation = self.elevation_subgrid.sample_coords(self.locations)
       
             # Load the crops planted for each farmer in the season #1, season #2 and season #3.
-            self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season #1 crop.npy'))
-            self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season #2 crop.npy'))
-            self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season #3 crop.npy'))
-            assert self.crops.max() < len(self.crop_names)
+            self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#1_crop.npz'))['data']
+            self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#2_crop.npz'))['data']
+            self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#3_crop.npz'))['data']
+            assert self.crops.max() < len(self.crop_ids)
 
-            self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_source.npy'))
+            self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_source.npz'))['data']
 
             # Set irrigation efficiency to 70% for all farmers.
             self.irrigation_efficiency[:] = .70
@@ -357,9 +368,9 @@ class Farmers(AgentBaseClass):
             self.profit[:] = 0
             self.profits_last_year[:] = 0
             self.disposable_income[:] = 0
-            self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'household size.npy'))
-            self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily non farm income family.npy'))
-            self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily consumption per capita.npy'))
+            self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'household_size.npz'))['data']
+            self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily_non_farm_income_family.npz'))['data']
+            self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily_consumption_per_capita.npz'))['data']
             self.flooded[:] = False
 
             self.farmer_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
@@ -851,8 +862,8 @@ class Farmers(AgentBaseClass):
             crop_prices_per_state = self.crop_prices[1][crop_price_index]
             assert not np.isnan(crop_prices_per_state).any()
             
-            tehsil_per_field = self.region_UID[harvesting_farmer_fields]
-            state_per_field = np.take(self.subdistrict2state, tehsil_per_field)
+            region_id_per_field = self.region_id[harvesting_farmer_fields]
+            state_per_field = np.take(self.subdistrict2state, region_id_per_field)
 
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
@@ -952,19 +963,21 @@ class Farmers(AgentBaseClass):
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU.
         """
-        year = self.model.current_time.year
-        month = self.model.current_time.month
-        if month < 7:  # Agricultural year in India runs from June to July.
-            agricultural_year = f"{year-1}-{year}"
-        else:
-            agricultural_year = f"{year}-{year+1}"
-        year_index = self.cultivation_costs[0][agricultural_year]
-        cultivation_cost_per_crop = self.cultivation_costs[1][year_index]
+        index = self.cultivation_costs[0].get(self.model.current_time)
+        cultivation_cost_per_crop = self.cultivation_costs[1][index]
+
+        # create numpy stack of growth length per crop and season
+        growth_length = np.stack([
+            self.crop_variables['season_#1_duration'],
+            self.crop_variables['season_#2_duration'],
+            self.crop_variables['season_#3_duration']
+        ], axis=1)
+
         plant_map, farmers_selling_land = self.plant_numba(
             n=self.n,
             season_idx=self.current_season_idx,
             is_first_day_of_season=self.is_first_day_of_season,
-            growth_length=self.growth_length,
+            growth_length=growth_length,
             crop_map=self.var.crop_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
             crops=self.crops,
@@ -1391,12 +1404,12 @@ class Farmers(AgentBaseClass):
         self._farmer_class[:self.n] = value
 
     @property
-    def tehsil(self):
-        return self._tehsil[:self.n]
+    def region_id(self):
+        return self._region_id[:self.n]
 
-    @tehsil.setter
-    def tehsil(self, value):
-        self._tehsil[:self.n] = value
+    @region_id.setter
+    def region_id(self, value):
+        self._region_id[:self.n] = value
 
     @property
     def flooded(self):
@@ -1514,7 +1527,7 @@ class Farmers(AgentBaseClass):
 
     def invest_in_sprinkler_irrigation(self):
         """Invests in sprinkler irrigation."""
-        farmer_states = self.subdistrict2state[self.region_UID]
+        farmer_states = self.subdistrict2state[self.region_id]
         # invest in sprinkler irrigation if the farmer is from Maharashtra and has no sprinkler irrigation
         farmers_without_sprinkler_irrigation_in_maharashtra = np.where((self.irrigation_efficiency < .90) & (farmer_states == self.states.index('MAHARASHTRA')))[0]
         # each farmer without sprinkler irrigation has a 20% probability of investing in sprinkler irrigation
@@ -1652,7 +1665,7 @@ class Farmers(AgentBaseClass):
   
         self.locations[self.n-1] = agent_location
         self.elevation[self.n-1] = self.elevation_map.sample_coords(np.expand_dims(agent_location, axis=0))
-        self.region_UID[self.n-1] = self.subdistrict_map.sample_coords(np.expand_dims(agent_location, axis=0))
+        self.region_id[self.n-1] = self.subdistrict_map.sample_coords(np.expand_dims(agent_location, axis=0))
         self.crops[self.n-1] = 1
         self.irrigated[self.n-1] = False
         self.wealth[self.n-1] = 0

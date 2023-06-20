@@ -1,0 +1,21 @@
+# conda env create -f environment.yml
+name: GEB
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - rasterio
+  - numba
+  - tbb
+  - pandas
+  - openpyxl
+  - geopandas
+  - numpy
+  - dask
+  - tqdm
+  - pip
+  - pip:
+    - s3fs
+    - git+https://github.com/Deltares/hydromt_sfincs.git
+    - git+https://github.com/ISI-MIP/isimip-client.git

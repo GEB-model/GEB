@@ -4,9 +4,8 @@ import numpy as np
 import geopandas as gpd
 import pandas as pd
 from pathlib import Path
-import matplotlib.pyplot as plt
 
-from preconfig import INPUT, ORIGINAL_DATA, PREPROCESSING_FOLDER
+from preconfig import INPUT, PREPROCESSING_FOLDER
 
 def fits(n, estimate, farm_sizes, mean, offset, stalled=False):
     target_area = n * mean + offset
@@ -213,6 +212,7 @@ def main():
         average_cell_area_region = cell_area[(regions_grid == region_id) & (cultivated_land == True)].mean()
         region_cultivated_land_area_lu = cell_area[(regions_grid == region_id) & (cultivated_land == True)].sum()
         cultivated_land_region = cultivated_land[regions_grid == region_id]
+        print('Cultivated land area in region:', cultivated_land_region.sum())
 
         total_ipf_weight = 0
         farm_cells_size_class = pd.DataFrame(index=SIZE_CLASSES)
@@ -312,11 +312,12 @@ def select_and_rename_columns(agents):
         'region_id': 'region_id',
         'household size': 'household_size',
         'irrigation_source': 'irrigation_source',
-        'Kharif: Crop: Name': 'season #1 crop',
-        'Rabi: Crop: Name': 'season #2 crop',
-        'Summer: Crop: Name': 'season #3 crop',
+        'Kharif: Crop: Name': 'season_#1_crop',
+        'Rabi: Crop: Name': 'season_#2_crop',
+        'Summer: Crop: Name': 'season_#3_crop',
         'daily_non_farm_income_family': 'daily_non_farm_income_family',
         'daily_consumption_per_capita': 'daily_consumption_per_capita',
+        'area_n_cells': 'area_n_cells',
     }
 
     agents = agents[list(select_and_rename.keys())]

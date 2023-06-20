@@ -9,5 +9,8 @@ if __name__ == '__main__':
     opt = configread(yml)
     
     geb_model = GEBModel(root=root, mode='w+', data_libs=data_libs)
-    geb_model.build(opt=opt, region={'subbasin': [[73.98727], [19.00465]], 'bounds': [66.55, 4.3, 93.17, 35.28]})
+    # Bhima
     # geb_model.build(opt=opt, region={'subbasin': [[75.895273], [17.370473]], 'bounds': [66.55, 4.3, 93.17, 35.28]})
+
+    # Sanctuary
+    geb_model.build(opt=opt, region={'subbasin': [[73.98727], [19.00465]], 'bounds': [66.55, 4.3, 93.17, 35.28]})

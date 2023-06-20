@@ -3,7 +3,7 @@ setup_grid:
   basin_index_fn: merit_hydro_index
   sub_grid_factor: 40
 
-setup_cell_area_map:
+# setup_cell_area_map:
 
 setup_crops:
   crop_ids:
@@ -32,10 +32,10 @@ setup_crops:
       d3a: 115.0
       d3b: 115.0
       d4: 115.0
-      kharif_d: 115.0
-      rabi_d: 115.0
+      season_#1_duration: 115.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 115.0
-      summer_d: 115.0
+      season_#3_duration: 115.0
     1:
       Kc1: 0.4
       Kc3: 1.15
@@ -47,10 +47,10 @@ setup_crops:
       d3a: 15.0
       d3b: 15.0
       d4: 20.0
-      kharif_d: 150.0
-      rabi_d: 115.0
+      season_#1_duration: 150.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 850.0
-      summer_d: 90.0
+      season_#3_duration: 90.0
     2:
       Kc1: 0.3
       Kc3: 1.05
@@ -62,10 +62,10 @@ setup_crops:
       d3a: 40.0
       d3b: 0.0
       d4: 25.0
-      kharif_d: 150.0
-      rabi_d: 115.0
+      season_#1_duration: 150.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 1500.0
-      summer_d: 90.0
+      season_#3_duration: 90.0
     3:
       Kc1: 1.05
       Kc3: 1.2
@@ -77,10 +77,10 @@ setup_crops:
       d3a: 15.0
       d3b: 30.0
       d4: 20.0
-      kharif_d: 150.0
-      rabi_d: 115.0
+      season_#1_duration: 150.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 1200.0
-      summer_d: 90.0
+      season_#3_duration: 90.0
     4:
       Kc1: 0.4
       Kc3: 1.25
@@ -92,10 +92,10 @@ setup_crops:
       d3a: 47.0
       d3b: 0.0
       d4: 29.0
-      kharif_d: 515.0
-      rabi_d: 480.0
+      season_#1_duration: 515.0
+      season_#2_duration: 480.0
       reference_yield_gr_m2: 15000.0
-      summer_d: 445.0
+      season_#3_duration: 445.0
     5:
       Kc1: 0.3
       Kc3: 1.1
@@ -107,10 +107,10 @@ setup_crops:
       d3a: 13.0
       d3b: 27.0
       d4: 20.0
-      kharif_d: 150.0
-      rabi_d: 115.0
+      season_#1_duration: 150.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 1000.0
-      summer_d: 90.0
+      season_#3_duration: 90.0
     6:
       Kc1: 0.35
       Kc3: 1.15
@@ -122,10 +122,10 @@ setup_crops:
       d3a: 33.0
       d3b: 17.0
       d4: 10.0
-      kharif_d: 150.0
-      rabi_d: 115.0
+      season_#1_duration: 150.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 550.0
-      summer_d: 90.0
+      season_#3_duration: 90.0
     7:
       Kc1: 100.0
       Kc3: 100.0
@@ -137,10 +137,10 @@ setup_crops:
       d3a: 100.0
       d3b: 100.0
       d4: 100.0
-      kharif_d: 100.0
-      rabi_d: 100.0
+      season_#1_duration: 100.0
+      season_#2_duration: 100.0
       reference_yield_gr_m2: 100.0
-      summer_d: 100.0
+      season_#3_duration: 100.0
     8:
       Kc1: 0.3
       Kc3: 1.2
@@ -152,10 +152,10 @@ setup_crops:
       d3a: 13.0
       d3b: 27.0
       d4: 15.0
-      kharif_d: 150.0
-      rabi_d: 115.0
+      season_#1_duration: 150.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 2400.0
-      summer_d: 90.0
+      season_#3_duration: 90.0
     9:
       Kc1: 100.0
       Kc3: 100.0
@@ -167,10 +167,10 @@ setup_crops:
       d3a: 100.0
       d3b: 100.0
       d4: 100.0
-      kharif_d: 100.0
-      rabi_d: 100.0
+      season_#1_duration: 100.0
+      season_#2_duration: 100.0
       reference_yield_gr_m2: 100.0
-      summer_d: 100.0
+      season_#3_duration: 100.0
     10:
       Kc1: 115.0
       Kc3: 115.0
@@ -182,10 +182,10 @@ setup_crops:
       d3a: 115.0
       d3b: 115.0
       d4: 115.0
-      kharif_d: 115.0
-      rabi_d: 115.0
+      season_#1_duration: 115.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 115.0
-      summer_d: 115.0
+      season_#3_duration: 115.0
     11:
       Kc1: 0.35
       Kc3: 1.05
@@ -197,10 +197,10 @@ setup_crops:
       d3a: 22.0
       d3b: 18.0
       d4: 15.0
-      kharif_d: 150.0
-      rabi_d: 115.0
+      season_#1_duration: 150.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 400.0
-      summer_d: 90.0
+      season_#3_duration: 90.0
     12:
       Kc1: 0.4
       Kc3: 1.05
@@ -212,10 +212,10 @@ setup_crops:
       d3a: 12.0
       d3b: 18.0
       d4: 20.0
-      kharif_d: 150.0
-      rabi_d: 115.0
+      season_#1_duration: 150.0
+      season_#2_duration: 115.0
       reference_yield_gr_m2: 600.0
-      summer_d: 90.0
+      season_#3_duration: 90.0
   crop_prices: ../preprocessing/crops/crop_prices.json
   cultivation_costs: ../preprocessing/crops/cultivation_costs.json
 
@@ -242,16 +242,16 @@ setup_crops:
 #   epsg: 32643
 #   resolution: 1000
 
-# setup_precip_forcing:
-#   starttime: 1980-01-01
-#   endtime: 2010-12-31
+setup_forcing:
+  starttime: 1979-01-01
+  endtime: 2016-12-31
 
-setup_regions_and_land_use:
-  region_database: india_cencus
-  unique_region_id: objectid
-  # region_database: gadm_level1
-  # unique_region_id: UID
-  river_threshold: 100
+# setup_regions_and_land_use:
+#   region_database: india_cencus
+#   unique_region_id: objectid
+#   # region_database: gadm_level1
+#   # unique_region_id: UID
+#   river_threshold: 100
 
 # setup_farmers:
 #   irrigation_sources:

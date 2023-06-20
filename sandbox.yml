@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2018-12-30
+  start_time: 2017-02-01
   ###
   # model end time (YYYY-MM-DD).
   end_time: 2018-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
-  spinup_time: 1989-12-21
+  spinup_time: 2017-01-01
   # spinup_time: 2007-12-31
   ###
   # base folder where to report output data to
@@ -93,15 +93,15 @@ calibration:
           day: 1
         save: export
         format: npz
-      tehsil:
-        type: farmers
-        function: null
-        varname: tehsil
-        frequency:
-          every: month
-          day: 1
-        save: export
-        format: npz
+      # tehsil:
+      #   type: farmers
+      #   function: null
+      #   varname: tehsil
+      #   frequency:
+      #     every: month
+      #     day: 1
+      #   save: export
+      #   format: npz
 
   DEAP:
     use_multiprocessing: True
@@ -261,15 +261,15 @@ report:
       day: 1
     save: export
     format: npz
-  tehsil:
-    type: farmers
-    function: null
-    varname: tehsil
-    frequency:
-      every: month
-      day: 1
-    save: export
-    format: npz
+  # tehsil:
+  #   type: farmers
+  #   function: null
+  #   varname: tehsil
+  #   frequency:
+  #     every: month
+  #     day: 1
+  #   save: export
+  #   format: npz
   # crops_kharif:
   #   type: farmers
   #   varname: crops[:,0]

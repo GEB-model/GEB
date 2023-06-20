@@ -65,8 +65,7 @@ def load_crop_variables() -> dict[np.ndarray]:
     """
     with open(os.path.join(INPUT, 'crops', 'crop_variables.json'), 'r') as f:
         crop_variables = json.load(f)
-    crop_variables = pd.DataFrame.from_dict(crop_variables, orient='index')
-    return crop_variables
+    return pd.DataFrame.from_dict(crop_variables, orient='index')
 
     
     # growth_length = np.full((len(crops), 3), np.nan, dtype=np.float32)
@@ -102,7 +101,7 @@ def load_crop_variables() -> dict[np.ndarray]:
     
     # return growth_length, stage_lengths, crop_factors, yield_factors, reference_yield
 
-def load_crop_names():
+def load_crop_ids():
     with open(os.path.join(INPUT, 'crops', 'crop_ids.json'), 'r') as f:
         crop_ids = json.load(f)
     # convert keys to int

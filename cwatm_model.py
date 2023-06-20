@@ -39,7 +39,7 @@ class CWatM_Model(CWATModel):
             binding[parameter] = value
         
         # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
-        binding['MaskMap'] = os.path.join(INPUT, 'areamaps', 'mask.tif')
+        binding['MaskMap'] = os.path.join(INPUT, 'areamaps', 'grid_mask.tif')
         if 'gauges' in self.config['general']:
             gauges = self.config['general']['gauges']
             binding['Gauges'] = ' '.join([str(item) for sublist in gauges for item in sublist])
@@ -51,9 +51,9 @@ class CWatM_Model(CWATModel):
         binding['Modflow_resolution'] = 1000
         
         # setting file paths for CWatM
-        binding["Ldd"] = os.path.join(INPUT, 'maps', 'grid', 'ldd.tif')
-        binding["ElevationStD"] = os.path.join(INPUT, 'maps', 'grid', 'elevation_STD.tif')
-        binding["CellArea"] = os.path.join(INPUT, 'maps', 'grid', 'cell_area.tif')
+        binding["Ldd"] = os.path.join(INPUT, 'routing', 'kinematic', 'ldd.tif')
+        binding["ElevationStD"] = os.path.join(INPUT, 'landsurface', 'topo', 'elevation_STD.tif')
+        binding["CellArea"] = os.path.join(INPUT, 'areamaps', 'cell_area.tif')
         binding["albedoLand"] = os.path.join(INPUT, 'landsurface', 'albedo', 'albedo_land.nc:albedoLand')
         binding["albedoWater"] = os.path.join(INPUT, 'landsurface', 'albedo', 'albedo_water.nc:albedoWater')
         binding["cropgroupnumber"] = os.path.join(INPUT, 'soil', 'cropgrp.tif')
@@ -131,10 +131,9 @@ class CWatM_Model(CWATModel):
         binding["recessionCoeff"] = os.path.join(groundwater_path, "recessionCoeff.map")
         binding["specificYield"] = os.path.join(groundwater_path, "specificYield.map")
         binding["kSatAquifer"] = os.path.join(groundwater_path, "kSatAquifer.map")
-        binding["topo_modflow"] = os.path.join(modflow_path, f"{binding['Modflow_resolution']}m", "modflow_elevation.tif")
-        binding["riverPercentage"] = os.path.join(modflow_path, f"{binding['Modflow_resolution']}m", "RiverPercentage.npy")
-        binding["cwatm_modflow_indices"] = os.path.join(modflow_path, f"{binding['Modflow_resolution']}m", "indices")
-        binding["modflow_mask"] = os.path.join(modflow_path, f"{binding['Modflow_resolution']}m", "modflow_mask.tif")
+        binding["topo_modflow"] = os.path.join(modflow_path, "modflow_elevation.tif")
+        binding["riverPercentage"] = os.path.join(modflow_path, "RiverPercentage.npy")
+        binding["modflow_mask"] = os.path.join(modflow_path, "modflow_mask.tif")
         
         binding["domesticWaterDemandFile"]  = os.path.join(water_demand_path, "historical_dom_month_millionm3_5min_1961_2010.nc")
         binding["domesticWaterDemandFile_SSP2"]  = os.path.join(water_demand_path, "ssp2_dom_month_millionm3_5min_2005_2060.nc")
