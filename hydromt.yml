@@ -3,7 +3,7 @@ setup_grid:
   basin_index_fn: merit_hydro_index
   sub_grid_factor: 40
 
-# setup_cell_area_map:
+setup_cell_area_map:
 
 setup_crops:
   crop_ids:
@@ -244,14 +244,24 @@ setup_crops:
 
 setup_forcing:
   starttime: 1979-01-01
-  endtime: 2016-12-31
+  endtime: 1979-12-31
+  # endtime: 2016-12-31
 
-# setup_regions_and_land_use:
-#   region_database: india_cencus
-#   unique_region_id: objectid
-#   # region_database: gadm_level1
-#   # unique_region_id: UID
-#   river_threshold: 100
+setup_regions_and_land_use:
+  region_database: india_cencus
+  unique_region_id: objectid
+  # region_database: gadm_level1
+  # unique_region_id: UID
+  river_threshold: 100
+
+setup_economic_data:
+
+setup_well_prices_by_reference_year:
+  well_price: 146_000
+  upkeep_price_per_m2: .3
+  reference_year: 2008
+  start_year: 1960
+  end_year: 2020
 
 # setup_farmers:
 #   irrigation_sources:

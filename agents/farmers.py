@@ -5,6 +5,7 @@ from datetime import date
 import json
 import random
 import calendar
+from pathlib import Path
 
 import numpy as np
 from numba import njit
@@ -19,7 +20,7 @@ from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_inflation_rates, load_lending_rates, load_well_prices
+from data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_economic_data
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -112,10 +113,10 @@ class Farmers(AgentBaseClass):
         self.crop_variables = load_crop_variables()
         self.cultivation_costs = load_cultivation_costs()
         
-        print('make lending and inflation rates dynamic')
-        self.inflation_rate = load_inflation_rates('India')
-        self.lending_rate = load_lending_rates('India')
-        self.well_price, self.well_upkeep_price_per_m2 = load_well_prices(self.inflation_rate)
+        self.inflation_rate = load_economic_data(Path('economics', 'inflation_rates.json'))
+        self.lending_rate = load_economic_data(Path('economics', 'lending_rates.json'))
+        self.well_price = load_economic_data(Path('economics', 'well_prices.json'))
+        self.well_upkeep_price_per_m2 = load_economic_data(Path('economics', 'upkeep_prices_well_per_m2.json'))
         self.well_investment_time_years = 10
 
         self.elevation_subgrid = MapReader(

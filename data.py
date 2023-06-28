@@ -101,6 +101,15 @@ def load_crop_variables() -> dict[np.ndarray]:
     
     # return growth_length, stage_lengths, crop_factors, yield_factors, reference_yield
 
+def parse_dates(date_strings, date_formats = ['%Y-%m-%dT%H%M%S', '%Y-%m-%d', '%Y']):
+    for date_format in date_formats:
+        try:
+            return [datetime.strptime(str(d), date_format) for d in date_strings]
+        except ValueError:
+            pass
+    else:
+        raise ValueError('No valid date format found for date strings: {}'.format(date_strings[0]))
+
 def load_crop_ids():
     with open(os.path.join(INPUT, 'crops', 'crop_ids.json'), 'r') as f:
         crop_ids = json.load(f)
@@ -108,44 +117,35 @@ def load_crop_ids():
     crop_ids = {int(key): value for key, value in crop_ids.items()}
     return crop_ids
 
-def load_inflation_rates(country):
-    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
-    inflation_series = pd.read_csv(fp, index_col=0, skiprows=4).loc[country]
-    inflation = {}
-    for year in range(1960, 2022):
-        inflation[year] = 1 + inflation_series[str(year)] / 100
-    return inflation
+def load_inflation_rates():
+    with open(Path(INPUT, 'economics', 'inflation_rates.json'), 'r') as f:
+        inflation_rates = json.load(f)
+    dates = [date(int(y), 1, 1) for y in inflation_rates['time']]
+    date_index = DateIndex(dates)
+    inflation_rates = {
+        int(region_id): values
+        for region_id, values in inflation_rates['rates'].items()
+    }
+    return date_index, inflation_rates
 
-def load_lending_rates(country):
-    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB lending interest rates', 'API_FR.INR.LEND_DS2_en_csv_v2_4772904.csv')
-    lending_series = pd.read_csv(fp, index_col=0, skiprows=4).loc[country]
-    lending = {}
-    for year in range(1960, 2022):
-        lending[year] = lending_series[str(year)] / 100
-    return lending
+def load_lending_rates():
+    with open(Path(INPUT, 'economics', 'lending_rates.json'), 'r') as f:
+        lending_rates = json.load(f)
+    dates = [date(int(y), 1, 1) for y in lending_rates['time']]
+    date_index = DateIndex(dates)
+    lending_rates = {
+        int(region_id): values
+        for region_id, values in lending_rates['rates'].items()
+    }
+    return date_index, lending_rates
 
-def load_well_prices(inflation_rates_per_year):
-    well_price_2008 = 146_000
-    upkeep_price_2008_m2 = 3000 / 10_000  # ha to m2
-    # create dictory with prices for well_prices per year by applying inflation rates
-    well_prices = {2008: well_price_2008}
-    for year in range(2009, 2022):
-        well_prices[year] = well_prices[year-1] * inflation_rates_per_year[year]
-    for year in range(2007, 1960, -1):
-        well_prices[year] = well_prices[year+1] / inflation_rates_per_year[year+1]
-    # do the same for upkeep price
-    upkeep_prices = {2008: upkeep_price_2008_m2}
-    for year in range(2009, 2022):
-        upkeep_prices[year] = upkeep_prices[year-1] * inflation_rates_per_year[year]
-    for year in range(2007, 1960, -1):
-        upkeep_prices[year] = upkeep_prices[year+1] / inflation_rates_per_year[year+1]
-    return well_prices, upkeep_prices
-
-
-if __name__ == '__main__':
-    # cultivation_costs = load_cultivation_costs()
-    # crop_prices = load_crop_prices()
-    # crop_yield_factors = load_crop_factors()
-    inflation_rates = load_inflation_rates('India')
-    well_prices = load_well_prices(inflation_rates)
-    load_lending_rates('India')
+def load_economic_data(fp: str) -> tuple[DateIndex, dict[int, np.ndarray]]:
+    with open(INPUT / fp, 'r') as f:
+        data = json.load(f)
+    dates = parse_dates(data['time'])
+    date_index = DateIndex(dates)
+    d = {
+        int(region_id): values
+        for region_id, values in data['data'].items()
+    }
+    return (date_index, d)
