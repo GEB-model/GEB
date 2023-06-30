@@ -220,22 +220,22 @@ setup_crops:
   crop_prices: ../preprocessing/crops/crop_prices.json
   cultivation_costs: ../preprocessing/crops/cultivation_costs.json
 
-# setup_mannings:
+setup_mannings:
 
-# setup_channel_width:
-#   minimum_width: 3
+setup_channel_width:
+  minimum_width: 3
 
-# setup_channel_depth:
+setup_channel_depth:
 
-# setup_channel_ratio:
+setup_channel_ratio:
 
-# setup_elevation_STD:
+setup_elevation_STD:
 
-# setup_soil_parameters:
+setup_soil_parameters:
 
-# setup_land_use_parameters:
+setup_land_use_parameters:
 
-# setup_waterbodies:
+setup_waterbodies:
 
 setup_modflow:
   epsg: 32643
@@ -261,12 +261,3 @@ setup_well_prices_by_reference_year:
   reference_year: 2008
   start_year: 1960
   end_year: 2020
-
-# setup_farmers:
-#   irrigation_sources:
-#     no_irrigation: 0
-#     canals: 1
-#     well: 2
-#     tubewell: 3
-#     tank: 4
-#     other: 5 

@@ -26,6 +26,7 @@ general:
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/GEB_Bhima/input/
   original_data: ../DataDrive/GEB/original_data/
+  preprocessing_folder: ../DataDrive/GEB_Bhima/preprocessing/
   data_folder: ../DataDrive/
   report_folder: ../report/bhima/
   initial_conditions_folder: ../calibration/bhima/runs\00_000\initial_conditions

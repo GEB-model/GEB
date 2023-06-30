@@ -20,6 +20,7 @@ general:
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/GEB_Krishna/input/
   original_data: ../DataDrive/GEB/original_data/
+  preprocessing_folder: ../DataDrive/GEB_Krishna/preprocessing/
   data_folder: ../DataDrive/
   report_folder: report/krishna/
   initial_conditions_folder: ../DataDrive/GEB_Krishna/initial

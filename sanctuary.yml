@@ -24,6 +24,7 @@ general:
   input_folder: ../DataDrive/GEB_Sanctuary/input/
   data_folder: ../DataDrive/
   original_data: ../DataDrive/GEB/original_data/
+  preprocessing_folder: ../DataDrive/GEB_Sanctuary/preprocessing/
   report_folder: ../report/sanctuary/
   initial_conditions_folder: ../DataDrive/GEB_Sanctuary/initial
   init_water_table: ../DataDrive/GEB_Sanctuary/report/init/water_table.npy
