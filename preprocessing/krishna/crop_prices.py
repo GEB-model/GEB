@@ -6,18 +6,25 @@ import json
 import calendar
 from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
-from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
+try:
+    import selenium
+except ImportError:
+    print('selenium not installed. Please install it')
+    exit()
 from selenium import webdriver
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.by import By
-import chromedriver_autoinstaller
-from pathlib import Path
+try:
+    import chromedriver_autoinstaller
+except ImportError:
+    print('chromedriver_autoinstaller not installed. Please install it')
+    exit()
 
+from pathlib import Path
 from preconfig import ORIGINAL_DATA, PREPROCESSING_FOLDER
 
 chromedriver_autoinstaller.install() 
@@ -271,7 +278,7 @@ def add_FRP_prices(crops):
     return crops
 
 def extrapolate(crops):
-    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
+    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_5551656.csv')
     inflation_series = pd.read_csv(fp, index_col=0, skiprows=4).loc['India']
     inflation_rates = {}
     for year in range(1960, 2022):
