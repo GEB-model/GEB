@@ -1020,10 +1020,10 @@ class Farmers(AgentBaseClass):
     ):  
         """Determines whether a farmer without a well invests in an irrigation well and takes a loan. Each farmer has
         a probability of investing in a well based on the following factors:
-            - The farmer's latest profit ratio (latest profit / latest potential profit)
-            - The profit ratio of the farmer's neighbors with wells (average of neighbors' latest profit / latest potential profit)
-            - Whether farmer disposable income is sufficient to pay for a loan for a well as well as the yearly upkeep cost
-            - The farmer's disposable income relative to the minimum disposable income required to invest in a well
+        - The farmer's latest profit ratio (latest profit / latest potential profit)
+        - The profit ratio of the farmer's neighbors with wells (average of neighbors' latest profit / latest potential profit)
+        - Whether farmer disposable income is sufficient to pay for a loan for a well as well as the yearly upkeep cost
+        - The farmer's disposable income relative to the minimum disposable income required to invest in a well
   
         Args:
             n: number of farmers
