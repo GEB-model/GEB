@@ -8,14 +8,19 @@ df = pd.read_excel(os.path.join(ORIGINAL_DATA, 'crops', 'GAEZ.xlsx')).set_index(
 # drop all rows where index is NaN
 df = df[~df.index.isna()]
 # split rows where multiple IDs are listed in the index
+new_rows = []
 for index, row in df.iterrows():
     if isinstance(index, str):
         for ID in index.split(','):
-            df.loc[ID] = row[1]
-        df.drop(index, inplace=True)
+            new_row = row.copy()
+            new_row.name = int(ID)
+            new_rows.append(new_row)
+    else:
+        new_row = row.copy()
+        new_row.name = index
+        new_rows.append(new_row)
 
-# set index to integer
-df.index = df.index.astype(int)
+df = pd.DataFrame(new_rows).sort_index()
 
 assert len(df) == max(df.index) + 1
 df = df.drop(['kcT', 'Ky1', 'Ky2a', 'Ky2b', 'Ky3a', 'Ky3b', 'Ky4'], axis=1)

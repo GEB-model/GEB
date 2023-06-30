@@ -22,20 +22,20 @@ setup_crops:
     12: Tur
   crop_variables:
     0:
-      Kc1: 115.0
-      Kc3: 115.0
-      Kc5: 115.0
-      KyT: 115.0
-      d1: 115.0
-      d2a: 115.0
-      d2b: 115.0
-      d3a: 115.0
-      d3b: 115.0
-      d4: 115.0
-      season_#1_duration: 115.0
+      Kc1: 0.3
+      Kc3: 1.0
+      Kc5: 0.3
+      KyT: 0.9
+      d1: 10.0
+      d2a: 25.0
+      d2b: 0.0
+      d3a: 13.0
+      d3b: 27.0
+      d4: 25.0
+      season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 115.0
-      season_#3_duration: 115.0
+      reference_yield_kg_m2: 0.8
+      season_#3_duration: 90.0
     1:
       Kc1: 0.4
       Kc3: 1.15
@@ -49,7 +49,7 @@ setup_crops:
       d4: 20.0
       season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 850.0
+      reference_yield_kg_m2: 0.85
       season_#3_duration: 90.0
     2:
       Kc1: 0.3
@@ -64,7 +64,7 @@ setup_crops:
       d4: 25.0
       season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 1500.0
+      reference_yield_kg_m2: 1.5
       season_#3_duration: 90.0
     3:
       Kc1: 1.05
@@ -79,7 +79,7 @@ setup_crops:
       d4: 20.0
       season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 1200.0
+      reference_yield_kg_m2: 1.2
       season_#3_duration: 90.0
     4:
       Kc1: 0.4
@@ -94,7 +94,7 @@ setup_crops:
       d4: 29.0
       season_#1_duration: 515.0
       season_#2_duration: 480.0
-      reference_yield_gr_m2: 15000.0
+      reference_yield_kg_m2: 15.0
       season_#3_duration: 445.0
     5:
       Kc1: 0.3
@@ -109,7 +109,7 @@ setup_crops:
       d4: 20.0
       season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 1000.0
+      reference_yield_kg_m2: 1.0
       season_#3_duration: 90.0
     6:
       Kc1: 0.35
@@ -124,23 +124,23 @@ setup_crops:
       d4: 10.0
       season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 550.0
+      reference_yield_kg_m2: 0.55
       season_#3_duration: 90.0
     7:
-      Kc1: 100.0
-      Kc3: 100.0
-      Kc5: 100.0
-      KyT: 100.0
-      d1: 100.0
-      d2a: 100.0
-      d2b: 100.0
-      d3a: 100.0
-      d3b: 100.0
-      d4: 100.0
+      Kc1: 0.4
+      Kc3: 1.05
+      Kc5: 0.35
+      KyT: 1.15
+      d1: 20.0
+      d2a: 30.0
+      d2b: 0.0
+      d3a: 12.0
+      d3b: 18.0
+      d4: 20.0
       season_#1_duration: 100.0
       season_#2_duration: 100.0
-      reference_yield_gr_m2: 100.0
-      season_#3_duration: 100.0
+      reference_yield_kg_m2: 0.6
+      season_#3_duration: 90.0
     8:
       Kc1: 0.3
       Kc3: 1.2
@@ -154,38 +154,38 @@ setup_crops:
       d4: 15.0
       season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 2400.0
+      reference_yield_kg_m2: 2.4
       season_#3_duration: 90.0
     9:
-      Kc1: 100.0
-      Kc3: 100.0
-      Kc5: 100.0
-      KyT: 100.0
-      d1: 100.0
-      d2a: 100.0
-      d2b: 100.0
-      d3a: 100.0
-      d3b: 100.0
-      d4: 100.0
+      Kc1: 0.4
+      Kc3: 1.05
+      Kc5: 0.35
+      KyT: 1.15
+      d1: 20.0
+      d2a: 30.0
+      d2b: 0.0
+      d3a: 12.0
+      d3b: 18.0
+      d4: 20.0
       season_#1_duration: 100.0
       season_#2_duration: 100.0
-      reference_yield_gr_m2: 100.0
-      season_#3_duration: 100.0
+      reference_yield_kg_m2: 0.6
+      season_#3_duration: 90.0
     10:
-      Kc1: 115.0
-      Kc3: 115.0
-      Kc5: 115.0
-      KyT: 115.0
-      d1: 115.0
-      d2a: 115.0
-      d2b: 115.0
-      d3a: 115.0
-      d3b: 115.0
-      d4: 115.0
-      season_#1_duration: 115.0
+      Kc1: 0.3
+      Kc3: 1.0
+      Kc5: 0.3
+      KyT: 0.9
+      d1: 10.0
+      d2a: 25.0
+      d2b: 0.0
+      d3a: 13.0
+      d3b: 27.0
+      d4: 25.0
+      season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 115.0
-      season_#3_duration: 115.0
+      reference_yield_kg_m2: 0.8
+      season_#3_duration: 90.0
     11:
       Kc1: 0.35
       Kc3: 1.05
@@ -199,7 +199,7 @@ setup_crops:
       d4: 15.0
       season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 400.0
+      reference_yield_kg_m2: 0.4
       season_#3_duration: 90.0
     12:
       Kc1: 0.4
@@ -214,8 +214,9 @@ setup_crops:
       d4: 20.0
       season_#1_duration: 150.0
       season_#2_duration: 115.0
-      reference_yield_gr_m2: 600.0
+      reference_yield_kg_m2: 0.6
       season_#3_duration: 90.0
+
   crop_prices: ../preprocessing/crops/crop_prices.json
   cultivation_costs: ../preprocessing/crops/cultivation_costs.json
 
@@ -234,18 +235,16 @@ setup_crops:
 
 # setup_land_use_parameters:
 
-# setup_albedo:
-
 # setup_waterbodies:
 
-# setup_modflow:
-#   epsg: 32643
-#   resolution: 1000
+setup_modflow:
+  epsg: 32643
+  resolution: 1000
 
 setup_forcing:
   starttime: 1979-01-01
-  endtime: 1979-12-31
-  # endtime: 2016-12-31
+  # endtime: 1979-12-31
+  endtime: 2016-12-31
 
 setup_regions_and_land_use:
   region_database: india_cencus

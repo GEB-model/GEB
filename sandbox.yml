@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2017-02-01
+  start_time: 2000-02-01
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2018-12-31
+  end_time: 2000-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
-  spinup_time: 2017-01-01
+  spinup_time: 2000-01-01
   # spinup_time: 2007-12-31
   ###
   # base folder where to report output data to
@@ -25,7 +25,7 @@ general:
   data_folder: ../DataDrive/
   original_data: ../DataDrive/GEB/original_data/
   preprocessing_folder: ../DataDrive/sandbox/preprocessing/
-  report_folder: ../report/sanctuary/
+  report_folder: ../report/sandbox/
   initial_conditions_folder: ../DataDrive/sandbox/initial
   init_water_table: ../DataDrive/sandbox/report/init/water_table.npy
   ###
@@ -349,26 +349,26 @@ report:
 #   - **function**: whether to use a function to parse the data. For example, 'mean' takes the mean etc. Options are 'mean', 'sum', 'nanmean' and 'nansum'.
 #   - **format**: format to save to.
 report_cwatm:
-  hydraulic head:
-    varname: data.grid.head
-    function: mean
-    format: csv
-    save: save
-  precipitation:
-    varname: data.grid.Precipitation
-    function: mean
-    format: csv
-    save: save
-  reservoir storage:
-    varname: data.grid.reservoirStorageM3C
-    function: null
-    format: csv
-    save: save
-  discharge:
-    varname: data.grid.discharge
-    function: sample,25,54
-    format: csv
-    save: save
+  # hydraulic head:
+  #   varname: data.grid.head
+  #   function: mean
+  #   format: csv
+  #   save: save
+  # precipitation:
+  #   varname: data.grid.Precipitation
+  #   function: mean
+  #   format: csv
+  #   save: save
+  # reservoir storage:
+  #   varname: data.grid.reservoirStorageM3C
+  #   function: null
+  #   format: csv
+  #   save: save
+  # discharge:
+  #   varname: data.grid.discharge
+  #   function: sample,25,54
+  #   format: csv
+  #   save: save
 
 parameters:
   SnowMeltCoef: 0.004

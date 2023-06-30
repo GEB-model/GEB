@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from datetime import timedelta, date
+import datetime
 from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from reporter import Reporter
@@ -47,20 +47,20 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
         if args.scenario == 'spinup':
-            end_time = self.config['general']['start_time']
-            current_time = self.config['general']['spinup_time']
+            end_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
+            current_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
             self.load_initial_data = False
             self.save_initial_data = self.config['general']['export_inital_on_spinup'] 
         else:
-            current_time = self.config['general']['start_time']
-            end_time = self.config['general']['end_time']
+            current_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
+            end_time = datetime.datetime.combine(self.config['general']['end_time'], datetime.time(0))
             self.load_initial_data = True
             self.save_initial_data = False
 
-        assert isinstance(end_time, date)
-        assert isinstance(current_time, date)
+        assert isinstance(end_time, datetime.datetime)
+        assert isinstance(current_time, datetime.datetime)
         
-        timestep_length = timedelta(days=1)
+        timestep_length = datetime.timedelta(days=1)
         n_timesteps = (end_time - current_time) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
@@ -132,6 +132,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         for _ in range(n):
             # print(self.current_time)
             t0 = time()
+            self.data.step()
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
 

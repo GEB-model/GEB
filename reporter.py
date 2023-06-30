@@ -35,7 +35,7 @@ class CWatMReporter(ABMReporter):
         self.variables = {}
         self.timesteps = []
 
-        if 'report_cwatm' in self.model.config:
+        if 'report_cwatm' in self.model.config and self.model.config['report_cwatm']:
             for name in self.model.config['report_cwatm']:
                 self.variables[name] = []
         self.step()  # report on inital state
@@ -86,7 +86,7 @@ class CWatMReporter(ABMReporter):
     def step(self) -> None:
         """This method is called after every timestep, to collect data for reporting from the model."""
         self.timesteps.append(self.model.current_time)
-        if 'report_cwatm' in self.model.config:
+        if 'report_cwatm' in self.model.config and self.model.config['report_cwatm']:
             for name, conf in self.model.config['report_cwatm'].items():
                 array = self.get_array(conf['varname'])
                 if array is None:

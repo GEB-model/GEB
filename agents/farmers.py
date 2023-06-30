@@ -521,9 +521,7 @@ class Farmers(AgentBaseClass):
             addtoevapotrans_m: Evaporated irrigation water in meters.
         """
         assert n == activation_order.size
-
-        print("use farmer_is_in_command_area")
-  
+          
         land_unit_array_size = cell_area.size
         water_withdrawal_m = np.zeros(land_unit_array_size, dtype=np.float32)
         water_consumption_m = np.zeros(land_unit_array_size, dtype=np.float32)
@@ -751,7 +749,7 @@ class Farmers(AgentBaseClass):
         yield_ratio = self.get_yield_ratio_numba(
             crop_map[harvest],
             actual_transpiration[harvest] / potential_transpiration[harvest],
-            self.crop_yield_factors['KyT'],
+            self.crop_variables['KyT'].values,
         )
         assert not np.isnan(yield_ratio).any()
         return yield_ratio
@@ -855,23 +853,17 @@ class Farmers(AgentBaseClass):
             if self.model.args.use_gpu:
                 harvested_area = harvested_area.get()
             harvested_crops = self.var.crop_map[harvest]
-            max_yield_per_crop = np.take(self.reference_yield, harvested_crops)
+            max_yield_per_crop = np.take(self.crop_variables['reference_yield_kg_m2'], harvested_crops)
       
-            year = self.model.current_time.year
-            month = self.model.current_time.month
-            crop_price_index = self.crop_prices[0][date(year, month, 1)]
-            crop_prices_per_state = self.crop_prices[1][crop_price_index]
-            assert not np.isnan(crop_prices_per_state).any()
+            crop_prices = self.crop_prices[1][self.crop_prices[0].get(self.model.current_time)]
+            assert not np.isnan(crop_prices).any()
             
-            region_id_per_field = self.region_id[harvesting_farmer_fields]
-            state_per_field = np.take(self.subdistrict2state, region_id_per_field)
-
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
             # get potential crop profit per farmer
             crop_yield_kg = harvested_area * yield_ratio * max_yield_per_crop
             assert (crop_yield_kg >= 0).all()
-            crop_prices_per_field = crop_prices_per_state[state_per_field, harvested_crops]
+            crop_prices_per_field = crop_prices[harvested_crops]
             profit = crop_yield_kg * crop_prices_per_field
             assert (profit >= 0).all()
             

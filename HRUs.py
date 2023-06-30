@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-from typing import Any, Union
+from typing import Union
 from numba import njit
 import rasterio
 import os
+import xarray as xr
 import numpy as np
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
 
-import matplotlib.pyplot as plt
+from config import INPUT
 
 
 class BaseVariables:
@@ -445,6 +446,33 @@ class Data:
         self.HRU = HRUs(self, model)
         self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn='mean')
         self.modflow = Modflow(self, model)
+        self.load_forcing()
+
+    def load_forcing(self):
+        # loading forcing data
+        # self.grid.hurs_100_ds = xr.open_dataset(INPUT / 'climate' / 'hurs.nc')['hurs']
+        # self.grid.pr_m_ds = xr.open_dataset(INPUT / 'climate' / 'pr.nc')['pr']
+        # self.grid.ps_kPa_ds = xr.open_dataset(INPUT / 'climate' / 'ps.nc')['ps'] * 0.001  # Pa to kPa
+        # self.grid.rlds_MJ_m2_day_ds = xr.open_dataset(INPUT / 'climate' / 'rlds.nc')['rlds'] * 86400 * 1E-6  # conversion from W/m2 to MJ/m2/day
+        # self.grid.rsds_MJ_m2_day_ds = xr.open_dataset(INPUT / 'climate' / 'rsds.nc')['rsds'] * 86400 * 1E-6  # conversion from W/m2 to MJ/m2/day
+        # self.grid.tas_C_ds = xr.open_dataset(INPUT / 'climate' / 'tas.nc')['tas'] - 273.15  # K to C
+        # self.grid.tasmax_C_ds = xr.open_dataset(INPUT / 'climate' / 'tasmax.nc')['tasmax'] - 273.15  # K to C
+        # self.grid.tasmin_C_ds = xr.open_dataset(INPUT / 'climate' / 'tasmin.nc')['tasmin'] - 273.15  # K to C
+        # # Adjust wind speed for measurement height: wind speed measured at
+        # # 10 m, but needed at 2 m height
+        # # Shuttleworth, W.J. (1993) in Maidment, D.R. (1993), p. 4.36
+        # self.grid.wind_ds = xr.open_dataset(INPUT / 'climate' / 'wind.nc')['wind'] * 0.749
+
+        # loading forcing data
+        self.grid.hurs_ds = xr.open_dataset(INPUT / 'climate' / 'hurs.nc')['hurs']
+        self.grid.pr_ds = xr.open_dataset(INPUT / 'climate' / 'pr.nc')['pr']
+        self.grid.ps_ds = xr.open_dataset(INPUT / 'climate' / 'ps.nc')['ps'] 
+        self.grid.rlds_ds = xr.open_dataset(INPUT / 'climate' / 'rlds.nc')['rlds']
+        self.grid.rsds_ds = xr.open_dataset(INPUT / 'climate' / 'rsds.nc')['rsds']
+        self.grid.tas_ds = xr.open_dataset(INPUT / 'climate' / 'tas.nc')['tas']
+        self.grid.tasmax_ds = xr.open_dataset(INPUT / 'climate' / 'tasmax.nc')['tasmax']
+        self.grid.tasmin_ds = xr.open_dataset(INPUT / 'climate' / 'tasmin.nc')['tasmin']
+        self.grid.sfcWind_ds = xr.open_dataset(INPUT / 'climate' / 'wind.nc')['wind']
 
     @staticmethod
     @njit(cache=True)
@@ -668,3 +696,23 @@ class Data:
         self.HRU.potential_transpiration_crop = self.split_HRU_data(self.HRU.potential_transpiration_crop, HRU)
         self.HRU.actual_transpiration_crop = self.split_HRU_data(self.HRU.actual_transpiration_crop, HRU)
         return HRU
+    
+    def step(self):
+        self.grid.hurs = self.grid.compress(self.grid.hurs_ds.sel(time=self.model.current_time).data)
+        
+        self.grid.pr = self.grid.compress(self.grid.pr_ds.sel(time=self.model.current_time).data)
+        assert (self.grid.pr >= 0).all(), "Precipitation must be positive or zero"
+        
+        self.grid.ps = self.grid.compress(self.grid.ps_ds.sel(time=self.model.current_time).data)
+        
+        self.grid.rlds = self.grid.compress(self.grid.rlds_ds.sel(time=self.model.current_time).data)
+        self.grid.rsds = self.grid.compress(self.grid.rsds_ds.sel(time=self.model.current_time).data)
+        
+        self.grid.tas = self.grid.compress(self.grid.tas_ds.sel(time=self.model.current_time).data)
+        self.grid.tasmax = self.grid.compress(self.grid.tasmax_ds.sel(time=self.model.current_time).data)
+        self.grid.tasmin = self.grid.compress(self.grid.tasmin_ds.sel(time=self.model.current_time).data)
+        
+        assert (self.grid.tas > -100).all() and (self.grid.tas < 370).all(), "tas out of range"
+        assert (self.grid.tasmax > -100).all() and (self.grid.tasmax < 370).all(), "tas out of range"
+        assert (self.grid.tasmin > -100).all() and (self.grid.tasmin < 370).all(), "tas out of range"
+        self.grid.sfcWind = self.grid.compress(self.grid.sfcWind_ds.sel(time=self.model.current_time).data)

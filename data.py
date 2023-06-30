@@ -9,7 +9,7 @@ from config import INPUT, ORIGINAL_DATA
 
 class DateIndex:
     def __init__(self, dates):
-        self.dates = dates
+        self.dates = np.array(dates)
 
     def get(self, date):
         # find first date where date is larger or equal to date in self.dates
@@ -22,8 +22,7 @@ def load_cultivation_costs():
     fp = os.path.join(INPUT, 'crops', 'cultivation_costs.json')
     with open(fp, 'r') as f:
         costs = json.load(f)
-    dates = [datetime.strptime(d, '%Y-%m-%d').date() for d in costs['time']]
-    dates = np.array(dates, dtype='datetime64')
+    dates = parse_dates(costs['time'])
     date_index = DateIndex(dates)
     crops = costs['crops']
 
@@ -44,8 +43,7 @@ def load_crop_prices() -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
     with open(fp, 'r') as f:
         crop_prices = json.load(f)
 
-    dates = [datetime.strptime(d, '%Y-%m-%d').date() for d in crop_prices['time']]
-    dates = np.array(dates, dtype='datetime64')
+    dates = parse_dates(crop_prices['time'])
     date_index = DateIndex(dates)
 
     crops = crop_prices['crops']
@@ -116,28 +114,6 @@ def load_crop_ids():
     # convert keys to int
     crop_ids = {int(key): value for key, value in crop_ids.items()}
     return crop_ids
-
-def load_inflation_rates():
-    with open(Path(INPUT, 'economics', 'inflation_rates.json'), 'r') as f:
-        inflation_rates = json.load(f)
-    dates = [date(int(y), 1, 1) for y in inflation_rates['time']]
-    date_index = DateIndex(dates)
-    inflation_rates = {
-        int(region_id): values
-        for region_id, values in inflation_rates['rates'].items()
-    }
-    return date_index, inflation_rates
-
-def load_lending_rates():
-    with open(Path(INPUT, 'economics', 'lending_rates.json'), 'r') as f:
-        lending_rates = json.load(f)
-    dates = [date(int(y), 1, 1) for y in lending_rates['time']]
-    date_index = DateIndex(dates)
-    lending_rates = {
-        int(region_id): values
-        for region_id, values in lending_rates['rates'].items()
-    }
-    return date_index, lending_rates
 
 def load_economic_data(fp: str) -> tuple[DateIndex, dict[int, np.ndarray]]:
     with open(INPUT / fp, 'r') as f:
