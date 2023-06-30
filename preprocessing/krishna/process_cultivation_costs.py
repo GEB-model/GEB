@@ -100,7 +100,7 @@ def inter_and_extrapolate(costs):
     return costs
 
 def load_inflation_rates(country):
-    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
+    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_5551656.csv')
     inflation_series = pd.read_csv(fp, index_col=0, skiprows=4).loc[country]
     inflation = {}
     for year in range(1960, 2022):
