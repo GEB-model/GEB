@@ -22,7 +22,7 @@ parser.add_argument('--switch_crops', dest='switch_crops', default=False, action
 parser.add_argument('--gpu_device', dest='gpu_device', type=int, default=0, required=False, help="""Specify the GPU to use (zero-indexed).""")
 parser.add_argument('--profiling', dest='profiling', default=False, action='store_true', help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.")
 parser.add_argument('--GPU', dest='use_gpu', default=False, action='store_true', help="Whether a GPU can be used to run the model. This requires CuPy to be installed.")
-parser.add_argument('--config', dest='config', default='GEB.yml', help="Path of the model configuration file.")
+parser.add_argument('--config', dest='config', default='sandbox.yml', help="Path of the model configuration file.")
 
 TEHSILS = [26, 30, 34, 35]
 
