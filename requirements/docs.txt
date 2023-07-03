@@ -1,4 +1,4 @@
-sphinx
+sphinx=6.2.1
 sphinx-autodoc-typehints
 sphinxcontrib-autoprogram
 sphinx_rtd_theme
