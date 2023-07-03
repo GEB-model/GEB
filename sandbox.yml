@@ -6,7 +6,7 @@ general:
   start_time: 2000-02-01
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2000-12-31
+  end_time: 2000-02-03
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
@@ -364,11 +364,11 @@ report_cwatm:
   #   function: null
   #   format: csv
   #   save: save
-  # discharge:
-  #   varname: data.grid.discharge
-  #   function: sample,25,54
-  #   format: csv
-  #   save: save
+  discharge:
+    varname: data.grid.discharge
+    function: null
+    format: netcdf
+    save: export
 
 parameters:
   SnowMeltCoef: 0.004

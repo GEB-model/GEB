@@ -4,6 +4,7 @@ from numba import njit
 import rasterio
 import os
 import xarray as xr
+import rioxarray as rxr
 import numpy as np
 try:
     import cupy as cp
@@ -86,6 +87,10 @@ class Grid(BaseVariables):
             self.gt = mask_src.transform.to_gdal()
             self.bounds = mask_src.bounds
             self.cell_size = mask_src.transform.a
+        with rxr.open_rasterio(mask_fn) as mask_src:
+            self.crs = mask_src.rio.crs
+            self.lon = mask_src.x.values
+            self.lat = mask_src.y.values
         cell_area_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'cell_area.tif')
         with rasterio.open(cell_area_fn) as cell_area_src:
             self.cell_area_uncompressed = cell_area_src.read(1)
