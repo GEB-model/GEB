@@ -45,9 +45,25 @@ class CWatMReporter(ABMReporter):
                     config['absolute_path'] = str(netcdf_path)
                     if netcdf_path.exists():
                         netcdf_path.unlink()
+                    if not 'time_ranges' in config:
+                        time = pd.date_range(start=self.model.current_time, periods=self.model.n_timesteps + 1, freq=self.model.timestep_length)
+                    else:
+                        time = []
+                        for time_range in config['time_ranges']:
+                            start = time_range['start']
+                            end = time_range['end']
+                            time.extend(pd.date_range(start=start, end=end, freq=self.model.timestep_length))
+                        # exlude time ranges that are not in the simulation period
+                        time = [t for t in time if t >= self.model.current_time and t <= self.model.current_time + (self.model.n_timesteps + 1) * self.model.timestep_length]
+                        # remove duplicates and sort
+                        time = list(dict.fromkeys(time))
+                        time.sort()
+                        if not time:
+                            print(f"WARNING: None of the time ranges for {name} are in the simulation period.")
+
                     self.variables[name] = xr.DataArray(
                         coords={
-                            'time': pd.date_range(start=self.model.current_time, periods=self.model.n_timesteps + 1, freq=self.model.timestep_length),
+                            'time': time,
                             'y': self.model.data.grid.lat,
                             'x': self.model.data.grid.lon,
                         },
@@ -138,8 +154,9 @@ class CWatMReporter(ABMReporter):
             with open(fp, 'w') as f:
                 f.write("\n".join([str(v) for v in value]))
         elif conf['format'] == 'netcdf':
-            self.variables[name].loc[{"time": self.model.current_time}] = value
-            self.variables[name].to_netcdf(self.model.config['report_cwatm'][name]['absolute_path'], mode='a')
+            if np.isin(np.datetime64(self.model.current_time), self.variables[name].time):
+                self.variables[name].loc[{"time": self.model.current_time}] = value
+                self.variables[name].to_netcdf(self.model.config['report_cwatm'][name]['absolute_path'], mode='a')
         else:
             raise ValueError(f"{conf['format']} not recognized")
 

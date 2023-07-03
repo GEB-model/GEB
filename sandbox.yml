@@ -3,10 +3,10 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2000-02-01
+  start_time: 2005-07-22
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2000-02-03
+  end_time: 2005-10-02
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
@@ -369,6 +369,31 @@ report_cwatm:
     function: null
     format: netcdf
     save: export
+    time_ranges:
+      - start: 2014-10-12
+        end: 2014-10-27
+      - start: 2010-05-18
+        end: 2010-05-24
+      - start: 2009-09-25
+        end: 2009-10-12
+      - start: 2008-08-05
+        end: 2008-08-11
+      - start: 2007-10-27
+        end: 2007-11-01
+      - start: 2007-09-16
+        end: 2007-10-07
+      - start: 2007-07-01
+        end: 2007-07-06
+      - start: 2007-06-22
+        end: 2007-07-04
+      - start: 2006-08-01
+        end: 2006-09-10
+      - start: 2006-07-28
+        end: 2006-09-12
+      - start: 2005-09-14
+        end: 2005-09-30
+      - start: 2005-07-23
+        end: 2005-08-16
 
 parameters:
   SnowMeltCoef: 0.004
