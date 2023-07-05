@@ -25,7 +25,7 @@ general:
     [75.895273, 17.370473]
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/GEB_Bhima/input/
-  original_data: ../DataDrive/GEB/original_data/
+  original_data: ../DataDrive/original_data/
   preprocessing_folder: ../DataDrive/GEB_Bhima/preprocessing/
   data_folder: ../DataDrive/
   report_folder: ../report/bhima/

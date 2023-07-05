@@ -23,7 +23,7 @@ general:
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/sandbox/input/
   data_folder: ../DataDrive/
-  original_data: ../DataDrive/GEB/original_data/
+  original_data: ../DataDrive/original_data/
   preprocessing_folder: ../DataDrive/sandbox/preprocessing/
   report_folder: ../report/sandbox/
   initial_conditions_folder: ../DataDrive/sandbox/initial
