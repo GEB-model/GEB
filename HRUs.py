@@ -60,6 +60,9 @@ class BaseVariables:
         """
         return array / self.cellArea
 
+    def register_initial_data(self, name: str) -> None:
+        self.model.initial_conditions.append(name)
+
     def load_initial(self, name, default=.0, gpu=False):
         if self.model.load_initial_data:
             fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npz")
@@ -68,6 +71,7 @@ class BaseVariables:
             else:
                 return np.load(fp)['data']
         else:
+            self.register_initial_data(name)
             return default
 
 class Grid(BaseVariables):
@@ -214,6 +218,12 @@ class HRUs(BaseVariables):
                 self.grid_to_HRU,
                 self.unmerged_HRU_indices
             ) = self.create_HRUs()
+            self.register_initial_data('HRU.land_use_type')
+            self.register_initial_data('HRU.land_use_ratio')
+            self.register_initial_data('HRU.land_owners')
+            self.register_initial_data('HRU.HRU_to_grid')
+            self.register_initial_data('HRU.grid_to_HRU')
+            self.register_initial_data('HRU.unmerged_HRU_indices')
         if self.model.args.use_gpu:
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
