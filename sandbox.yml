@@ -3,10 +3,10 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2005-07-22
+  start_time: 1979-07-22
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2005-10-02
+  end_time: 1979-10-02
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
@@ -165,9 +165,7 @@ draw:
     farmers:
       draw_every_nth: 1
   draw_geography:
-    tehsil:
-      properties:
-        color: red
+  
   ###
   # Specify the colors and names of the crops to use here. The indices must match the indices the crop factors file (../DataDrive/GEB/input/crop_data/crop_factors.csv).
   crop_data:
@@ -365,11 +363,14 @@ report_cwatm:
   #   format: csv
   #   save: save
   discharge:
-    varname: data.grid.discharge
+    varname: data.grid.hourly_discharge
+    dt: 24
     function: null
     format: netcdf
     save: export
     time_ranges:
+      - start: 1979-07-22
+        end: 1979-07-28
       - start: 2014-10-12
         end: 2014-10-27
       - start: 2010-05-18

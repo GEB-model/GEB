@@ -83,12 +83,12 @@ if __name__ == '__main__':
         # [
         #     {"name": "wealth_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
         # ],
-        [
-            {"name": "discharge", "color": "#FF0000"},
-        ],
-        [
-            {"name": "reservoir storage", "color": "#FF0000"},
-        ],
+        # [
+        #     {"name": "discharge", "color": "#FF0000"},
+        # ],
+        # [
+        #     {"name": "reservoir storage", "color": "#FF0000"},
+        # ],
         # [
         #     {"name": "w1", "color": "#FF0000"},
         #     {"name": "w2", "color": "#FFAA00"},
@@ -96,12 +96,12 @@ if __name__ == '__main__':
         #     {"name": "potevap", "color": "#FFFF00"},
         #     {"name": "actevap", "color": "#000000"},
         # ],
-        [
-            {"name": "hydraulic head", "color": "#FF0000"},
-        ],
-        [
-            {"name": "precipitation", "color": "#FF0000"},
-        ],
+        # [
+        #     {"name": "hydraulic head", "color": "#FF0000"},
+        # ],
+        # [
+        #     {"name": "precipitation", "color": "#FF0000"},
+        # ],
     ]
 
     model_params = {

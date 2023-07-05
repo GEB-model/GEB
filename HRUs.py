@@ -145,8 +145,13 @@ class Grid(BaseVariables):
             else:
                 fillvalue = 0
         outmap = self.full(fillvalue, dtype=array.dtype).reshape(self.mask_flat.size)
-        outmap[self.mask_flat == False] = array
-        return outmap.reshape(self.mask.shape)
+        output_shape = self.mask.shape
+        if array.ndim == 2:
+            assert array.shape[1] == self.mask_flat.size - self.mask_flat.sum()
+            outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
+            output_shape = (array.shape[0], *output_shape)
+        outmap[..., self.mask_flat == False] = array
+        return outmap.reshape(output_shape)
 
     def plot(self, array: np.ndarray) -> None:
         """Plot array.

@@ -17,6 +17,7 @@ general:
   basin_id: 450000005
   gauges:
     - [80.0731, 16.7942]
+  poor_point: [80.8936617, 15.868063]
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/GEB_Krishna/input/
   original_data: ../DataDrive/GEB/original_data/

@@ -24,6 +24,7 @@ if __name__ == '__main__':
     # add ch to logger
     logger.addHandler(ch)
     # add file handler
+    INPUT.mkdir(exist_ok=True, parents=True)
     fh = logging.FileHandler(INPUT / 'hydromt.log')
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)

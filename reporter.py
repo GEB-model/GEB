@@ -75,7 +75,7 @@ class CWatMReporter(ABMReporter):
                 else:
                     self.variables[name] = []
         
-        self.step()  # report on inital state
+        # self.step()  # report on inital state
 
     def decompress(self, attr: str, array: np.ndarray) -> np.ndarray:
         """This function decompresses an array for given attribute.

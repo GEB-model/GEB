@@ -4,7 +4,7 @@ import os
 from cwatm.cwatm_model import CWATModel
 from cwatm.management_modules.dynamicModel import ModelFrame
 from cwatm.management_modules.configuration import parse_configuration, read_metanetcdf
-from cwatm.management_modules.globals import dateVar, settingsfile, binding, option, outDir
+from cwatm.management_modules.globals import settingsfile, binding, option, outDir
 from cwatm.management_modules.data_handling import cbinding
 from cwatm.management_modules.timestep import checkifDate
 from cwatm.run_cwatm import headerinfo
@@ -166,13 +166,11 @@ class CWatM_Model(CWATModel):
         binding["slopeLength"] = os.path.join(topo_path, "slopeLength.map")
         binding["relativeElevation"] = os.path.join(topo_path, "dzRel.nc")
 
-        checkifDate('StepStart', 'StepEnd', 'SpinUp', cbinding('PrecipitationMaps'))
+        # checkifDate('StepStart', 'StepEnd', 'SpinUp', cbinding('PrecipitationMaps'))
         headerinfo()
 
         CWATModel.__init__(self)
-        self.stCWATM = ModelFrame(self, firstTimestep=dateVar["intStart"], lastTimeStep=dateVar["intEnd"])
-        self.stCWATM.initialize_run()
-        CWATModel.dateVar = dateVar
+        self.stCWATM = ModelFrame(self)
 
     def step(self, n: int) -> None:
         """Performs n number of (daily) steps in CWatM.

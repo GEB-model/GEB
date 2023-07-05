@@ -15,8 +15,12 @@ dependencies:
   - dask
   - tqdm
   - esmpy
+  - s3fs
   - pip
   - pip:
-    - s3fs
     - git+https://github.com/Deltares/hydromt_sfincs.git
     - git+https://github.com/ISI-MIP/isimip-client.git
+    - sphinx
+    - sphinx_rtd_theme
+    - sphinxcontrib-autoprogram
+    - sphinxcontrib-autoyaml
