@@ -7,7 +7,7 @@ from config import INPUT, config
 if __name__ == '__main__':
     yml = r"./hydromt.yml"
 
-    data_libs = [r"../DataDrive/GEB/original_data/data_catalog.yml"]
+    data_libs = [r"../DataDrive/original_data/data_catalog.yml"]
     opt = configread(yml)
     logger = logging.getLogger(__name__)
     # set log level to debug
