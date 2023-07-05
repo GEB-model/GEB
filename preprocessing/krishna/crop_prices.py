@@ -27,8 +27,6 @@ except ImportError:
 from pathlib import Path
 from preconfig import ORIGINAL_DATA, PREPROCESSING_FOLDER
 
-chromedriver_autoinstaller.install() 
-
 CROP_PRICES_PATH = os.path.join(ORIGINAL_DATA, 'crop_prices')
 os.makedirs(CROP_PRICES_PATH, exist_ok=True)
 SCRAPE_PATH = os.path.join(CROP_PRICES_PATH, 'scraped')
@@ -311,9 +309,16 @@ def workwork(i=None):
             print(e)
 
 if __name__ == '__main__':
-    N_WORKERS = 10
-    # with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
-    #     done = executor.map(workwork, list(range(1, N_WORKERS+1)))
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no-scrape', action='store_true')
+    parser.add_argument('--n-workers', type=int, default=10, help='Number of workers to use for scraping')
+    args = parser.parse_args()
+    
+    if not args.no_scrape:
+        chromedriver_autoinstaller.install() 
+        with ThreadPoolExecutor(max_workers=args.n_workders) as executor:
+            done = executor.map(workwork, list(range(1, args.n_workders+1)))
 
     output_folder = os.path.join(PREPROCESSING_FOLDER, 'crops')
     os.makedirs(output_folder, exist_ok=True)
