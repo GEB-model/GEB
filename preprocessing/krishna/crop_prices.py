@@ -309,8 +309,8 @@ def workwork(i=None):
             print(e)
 
 if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
+    from preconfig import parser
+
     parser.add_argument('--no-scrape', action='store_true')
     parser.add_argument('--n-workers', type=int, default=10, help='Number of workers to use for scraping')
     args = parser.parse_args()
