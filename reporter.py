@@ -46,13 +46,19 @@ class CWatMReporter(ABMReporter):
                     if netcdf_path.exists():
                         netcdf_path.unlink()
                     if not 'time_ranges' in config:
-                        time = pd.date_range(start=self.model.current_time, periods=self.model.n_timesteps + 1, freq=self.model.timestep_length)
+                        if 'substeps' in config:
+                            time = pd.date_range(start=self.model.current_time, periods=(self.model.n_timesteps + 1) * config['substeps'], freq=self.model.timestep_length / config['substeps'], inclusive='left')
+                        else:
+                            time = pd.date_range(start=self.model.current_time, periods=self.model.n_timesteps + 1, freq=self.model.timestep_length)
                     else:
                         time = []
                         for time_range in config['time_ranges']:
                             start = time_range['start']
                             end = time_range['end']
-                            time.extend(pd.date_range(start=start, end=end, freq=self.model.timestep_length))
+                            if 'substeps' in config:
+                                time.extend(pd.date_range(start=start, end=end + self.model.timestep_length, freq=self.model.timestep_length / config['substeps'], inclusive='left'))
+                            else:
+                                time.extend(pd.date_range(start=start, end=end, freq=self.model.timestep_length))
                         # exlude time ranges that are not in the simulation period
                         time = [t for t in time if t >= self.model.current_time and t <= self.model.current_time + (self.model.n_timesteps + 1) * self.model.timestep_length]
                         # remove duplicates and sort
@@ -75,7 +81,7 @@ class CWatMReporter(ABMReporter):
                 else:
                     self.variables[name] = []
         
-        # self.step()  # report on inital state
+        self.step()  # report on inital state
 
     def decompress(self, attr: str, array: np.ndarray) -> np.ndarray:
         """This function decompresses an array for given attribute.
@@ -155,7 +161,10 @@ class CWatMReporter(ABMReporter):
                 f.write("\n".join([str(v) for v in value]))
         elif conf['format'] == 'netcdf':
             if np.isin(np.datetime64(self.model.current_time), self.variables[name].time):
-                self.variables[name].loc[{"time": self.model.current_time}] = value
+                if 'substeps' in conf:
+                    self.variables[name].loc[{"time": slice(self.model.current_time, self.model.current_time + self.model.timestep_length - self.model.timestep_length / conf['substeps'])}] = value
+                else:
+                    self.variables[name].loc[{"time": self.model.current_time}] = value
                 self.variables[name].to_netcdf(self.model.config['report_cwatm'][name]['absolute_path'], mode='a')
         else:
             raise ValueError(f"{conf['format']} not recognized")
