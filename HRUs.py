@@ -457,22 +457,9 @@ class Data:
         self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn='mean')
         self.modflow = Modflow(self, model)
         self.load_forcing()
+        self.load_water_demand()
 
     def load_forcing(self):
-        # loading forcing data
-        # self.grid.hurs_100_ds = xr.open_dataset(INPUT / 'climate' / 'hurs.nc')['hurs']
-        # self.grid.pr_m_ds = xr.open_dataset(INPUT / 'climate' / 'pr.nc')['pr']
-        # self.grid.ps_kPa_ds = xr.open_dataset(INPUT / 'climate' / 'ps.nc')['ps'] * 0.001  # Pa to kPa
-        # self.grid.rlds_MJ_m2_day_ds = xr.open_dataset(INPUT / 'climate' / 'rlds.nc')['rlds'] * 86400 * 1E-6  # conversion from W/m2 to MJ/m2/day
-        # self.grid.rsds_MJ_m2_day_ds = xr.open_dataset(INPUT / 'climate' / 'rsds.nc')['rsds'] * 86400 * 1E-6  # conversion from W/m2 to MJ/m2/day
-        # self.grid.tas_C_ds = xr.open_dataset(INPUT / 'climate' / 'tas.nc')['tas'] - 273.15  # K to C
-        # self.grid.tasmax_C_ds = xr.open_dataset(INPUT / 'climate' / 'tasmax.nc')['tasmax'] - 273.15  # K to C
-        # self.grid.tasmin_C_ds = xr.open_dataset(INPUT / 'climate' / 'tasmin.nc')['tasmin'] - 273.15  # K to C
-        # # Adjust wind speed for measurement height: wind speed measured at
-        # # 10 m, but needed at 2 m height
-        # # Shuttleworth, W.J. (1993) in Maidment, D.R. (1993), p. 4.36
-        # self.grid.wind_ds = xr.open_dataset(INPUT / 'climate' / 'wind.nc')['wind'] * 0.749
-
         # loading forcing data
         self.grid.hurs_ds = xr.open_dataset(INPUT / 'climate' / 'hurs.nc')['hurs']
         self.grid.pr_ds = xr.open_dataset(INPUT / 'climate' / 'pr.nc')['pr']
@@ -483,6 +470,13 @@ class Data:
         self.grid.tasmax_ds = xr.open_dataset(INPUT / 'climate' / 'tasmax.nc')['tasmax']
         self.grid.tasmin_ds = xr.open_dataset(INPUT / 'climate' / 'tasmin.nc')['tasmin']
         self.grid.sfcWind_ds = xr.open_dataset(INPUT / 'climate' / 'wind.nc')['wind']
+
+    def load_water_demand(self):
+        self.model.domestic_water_consumption_ds = xr.open_dataset(INPUT / 'water_demand' / 'domestic_water_consumption.nc')
+        self.model.domestic_water_demand_ds = xr.open_dataset(INPUT / 'water_demand' / 'domestic_water_demand.nc')
+        self.model.industry_water_consumption_ds = xr.open_dataset(INPUT / 'water_demand' / 'industry_water_consumption.nc')
+        self.model.industry_water_demand_ds = xr.open_dataset(INPUT / 'water_demand' / 'industry_water_demand.nc')
+        self.model.livestock_water_consumption_ds = xr.open_dataset(INPUT / 'water_demand' / 'livestock_water_consumption.nc')
 
     @staticmethod
     @njit(cache=True)

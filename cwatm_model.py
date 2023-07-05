@@ -135,13 +135,6 @@ class CWatM_Model(CWATModel):
         binding["riverPercentage"] = os.path.join(modflow_path, "RiverPercentage.npy")
         binding["modflow_mask"] = os.path.join(modflow_path, "modflow_mask.tif")
         
-        binding["domesticWaterDemandFile"]  = os.path.join(water_demand_path, "historical_dom_month_millionm3_5min_1961_2010.nc")
-        binding["domesticWaterDemandFile_SSP2"]  = os.path.join(water_demand_path, "ssp2_dom_month_millionm3_5min_2005_2060.nc")
-        binding["industryWaterDemandFile"] = os.path.join(water_demand_path, "historical_ind_year_millionm3_5min_1961_2010.nc")
-        binding["industryWaterDemandFile_SSP2"] = os.path.join(water_demand_path, "ssp2_ind_year_millionm3_5min_2005_2060.nc")
-        binding["livestockWaterDemandFile"] = os.path.join(water_demand_path, "historical_liv_month_millionm3_5min_1961_2010.nc")
-        binding["livestockWaterDemandFile_SSP2"] = os.path.join(water_demand_path, "ssp2_liv_month_millionm3_5min_2005_2060.nc")
-        
         binding["chanMan"] = os.path.join(INPUT, "routing", "kinematic", "mannings.tif")
         binding["chanLength"] = os.path.join(INPUT, "routing", "kinematic", "channel_length.tif")
         binding["chanWidth"] = os.path.join(INPUT, "routing", "kinematic", "channel_width.tif")
