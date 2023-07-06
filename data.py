@@ -153,9 +153,9 @@ def load_lending_rates(country):
         lending[year] = lending_series[str(year)] / 100
     return lending
 
-def load_well_prices(inflation_rates_per_year):
-    well_price_2008 = 146_000
-    upkeep_price_2008_m2 = 3000 / 10_000  # ha to m2
+def load_well_prices(self, inflation_rates_per_year):
+    well_price_2008 = self.model.config['agent_settings']['expected_utility']['adaptation_well']['adaptation_cost']
+    upkeep_price_2008_m2 = self.model.config['agent_settings']['expected_utility']['adaptation_well']['upkeep_costs'] / 10_000  # ha to m2
     # create dictory with prices for well_prices per year by applying inflation rates
     well_prices = {2008: well_price_2008}
     for year in range(2009, 2022):
@@ -169,6 +169,18 @@ def load_well_prices(inflation_rates_per_year):
     for year in range(2007, 1960, -1):
         upkeep_prices[year] = upkeep_prices[year+1] / inflation_rates_per_year[year+1]
     return well_prices, upkeep_prices
+
+def load_sprinkler_prices(self, inflation_rates_per_year):
+    sprinkler_price_2008 = self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['adaptation_cost']
+    #upkeep_price_2008_m2 = 3000 / 10_000  # ha to m2
+    # create dictory with prices for well_prices per year by applying inflation rates
+    sprinkler_prices = {2008: sprinkler_price_2008}
+    for year in range(2009, 2022):
+        sprinkler_prices[year] = sprinkler_prices[year-1] * inflation_rates_per_year[year]
+    for year in range(2007, 1960, -1):
+        sprinkler_prices[year] = sprinkler_prices[year+1] / inflation_rates_per_year[year+1]
+    return sprinkler_prices
+
 
 
 if __name__ == '__main__':
