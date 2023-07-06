@@ -3,15 +3,15 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2010-12-31
+  start_time: 2017-12-31
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2014-12-31
+  end_time: 2019-01-02
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
-  spinup_time: 2007-12-31
+  spinup_time: 2003-12-31
   ###
   # base folder where to report output data to
   upscale_factor: 40
@@ -47,6 +47,37 @@ agent_settings:
     return_fraction: .5
     farmers_going_out_of_business: false
     well_implementation_intention_behaviour_gap: .8
+  expected_utility:
+    general:
+      include_adaptation: true
+    drought_risk_calculations:
+      risk_perception:
+        base: 1.6
+        min: 0.6 
+        max: 2
+        coef: -1.2
+      event_perception:
+        moving_average_threshold: 20
+        absolute_threshold: 40
+    adaptation_sprinkler:
+      loan_duration: 11 
+      interest_rate: 0.04
+      adaptation_cost: 20000 # Per hectare 
+      reduced_damage: 0.1
+      lifespan: 75
+    adaptation_well:
+      loan_duration: 11 
+      interest_rate: 0.04
+      adaptation_cost: 146000
+      upkeep_costs: 3000 # Per hectare
+      reduced_damage: 0.1
+      lifespan: 75
+    decisions:
+      risk_aversion: 1 # Sigma 
+      decision_horizon: 15
+      time_discounting: 0.032
+      expenditure_cap: 0.1
+      
 ###
 # This sections contains settings for logging of the model. 
 logging:
@@ -287,13 +318,6 @@ report:
     function: null
     save: export
     format: npz
-  # Currently not in model 
-  # wealth_sample:
-  #   type: farmers
-  #   function: sample
-  #   varname: wealth
-  #   save: save
-  #   format: csv
   activation order:
     type: farmers
     function: null
@@ -331,6 +355,31 @@ report:
     varname: "_profit"
     format: npz
     save: export
+  disposable_income sample:
+    type: farmers
+    function: mean
+    varname: disposable_income
+    save: save
+    format: csv
+  wealth sample:
+    type: farmers
+    function: mean
+    varname: wealth
+    save: save
+    format: csv
+  mean_risk_perception:
+    type: farmers
+    function: mean
+    varname: risk_perception
+    save: save
+    format: csv
+  sample_risk_perception:
+    type: farmers
+    function: sample
+    varname: risk_perception
+    save: save
+    format: csv
+    
 
 ###
 # In this section you can configure what CWatM data is saved, such as the groundwater head in each timestep, as follows:
@@ -361,6 +410,7 @@ report_cwatm:
     function: mean
     format: csv
     save: save
+    
 
 parameters:
   SnowMeltCoef: 0.004
