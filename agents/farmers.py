@@ -2,9 +2,11 @@
 import os
 import math
 from datetime import date
+import cftime
 import json
 import random
 import calendar
+from scipy.stats import genextreme
 
 import numpy as np
 from numba import njit
@@ -14,12 +16,21 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
+from scipy import interpolate
+from numpy.linalg import LinAlgError
+import matplotlib.pyplot as plt
+
+from honeybees.library.mapIO import NetCDFReader
 from honeybees.library.mapIO import ArrayReader
 from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates, load_lending_rates, load_well_prices
+from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates, load_lending_rates, load_well_prices, load_sprinkler_prices
+
+## Import the DecisionModule class from the other file 
+from agents.decision_module import DecisionModule
+
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -65,7 +76,12 @@ class Farmers(AgentBaseClass):
         "crop_names",
         "cultivation_costs",
         "crop_prices",
-        "inflation"
+        "inflation", 
+        ## risk perception & SEUT 
+        "previous_month",
+        "moving_average_loss",
+        "absolute_threshold_loss",
+        "yearly_precipitation_HRU",
     ]
     agent_attributes = [
         "_locations",
@@ -84,18 +100,37 @@ class Farmers(AgentBaseClass):
         "_irrigation_efficiency",
         "_n_water_accessible_days",
         "_n_water_accessible_years",
-        "_water_availability_by_farmer",
         "_channel_abstraction_m3_by_farmer",
         "_groundwater_abstraction_m3_by_farmer",
         "_reservoir_abstraction_m3_by_farmer",
+        "_yearly_abstraction_m3_by_farmer",
         "_latest_profits",
-        "_profits_last_year",
+        "_yearly_profits",
+        "_yearly_yield_ratio",
+        "_total_crop_age",
+        "_per_harvest_yield_ratio",
+        "_per_harvest_precipitation",
+        "_yearly_precipitation",
+        "_yearly_precipitation_probability",
         "_latest_potential_profits",
         "_groundwater_depth",
         "_profit",
         "_farmer_is_in_command_area",
         "_farmer_class",
-        "_flooded"
+        "_flooded",
+        ## expected utility 
+        "_adapted",
+        "_time_adapted",
+        "_wealth",
+        "_risk_perception",
+        "_drought_timer",
+        "_drought_loss",
+        "_risk_perc_min",
+        "_risk_perc_max",
+        "_risk_decr",
+        "_decision_horizon",
+        "_annual_costs_all_adaptations",
+        "_GEV_parameters",
     ]
     __slots__.extend(agent_attributes)
 
@@ -110,9 +145,21 @@ class Farmers(AgentBaseClass):
         self.growth_length, self.crop_stage_lengths, self.crop_factors, self.crop_yield_factors, self.reference_yield = load_crop_factors()
         self.cultivation_costs = load_cultivation_costs()
         
+        ## Set parameters required for drought event perception, risk perception and SEUT 
+        self.previous_month = 0
+        self.moving_average_threshold = self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['event_perception']['moving_average_threshold']
+        self.absolute_threshold = self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['event_perception']['absolute_threshold']
+       
+        # Assign risk aversion sigma, time discounting preferences, expendature cap 
+        self.sigma = self.model.config['agent_settings']['expected_utility']['decisions']['risk_aversion']
+        self.r_time = self.model.config['agent_settings']['expected_utility']['decisions']['time_discounting']
+        self.expenditure_cap = self.model.config['agent_settings']['expected_utility']['decisions']['expenditure_cap']
+
+        # Set costs for adaptations 
         self.inflation_rate = load_inflation_rates('India')
         self.lending_rate = load_lending_rates('India')
-        self.well_price, self.well_upkeep_price_per_m2 = load_well_prices(self.inflation_rate)
+        self.well_price, self.well_upkeep_price_per_m2 = load_well_prices(self, self.inflation_rate)
+        self.sprinkler_price = load_sprinkler_prices(self, self.inflation_rate)
         self.well_investment_time_years = 10
 
         self.elevation_map = ArrayReader(
@@ -246,13 +293,41 @@ class Farmers(AgentBaseClass):
                 "dtype": np.float32,
                 "nodata": np.nan
             },
+            "_yearly_abstraction_m3_by_farmer": {
+                "dtype": np.float32,
+                "nodata": [np.nan, np.nan, np.nan, np.nan]
+            },
             "_latest_profits": {
                 "dtype": np.float32,
                 "nodata": [np.nan, np.nan, np.nan],
             },
-            "_profits_last_year": {
+            "_yearly_profits": {
                 "dtype": np.float32,
-                "nodata": np.nan,
+                "nodata": [np.nan] * (self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'] + 1),
+            },
+            "_yearly_yield_ratio": {
+                "dtype": np.float32,
+                "nodata": [np.nan] * (self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'] + 1),
+            },
+            "_total_crop_age": {
+                "dtype": np.float32,
+                "nodata": [np.nan, np.nan, np.nan],
+            },
+            "_per_harvest_yield_ratio": {
+                "dtype": np.float32,
+                "nodata": [np.nan, np.nan, np.nan],
+            },
+            "_per_harvest_precipitation": {
+                "dtype": np.float32,
+                "nodata": [np.nan, np.nan, np.nan],
+            },
+            "_yearly_precipitation": {
+                "dtype": np.float32,
+                "nodata": [np.nan] * (self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'] + 1),
+            },
+            "_yearly_precipitation_probability": {
+                "dtype": np.float32,
+                "nodata": [np.nan] * (self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'] + 1),
             },
             "_latest_potential_profits": {
                 "dtype": np.float32,
@@ -272,9 +347,418 @@ class Farmers(AgentBaseClass):
                 "nodata": False,
                 "nodatacheck": False
             },
+            "_adapted": {
+                "dtype": np.int32,
+                "nodata": [np.nan, np.nan],
+            },
+            "_time_adapted": {
+                "dtype": np.int32,
+                "nodata": [np.nan, np.nan],
+            },
+            "_wealth": {
+                "dtype": np.float32,
+                "nodata": np.nan,
+            },
+            "_decision_horizon": {
+                "dtype": np.float32,
+                "nodata": [np.nan],
+            },
+            "_risk_perception": {
+                "dtype": np.float32,
+                "nodata": -1,
+            },
+            "_drought_timer": {
+                "dtype": np.float32,
+                "nodata": False,
+                "nodatacheck": False
+            },
+            "_drought_loss": {
+                "dtype": np.float32,
+                "nodata": [np.nan, np.nan, np.nan],
+            },
+            "_risk_perc_min": {
+                "dtype": np.float32,
+                "nodata": -1,
+            },
+            "_risk_perc_max": {
+                "dtype": np.float32,
+                "nodata": False,
+            },
+            "_risk_decr": {
+                "dtype": np.float32,
+                "nodata": False,
+            },
+            "_annual_costs_all_adaptations": {
+                "dtype": np.float32,
+                "nodata": np.nan,
+            },
+            "_GEV_parameters": {
+                "dtype": np.float32,
+                "nodata": [np.nan, np.nan, np.nan],
+            },
         }
         self.initiate_agents()
 
+    @property
+    def locations(self):
+        return self._locations[:self.n]
+
+    @locations.setter
+    def locations(self, value):
+        self._locations[:self.n] = value
+
+    @property
+    def crops(self):
+        return self._crops[:self.n]
+
+    @crops.setter
+    def crops(self, value):
+        self._crops[:self.n] = value
+
+    @property
+    def latest_profits(self):
+        return self._latest_profits[:self.n]
+
+    @latest_profits.setter
+    def latest_profits(self, value):
+        self._latest_profits[:self.n] = value
+
+    @property
+    def latest_potential_profits(self):
+        return self._latest_potential_profits[:self.n]
+
+    @latest_potential_profits.setter
+    def latest_potential_profits(self, value):
+        self._latest_potential_profits[:self.n] = value
+
+    @property
+    def irrigation_efficiency(self):
+        return self._irrigation_efficiency[:self.n]
+
+    @irrigation_efficiency.setter
+    def irrigation_efficiency(self, value):
+        self._irrigation_efficiency[:self.n] = value
+
+    @property
+    def elevation(self):
+        return self._elevation[:self.n]
+
+    @elevation.setter
+    def elevation(self, value):
+        self._elevation[:self.n] = value
+
+    @property
+    def reservoir_abstraction_m3_by_farmer(self):
+        return self._reservoir_abstraction_m3_by_farmer[:self.n]
+
+    @reservoir_abstraction_m3_by_farmer.setter
+    def reservoir_abstraction_m3_by_farmer(self, value):
+        self._reservoir_abstraction_m3_by_farmer[:self.n] = value
+
+    @property
+    def groundwater_abstraction_m3_by_farmer(self):
+        return self._groundwater_abstraction_m3_by_farmer[:self.n]
+
+    @groundwater_abstraction_m3_by_farmer.setter
+    def groundwater_abstraction_m3_by_farmer(self, value):
+        self._groundwater_abstraction_m3_by_farmer[:self.n] = value
+
+    @property
+    def channel_abstraction_m3_by_farmer(self):
+        return self._channel_abstraction_m3_by_farmer[:self.n]
+
+    @channel_abstraction_m3_by_farmer.setter
+    def channel_abstraction_m3_by_farmer(self, value):
+        self._channel_abstraction_m3_by_farmer[:self.n] = value
+
+    @property
+    def yearly_abstraction_m3_by_farmer(self):
+        return self._yearly_abstraction_m3_by_farmer[:self.n]
+
+    @yearly_abstraction_m3_by_farmer.setter
+    def yearly_abstraction_m3_by_farmer(self, value):
+        self._yearly_abstraction_m3_by_farmer[:self.n] = value
+
+    @property
+    def n_water_accessible_days(self):
+        return self._n_water_accessible_days[:self.n]
+
+    @n_water_accessible_days.setter
+    def n_water_accessible_days(self, value):
+        self._n_water_accessible_days[:self.n] = value
+
+    @property
+    def n_water_accessible_years(self):
+        return self._n_water_accessible_years[:self.n]
+
+    @n_water_accessible_years.setter
+    def n_water_accessible_years(self, value):
+        self._n_water_accessible_years[:self.n] = value
+
+    @property
+    def disposable_income(self):
+        return self._disposable_income[:self.n]
+
+    @disposable_income.setter
+    def disposable_income(self, value):
+        self._disposable_income[:self.n] = value
+
+    @property
+    def loan_amount(self):
+        return self._loan_amount[:self.n]
+
+    @loan_amount.setter
+    def loan_amount(self, value):
+        self._loan_amount[:self.n] = value
+
+    @property
+    def loan_interest(self):
+        return self._loan_interest[:self.n]
+
+    @loan_interest.setter
+    def loan_interest(self, value):
+        self._loan_interest[:self.n] = value
+
+    @property
+    def loan_duration(self):
+        return self._loan_duration[:self.n]
+
+    @loan_duration.setter
+    def loan_duration(self, value):
+        self._loan_duration[:self.n] = value
+
+    @property
+    def loan_interest(self):
+        return self._loan_interest[:self.n]
+
+    @loan_interest.setter
+    def loan_interest(self, value):
+        self._loan_interest[:self.n] = value
+
+    @property
+    def loan_interest(self):
+        return self._loan_interest[:self.n]
+
+    @loan_interest.setter
+    def loan_interest(self, value):
+        self._loan_interest[:self.n] = value
+
+    @property
+    def loan_end_year(self):
+        return self._loan_end_year[:self.n]
+
+    @loan_end_year.setter
+    def loan_end_year(self, value):
+        self._loan_end_year[:self.n] = value
+
+    @property
+    def household_size(self):
+        return self._household_size[:self.n]
+
+    @household_size.setter
+    def household_size(self, value):
+        self._household_size[:self.n] = value
+
+    @property
+    def groundwater_depth(self):
+        return self._groundwater_depth[:self.n]
+
+    @groundwater_depth.setter
+    def groundwater_depth(self, value):
+        self._groundwater_depth[:self.n] = value
+
+    @property
+    def daily_expenses_per_capita(self):
+        return self._daily_expenses_per_capita[:self.n]
+
+    @daily_expenses_per_capita.setter
+    def daily_expenses_per_capita(self, value):
+        self._daily_expenses_per_capita[:self.n] = value
+
+    @property
+    def daily_non_farm_income(self):
+        return self._daily_non_farm_income[:self.n]
+
+    @daily_non_farm_income.setter
+    def daily_non_farm_income(self, value):
+        self._daily_non_farm_income[:self.n] = value
+
+    @property
+    def irrigation_source(self):
+        return self._irrigation_source[:self.n]
+
+    @irrigation_source.setter
+    def irrigation_source(self, value):
+        self._irrigation_source[:self.n] = value
+
+    @property
+    def profit(self):
+        return self._profit[:self.n]
+
+    @profit.setter
+    def profit(self, value):
+        self._profit[:self.n] = value
+
+    @property
+    def yearly_profits(self):
+        return self._yearly_profits[:self.n]
+
+    @yearly_profits.setter
+    def yearly_profits(self, value):
+        self._yearly_profits[:self.n] = value
+
+    @property
+    def yearly_yield_ratio(self):
+        return self._yearly_yield_ratio[:self.n]
+
+    @yearly_yield_ratio.setter
+    def yearly_yield_ratio(self, value):
+        self._yearly_yield_ratio[:self.n] = value
+
+    @property
+    def total_crop_age(self):
+        return self._total_crop_age[:self.n]
+
+    @total_crop_age.setter
+    def total_crop_age(self, value):
+        self._total_crop_age[:self.n] = value
+
+    @property
+    def per_harvest_yield_ratio(self):
+        return self._per_harvest_yield_ratio[:self.n]
+
+    @per_harvest_yield_ratio.setter
+    def per_harvest_yield_ratio(self, value):
+        self._per_harvest_yield_ratio[:self.n] = value
+
+    @property
+    def per_harvest_precipitation(self):
+        return self._per_harvest_precipitation[:self.n]
+
+    @per_harvest_precipitation.setter
+    def per_harvest_precipitation(self, value):
+        self._per_harvest_precipitation[:self.n] = value
+    
+    @property
+    def yearly_precipitation_probability(self):
+        return self._yearly_precipitation_probability[:self.n]
+
+    @yearly_precipitation_probability.setter
+    def yearly_precipitation_probability(self, value):
+        self._yearly_precipitation_probability[:self.n] = value
+
+    @property
+    def yearly_precipitation(self):
+        return self._yearly_precipitation[:self.n]
+
+    @yearly_precipitation.setter
+    def yearly_precipitation(self, value):
+        self._yearly_precipitation[:self.n] = value
+
+    @property
+    def farmer_is_in_command_area(self):
+        return self._farmer_is_in_command_area[:self.n]
+
+    @farmer_is_in_command_area.setter
+    def farmer_is_in_command_area(self, value):
+        self._farmer_is_in_command_area[:self.n] = value
+
+    @property
+    def farmer_class(self):
+        return self._farmer_class[:self.n]
+
+    @farmer_class.setter
+    def farmer_class(self, value):
+        self._farmer_class[:self.n] = value
+
+    @property
+    def tehsil(self):
+        return self._tehsil[:self.n]
+
+    @tehsil.setter
+    def tehsil(self, value):
+        self._tehsil[:self.n] = value
+
+    @property
+    def flooded(self):
+        return self._flooded[:self.n]
+
+    @flooded.setter
+    def flooded(self, value):
+        self._flooded[:self.n] = value
+
+    @property
+    def field_indices_by_farmer(self):
+        return self._field_indices_by_farmer[:self.n]
+
+    @field_indices_by_farmer.setter
+    def field_indices_by_farmer(self, value):
+        self._field_indices_by_farmer[:self.n] = value
+
+    @property
+    def adapted(self):
+        return self._adapted[:self.n]
+
+    @adapted.setter
+    def adapted(self, value):
+        self._adapted[:self.n] = value
+    
+    @property
+    def time_adapted(self):
+        return self._time_adapted[:self.n]
+
+    @time_adapted.setter
+    def time_adapted(self, value):
+        self._time_adapted[:self.n] = value
+
+    @property
+    def wealth(self):
+        return self._wealth[:self.n]
+
+    @wealth.setter
+    def wealth(self, value):
+        self._wealth[:self.n] = value
+
+    @property
+    def drought_loss(self):
+        return self._drought_loss[:self.n]
+
+    @drought_loss.setter
+    def drought_loss(self, value):
+        self._drought_loss[:self.n] = value
+
+    @property
+    def drought_timer(self):
+        return self._drought_timer[:self.n]
+
+    @drought_timer.setter
+    def drought_timer(self, value):
+        self._drought_timer[:self.n] = value
+
+    @property
+    def risk_perception(self):
+        return self._risk_perception[:self.n]
+
+    @risk_perception.setter
+    def risk_perception(self, value):
+        self._risk_perception[:self.n] = value
+
+    @property
+    def annual_costs_all_adaptations(self):
+        return self._annual_costs_all_adaptations[:self.n]
+
+    @annual_costs_all_adaptations.setter
+    def annual_costs_all_adaptations(self, value):
+        self._annual_costs_all_adaptations[:self.n] = value
+
+    @property
+    def GEV_parameters(self):
+        return self._GEV_parameters[:self.n]
+
+    @GEV_parameters.setter
+    def GEV_parameters(self, value):
+        self._GEV_parameters[:self.n] = value
+    
     @staticmethod
     def is_in_command_area(n, command_areas, field_indices, field_indices_by_farmer):
         farmer_is_in_command_area = np.zeros(n, dtype=np.bool)
@@ -330,38 +814,89 @@ class Farmers(AgentBaseClass):
 
             # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
             self.elevation = self.elevation_map.sample_coords(self.locations)
-      
+
+            # Initiate adaptation status
+            self.adapted = np.zeros((self.n, 2), dtype=np.int32) # 2d array which indicates if agents have adapted. 0 = not adapted, 1 adapted. Column 0 = sprinkler, 1 = well
+            self.time_adapted = np.zeros((self.n, 2), dtype=np.int32) # array containing the time each agent has been paying off their dry flood proofing investment loan. Column 0 = sprinkler, 1 = well
+
+
             # Load the crops planted for each farmer in the Kharif, Rabi and Summer seasons.
             self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif crop.npy'))
             self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi crop.npy'))
             self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer crop.npy'))
             assert self.crops.max() < len(self.crop_names)
 
+            # Set irrigation source 
             self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation_source.npy'))
-
-            # Set irrigation efficiency to 70% for all farmers.
-            self.irrigation_efficiency[:] = .70
+            # set the adaptation of wells to 1 if farmers have well 
+            self.adapted[:,1][np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])] = 1
+            
+            #self.irrigation_source = np.zeros(15657)
 
             # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
 
             self.channel_abstraction_m3_by_farmer[:] = 0
             self.reservoir_abstraction_m3_by_farmer[:] = 0
             self.groundwater_abstraction_m3_by_farmer[:] = 0
-            self.water_availability_by_farmer[:] = 0
+            # 2D-array for storing yearly abstraction by farmer. 0: channel abstraction, 1: reservoir abstraction, 2: groundwater abstraction, 3: total abstraction
+            self.yearly_abstraction_m3_by_farmer = np.zeros((self.n, 4), dtype=np.float32)
             self.n_water_accessible_days[:] = 0
             self.n_water_accessible_years[:] = 0
 
             self.profit[:] = 0
-            self.profits_last_year[:] = 0
+
+            self.yearly_profits = np.zeros((self.n, self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'] + 1), dtype=np.float32)
+            self.yearly_yield_ratio = np.zeros((self.n, self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'] + 1), dtype=np.float32)
+
+            # 0 = kharif age, 1 = rabi age, 2 = summer age, 3 = total growth time 
+            self.total_crop_age = np.zeros((self.n, 3), dtype=np.float32)
+            # 0 = kharif yield_ratio, 1 = rabi yield_ratio, 2 = summer yield_ratio
+            self.per_harvest_yield_ratio = np.zeros((self.n, 3), dtype=np.float32)
+            self.per_harvest_precipitation = np.zeros((self.n, 3), dtype=np.float32)
+
+            self.yearly_precipitation = np.zeros((self.n, self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'] + 1), dtype=np.float32)
+            self.yearly_precipitation_probability = np.zeros((self.n, self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'] + 1), dtype=np.float32)
+            # Create 2d array in which the past years rainfall is stored 
+            self.yearly_precipitation_HRU = np.zeros((250, self.var.land_owners[self.var.land_owners != -1].size), dtype=np.float32)
             self.disposable_income[:] = 0
             self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'household size.npy'))
             self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily non farm income family.npy'))
             self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
             self.flooded[:] = False
 
+            ## Base initial wealth on x days of daily expenses
+            self.wealth = self.daily_expenses_per_capita * self.household_size * ((365/12)*18)
+        
+            ## Risk perception variables 
+            self.risk_perception = np.full(self.n, self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'], dtype = np.float32)
+            self.drought_timer = np.full(self.n, 99, dtype = np.float32)
+            self.drought_loss = np.zeros((self.n, 3), dtype=np.float32)
+
+            # Set irrigation efficiency to 70% for all farmers.
+            self.irrigation_efficiency[:] = .70
+            # Set the people who already have more van 90% irrigation efficiency to already adapted for the sprinkler irrgation adaptation  
+            self.adapted[:,0][self.irrigation_efficiency >= .90] = 1
+            
+            # Initiate array that tracks the overall yearly costs for all adaptations 
+            self.annual_costs_all_adaptations = np.zeros(self.n, dtype=np.float32) 
+
             self.farmer_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
 
             self.farmer_is_in_command_area[:] = False
+
+            ## Load in the GEV_parameters, calculated from the extreme value distribution of the 1979-2016 timeseries --> perhaps longer would be better than higher resolution 
+            parameter_names = ['shape', 'loc', 'scale']
+            self.GEV_parameters = np.zeros((len(self.locations), len(parameter_names)))
+
+            for i, varname in enumerate(parameter_names):
+                GEV_map = NetCDFReader(
+                    fp=os.path.join(self.model.config['general']['input_folder'], 'drought', 'Precipitation', 'GEV_1979_2016_Sanctuary.nc'),
+                    varname=varname,
+                    bounds=self.model.bounds,
+                    latname='lat',
+                    lonname='lon',
+                )
+                self.GEV_parameters[:, i] = GEV_map.sample_coords(self.locations)
     
         self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
         self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
@@ -369,12 +904,18 @@ class Farmers(AgentBaseClass):
         self.var.crop_age_days_map = self.var.load_initial('crop_age_days_map', default=np.full_like(self.var.land_owners, -1), gpu=False)
         self.var.crop_harvest_age_days = self.var.load_initial('crop_harvest_age_days', default=np.full_like(self.var.land_owners, -1), gpu=False)
 
+        self.risk_perc_min = np.full(self.n, self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'], dtype = np.float32)
+        self.risk_perc_max = np.full(self.n, self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['max'], dtype = np.float32)
+        self.risk_decr = np.full(self.n, self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['coef'], dtype = np.float32)
+        self.decision_horizon = np.full(self.n, self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'])
+
+
         self._field_indices_by_farmer = np.full((self.max_n, 2), -1, dtype=np.int32)
         self.update_field_indices()
 
         print(f'Loaded {self.n} farmer agents')
 
-        # check whether non of the attributes have nodata values
+        # check whether none of the attributes have nodata values
         for attr in self.agent_attributes:
             assert getattr(self, attr[1:]).shape[0] == self.n
             if "nodatacheck" not in self.agent_attributes_meta[attr] or self.agent_attributes_meta[attr]['nodatacheck'] is True:
@@ -741,22 +1282,206 @@ class Farmers(AgentBaseClass):
         assert not np.isnan(yield_ratio).any()
         return yield_ratio
 
-    def save_profit(self, harvesting_farmers: np.ndarray, profit: np.ndarray, potential_profit: np.ndarray) -> None:
-        """Saves the current harvest for harvesting farmers in a 2-dimensional array. The first dimension is the different farmers, while the second dimension are the previous harvests. First the previous harvests are moved by 1 column (dropping old harvests when they don't visit anymore) to make room for the new harvest. Then, the new harvest is placed in the array.
+    def precipitation_sum(self) -> None:
+        # Store precipitation per day in a 2d array of past days. After new day is stored, shift the daily precipitation a day back. 
+        self.yearly_precipitation_HRU[1:,: ] = self.yearly_precipitation_HRU[0:-1, :]
+        self.yearly_precipitation_HRU[0,:] = self.model.data.HRU.Precipitation[self.var.land_owners != -1]
+
+        # To create unique groups based on water abstraction, sum the abstractions. Later used to make groups. 
+        self.yearly_abstraction_m3_by_farmer[:,0] += self.channel_abstraction_m3_by_farmer
+        self.yearly_abstraction_m3_by_farmer[:,1] += self.reservoir_abstraction_m3_by_farmer
+        self.yearly_abstraction_m3_by_farmer[:,2] += self.groundwater_abstraction_m3_by_farmer
+        self.yearly_abstraction_m3_by_farmer[:,3] += self.channel_abstraction_m3_by_farmer + self.reservoir_abstraction_m3_by_farmer + self.groundwater_abstraction_m3_by_farmer
+
+    def save_profit_water_rain(self, harvesting_farmers: np.ndarray, profit: np.ndarray, potential_profit: np.ndarray) -> None:
+        """Saves the current harvest for harvesting farmers in a 2-dimensional array. The first dimension is the different farmers, while the second dimension are the previous harvests. 
+        First the previous harvests are moved by 1 column (dropping old harvests) to make room for the new harvest. Then, the new harvest is placed in the array.
+        
+        Also saves the profits, yield ratio and precipitation. It does this per harvest and resets & saves the total at the start of each year.
   
         Args:
             harvesting_farmers: farmers that harvest in this timestep.
         """
+        
         assert (profit >= 0).all()
         assert (potential_profit >= 0).all()
 
-        self.profits_last_year[harvesting_farmers] = profit[harvesting_farmers]
-
+        # shift all columns one column further, the last falls off.
         self.latest_profits[harvesting_farmers, 1:] = self.latest_profits[harvesting_farmers, 0:-1]
         self.latest_profits[harvesting_farmers, 0] = profit[harvesting_farmers]
-  
+        # shift all columns one column further, the last falls off.
         self.latest_potential_profits[harvesting_farmers, 1:] = self.latest_potential_profits[harvesting_farmers, 0:-1]
         self.latest_potential_profits[harvesting_farmers, 0] = potential_profit[harvesting_farmers]
+
+        ## Variable that sums harvests within a year. After a year has passed the total is moved to the second column (next function). Correct for field size 
+        self.yearly_profits[harvesting_farmers, 0] += self.latest_profits[harvesting_farmers, 0] / self.field_size_per_farmer[harvesting_farmers]
+        
+        
+    def store_long_term_damages_profits_rain(self) -> None:
+        """Saves the yearly profit, rainfall and yield ratios and stores them. Then calculates for each unique farmer type what their yearly mean is. 
+        """
+        # shift all columns one column further, the last falls off. 
+        self.yearly_profits[:, 1:] = self.yearly_profits[:, 0:-1]
+        # Set the first column to 0
+        self.yearly_profits[:, 0] = 0
+
+        # calculate the average yield ratio for that year 
+        total_planted_time = self.total_crop_age[:,0] + self.total_crop_age[:,1] + self.total_crop_age[:,2]
+        
+        ## Mask where total_planted time is 0 (no planting was done)
+        total_planted_time = np.ma.masked_where(total_planted_time == 0, total_planted_time)
+
+        # add the yield ratio proportional to the total planting time 
+        self.yearly_yield_ratio[:, 0] = (
+            self.total_crop_age[:, 0] / total_planted_time * self.per_harvest_yield_ratio[:, 0] + #kharif yield ratio 
+            self.total_crop_age[:, 1] / total_planted_time * self.per_harvest_yield_ratio[:, 1] + #rabi yield ratio 
+            self.total_crop_age[:, 2] / total_planted_time * self.per_harvest_yield_ratio[:, 2]   #summer yield ratio 
+            ) 
+        
+        # add the total precipitation during planting time 
+        self.yearly_precipitation[:, 0] = self.per_harvest_precipitation[:,0] + self.per_harvest_precipitation[:,1] + self.per_harvest_precipitation[:,2]
+
+        # seasonal_rainfall_probability = np.zeros((self.n, 3), dtype=np.float32)
+        # ## Convert the seasonal rainfall to monthly rainfall in mm, to 
+        # seasonal_rainfall_probability[:,0] = genextreme.sf((self.per_harvest_precipitation[self.total_crop_age[:,0] != 0, 0] / self.total_crop_age[self.total_crop_age[:,0] != 0, 0] * (365/12) * 1000), self.GEV_parameters[self.total_crop_age[:,0] != 0,0], self.GEV_parameters[self.total_crop_age[:,0] != 0,1], self.GEV_parameters[self.total_crop_age[:,0] != 0,2])
+        # seasonal_rainfall_probability[:,1] = genextreme.sf((self.per_harvest_precipitation[:, 1] / self.total_crop_age[:, 1] * (365/12) * 1000), self.GEV_parameters[:,0], self.GEV_parameters[:,1], self.GEV_parameters[:,2])
+        # seasonal_rainfall_probability[:,2] = genextreme.sf((self.per_harvest_precipitation[:, 2] / self.total_crop_age[:, 2] * (365/12) * 1000), self.GEV_parameters[:,0], self.GEV_parameters[:,1], self.GEV_parameters[:,2])
+        
+
+        # shift all columns one column further, the last falls off. 
+        self.yearly_yield_ratio[:, 1:] = self.yearly_yield_ratio[:, 0:-1]
+        # Set the first column to 0
+        self.yearly_yield_ratio[:, 0] = 0
+        # set the total crop age and per crop yield ratios to 0 
+        self.total_crop_age[:, :] = 0
+        self.per_harvest_yield_ratio[:, :] = 0
+
+        #shift all columns one column further, the last falls off. 
+        self.yearly_precipitation[:, 1:] = self.yearly_precipitation[:, 0:-1]
+        #Reset the first column of the HRU and yearly precipitation columns to 0 
+        self.yearly_precipitation[:, 0] = 0
+
+        #shift all columns one column further, the last falls off. 
+        self.yearly_precipitation_probability[:, 1:] = self.yearly_precipitation_probability[:, 0:-1]
+        #Reset the first column of the HRU and yearly precipitation columns to 0 
+        self.yearly_precipitation_probability[:, 0] = 0
+        
+        # Now convert the yearly values per individual farmer to unique farmer types
+        # First check if these variables already exist, otherwise make them. The total years they use is equal to the decision horizon. 
+        unique_yearly_profits = locals().get('unique_yearly_profits', 
+                                             np.empty((0, self.decision_horizon[0])))
+        unique_yearly_yield_ratio = locals().get('unique_yearly_yield_ratio', 
+                                                 np.empty((0, self.decision_horizon[0])))
+        unique_yearly_precipitation = locals().get('unique_yearly_precipitation', 
+                                                   np.empty((0, self.decision_horizon[0])))
+        unique_precipitation_probability = locals().get('unique_precipitation_probability', 
+                                                   np.empty((0, self.decision_horizon[0])))
+
+        # Make a new variable that has crop combination and the farmer class (what type of water they use), as to make unique groups based on this
+        # Should perhaps make this into a model wide variable 
+        crop_irrigation_groups = np.hstack((self.crops, self.farmer_class.reshape(-1, 1)))
+
+        # Save the profits, rainfall and water shortage for each farmer type. To do: change this to a vectorized operation, determine and add more homogene farmer groups 
+        for crop_combination in np.unique(crop_irrigation_groups, axis=0):
+
+            unique_farmer_groups = np.where((crop_irrigation_groups==crop_combination[None, ...]).all(axis=1))[0]
+            
+            # Calculate averages of profits, yield ratio, precipitation, and probability for the same farmer groups
+            average_profits = np.mean(self.yearly_profits[unique_farmer_groups, 1:], axis=0)
+            average_yield_ratio = np.mean(self.yearly_yield_ratio[unique_farmer_groups, 1:], axis=0)
+            average_precipitation = np.mean(self.yearly_precipitation[unique_farmer_groups, 1:], axis=0)
+            average_probability = np.mean(self.yearly_precipitation_probability[unique_farmer_groups, 1:], axis=0)
+            
+            # Prepend the averages to respective arrays
+            unique_yearly_profits = np.vstack((average_profits, unique_yearly_profits))
+            unique_yearly_yield_ratio = np.vstack((average_yield_ratio, unique_yearly_yield_ratio))
+            unique_yearly_precipitation = np.vstack((average_precipitation, unique_yearly_precipitation))
+            unique_precipitation_probability = np.vstack((average_probability, unique_precipitation_probability))
+
+
+        # Make sure that it is max X values that are saved
+        unique_yearly_profits = unique_yearly_profits[:,:self.decision_horizon[0]]
+        unique_yearly_yield_ratio = unique_yearly_yield_ratio[:,:self.decision_horizon[0]]
+        unique_yearly_precipitation = unique_yearly_precipitation[:,:self.decision_horizon[0]]
+        unique_precipitation_probability = unique_precipitation_probability[:,:self.decision_horizon[0]]
+
+        ## Mask the minimum and the maximum value 
+        arrays = [unique_yearly_profits, unique_yearly_yield_ratio, unique_yearly_precipitation, unique_precipitation_probability]
+        masked_arrays = []
+
+        for array in arrays:
+            mask = np.ones_like(array, dtype=bool)
+            # Find the indices of the maximum and minimum values along axis 1 (columns)
+            max_indices = np.argmax(array, axis=1)
+            min_indices = np.argmin(array, axis=1)
+
+            # Update the mask for the corresponding column indices
+            mask[np.arange(array.shape[0]), max_indices] = False
+            mask[np.arange(array.shape[0]), min_indices] = False
+
+            # Create a masked array using the mask
+            masked_array = np.ma.array(array, mask=~mask)
+            masked_arrays.append(masked_array)
+
+        unique_yearly_profits_mask, unique_yearly_yield_ratio_mask, unique_yearly_precipitation_mask, unique_precipitation_probability_mask = masked_arrays
+        
+
+        # Mask rows that consist only of 0s --> no relation possible 
+        mask = np.any((unique_yearly_profits_mask != 0), axis=1) & np.any((unique_yearly_yield_ratio_mask != 0), axis=1) & np.any((unique_yearly_precipitation_mask != 0), axis=1)
+        masked_unique_yearly_profits = unique_yearly_profits_mask[mask]
+        masked_unique_yearly_yield_ratio = unique_yearly_yield_ratio_mask[mask]
+        masked_unique_yearly_precipitation = unique_yearly_precipitation_mask[mask]
+        masked_precipitation_probability= unique_precipitation_probability[mask]
+
+
+        ## Clear previous plots from the cache
+        plt.clf()
+
+        # For testing, only show the first five unique farmer groups 
+        trendline_count = 0
+
+        ## Create empty lists to append the relations to 
+        farmer_profit_yield_relation = []
+        farmer_profit_rainfall_relation = []
+
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        # Determine the relation between the remaining rows. To do: vectorize --> may be a bit difficult
+        for i, (row1, row2, row3) in enumerate(zip(masked_unique_yearly_yield_ratio, masked_unique_yearly_profits, masked_unique_yearly_precipitation), 1):
+            ## Determine the relation between yield ratio and profit for all farmer types
+            # Calculate the coefficients and save them  
+            coefficients_profit_yield = np.polyfit(row1, row3, 1)
+            poly_profit_yield = np.poly1d(coefficients_profit_yield)
+            farmer_profit_yield_relation.append(poly_profit_yield)
+            
+            ## Visualize the scatterplot and trendline 
+            ax1.scatter(row1, row3)
+            ax1.plot(row1, poly_profit_yield(row1), label= f'Farmer group {i}')
+            
+            ## Determine the relation between profit and precipitation for all farmer types 
+            # Calculate the coefficients and save them 
+            coefficients_profit_rainfall = np.polyfit(row2, row3, 1)
+            poly_profit_rainfall = np.poly1d(coefficients_profit_rainfall)
+            farmer_profit_rainfall_relation.append(poly_profit_rainfall)
+
+            ## Visualize the scatterplot and trendline 
+            ax2.scatter(row2, row3)
+            ax2.plot(row2, poly_profit_rainfall(row2), label= f'Farmer group {i}')
+
+            # For testing, only calculate the first 5 farmer types 
+            trendline_count += 1
+            if trendline_count == 15:
+                break
+
+        ax1.set_xlabel('Yield ratio')
+        ax1.set_ylabel('precipitation')
+
+        ax2.set_xlabel('Profits')
+        ax2.set_ylabel('Precipitation')
+
+        plt.tight_layout()
+
+        plt.legend()
+        plt.show()
 
     def by_field(self, var, nofieldvalue=-1):
         if self.n:
@@ -818,8 +1543,8 @@ class Farmers(AgentBaseClass):
                         crop_harvest_age_days[field] = -1
                 else:
                     assert crop_map[field] == -1
-        return harvest
-  
+        return harvest      
+
     def harvest(self):
         """This function determines which crops needs to be harvested, based on the current age of the crops and the harvest age of the crop. First a helper function is used to obtain the harvest map. Then, if at least 1 field is harvested, the yield ratio is obtained for all fields using the ratio of actual to potential evapotranspiration, saves the harvest per farmer and potentially invests in water saving techniques.
         """
@@ -862,14 +1587,45 @@ class Farmers(AgentBaseClass):
             
             self.profit = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
 
+            ## Set the current crop age
+            crop_age = self.var.crop_age_days_map[harvest]
+            total_crop_age = np.bincount(harvesting_farmer_fields, weights = crop_age, minlength=self.n) / np.bincount(harvesting_farmer_fields, minlength=self.n)
+
+            ## Convert the yield_ratio per field to the average yield ratio per farmer 
+            yield_ratio_agent = np.bincount(harvesting_farmer_fields, weights = yield_ratio, minlength=self.n) / np.bincount(harvesting_farmer_fields, minlength=self.n)
+            
+            # Convert the precipitation per HRU to precipitation per farmer -- first sum it over the days the crop has grown
+            cum_prec_HRU_latest_harvest = np.sum(self.yearly_precipitation_HRU[:crop_age[0], :], axis=0)
+            precipitation_agent = np.bincount(self.var.land_owners[self.var.land_owners != -1], weights=cum_prec_HRU_latest_harvest, minlength=self.n) / np.bincount(self.var.land_owners[self.var.land_owners != -1], minlength=self.n)
+
+            ## Add the yield ratio, precipitation and the crop age to the array corresponding to the current season to do: perhaps this needs a plus too in case there were more than a single harvest per season 
+            if self.current_season_idx == 0:
+                self.total_crop_age[harvesting_farmers, 0] = total_crop_age[harvesting_farmers]
+                self.per_harvest_yield_ratio[harvesting_farmers, 0] = yield_ratio_agent[harvesting_farmers]
+                self.per_harvest_precipitation[harvesting_farmers, 0] = precipitation_agent[harvesting_farmers]
+            elif self.current_season_idx == 1:
+                self.total_crop_age[harvesting_farmers, 1] = total_crop_age[harvesting_farmers]
+                self.per_harvest_yield_ratio[harvesting_farmers, 1] = yield_ratio_agent[harvesting_farmers]
+                self.per_harvest_precipitation[harvesting_farmers, 1] = precipitation_agent[harvesting_farmers]
+            elif self.current_season_idx == 2:
+                self.total_crop_age[harvesting_farmers, 2] = total_crop_age[harvesting_farmers]
+                self.per_harvest_yield_ratio[harvesting_farmers, 2] = yield_ratio_agent[harvesting_farmers]
+                self.per_harvest_precipitation[harvesting_farmers, 2] = precipitation_agent[harvesting_farmers]
+           
             # get potential crop profit per farmer
             potential_crop_yield = harvested_area * max_yield_per_crop
             potential_profit = potential_crop_yield * crop_prices_per_field
             potential_profit = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
       
-            self.save_profit(harvesting_farmers, self.profit, potential_profit)
-      
+            self.save_profit_water_rain(harvesting_farmers, self.profit, potential_profit)
+            
+            self.drought_risk_perception(harvesting_farmers)
+            
+            ## After updating the drought risk perception, set the previous month for the next timestep as the current for this timestep
+            self.previous_month = self.model.current_time.month
+
             self.disposable_income += self.profit
+
         
         else:
             self.profit = np.zeros(self.n, dtype=np.float32)
@@ -918,7 +1674,7 @@ class Farmers(AgentBaseClass):
             field_size_per_farmer: Field size per farmer in m2
 
         Returns:
-            plant: Subarray map of what crops are plantn this day.
+            plant: Subarray map of what crops are planted this day.
         """
         plant = np.full_like(crop_map, -1, dtype=np.int32)
         sell_land = np.zeros(disposable_income.size, dtype=np.bool_)
@@ -986,6 +1742,142 @@ class Farmers(AgentBaseClass):
         field_is_paddy_irrigated = (self.var.crop_map == self.crop_names['Paddy'])
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)] = 2
         self.var.land_use_type[(self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)] = 3
+    
+    def drought_risk_perception(self, harvesting_farmers: np.ndarray):
+        ## convert the harvesting farmers array to a full length array with true values  
+        harvesting_farmers_long = np.zeros(self.n, dtype=bool)
+        harvesting_farmers_long[harvesting_farmers] = True
+
+        ## Update the drought timer for every timestep (harvest) that it is activated, update is the difference between last and current timestep 
+        months_passed = (self.model.current_time.month - self.previous_month) % 12
+        self.drought_timer += (months_passed / 12) 
+        
+        ## Determine the loss between potential and actual profits of all recorded events in % for all the harvesting farmers 
+        self.drought_loss[harvesting_farmers_long] = np.abs(((self.latest_profits[harvesting_farmers_long] - self.latest_potential_profits[harvesting_farmers_long]) / self.latest_potential_profits[harvesting_farmers_long]) * 100)
+        
+        ## Determine latest and past average loss percentages 
+        drought_loss_latest = self.drought_loss[:,0]
+        drought_loss_past = np.mean(self.drought_loss[:, 1:], axis=1)
+
+        ## Farmers experience drought events if the loss is larger than that of the last few years, or very large (thresholds t.b.d.)
+        experienced_drought_event = np.logical_or(drought_loss_past - drought_loss_latest >= self.moving_average_threshold, drought_loss_latest >= self.absolute_threshold)
+        
+        # Reset drought timer on locations that have harvesting farmers and that have experienced a drought event 
+        self.drought_timer[np.logical_and(harvesting_farmers_long, experienced_drought_event)] = 0
+
+        # Calculate the updated risk perception of all farmers 
+        self.risk_perception = (self.risk_perc_max * 1.6 ** (self.risk_decr * self.drought_timer)) + self.risk_perc_min
+
+        print('Risk perception mean = ',np.mean(self.risk_perception))
+
+
+    def SEUT_irrigation_well(self) -> None:
+        decision_module = DecisionModule(self)
+        
+        ## Set the probabilities for future droughts -- will be changed later 
+        p_droughts = np.array([1000, 500, 250, 100, 50, 25, 10, 5, 2])
+        
+        ## How much of the yield is lost during drought
+        p_droughts_loss = np.array([300, 200, 150, 100, 60, 50, 40, 30, 10]) / 100
+        # Create random damages in 9d arrays to provide input for the decision module 
+        # Firstcreate an empty array with the specified dimensions
+        expected_damages = np.zeros((len(p_droughts), self.n))
+        expected_damages_adapt = np.zeros((len(p_droughts), self.n))
+
+        # loop over the first dimension of the array
+        for i, p in enumerate(p_droughts_loss):
+            reduced_damage_factor = self.model.config['agent_settings']['expected_utility']['adaptation_well']['reduced_damage']
+            ## Yearly yield (rupees) per hectare, based on proportional cultivation of major crops and crop prices in maharastra
+            average_price_per_m2 = 130000 / 10000
+            # generate a random 1D array using the given parameters
+            expected_damages[i] = self.field_size_per_farmer * average_price_per_m2 * p 
+
+            expected_damages_adapt[i] = self.field_size_per_farmer * average_price_per_m2 * p * reduced_damage_factor 
+
+
+        # Convert adaptation + upkeep cost to annual cost based on loan duration and interest rate
+        total_cost = np.full(self.n, self.well_price[self.model.current_time.year], dtype = np.float32)
+        loan_duration = self.model.config['agent_settings']['expected_utility']['adaptation_well']['loan_duration'] 
+        r_loan =  self.model.config['agent_settings']['expected_utility']['adaptation_well']['interest_rate'] 
+
+        # Calculate annnual costs of adaptation loan based on interest rate and loan duration
+        annual_cost = total_cost * (r_loan *( 1+r_loan) ** loan_duration/ ((1+r_loan)**loan_duration -1))
+        
+        # Determine the total yearly costs of farmers if they would adapt this cycle 
+        total_annual_costs = annual_cost + self.annual_costs_all_adaptations
+
+        # Reset timer and adaptation status when lifespan of adaptation is exceeded 
+        self.adapted[:,1][self.time_adapted[:,1] == self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan']] = 0
+        self.time_adapted[:,1][self.time_adapted[:,1] == self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan']] = -1 
+
+        decision_params = {'loan_duration': self.model.config['agent_settings']['expected_utility']['adaptation_well']['loan_duration'],  
+                        'expenditure_cap': self.expenditure_cap, 
+                        #'lifespan' : self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan'], ## Not in model yet, can be added 
+                        'n_agents':  self.n, 
+                        'sigma': self.sigma,
+                        'wealth': self.wealth, 
+                        'income': self.disposable_income, 
+                        'p_droughts': 1 / p_droughts, 
+                        'risk_perception': self.risk_perception, 
+                        'expected_damages': expected_damages, 
+                        'expected_damages_adapt': expected_damages_adapt,
+                        'total_annual_costs': total_annual_costs,
+                        'adaptation_costs': annual_cost, 
+                        'adapted': self.adapted[:,1], 
+                        'time_adapted' : self.time_adapted[:,1], 
+                        'T': self.decision_horizon, 
+                        'r': self.r_time, 
+                        }
+        
+        nbits = 19
+
+        # Check whether farmers have a well 
+        #has_well = self.adapted[:,1] == 1
+        
+        # Determine EU of adaptation or doing nothing            
+        EU_do_nothing = decision_module.calcEU_do_nothing(**decision_params)
+        EU_adapt = decision_module.calcEU_adapt(**decision_params) 
+
+        # Check output for missing data (if something went wrong in calculating EU)
+        assert(EU_do_nothing != -1).any or (EU_adapt != -1).any()
+                
+        # Compare EU of adapting vs. not adapting
+        EU_stay_adapt_bool = (EU_adapt >= EU_do_nothing)
+
+        self.adapted[:,1] = EU_stay_adapt_bool * 1
+
+        # Check which people will adapt and whether they made this decision for the first time
+        pos_first_time_adapted = (self.adapted[:,1] == 1) * (self.time_adapted[:,1] == -1)
+        # Set the timer for these people to 0
+        self.time_adapted[:,1][pos_first_time_adapted] = 0
+        # Update timer for next year
+        self.time_adapted[:,1][self.time_adapted[:,1] != -1] += 1
+
+        # Check for missing data
+        assert (self.adapted[:,1] != -1).any()
+
+        ## Print the percentage of adapted households 
+        percentage_adapted = round(np.sum(self.adapted[:,1])/ len(self.adapted[:,1]) * 100, 2)
+        print('Irrigation well farms',percentage_adapted,'(%)')
+
+        # ## Change the well status if the farmer has made the investment 
+        invest_in_well = EU_stay_adapt_bool * 1
+        self.irrigation_source[invest_in_well] = self.irrigation_source_key['tubewell']
+        
+        ## Add the added annual costs to the overal annual costs of all adaptations, do this only to first time adapters (costs are repeating)
+        self.annual_costs_all_adaptations[pos_first_time_adapted] += annual_cost[pos_first_time_adapted]
+
+        ## Reduce the wealth of the farmer by the annual cost of the adaptation if it has made an adaptation in the last 30 years 
+        self.wealth[self.time_adapted[:,1] != -1] -= annual_cost
+    
+        # for crop_option in np.unique(self.crops, axis=0):
+            
+        #     farmers_with_crop_option = np.where((self.crops==crop_option[None, ...]).all(axis=1))[0]
+            
+        #     farmers_with_well_crop_option = np.where(has_well[farmers_with_crop_option] == True)[0]
+        #     farmers_without_well = np.where(has_well[farmers_with_crop_option] == False)[0]
+
+        #     if farmers_without_well.size > 0 and farmers_with_well_crop_option.size > 0:
 
     @staticmethod
     @njit(cache=True)
@@ -1037,6 +1929,7 @@ class Farmers(AgentBaseClass):
             disposable_income_threshold: the minimum disposable income required to invest in a well after considering total well cost
             intention_behaviour_gap: the ratio of action to intention. For example, if the intention_behaviour_gap is 1, then the farmer will always implement the measure when intended, if the intention_behaviour_gap is 0 the measure will never be implemented.
         """
+        
         invest_in_well = np.zeros(n, dtype=np.bool_)
         neighbor_nan_value = np.iinfo(neighbors_with_well.dtype).max
         for i, farmer_idx in enumerate(farmers_without_well):
@@ -1105,17 +1998,6 @@ class Farmers(AgentBaseClass):
     def invest_in_irrigation_well(self) -> None:
         nbits = 19
 
-        # from honeybees.library.geohash import window
-        # width_lon, height_lat = window(nbits, *self.model.bounds)
-        # import matplotlib.pyplot as plt
-        # colors = ['red', 'blue', 'green', 'yellow', 'orange']
-        # for i in range(5):
-        #     own_location = self.locations[farmers_with_well[i]]
-        #     plt.scatter(own_location[0], own_location[1], c=colors[i])
-        #     agent_neighbours = neighbors_with_well[i]
-        #     plt.scatter(self.locations[agent_neighbours][:,0], self.locations[agent_neighbours][:,1], c=colors[i], alpha=.5)
-        # plt.show()
-
         has_well = np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])
 
         for crop_option in np.unique(self.crops, axis=0):
@@ -1163,254 +2045,7 @@ class Farmers(AgentBaseClass):
                 )
                 self.irrigation_source[invest_in_well] = self.irrigation_source_key['tubewell']
     
-    @property
-    def locations(self):
-        return self._locations[:self.n]
-
-    @locations.setter
-    def locations(self, value):
-        self._locations[:self.n] = value
-
-    @property
-    def crops(self):
-        return self._crops[:self.n]
-
-    @crops.setter
-    def crops(self, value):
-        self._crops[:self.n] = value
-
-    @property
-    def latest_profits(self):
-        return self._latest_profits[:self.n]
-
-    @latest_profits.setter
-    def latest_profits(self, value):
-        self._latest_profits[:self.n] = value
-
-    @property
-    def latest_potential_profits(self):
-        return self._latest_potential_profits[:self.n]
-
-    @latest_potential_profits.setter
-    def latest_potential_profits(self, value):
-        self._latest_potential_profits[:self.n] = value
-
-    @property
-    def irrigation_efficiency(self):
-        return self._irrigation_efficiency[:self.n]
-
-    @irrigation_efficiency.setter
-    def irrigation_efficiency(self, value):
-        self._irrigation_efficiency[:self.n] = value
-
-    @property
-    def elevation(self):
-        return self._elevation[:self.n]
-
-    @elevation.setter
-    def elevation(self, value):
-        self._elevation[:self.n] = value
-
-    @property
-    def reservoir_abstraction_m3_by_farmer(self):
-        return self._reservoir_abstraction_m3_by_farmer[:self.n]
-
-    @reservoir_abstraction_m3_by_farmer.setter
-    def reservoir_abstraction_m3_by_farmer(self, value):
-        self._reservoir_abstraction_m3_by_farmer[:self.n] = value
-
-    @property
-    def groundwater_abstraction_m3_by_farmer(self):
-        return self._groundwater_abstraction_m3_by_farmer[:self.n]
-
-    @groundwater_abstraction_m3_by_farmer.setter
-    def groundwater_abstraction_m3_by_farmer(self, value):
-        self._groundwater_abstraction_m3_by_farmer[:self.n] = value
-
-    @property
-    def channel_abstraction_m3_by_farmer(self):
-        return self._channel_abstraction_m3_by_farmer[:self.n]
-
-    @channel_abstraction_m3_by_farmer.setter
-    def channel_abstraction_m3_by_farmer(self, value):
-        self._channel_abstraction_m3_by_farmer[:self.n] = value
-
-    @property
-    def water_availability_by_farmer(self):
-        return self._water_availability_by_farmer[:self.n]
-
-    @water_availability_by_farmer.setter
-    def water_availability_by_farmer(self, value):
-        self._water_availability_by_farmer[:self.n] = value
-
-    @property
-    def n_water_accessible_days(self):
-        return self._n_water_accessible_days[:self.n]
-
-    @n_water_accessible_days.setter
-    def n_water_accessible_days(self, value):
-        self._n_water_accessible_days[:self.n] = value
-
-    @property
-    def n_water_accessible_years(self):
-        return self._n_water_accessible_years[:self.n]
-
-    @n_water_accessible_years.setter
-    def n_water_accessible_years(self, value):
-        self._n_water_accessible_years[:self.n] = value
-
-    @property
-    def disposable_income(self):
-        return self._disposable_income[:self.n]
-
-    @disposable_income.setter
-    def disposable_income(self, value):
-        self._disposable_income[:self.n] = value
-
-    @property
-    def loan_amount(self):
-        return self._loan_amount[:self.n]
-
-    @loan_amount.setter
-    def loan_amount(self, value):
-        self._loan_amount[:self.n] = value
-
-    @property
-    def loan_interest(self):
-        return self._loan_interest[:self.n]
-
-    @loan_interest.setter
-    def loan_interest(self, value):
-        self._loan_interest[:self.n] = value
-
-    @property
-    def loan_duration(self):
-        return self._loan_duration[:self.n]
-
-    @loan_duration.setter
-    def loan_duration(self, value):
-        self._loan_duration[:self.n] = value
-
-    @property
-    def loan_interest(self):
-        return self._loan_interest[:self.n]
-
-    @loan_interest.setter
-    def loan_interest(self, value):
-        self._loan_interest[:self.n] = value
-
-    @property
-    def loan_interest(self):
-        return self._loan_interest[:self.n]
-
-    @loan_interest.setter
-    def loan_interest(self, value):
-        self._loan_interest[:self.n] = value
-
-    @property
-    def loan_end_year(self):
-        return self._loan_end_year[:self.n]
-
-    @loan_end_year.setter
-    def loan_end_year(self, value):
-        self._loan_end_year[:self.n] = value
-
-    @property
-    def household_size(self):
-        return self._household_size[:self.n]
-
-    @household_size.setter
-    def household_size(self, value):
-        self._household_size[:self.n] = value
-
-    @property
-    def groundwater_depth(self):
-        return self._groundwater_depth[:self.n]
-
-    @groundwater_depth.setter
-    def groundwater_depth(self, value):
-        self._groundwater_depth[:self.n] = value
-
-    @property
-    def daily_expenses_per_capita(self):
-        return self._daily_expenses_per_capita[:self.n]
-
-    @daily_expenses_per_capita.setter
-    def daily_expenses_per_capita(self, value):
-        self._daily_expenses_per_capita[:self.n] = value
-
-    @property
-    def daily_non_farm_income(self):
-        return self._daily_non_farm_income[:self.n]
-
-    @daily_non_farm_income.setter
-    def daily_non_farm_income(self, value):
-        self._daily_non_farm_income[:self.n] = value
-
-    @property
-    def irrigation_source(self):
-        return self._irrigation_source[:self.n]
-
-    @irrigation_source.setter
-    def irrigation_source(self, value):
-        self._irrigation_source[:self.n] = value
-
-    @property
-    def profit(self):
-        return self._profit[:self.n]
-
-    @profit.setter
-    def profit(self, value):
-        self._profit[:self.n] = value
-
-    @property
-    def profits_last_year(self):
-        return self._profits_last_year[:self.n]
-
-    @profits_last_year.setter
-    def profits_last_year(self, value):
-        self._profits_last_year[:self.n] = value
-
-    @property
-    def farmer_is_in_command_area(self):
-        return self._farmer_is_in_command_area[:self.n]
-
-    @farmer_is_in_command_area.setter
-    def farmer_is_in_command_area(self, value):
-        self._farmer_is_in_command_area[:self.n] = value
-
-    @property
-    def farmer_class(self):
-        return self._farmer_class[:self.n]
-
-    @farmer_class.setter
-    def farmer_class(self, value):
-        self._farmer_class[:self.n] = value
-
-    @property
-    def tehsil(self):
-        return self._tehsil[:self.n]
-
-    @tehsil.setter
-    def tehsil(self, value):
-        self._tehsil[:self.n] = value
-
-    @property
-    def flooded(self):
-        return self._flooded[:self.n]
-
-    @flooded.setter
-    def flooded(self, value):
-        self._flooded[:self.n] = value
-
-    @property
-    def field_indices_by_farmer(self):
-        return self._field_indices_by_farmer[:self.n]
-
-    @field_indices_by_farmer.setter
-    def field_indices_by_farmer(self, value):
-        self._field_indices_by_farmer[:self.n] = value
-
+    
     @staticmethod
     @njit(cache=True)
     def field_size_per_farmer_numba(field_indices_by_farmer: np.ndarray, field_indices: np.ndarray, cell_area: np.ndarray) -> np.ndarray:
@@ -1462,6 +2097,7 @@ class Farmers(AgentBaseClass):
         self.loan_amount[has_loan] -= loan_payoff
         self.disposable_income[has_loan] -= loan_payment
         self.disposable_income[self.disposable_income < 0] = 0  # for now, we assume that farmers don't have negative disposable income
+        
 
     # @staticmethod
     # @njit(cache=True)
@@ -1476,19 +2112,19 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit
-    def switch_crops_numba(ids, crops, neighbours, profits_last_year) -> None:
+    def switch_crops_numba(ids, crops, neighbours, profits_last_harvest) -> None:
         """Switches crops for each farmer."""
         nodata_value_neighbors = np.iinfo(neighbours.dtype).max
         for i, farmer_idx in enumerate(ids):
-            profit_last_year = profits_last_year[farmer_idx]
+            profit_last_harvest = profits_last_harvest[farmer_idx]
             neighbor_farmers = neighbours[i]
             neighbor_farmers = neighbor_farmers[neighbor_farmers != nodata_value_neighbors]  # delete farmers without neighbors
             if neighbor_farmers.size == 0:  # no neighbors
                 continue
 
-            neighbor_profits = profits_last_year[neighbor_farmers]
+            neighbor_profits = profits_last_harvest[neighbor_farmers]
             neighbor_with_max_profit = np.argmax(neighbor_profits)
-            if neighbor_profits[neighbor_with_max_profit] > profit_last_year:
+            if neighbor_profits[neighbor_with_max_profit] > profit_last_harvest:
                 crops[farmer_idx] = crops[neighbor_farmers[neighbor_with_max_profit]]
 
     def switch_crops(self):
@@ -1507,16 +2143,102 @@ class Farmers(AgentBaseClass):
                 search_ids=ids,
                 search_target_ids=ids
             )
-            self.switch_crops_numba(ids, self.crops, neighbors, self.profits_last_year)
+            self.switch_crops_numba(ids, self.crops, neighbors, self.latest_profits[:, 0])
+    
 
-    def invest_in_sprinkler_irrigation(self):
-        """Invests in sprinkler irrigation."""
-        farmer_states = self.subdistrict2state[self.tehsil]
-        # invest in sprinkler irrigation if the farmer is from Maharashtra and has no sprinkler irrigation
-        farmers_without_sprinkler_irrigation_in_maharashtra = np.where((self.irrigation_efficiency < .90) & (farmer_states == self.states.index('MAHARASHTRA')))[0]
-        # each farmer without sprinkler irrigation has a 20% probability of investing in sprinkler irrigation
-        invest_in_sprinkler_irrigation = np.random.random(farmers_without_sprinkler_irrigation_in_maharashtra.size) < .20
-        self.irrigation_efficiency[farmers_without_sprinkler_irrigation_in_maharashtra[invest_in_sprinkler_irrigation]] = .90
+    def invest_in_sprinkler_irrigation(self) -> None:
+        decision_module = DecisionModule(self)
+
+        ## Set the probabilities for future droughts -- will be changed later 
+        p_droughts = np.array([1000, 500, 250, 100, 50, 25, 10, 5, 2])
+        
+        ## How much of the yield is lost during drought
+        p_droughts_loss = np.array([300, 200, 150, 100, 60, 50, 40, 30, 10]) / 100
+        # Create random damages in 9d arrays to provide input for the decision module 
+        # Firstcreate an empty array with the specified dimensions
+        expected_damages = np.zeros((len(p_droughts), self.n))
+        expected_damages_adapt = np.zeros((len(p_droughts), self.n))
+
+        # loop over the first dimension of the array
+        for i, p in enumerate(p_droughts_loss):
+            reduced_damage_factor = 1 - self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['reduced_damage']
+            ## Yearly yield (rupees) per hectare, based on proportional cultivation of major crops and crop prices in maharastra
+            average_price_per_m2 = 130000 / 10000
+            # generate a random 1D array using the given parameters
+            expected_damages[i] = self.field_size_per_farmer * average_price_per_m2 * p 
+
+            expected_damages_adapt[i] = self.field_size_per_farmer * average_price_per_m2 * p * reduced_damage_factor 
+
+        # Convert adaptation cost to annual cost based on loan duration and interest rate
+        ## Adaptation price is sprinkler/drip irrigation price per acre, use field size in acres times the price per acre 
+        total_cost = self.field_size_per_farmer * 0.000247105 * self.sprinkler_price[self.model.current_time.year]
+        loan_duration = self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['loan_duration'] ## loan duration
+        r_loan =  self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['interest_rate']  ## loan interest
+
+        # Calculate annnual costs of one adaptation loan based on interest rate and loan duration
+        annual_cost = total_cost * (r_loan *( 1+r_loan) ** loan_duration/ ((1+r_loan)**loan_duration -1))
+        # Determine the total yearly costs of farmers if they would adapt this cycle 
+        total_annual_costs = annual_cost + self.annual_costs_all_adaptations
+
+        # Reset timer and adaptation status when lifespan of adaptation is exceeded 
+        self.adapted[:,0][self.time_adapted[:,0] == self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan']] = 0
+        self.time_adapted[:,0][self.time_adapted[:,0] == self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan']] = -1 
+
+        decision_params = {'loan_duration': self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['loan_duration'],  
+                        'expenditure_cap': self.expenditure_cap, 
+                        #'lifespan' : self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan'], ## Not in model yet, can be added 
+                        'n_agents':  self.n, 
+                        'sigma': self.sigma,
+                        'wealth': self.wealth, 
+                        'income': self.disposable_income, 
+                        'p_droughts': 1 / p_droughts, 
+                        'risk_perception': self.risk_perception, 
+                        'expected_damages': expected_damages, 
+                        'expected_damages_adapt': expected_damages_adapt,
+                        'total_annual_costs': total_annual_costs,
+                        'adaptation_costs': annual_cost, 
+                        'adapted': self.adapted[:,0], 
+                        'time_adapted' : self.time_adapted[:,0], 
+                        'T': self.decision_horizon, 
+                        'r': self.r_time, 
+                        } 
+
+        # Determine EU of adaptation or doing nothing            
+        EU_do_nothing = decision_module.calcEU_do_nothing(**decision_params)
+        EU_adapt = decision_module.calcEU_adapt(**decision_params) 
+        
+        # Check output for missing data (if something went wrong in calculating EU)
+        assert(EU_do_nothing != -1).any or (EU_adapt != -1).any()
+
+        # Only compare EU of adapting vs. not adapting
+        EU_stay_adapt_bool = (EU_adapt >= EU_do_nothing)
+
+        self.adapted[:,0] = EU_stay_adapt_bool * 1
+
+        # Check which people will adapt and whether they made this decision for the first time
+        pos_first_time_adapted = (self.adapted[:,0] == 1) * (self.time_adapted[:,0] == -1)
+        # Set the timer for these people to 0
+        self.time_adapted[:,0][pos_first_time_adapted] = 0
+        # Update timer for next year
+        self.time_adapted[:,0][self.time_adapted[:,0] != -1] += 1
+
+        # Update the percentage of households implementing drip irrigation 
+        # Check for missing data
+        assert (self.adapted[:,0] != -1).any()
+
+        ## Print the percentage of adapted households 
+        percentage_adapted = round(np.sum(self.adapted[:,0])/ len(self.adapted[:,0]) * 100, 2)
+        print('Sprinkler irrigation farms',percentage_adapted,'(%)')
+
+        ## Change the irrigation efficiency if the farmer has made the investment 
+        invest_in_sprinkler_irrigation = EU_stay_adapt_bool * 1
+        self.irrigation_efficiency[invest_in_sprinkler_irrigation] = .90
+
+        ## Add the added annual costs to the overal annual costs of all adaptations, do this only to first time adapters (costs are repeating)
+        self.annual_costs_all_adaptations[pos_first_time_adapted] += annual_cost[pos_first_time_adapted]
+
+        ## Reduce the wealth of the farmer by the annual cost of the adaptation if it has made an adaptation in the last 30 years 
+        self.wealth[self.time_adapted[:,0] != -1] -= annual_cost
 
     def step(self) -> None:
         """
@@ -1549,12 +2271,29 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.expenses_and_income()
+        self.precipitation_sum()
+
+        # ## monthly actions 
+        # if self.model.current_time.day == 1: 
+        #     ## update the drought risk perception 
+            
+
+        ## yearly actions 
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
 
             self.farmer_is_in_command_area = self.is_in_command_area(self.n, self.var.reservoir_command_areas, self.field_indices, self.field_indices_by_farmer)
             # for now class is only dependent on being in a command area or not
             self.farmer_class = self.farmer_is_in_command_area.copy()
-
+            # Set to 0 for precipitation if there is no abstraction 
+            self.farmer_class[self.yearly_abstraction_m3_by_farmer[:,3] == 0] = 0 
+            # Set to 1 if channel abstraction is bigger than reservoir and groundwater, 2 for reservoir, 3 for groundwater 
+            self.farmer_class[(self.yearly_abstraction_m3_by_farmer[:,0] > self.yearly_abstraction_m3_by_farmer[:,1]) & 
+                              (self.yearly_abstraction_m3_by_farmer[:,0] > self.yearly_abstraction_m3_by_farmer[:,2])] = 1 
+            self.farmer_class[(self.yearly_abstraction_m3_by_farmer[:,1] > self.yearly_abstraction_m3_by_farmer[:,0]) & 
+                              (self.yearly_abstraction_m3_by_farmer[:,1] > self.yearly_abstraction_m3_by_farmer[:,2])] = 2 
+            self.farmer_class[(self.yearly_abstraction_m3_by_farmer[:,2] > self.yearly_abstraction_m3_by_farmer[:,0]) & 
+                              (self.yearly_abstraction_m3_by_farmer[:,2] > self.yearly_abstraction_m3_by_farmer[:,1])] = 3 
+            
             # check if current year is a leap year
             days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
             has_access_to_water_all_year = self.n_water_accessible_days >= 365
@@ -1562,21 +2301,29 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
             
-            if self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':
+            if self.model.args.scenario not in ['spinup', 'noadaptation', 'noHI', 'base', 'noCC_base', 'noCC_noHI','sprinkler']:
                 # self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
                 self.switch_crops()
             
             self.upkeep_assets()
             self.make_loan_payment()
-            if self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':
+            ## Save all profits, damages and rainfall for farmer estimations 
+            self.store_long_term_damages_profits_rain()
+            
+            if self.model.args.scenario not in ['spinup', 'noadaptation', 'noHI', 'base', 'noCC_base', 'noCC_noHI']:
                 self.invest_in_irrigation_well()
-            if self.model.args.scenario == 'sprinkler':
-                self.invest_in_sprinkler_irrigation()            
+            if self.model.args.scenario not in ['spinup', 'noadaptation', 'noHI', 'base', 'noCC_base', 'noCC_noHI']:
+                self.invest_in_sprinkler_irrigation()
+                # self.SEUT_irrigation_well()     
+
+            self.wealth += self.disposable_income * 0.2
+
+            print(np.mean(self.wealth))
 
             # reset disposable income and profits
             self.disposable_income[:] = 0
-            self.profits_last_year[:] = 0
-
+        
+        
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         # if self.model.current_timestep == 105:
@@ -1656,7 +2403,6 @@ class Farmers(AgentBaseClass):
         self.irrigation_efficiency[self.n-1] = False
         self.n_water_accessible_days[self.n-1] = 0
         self.n_water_accessible_years[self.n-1] = 0
-        self.water_availability_by_farmer[self.n-1] = 0
         self.channel_abstraction_m3_by_farmer[self.n-1] = 0
         self.groundwater_abstraction_m3_by_farmer[self.n-1] = 0
         self.reservoir_abstraction_m3_by_farmer[self.n-1] = 0
