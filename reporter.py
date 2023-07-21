@@ -77,7 +77,7 @@ class CWatMReporter(ABMReporter):
                         name=name
                     )
                     self.variables[name] = self.variables[name].rio.write_crs(self.model.data.grid.crs).rio.write_coordinate_system()
-                    self.variables[name].to_netcdf(netcdf_path, mode='a')
+                    self.variables[name].to_netcdf(netcdf_path, mode='a', encoding={name: {'zlib': True, 'complevel': 5}})
                 else:
                     self.variables[name] = []
         

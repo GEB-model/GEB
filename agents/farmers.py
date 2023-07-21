@@ -1010,10 +1010,10 @@ class Farmers(AgentBaseClass):
         loan_amount: np.ndarray,
         loan_duration: np.ndarray,
         loan_end_year: np.ndarray,
-        well_price: float,
-        well_upkeep_price_per_m2: float,
+        well_price: np.ndarray,
+        well_upkeep_price_per_m2: np.ndarray,
         well_investment_time_years: int,
-        interest_rate: float,
+        interest_rate: np.ndarray,
         disposable_income: np.ndarray,
         disposable_income_threshold: int=0,
         intention_behaviour_gap: int=1
@@ -1068,16 +1068,16 @@ class Farmers(AgentBaseClass):
 
                 potential_benefit = profit_with_neighbor_efficiency - latest_profit
                 potential_benefit_over_investment_time = potential_benefit * well_investment_time_years
-                total_cost_over_investment_time = well_price + well_upkeep_price_per_m2 * farm_size_m2[farmer_idx] * well_investment_time_years
+                total_cost_over_investment_time = well_price[farmer_idx] + well_upkeep_price_per_m2[farmer_idx] * farm_size_m2[farmer_idx] * well_investment_time_years
 
                 if potential_benefit_over_investment_time <= total_cost_over_investment_time:
                     continue
                     
                 # assume linear loan
-                money_left_for_investment = disposable_income[farmer_idx] - well_upkeep_price_per_m2 * farm_size_m2[farmer_idx]
+                money_left_for_investment = disposable_income[farmer_idx] - well_upkeep_price_per_m2[farmer_idx] * farm_size_m2[farmer_idx]
                 well_loan_duration = 30
-                loan_size = well_price
-                yearly_payment = loan_size / well_loan_duration + loan_size * interest_rate
+                loan_size = well_price[farmer_idx]
+                yearly_payment = loan_size / well_loan_duration + loan_size * interest_rate[farmer_idx]
 
                 if money_left_for_investment < yearly_payment + disposable_income_threshold:
                     continue
@@ -1085,7 +1085,7 @@ class Farmers(AgentBaseClass):
                 if random.random() < intention_behaviour_gap:
                     invest_in_well[farmer_idx] = True
                     
-                    loan_interest[farmer_idx] = interest_rate
+                    loan_interest[farmer_idx] = interest_rate[farmer_idx]
                     loan_amount[farmer_idx] = loan_size
                     loan_duration[farmer_idx] = well_loan_duration
                     loan_end_year[farmer_idx] = year + well_loan_duration
@@ -1110,6 +1110,14 @@ class Farmers(AgentBaseClass):
             #     surface_irrigated[farmer_idx] = True
 
         return invest_in_well
+
+    def get_value_per_farmer_from_region_id(self, data) -> np.ndarray:
+        index = data[0].get(self.model.current_time)
+        unique_region_ids, inv = np.unique(self.region_id, return_inverse=True)
+        values = np.full_like(unique_region_ids, np.nan, dtype=np.float32)
+        for i, region_id in enumerate(unique_region_ids):
+            values[i] = data[1][region_id][index]
+        return values[inv]
 
     def invest_in_irrigation_well(self) -> None:
         nbits = 19
@@ -1149,8 +1157,6 @@ class Farmers(AgentBaseClass):
                     search_target_ids=farmers_with_well_crop_option
                 )
 
-                interest_rate = self.lending_rate[self.model.current_time.year]
-                assert not np.isnan(interest_rate)
                 invest_in_well = self.invest_numba(
                     n=self.n,
                     year=self.model.current_time.year,
@@ -1163,10 +1169,10 @@ class Farmers(AgentBaseClass):
                     loan_amount=self.loan_amount,
                     loan_duration=self.loan_duration,
                     loan_end_year=self.loan_end_year,
-                    well_price=self.well_price[self.model.current_time.year],
-                    well_upkeep_price_per_m2=self.well_upkeep_price_per_m2[self.model.current_time.year],
+                    well_price=self.get_value_per_farmer_from_region_id(self.well_price),
+                    well_upkeep_price_per_m2=self.get_value_per_farmer_from_region_id(self.well_upkeep_price_per_m2),
                     well_investment_time_years=self.well_investment_time_years,
-                    interest_rate=interest_rate,
+                    interest_rate=self.get_value_per_farmer_from_region_id(self.lending_rate),
                     disposable_income=self.disposable_income,
                     intention_behaviour_gap=self.model.config['agent_settings']['farmers']['well_implementation_intention_behaviour_gap']
                 )
@@ -1459,7 +1465,15 @@ class Farmers(AgentBaseClass):
 
     def upkeep_assets(self):
         has_well = np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])
-        self.disposable_income -= self.well_upkeep_price_per_m2[self.model.current_time.year] * self.field_size_per_farmer * has_well
+
+        index = self.well_upkeep_price_per_m2[0].get(self.model.current_time)
+        unique_region_ids, inv = np.unique(self.region_id, return_inverse=True)
+        values = np.full_like(unique_region_ids, np.nan, dtype=np.float32)
+        for i, region_id in enumerate(unique_region_ids):
+            values[i] = self.well_upkeep_price_per_m2[1][region_id][index]
+        values = values[inv]
+
+        self.disposable_income -= values * self.field_size_per_farmer * has_well
 
     def make_loan_payment(self):
         has_loan = self.loan_amount > 0
