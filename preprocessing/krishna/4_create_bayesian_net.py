@@ -40,8 +40,8 @@ bins = {
         'labels': [1, 2, 3, 4, 5],
     },
     "How large is the area you grow crops on in hectares?" : {
-        'bins': [0, 1, 2, 4, 10, np.inf],
-        'labels': ['0-1', '1-2', '2-4', '4-10', '>10'],
+        'bins': [0, 1, 2, 4, np.inf],
+        'labels': ['0-1', '1-2', '2-4', '>4'],  # after size class groups in agricultural census
     },
 }
 

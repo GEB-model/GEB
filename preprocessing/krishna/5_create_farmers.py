@@ -4,6 +4,9 @@ import numpy as np
 import geopandas as gpd
 import pandas as pd
 from pathlib import Path
+from pgmpy.models import BayesianNetwork
+from pgmpy.sampling import BayesianModelSampling
+from pgmpy.factors.discrete import State
 
 from preconfig import INPUT, PREPROCESSING_FOLDER
 
@@ -154,6 +157,19 @@ def main():
         '20.0 & ABOVE',
     )
 
+    SIZE_GROUPS = {
+        'Below 0.5': '0-1',
+        '0.5-1.0': '0-1',
+        '1.0-2.0': '1-2',
+        '2.0-3.0': '2-4',
+        '3.0-4.0': '2-4',
+        '4.0-5.0': '>4',
+        '5.0-7.5': '>4',
+        '7.5-10.0': '>4',
+        '10.0-20.0': '>4',
+        '20.0 & ABOVE': '>4',
+    }
+
     SIZE_CLASSES_BOUNDARIES = {
         'Below 0.5': (2_500, 5_000),  # farm is assumed to be at least 2500 m2
         '0.5-1.0': (5_000, 10_000),
@@ -178,6 +194,10 @@ def main():
 
     regions_shapes = gpd.read_file(Path(INPUT, 'areamaps', 'regions.geojson'))
     avg_farm_size = pd.read_excel(Path(PREPROCESSING_FOLDER, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
+    n_farms = pd.read_excel(Path(PREPROCESSING_FOLDER, 'census', 'n_farms.xlsx'), index_col=(0, 1, 2))
+
+    bayesian_network = BayesianNetwork.load(str(PREPROCESSING_FOLDER / 'bayesian_net' / 'bayesian_net.bif'), filetype='bif')
+    bayesian_sampler = BayesianModelSampling(bayesian_network)
 
     all_agents = []
     for _, region in regions_shapes.iterrows():
@@ -187,55 +207,27 @@ def main():
 
         state, district, tehsil = region["state_name"], region["district_n"], region["sub_dist_1"]
 
-        ipfs = {}
-        ipf_area = {}
-        for size_class in SIZE_CLASSES:
-            ipfs[size_class] = pd.read_csv(
-                Path(
-                    PREPROCESSING_FOLDER,
-                    'agents',
-                    'farmers',
-                    'ipf',
-                    f'{state}_{district}_{tehsil}_{size_class}.csv'),
-                low_memory=False
-            )
+        n_farms_region = n_farms.loc[(state, district, tehsil)]
+        avg_farm_size_region = avg_farm_size.loc[(state, district, tehsil)]
 
-            avg_farm_size_size_class = avg_farm_size.loc[(state, district, tehsil), size_class]
-            ipf_n_farms = ipfs[size_class]['weight'].sum()
-            if np.isnan(avg_farm_size_size_class):
-                assert ipf_n_farms == 0
-                avg_farm_size_size_class = 0
-            ipf_area[size_class] = avg_farm_size_size_class * ipf_n_farms
-            del avg_farm_size_size_class
-
-        cultivated_land_ipf = sum(ipf_area.values())
         average_cell_area_region = cell_area[(regions_grid == region_id) & (cultivated_land == True)].mean()
         region_cultivated_land_area_lu = cell_area[(regions_grid == region_id) & (cultivated_land == True)].sum()
         cultivated_land_region = cultivated_land[regions_grid == region_id]
         print('Cultivated land area in region:', cultivated_land_region.sum())
 
-        total_ipf_weight = 0
-        farm_cells_size_class = pd.DataFrame(index=SIZE_CLASSES)
-        for size_class in SIZE_CLASSES:
-            ipfs[size_class]['weight'] = ipfs[size_class]['weight'] / cultivated_land_ipf * region_cultivated_land_area_lu
-            total_size_class_weight = ipfs[size_class]['weight'].sum()
-            total_ipf_weight += total_size_class_weight
-            if total_size_class_weight == 0:
-                farm_cells_size_class.loc[size_class, 'n_cells'] = 0
-            else:
-                n_cells = total_size_class_weight * avg_farm_size.loc[(state, district, tehsil), size_class] / average_cell_area_region
-                assert not np.isnan(n_cells)
-                farm_cells_size_class.loc[size_class, 'n_cells'] = n_cells
-        
-        assert math.isclose(region_cultivated_land_area_lu, farm_cells_size_class.sum() * average_cell_area_region.item())
+        census_farmed_area = (n_farms_region * avg_farm_size_region).sum()
+        correction_factor = region_cultivated_land_area_lu / census_farmed_area
 
         n_holdings_per_size_class = pd.Series(0, index=SIZE_CLASSES)
         n_cells_per_size_class = pd.Series(0, index=SIZE_CLASSES)
         for size_class in SIZE_CLASSES:
-            n_holdings_per_size_class[size_class] = ipfs[size_class]['weight'].sum()
-            if n_holdings_per_size_class[size_class] > 0:
-                n_cells_per_size_class.loc[size_class] = n_holdings_per_size_class[size_class] * avg_farm_size.loc[(state, district, tehsil), size_class] / average_cell_area_region
+            n_holdings_for_size_class = n_farms_region[size_class] * correction_factor
+            if n_holdings_for_size_class > 0:
+                n_cells_per_size_class.loc[size_class] = n_holdings_for_size_class * avg_farm_size_region[size_class] / average_cell_area_region
                 assert not np.isnan(n_cells_per_size_class.loc[size_class])
+            else:
+                n_cells_per_size_class.loc[size_class] = 0
+            n_holdings_per_size_class[size_class] = n_holdings_for_size_class
 
         assert math.isclose(cultivated_land_region.sum(), n_cells_per_size_class.sum())
         
@@ -273,20 +265,6 @@ def main():
             if number_of_agents_size_class == 0 and whole_cells_per_size_class[size_class] > 0:
                 number_of_agents_size_class = 1
 
-            ipfs[size_class]['adjusted_weight'] = ipfs[size_class]['weight'] / ipfs[size_class]['weight'].sum() * number_of_agents_size_class
-            ipfs[size_class]['n'] = (ipfs[size_class]['adjusted_weight'] // 1).astype(int)
-
-            # because of the rounding, there might be a few agents missing. Here we increase n for the rows where the decimal part of the weight is the largest
-            n_missing = number_of_agents_size_class - int(ipfs[size_class]['n'].sum())
-            assert n_missing >= 0
-            index = list(zip(ipfs[size_class].index, ipfs[size_class]['adjusted_weight'] % 1))
-            sorted_index = sorted(index, key=lambda x: x[1], reverse=True)
-            missing_pop_indices = [p[0] for p in sorted_index[:n_missing]]
-            ipfs[size_class].loc[missing_pop_indices, 'n'] += 1
-            assert ipfs[size_class]['n'].sum() == number_of_agents_size_class
-
-            population = ipfs[size_class].loc[ipfs[size_class].index.repeat(ipfs[size_class]['n'])]
-            population = population.drop(['crops', 'weight', 'adjusted_weight', 'size_class', 'n'], axis=1)            
             offset = whole_cells_per_size_class[size_class] - number_of_agents_size_class * mean_cells_per_agent
 
             n_farms_size_class, farm_sizes_size_class = get_farm_distribution(number_of_agents_size_class, min_size_cells, max_size_cells, mean_cells_per_agent, offset)
@@ -294,11 +272,19 @@ def main():
             assert (farm_sizes_size_class > 0).all()
             assert (n_farms_size_class * farm_sizes_size_class).sum() == whole_cells_per_size_class[size_class]
             farm_sizes = farm_sizes_size_class.repeat(n_farms_size_class)
+            
             np.random.shuffle(farm_sizes)
+
+            evidence = [
+                State(
+                    var="How_large_is_the_area_you_grow_crops_on_in_hectares",
+                    state=SIZE_GROUPS[size_class]
+                ),
+            ]
+            population = bayesian_sampler.rejection_sample(evidence=evidence, size=number_of_agents_size_class, show_progress=False)
+            
             population['area_n_cells'] = farm_sizes
             region_agents.append(population)
-
-            assert population['area_n_cells'].sum() == whole_cells_per_size_class[size_class]
 
         region_agents = pd.concat(region_agents, ignore_index=True)
         region_agents['region_id'] = region_id
