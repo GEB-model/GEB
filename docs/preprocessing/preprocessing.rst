@@ -2,20 +2,9 @@
 Preprocessing
 ##############
 
-This section describes how all model input data should be obtained and processed. By default, all data should be saved in the folder `ROOT`.
+GEB uses HydroMT to preprocess all data required for the model. HydroMT (Hydro Model Tools) is an open-source Python package that facilitates the process of building and analyzing spatial geoscientific models with a focus on water system models. It does so by automating the workflow to go from raw data to a complete model instance which is ready to run. This plugin provides an implementation of the model API for the GEB model.
 
-.. toctree::
-   :maxdepth: 2
-   :numbered: 1
-   
-   1_create_mask_and_hydro_maps
-   2_scale_cwatm
-   3_scrape_command_areas
-   4_create_lakes_and_reservoirs
-   5_create_land_use_map
-   6_get_farm_sizes
-   7_get_irrigation_source
-   8_create_farmers
-   9_pick_farmer_crops
-   10_preprocess_modflow
-   11_other_data
+
+
+Please request the password for the IIASA FTP server by contacting wfas.info@iiasa.ac.at.
+wget -m --user=rcwatm --password=<PASSWORD> ftp://ftp.iiasa.ac.at/waterdemand_scenarios/5arcmin

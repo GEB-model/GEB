@@ -1,8 +1,9 @@
 import os
 import pandas as pd
 import numpy as np
+from pathlib import Path
 
-from preconfig import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, PREPROCESSING_FOLDER
 
 def prefilter():
     df = pd.read_csv(os.path.join(ORIGINAL_DATA, 'ICPSR_22626', 'DS0002', '22626-0002-Data.tsv'), delimiter='\t')
@@ -194,6 +195,6 @@ if __name__ == '__main__':
     crops = read_crops()
     households = process(households, crops)
     households = rename_parameters(households)
-    folder = os.path.join(INPUT, 'agents')
-    os.makedirs(folder, exist_ok=True)
-    households.to_csv(os.path.join(folder, 'IHDS_I.csv'), index=False)
+    folder = Path(PREPROCESSING_FOLDER, 'agents', 'farmers')
+    folder.mkdir(parents=True, exist_ok=True)
+    households.to_csv(folder / 'IHDS_I.csv', index=False)

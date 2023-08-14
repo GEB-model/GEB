@@ -1,20 +1,34 @@
 import os
+import json
 import argparse
-
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import rasterio
 from itertools import product, chain
+import rasterio
 
 import warnings
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
 from tqdm import tqdm
+from preconfig import INPUT, PREPROCESSING_FOLDER
 
-from methods import create_cell_area_map
-
-from preconfig import INPUT
+SURVEY_CROP_CONVERSION = {
+    'Bajra': 'Bajra',
+    'Groundnut': 'Groundnut',
+    'Jowar': 'Jowar',
+    'Rice/ Paddy': 'Paddy',
+    'Sugarcane': 'Sugarcane',
+    'Wheat': 'Wheat',
+    'Cotton': 'Cotton',
+    'Gram': 'Gram',
+    'Maize': 'Maize',
+    'Moong': 'Moong',
+    'Ragi': 'Ragi',
+    'Sunflower': 'Sunflower',
+    'Tur (arhar)': 'Tur'
+}
 
 SEASONS = ['Kharif', 'Rabi', 'Summer']
 SIZE_CLASSES = (
@@ -29,7 +43,10 @@ SIZE_CLASSES = (
     '10.0-20.0',
     '20.0 & ABOVE',
 )
-CROPS = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))
+
+with open(Path(INPUT, 'crops', 'crop_ids.json'), 'r') as f:
+    CROPS = list(json.load(f).values())
+
 SIZE_GROUP = {
     'Below 0.5': ['Below 0.5', '0.5-1.0'],
     '0.5-1.0': ['Below 0.5', '0.5-1.0'],
@@ -47,7 +64,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--n_jobs', '-n', type=int, default=1)
 args = parser.parse_known_args()[0]
 
-class IPL(object):
+class IPF(object):
     def __init__(self, original, marginals, weight_col='weight', n=None,
                  convergence_rate=1e-5, max_iterations=1000, verbose=0, rate_tolerance=1e-8):
         """
@@ -248,13 +265,13 @@ class IPL(object):
         else:
             raise(ValueError(f'wrong verbose input, must be either 0, 1 or 2 but got {self.verbose}'))
 
-def fit(ipl_group):
-    (state, district, tehsil, size_class), crop_frequencies, irrigation_sources = ipl_group
+def fit(ipf_group):
+    (state, district, tehsil, size_class), crop_frequencies, irrigation_sources, survey_data = ipf_group
     if tehsil == '0':
         return
-    fp = os.path.join(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
-    # if os.path.exists(fp):
-    #     return
+    fp = Path(folder, f"{state}_{district}_{tehsil}_{size_class}.csv")
+    if os.path.exists(fp):
+        return
     # print(state, district, tehsil, size_class)
     survey_data_size_class = survey_data[survey_data['size_class'].isin(SIZE_GROUP[size_class])]
     # survey_data_size_class = survey_data.copy()
@@ -271,7 +288,7 @@ def fit(ipl_group):
         n = 0
     else:
         n = int(n)
-    ipl = IPL(
+    ipf = IPF(
         original=survey_data_size_class,
         marginals=marginals,
         n=n,
@@ -279,23 +296,28 @@ def fit(ipl_group):
         max_iterations=10_000,
     ).iteration()
 
-    ipl.to_csv(fp, index=False)
+    ipf.to_csv(fp, index=False)
 
-def get_ipl_groups(crop_data, irrigation_sources):
-    ipl_groups = crop_data.groupby(crop_data.index)
-    for ipl_group in ipl_groups:
-        yield ipl_group[0], ipl_group[1], irrigation_sources.loc[ipl_group[0]]
+def get_ipf_groups(crop_data, irrigation_sources, survey_data):
+    ipf_groups = crop_data.groupby(crop_data.index)
+    for ipf_group in ipf_groups:
+        yield ipf_group[0], ipf_group[1], irrigation_sources.loc[ipf_group[0]], survey_data
 
 
 if __name__ == '__main__':
-    with rasterio.open(os.path.join(INPUT, 'areamaps', 'tehsils.tif'), 'r') as src:
-        tehsils_tif = src.read(1)
-        cell_area = create_cell_area_map(src.profile, write_to_disk=False)
+    tehsils_shape = gpd.read_file(Path(INPUT, 'areamaps', 'regions.geojson')).set_index(['state_name', 'district_n', 'sub_dist_1'])
+    avg_farm_size = pd.read_excel(Path(PREPROCESSING_FOLDER, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
+    n_farms = pd.read_excel(Path(PREPROCESSING_FOLDER, 'census', 'n_farms.xlsx'), index_col=(0, 1, 2))
+    
+    # load marginals
+    crop_data = pd.read_excel(Path(PREPROCESSING_FOLDER, 'census', 'crop_data.xlsx'), index_col=(0, 1, 2, 3))
+    crop_data.columns = [c.replace('Tur (Arhar)', 'Tur') for c in crop_data.columns]
+    irrigation_sources = pd.read_excel(Path(PREPROCESSING_FOLDER, 'census', 'irrigation_sources.xlsx'), index_col=(0, 1, 2, 3))
 
-    tehsils_shape = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')).set_index(['state_name', 'district_n', 'sub_dist_1'])
-    avg_farm_size = pd.read_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'), index_col=(0, 1, 2))
-    crop_data = pd.read_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'), index_col=(0, 1, 2, 3))
-    irrigation_sources = pd.read_excel(os.path.join(INPUT, 'census', 'irrigation_sources.xlsx'), index_col=(0, 1, 2, 3))
+    with rasterio.open(Path(INPUT, 'areamaps', 'region_subgrid.tif')) as src:
+        tehsils_tif = src.read(1)
+    with rasterio.open(Path(INPUT, 'areamaps', 'region_cell_area_subgrid.tif')) as src:
+        cell_area = src.read(1)
 
     print("Getting tehsil areas")
     for (state, district, tehsil), tehsil_crop_data in tqdm(crop_data.groupby(level=[0, 1, 2])):
@@ -307,10 +329,10 @@ if __name__ == '__main__':
         # area_per_size_class = tehsil_farm_size * farms_per_size_class
         # census_farm_area = area_per_size_class.sum()
 
-        tehsil_ID = tehsils_shape.loc[(state, district, tehsil), 'ID']
+        tehsil_ID = tehsils_shape.loc[(state, district, tehsil), 'region_id']
         tehsil_area = cell_area[tehsils_tif == tehsil_ID].sum()
 
-    columns = [f'{crop}_irr_holdings' for crop in CROPS['CENSUS'].tolist()] + [f'{crop}_rain_holdings' for crop in CROPS['CENSUS'].tolist()]
+    columns = [f'{crop}_irr_holdings' for crop in CROPS] + [f'{crop}_rain_holdings' for crop in CROPS]
     crop_data = crop_data[columns]
     crop_data = crop_data.rename(columns={
         column: column.replace('_holdings', '')
@@ -322,8 +344,6 @@ if __name__ == '__main__':
         column: column.replace('_n_holdings', '')
         for column in irrigation_sources.columns
     })
-
-    n_farms = pd.read_excel(os.path.join(INPUT, 'census', 'n_farms.xlsx'), index_col=(0, 1, 2))
 
     size_class_convert = {
         "Below 0.5": 0,
@@ -359,21 +379,22 @@ if __name__ == '__main__':
                     break
         return survey
 
-    survey_data = pd.read_csv(os.path.join(INPUT, 'agents', 'IHDS_I.csv'))
+    survey_data = pd.read_csv(Path(PREPROCESSING_FOLDER, 'agents', 'farmers', 'IHDS_I.csv'))
     survey_data = assign_size_classes(survey_data)
     survey_data[~(survey_data['Kharif: Crop: Name'].isnull() & survey_data['Rabi: Crop: Name'].isnull() & survey_data['Summer: Crop: Name'].isnull())]
 
-    for season in SEASONS:
-        survey_data[f'{season}: Crop: Irrigation'] = survey_data[f'{season}: Crop: Irrigation'].map({'Yes': 'irr', 'No': 'rain'})
-
-    crop_convert = CROPS.set_index('IHDS')['CENSUS'].to_dict()
     # drop all farmers that grow crops that are not part of the analysed crops
     for season in SEASONS:
-        survey_data = survey_data[(survey_data[f'{season}: Crop: Name'].isin(crop_convert.keys())) | (survey_data[f'{season}: Crop: Name'].isnull())]
-    for season in SEASONS:
-        survey_data[f'{season}: Crop: Name'] = survey_data[f'{season}: Crop: Name'].map(crop_convert)
+        survey_data = survey_data[(survey_data[f'{season}: Crop: Name'].isin(SURVEY_CROP_CONVERSION.keys())) | (survey_data[f'{season}: Crop: Name'].isnull())]
 
-    print("Also remove households where other crops are grown?")
+    for season in SEASONS:
+        survey_data[f'{season}: Crop: Irrigation'] = survey_data[f'{season}: Crop: Irrigation'].map({'Yes': 'irr', 'No': 'rain'})
+        survey_data[f'{season}: Crop: Name'] = survey_data[f'{season}: Crop: Name'].map(SURVEY_CROP_CONVERSION)
+
+    # manually checked that all crops are growing in the Kharif season, so just to make sure that there are no crops dropped that shouldn't be. Assert that all crops in the conversion dict are present.
+    assert len(np.unique(survey_data['Kharif: Crop: Name'].dropna()).tolist()) == len(CROPS)
+
+    # drop all farmers that don't grow any crops
     survey_data = survey_data[~(survey_data['Kharif: Crop: Name'].isnull() & survey_data['Rabi: Crop: Name'].isnull() & survey_data['Summer: Crop: Name'].isnull())]
 
     # Check if irrigation is assigned to all crops
@@ -397,22 +418,22 @@ if __name__ == '__main__':
         np.nan: 'no_irrigation'
     })
 
-    folder = os.path.join(INPUT, 'agents', 'ipl')
-    os.makedirs(folder, exist_ok=True)
+    folder = Path(PREPROCESSING_FOLDER, 'agents', 'farmers', 'ipf')
+    folder.mkdir(parents=True, exist_ok=True)
 
-    ipl_groups = get_ipl_groups(crop_data, irrigation_sources)
+    ipf_groups = get_ipf_groups(crop_data, irrigation_sources, survey_data)
 
     if args.n_jobs == 1:
-        for ipl_group in tqdm(ipl_groups):
-            fit(ipl_group)
+        for ipf_group in tqdm(ipf_groups):
+            fit(ipf_group)
     else:
         from tqdm.contrib.concurrent import process_map
-        process_map(fit, ipl_groups, max_workers=args.n_jobs)
+        process_map(fit, ipf_groups, max_workers=args.n_jobs)
 
     # create a list of all the files in the folder
     files = os.listdir(folder)
     #iterate through the list of files
     for file in files:
         # open files in pandas
-        df = pd.read_csv(os.path.join(folder, file))
+        df = pd.read_csv(Path(folder, file))
         

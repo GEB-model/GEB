@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `GEB.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`). 
+"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `sandbox.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`). 
 
 """
 
@@ -8,6 +8,9 @@ import pandas as pd
 from collections.abc import Iterable
 import numpy as np
 import re
+import xarray as xr
+import rioxarray as rxr
+from pathlib import Path
 try:
     import cupy as cp
 except ImportError:
@@ -35,9 +38,49 @@ class CWatMReporter(ABMReporter):
         self.variables = {}
         self.timesteps = []
 
-        if 'report_cwatm' in self.model.config:
-            for name in self.model.config['report_cwatm']:
-                self.variables[name] = []
+        if 'report_cwatm' in self.model.config and self.model.config['report_cwatm']:
+            for name, config in self.model.config['report_cwatm'].items():
+                if config['format'] == 'netcdf':
+                    netcdf_path = Path(self.export_folder, name + '.nc')
+                    config['absolute_path'] = str(netcdf_path)
+                    if netcdf_path.exists():
+                        netcdf_path.unlink()
+                    if not 'time_ranges' in config:
+                        if 'substeps' in config:
+                            time = pd.date_range(start=self.model.current_time, periods=(self.model.n_timesteps + 1) * config['substeps'], freq=self.model.timestep_length / config['substeps'], inclusive='left')
+                        else:
+                            time = pd.date_range(start=self.model.current_time, periods=self.model.n_timesteps + 1, freq=self.model.timestep_length)
+                    else:
+                        time = []
+                        for time_range in config['time_ranges']:
+                            start = time_range['start']
+                            end = time_range['end']
+                            if 'substeps' in config:
+                                time.extend(pd.date_range(start=start, end=end + self.model.timestep_length, freq=self.model.timestep_length / config['substeps'], inclusive='left'))
+                            else:
+                                time.extend(pd.date_range(start=start, end=end, freq=self.model.timestep_length))
+                        # exlude time ranges that are not in the simulation period
+                        time = [t for t in time if t >= self.model.current_time and t <= self.model.current_time + (self.model.n_timesteps + 1) * self.model.timestep_length]
+                        # remove duplicates and sort
+                        time = list(dict.fromkeys(time))
+                        time.sort()
+                        if not time:
+                            print(f"WARNING: None of the time ranges for {name} are in the simulation period.")
+
+                    self.variables[name] = xr.DataArray(
+                        coords={
+                            'time': time,
+                            'y': self.model.data.grid.lat,
+                            'x': self.model.data.grid.lon,
+                        },
+                        dims=['time', 'y', 'x'],
+                        name=name
+                    )
+                    self.variables[name] = self.variables[name].rio.write_crs(self.model.data.grid.crs).rio.write_coordinate_system()
+                    self.variables[name].to_netcdf(netcdf_path, mode='a')
+                else:
+                    self.variables[name] = []
+        
         self.step()  # report on inital state
 
     def decompress(self, attr: str, array: np.ndarray) -> np.ndarray:
@@ -83,10 +126,53 @@ class CWatMReporter(ABMReporter):
 
         return array
 
+    def export_value(self, name: str, value: np.ndarray, conf: dict) -> None:
+        """Exports an array of values to the export folder.
+        
+        Args:
+            name: Name of the value to be exported.
+            value: The array itself.
+            conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
+        """
+        folder = os.path.join(self.export_folder, name)
+        try:
+            os.makedirs(folder)
+        except OSError:
+            pass
+        if 'format' not in conf:
+            raise ValueError(f"Export format must be specified for {name} in config file (npy/npz/csv/xlsx).")
+        fn = f"{self.timesteps[-1].isoformat().replace('-', '').replace(':', '')}"
+        if conf['format'] == 'npy':
+            fn += '.npy'
+            fp = os.path.join(folder, fn)
+            np.save(fp, value)
+        elif conf['format'] == 'npz':
+            fn += '.npz'
+            fp = os.path.join(folder, fn)
+            np.savez_compressed(fp, data=value)
+        elif conf['format'] == 'csv':
+            fn += '.csv'
+            fp = os.path.join(folder, fn)
+            if isinstance(value, (np.ndarray, cp.ndarray)):
+                value = value.tolist()
+            if len(value) > 100_000:
+                self.model.logger.info(f"Exporting {len(value)} items to csv. This might take a long time and take a lot of space. Consider using NumPy (compressed) binary format (npy/npz).")
+            with open(fp, 'w') as f:
+                f.write("\n".join([str(v) for v in value]))
+        elif conf['format'] == 'netcdf':
+            if np.isin(np.datetime64(self.model.current_time), self.variables[name].time):
+                if 'substeps' in conf:
+                    self.variables[name].loc[{"time": slice(self.model.current_time, self.model.current_time + self.model.timestep_length - self.model.timestep_length / conf['substeps'])}] = value
+                else:
+                    self.variables[name].loc[{"time": self.model.current_time}] = value
+                self.variables[name].to_netcdf(self.model.config['report_cwatm'][name]['absolute_path'], mode='a')
+        else:
+            raise ValueError(f"{conf['format']} not recognized")
+
     def step(self) -> None:
         """This method is called after every timestep, to collect data for reporting from the model."""
         self.timesteps.append(self.model.current_time)
-        if 'report_cwatm' in self.model.config:
+        if 'report_cwatm' in self.model.config and self.model.config['report_cwatm']:
             for name, conf in self.model.config['report_cwatm'].items():
                 array = self.get_array(conf['varname'])
                 if array is None:
@@ -100,7 +186,7 @@ class CWatMReporter(ABMReporter):
                         value = None
                     else:
                         if conf['function'] == None:
-                            value = array
+                            value = self.decompress(conf['varname'], array)
                         else:
                             function, *args = conf['function'].split(',')
                             if function == 'mean':
@@ -130,6 +216,10 @@ class CWatMReporter(ABMReporter):
     def report(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
+            if isinstance(values, xr.DataArray):
+                values.close()
+                continue
+
             if isinstance(values[0], Iterable):
                 df = pd.DataFrame.from_dict(
                     {

@@ -1,14 +1,16 @@
 import os
-
+import json
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+from tqdm import tqdm
 
 import warnings
 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
-from preconfig import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, PREPROCESSING_FOLDER, INPUT
 
 YEAR = '2000-2001'
 SIZE_CLASSES = (
@@ -24,21 +26,31 @@ SIZE_CLASSES = (
     '20.0 & ABOVE',
 )
 
+CROP_CONVERSION = {
+    'Tur': 'Tur (Arhar)',
+}
+
 def read_census_data(fn):
     census_data = gpd.read_file(fn)
-    subdistricts = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson'))
-    census_data = census_data[census_data.set_index(['state_name', 'district_n', 'sub_dist_1']).index.isin(subdistricts.set_index(['state_name', 'district_n', 'sub_dist_1']).index)]
+    subdistricts = gpd.read_file(os.path.join(INPUT, 'areamaps', 'regions.geojson'))
+    census_data = census_data[
+        census_data.set_index(['state_name', 'district_n', 'sub_dist_1']).index.isin(subdistricts.set_index(['state_name', 'district_n', 'sub_dist_1']).index)]
     return census_data
 
 def get_crop_table(census_df):
-    CROPS = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))['CENSUS'].tolist() + ['Other fodder crops']
+    with open(Path(INPUT, 'crops', 'crop_ids.json'), 'r') as f:
+        crop_ids = json.load(f)
+    CROPS = list(crop_ids.values()) + ['Other fodder crops']
+    
     df = census_df.copy()
     n = len(df)
     df = df.loc[df.index.repeat(len(SIZE_CLASSES))]
     df['size_class'] = SIZE_CLASSES * n
     df = df.set_index(['state_name', 'district_n', 'sub_dist_1', 'size_class'])
 
-    for crop in CROPS:
+    for crop in tqdm(CROPS):
+        if crop in CROP_CONVERSION:
+            crop = CROP_CONVERSION[crop]
         fn = os.path.join(ORIGINAL_DATA, 'census', 'output', 'crops', f'crops_{crop.upper()}_{YEAR}.geojson')
         census_data = read_census_data(fn)
         for _, row in census_data.iterrows():
@@ -131,7 +143,7 @@ def get_crop_table(census_df):
     df['holdings_total'] = df[[column for column in df.columns if column.endswith('_holdings')]].sum(axis=1)
     df['area_total'] = df[[column for column in df.columns if column.endswith('_area')]].sum(axis=1)
 
-    df.to_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'))
+    df.to_excel(os.path.join(PREPROCESSING_FOLDER, 'census', 'crop_data.xlsx'))
 
 def get_farm_size_table(census_df):
     df = census_df.copy()
@@ -152,7 +164,7 @@ def get_farm_size_table(census_df):
                 avg_area = row[f'{size_class}_area_total'] / row[f'{size_class}_n_total'] * 10_000  # ha -> m2
             df.loc[(state, district, tehsil), size_class] = avg_area
 
-    df.to_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'))
+    df.to_excel(os.path.join(PREPROCESSING_FOLDER, 'census', 'avg_farm_size.xlsx'))
 
 def get_farm_count_table(census_df):
     df = census_df.copy()
@@ -178,7 +190,7 @@ def get_farm_count_table(census_df):
     # make sure there are no negative values in dataframe
     assert (df < 0).sum().sum() == 0
 
-    df.to_excel(os.path.join(INPUT, 'census', 'n_farms.xlsx'))
+    df.to_excel(os.path.join(PREPROCESSING_FOLDER, 'census', 'n_farms.xlsx'))
     return df
 
 
@@ -247,14 +259,19 @@ def get_irrigation_source_table(census_df, n_farms):
     # check whether number of irrigation sources matches number of farms
     assert n_farms.sum().sum() == df.sum().sum()
 
-    df.to_excel(os.path.join(INPUT, 'census', 'irrigation_sources.xlsx'))
+    df.to_excel(os.path.join(PREPROCESSING_FOLDER, 'census', 'irrigation_sources.xlsx'))
 
 if __name__ == '__main__':
-    os.makedirs(os.path.join(INPUT, 'census'), exist_ok=True)
-    fn = os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')
-    census_data = gpd.read_file(fn)
+    os.makedirs(os.path.join(PREPROCESSING_FOLDER, 'census'), exist_ok=True)
+
+    census_data = gpd.read_file(os.path.join(INPUT, 'areamaps', 'regions.geojson'))
     census_df = census_data[['state_name', 'district_n', 'sub_dist_1']]
+
+    print("Getting farm size table")
     get_farm_size_table(census_df)
+    print("Getting farm count table")
     n_farms = get_farm_count_table(census_df)
+    print("Getting crop table")
     get_crop_table(census_df)
+    print("Getting irrigation source table")
     get_irrigation_source_table(census_df, n_farms)

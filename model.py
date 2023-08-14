@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-from datetime import timedelta, date
+import datetime
+from pathlib import Path
 from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from reporter import Reporter
@@ -45,25 +46,27 @@ class GEBModel(ABM_Model, CWatM_Model):
         
         self.config = self.setup_config(GEB_config_path)
 
-        self.initial_conditions_folder = os.path.join(self.config['general']['initial_conditions_folder'])
+        self.initial_conditions_folder = Path(self.config['general']['initial_conditions_folder'])
         if args.scenario == 'spinup':
-            end_time = self.config['general']['start_time']
-            current_time = self.config['general']['spinup_time']
+            end_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
+            current_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
             self.load_initial_data = False
-            self.save_initial_data = self.config['general']['export_inital_on_spinup'] 
+            self.save_initial_data = self.config['general']['export_inital_on_spinup']
+            self.initial_conditions = []
         else:
-            current_time = self.config['general']['start_time']
-            end_time = self.config['general']['end_time']
+            current_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
+            end_time = datetime.datetime.combine(self.config['general']['end_time'], datetime.time(0))
             self.load_initial_data = True
             self.save_initial_data = False
 
-        assert isinstance(end_time, date)
-        assert isinstance(current_time, date)
+        assert isinstance(end_time, datetime.datetime)
+        assert isinstance(current_time, datetime.datetime)
         
-        timestep_length = timedelta(days=1)
+        timestep_length = datetime.timedelta(days=1)
         n_timesteps = (end_time - current_time) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0
         
         self.data = Data(self)
 
@@ -74,10 +77,10 @@ class GEBModel(ABM_Model, CWatM_Model):
             self.sfincs = SFINCS(self, self.config, bbox=bbox)
         self.reporter = Reporter(self)
 
-        np.savez_compressed(os.path.join(self.reporter.abm_reporter.export_folder, 'land_owners.npz'), data=self.data.HRU.land_owners)
-        np.savez_compressed(os.path.join(self.reporter.abm_reporter.export_folder, 'unmerged_HRU_indices.npz'), data=self.data.HRU.unmerged_HRU_indices)
-        np.savez_compressed(os.path.join(self.reporter.abm_reporter.export_folder, 'scaling.npz'), data=self.data.HRU.scaling)
-        np.savez_compressed(os.path.join(self.reporter.abm_reporter.export_folder, 'activation_order.npz'), data=self.agents.farmers.activation_order_by_elevation)
+        np.savez_compressed(Path(self.reporter.abm_reporter.export_folder, 'land_owners.npz'), data=self.data.HRU.land_owners)
+        np.savez_compressed(Path(self.reporter.abm_reporter.export_folder, 'unmerged_HRU_indices.npz'), data=self.data.HRU.unmerged_HRU_indices)
+        np.savez_compressed(Path(self.reporter.abm_reporter.export_folder, 'scaling.npz'), data=self.data.HRU.scaling)
+        np.savez_compressed(Path(self.reporter.abm_reporter.export_folder, 'activation_order.npz'), data=self.agents.farmers.activation_order_by_elevation)
 
         self.running = True
 
@@ -132,6 +135,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         for _ in range(n):
             # print(self.current_time)
             t0 = time()
+            self.data.step()
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
 
@@ -153,47 +157,21 @@ class GEBModel(ABM_Model, CWatM_Model):
         for _ in range(self.n_timesteps):
             self.step()
 
-        if self.save_initial_data:
-            initCondVar = [
-                'HRU.land_use_type',
-                'HRU.land_use_ratio',
-                'HRU.land_owners',
-                'HRU.HRU_to_grid',
-                'HRU.grid_to_HRU',
-                'HRU.unmerged_HRU_indices',
-                'HRU.w1',
-                'HRU.w2',
-                'HRU.w3',
-                'HRU.topwater',
-                'HRU.interceptStor',
-                'HRU.SnowCoverS',
-                'HRU.FrostIndex',
-                'HRU.actual_transpiration_crop',
-                'HRU.potential_transpiration_crop',
-                'HRU.crop_map',
-                'HRU.crop_age_days_map',
-                'HRU.crop_harvest_age_days',
-                'grid.channelStorageM3',
-                'grid.discharge',
-                'grid.lakeInflow',
-                'grid.lakeStorage',
-                'grid.reservoirStorage',
-                'grid.lakeVolume',
-                'grid.outLake', 
-                'grid.lakeOutflow', 
-                'modflow.head',
-            ]
-            # self.initCondVar.extend(['grid.smalllakeInflow', 'grid.smalllakeStorage', 'grid.smalllakeOutflow', 'grid.smalllakeInflowOld', 'grid.smalllakeVolumeM3'])
+        if self.config['general']['couple_plantFATE']:
+            self.data.HRU.plant_fate_df.to_csv('plantFATE.csv')
 
-            os.makedirs(self.initial_conditions_folder, exist_ok=True)
+        if self.save_initial_data:
+            self.initial_conditions_folder.mkdir(parents=True, exist_ok=True)
+            with open(Path(self.initial_conditions_folder, 'initial_conditions.txt'), 'w') as f:
+                for var in self.initial_conditions:
+                    f.write(f"{var}\n")
             
-            for initvar in initCondVar:
-                fp = os.path.join(self.initial_conditions_folder, f"{initvar}.npz")
-                values = attrgetter(initvar)(self.data)
-                np.savez_compressed(fp, data=values)
+                    fp = self.initial_conditions_folder / f"{var}.npz"
+                    values = attrgetter(var)(self.data)
+                    np.savez_compressed(fp, data=values)
 
             for attribute in self.agents.farmers.agent_attributes:
-                fp = os.path.join(self.initial_conditions_folder, f"farmers.{attribute}.npz")
+                fp = Path(self.initial_conditions_folder, f"farmers.{attribute}.npz")
                 values = attrgetter(attribute)(self.agents.farmers)
                 np.savez_compressed(fp, data=values)
 

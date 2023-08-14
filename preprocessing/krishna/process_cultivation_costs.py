@@ -1,11 +1,11 @@
 import os
-import math
-import statistics
+from datetime import datetime
+import json
 
 import numpy as np
 import pandas as pd
 
-from preconfig import ORIGINAL_DATA, DATA_FOLDER
+from preconfig import ORIGINAL_DATA, PREPROCESSING_FOLDER
 
 STATES = ['Maharashtra']
 YEARS = list(range(2004, 2019))
@@ -92,57 +92,20 @@ def inter_and_extrapolate(costs):
                     scaled_changes = step_changes * (real_changes ** (1 / empty_size)) / (total_changes ** (1 / empty_size))
                     for i, change in zip(range(j, k), scaled_changes):
                         crop_data[i] = crop_data[i-1] * change
-
+            costs[(state, crop)] = crop_data
+        costs = costs.drop((state, 'changes'), axis=1)
+    
+    # assert no nan values in costs
+    assert not costs.isnull().values.any()
     return costs
-
-def add_tomatoes_maharashtra(costs):
-    # https://www.chemijournal.com/archives/2019/vol7issue4/PartW/7-4-55-593.pdf
-    # http://iasir.net/AIJRFANSpapers/AIJRFANS15-342.pdf
-    # https://www.phytojournal.com/archives/2021/vol10issue1S/PartH/S-10-1-68-438.pdf
-    # https://www.thepharmajournal.com/archives/2021/vol10issue7S/PartH/S-10-6-129-886.pdf
-    state = 'Maharashtra'
-    costs.insert(0, (state, 'Tomato'), np.nan)
-    tomatoes = pd.read_excel(os.path.join(input_folder, 'tomato.xlsx'), skiprows=3)
-    index_col = 'Sl no'
-    tomatoes = tomatoes.astype({index_col: str})
-    tomatoes = tomatoes.set_index(index_col)
-    tomatoes = tomatoes[[column for column in tomatoes.columns if column.startswith('#')]]
-    years = tomatoes.loc['Year']
-    animal_labour = tomatoes.loc['11.2.3']
-    machine_labour = tomatoes.loc['11.3.3']
-    seeds = tomatoes.loc['11.4']
-    fertilizer = tomatoes.loc['11.5.1']
-    manure = tomatoes.loc['11.5.2']
-    insecticides = tomatoes.loc['11.6']
-    farm_deprecation = tomatoes.loc['12.4']
-
-    tomato_total_costs = (animal_labour + machine_labour + seeds + fertilizer + manure + insecticides + farm_deprecation) / 10_000  # rs / ha -> rs / m2
-
-    costs_base_year = []
-    for study in tomato_total_costs.index:
-        year = years.at[study]
-        cost = tomato_total_costs.at[study]
-        changes_per_year = costs[(state, 'changes')].iloc[1:costs.index.get_loc(year)+1]
-        total_change = math.prod(changes_per_year)
-        cost_base_year = cost / total_change
-        costs_base_year.append(cost_base_year)
-
-    cost_base_year = statistics.mean(costs_base_year)
-    costs.loc[costs.index[0], (state, 'Tomato')] = cost_base_year
-    for i in range(1, len(costs)):
-        costs.loc[costs.index[i], (state, 'Tomato')] = costs.loc[costs.index[i-1], (state, 'Tomato')] * costs.loc[costs.index[i], (state, 'changes')]
-
-    return costs
-
 
 def load_inflation_rates(country):
-    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_4570810.csv')
+    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_5551656.csv')
     inflation_series = pd.read_csv(fp, index_col=0, skiprows=4).loc[country]
     inflation = {}
     for year in range(1960, 2022):
         inflation[year] = 1 + inflation_series[str(year)] / 100
     return inflation
-
 
 def process_additional_years(costs, lower_bound):
     inflation = load_inflation_rates('India')
@@ -150,18 +113,45 @@ def process_additional_years(costs, lower_bound):
         costs.loc[f"{lower_bound[0]}-{lower_bound[1]}"] = costs.loc[f"{lower_bound[0]+1}-{lower_bound[1]+1}"] / inflation[year]
     return costs
 
-
 if __name__ == '__main__':
     costs = parse()
     costs = get_changes(costs)
     costs = inter_and_extrapolate(costs)
-    costs = add_tomatoes_maharashtra(costs)
     for year in range(2003, 1959, -1):
         costs = process_additional_years(costs, lower_bound=(year, year+1))
+    # sort by index
+    costs = costs.sort_index()
+    costs = costs['Maharashtra']
+    
+    # replace index by datetime index with starting date of july
+    costs.index = [datetime(year=int(cropping_season.split('-')[0]), month=7, day=1) for cropping_season in costs.index]
 
-    print(costs)
-    folder = os.path.join(DATA_FOLDER, 'GEB', 'input', 'crops')
+    conversion_dict = {
+        'Bajra': 'Bajra',
+        'Groundnut': 'Groundnut',
+        'Jowar': 'Jowar',
+        'Paddy': 'Paddy',
+        'Sugarcane': 'Sugarcane',
+        'Wheat': 'Wheat',
+        'Cotton': 'Cotton',
+        'Gram': 'Gram',
+        'Maize': 'Maize',
+        'Moong': 'Moong',
+        'Ragi': 'Ragi',
+        'Sunflower': 'Sunflower',
+        'Arhar': 'Tur'
+    }
+
+    costs_dict = {
+        'time': costs.index.strftime('%Y-%m-%d').tolist(),
+        'crops': {
+            conversion_dict[column]: costs[column].tolist()
+            for column in conversion_dict.keys()
+        },
+    }
+
+    folder = os.path.join(PREPROCESSING_FOLDER, 'crops')
     os.makedirs(folder, exist_ok=True)
-    fp = os.path.join(folder, 'cultivation_costs.xlsx')
-    costs.to_excel(fp)
-    # print(pd.read_excel(fp, header=(0, 1), index_col=0))
+    with open(os.path.join(folder, 'cultivation_costs.json'), 'w') as f:
+        json.dump(costs_dict, f)
+
