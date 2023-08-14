@@ -1399,21 +1399,6 @@ class Farmers(AgentBaseClass):
             self.total_crop_age[:, 2] / total_planted_time * self.per_harvest_yield_ratio[:, 2]   #summer yield ratio 
             ) 
         
-        # # Create a figure and axes
-        # fig, ax = plt.subplots()
-
-        # # Create the violin plot
-        # ax.violinplot(self.yearly_yield_ratio[:, 0], showmedians=True)
-
-        # # Set labels and title
-        # ax.set_xlabel('X-axis')
-        # ax.set_ylabel('Y-axis')
-        # ax.set_title('Violin Plot')
-
-        # # Show the plot
-        # plt.show()
-
-
         # Convert the seasonal SPEI to yearly SPEI probability 
         seasonal_SPEI_probability = np.zeros((self.n, 3), dtype=np.float32)
 
@@ -1461,7 +1446,11 @@ class Farmers(AgentBaseClass):
 
         # Make a new variable that has crop combination and the farmer class (what type of water they use), as to make unique groups based on this
         # Should perhaps make this into a model wide variable 
-        crop_irrigation_groups = np.hstack((self.crops, self.farmer_class.reshape(-1, 1)))
+        crop_irrigation_groups1 = np.hstack((self.crops[:,0].reshape(-1, 1), self.farmer_class.reshape(-1, 1)))
+
+        crop_irrigation_groups = self.crops
+
+        crop_irrigation_groups1 = self.water_use
 
         # Save the profits, rainfall and water shortage for each farmer type. To do: change this to a vectorized operation, determine and add more homogene farmer groups 
         for crop_combination in np.unique(crop_irrigation_groups, axis=0):
@@ -1552,11 +1541,11 @@ class Farmers(AgentBaseClass):
             poly_yield_probability= np.poly1d(coefficients_yield_probability)
             group_yield_probability_relation.append(poly_yield_probability)
 
-            # slope_yield, intercept_yield, r_value_yield, p_value_yield, std_err_yield = linregress(row1, row3)
+            slope_yield, intercept_yield, r_value_yield, p_value_yield, std_err_yield = linregress(row1, row3)
 
-            # if len(masked_unique_yearly_yield_ratio[0,:]) > 20:
-            #     yield_probability_R2_scipy.append(r_value_yield**2)
-            #     yield_probability_p_scipy.append(p_value_yield)
+            if len(masked_unique_yearly_yield_ratio[0,:]) > 20:
+                yield_probability_R2_scipy.append(r_value_yield**2)
+                yield_probability_p_scipy.append(p_value_yield)
 
             # ## Visualize the scatterplot and trendline 
             # ax1.scatter(row1, row3)
@@ -1570,11 +1559,6 @@ class Farmers(AgentBaseClass):
             # if trendline_count == 15:
             #     break
 
-
-        # self.farmer_yield_probability_relation[mask_rows] = np.array(group_yield_probability_relation)
-        # self.farmer_probability_yield_relation[mask_rows] = np.array(group_probability_profit_relation)
-        
-   
         # Sample the individual agent relation from the agent groups 
         # Where does each agent sit in the list of unique groups
         positions_agent = np.where(np.all(crop_irrigation_groups[:, np.newaxis, :] == np.unique(crop_irrigation_groups, axis=0), axis=-1))
@@ -1586,6 +1570,7 @@ class Farmers(AgentBaseClass):
             self.farmer_yield_probability_relation = np.array(group_yield_probability_relation)[exact_position]
             assert isinstance(self.farmer_yield_probability_relation, np.ndarray), "self.farmer_yield_probability_relation must be a np.ndarray"
         
+        print('R2:', np.mean(yield_probability_R2_scipy), 'p: ', np.mean(yield_probability_p_scipy))
 
         # ax1.set_xlabel('Yield ratio')
         # ax1.set_ylabel('SPEI probability')
@@ -1598,47 +1583,92 @@ class Farmers(AgentBaseClass):
         # plt.legend()
         # plt.show()
 
-    def adaptation_yield_ratio_difference(self) -> None:
+    def adaptation_yield_ratio_difference(self, adaptation_type) -> None:
         # Filter the farmers based on a group that has and doesnt have adaptations
-        # Create the unique groups exactly the same as how they exist for the farmer-yield-profit-probability relations 
-        unique_irrigation_groups = np.hstack((self.crops, self.farmer_class.reshape(-1, 1)))
+        # Find for each farmer (group) without adaptation, the group that is similar but with adaptation   
+
+        # Reorganize the crop types based on how much water they use: 0 = high water, 1 = moderate, 2 = low requirement
+            # 0: paddy (3), sugarcane(4). 
+            # 1: wheat(5), Maize(8), groundnut(1), Sunflower (11), Jowar(2), Bajra (0)
+            # 2: Cotton(6), Ragi (10), Moong(9), Gram(7), Tur (12)
+        
+        # Mapping from original numbers to new group numbers
+        mapping = {0: 1, 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 2, 7: 2, 8: 1, 9: 2, 10: 2, 11: 1, 12: 2}
+        
+        crops_water_use =  np.full_like(self.crops, -1)
+
+        # Iterate through the mapping and apply the changes
+        for original_value, new_group in mapping.items():
+            crops_water_use[self.crops == original_value] = new_group
+
+        # unique_irrigation_groups1 = np.hstack((crops_water_use, self.adapted[:,adaptation_type].reshape(-1,1)))
+        # add 0s to the last column, to have only the group which has not adapted 
+        irrigation_groups_onlyzeros = np.hstack((self.crops[:,0].reshape(-1,1), np.zeros(self.n).reshape(-1,1)))
+        # Also create the full, original group 
+        irrigation_groups = np.hstack((self.crops[:,0].reshape(-1,1), self.adapted[:,adaptation_type].reshape(-1,1)))
 
         # Create empty array to put the groups' values in 
-        unique_well_yield_ratio_gain = locals().get('unique_yearly_profits', 
-                                             np.empty(len(np.unique(unique_irrigation_groups, axis=0)), dtype= np.float32))
-
+        unique_yield_ratio_gain = locals().get('unique_yearly_profits', 
+                                             np.empty(len(np.unique(irrigation_groups, axis=0)), dtype= np.float32))
+        
         # Determine for each farmer group the average yield ratio of the portion that has/has not adapted 
-        for unique_combination in np.unique(unique_irrigation_groups, axis=0):
-            unique_farmer_groups = (unique_irrigation_groups == unique_combination[None, ...]).all(axis=1)
+        for unique_combination in np.unique(irrigation_groups_onlyzeros, axis=0):
+            # Determine the group that has not adapted
+            unique_farmer_groups = (irrigation_groups == unique_combination[None, ...]).all(axis=1)
             
-            adapted_mask = self.adapted[:, :] == 1
-            unadapted_mask = self.adapted[:, :] == 0
+            # Determine their counterpart group that has adapted
+            unique_combination_adapted = unique_combination.copy()
+            unique_combination_adapted[1] = 1
+            unique_farmer_groups_adapted = (irrigation_groups == unique_combination_adapted[None, ...]).all(axis=1)
 
+            unadapted_yield_ratio = np.mean(self.yearly_yield_ratio[unique_farmer_groups, :], axis=1)
+            adapted_yield_ratio = np.mean(self.yearly_yield_ratio[unique_farmer_groups_adapted, :], axis=1)
+            
+            # assert np.count_nonzero(adapted_mask) != 0, "Count of adapted_mask should not be 0!"
+            # assert np.count_nonzero(unadapted_mask) != 0, "Count of not adapted agents should not be 0!"
 
-            # Calculate the mean of yield ratio over time for both the adapted and unadapted groups  
-            adapted_yield_ratio_well = np.mean(self.yearly_yield_ratio[unique_farmer_groups & adapted_mask[:,1], :], axis=1)
-            unadapted_yield_ratio_well = np.mean(self.yearly_yield_ratio[unique_farmer_groups & unadapted_mask[:,1], :], axis=1)
+             # Create a figure and axes
+            plt.clf()
+            fig, (ax1, ax2) = plt.subplots(1, 2)
 
-            # Ensure both arrays are the same length by padding the shorter one with zeroes.
-            diff_length = len(adapted_yield_ratio_well) - len(unadapted_yield_ratio_well)
-            if diff_length > 0:
-                unadapted_yield_ratio_well = np.pad(unadapted_yield_ratio_well, (0, diff_length), 'constant')
-            elif diff_length < 0:
-                adapted_yield_ratio_well = np.pad(adapted_yield_ratio_well, (0, -diff_length), 'constant')
+            # Create the violin plot
+            ax1.violinplot(adapted_yield_ratio, showmedians=True)
+            ax2.violinplot(unadapted_yield_ratio, showmedians=True)
+            # Set labels and title
+            for ax in (ax1, ax2):
+                ax.set_xlabel('X-axis')
+                ax.set_ylabel('Y-axis')
+            
+            ax1.set_title('adapted group')
+            ax2.set_title('not adapted group')
 
-            # Calculate the difference between yes/no adaptated 
-            well_yield_ratio_gain = adapted_yield_ratio_well - unadapted_yield_ratio_well
-            # Calculate the mean of this for the entire group --> this is a problem 
-            mean_well_yield_ratio_gain = np.mean(well_yield_ratio_gain)
+            # Show the plot
+            plt.tight_layout()
+            plt.show()
+
+            # # Ensure both arrays are the same length by padding the shorter one with zeroes.
+            # diff_length = len(adapted_yield_ratio) - len(unadapted_yield_ratio)
+            # if diff_length > 0:
+            #     unadapted_yield_ratio = np.pad(unadapted_yield_ratio, (0, diff_length), 'constant')
+            # elif diff_length < 0:
+            #     adapted_yield_ratio = np.pad(adapted_yield_ratio, (0, -diff_length), 'constant')
+
+            # # Calculate the difference between yes/no adaptated 
+            # yield_ratio_gain = adapted_yield_ratio - unadapted_yield_ratio
+            # # Calculate the mean of this for the entire group --> this is a problem 
+            # mean_yield_ratio_gain = np.mean(yield_ratio_gain)
+            yield_ratio_gain_absolute = np.median(adapted_yield_ratio) - np.median(unadapted_yield_ratio)
+
 
             # Add the difference to the total groups 
-            unique_well_yield_ratio_gain = np.hstack((mean_well_yield_ratio_gain, unique_well_yield_ratio_gain))
+            unique_yield_ratio_gain = np.hstack((mean_yield_ratio_gain, unique_yield_ratio_gain))
 
         # Where does each agent sit in the list of unique groups
-        positions_agent = np.where(np.all(unique_irrigation_groups[:, np.newaxis, :] == np.unique(unique_irrigation_groups, axis=0), axis=-1))
+        positions_agent = np.where(np.all(irrigation_groups[:, np.newaxis, :] == np.unique(irrigation_groups, axis=0), axis=-1))
         exact_position = positions_agent[1]
 
-        self.yield_ratio_gain[:,1] = unique_well_yield_ratio_gain[exact_position]
+        # Convert the group ratio gain to the agent ratio gain 
+        self.yield_ratio_gain[:,adaptation_type] = unique_yield_ratio_gain[exact_position]
 
 
     def by_field(self, var, nofieldvalue=-1):
@@ -2016,6 +2046,9 @@ class Farmers(AgentBaseClass):
 
         yield_ratios = self.convert_probability_to_yield_ratio(p_droughts)
 
+        # Calculate the alternate yield-ratio with an adaptation 
+        alternate_yield_ratio_multiplier = self.adaptation_yield_ratio_difference(0)
+
         total_profits = np.zeros((self.n, len(p_droughts)))
 
         # Now iterate over each individual yield ratio to get the profit
@@ -2118,9 +2151,25 @@ class Farmers(AgentBaseClass):
     def SEUT_irrigation_well(self) -> None:
         decision_module = DecisionModule(self)
         
-        ## Set the probabilities for future droughts -- will be changed later 
+        ## Set the probabilities for future droughts 
         p_droughts = np.array([1000, 500, 250, 100, 50, 25, 10, 5, 2])
+
+        yield_ratios = self.convert_probability_to_yield_ratio(p_droughts)
+
+        # Calculate the alternate yield-ratio with an adaptation 
+        alternate_yield_ratio_multiplier = self.adaptation_yield_ratio_difference(1)
+
+        total_profits = np.zeros((self.n, len(p_droughts)))
+
+        # Now iterate over each individual yield ratio to get the profit
+        for col in range(yield_ratios.shape[1]):
+            YR_one_probability = yield_ratios[:, col]
+            
+            total_profits[:,col] = self.theoretical_profit(YR_one_probability)
         
+        # Transpose columns because this is whats needed in 
+        total_profits = total_profits.T
+
         ## How much of the yield is lost during drought
         p_droughts_loss = np.array([300, 200, 150, 100, 60, 50, 40, 30, 10]) / 100
         # Create random damages in 9d arrays to provide input for the decision module 
@@ -2544,11 +2593,12 @@ class Farmers(AgentBaseClass):
             # Set to 3 for precipitation if there is no abstraction 
             self.farmer_class[self.yearly_abstraction_m3_by_farmer[:,3] == 0] = 3 
             
-            # Categorize water use based on the abstraction of the farmer. These limits could be better updated 
+            # Categorize water use based on the abstraction of the farmer. These limits could be better updated. Currently the above, relative, system works better
             # 0 is surface water / channel-dependent, 1 is reservoir-dependent, 2 is groundwater-dependent, 3 is rainwater-dependent
             for i in range(3):
-                self.water_use[:,i] = np.where(self.yearly_abstraction_m3_by_farmer[:, i] < 0.15, 0, 
-                                            np.where(self.yearly_abstraction_m3_by_farmer[:, i] < 0.50, 1, 2))
+                self.water_use[:,i] = np.where(self.yearly_abstraction_m3_by_farmer[:, i] == 0, 0, 
+                                            np.where(self.yearly_abstraction_m3_by_farmer[:, i] < 0.25, 1,
+                                                     np.where(self.yearly_abstraction_m3_by_farmer[:, i] < 0.5, 2, 3)))
 
             self.water_use[:,3] = np.where(self.yearly_abstraction_m3_by_farmer[:, 3] == 0, 0, 1)
 
@@ -2573,9 +2623,8 @@ class Farmers(AgentBaseClass):
             if self.model.args.scenario not in ['spinup', 'noadaptation', 'noHI', 'base', 'noCC_base', 'noCC_noHI', 'sprinkler']:
                 self.invest_in_irrigation_well()
             if self.model.args.scenario not in ['spinup', 'noadaptation', 'noHI', 'base', 'noCC_base', 'noCC_noHI']:
-                self.adaptation_yield_ratio_difference()
-                self.invest_in_sprinkler_irrigation()
-                # self.SEUT_irrigation_well()     
+                #self.invest_in_sprinkler_irrigation()
+                self.SEUT_irrigation_well()     
 
             self.wealth += self.disposable_income * 0.2
 

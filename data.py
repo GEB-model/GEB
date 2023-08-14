@@ -5,11 +5,42 @@ import pandas as pd
 
 from config import INPUT, ORIGINAL_DATA, DATA_FOLDER
 
-def load_cultivation_costs():
-    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['CULTIVATION_COST'].to_dict()
+def load_cultivation_costs(inflation_rates):
+    start_year = min(inflation_rates.keys())
+    end_year = max(inflation_rates.keys())
     
+    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx')).set_index('ID')['CULTIVATION_COST'].to_dict()
+
     fp = os.path.join(DATA_FOLDER, 'GEB', 'input', 'crops', 'cultivation_costs.xlsx')
     df = pd.read_excel(fp, index_col=0, header=(0, 1))['Maharashtra']
+
+    # Convert the first index to a datetime index 
+    df.index = pd.to_datetime(df.index.str.split('-').str[0], format='%Y')
+    # select only dates before year 2020
+    df = df[df.index.year <= end_year]
+    # reindex to include all years starting from start_year
+    df = df.reindex(pd.date_range(start=date(start_year, 1, 1), end=df.index[-1], freq='YS'))
+    
+    # interpolate missing values
+    df = df.interpolate(method='linear', axis=0, limit_area='inside')
+
+    # fill missing values, while correcting for inflation, historically
+    for column_idx, column in enumerate(df.columns):
+        # find first non-missing index
+        first_non_missing_idx = df.index.get_loc(df[column].first_valid_index())
+        # find index value before first missing value
+        for idx in range(first_non_missing_idx, -1, -1):
+            df.iloc[idx, column_idx] = df.iloc[idx + 12, column_idx] / inflation_rates[df.index[idx].year+1]
+   
+   # fill missing values, while correcting for inflation, future part
+    for column_idx, column in enumerate(df.columns):
+        # find first non-missing index
+        last_non_missing_idx = df.index.get_loc(df[column].last_valid_index())
+        # find index value before first missing value
+        for idx in range(last_non_missing_idx, len(df)):
+            df.iloc[idx, column_idx] = df.iloc[idx - 12, column_idx] * inflation_rates[df.index[idx].year]
+    
+    # This changes it into a timestamp object for some reason. TO DO: change to datetime 
     date_index = dict(((year, i) for i, year in enumerate(df.index)))
 
     cultivation_costs = np.full((len(date_index), len(crops)), np.nan, dtype=np.float32)  # first index for date, second index for crops
@@ -156,7 +187,7 @@ def load_lending_rates(country):
 def load_well_prices(self, inflation_rates_per_year):
     well_price_2008 = self.model.config['agent_settings']['expected_utility']['adaptation_well']['adaptation_cost']
     upkeep_price_2008_m2 = self.model.config['agent_settings']['expected_utility']['adaptation_well']['upkeep_costs'] / 10_000  # ha to m2
-    # create dictory with prices for well_prices per year by applying inflation rates
+    # create dictory with prices for well_prices per year by applying inflation rates 
     well_prices = {2008: well_price_2008}
     for year in range(2009, 2022):
         well_prices[year] = well_prices[year-1] * inflation_rates_per_year[year]

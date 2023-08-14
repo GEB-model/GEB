@@ -114,6 +114,16 @@ if __name__ == '__main__':
         [
             {"name": "precipitation", "color": "#FF0000"},
         ],
+        [
+            {"name": "disposable_income sample", "color": "#FF0000"},
+        ],
+        [
+            {"name": "wealth sample", "color": "#FF0000"},
+         ],
+        [
+            {"name": "mean_risk_perception", "color": "#FF0000"},
+        ],
+
     ]
 
     model_params = {

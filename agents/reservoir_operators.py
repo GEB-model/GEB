@@ -29,14 +29,9 @@ class ReservoirOperators(AgentBaseClass):
 
         self.reservoir_release_factors = np.full(len(self.active_reservoirs), self.model.config['agent_settings']['reservoir_operators']['max_reservoir_release_factor'])
 
-        # Set reservoir volume at 0 if no reservoir scenario is used 
-        if self.model.args.scenario == 'noadaptation':
-            self.reservoir_volume = self.flood_volume = 1
-        else:
-            self.reservoir_volume = self.active_reservoirs['reservoir_volume'].values
-            self.flood_volume = self.active_reservoirs['flood_volume'].values
         
-
+        self.reservoir_volume = self.active_reservoirs['reservoir_volume'].values
+        self.flood_volume = self.active_reservoirs['flood_volume'].values
         self.dis_avg = self.active_reservoirs['Dis_avg'].values
         
         self.cons_limit_ratio = 0.02
@@ -78,7 +73,7 @@ class ReservoirOperators(AgentBaseClass):
                                     (reservoir_fill < self.flood_limit_ratio), temp, reservoir_outflow)
         
         # make outflow same as inflow for a scenario without a reservoir 
-        if self.model.args.scenario == 'noReservoir':
+        if 'noHI' in self.model.args.scenario:
             reservoir_outflow = inflowC
                         
         return reservoir_outflow
