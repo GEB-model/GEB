@@ -16,8 +16,12 @@ def read_crops():
     df = pd.read_csv(os.path.join(ORIGINAL_DATA, 'ICPSR_22626', 'DS0008', '22626-0008-Data.tsv'), delimiter='\t')
     return df
 
+def read_individuals():
+    df = pd.read_csv(os.path.join(ORIGINAL_DATA, 'ICPSR_22626', 'DS0001', '22626-0001-Data.tsv'), delimiter='\t')
+    return df
 
-def process(households, crops):
+
+def process(households, crops, individuals):
     select_households = {
         'SWEIGHT': 'weight',
         'STATEID': 'State code',
@@ -50,6 +54,7 @@ def process(households, crops):
         'INCPROP': 'Income property Rs',
         'incother': 'Other income Rs',
         'COPC': 'Monthly consumption per capita Rs',
+        'HHED5ADULT': 'Education'
     }
     households = households[select_households.keys()].rename(columns=select_households)
     households = households[households['area owned & cultivated'] != ' ']
@@ -83,6 +88,10 @@ def process(households, crops):
     households = households.merge(summer_crops, how='left', on='Full household ID')
 
     households = households[~(households['Kharif: Crop: Name'].isnull() & households['Rabi: Crop: Name'].isnull() & households['Summer: Crop: Name'].isnull())]
+
+    individuals = individuals.rename(columns={'ro5': 'age'})
+
+    households = households.merge(individuals.groupby('idhh')['age'].max(), how='left', left_on='Full household ID', right_on='idhh')
 
     return households
 
@@ -192,8 +201,9 @@ def rename_parameters(households):
 
 if __name__ == '__main__':
     households = prefilter()
+    individuals = read_individuals()
     crops = read_crops()
-    households = process(households, crops)
+    households = process(households, crops, individuals)
     households = rename_parameters(households)
     folder = Path(PREPROCESSING_FOLDER, 'agents', 'farmers')
     folder.mkdir(parents=True, exist_ok=True)
