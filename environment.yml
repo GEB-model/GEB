@@ -17,6 +17,7 @@ dependencies:
   - esmpy
   - deap
   - s3fs
+  - hydromt>=0.8
   - pip
   - pip:
     - git+https://github.com/Deltares/hydromt_sfincs.git
