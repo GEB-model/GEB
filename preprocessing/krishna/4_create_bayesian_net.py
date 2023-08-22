@@ -27,7 +27,7 @@ class Survey:
             epsilon=1e-8,
         )
 
-    def estimate_parameters(self, plot=False):
+    def estimate_parameters(self, plot=False, save=False):
         print("Learning network parameters")
         self.model = BayesianNetwork(self.model.edges())
         self.model.fit(
@@ -48,9 +48,12 @@ class Survey:
 
             edge_params[edge] = {'label': round(cramers_v_value, 2)}
 
-        if plot:
+        if plot or save:
             self.model.to_daft('circular', edge_params=edge_params, pgm_params={'grid_unit': 10}, latex=False).render()
-            plt.show()
+            if save:
+                plt.savefig(save)
+            if plot:
+                plt.show()
 
     def fix_naming(self):
         # replace all spaces in column names with underscores, otherwise pgmpy will throw an error when saving/loading model
@@ -231,19 +234,18 @@ if __name__ == '__main__':
     IHDS_survey = IHDSSurvey()
     IHDS_survey.parse()
     IHDS_survey.learn_structure()
-    IHDS_survey.estimate_parameters(plot=False)
+    IHDS_survey.estimate_parameters(plot=False, save=bayesian_net_folder / 'IHDS.png')
     IHDS_survey.save(bayesian_net_folder / 'IHDS.bif')
 
     farmer_survey = FarmerSurvey(b'2!hM0t$2Kd66')
     farmer_survey.parse()
     farmer_survey.learn_structure()
-    farmer_survey.estimate_parameters(plot=False)
+    farmer_survey.estimate_parameters(plot=False, save=bayesian_net_folder / 'farmer_survey.png')
     farmer_survey.save(bayesian_net_folder / 'farmer_survey.bif')
 
     farmers = farmer_survey.sample(10)
 
     evidence_columns = ['age', 'education', 'field_size']
-
 
     def get_additional_variables(group):
         additional_variables = IHDS_survey.sample(
