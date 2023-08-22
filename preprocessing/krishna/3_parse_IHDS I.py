@@ -31,7 +31,8 @@ def process(households, crops, individuals):
         'HHSPLITID': 'Split household ID',
         'IDHH': 'Full household ID',
         'NPERSONS': 'household size',
-        'FM5': 'area owned & cultivated',
+        'FM2': 'local unit / acre',
+        'FM5': 'area owned & cultivated (local unit)',
         'FM9A': 'Irrigation',
         'FM9B': 'Irrigation type 1',
         'FM9C': 'Irrigation type 2',
@@ -57,9 +58,13 @@ def process(households, crops, individuals):
         'HHED5ADULT': 'Education'
     }
     households = households[select_households.keys()].rename(columns=select_households)
-    households = households[households['area owned & cultivated'] != ' ']
-    households['area owned & cultivated'] = households['area owned & cultivated'].astype(float)
-    households = households[households['area owned & cultivated'] > 0]
+    households = households[households['area owned & cultivated (local unit)'] != ' ']
+    
+    households['area owned & cultivated (local unit)'] = households['area owned & cultivated (local unit)'].astype(float)
+    households = households[households['area owned & cultivated (local unit)'] > 0]
+
+    households['area owned & cultivated (acre)'] = households['area owned & cultivated (local unit)'] / households['local unit / acre'].astype(float)
+    households['area owned & cultivated (hectare)'] = households['area owned & cultivated (acre)'] * 0.404685642
 
     for column in ['Hired farm labour Rs', 'Salaried income Rs', 'Business income Rs', 'Government benefits Rs', 'Income property Rs', 'Other income Rs', 'Seeds Rs', 'Fertilizers Rs', 'Pesticides Rs', 'Irrigation water Rs', 'Hired Equipt/Animals Rs', 'Ag loan repayment Rs', 'Farm miscellaneous Rs', 'New farm equipt Rs']:
         households[households[column] == ' '] = 0
