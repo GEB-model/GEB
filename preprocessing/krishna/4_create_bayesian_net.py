@@ -229,7 +229,6 @@ def load(path):
 if __name__ == '__main__':
     bayesian_net_folder = PREPROCESSING_FOLDER / 'bayesian_net'
     bayesian_net_folder.mkdir(exist_ok=True, parents=True)
-    bayesian_net_path = bayesian_net_folder / 'bayesian_net.bif'
 
     IHDS_survey = IHDSSurvey()
     IHDS_survey.parse()
