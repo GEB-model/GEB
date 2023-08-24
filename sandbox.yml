@@ -14,15 +14,10 @@ general:
   # spinup_time: 2007-12-31
   ###
   # base folder where to report output data to
-  upscale_factor: 40
-  basin_id: 450000005
   gauges:
     - [73.98727, 19.00464]
-  poor_point:
-    [73.98727, 19.00464]
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/sandbox/input/
-  data_folder: ../DataDrive/
   original_data: ../DataDrive/original_data/
   preprocessing_folder: ../DataDrive/sandbox/preprocessing/
   report_folder: ../DataDrive/report/sandbox/

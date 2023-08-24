@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import numpy as np  
 import os
+import datetime
+
 from cwatm.cwatm_model import CWATModel
 from cwatm.management_modules.dynamicModel import ModelFrame
 from cwatm.management_modules.configuration import parse_configuration, read_metanetcdf
@@ -8,9 +10,8 @@ from cwatm.management_modules.globals import settingsfile, binding, option, outD
 from cwatm.management_modules.data_handling import cbinding
 from cwatm.management_modules.timestep import checkifDate
 from cwatm.run_cwatm import headerinfo
-import datetime
 
-from config import INPUT, DATA_FOLDER
+from config import INPUT
 
 class CWatM_Model(CWATModel):
     """
@@ -59,19 +60,12 @@ class CWatM_Model(CWATModel):
         binding["cropgroupnumber"] = os.path.join(INPUT, 'soil', 'cropgrp.tif')
         binding["metaNetcdfFile"] = os.path.join(INPUT, 'metaNetcdf.xml')
 
-        climate_path = os.path.join(DATA_FOLDER, 'GEB', 'input', 'climate', 'Isi-Mip2', 'wfdei')
         topo_path = os.path.join(INPUT, 'landsurface', 'topo')
         grassland_path = os.path.join(INPUT, 'landcover', 'grassland')
         groundwater_path = os.path.join(INPUT, 'groundwater')
         modflow_path = os.path.join(INPUT, 'groundwater', 'modflow')
         binding['PathGroundwaterModflow'] = modflow_path
-        water_demand_path = os.path.join(DATA_FOLDER, 'GEB', 'input', 'demand')
         res_lakes_path = os.path.join(INPUT, 'routing', 'lakesreservoirs')
-        
-        binding["downscale_wordclim_tavg"] = os.path.join(climate_path, 'worldclim_tavg.nc:wc_tavg')
-        binding["downscale_wordclim_tmin"] = os.path.join(climate_path, 'worldclim_tmin.nc:wc_tmin')
-        binding["downscale_wordclim_tmax"] = os.path.join(climate_path, 'worldclim_tmax.nc:wc_tmax ')
-        binding["downscale_wordclim_prec"] = os.path.join(climate_path, 'worldclim_prec.nc:wc_prec')
 
         path_soil = os.path.join(INPUT, 'soil')
         
@@ -146,20 +140,10 @@ class CWatM_Model(CWATModel):
         binding["reservoir_command_areas"] =  os.path.join(res_lakes_path, "command_areas.tif")
         binding["smallLakesRes"] = os.path.join(res_lakes_path, "smallLakesRes.nc")
         binding["smallwaterBodyDis"] = os.path.join(res_lakes_path, "smallLakesResDis.nc")
-        binding["TminMaps"] = os.path.join(climate_path, "tmin*")
-        binding["TmaxMaps"] = os.path.join(climate_path, "tmax*")
-        binding["PSurfMaps"] = os.path.join(climate_path, "ps*")
-        binding["RhsMaps"] = os.path.join(climate_path, "hurs*")
-        binding["QAirMaps"] = os.path.join(climate_path, "huss*")
-        binding["WindMaps"] = os.path.join(climate_path, "wind*")
-        binding["RSDSMaps"] = os.path.join(climate_path, "rsds*")
-        binding["RSDLMaps"] = os.path.join(climate_path, "rlds*")
-        binding["PrecipitationMaps"] = os.path.join(climate_path, "pr*.nc")
-        binding["TavgMaps"] = os.path.join(climate_path, "tavg*")
+
         binding["slopeLength"] = os.path.join(topo_path, "slopeLength.map")
         binding["relativeElevation"] = os.path.join(topo_path, "dzRel.nc")
 
-        # checkifDate('StepStart', 'StepEnd', 'SpinUp', cbinding('PrecipitationMaps'))
         headerinfo()
 
         CWATModel.__init__(self)

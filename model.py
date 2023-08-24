@@ -133,7 +133,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         else:
             n = step_size
         for _ in range(n):
-            # print(self.current_time)
+            print(self.current_time)
             t0 = time()
             self.data.step()
             ABM_Model.step(self, 1, report=False)

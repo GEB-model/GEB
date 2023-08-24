@@ -2,13 +2,13 @@ import logging
 from hydromt_geb import GEBModel
 from hydromt.config import configread
 
-from config import INPUT, config
+from config import INPUT, config, parser
 
-if __name__ == '__main__':
-    yml = r"./hydromt.yml"
+parser.add_argument('--data_libs', '-d', type=str, nargs='+', default=[r"../DataDrive/original_data/data_catalog.yml"])
+parser.add_argument('--yml', '-y', type=str, default=r"./hydromt.yml")
+args = parser.parse_known_args()[0]
 
-    data_libs = [r"../DataDrive/original_data/data_catalog.yml"]
-    opt = configread(yml)
+def create_logger():
     logger = logging.getLogger(__name__)
     # set log level to debug
     logger.setLevel(logging.DEBUG)
@@ -29,17 +29,19 @@ if __name__ == '__main__':
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
+    return logger
     
+if __name__ == '__main__':
     geb_model = GEBModel(
         root=INPUT,
         mode='w+',
-        data_libs=data_libs,
-        logger=logger,
+        data_libs=args.data_libs,
+        logger=create_logger(),
     )
 
     poor_point = config['general']['poor_point']
     geb_model.build(
-        opt=opt,
+        opt=configread(args.yml),
         region={
             'subbasin': [
                 [poor_point[0]], [poor_point[1]]

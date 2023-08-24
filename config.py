@@ -10,6 +10,3 @@ assert 'config' in args
 
 config = yaml.load(open(Path(os.path.dirname(__file__), args.config), 'r'), Loader=yaml.FullLoader)
 INPUT = Path(config['general']['input_folder'])
-PREPROCESSING_FOLDER = Path(config['general']['preprocessing_folder'])
-DATA_FOLDER = Path(config['general']['data_folder'])
-ORIGINAL_DATA = Path(config['general']['original_data'])
