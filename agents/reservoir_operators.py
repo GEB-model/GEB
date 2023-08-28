@@ -15,23 +15,23 @@ class ReservoirOperators(AgentBaseClass):
         self.model = model
         self.agents = agents
         AgentBaseClass.__init__(self)
-        fn = os.path.join(self.model.config['general']['input_folder'], 'routing', 'lakesreservoirs', 'basin_lakes_data.xlsx')
-        df = pd.read_excel(fn).set_index('Hylak_id')
+        fn = os.path.join(self.model.config['general']['input_folder'], 'routing', 'lakesreservoirs', 'basin_lakes_data.csv')
+        df = pd.read_csv(fn).set_index('waterbody_id')
 
-        self.reservoirs = df[df['Lake_type'] == 2].copy()
+        self.reservoirs = df[df['waterbody_type'] == 2].copy()
 
     def initiate_agents(self, waterBodyIDs):
 
-        assert (self.reservoirs['reservoir_volume'] > 0).all()
+        assert (self.reservoirs['volume_total'] > 0).all()
         self.active_reservoirs = self.reservoirs.loc[waterBodyIDs]
 
         np.save(os.path.join(self.model.config['general']['report_folder'], self.model.args.scenario, 'active_reservoirs_waterBodyIDs.npy'), waterBodyIDs)
 
         self.reservoir_release_factors = np.full(len(self.active_reservoirs), self.model.config['agent_settings']['reservoir_operators']['max_reservoir_release_factor'])
 
-        self.reservoir_volume = self.active_reservoirs['reservoir_volume'].values
-        self.flood_volume = self.active_reservoirs['flood_volume'].values
-        self.dis_avg = self.active_reservoirs['Dis_avg'].values
+        self.reservoir_volume = self.active_reservoirs['volume_total'].values
+        self.flood_volume = self.active_reservoirs['volume_flood'].values
+        self.dis_avg = self.active_reservoirs['average_discharge'].values
         
         self.cons_limit_ratio = 0.02
         self.norm_limit_ratio = self.flood_volume / self.reservoir_volume

@@ -1,16 +1,18 @@
 import os
-
+import json
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+from tqdm import tqdm
 
 import warnings
 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
-from preconfig import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, PREPROCESSING_FOLDER, INPUT
 
-YEAR = '2000-01'
+YEAR = '2000-2001'
 SIZE_CLASSES = (
     'Below 0.5',
     '0.5-1.0',
@@ -24,21 +26,31 @@ SIZE_CLASSES = (
     '20.0 & ABOVE',
 )
 
+CROP_CONVERSION = {
+    'Tur': 'Tur (Arhar)',
+}
+
 def read_census_data(fn):
     census_data = gpd.read_file(fn)
-    subdistricts = gpd.read_file(os.path.join(INPUT, 'areamaps', 'subdistricts.geojson'))
-    census_data = census_data[census_data.set_index(['state_name', 'district_n', 'sub_dist_1']).index.isin(subdistricts.set_index(['state_name', 'district_n', 'sub_dist_1']).index)]
+    subdistricts = gpd.read_file(os.path.join(INPUT, 'areamaps', 'regions.geojson'))
+    census_data = census_data[
+        census_data.set_index(['state_name', 'district_n', 'sub_dist_1']).index.isin(subdistricts.set_index(['state_name', 'district_n', 'sub_dist_1']).index)]
     return census_data
 
 def get_crop_table(census_df):
-    CROPS = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))['CENSUS'].tolist() + ['Other fodder crops'] + ['All crops']
+    with open(Path(INPUT, 'crops', 'crop_ids.json'), 'r') as f:
+        crop_ids = json.load(f)
+    CROPS = list(crop_ids.values()) + ['Other fodder crops']
+    
     df = census_df.copy()
     n = len(df)
     df = df.loc[df.index.repeat(len(SIZE_CLASSES))]
     df['size_class'] = SIZE_CLASSES * n
     df = df.set_index(['state_name', 'district_n', 'sub_dist_1', 'size_class'])
 
-    for crop in CROPS:
+    for crop in tqdm(CROPS):
+        if crop in CROP_CONVERSION:
+            crop = CROP_CONVERSION[crop]
         fn = os.path.join(ORIGINAL_DATA, 'census', 'output', 'crops', f'crops_{crop.upper()}_{YEAR}.geojson')
         census_data = read_census_data(fn)
         for _, row in census_data.iterrows():
@@ -131,7 +143,7 @@ def get_crop_table(census_df):
     df['holdings_total'] = df[[column for column in df.columns if column.endswith('_holdings')]].sum(axis=1)
     df['area_total'] = df[[column for column in df.columns if column.endswith('_area')]].sum(axis=1)
 
-    df.to_excel(os.path.join(INPUT, 'census', 'crop_data.xlsx'))
+    df.to_excel(os.path.join(PREPROCESSING_FOLDER, 'census', 'crop_data.xlsx'))
 
 def get_farm_size_table(census_df):
     df = census_df.copy()
@@ -152,28 +164,114 @@ def get_farm_size_table(census_df):
                 avg_area = row[f'{size_class}_area_total'] / row[f'{size_class}_n_total'] * 10_000  # ha -> m2
             df.loc[(state, district, tehsil), size_class] = avg_area
 
-    df.to_excel(os.path.join(INPUT, 'census', 'avg_farm_size.xlsx'))
+    df.to_excel(os.path.join(PREPROCESSING_FOLDER, 'census', 'avg_farm_size.xlsx'))
 
 def get_farm_count_table(census_df):
     df = census_df.copy()
     df = df.set_index(['state_name', 'district_n', 'sub_dist_1'])
     fn = os.path.join(ORIGINAL_DATA, 'census', 'output', f'farm_size_{YEAR}.geojson')
     census_data = read_census_data(fn)
+
+    for size_class in SIZE_CLASSES:
+        df[size_class] = -1
     
     for _, row in census_data.iterrows():
         state, district, tehsil = row['state_name'], row['district_n'], row['sub_dist_1']
 
         for size_class in SIZE_CLASSES:
-            df.loc[(state, district, tehsil), size_class] = row[f'{size_class}_n_total']
+            n = row[f'{size_class}_n_total']
+            if np.isnan(n):
+                n = 0
+            else:
+                n = int(n)
+            assert isinstance(n, int)
+            df.loc[(state, district, tehsil), size_class] = n
 
-    df.to_excel(os.path.join(INPUT, 'census', 'n_farms.xlsx'))
+    # make sure there are no negative values in dataframe
+    assert (df < 0).sum().sum() == 0
 
+    df.to_excel(os.path.join(PREPROCESSING_FOLDER, 'census', 'n_farms.xlsx'))
+    return df
+
+
+def get_irrigation_source_table(census_df, n_farms):
+    df = census_df.copy()
+    n = len(df)
+    df = df.loc[df.index.repeat(len(SIZE_CLASSES))]
+    df['size_class'] = SIZE_CLASSES * n
+    df = df.set_index(['state_name', 'district_n', 'sub_dist_1', 'size_class'])
+
+    irrigation_sources = ['canals', 'tank', 'well', 'tubewell', 'other']
+    # already set values in all columns to ensure dtypes are int
+    for irrigation_type in irrigation_sources:
+        df[f"{irrigation_type}_n_holdings"] = -1
+    df['no_irrigation_n_holdings'] = -1
+
+    fn = os.path.join(ORIGINAL_DATA, 'census', 'output', f'irrigation_source_{YEAR}.geojson')
+    census_data = read_census_data(fn)
+    for _, row in census_data.iterrows():
+        state, district, tehsil = row['state_name'], row['district_n'], row['sub_dist_1']
+        for size_class in SIZE_CLASSES:
+            n_farms_size_class = n_farms.loc[(state, district, tehsil), size_class]
+            if np.isnan(n_farms_size_class):
+                assert np.isnan(row[f'{size_class}_total_holdings'])
+                continue
+            else:
+                holdings_per_source = {}
+                for irrigation_type in irrigation_sources:
+                    n = row[f'{size_class}_{irrigation_type}_holdings']
+                    if np.isnan(n):
+                        n = 0
+                    else:
+                        n = int(n)
+                    holdings_per_source[irrigation_type] = n
+
+                total_irrigated_holdings = sum(holdings_per_source.values())
+                if total_irrigated_holdings > n_farms_size_class:
+                    # scale irrigated holdings down to match total number of holdings
+                    scale = n_farms_size_class / total_irrigated_holdings
+                    for irrigation_type in irrigation_sources:
+                        holdings_per_source[irrigation_type] = holdings_per_source[irrigation_type] * scale
+
+                    holdings_per_source_int = {k: int(v) for k, v in holdings_per_source.items()}
+                    total_irrigated_holdings = sum(holdings_per_source_int.values())
+                    if total_irrigated_holdings < n_farms_size_class:
+                        # sort the irrigation sources by largest moduli
+                        irrigation_sources_sorted = sorted(holdings_per_source.items(), key=lambda x: x[1] % 1, reverse=True)
+                        # select the difference between the total number of holdings and the sum of the integer holdings
+                        for key, _ in irrigation_sources_sorted[:n_farms_size_class - total_irrigated_holdings]:
+                            holdings_per_source_int[key] += 1
+
+                    total_irrigated_holdings = sum(holdings_per_source_int.values())
+                    assert total_irrigated_holdings == n_farms_size_class
+                    holdings_per_source = holdings_per_source_int
+
+                for irrigation_type in irrigation_sources:
+                    df.loc[(state, district, tehsil, size_class), f"{irrigation_type}_n_holdings"] = holdings_per_source[irrigation_type]
+
+                non_irrigated_holdings = n_farms_size_class - total_irrigated_holdings
+                
+                df.loc[(state, district, tehsil, size_class), "no_irrigation_n_holdings"] = non_irrigated_holdings
+                # df.loc[(state, district, tehsil, size_class), f"{irrigation_type}_area"] = row[f'{size_class}_{irrigation_type}_area']
+
+    # make sure there are no negative values in dataframe
+    assert (df < 0).sum().sum() == 0
+    # check whether number of irrigation sources matches number of farms
+    assert n_farms.sum().sum() == df.sum().sum()
+
+    df.to_excel(os.path.join(PREPROCESSING_FOLDER, 'census', 'irrigation_sources.xlsx'))
 
 if __name__ == '__main__':
-    os.makedirs(os.path.join(INPUT, 'census'), exist_ok=True)
-    fn = os.path.join(INPUT, 'areamaps', 'subdistricts.geojson')
-    census_data = gpd.read_file(fn)
+    os.makedirs(os.path.join(PREPROCESSING_FOLDER, 'census'), exist_ok=True)
+
+    census_data = gpd.read_file(os.path.join(INPUT, 'areamaps', 'regions.geojson'))
     census_df = census_data[['state_name', 'district_n', 'sub_dist_1']]
+
+    print("Getting farm size table")
     get_farm_size_table(census_df)
-    get_farm_count_table(census_df)
+    print("Getting farm count table")
+    n_farms = get_farm_count_table(census_df)
+    print("Getting crop table")
     get_crop_table(census_df)
+    print("Getting irrigation source table")
+    get_irrigation_source_table(census_df, n_farms)

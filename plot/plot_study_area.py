@@ -5,7 +5,7 @@ try:
 except ImportError:
     raise ImportError("Matplotlib not found, could not create plot")
 
-from mpl_toolkits.axes_grid.inset_locator import InsetPosition
+from mpl_toolkits.axes_grid1.inset_locator import InsetPosition
 from cartopy.io.img_tiles import OSM
 import cartopy.crs as ccrs
 import matplotlib.patches as mpatches
@@ -14,8 +14,11 @@ import cartopy.feature as cfeature
 import geopandas as gpd
 import cartopy.crs as ccrs
 import numpy as np
+import os
 
 from shapely.geometry import Polygon
+
+from plotconfig import INPUT
 
 import matplotlib as mpl
 
@@ -98,7 +101,7 @@ def plot_location(outline):
     scale_bar(ax, length=None, location=(0.15, 0.05), linewidth=3)
 
     # plt.show()
-    plt.savefig('plot/output/study_area.png', dpi=300)
+    plt.savefig('plot/output/study_area.tif', dpi=300)
 
 
 def plot_basins(outline):
@@ -161,14 +164,14 @@ def plot_cutout(outline):
 
     ax.add_image(imagery, 8, interpolation='spline36', regrid_shape=5_000)
 
-    # plt.show()
+    plt.show()
     plt.savefig('plot/output/cutout.png', dpi=300)
 
 
 if __name__ == '__main__':
-    study_area = 'DataDrive/GEB/input/areamaps/mask.shp'
+    study_area = os.path.join(INPUT, 'areamaps', 'mask.shp')
     outline = gpd.GeoDataFrame.from_file(study_area).iloc[2].geometry
-    # plot_location(outline)
-    plot_cutout(outline)
+    plot_location(outline)
+    # plot_cutout(outline)
 
     # plot_basins(outline)

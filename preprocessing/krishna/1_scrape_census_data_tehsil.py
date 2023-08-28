@@ -11,15 +11,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
 from tqdm import tqdm
+import numpy as np
 import shutil
 from io import StringIO
 from multiprocessing import current_process
 from pebble import ProcessPool
 from concurrent.futures import TimeoutError
-import numpy as np
-
-import chromedriver_autoinstaller
-chromedriver_autoinstaller.install()
 
 from preconfig import ORIGINAL_DATA, INPUT
 
@@ -67,8 +64,7 @@ class CensusScraper:
         else:
             raise ValueError
         self.download_dir = os.path.abspath(os.path.join('tmp', current_process_identifier))
-        if not os.path.exists(self.download_dir):
-            os.makedirs(self.download_dir)
+        os.makedirs(self.download_dir, exist_ok=True)
         prefs = {'download.default_directory': self.download_dir}
         options.add_experimental_option('prefs', prefs)
         options.add_experimental_option('excludeSwitches', ['enable-logging'])
@@ -295,7 +291,7 @@ def process_csv(folder, tehsil_2_shapefile, subdistricts, response_block, size_c
     fn = kind
     if subtype:
         fn = kind + f'_{subtype}'
-    fn += f'_{year}.geojson'
+    fn += f'_{year}-{year+1}.geojson'
     subdistricts.to_file(os.path.join(output_folder, fn), driver='GeoJSON')
     # subdistricts.plot()
     # import matplotlib.pyplot as plt
@@ -349,7 +345,8 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, subset
             for idx, tehsil in tehsils.iterrows():
                 tehsil_name = tehsil[f'{year_short_string}_subd']
                 if tehsil[f'{year_short_string}_value']:
-                    tehsil_name = tehsil_name, tehsil[f'{year_short_string}_value']
+                    if not (isinstance(tehsil[f'{year_short_string}_value'], float) and np.isnan(tehsil[f'{year_short_string}_value'])):
+                        tehsil_name = tehsil_name, tehsil[f'{year_short_string}_value']
                 tehsil_2_shapefile[(state_name, district_name, tehsil_name)] = idx
                 if tehsil_name != '0':
                     to_download[(state_name, district_name)].append(tehsil_name)
@@ -389,30 +386,42 @@ def main(url, kind, year, dropdowns, download_name, fields, subtype=None, subset
     
 
 if __name__ == '__main__':
-    scrape = True
-    headless = True
-    create_file = False
-    for year in (2010, 2015):
-        # main(
-        #     url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
-        #     kind='farm_size',
-        #     year=year,
-        #     dropdowns=[
-        #         ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
-        #         ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-        #         ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
-        #     ],
-        #     download_name='TehsilT1table1.csv',
-        #     size_class_column='field4',
-        #     fields={
-        #         'area_total1': "area_total",
-        #         'no_total1': "n_total"
-        #     },
-        #     scrape=scrape,
-        #     create_file=create_file,
-        #     headless=headless,
-        #     response_block=2
-        # )
+    # initiate argument parser
+    from preconfig import parser
+    parser.add_argument('--noscrape', action='store_true')
+    parser.add_argument('--headless', action='store_true')
+    parser.add_argument('--no_create_map', action='store_true')
+    args = parser.parse_args()
+
+    scrape = not args.noscrape
+    headless = args.headless
+    create_file = not args.no_create_map
+
+    if scrape:
+        import chromedriver_autoinstaller
+        chromedriver_autoinstaller.install()
+    
+    for year in (2000, 2010, 2015):
+        main(
+            url="http://agcensus.dacnet.nic.in/tehsilsummarytype.aspx",
+            kind='farm_size',
+            year=year,
+            dropdowns=[
+                ("_ctl0_ContentPlaceHolder1_ddlTables", 'NUMBER & AREA OF OPERATIONAL HOLDINGS'),
+                ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+                ("_ctl0_ContentPlaceHolder1_ddlGender", 'TOTAL'),
+            ],
+            download_name='TehsilT1table1.csv',
+            size_class_column='field4',
+            fields={
+                'area_total1': "area_total",
+                'no_total1': "n_total"
+            },
+            scrape=scrape,
+            create_file=create_file,
+            headless=headless,
+            response_block=2
+        )
         crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'))['CENSUS'].tolist()
         crops = [crop.upper() for crop in crops]
         main(
@@ -456,61 +465,64 @@ if __name__ == '__main__':
         #         'pl_area': 'partly_irrigated_area',
         #     },
         #     scrape=scrape,
-        #     headless=headless
+        #     headless=headless,
+        #     create_file=create_file
         # )
-        # if year != '2015-16': 
-        #     main(
-        #         url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-        #         kind='irrigation_source',
-        #         year=year,
-        #         dropdowns=[
-        #             ("_ctl0_ContentPlaceHolder1_ddlTables", 'SOURCES OF IRRIGATION'),
-        #             ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-        #         ],
-        #         download_name='tktabledisplay5a.csv',
-        #         fields={
-        #             'total_hold': 'total_holdings',
-        #             'total_area': 'total_area',
-        #             'canal_hd': 'canals_holdings',
-        #             'canal_ar': 'canals_area',
-        #             'tank_hd': 'tank_holdings',
-        #             'tank_ar': 'tank_area',
-        #             'well_hd': 'well_holdings',
-        #             'well_ar': 'well_area',
-        #             'tubewel_hd': 'tubewell_holdings',
-        #             'tubewel_ar': 'tubewell_area',
-        #             'oth_hd': 'other_holdings',
-        #             'oth_ar': 'other_area',
-        #             'irri_hd': 'irrigated_holdings',
-        #             'nt_irri_ar': 'irrigated_area'
-        #         },
-        #         scrape=scrape,
-        #         headless=headless
-        #     )
-        #     main(
-        #         url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
-        #         kind='wells_and_tubewells',
-        #         year=year,
-        #         dropdowns=[
-        #             ("_ctl0_ContentPlaceHolder1_ddlTables", 'WELLS AND TUBEWELLS'),
-        #             ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
-        #         ],
-        #         download_name='tktabledisplay5b.csv',
-        #         fields={
-        #             'total_hold': 'total_holdings',
-        #             'total_area': 'total_area',
-        #             'wells_ep': 'well_electric_pumpset',
-        #             'well_dp': 'well_diesel_pumpset',
-        #             'Total_Pumps': 'well_total',
-        #             'well_wp': 'well_without_pumpset',
-        #             'wells_nuse': 'well_not_in_use',
-        #             'tubewel_e': 'tubewell_electric',
-        #             'tubewel_d': 'tubewell_diesel',
-        #             'tubewells': 'tubewell_total'
-        #         },
-        #         scrape=scrape,
-        #         headless=headless
-        #     )
+        if year != 2015: 
+            main(
+                url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+                kind='irrigation_source',
+                year=year,
+                dropdowns=[
+                    ("_ctl0_ContentPlaceHolder1_ddlTables", 'SOURCES OF IRRIGATION'),
+                    ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+                ],
+                download_name='tktabledisplay5a.csv',
+                fields={
+                    'total_hold': 'total_holdings',
+                    'total_area': 'total_area',
+                    'canal_hd': 'canals_holdings',
+                    'canal_ar': 'canals_area',
+                    'tank_hd': 'tank_holdings',
+                    'tank_ar': 'tank_area',
+                    'well_hd': 'well_holdings',
+                    'well_ar': 'well_area',
+                    'tubewel_hd': 'tubewell_holdings',
+                    'tubewel_ar': 'tubewell_area',
+                    'oth_hd': 'other_holdings',
+                    'oth_ar': 'other_area',
+                    'irri_hd': 'irrigated_holdings',
+                    'nt_irri_ar': 'irrigated_area'
+                },
+                scrape=scrape,
+                headless=headless,
+                create_file=create_file
+            )
+            main(
+                url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
+                kind='wells_and_tubewells',
+                year=year,
+                dropdowns=[
+                    ("_ctl0_ContentPlaceHolder1_ddlTables", 'WELLS AND TUBEWELLS'),
+                    ("_ctl0_ContentPlaceHolder1_ddlSocialGroup", 'ALL SOCIAL GROUPS'),
+                ],
+                download_name='tktabledisplay5b.csv',
+                fields={
+                    'total_hold': 'total_holdings',
+                    'total_area': 'total_area',
+                    'wells_ep': 'well_electric_pumpset',
+                    'well_dp': 'well_diesel_pumpset',
+                    'Total_Pumps': 'well_total',
+                    'well_wp': 'well_without_pumpset',
+                    'wells_nuse': 'well_not_in_use',
+                    'tubewel_e': 'tubewell_electric',
+                    'tubewel_d': 'tubewell_diesel',
+                    'tubewells': 'tubewell_total'
+                },
+                scrape=scrape,
+                headless=headless,
+                create_file=create_file
+            )
         # main(
         #     url="http://agcensus.dacnet.nic.in/TalukCharacteristics.aspx",
         #     kind='cropped_area',
@@ -528,5 +540,6 @@ if __name__ == '__main__':
         #         'Gross_ar': 'gross_cropped_area'
         #     },
         #     scrape=scrape,
-        #     headless=headless
+        #     headless=headless,
+        #     create_file=create_file
         # )

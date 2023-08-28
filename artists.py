@@ -21,11 +21,11 @@ class Artists(honeybeesArtists):
         honeybeesArtists.__init__(self, model)
         self.color = '#1386FF'
         self.min_colorbar_alpha = .4
-        self.background_variable = "agents.farmers.has_well"  # set initial background iamge.
+        self.background_variable = "data.HRU.land_use_type"  # set initial background iamge.
         self.custom_plot = self.get_custom_plot()
         self.set_variables()
 
-    def draw_farmers(self, model, agents, idx: int) -> dict:
+    def draw_farmers(self, model, agents, idx: int, color: str='#ff0000') -> dict:
         """This function is used to draw farmers. First it is determined what crop is grown by the farmer, then the we get the color used to display that crop from the model configuration.
 
         Args:
@@ -36,10 +36,17 @@ class Artists(honeybeesArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        if self.model.agents.farmers.has_well[idx] is True:
-            color = '#0000ff'
+        n_crops = (model.agents.farmers.crops[idx] != -1).sum()
+        if n_crops == 1:
+            color = "#ff0000"
+        elif n_crops == 2:
+            color = "#00ff00"
         else:
-            color = '#ff0000'
+            color = "#0000ff"
+        # if self.model.agents.farmers.flooded[idx] == True:
+        #     color = '#ff0000'
+        # else:
+        #     color = '#0000ff'
         # if idx == self.model.agents.farmers.sample[0]:
         #     color = '#ff0000'
         #     r = 3
@@ -50,7 +57,6 @@ class Artists(honeybeesArtists):
         #     color = '#0000ff'
         #     r = 3
         # else:
-        color = '#ff0000'
         r = .5
         return {"type": "shape", "shape": "circle", "r": r, "filled": True, "color": color}
 

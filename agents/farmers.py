@@ -3,22 +3,24 @@ import os
 import math
 from datetime import date
 import json
+import random
 import calendar
+from pathlib import Path
 
 import numpy as np
+from numba import njit
+from pyproj import Transformer
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
 
-from numba import njit
-
-from honeybees.library.mapIO import ArrayReader
+from honeybees.library.mapIO import MapReader
 from honeybees.agents import AgentBaseClass
-from honeybees.library.raster import pixels_to_coords
+from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_factors, load_crop_names, load_inflation_rates, load_lending_rates, load_well_prices
+from data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_economic_data
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -68,11 +70,10 @@ class Farmers(AgentBaseClass):
     ]
     agent_attributes = [
         "_locations",
-        "_tehsil",
+        "_region_id",
         "_elevation",
         "_crops",
-        "_irrigated",
-        "_has_well",
+        "_irrigation_source",
         "_household_size",
         "_disposable_income",
         "_loan_amount",
@@ -89,8 +90,13 @@ class Farmers(AgentBaseClass):
         "_groundwater_abstraction_m3_by_farmer",
         "_reservoir_abstraction_m3_by_farmer",
         "_latest_profits",
+        "_profits_last_year",
         "_latest_potential_profits",
         "_groundwater_depth",
+        "_profit",
+        "_farmer_is_in_command_area",
+        "_farmer_class",
+        "_flooded"
     ]
     __slots__.extend(agent_attributes)
 
@@ -101,135 +107,200 @@ class Farmers(AgentBaseClass):
         self.var = model.data.HRU
         self.redundancy = reduncancy
 
-        self.crop_names = load_crop_names()
-        self.growth_length, self.crop_stage_lengths, self.crop_factors, self.crop_yield_factors, self.reference_yield = load_crop_factors()
+        self.crop_ids = load_crop_ids()
+        # reverse dictionary
+        self.crop_names = {crop_name: crop_id for crop_id, crop_name in self.crop_ids.items()}
+        self.crop_variables = load_crop_variables()
         self.cultivation_costs = load_cultivation_costs()
         
-        self.inflation_rate = load_inflation_rates('India')
-        self.lending_rate = load_lending_rates('India')
-        self.well_price, self.well_upkeep_price_per_m2 = load_well_prices(self.inflation_rate)
+        self.inflation_rate = load_economic_data(Path('economics', 'inflation_rates.json'))
+        self.lending_rate = load_economic_data(Path('economics', 'lending_rates.json'))
+        self.well_price = load_economic_data(Path('economics', 'well_prices.json'))
+        self.well_upkeep_price_per_m2 = load_economic_data(Path('economics', 'upkeep_prices_well_per_m2.json'))
         self.well_investment_time_years = 10
 
-        self.elevation_map = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subelv.tif'),
-            bounds=self.model.bounds
+        self.elevation_subgrid = MapReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subgrid_elevation.tif'),
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
         )
-        self.elevation_grid = self.model.data.grid.compress(ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'elv.tif'),
-            bounds=self.model.bounds
+        self.elevation_grid = self.model.data.grid.compress(MapReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'elevation.tif'),
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
         ).get_data_array())
 
+        with open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_sources.json')) as f:
+            self.irrigation_source_key = json.load(f)
+
         # load map of all subdistricts
-        self.subdistrict_map = ArrayReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'tehsils.tif'),
-            bounds=self.model.bounds
+        print('test subdistrict map')
+        self.subdistrict_map = MapReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'region_subgrid.tif'),
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
         )
-        # load dictionary that maps subdistricts to state names
-        with open(os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'subdistrict2state.json'), 'r') as f:
-            subdistrict2state = json.load(f)
-            subdistrict2state = {int(subdistrict): state for subdistrict, state in subdistrict2state.items()}
-            # assert that all subdistricts keys are integers
-            assert all([isinstance(subdistrict, int) for subdistrict in subdistrict2state.keys()])
-            # make sure all keys are consecutive integers starting at 0
-            assert min(subdistrict2state.keys()) == 0
-            assert max(subdistrict2state.keys()) == len(subdistrict2state) - 1
-            # load unique states
-            self.states = list(set(subdistrict2state.values()))
-            # create numpy array mapping subdistricts to states
-            state2int = {state: i for i, state in enumerate(self.states)}
-            self.subdistrict2state = np.zeros(len(subdistrict2state), dtype=np.int32)
-            for subdistrict, state in subdistrict2state.items():
-                self.subdistrict2state[subdistrict] = state2int[state]
+
+        # # load dictionary that maps subdistricts to state names
+        # with open(os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'subdistrict2state.json'), 'r') as f:
+        #     subdistrict2state = json.load(f)
+        #     subdistrict2state = {int(subdistrict): state for subdistrict, state in subdistrict2state.items()}
+        #     # assert that all subdistricts keys are integers
+        #     assert all([isinstance(subdistrict, int) for subdistrict in subdistrict2state.keys()])
+        #     # make sure all keys are consecutive integers starting at 0
+        #     assert min(subdistrict2state.keys()) == 0
+        #     assert max(subdistrict2state.keys()) == len(subdistrict2state) - 1
+        #     # load unique states
+        #     self.states = list(set(subdistrict2state.values()))
+        #     # create numpy array mapping subdistricts to states
+        #     state2int = {state: i for i, state in enumerate(self.states)}
+        #     self.subdistrict2state = np.zeros(len(subdistrict2state), dtype=np.int32)
+        #     for subdistrict, state in subdistrict2state.items():
+        #         self.subdistrict2state[subdistrict] = state2int[state]
         
-        self.crop_prices = load_crop_prices(state2int, self.inflation_rate)
+        self.crop_prices = load_crop_prices()
 
         self.agent_attributes_meta = {
             "_locations": {
+                "dtype": np.float32,
                 "nodata": [np.nan, np.nan]
             },
-            "_tehsil": {
+            "_region_id": {
+                "dtype": np.int32,
                 "nodata": -1
             },
             "_elevation": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_crops": {
+                "dtype": np.int32,
                 "nodata": [-1, -1, -1],
                 "nodatacheck": False
             },
-            "_irrigated": {
-                "nodata": -1,
-            },
             "_groundwater_depth": {
-                "nodata": -1,
+                "dtype": np.float32,
+                "nodata": np.nan,
             },
             "_household_size": {
+                "dtype": np.int32,
                 "nodata": -1,
             },
             "_disposable_income": {
-                "nodata": -1
+                "dtype": np.float32,
+                "nodata": np.nan
             },
             "_loan_amount": {
-                "nodata": -1,
+                "dtype": np.float32,
+                "nodata": np.nan,
                 "nodatacheck": False
             },
-            "_profit_per_farmer": {
+            "_profit": {
+                "dtype": np.float32,
                 "nodata": np.nan,
                 "nodatacheck": False
             },
             "_loan_interest": {
-                "nodata": -1,
+                "dtype": np.float32,
+                "nodata": np.nan,
                 "nodatacheck": False
             },
             "_loan_end_year": {
+                "dtype": np.int32,
                 "nodata": -1,
                 "nodatacheck": False
             },
             "_loan_duration": {
+                "dtype": np.int32,
                 "nodata": -1,
                 "nodatacheck": False
             },
             "_daily_non_farm_income": {
-                "nodata": -1
+                "dtype": np.float32,
+                "nodata": np.nan
             },
             "_daily_expenses_per_capita": {
-                "nodata": -1
+                "dtype": np.float32,
+                "nodata": np.nan
             },
             "_irrigation_efficiency": {
-                "nodata": -1
+                "dtype": np.float32,
+                "nodata": np.nan
             },
             "_n_water_accessible_days": {
+                "dtype": np.int32,
                 "nodata": -1
             },
             "_n_water_accessible_years": {
+                "dtype": np.int32,
                 "nodata": -1
             },
-            "_has_well": {
-                "nodata": False,
-                "nodatacheck": False
+            "_irrigation_source": {
+                "dtype": np.int32,
+                "nodata": -1,
             },
             "_water_availability_by_farmer": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_channel_abstraction_m3_by_farmer": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_groundwater_abstraction_m3_by_farmer": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_reservoir_abstraction_m3_by_farmer": {
+                "dtype": np.float32,
                 "nodata": np.nan
             },
             "_latest_profits": {
+                "dtype": np.float32,
                 "nodata": [np.nan, np.nan, np.nan],
-                # "nodatacheck": False
+            },
+            "_profits_last_year": {
+                "dtype": np.float32,
+                "nodata": np.nan,
             },
             "_latest_potential_profits": {
+                "dtype": np.float32,
                 "nodata": [np.nan, np.nan, np.nan],
-                # "nodatacheck": False
+            },
+            "_farmer_class": {
+                "dtype": np.int32,
+                "nodata": -1,
+            },
+            "_farmer_is_in_command_area": {
+                "dtype": bool,
+                "nodata": False,
+                "nodatacheck": False
+            },
+            "_flooded": {
+                "dtype": bool,
+                "nodata": False,
+                "nodatacheck": False
             },
         }
         self.initiate_agents()
+
+    @staticmethod
+    def is_in_command_area(n, command_areas, field_indices, field_indices_by_farmer):
+        farmer_is_in_command_area = np.zeros(n, dtype=bool)
+        for farmer_i in range(n):
+            farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_i)
+            for field in farmer_fields:
+                command_area = command_areas[field]
+                if command_area != -1:
+                    farmer_is_in_command_area[farmer_i] = True
+                    break
+        return farmer_is_in_command_area
 
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
@@ -237,15 +308,11 @@ class Farmers(AgentBaseClass):
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
         if self.model.load_initial_data:
             for attribute in self.agent_attributes:
-                fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npy")
-                values = np.load(fp)
+                fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npz")
+                values = np.load(fp)['data']
                 setattr(self, attribute, values)
             self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
             self.max_n = self._locations.shape[0]
-            self.latest_profits.fill(np.nan)
-            self.latest_potential_profits.fill(np.nan)
-            print("remove this later")
-            self._profit_per_farmer = np.zeros(self.max_n)
         else:
             farms = self.model.data.farms
 
@@ -263,79 +330,53 @@ class Farmers(AgentBaseClass):
             pixels = np.zeros((self.n, 2), dtype=np.int32)
             pixels[:,0] = np.round(np.bincount(farms[farms != -1], horizontal_index) / np.bincount(farms[farms != -1])).astype(int)
             pixels[:,1] = np.round(np.bincount(farms[farms != -1], vertical_index) / np.bincount(farms[farms != -1])).astype(int)
-            self._locations = np.full((self.max_n, 2), np.nan, dtype=np.float32)
+
+            for attribute in self.agent_attributes:
+                if isinstance(self.agent_attributes_meta[attribute]["nodata"], list):
+                    shape = (self.max_n, len(self.agent_attributes_meta[attribute]["nodata"]))
+                else:
+                    shape = self.max_n
+                setattr(self, attribute, np.full(shape, self.agent_attributes_meta[attribute]["nodata"], dtype=self.agent_attributes_meta[attribute]["dtype"]))
+
             self.locations = pixels_to_coords(pixels + .5, self.var.gt)
 
-            # Load the tehsil code of each farmer.
-            self._tehsil = np.full(self.max_n, -1, dtype=np.int32)
-            self.tehsil = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'tehsil_code.npy'))
+            # Load the region_code of each farmer.
+            self.region_id = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'region_id.npz'))['data']
 
             # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
-            self._elevation = np.full(self.max_n, np.nan, dtype=np.float32)
-            self.elevation = self.elevation_map.sample_coords(self.locations)
+            self.elevation = self.elevation_subgrid.sample_coords(self.locations)
       
-            # Load the crops planted for each farmer in the Kharif, Rabi and Summer seasons.
-            self._crops = np.full((self.max_n, 3), -1, dtype=np.int32)  # kharif, rabi, summer
-            self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif crop.npy'))
-            self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi crop.npy'))
-            self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer crop.npy'))
-            assert self.crops.max() < len(self.crop_names)
-      
-            # Load the irrigation status of each farmer. This is a boolean array with three columns, one for each season.      
-            irrigated = np.full((self.n, 3), -1, dtype=np.int8)  # kharif, rabi, summer
-            irrigated[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'kharif irrigation.npy'))
-            irrigated[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'rabi irrigation.npy'))
-            irrigated[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'summer irrigation.npy'))
-      
-            # Assume that a farmer that is irrigated in one season, is also irrigated in the other seasons. Thus using any to get the irrigation status
-            # for all seasons.
-            self._irrigated = np.full(self.max_n, -1, dtype=np.int8)
-            self.irrigated = irrigated.any(axis=1)
+            # Load the crops planted for each farmer in the season #1, season #2 and season #3.
+            self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#1_crop.npz'))['data']
+            self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#2_crop.npz'))['data']
+            self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#3_crop.npz'))['data']
+            assert self.crops.max() < len(self.crop_ids)
 
-            # Load the irrigation type from file and assign all farmers with irrigation type 1 (well) a well.
-            irrigation_type = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'irrigation type.npy'))
-            self._has_well= np.full(self.max_n, 0, dtype=bool)
-            self.has_well[:] = (irrigation_type == 1).any(axis=1)
+            self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_source.npz'))['data']
 
             # Set irrigation efficiency to 70% for all farmers.
-            self._irrigation_efficiency = np.full(self.max_n, -1, dtype=np.float32)
             self.irrigation_efficiency[:] = .70
 
             # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
-            self._latest_profits = np.full((self.max_n, 3), np.nan, dtype=np.float32)
-            self._latest_potential_profits = np.full((self.max_n, 3), np.nan, dtype=np.float32)
 
-            self._channel_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.channel_abstraction_m3_by_farmer[:] = 0
-            self._reservoir_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.reservoir_abstraction_m3_by_farmer[:] = 0
-            self._groundwater_abstraction_m3_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.groundwater_abstraction_m3_by_farmer[:] = 0
-            self._water_availability_by_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
             self.water_availability_by_farmer[:] = 0
-            self._n_water_accessible_days = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_accessible_days[:] = 0
-            self._n_water_accessible_years = np.full(self.max_n, -1, dtype=np.int32)
             self.n_water_accessible_years[:] = 0
 
-            self._profit_per_farmer = np.full(self.max_n, np.nan, dtype=np.float32)
-            self.profit_per_farmer[:] = 0
-            self._disposable_income = np.full(self.max_n, -1, dtype=np.float32)
+            self.profit[:] = 0
+            self.profits_last_year[:] = 0
             self.disposable_income[:] = 0
+            self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'household_size.npz'))['data']
+            self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily_non_farm_income_family.npz'))['data']
+            self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily_consumption_per_capita.npz'))['data']
+            self.flooded[:] = False
 
-            self._loan_amount = np.full(self.max_n, 0, dtype=np.float32)
-            self._loan_interest = np.full(self.max_n, 0, dtype=np.float32)
-            self._loan_duration = np.full(self.max_n, -1, dtype=np.int32)
-            self._loan_end_year = np.full(self.max_n, -1, dtype=np.int32)
+            self.farmer_class[:] = 0  # 0 is precipitation-dependent, 1 is surface water-dependent, 2 is reservoir-dependent, 3 is groundwater-dependent
 
-            self._household_size = np.full(self.max_n, -1, dtype=np.int32)
-            self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'household size.npy'))
-
-            self._daily_non_farm_income = np.full(self.max_n, -1, dtype=np.float32)
-            self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily non farm income family.npy'))
-
-            self._daily_expenses_per_capita = np.full(self.max_n, -1, dtype=np.float32)
-            self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'attributes', 'daily consumption per capita.npy'))
+            self.farmer_is_in_command_area[:] = False
     
         self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
         self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
@@ -348,9 +389,7 @@ class Farmers(AgentBaseClass):
 
         print(f'Loaded {self.n} farmer agents')
 
-        print("move to farmer initialization")
-        self._groundwater_depth = np.zeros(self.max_n, dtype=np.float32)
-
+        # check whether non of the attributes have nodata values
         for attr in self.agent_attributes:
             assert getattr(self, attr[1:]).shape[0] == self.n
             if "nodatacheck" not in self.agent_attributes_meta[attr] or self.agent_attributes_meta[attr]['nodatacheck'] is True:
@@ -482,7 +521,7 @@ class Farmers(AgentBaseClass):
             addtoevapotrans_m: Evaporated irrigation water in meters.
         """
         assert n == activation_order.size
-  
+          
         land_unit_array_size = cell_area.size
         water_withdrawal_m = np.zeros(land_unit_array_size, dtype=np.float32)
         water_consumption_m = np.zeros(land_unit_array_size, dtype=np.float32)
@@ -643,17 +682,17 @@ class Farmers(AgentBaseClass):
             self.field_indices,
             self.elevation_grid,
             self.irrigation_efficiency,
-            self.irrigated,
-            self.has_well,
-            cell_area,
-            HRU_to_grid,
-            self.var.crop_map,
-            totalPotIrrConsumption,
-            available_channel_storage_m3,
-            available_groundwater_m3,
-            groundwater_head,
-            available_reservoir_storage_m3,
-            command_areas,
+            surface_irrigated=np.isin(self.irrigation_source, [self.irrigation_source_key['canals'], self.irrigation_source_key['other']]),
+            well_irrigated=np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']]),
+            cell_area=cell_area,
+            HRU_to_grid=HRU_to_grid,
+            crop_map=self.var.crop_map,
+            totalPotIrrConsumption=totalPotIrrConsumption,
+            available_channel_storage_m3=available_channel_storage_m3,
+            available_groundwater_m3=available_groundwater_m3,
+            groundwater_head=groundwater_head,
+            available_reservoir_storage_m3=available_reservoir_storage_m3,
+            command_areas=command_areas,
             return_fraction=self.model.config['agent_settings']['farmers']['return_fraction'],
             well_depth=30
         )
@@ -710,25 +749,27 @@ class Farmers(AgentBaseClass):
         yield_ratio = self.get_yield_ratio_numba(
             crop_map[harvest],
             actual_transpiration[harvest] / potential_transpiration[harvest],
-            self.crop_yield_factors['KyT'],
+            self.crop_variables['KyT'].values,
         )
         assert not np.isnan(yield_ratio).any()
         return yield_ratio
 
-    def save_profit(self, harvesting_farmers: np.ndarray, profit_per_farmer: np.ndarray, potential_profit_per_farmer: np.ndarray) -> None:
+    def save_profit(self, harvesting_farmers: np.ndarray, profit: np.ndarray, potential_profit: np.ndarray) -> None:
         """Saves the current harvest for harvesting farmers in a 2-dimensional array. The first dimension is the different farmers, while the second dimension are the previous harvests. First the previous harvests are moved by 1 column (dropping old harvests when they don't visit anymore) to make room for the new harvest. Then, the new harvest is placed in the array.
   
         Args:
             harvesting_farmers: farmers that harvest in this timestep.
         """
-        assert (profit_per_farmer >= 0).all()
-        assert (potential_profit_per_farmer >= 0).all()
+        assert (profit >= 0).all()
+        assert (potential_profit >= 0).all()
+
+        self.profits_last_year[harvesting_farmers] = profit[harvesting_farmers]
 
         self.latest_profits[harvesting_farmers, 1:] = self.latest_profits[harvesting_farmers, 0:-1]
-        self.latest_profits[harvesting_farmers, 0] = profit_per_farmer[harvesting_farmers]
+        self.latest_profits[harvesting_farmers, 0] = profit[harvesting_farmers]
   
         self.latest_potential_profits[harvesting_farmers, 1:] = self.latest_potential_profits[harvesting_farmers, 0:-1]
-        self.latest_potential_profits[harvesting_farmers, 0] = potential_profit_per_farmer[harvesting_farmers]
+        self.latest_potential_profits[harvesting_farmers, 0] = potential_profit[harvesting_farmers]
 
     def by_field(self, var, nofieldvalue=-1):
         if self.n:
@@ -812,39 +853,33 @@ class Farmers(AgentBaseClass):
             if self.model.args.use_gpu:
                 harvested_area = harvested_area.get()
             harvested_crops = self.var.crop_map[harvest]
-            max_yield_per_crop = np.take(self.reference_yield, harvested_crops)
+            max_yield_per_crop = np.take(self.crop_variables['reference_yield_kg_m2'], harvested_crops)
       
-            year = self.model.current_time.year
-            month = self.model.current_time.month
-            crop_price_index = self.crop_prices[0][date(year, month, 1)]
-            crop_prices_per_state = self.crop_prices[1][crop_price_index]
-            assert not np.isnan(crop_prices_per_state).any()
+            crop_prices = self.crop_prices[1][self.crop_prices[0].get(self.model.current_time)]
+            assert not np.isnan(crop_prices).any()
             
-            tehsil_per_field = self.tehsil[harvesting_farmer_fields]
-            state_per_field = np.take(self.subdistrict2state, tehsil_per_field)
-
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
             # get potential crop profit per farmer
-            crop_yield_gr = harvested_area * yield_ratio * max_yield_per_crop
-            assert (crop_yield_gr >= 0).all()
-            crop_prices_per_field = crop_prices_per_state[state_per_field, harvested_crops]
-            profit = crop_yield_gr * crop_prices_per_field
+            crop_yield_kg = harvested_area * yield_ratio * max_yield_per_crop
+            assert (crop_yield_kg >= 0).all()
+            crop_prices_per_field = crop_prices[harvested_crops]
+            profit = crop_yield_kg * crop_prices_per_field
             assert (profit >= 0).all()
             
-            self.profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
+            self.profit = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
 
             # get potential crop profit per farmer
             potential_crop_yield = harvested_area * max_yield_per_crop
             potential_profit = potential_crop_yield * crop_prices_per_field
-            potential_profit_per_farmer = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
+            potential_profit = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
       
-            self.save_profit(harvesting_farmers, self.profit_per_farmer, potential_profit_per_farmer)
+            self.save_profit(harvesting_farmers, self.profit, potential_profit)
       
-            self.disposable_income += self.profit_per_farmer
+            self.disposable_income += self.profit
         
         else:
-            self.profit_per_farmer = np.zeros(self.n, dtype=np.float32)
+            self.profit = np.zeros(self.n, dtype=np.float32)
   
         self.var.actual_transpiration_crop[harvest] = 0
         self.var.potential_transpiration_crop[harvest] = 0
@@ -921,19 +956,21 @@ class Farmers(AgentBaseClass):
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU.
         """
-        year = self.model.current_time.year
-        month = self.model.current_time.month
-        if month < 7:  # Agricultural year in India runs from June to July.
-            agricultural_year = f"{year-1}-{year}"
-        else:
-            agricultural_year = f"{year}-{year+1}"
-        year_index = self.cultivation_costs[0][agricultural_year]
-        cultivation_cost_per_crop = self.cultivation_costs[1][year_index]
+        index = self.cultivation_costs[0].get(self.model.current_time)
+        cultivation_cost_per_crop = self.cultivation_costs[1][index]
+
+        # create numpy stack of growth length per crop and season
+        growth_length = np.stack([
+            self.crop_variables['season_#1_duration'],
+            self.crop_variables['season_#2_duration'],
+            self.crop_variables['season_#3_duration']
+        ], axis=1)
+
         plant_map, farmers_selling_land = self.plant_numba(
             n=self.n,
             season_idx=self.current_season_idx,
             is_first_day_of_season=self.is_first_day_of_season,
-            growth_length=self.growth_length,
+            growth_length=growth_length,
             crop_map=self.var.crop_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
             crops=self.crops,
@@ -962,9 +999,9 @@ class Farmers(AgentBaseClass):
     @staticmethod
     @njit(cache=True)
     def invest_numba(
+        n: int,
         year: int,
         farmers_without_well: np.ndarray,
-        has_well: np.ndarray,
         neighbors_with_well: np.ndarray,
         latest_profits: np.ndarray,
         latest_potential_profits: np.ndarray,
@@ -973,21 +1010,23 @@ class Farmers(AgentBaseClass):
         loan_amount: np.ndarray,
         loan_duration: np.ndarray,
         loan_end_year: np.ndarray,
-        well_price: float,
-        well_upkeep_price_per_m2: float,
+        well_price: np.ndarray,
+        well_upkeep_price_per_m2: np.ndarray,
         well_investment_time_years: int,
-        interest_rate: float,
+        interest_rate: np.ndarray,
         disposable_income: np.ndarray,
-        disposable_income_threshold: int=0
+        disposable_income_threshold: int=0,
+        intention_behaviour_gap: int=1
     ):  
         """Determines whether a farmer without a well invests in an irrigation well and takes a loan. Each farmer has
         a probability of investing in a well based on the following factors:
-            - The farmer's latest profit ratio (latest profit / latest potential profit)
-            - The profit ratio of the farmer's neighbors with wells (average of neighbors' latest profit / latest potential profit)
-            - Whether farmer disposable income is sufficient to pay for a loan for a well as well as the yearly upkeep cost
-            - The farmer's disposable income relative to the minimum disposable income required to invest in a well
+        - The farmer's latest profit ratio (latest profit / latest potential profit)
+        - The profit ratio of the farmer's neighbors with wells (average of neighbors' latest profit / latest potential profit)
+        - Whether farmer disposable income is sufficient to pay for a loan for a well as well as the yearly upkeep cost
+        - The farmer's disposable income relative to the minimum disposable income required to invest in a well
   
         Args:
+            n: number of farmers
             year: the current year
             farmers_without_well: farmers currently without a well
             has_well: farmers currently with a will (collary of farmers_without_well)
@@ -1005,11 +1044,11 @@ class Farmers(AgentBaseClass):
             interest_rate: current interest rate
             disposable_income: disposable income of each farmer
             disposable_income_threshold: the minimum disposable income required to invest in a well after considering total well cost
+            intention_behaviour_gap: the ratio of action to intention. For example, if the intention_behaviour_gap is 1, then the farmer will always implement the measure when intended, if the intention_behaviour_gap is 0 the measure will never be implemented.
         """
+        invest_in_well = np.zeros(n, dtype=np.bool_)
         neighbor_nan_value = np.iinfo(neighbors_with_well.dtype).max
         for i, farmer_idx in enumerate(farmers_without_well):
-            assert not has_well[farmer_idx]
-
             latest_profit = latest_profits[farmer_idx, 0]
             latest_potential_profit = latest_potential_profits[farmer_idx, 0]
 
@@ -1029,30 +1068,31 @@ class Farmers(AgentBaseClass):
 
                 potential_benefit = profit_with_neighbor_efficiency - latest_profit
                 potential_benefit_over_investment_time = potential_benefit * well_investment_time_years
-                total_cost_over_investment_time = well_price + well_upkeep_price_per_m2 * farm_size_m2[farmer_idx] * well_investment_time_years
+                total_cost_over_investment_time = well_price[farmer_idx] + well_upkeep_price_per_m2[farmer_idx] * farm_size_m2[farmer_idx] * well_investment_time_years
 
                 if potential_benefit_over_investment_time <= total_cost_over_investment_time:
                     continue
                     
                 # assume linear loan
-                money_left_for_investment = disposable_income[farmer_idx] - well_upkeep_price_per_m2 * farm_size_m2[farmer_idx]
+                money_left_for_investment = disposable_income[farmer_idx] - well_upkeep_price_per_m2[farmer_idx] * farm_size_m2[farmer_idx]
                 well_loan_duration = 30
-                loan_size = well_price
-                yearly_payment = loan_size / well_loan_duration + loan_size * interest_rate
+                loan_size = well_price[farmer_idx]
+                yearly_payment = loan_size / well_loan_duration + loan_size * interest_rate[farmer_idx]
 
                 if money_left_for_investment < yearly_payment + disposable_income_threshold:
                     continue
 
-                has_well[farmer_idx] = True
-                
-                loan_interest[farmer_idx] = interest_rate
-                loan_amount[farmer_idx] = loan_size
-                loan_duration[farmer_idx] = well_loan_duration
-                loan_end_year[farmer_idx] = year + well_loan_duration
+                if random.random() < intention_behaviour_gap:
+                    invest_in_well[farmer_idx] = True
+                    
+                    loan_interest[farmer_idx] = interest_rate[farmer_idx]
+                    loan_amount[farmer_idx] = loan_size
+                    loan_duration[farmer_idx] = well_loan_duration
+                    loan_end_year[farmer_idx] = year + well_loan_duration
 
-                # set profits to nan, just to make sure that only profits with new adaptation measure are used.
-                latest_profits[farmer_idx] = np.nan
-                latest_potential_profits[farmer_idx] = np.nan
+                    # set profits to nan, just to make sure that only profits with new adaptation measure are used.
+                    latest_profits[farmer_idx] = np.nan
+                    latest_potential_profits[farmer_idx] = np.nan
 
             # farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer_idx)
             # channel_storage_farmer_m3 = 0
@@ -1069,6 +1109,16 @@ class Farmers(AgentBaseClass):
             # if in_reservoir_command_area and not surface_irrigated[farmer_idx]:
             #     surface_irrigated[farmer_idx] = True
 
+        return invest_in_well
+
+    def get_value_per_farmer_from_region_id(self, data) -> np.ndarray:
+        index = data[0].get(self.model.current_time)
+        unique_region_ids, inv = np.unique(self.region_id, return_inverse=True)
+        values = np.full_like(unique_region_ids, np.nan, dtype=np.float32)
+        for i, region_id in enumerate(unique_region_ids):
+            values[i] = data[1][region_id][index]
+        return values[inv]
+
     def invest_in_irrigation_well(self) -> None:
         nbits = 19
 
@@ -1083,15 +1133,17 @@ class Farmers(AgentBaseClass):
         #     plt.scatter(self.locations[agent_neighbours][:,0], self.locations[agent_neighbours][:,1], c=colors[i], alpha=.5)
         # plt.show()
 
+        has_well = np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])
+
         for crop_option in np.unique(self.crops, axis=0):
             
             farmers_with_crop_option = np.where((self.crops==crop_option[None, ...]).all(axis=1))[0]
             
-            farmers_with_well = np.where(self.has_well[farmers_with_crop_option] == True)[0]
-            farmers_without_well = np.where(self.has_well[farmers_with_crop_option] == False)[0]
+            farmers_with_well_crop_option = np.where(has_well[farmers_with_crop_option] == True)[0]
+            farmers_without_well = np.where(has_well[farmers_with_crop_option] == False)[0]
             farmers_without_well_indices = farmers_with_crop_option[farmers_without_well]
 
-            if farmers_without_well.size > 0 and farmers_with_well.size > 0:
+            if farmers_without_well.size > 0 and farmers_with_well_crop_option.size > 0:
                 neighbors_with_well = find_neighbors(
                     self.locations[farmers_with_crop_option],
                     radius=5_000,
@@ -1102,29 +1154,29 @@ class Farmers(AgentBaseClass):
                     miny=self.model.bounds[2],
                     maxy=self.model.bounds[3],
                     search_ids=farmers_without_well,
-                    search_target_ids=farmers_with_well
+                    search_target_ids=farmers_with_well_crop_option
                 )
 
-                interest_rate = self.lending_rate[self.model.current_time.year]
-                assert not np.isnan(interest_rate)
-                self.invest_numba(
-                    self.model.current_time.year,
-                    farmers_without_well_indices,
-                    self.has_well,
-                    neighbors_with_well,
-                    self.latest_profits,
-                    self.latest_potential_profits,
-                    self.field_size_per_farmer,
-                    self.loan_interest,
-                    self.loan_amount,
-                    self.loan_duration,
-                    self.loan_end_year,
-                    self.well_price[self.model.current_time.year],
-                    self.well_upkeep_price_per_m2[self.model.current_time.year],
-                    self.well_investment_time_years,
-                    interest_rate,
-                    self.disposable_income,
+                invest_in_well = self.invest_numba(
+                    n=self.n,
+                    year=self.model.current_time.year,
+                    farmers_without_well=farmers_without_well_indices,
+                    neighbors_with_well=neighbors_with_well,
+                    latest_profits=self.latest_profits,
+                    latest_potential_profits=self.latest_potential_profits,
+                    farm_size_m2=self.field_size_per_farmer,
+                    loan_interest=self.loan_interest,
+                    loan_amount=self.loan_amount,
+                    loan_duration=self.loan_duration,
+                    loan_end_year=self.loan_end_year,
+                    well_price=self.get_value_per_farmer_from_region_id(self.well_price),
+                    well_upkeep_price_per_m2=self.get_value_per_farmer_from_region_id(self.well_upkeep_price_per_m2),
+                    well_investment_time_years=self.well_investment_time_years,
+                    interest_rate=self.get_value_per_farmer_from_region_id(self.lending_rate),
+                    disposable_income=self.disposable_income,
+                    intention_behaviour_gap=self.model.config['agent_settings']['farmers']['well_implementation_intention_behaviour_gap']
                 )
+                self.irrigation_source[invest_in_well] = self.irrigation_source_key['tubewell']
     
     @property
     def locations(self):
@@ -1157,14 +1209,6 @@ class Farmers(AgentBaseClass):
     @latest_potential_profits.setter
     def latest_potential_profits(self, value):
         self._latest_potential_profits[:self.n] = value
-
-    @property
-    def irrigated(self):
-        return self._irrigated[:self.n]
-
-    @irrigated.setter
-    def irrigated(self, value):
-        self._irrigated[:self.n] = value
 
     @property
     def irrigation_efficiency(self):
@@ -1319,28 +1363,60 @@ class Farmers(AgentBaseClass):
         self._daily_non_farm_income[:self.n] = value
 
     @property
-    def has_well(self):
-        return self._has_well[:self.n]
+    def irrigation_source(self):
+        return self._irrigation_source[:self.n]
 
-    @has_well.setter
-    def has_well(self, value):
-        self._has_well[:self.n] = value
-
-    @property
-    def profit_per_farmer(self):
-        return self._profit_per_farmer[:self.n]
-
-    @profit_per_farmer.setter
-    def profit_per_farmer(self, value):
-        self._profit_per_farmer[:self.n] = value
+    @irrigation_source.setter
+    def irrigation_source(self, value):
+        self._irrigation_source[:self.n] = value
 
     @property
-    def tehsil(self):
-        return self._tehsil[:self.n]
+    def profit(self):
+        return self._profit[:self.n]
 
-    @tehsil.setter
-    def tehsil(self, value):
-        self._tehsil[:self.n] = value
+    @profit.setter
+    def profit(self, value):
+        self._profit[:self.n] = value
+
+    @property
+    def profits_last_year(self):
+        return self._profits_last_year[:self.n]
+
+    @profits_last_year.setter
+    def profits_last_year(self, value):
+        self._profits_last_year[:self.n] = value
+
+    @property
+    def farmer_is_in_command_area(self):
+        return self._farmer_is_in_command_area[:self.n]
+
+    @farmer_is_in_command_area.setter
+    def farmer_is_in_command_area(self, value):
+        self._farmer_is_in_command_area[:self.n] = value
+
+    @property
+    def farmer_class(self):
+        return self._farmer_class[:self.n]
+
+    @farmer_class.setter
+    def farmer_class(self, value):
+        self._farmer_class[:self.n] = value
+
+    @property
+    def region_id(self):
+        return self._region_id[:self.n]
+
+    @region_id.setter
+    def region_id(self, value):
+        self._region_id[:self.n] = value
+
+    @property
+    def flooded(self):
+        return self._flooded[:self.n]
+
+    @flooded.setter
+    def flooded(self, value):
+        self._flooded[:self.n] = value
 
     @property
     def field_indices_by_farmer(self):
@@ -1388,7 +1464,16 @@ class Farmers(AgentBaseClass):
         self.disposable_income[self.disposable_income < 0] = 0  # for now, weassume that farmers cannot go into debt
 
     def upkeep_assets(self):
-        self.disposable_income -= self.well_upkeep_price_per_m2[self.model.current_time.year] * self.field_size_per_farmer * self.has_well
+        has_well = np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])
+
+        index = self.well_upkeep_price_per_m2[0].get(self.model.current_time)
+        unique_region_ids, inv = np.unique(self.region_id, return_inverse=True)
+        values = np.full_like(unique_region_ids, np.nan, dtype=np.float32)
+        for i, region_id in enumerate(unique_region_ids):
+            values[i] = self.well_upkeep_price_per_m2[1][region_id][index]
+        values = values[inv]
+
+        self.disposable_income -= values * self.field_size_per_farmer * has_well
 
     def make_loan_payment(self):
         has_loan = self.loan_amount > 0
@@ -1401,20 +1486,55 @@ class Farmers(AgentBaseClass):
         self.disposable_income[has_loan] -= loan_payment
         self.disposable_income[self.disposable_income < 0] = 0  # for now, we assume that farmers don't have negative disposable income
 
+    # @staticmethod
+    # @njit(cache=True)
+    # def switch_crops(sugarcane_idx, n_water_accessible_years, crops, days_in_year) -> None:
+    #     """Switches crops for each farmer.
+    #     """
+    #     assert (n_water_accessible_years <= days_in_year + 1).all() # make sure never higher than full year
+    #     for farmer_idx in range(n_water_accessible_years.size):
+    #         # each farmer with all-year access to water has a 20% probability of switching to sugarcane
+    #         if n_water_accessible_years[farmer_idx] >= 3 and np.random.random() < .20:
+    #             crops[farmer_idx] = sugarcane_idx
+
     @staticmethod
-    @njit(cache=True)
-    def switch_crops(sugarcane_idx, n_water_accessible_years, crops, days_in_year) -> None:
-        """Switches crops for each farmer.
-        """
-        assert (n_water_accessible_years <= days_in_year + 1).all() # make sure never higher than full year
-        for farmer_idx in range(n_water_accessible_years.size):
-            # each farmer with all-year access to water has a 20% probability of switching to sugarcane
-            if n_water_accessible_years[farmer_idx] >= 3 and np.random.random() < .20:
-                crops[farmer_idx] = sugarcane_idx
+    @njit
+    def switch_crops_numba(ids, crops, neighbours, profits_last_year) -> None:
+        """Switches crops for each farmer."""
+        nodata_value_neighbors = np.iinfo(neighbours.dtype).max
+        for i, farmer_idx in enumerate(ids):
+            profit_last_year = profits_last_year[farmer_idx]
+            neighbor_farmers = neighbours[i]
+            neighbor_farmers = neighbor_farmers[neighbor_farmers != nodata_value_neighbors]  # delete farmers without neighbors
+            if neighbor_farmers.size == 0:  # no neighbors
+                continue
+
+            neighbor_profits = profits_last_year[neighbor_farmers]
+            neighbor_with_max_profit = np.argmax(neighbor_profits)
+            if neighbor_profits[neighbor_with_max_profit] > profit_last_year:
+                crops[farmer_idx] = crops[neighbor_farmers[neighbor_with_max_profit]]
+
+    def switch_crops(self):
+        """Switches crops for each farmer."""
+        for farmer_class in np.unique(self.farmer_class):
+            ids = np.where(self.farmer_class == farmer_class)[0]
+            neighbors = find_neighbors(
+                self.locations,
+                radius=1_000,
+                n_neighbor=3,
+                bits=19,
+                minx=self.model.bounds[0],
+                maxx=self.model.bounds[1],
+                miny=self.model.bounds[2],
+                maxy=self.model.bounds[3],
+                search_ids=ids,
+                search_target_ids=ids
+            )
+            self.switch_crops_numba(ids, self.crops, neighbors, self.profits_last_year)
 
     def invest_in_sprinkler_irrigation(self):
         """Invests in sprinkler irrigation."""
-        farmer_states = self.subdistrict2state[self.tehsil]
+        farmer_states = self.subdistrict2state[self.region_id]
         # invest in sprinkler irrigation if the farmer is from Maharashtra and has no sprinkler irrigation
         farmers_without_sprinkler_irrigation_in_maharashtra = np.where((self.irrigation_efficiency < .90) & (farmer_states == self.states.index('MAHARASHTRA')))[0]
         # each farmer without sprinkler irrigation has a 20% probability of investing in sprinkler irrigation
@@ -1429,19 +1549,19 @@ class Farmers(AgentBaseClass):
         """
         month = self.model.current_time.month
         if month in (6, 7, 8, 9, 10):
-            self.current_season_idx = 0  # kharif
+            self.current_season_idx = 0  # season #1
             if month == 6 and self.model.current_time.day == 1:
                 self.is_first_day_of_season = True
             else:
                 self.is_first_day_of_season = False
         elif month in (11, 12, 1, 2):
-            self.current_season_idx = 1  # rabi
+            self.current_season_idx = 1  # season #2
             if month == 11 and self.model.current_time.day == 1:
                 self.is_first_day_of_season = True
             else:
                 self.is_first_day_of_season = False
         elif month in (3, 4, 5):
-            self.current_season_idx = 2  # summer
+            self.current_season_idx = 2  # season #3
             if month == 3 and self.model.current_time.day == 1:
                 self.is_first_day_of_season = True
             else:
@@ -1453,6 +1573,11 @@ class Farmers(AgentBaseClass):
         self.plant()
         self.expenses_and_income()
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+
+            self.farmer_is_in_command_area = self.is_in_command_area(self.n, self.var.reservoir_command_areas, self.field_indices, self.field_indices_by_farmer)
+            # for now class is only dependent on being in a command area or not
+            self.farmer_class = self.farmer_is_in_command_area.copy()
+
             # check if current year is a leap year
             days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
             has_access_to_water_all_year = self.n_water_accessible_days >= 365
@@ -1460,8 +1585,9 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
             
-            if self.model.current_timestep >= days_in_year and self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':  # 364 bacause jan 1 is timestep 0
-                self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
+            if self.model.args.scenario != 'spinup' and self.model.args.scenario != 'noadaptation':
+                # self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
+                self.switch_crops()
             
             self.upkeep_assets()
             self.make_loan_payment()
@@ -1470,9 +1596,9 @@ class Farmers(AgentBaseClass):
             if self.model.args.scenario == 'sprinkler':
                 self.invest_in_sprinkler_irrigation()            
 
-            # reset disposable income
+            # reset disposable income and profits
             self.disposable_income[:] = 0
-
+            self.profits_last_year[:] = 0
 
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
@@ -1546,7 +1672,7 @@ class Farmers(AgentBaseClass):
   
         self.locations[self.n-1] = agent_location
         self.elevation[self.n-1] = self.elevation_map.sample_coords(np.expand_dims(agent_location, axis=0))
-        self.tehsil[self.n-1] = self.subdistrict_map.sample_coords(np.expand_dims(agent_location, axis=0))
+        self.region_id[self.n-1] = self.subdistrict_map.sample_coords(np.expand_dims(agent_location, axis=0))
         self.crops[self.n-1] = 1
         self.irrigated[self.n-1] = False
         self.wealth[self.n-1] = 0
@@ -1564,3 +1690,25 @@ class Farmers(AgentBaseClass):
             assert getattr(self, attr[1:]).shape[0] == self.n
             if "nodatacheck" not in self.agent_attributes_meta[attr] or self.agent_attributes_meta[attr]['nodatacheck'] is True:
                 assert not np.array_equal(getattr(self, attr)[self.n-1], self.agent_attributes_meta[attr]['nodata'], equal_nan=True)
+
+    def flood(self, flood_depth, crs, gt):
+        transformer = Transformer.from_crs("epsg:4326", crs)
+        x, y = transformer.transform(self.locations[:, 1], self.locations[:, 0])
+
+        coordinates = np.column_stack((x, y))
+
+        map_extent = (gt[0], gt[0] + gt[1] * flood_depth.shape[1], gt[3] + gt[5] * flood_depth.shape[0], gt[3])
+        agents_in_map_extent = (coordinates[:, 0] >= map_extent[0]) & (coordinates[:, 0] <= map_extent[1]) & (coordinates[:, 1] >= map_extent[2]) & (coordinates[:, 1] <= map_extent[3])
+        
+        coordinates_in_extent = coordinates[agents_in_map_extent]
+
+        flood_depth_per_agent = sample_from_map(flood_depth, coordinates_in_extent, gt)
+
+        has_flooded = flood_depth_per_agent > 0
+
+        self.flooded[agents_in_map_extent] = has_flooded
+
+        # import matplotlib.pyplot as plt
+        # plt.scatter(coordinates_in_extent[has_flooded][:, 0], coordinates_in_extent[has_flooded][:, 1], c='red')
+        # plt.scatter(coordinates_in_extent[~has_flooded][:, 0], coordinates_in_extent[~has_flooded][:, 1], c='blue')
+        # plt.show()

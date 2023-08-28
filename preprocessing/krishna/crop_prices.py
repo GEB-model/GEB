@@ -4,26 +4,32 @@ import time
 import re
 import json
 import calendar
-from datetime import datetime
+from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
-from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
+try:
+    import selenium
+except ImportError:
+    print('selenium not installed. Please install it')
+    exit()
 from selenium import webdriver
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.by import By
-import chromedriver_autoinstaller
+try:
+    import chromedriver_autoinstaller
+except ImportError:
+    print('chromedriver_autoinstaller not installed. Please install it')
+    exit()
 
-from preconfig import ORIGINAL_DATA, INPUT
+from pathlib import Path
+from preconfig import ORIGINAL_DATA, PREPROCESSING_FOLDER
 
-chromedriver_autoinstaller.install() 
-
-BASE_PATH = os.path.join(ORIGINAL_DATA, 'crop_prices')
-os.makedirs(BASE_PATH, exist_ok=True)
-SCRAPE_PATH = os.path.join(BASE_PATH, 'scraped')
+CROP_PRICES_PATH = os.path.join(ORIGINAL_DATA, 'crop_prices')
+os.makedirs(CROP_PRICES_PATH, exist_ok=True)
+SCRAPE_PATH = os.path.join(CROP_PRICES_PATH, 'scraped')
 os.makedirs(SCRAPE_PATH, exist_ok=True)
 
 class Scraper:
@@ -201,58 +207,97 @@ class Scraper:
                         raise Exception
         print(f'Process {self.i} - finished')
 
-def parse(state, crops=None):
+def parse(state, crops):
     print(f"Parsing {state}")
 
-    output_folder = os.path.join(INPUT, 'crops', 'crop_prices_rs_per_g')
-    os.makedirs(output_folder, exist_ok=True)
-    output_path = os.path.join(output_folder, f"{state}.xlsx")
-    if not os.path.exists(output_path):
+    dates = [datetime(2000, 1, 1)]
+    while dates[-1] < datetime.utcnow():
+        dates.append(dates[-1] + relativedelta(months=1))
 
-        dates = [datetime(2000, 1, 1)]
-        while dates[-1] < datetime.utcnow():
-            dates.append(dates[-1] + relativedelta(months=1))
-
-        output = pd.DataFrame(index=dates)
-        for commodity in os.listdir(SCRAPE_PATH):
-            if crops and commodity not in crops:
+    output = pd.DataFrame(index=dates)
+    for crop_name, commodity in crops.items():
+        print(f'\t{commodity}')
+        commody_prices = []
+        commodity_folder = os.path.join(SCRAPE_PATH, commodity)
+        for fn in os.listdir(commodity_folder):
+            if not fn.endswith('.html'):
                 continue
-            print(f'\t{commodity}')
-            commody_prices = []
-            commodity_folder = os.path.join(SCRAPE_PATH, commodity)
-            for fn in os.listdir(commodity_folder):
-                if not fn.endswith('.html'):
-                    continue
-                date = re.match("([0-9]{4})_([0-9]{1,2})\.html", fn)
-                year = int(date.group(1))
-                month = int(date.group(2))
-                date = datetime(year, month, 1)  # set first day of month
-                if month == 2:  # there is a typo in the downloaded data from Agmarknet
-                    month_name = "Febraury"
-                else:
-                    month_name = calendar.month_name[month]
-                column_name = f"Prices {month_name}, {year}"
-                fp = os.path.join(commodity_folder, fn)
-                try:
-                    df = pd.read_html(fp, header=0, index_col=0)[0]
-                except ValueError:
-                    continue
-                if state.title() in df.index:
-                    commody_prices.append((date, df.loc[state.title(), column_name]))
-            commody_prices = sorted(commody_prices, key=lambda x: x[0])
-            if commody_prices:
-                value_dates, values = zip(*commody_prices)
-                output[commodity] = np.nan
-                output.loc[value_dates, commodity] = values
-        output = output / 100 / 1000  # rs / quintal (100 kg) -> rs / g
-        output.to_excel(output_path)
-    else:
-        output = pd.read_excel(output_path, index_col=0)
+            date = re.match("([0-9]{4})_([0-9]{1,2})\.html", fn)
+            year = int(date.group(1))
+            month = int(date.group(2))
+            date = datetime(year, month, 1)  # set first day of month
+            if month == 2:  # there is a typo in the downloaded data from Agmarknet
+                month_name = "Febraury"
+            else:
+                month_name = calendar.month_name[month]
+            column_name = f"Prices {month_name}, {year}"
+            fp = os.path.join(commodity_folder, fn)
+            try:
+                df = pd.read_html(fp, header=0, index_col=0)[0]
+            except ValueError:
+                continue
+            if state.title() in df.index:
+                commody_prices.append((date, df.loc[state.title(), column_name]))
+        commody_prices = sorted(commody_prices, key=lambda x: x[0])
+        if commody_prices:
+            value_dates, values = zip(*commody_prices)
+            output[crop_name] = np.nan
+            output.loc[value_dates, crop_name] = values
+
+    output = output / 100  # rs / quintal (100 kg) -> rs / kg
+    output = output.interpolate(method='linear', axis=0, limit_area='inside')
+
+    return output
+
     # print(output)
     # fig, ax = plt.subplots(1)
     # ax.plot(value_dates, values, label=commodity)
     # plt.legend()
     # plt.show()
+
+def add_FRP_prices(crops):
+    df = pd.read_excel(Path(CROP_PRICES_PATH, 'FRP.xlsx'), index_col=0)
+
+    start_year = int(df.index[0][:4])
+    end_year = int(df.index[-1][-4:])
+    
+    df.index = pd.date_range(
+        start=date(start_year, 1, 1), end=date(end_year, 1, 1), freq='YS', inclusive='left'
+    ) + pd.DateOffset(months=6)
+    df = df.reindex(
+        pd.date_range(start=date(start_year, 7, 1), end=date(end_year, 7, 1), freq='MS', inclusive='left')
+    )
+    df = df.interpolate(method='ffill', axis=0)
+    # set sugarcane prices in crops
+
+    for crop in df.columns:
+        crops = crops.assign(sugarcane=df[crop])
+    crops = crops[crops.index.year < 2022]
+    return crops
+
+def extrapolate(crops):
+    fp = os.path.join(ORIGINAL_DATA, 'economics', 'WB inflation rates', 'API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_5551656.csv')
+    inflation_series = pd.read_csv(fp, index_col=0, skiprows=4).loc['India']
+    inflation_rates = {}
+    for year in range(1960, 2022):
+        inflation_rates[year] = 1 + inflation_series[str(year)] / 100
+
+    # fill missing values, while correcting for inflation, historically
+    for column_idx, column in enumerate(crops.columns):
+        # find first non-missing index
+        first_non_missing_idx = crops.index.get_loc(crops[column].first_valid_index())
+        # find index value before first missing value
+        for idx in range(first_non_missing_idx, -1, -1):
+            crops.iloc[idx, column_idx] = crops.iloc[idx + 12, column_idx] / inflation_rates[crops.index[idx].year+1]
+
+    # fill missing values, while correcting for inflation, future part
+    for column_idx, column in enumerate(crops.columns):
+        # find first non-missing index
+        last_non_missing_idx = crops.index.get_loc(crops[column].last_valid_index())
+        # find index value before first missing value
+        for idx in range(last_non_missing_idx, len(crops)):
+            crops.iloc[idx, column_idx] = crops.iloc[idx - 12, column_idx] * inflation_rates[crops.index[idx].year]
+    return crops
 
 def workwork(i=None):
     while True:
@@ -264,12 +309,46 @@ def workwork(i=None):
             print(e)
 
 if __name__ == '__main__':
-    N_WORKERS = 10
-    # with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
-    #     done = executor.map(workwork, list(range(1, N_WORKERS+1)))
-    with open(os.path.join(INPUT, 'areamaps', 'subdistrict2state.json'), 'r') as f:
-        subdistrict2state = json.load(f)
-    states = set(subdistrict2state.values())
-    crops = pd.read_excel(os.path.join(INPUT, 'crops', 'crops.xlsx'), index_col=0)['PRICE'].to_list()
-    for state in states:
-        parse(state, crops=crops)
+    from preconfig import parser
+
+    parser.add_argument('--no-scrape', action='store_true')
+    parser.add_argument('--n-workers', type=int, default=10, help='Number of workers to use for scraping')
+    args = parser.parse_args()
+    
+    if not args.no_scrape:
+        chromedriver_autoinstaller.install() 
+        with ThreadPoolExecutor(max_workers=args.n_workders) as executor:
+            done = executor.map(workwork, list(range(1, args.n_workders+1)))
+
+    output_folder = os.path.join(PREPROCESSING_FOLDER, 'crops')
+    os.makedirs(output_folder, exist_ok=True)
+    output_path = os.path.join(output_folder, f"crop_prices.json")
+
+    crops = parse('Maharashtra', crops={
+        "Bajra": "Bajra(Pearl Millet.Cumbu)",
+        "Groundnut": "Groundnut",
+        "Jowar": "Jowar(Sorghum)",
+        "Paddy": "Rice",
+        "Sugarcane": "Sugarcane",
+        "Wheat": "Wheat",
+        "Cotton": "Cotton",
+        "Gram": "Green Gram (Moong)(Whole)",
+        "Maize": "Maize",
+        "Moong": "Green Gram (Moong)(Whole)",
+        "Ragi": "Ragi (Finger Millet)",
+        "Sunflower": "Sunflower",
+        "Tur": "Arhar (Tur.Red Gram)(Whole)"
+    })
+    crops = add_FRP_prices(crops)
+
+    crops = extrapolate(crops)
+
+    export = {
+        'time': pd.Series(crops.index).dt.strftime('%Y-%m-%d').tolist(),
+        'crops': {}
+    }
+    for commodity in crops.columns:
+        export['crops'][commodity] = crops[commodity].tolist()
+
+    with open(output_path, 'w') as f:
+        json.dump(export, f, indent=2)

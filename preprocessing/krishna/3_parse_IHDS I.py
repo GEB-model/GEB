@@ -1,7 +1,9 @@
 import os
 import pandas as pd
+import numpy as np
+from pathlib import Path
 
-from preconfig import ORIGINAL_DATA, INPUT
+from preconfig import ORIGINAL_DATA, PREPROCESSING_FOLDER
 
 def prefilter():
     df = pd.read_csv(os.path.join(ORIGINAL_DATA, 'ICPSR_22626', 'DS0002', '22626-0002-Data.tsv'), delimiter='\t')
@@ -101,8 +103,9 @@ def rename_parameters(households):
         '3': 'Both',
     })
     irrigation_map = {
-        0: 'Yes',
-        1: 'No',
+        0: 'No',
+        1: 'Yes',
+        np.nan: 'No',
     }
     households['Kharif: Crop: Irrigation'] = households['Kharif: Crop: Irrigation'].map(irrigation_map)
     households['Rabi: Crop: Irrigation'] = households['Rabi: Crop: Irrigation'].map(irrigation_map)
@@ -181,6 +184,10 @@ def rename_parameters(households):
     households['Rabi: Crop: Name'] = households['Rabi: Crop: Name'].map(crop_map)
     households['Summer: Crop: Name'] = households['Summer: Crop: Name'].map(crop_map)
 
+    households.loc[pd.isnull(households['Kharif: Crop: Name']), 'Kharif: Crop: Irrigation'] = np.nan
+    households.loc[pd.isnull(households['Rabi: Crop: Name']), 'Rabi: Crop: Irrigation'] = np.nan
+    households.loc[pd.isnull(households['Summer: Crop: Name']), 'Summer: Crop: Irrigation'] = np.nan
+
     return households
 
 if __name__ == '__main__':
@@ -188,6 +195,6 @@ if __name__ == '__main__':
     crops = read_crops()
     households = process(households, crops)
     households = rename_parameters(households)
-    folder = os.path.join(INPUT, 'agents')
-    os.makedirs(folder, exist_ok=True)
-    households.to_csv(os.path.join(folder, 'IHDS_I.csv'), index=False)
+    folder = Path(PREPROCESSING_FOLDER, 'agents', 'farmers')
+    folder.mkdir(parents=True, exist_ok=True)
+    households.to_csv(folder / 'IHDS_I.csv', index=False)

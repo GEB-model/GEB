@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
-from typing import Any, Union
+from typing import Union
 from numba import njit
 import rasterio
 import os
+import xarray as xr
+import rioxarray as rxr
 import numpy as np
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
 
-import matplotlib.pyplot as plt
+from config import INPUT
 
 
 class BaseVariables:
@@ -58,14 +60,18 @@ class BaseVariables:
         """
         return array / self.cellArea
 
+    def register_initial_data(self, name: str) -> None:
+        self.model.initial_conditions.append(name)
+
     def load_initial(self, name, default=.0, gpu=False):
         if self.model.load_initial_data:
-            fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npy")
+            fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npz")
             if gpu:
-                return cp.load(fp)
+                return cp.load(fp)['data']
             else:
-                return np.load(fp)
+                return np.load(fp)['data']
         else:
+            self.register_initial_data(name)
             return default
 
 class Grid(BaseVariables):
@@ -79,12 +85,16 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        mask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'mask.tif')
+        mask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'grid_mask.tif')
         with rasterio.open(mask_fn) as mask_src:
             self.mask = mask_src.read(1).astype(bool)
             self.gt = mask_src.transform.to_gdal()
             self.bounds = mask_src.bounds
             self.cell_size = mask_src.transform.a
+        with rxr.open_rasterio(mask_fn) as mask_src:
+            self.crs = mask_src.rio.crs
+            self.lon = mask_src.x.values
+            self.lat = mask_src.y.values
         cell_area_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'cell_area.tif')
         with rasterio.open(cell_area_fn) as cell_area_src:
             self.cell_area_uncompressed = cell_area_src.read(1)
@@ -139,8 +149,13 @@ class Grid(BaseVariables):
             else:
                 fillvalue = 0
         outmap = self.full(fillvalue, dtype=array.dtype).reshape(self.mask_flat.size)
-        outmap[self.mask_flat == False] = array
-        return outmap.reshape(self.mask.shape)
+        output_shape = self.mask.shape
+        if array.ndim == 2:
+            assert array.shape[1] == self.mask_flat.size - self.mask_flat.sum()
+            outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
+            output_shape = (array.shape[0], *output_shape)
+        outmap[..., self.mask_flat == False] = array
+        return outmap.reshape(output_shape)
 
     def plot(self, array: np.ndarray) -> None:
         """Plot array.
@@ -177,7 +192,7 @@ class HRUs(BaseVariables):
     def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
-        submask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'submask.tif')
+        submask_fn = os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'sub_grid_mask.tif')
         with rasterio.open(submask_fn) as mask_src:
             submask_height = mask_src.profile['height']
             submask_width = mask_src.profile['width']
@@ -188,12 +203,12 @@ class HRUs(BaseVariables):
         self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
         self.cell_size = self.data.grid.cell_size / self.scaling
         if self.model.load_initial_data:
-            self.land_use_type = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_type.npy'))
-            self.land_use_ratio = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_ratio.npy'))
-            self.land_owners = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_owners.npy'))
-            self.HRU_to_grid = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.HRU_to_grid.npy'))
-            self.grid_to_HRU = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.grid_to_HRU.npy'))
-            self.unmerged_HRU_indices  = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.unmerged_HRU_indices.npy'))
+            self.land_use_type = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_type.npz'))['data']
+            self.land_use_ratio = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_ratio.npz'))['data']
+            self.land_owners = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_owners.npz'))['data']
+            self.HRU_to_grid = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.HRU_to_grid.npz'))['data']
+            self.grid_to_HRU = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.grid_to_HRU.npz'))['data']
+            self.unmerged_HRU_indices  = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.unmerged_HRU_indices.npz'))['data']
         else:
             (
                 self.land_use_type,
@@ -203,6 +218,12 @@ class HRUs(BaseVariables):
                 self.grid_to_HRU,
                 self.unmerged_HRU_indices
             ) = self.create_HRUs()
+            self.register_initial_data('HRU.land_use_type')
+            self.register_initial_data('HRU.land_use_ratio')
+            self.register_initial_data('HRU.land_owners')
+            self.register_initial_data('HRU.HRU_to_grid')
+            self.register_initial_data('HRU.grid_to_HRU')
+            self.register_initial_data('HRU.unmerged_HRU_indices')
         if self.model.args.use_gpu:
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
@@ -438,13 +459,34 @@ class Data:
     def __init__(self, model):
         self.model = model
 
-        with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as farms_src:
+        with rasterio.open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'farms.tif'), 'r') as farms_src:
             self.farms = farms_src.read()[0]
 
         self.grid = Grid(self, model)
         self.HRU = HRUs(self, model)
         self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn='mean')
         self.modflow = Modflow(self, model)
+        self.load_forcing()
+        self.load_water_demand()
+
+    def load_forcing(self):
+        # loading forcing data
+        self.grid.hurs_ds = xr.open_dataset(INPUT / 'climate' / 'hurs.nc')['hurs']
+        self.grid.pr_ds = xr.open_dataset(INPUT / 'climate' / 'pr.nc')['pr']
+        self.grid.ps_ds = xr.open_dataset(INPUT / 'climate' / 'ps.nc')['ps'] 
+        self.grid.rlds_ds = xr.open_dataset(INPUT / 'climate' / 'rlds.nc')['rlds']
+        self.grid.rsds_ds = xr.open_dataset(INPUT / 'climate' / 'rsds.nc')['rsds']
+        self.grid.tas_ds = xr.open_dataset(INPUT / 'climate' / 'tas.nc')['tas']
+        self.grid.tasmax_ds = xr.open_dataset(INPUT / 'climate' / 'tasmax.nc')['tasmax']
+        self.grid.tasmin_ds = xr.open_dataset(INPUT / 'climate' / 'tasmin.nc')['tasmin']
+        self.grid.sfcWind_ds = xr.open_dataset(INPUT / 'climate' / 'wind.nc')['wind']
+
+    def load_water_demand(self):
+        self.model.domestic_water_consumption_ds = xr.open_dataset(INPUT / 'water_demand' / 'domestic_water_consumption.nc')
+        self.model.domestic_water_demand_ds = xr.open_dataset(INPUT / 'water_demand' / 'domestic_water_demand.nc')
+        self.model.industry_water_consumption_ds = xr.open_dataset(INPUT / 'water_demand' / 'industry_water_consumption.nc')
+        self.model.industry_water_demand_ds = xr.open_dataset(INPUT / 'water_demand' / 'industry_water_demand.nc')
+        self.model.livestock_water_consumption_ds = xr.open_dataset(INPUT / 'water_demand' / 'livestock_water_consumption.nc')
 
     @staticmethod
     @njit(cache=True)
@@ -668,3 +710,23 @@ class Data:
         self.HRU.potential_transpiration_crop = self.split_HRU_data(self.HRU.potential_transpiration_crop, HRU)
         self.HRU.actual_transpiration_crop = self.split_HRU_data(self.HRU.actual_transpiration_crop, HRU)
         return HRU
+    
+    def step(self):
+        self.grid.hurs = self.grid.compress(self.grid.hurs_ds.sel(time=self.model.current_time).data)
+        
+        self.grid.pr = self.grid.compress(self.grid.pr_ds.sel(time=self.model.current_time).data)
+        assert (self.grid.pr >= 0).all(), "Precipitation must be positive or zero"
+        
+        self.grid.ps = self.grid.compress(self.grid.ps_ds.sel(time=self.model.current_time).data)
+        
+        self.grid.rlds = self.grid.compress(self.grid.rlds_ds.sel(time=self.model.current_time).data)
+        self.grid.rsds = self.grid.compress(self.grid.rsds_ds.sel(time=self.model.current_time).data)
+        
+        self.grid.tas = self.grid.compress(self.grid.tas_ds.sel(time=self.model.current_time).data)
+        self.grid.tasmax = self.grid.compress(self.grid.tasmax_ds.sel(time=self.model.current_time).data)
+        self.grid.tasmin = self.grid.compress(self.grid.tasmin_ds.sel(time=self.model.current_time).data)
+        
+        assert (self.grid.tas > -100).all() and (self.grid.tas < 370).all(), "tas out of range"
+        assert (self.grid.tasmax > -100).all() and (self.grid.tasmax < 370).all(), "tas out of range"
+        assert (self.grid.tasmin > -100).all() and (self.grid.tasmin < 370).all(), "tas out of range"
+        self.grid.sfcWind = self.grid.compress(self.grid.sfcWind_ds.sel(time=self.model.current_time).data)
