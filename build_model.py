@@ -4,9 +4,6 @@ from hydromt.config import configread
 
 from config import INPUT, config, parser
 
-parser.add_argument('--data_libs', '-d', type=str, nargs='+', default=[r"../DataDrive/original_data/data_catalog.yml"])
-parser.add_argument('--yml', '-y', type=str, default=r"./hydromt.yml")
-args = parser.parse_known_args()[0]
 
 def create_logger():
     logger = logging.getLogger(__name__)
@@ -32,6 +29,10 @@ def create_logger():
     return logger
     
 if __name__ == '__main__':
+    parser.add_argument('--data_libs', '-d', type=str, nargs='+', default=[r"../DataDrive/original_data/data_catalog.yml"])
+    parser.add_argument('--yml', '-y', type=str, default=r"./hydromt.yml")
+    args = parser.parse_known_args()[0]
+    
     geb_model = GEBModel(
         root=INPUT,
         mode='w+',
