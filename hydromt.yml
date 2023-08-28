@@ -263,3 +263,13 @@ setup_well_prices_by_reference_year:
   reference_year: 2008
   start_year: 1960
   end_year: 2020
+
+setup_farmers_simple:
+  region_id_column: region_id
+  irrigation_sources:
+    no_irrigation': 0
+    canals: 1
+    well: 2
+    tubewell: 3
+    tank: 4
+    other: 5
