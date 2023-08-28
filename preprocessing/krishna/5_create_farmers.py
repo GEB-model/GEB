@@ -24,7 +24,7 @@ def main():
     )
 
     SIZE_CLASSES_BOUNDARIES = {
-        'Below 0.5': (2_500, 5_000),  # farm is assumed to be at least 2500 m2
+        'Below 0.5': (0, 5_000),  # farm is assumed to be at least 2500 m2
         '0.5-1.0': (5_000, 10_000),
         '1.0-2.0': (10_000, 20_000),
         '2.0-3.0': (20_000, 30_000),
@@ -33,7 +33,7 @@ def main():
         '5.0-7.5': (50_000, 75_000),
         '7.5-10.0': (75_000, 100_000),
         '10.0-20.0': (100_000, 200_000),
-        '20.0 & ABOVE': (200_000, 400_000),
+        '20.0 & ABOVE': (200_000, np.inf),
     }
 
     with rasterio.open(Path(INPUT, 'landsurface', 'full_region_cultivated_land.tif'), 'r') as src:
@@ -128,10 +128,19 @@ def main():
                 continue
             
             min_size_m2, max_size_m2 = SIZE_CLASSES_BOUNDARIES[size_class]
+            assert max_size_m2 >= avg_farm_size.loc[(state, district, tehsil), size_class] >= min_size_m2, "average farm size is outside of the size class boundaries"
+            
+            # if minimum farm size is 0, assume it is half of the average farm size for that class
+            if min_size_m2 == 0:
+                min_size_m2 = avg_farm_size.loc[(state, district, tehsil), size_class] / 2
+            # if maximum farm size is inf, assume it is twice the average farm size for that class
+            if max_size_m2 == np.inf:
+                max_size_m2 = avg_farm_size.loc[(state, district, tehsil), size_class] * 2
 
-            min_size_cells = int(min_size_m2 / average_cell_area_region)
+            min_size_cells = math.floor(min_size_m2 / average_cell_area_region)
             min_size_cells = max(min_size_cells, 1)  # farm can never be smaller than one cell
-            max_size_cells = int(max_size_m2 / average_cell_area_region) - 1  # otherwise they overlap with next size class
+            max_size_cells = math.ceil(max_size_m2 / average_cell_area_region)  # otherwise they overlap with next size class
+            
             mean_cells_per_agent = int(avg_farm_size.loc[(state, district, tehsil), size_class] / average_cell_area_region)
 
             if mean_cells_per_agent < min_size_cells or mean_cells_per_agent > max_size_cells:  # there must be an error in the data, thus assume centred
@@ -141,7 +150,7 @@ def main():
             # if there is agricultural land, but there are no agents rounded down, we assume there is one agent
             if number_of_agents_size_class == 0 and whole_cells_per_size_class[size_class] > 0:
                 number_of_agents_size_class = 1
-
+            
             ipfs[size_class]['adjusted_weight'] = ipfs[size_class]['weight'] / ipfs[size_class]['weight'].sum() * number_of_agents_size_class
             ipfs[size_class]['n'] = (ipfs[size_class]['adjusted_weight'] // 1).astype(int)
 
@@ -156,15 +165,22 @@ def main():
 
             population = ipfs[size_class].loc[ipfs[size_class].index.repeat(ipfs[size_class]['n'])]
             population = population.drop(['crops', 'weight', 'adjusted_weight', 'size_class', 'n'], axis=1)            
-            offset = whole_cells_per_size_class[size_class] - number_of_agents_size_class * mean_cells_per_agent
-
-            n_farms_size_class, farm_sizes_size_class = get_farm_distribution(number_of_agents_size_class, min_size_cells, max_size_cells, mean_cells_per_agent, offset)
+            
+            if number_of_agents_size_class == 1:
+                n_farms_size_class = np.array([1])
+                farm_sizes_size_class = np.array([whole_cells_per_size_class[size_class]])
+            else:
+                offset = whole_cells_per_size_class[size_class] - number_of_agents_size_class * mean_cells_per_agent
+                n_farms_size_class, farm_sizes_size_class = get_farm_distribution(number_of_agents_size_class, min_size_cells, max_size_cells, mean_cells_per_agent, offset)
+        
             assert n_farms_size_class.sum() == number_of_agents_size_class
             assert (farm_sizes_size_class > 0).all()
             assert (n_farms_size_class * farm_sizes_size_class).sum() == whole_cells_per_size_class[size_class]
             farm_sizes = farm_sizes_size_class.repeat(n_farms_size_class)
             np.random.shuffle(farm_sizes)
+            
             population['area_n_cells'] = farm_sizes
+            
             region_agents.append(population)
 
             assert population['area_n_cells'].sum() == whole_cells_per_size_class[size_class]
