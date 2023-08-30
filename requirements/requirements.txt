@@ -5,6 +5,6 @@ pandas
 openpyxl
 geopandas
 numpy
-hydromt_sfincs
 git+https://github.com/jensdebruijn/honeybees.git
 git+https://github.com/jensdebruijn/ABCWatM.git
+git+https://github.com/jensdebruijn/hydromt_geb.git
