@@ -242,15 +242,6 @@ report:
       day: 1
     save: export
     format: npz
-  tehsil:
-    type: farmers
-    function: null
-    varname: tehsil
-    frequency:
-      every: month
-      day: 1
-    save: export
-    format: npz
   # crops_kharif:
   #   type: farmers
   #   varname: crops[:,0]
