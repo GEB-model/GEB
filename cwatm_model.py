@@ -158,6 +158,10 @@ class CWatM_Model(CWATModel):
         for _ in range(n):
             self.stCWATM.step()
 
+    def finalize(self) -> None:
+        """Finalizes CWatM."""
+        self.stCWATM.finalize()
+
     def export_water_table(self) -> None:
         """Function to save required water table output to file."""
         dirname = os.path.dirname(self.init_water_table_file)
