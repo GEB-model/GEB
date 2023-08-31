@@ -7,11 +7,11 @@ general:
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2019-01-02
+  end_time: 2014-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
-  spinup_time: 1970-01-01
+  spinup_time: 1980-01-01
   ###
   # base folder where to report output data to
   upscale_factor: 40
@@ -23,7 +23,7 @@ general:
   CWatM_settings: CWatM.ini
   input_folder: ../DataDrive/GEB_Sanctuary/input/
   data_folder: ../DataDrive/
-  original_data: ../DataDrive/original_data/
+  original_data: ../DataDrive/GEB/original_data/
   preprocessing_folder: ../DataDrive/GEB_Sanctuary/preprocessing/
   report_folder: ../report/sanctuary/
   initial_conditions_folder: ../DataDrive/GEB_Sanctuary/initial
@@ -55,30 +55,30 @@ agent_settings:
     drought_risk_calculations:
       risk_perception:
         base: 1.6
-        min: 0.6 
+        min: 0.001
         max: 2
-        coef: -1.2
+        coef: -1.5
       event_perception:
-        moving_average_threshold: 20
+        moving_average_threshold: 30
         absolute_threshold: 40
-    adaptation_sprinkler:
+    adaptation_sprinkler: # Adaptation type 0
       loan_duration: 11 
       interest_rate: 0.04
       adaptation_cost: 20000 # Per hectare 
       reduced_damage: 0.1
-      lifespan: 75
-    adaptation_well:
+      lifespan: 15
+    adaptation_well: # Adaptation type 0
       loan_duration: 11 
       interest_rate: 0.04
       adaptation_cost: 146000
       upkeep_costs: 3000 # Per hectare
       reduced_damage: 0.1
-      lifespan: 75
+      lifespan: 40
     decisions:
       risk_aversion: 1 # Sigma 
-      decision_horizon: 100
+      decision_horizon: 10
       time_discounting: 0.032
-      expenditure_cap: 0.1
+      expenditure_cap: 0.01
       
 ###
 # This sections contains settings for logging of the model. 
@@ -119,15 +119,6 @@ calibration:
         type: farmers
         function: null
         varname: field_size_per_farmer
-        frequency:
-          every: month
-          day: 1
-        save: export
-        format: npz
-      tehsil:
-        type: farmers
-        function: null
-        varname: tehsil
         frequency:
           every: month
           day: 1
@@ -293,15 +284,6 @@ report:
       day: 1
     save: export
     format: npz
-  tehsil:
-    type: farmers
-    function: null
-    varname: tehsil
-    frequency:
-      every: month
-      day: 1
-    save: export
-    format: npz
   crops_kharif:
     type: farmers
     varname: crops[:,0]
@@ -320,32 +302,32 @@ report:
     function: null
     save: export
     format: npz
-  activation order:
+  activation_order:
     type: farmers
     function: null
     varname: activation_order_by_elevation
     format: npz
     frequency: initial
     save: export
-  reservoir irrigation:
+  reservoir_irrigation:
     type: farmers
     function: null
     varname: reservoir_abstraction_m3_by_farmer
     format: npz
     save: export
-  groundwater irrigation:
+  groundwater_irrigation:
     type: farmers
     function: null
     varname: groundwater_abstraction_m3_by_farmer
     format: npz
     save: export
-  channel irrigation:
+  channel_irrigation:
     type: farmers
     function: null
     varname: channel_abstraction_m3_by_farmer
     format: npz
     save: export
-  groundwater depth:
+  groundwater_depth:
     type: farmers
     function: null
     varname: groundwater_depth
@@ -357,30 +339,30 @@ report:
     varname: "_profit"
     format: npz
     save: export
-  disposable_income sample:
+  disposable_income:
     type: farmers
     function: mean
     varname: disposable_income
     save: save
     format: csv
-  wealth sample:
+  irrigation_efficiency:
     type: farmers
     function: mean
-    varname: wealth
-    save: save
-    format: csv
-  mean_risk_perception:
+    varname: irrigation_efficiency
+    save: export
+    format: npz
+  farmer_adaptations:
     type: farmers
     function: mean
-    varname: risk_perception
-    save: save
-    format: csv
-  sample_risk_perception:
+    varname: adapted
+    save: export
+    format: npz
+  risk_multiplier:
     type: farmers
-    function: sample
-    varname: risk_perception
-    save: save
-    format: csv
+    function: mean
+    varname: risk_multiplier
+    save: export
+    format: npz
     
 
 ###
@@ -425,11 +407,6 @@ report_cwatm:
         end: 2005-09-30
       - start: 2005-07-23
         end: 2005-08-16
-  precipitation:
-    varname: data.grid.Precipitation
-    function: mean
-    format: csv
-    save: save
 
 parameters:
   SnowMeltCoef: 0.004

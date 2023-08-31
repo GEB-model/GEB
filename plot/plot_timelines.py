@@ -14,13 +14,13 @@ plt.rcParams["font.family"] = "monospace"
 from plotconfig import config
 TIMEDELTA = timedelta(days=1)
 
-FARMER_MULTIPLIER = 15657
+FARMER_MULTIPLIER = 10490
 MONEY_MULTIPLIER = 1_000_000_000
 WATER_MULTIPLIER = 1_000_000
 
-with rasterio.open(os.path.join(config['general']['input_folder'], 'areamaps', 'sub_cell_area.tif'), 'r') as src_cell_area:
+with rasterio.open(os.path.join(config['general']['input_folder'], 'areamaps', 'region_cell_area_subgrid.tif'), 'r') as src_cell_area:
     cell_area = src_cell_area.read(1)
-with rasterio.open(os.path.join(config['general']['input_folder'], 'agents', 'farms.tif'), 'r') as src:
+with rasterio.open(os.path.join(config['general']['input_folder'], 'agents', 'farmers','farms.tif'), 'r') as src:
     farms = src.read(1)
 
 
@@ -30,6 +30,36 @@ field_size = np.bincount(farms[is_field], weights=cell_area[is_field])
 
 # field_size_test = np.load(os.path.join(config['general']['report_folder'], 'irrigation_source', '20110101.npz'))
 
+
+def get_precipitation_per_year(scenario):
+    file_path = os.path.join(config['general']['report_folder'], scenario, 'precipitation.csv')
+    
+    # Load the CSV file as a NumPy array, skipping the first row and ignoring the first column
+    data = np.genfromtxt(file_path, delimiter=',', dtype=float, skip_header=2, usecols=(1,))
+
+    # Load the dates from the first column as strings
+    dates = np.genfromtxt(file_path, delimiter=',', dtype=str, skip_header=2, usecols=(0,))
+    # Extract the year component from the date strings
+    years = np.array([int(date[:4]) for date in dates])
+    # Get an array of unique years
+    unique_years = np.unique(years)
+
+    # Calculate the mean precipitation value for each unique year
+    mean_by_year = []
+    for year in unique_years:
+        mask = years == year
+        values = data[mask]
+        mean_by_year.append(values.sum())
+
+    return np.array(mean_by_year)
+
+    # for year in unique_years:
+    #     mask = years == year
+    #     values = data[mask]
+    #     mean_by_year = values.mean()
+
+    # return mean_by_year
+
 def sum_all(x):
     return np.sum(x) / FARMER_MULTIPLIER
 
@@ -38,23 +68,15 @@ def sum_irrigation(x):
     return np.sum(filtered_values) / FARMER_MULTIPLIER
 
 def get_farmer_states():
-    tehsil = np.load(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'tehsil_code.npy'))
+    region = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'region_id.npz'))['data']
 
-    with open(os.path.join(config['general']['input_folder'], 'areamaps', 'subdistrict2state.json'), 'r') as f:
-        subdistrict2state = json.load(f)
-        subdistrict2state = {int(subdistrict): state for subdistrict, state in subdistrict2state.items()}
-        # assert that all subdistricts keys are integers
-        assert all([isinstance(subdistrict, int) for subdistrict in subdistrict2state.keys()])
-        # make sure all keys are consecutive integers starting at 0
-        assert min(subdistrict2state.keys()) == 0
-        assert max(subdistrict2state.keys()) == len(subdistrict2state) - 1
-        # load unique states
-        state_index = list(set(subdistrict2state.values()))
-        # create numpy array mapping subdistricts to states
-        state2int = {state: i for i, state in enumerate(state_index)}
-        subdistrict2state_arr = np.zeros(len(subdistrict2state), dtype=np.int32)
-        for subdistrict, state in subdistrict2state.items():
-            subdistrict2state_arr[subdistrict] = state2int[state]
+    subdistrict_map = MapReader(
+            fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'region_subgrid.tif'),
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
+        )
 
     return subdistrict2state_arr[tehsil], state_index
 
@@ -138,17 +160,18 @@ if __name__ == '__main__':
     # set x and y axis fontsize for all plots
     plt.rc('xtick', labelsize=8)
     plt.rc('ytick', labelsize=8)
-    fig, axes = plt.subplots(2, 5, figsize=(20, 8), sharex=True)
-    ((ax0, ax1, ax2, ax3, ax4), (ax5, ax6, ax7, ax8, ax9)) = axes
+    fig, axes = plt.subplots(2, 3, figsize=(20, 8), sharex=True)
+    ((ax0, ax1, ax2), (ax5, ax6, ax7)) = axes
     # use tight layout
     fig.tight_layout()
     plt.subplots_adjust(hspace=0.1)
     farmer_states, state_index = get_farmer_states()
     linestyles = ['-', '--', '-.', ':']
     colors = ['red', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
-    scenarios = ['base', 'sprinkler', 'noadaptation', 'noReservoir']
+    scenarios = ['base', 'Adaptation', 'noHI', 'noCC_base']
     # scenarios = ['base']
     # scenarios = ['sprinkler']
+    # scenarios = ['Adaptation', 'noHI', 'noCC_Adaptation', 'noCC_noHI', 'noCC_base']
 
     fn = os.path.join(config['general']['input_folder'], 'routing', 'lakesreservoirs', 'basin_lakes_data.xlsx')
     df = pd.read_excel(fn).set_index('Hylak_id')
@@ -165,8 +188,7 @@ if __name__ == '__main__':
     # export to disk
     # reservoirs.to_file(os.path.join(config['general']['report_folder'], 'reservoirs.geojson'), driver='GeoJSON')
 
-    inflation = np.array([
-        0,
+    inflation = np.array([0,
         8.34926704907581,
         10.8823529411765,
         11.9893899204243,
@@ -181,6 +203,9 @@ if __name__ == '__main__':
     ])
     cum_inflation = np.cumprod(1 + inflation / 100)
     
+    #  
+
+
     for i, scenario in enumerate(scenarios):
         discharge = get_discharge(scenario)
         # sum discharge per year
@@ -190,6 +215,13 @@ if __name__ == '__main__':
         discharge_per_year = discharge_per_year[1:]
         to_plot = pd.DataFrame(discharge_per_year, columns=['discharge'])
         
+        # # ## add precipitation 
+        # precipitation_per_year = get_precipitation_per_year(scenario)
+        # to_plot = to_plot.loc(discharge_per_year, columns=['precipitation'])
+
+        
+        precipitation_per_year = get_precipitation_per_year(scenario)
+        to_plot['precipitation'] = precipitation_per_year
 
         ## change the irrigation_source so that it only counts the well_irrigated farms 
         for year in discharge_per_year.index:
@@ -205,12 +237,12 @@ if __name__ == '__main__':
             reservoir_storage_year = reservoir_storage[reservoir_storage.index.year == year].mean()
             to_plot.loc[year, 'reservoir_storage'] = reservoir_storage[reservoir_storage.index.year == year].mean().item()
 
-        for year in discharge_per_year.index:
-            crops = read_arrays(scenario, year, 'crops_kharif', mode='first_day_of_year')
-            farmers_sugarcane = (crops == 4)
-            for state_idx, state_name in enumerate(state_index):
-                # set n_farmers_sugarcane in to_plot
-                to_plot.loc[year, f'n_farmers_sugarcane_{state_name}'] = farmers_sugarcane[farmer_states == state_idx].sum()
+        # for year in discharge_per_year.index:
+        #     crops = read_arrays(scenario, year, 'crops_kharif', mode='first_day_of_year')
+        #     farmers_sugarcane = (crops == 4)
+        #     for state_idx, state_name in enumerate(state_index):
+        #         # set n_farmers_sugarcane in to_plot
+        #         to_plot.loc[year, f'n_farmers_sugarcane_{state_name}'] = farmers_sugarcane[farmer_states == state_idx].sum()
         
         for year in discharge_per_year.index:
             has_well = sum_irrigation(read_arrays(scenario, year, 'irrigation_source', mode='first_day_of_year'))
@@ -253,26 +285,41 @@ if __name__ == '__main__':
 
         if scenario == 'base':
             scenario = 'baseline'
-        if scenario == 'sprinkler':
-            scenario = 'drip'
-        if scenario == 'noadaptation':
-            scenario = 'No Adaptation'
-        if scenario == 'noReservoir':
-            scenario = 'No reservoir'
+        if scenario == 'Adaptation':
+            scenario = 'Adaptation'
+        # if scenario == 'noHI':
+        #     scenario = 'no Human Influence'
+        # if scenario == 'noCC_base':
+        #     scenario = 'no CC baseline'
+        # if scenario == 'noCC_Adaptation':
+        #     scenario = 'no CC Adaptation'
+        # if scenario == 'noCC_noHI':
+        #     scenario = 'no CC & HI'
 
         title_fontsize = 9
 
+        # # precipitation
+        # ax0.plot(to_plot.index, to_plot['precipitation'] * 100, label=scenario, linestyle=linestyle, color='#1f77b4')
+        # ax0.set_title('A - Average yearly precipitation (mm)', fontsize=title_fontsize)
+        # ax0.set_xlim(to_plot.index[0], to_plot.index[-1])
+
         # discharge
         ax0.plot(to_plot.index, to_plot['discharge'], label=scenario, linestyle=linestyle, color='#1f77b4')
-        ax0.set_title('A - Average yearly discharge (m/s)', fontsize=title_fontsize)
+        ax0.set_title('B - Average yearly discharge (m/s)', fontsize=title_fontsize)
         ax0.set_xlim(to_plot.index[0], to_plot.index[-1])
 
-        # sugarcane farmers
+        # groundwater depth
         for j, state in enumerate(state_index):
             color = colors[j]
-            ax1.plot(to_plot.index, to_plot[f'n_farmers_sugarcane_{state}'] / FARMER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
-        ax1.set_title(f'B - Sugarcane farmers (×{FARMER_MULTIPLIER})', fontsize=title_fontsize)
-        ax1.set_ylim(0, 3)
+            ax1.plot(to_plot.index, to_plot[f'groundwater_depth_{state}'], label=f'{scenario} {state.title()}', color='#1f77b4', linestyle=linestyle)
+        ax1.set_title('F - Groundwater depth (m)', fontsize=title_fontsize)
+
+        # # sugarcane farmers
+        # for j, state in enumerate(state_index):
+        #     color = colors[j]
+        #     ax1.plot(to_plot.index, to_plot[f'n_farmers_sugarcane_{state}'] / FARMER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        # ax1.set_title(f'B - Sugarcane farmers (×{FARMER_MULTIPLIER})', fontsize=title_fontsize)
+        # ax1.set_ylim(0, 3)
 
         # well-irrigated farmers
         for j, state in enumerate(state_index):
@@ -281,54 +328,59 @@ if __name__ == '__main__':
         ax2.set_title(f'C - Well irrigating farmers (×{FARMER_MULTIPLIER})', fontsize=title_fontsize)
         ax2.set_ylim(0, 3)
 
-        # groundwater irrigation
-        for j, state in enumerate(state_index):
-            color = colors[j]
-            ax3.plot(to_plot.index, to_plot[f'groundwater_irrigation_{state}'] / WATER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
-        ax3.set_title(f'D - Groundwater consumption farmers ({WATER_MULTIPLIER}' + r'$m^3$/day)', fontsize=title_fontsize)
+        # # groundwater irrigation
+        # for j, state in enumerate(state_index):
+        #     color = colors[j]
+        #     ax3.plot(to_plot.index, to_plot[f'groundwater_irrigation_{state}'] / WATER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        # ax3.set_title(f'D - Groundwater consumption farmers ({WATER_MULTIPLIER}' + r'$m^3$/day)', fontsize=title_fontsize)
 
-        # total irrigation
-        for j, state in enumerate(state_index):
-            color = colors[j]
-            ax4.plot(to_plot.index, to_plot[f'total_irrigation_{state}'] / WATER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
-        ax4.set_title(f'E - Irrigation consumption farmers ({WATER_MULTIPLIER}' + r'$m^3$/day)', fontsize=title_fontsize)
+        # # total irrigation
+        # for j, state in enumerate(state_index):
+        #     color = colors[j]
+        #     ax4.plot(to_plot.index, to_plot[f'total_irrigation_{state}'] / WATER_MULTIPLIER, label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        # ax4.set_title(f'E - Irrigation consumption farmers ({WATER_MULTIPLIER}' + r'$m^3$/day)', fontsize=title_fontsize)
 
-        # groundwater depth
-        for j, state in enumerate(state_index):
-            color = colors[j]
-            ax5.plot(to_plot.index, to_plot[f'groundwater_depth_{state}'], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
-        ax5.set_title('F - Groundwater depth (m)', fontsize=title_fontsize)
+        
 
-        # reservoirs
-        ax6.plot(to_plot.index, to_plot['reservoir_storage'] / 1_000_000_000, label=scenario, linestyle=linestyle, color='#1f77b4')
-        ax6.set_title('G - Mean reservoir storage (billion m$3$)', fontsize=title_fontsize)
+        # # reservoirs
+        # ax6.plot(to_plot.index, to_plot['reservoir_storage'] / 1_000_000_000, label=scenario, linestyle=linestyle, color='#1f77b4')
+        # ax6.set_title('G - Mean reservoir storage (billion m$3$)', fontsize=title_fontsize)
 
         # profit per state
         for j, state in enumerate(state_index):
             color = colors[j]
-            ax7.plot(to_plot.index, to_plot[f'profit_{state}'] / cum_inflation[0:4,], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
-        ax7.set_title('H - Profit farmers (billion 2007 rupees)', fontsize=title_fontsize)
+            ax5.plot(to_plot.index, to_plot[f'profit_{state}'] / cum_inflation[0:12,], label=f'{scenario} {state.title()}', color=color, linestyle=linestyle)
+        ax5.set_title('H - Profit farmers (billion 2007 rupees)', fontsize=title_fontsize)
         
         # small vs large farmers
         for j, size in enumerate(['small', 'large']):
             color = colors[j + len(state_index)]  # use different colors than for states
-            ax8.plot(to_plot.index, to_plot[f'well_irrigated_{size}'], label=f'{scenario} {size}', color=color, linestyle=linestyle)
-        ax8.set_title(f'I - Well irrigating farmers (×{FARMER_MULTIPLIER})', fontsize=title_fontsize)
+            ax7.plot(to_plot.index, to_plot[f'well_irrigated_{size}'], label=f'{scenario} {size}', color=color, linestyle=linestyle)
+        ax7.set_title(f'I - Well irrigating farmers (×{FARMER_MULTIPLIER})', fontsize=title_fontsize)
         # ax1.set_ylim(0, 3)
         
-        # profit small vs large
+        # profit small vs large (to_plot['discharge'] * 60) 
         for j, size in enumerate(['small', 'large']):
             color = colors[j + len(state_index)]
-            ax9.plot(to_plot.index, to_plot[f'profit_{size}'] / cum_inflation[0:4,], label=f'{scenario} {size}', color=color, linestyle=linestyle)
-        ax9.set_title('J - Profit farmers (billion 2007 rupees)', fontsize=title_fontsize)
+            ax6.plot(to_plot.index, to_plot[f'profit_{size}'] / cum_inflation[0:12,], label=f'{scenario} {size}', color=color, linestyle=linestyle)
+        ax6.set_title('J - Profit farmers (billion 2007 rupees)', fontsize=title_fontsize)
+
+        #  Water / adaptation efficiency, if higher, it means that less water is needed for equal profits. Works better with precipitation probably
+        # for j, size in enumerate(['small', 'large']):
+        #     color = colors[j + len(state_index)]
+        #     ax9.plot(
+        #         to_plot.index, 
+        #         ((to_plot[f'profit_{size}'] / cum_inflation[0:4,]) - (to_plot['discharge'] * 60)) / ((to_plot[f'profit_{size}'] / cum_inflation[0:4,]) + (to_plot['discharge'] * 60)) , 
+        #         label=f'{scenario} {size}', color=color, linestyle=linestyle)
+        # ax9.set_title('J - Profit farmers (billion 2007 rupees)', fontsize=title_fontsize)
 
     to_plot.to_csv('plot/sanctuary/total_discharge_per_year.csv')
 
     # invert y axis
-    ax5.invert_yaxis()
+    #ax2.invert_yaxis()
     for horizontal_axes in axes:
         for ax in horizontal_axes:
             ax.legend()
     
-    plt.savefig('plot/sanctuary/total_discharge_per_year.png')
+    plt.savefig('../plot/sanctuary/total_discharge_per_year.png')
     plt.savefig('plot/sanctuary/total_discharge_per_year.svg')

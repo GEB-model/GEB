@@ -3,14 +3,14 @@
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2005-12-31
+  start_time: 2005-01-01
   ###
   # model end time (YYYY-MM-DD).
   # end_time: 2010-01-01
-  end_time: 2006-01-10
+  end_time: 2014-12-31
   ###
   # start of the spinup time (YYYY-MM-DD).
-  spinup_time: 2005-12-30
+  spinup_time: 1980-01-01
   ###
   # base folder where to report output data to
   upscale_factor: 20
@@ -38,7 +38,7 @@ general:
   couple_plantFATE: false
 
 ###
-# This section can contain settings to change the behavior or the agents.
+# This section can contain settings to change the behavior of the agents.
 agent_settings:
   ###
   # If this setting is set to true, the farmers in the model are activated in a set order, allowing for better reproducability of the model.
@@ -52,6 +52,36 @@ agent_settings:
     return_fraction: .5
     farmers_going_out_of_business: false
     well_implementation_intention_behaviour_gap: .8
+  expected_utility:
+    general:
+      include_adaptation: true
+    drought_risk_calculations:
+      risk_perception:
+        base: 1.6
+        min: 0.6 
+        max: 2
+        coef: -.5
+      event_perception:
+        moving_average_threshold: 20
+        absolute_threshold: 40
+    adaptation_sprinkler:
+      loan_duration: 11 
+      interest_rate: 0.04
+      adaptation_cost: 20000 # Per hectare 
+      reduced_damage: 0.1
+      lifespan: 75
+    adaptation_well:
+      loan_duration: 11 
+      interest_rate: 0.04
+      adaptation_cost: 146000
+      upkeep_costs: 3000 # Per hectare
+      reduced_damage: 0.1
+      lifespan: 75
+    decisions:
+      risk_aversion: 1 # Sigma 
+      decision_horizon: 10
+      time_discounting: 0.032
+      expenditure_cap: 0.1
 
 calibration:
   # spinup_time: 2004-01-01
@@ -78,15 +108,6 @@ calibration:
         type: farmers
         function: null
         varname: field_size_per_farmer
-        frequency:
-          every: month
-          day: 1
-        save: export
-        format: npz
-      tehsil:
-        type: farmers
-        function: null
-        varname: tehsil
         frequency:
           every: month
           day: 1
@@ -166,10 +187,6 @@ draw:
   draw_agents:
     farmers:
       draw_every_nth: 100
-  draw_geography:
-    tehsil:
-      properties:
-        color: red
   ###
   # Specify the colors and names of the crops to use here. The indices must match the indices the crop factors file (../DataDrive/GEB/input/crop_data/crop_factors.csv).
   crop_data:
@@ -237,15 +254,6 @@ report:
     type: farmers
     function: null
     varname: field_size_per_farmer
-    frequency:
-      every: month
-      day: 1
-    save: export
-    format: npz
-  tehsil:
-    type: farmers
-    function: null
-    varname: tehsil
     frequency:
       every: month
       day: 1

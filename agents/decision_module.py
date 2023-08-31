@@ -9,13 +9,12 @@ class DecisionModule:
         
 
     @staticmethod
-    #@njit(cache=True)
+    @njit(cache=True)
     def IterateThroughFlood(
         n_floods: int,
-        wealth: np.ndarray,
-        income: np.ndarray,
+        total_profits: np.ndarray,
+        profits_no_event: np.ndarray,
         max_T: int,
-        expected_damages: np.ndarray,
         n_agents: int,
         r: float
     ) -> np.ndarray:
@@ -40,18 +39,17 @@ class DecisionModule:
         for i, index in enumerate(np.arange(1, n_floods + 3)):
             # Check if we are in the last iterations
             if i < n_floods:
-                NPV_flood_i = wealth - expected_damages[i]
+                NPV_flood_i = total_profits[i]
                 NPV_flood_i = (NPV_flood_i).astype(np.float32)
 
-            # if in the last two iterations do not subtract damages (probs of no
-            # flood event)
+            # if in the last two iterations do not subtract damages (probs of no event)
             elif i >= n_floods:
-                NPV_flood_i = wealth 
+                NPV_flood_i = profits_no_event 
                 NPV_flood_i = NPV_flood_i.astype(np.float32)
 
             # iterate over NPVs for each year in the time horizon and apply time
             # discounting
-            NPV_t0 = (wealth).astype(np.float32)  # no flooding in t=0
+            NPV_t0 = (profits_no_event).astype(np.float32)  # no flooding in t=0
 
             # Calculate time discounted NPVs
             t_arr = np.arange(1, max_T, dtype=np.float32)
@@ -74,10 +72,9 @@ class DecisionModule:
     def calcEU_do_nothing(
         self,
         n_agents: int,
-        wealth: np.ndarray,
-        income: np.ndarray,
         risk_perception: np.ndarray,
-        expected_damages: np.ndarray,
+        total_profits: np.ndarray,
+        profits_no_event: np.ndarray,
         adapted: np.ndarray,
         p_droughts: np.ndarray,
         T: np.ndarray,
@@ -105,11 +102,11 @@ class DecisionModule:
 
         # Ensure p floods is in increasing order
         indices = np.argsort(p_droughts)
-        expected_damages = expected_damages[indices]
+        total_profits = total_profits[indices]
         p_droughts = np.sort(p_droughts)
 
         # Preallocate arrays
-        n_floods, n_agents = expected_damages.shape
+        n_floods, n_agents = total_profits.shape
         p_all_events = np.full((p_droughts.size + 3, n_agents), -1, dtype=np.float32)
 
         # calculate perceived risk
@@ -137,10 +134,9 @@ class DecisionModule:
         n_agents = np.int32(n_agents)
         NPV_summed = self.IterateThroughFlood(
             n_floods,
-            wealth,
-            income,
+            total_profits,
+            profits_no_event,
             max_T,
-            expected_damages,
             n_agents,
             r)
 
@@ -163,23 +159,24 @@ class DecisionModule:
         x = p_all_events
         EU_do_nothing_array = np.trapz(y=y, x=x, axis=0)
 
-        # People who already adapted cannot adapt
-        EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
+        # People who already adapted cannot adapt, changed to a condition in the function that calls this, need the SEUT of doing nothing of those that have adapted
+        # EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
 
         return EU_do_nothing_array
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def calcEU_adapt(
         expenditure_cap: float,
         loan_duration: int,
         n_agents: int,
         sigma: float,
-        wealth: np.ndarray,
-        income: np.ndarray,
+        total_profits: np.ndarray,
+        profits_no_event: np.ndarray,
+        total_profits_adaptation: np.ndarray,
+        profits_no_event_adaptation: np.ndarray,
         p_droughts: np.ndarray,
         risk_perception: np.ndarray,
-        expected_damages_adapt: np.ndarray,
         adaptation_costs: np.ndarray,
         total_annual_costs: np.ndarray,
         time_adapted: np.ndarray,
@@ -187,9 +184,6 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
 
-        # Not used (kwargs not supported in njit)
-        #lifespan_dryproof,
-        expected_damages
     ) -> np.ndarray:
         '''This function calculates the discounted subjective utility for staying and implementing dry flood proofing measures for each agent.
         We take into account the current adaptation status of each agent, so that agents also consider the number of years of remaining loan payment.
@@ -225,28 +219,30 @@ class DecisionModule:
 
         # Ensure p floods is in increasing order
         indices = np.argsort(p_droughts)
-        expected_damages_adapt = expected_damages_adapt[indices]
+        total_profits_adaptation = total_profits_adaptation[indices]
         p_droughts = np.sort(p_droughts)
 
-        # Identify agents unable to afford the adaptation or those that have already adapted 
-        constrained = np.where((wealth * expenditure_cap <= total_annual_costs) & (adapted == 1))
-        unconstrained = np.where((wealth * expenditure_cap > total_annual_costs) & (adapted == 0))
+        # Identify agents able to afford the adaptation and that have not yet adapted 
+        unconstrained = np.where((profits_no_event * expenditure_cap > total_annual_costs) & (adapted == 0))
+        # Create a mask to mask all constrained agents 
+        unconstrained_mask = (profits_no_event * expenditure_cap > total_annual_costs) & (adapted == 0)
 
         # Those who cannot affort it cannot adapt
-        EU_adapt[constrained] = -np.inf
+        EU_adapt[~unconstrained_mask] = -np.inf
 
         # Iterate only through agents who can afford to adapt
         for i in unconstrained[0]:
 
             # Find damages and loan duration left to pay
-            expected_damages_adapt_i = expected_damages_adapt[:,i].copy()
+            total_profits_adaptation_i = total_profits_adaptation[:,i].copy()
+            # expected_damages_adapt_i = expected_damages_adapt[:,i].copy()
             payment_remainder = max(loan_duration - time_adapted[i], 0)
 
             # Extract decision horizon
             t_agent = t[:T[i]]
 
             # NPV under no flood event
-            NPV_adapt_no_flood = np.full(T[i], wealth[i], dtype=np.float32)
+            NPV_adapt_no_flood = np.full(T[i], profits_no_event_adaptation[i], dtype=np.float32)
             
             NPV_adapt_no_flood[:payment_remainder] -= adaptation_costs[i]
             
@@ -261,9 +257,8 @@ class DecisionModule:
                                     (1 - sigma)) / (1 - sigma)
 
             # Calculate NPVs outcomes for each flood event
-            NPV_adapt = np.full((p_droughts.size, T[i]), wealth[i], dtype=np.float32)
+            NPV_adapt = np.full((p_droughts.size, T[i]), total_profits_adaptation_i.reshape((p_droughts.size, 1)), dtype=np.float32)
             
-            NPV_adapt[:,1:] -= expected_damages_adapt_i.reshape((p_droughts.size, 1))
             NPV_adapt[:, :payment_remainder] -= adaptation_costs[i]
 
             NPV_adapt /= (1 + r) ** t_agent
