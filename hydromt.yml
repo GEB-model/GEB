@@ -263,3 +263,10 @@ setup_well_prices_by_reference_year:
   reference_year: 2008
   start_year: 1960
   end_year: 2020
+
+# setup_sprinkler_prices_by_reference_year:
+#   sprinkler_price: 40000
+#   upkeep_price_per_m2: 0
+#   reference_year: 2021
+#   start_year: 1960
+#   end_year: 2020
