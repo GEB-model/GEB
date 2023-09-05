@@ -14,7 +14,8 @@ from honeybees.visualization.canvas import Canvas
 
 from hydromt.config import configread
 import hydromt_geb
-import geb    
+import geb
+from geb.model import GEBModel
 
 faulthandler.enable()
 
@@ -156,7 +157,7 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, gui, no_
     }
 
     if not gui:
-        model = geb.GEBModel(**model_params)
+        model = GEBModel(**model_params)
         if profiling:
             with cProfile.Profile() as pr:
                 model.run()
@@ -184,7 +185,7 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, gui, no_
             'year'
         ]
 
-        server = ModularServer(MODEL_NAME, geb.GEBModel, server_elements, DISPLAY_TIMESTEPS, model_params=model_params, port=None)
+        server = ModularServer(MODEL_NAME, GEBModel, server_elements, DISPLAY_TIMESTEPS, model_params=model_params, port=None)
         server.launch(port=port, browser=no_browser)
 
     if use_gpu:

@@ -147,10 +147,10 @@ class Farmers(AgentBaseClass):
         #self.crop_names = load_crop_names()
         #self.growth_length, self.crop_stage_lengths, self.crop_factors, self.crop_yield_factors, self.reference_yield = load_crop_factors()
 
-        self.crop_ids = load_crop_ids()
+        self.crop_ids = load_crop_ids(Path(self.model.config['general']['input_folder']))
         # reverse dictionary
         self.crop_names = {crop_name: crop_id for crop_id, crop_name in self.crop_ids.items()}
-        self.crop_variables = load_crop_variables()
+        self.crop_variables = load_crop_variables(Path(self.model.config['general']['input_folder']))
         
         ## Set parameters required for drought event perception, risk perception and SEUT 
         self.previous_month = 0
@@ -162,10 +162,10 @@ class Farmers(AgentBaseClass):
         self.r_time = self.model.config['agent_settings']['expected_utility']['decisions']['time_discounting']
         self.expenditure_cap = self.model.config['agent_settings']['expected_utility']['decisions']['expenditure_cap']
 
-        self.inflation_rate = load_economic_data(Path('economics', 'inflation_rates.json'))
-        self.lending_rate = load_economic_data(Path('economics', 'lending_rates.json'))
-        self.well_price = load_economic_data(Path('economics', 'well_prices.json'))
-        self.well_upkeep_price_per_m2 = load_economic_data(Path('economics', 'upkeep_prices_well_per_m2.json'))
+        self.inflation_rate = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'inflation_rates.json'))
+        self.lending_rate = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'lending_rates.json'))
+        self.well_price = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'well_prices.json'))
+        self.well_upkeep_price_per_m2 = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'upkeep_prices_well_per_m2.json'))
         # requires update to become similar as well prices 
         # self.sprinkler_price = load_sprinkler_prices(self, self.inflation_rate)
         self.well_investment_time_years = 10
@@ -228,8 +228,8 @@ class Farmers(AgentBaseClass):
         #     for subdistrict, state in subdistrict2state.items():
         #         self.subdistrict2state[subdistrict] = state2int[state]
         
-        self.crop_prices = load_crop_prices()
-        self.cultivation_costs = load_cultivation_costs()
+        self.crop_prices = load_crop_prices(Path(self.model.config['general']['input_folder']))
+        self.cultivation_costs = load_cultivation_costs(Path(self.model.config['general']['input_folder']))
         self.total_spinup_time = self.model.config['general']['start_time'].year - self.model.config['general']['spinup_time'].year
 
         self.agent_attributes_meta = {

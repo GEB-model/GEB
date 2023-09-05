@@ -2,14 +2,13 @@
 import numpy as np  
 import os
 import datetime
+from pathlib import Path
 
 from cwatm.cwatm_model import CWATModel
 from cwatm.management_modules.dynamicModel import ModelFrame
 from cwatm.management_modules.configuration import parse_configuration
 from cwatm.management_modules.globals import settingsfile, binding, outDir
 from cwatm.run_cwatm import headerinfo
-
-from geb.config import INPUT
 
 class CWatM_Model(CWATModel):
     """
@@ -38,7 +37,7 @@ class CWatM_Model(CWATModel):
             binding[parameter] = value
         
         # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
-        binding['MaskMap'] = os.path.join(INPUT, 'areamaps', 'grid_mask.tif')
+        binding['MaskMap'] = os.path.join(Path(self.config['general']['input_folder']), 'areamaps', 'grid_mask.tif')
         if 'gauges' in self.config['general']:
             gauges = self.config['general']['gauges']
             binding['Gauges'] = ' '.join([str(item) for sublist in gauges for item in sublist])
@@ -50,22 +49,22 @@ class CWatM_Model(CWATModel):
         binding['Modflow_resolution'] = 1000
         
         # setting file paths for CWatM
-        binding["Ldd"] = os.path.join(INPUT, 'routing', 'kinematic', 'ldd.tif')
-        binding["ElevationStD"] = os.path.join(INPUT, 'landsurface', 'topo', 'elevation_STD.tif')
-        binding["CellArea"] = os.path.join(INPUT, 'areamaps', 'cell_area.tif')
-        binding["albedoLand"] = os.path.join(INPUT, 'landsurface', 'albedo', 'albedo_land.nc:albedoLand')
-        binding["albedoWater"] = os.path.join(INPUT, 'landsurface', 'albedo', 'albedo_water.nc:albedoWater')
-        binding["cropgroupnumber"] = os.path.join(INPUT, 'soil', 'cropgrp.tif')
-        binding["metaNetcdfFile"] = os.path.join(INPUT, 'metaNetcdf.xml')
+        binding["Ldd"] = os.path.join(Path(self.config['general']['input_folder']), 'routing', 'kinematic', 'ldd.tif')
+        binding["ElevationStD"] = os.path.join(Path(self.config['general']['input_folder']), 'landsurface', 'topo', 'elevation_STD.tif')
+        binding["CellArea"] = os.path.join(Path(self.config['general']['input_folder']), 'areamaps', 'cell_area.tif')
+        binding["albedoLand"] = os.path.join(Path(self.config['general']['input_folder']), 'landsurface', 'albedo', 'albedo_land.nc:albedoLand')
+        binding["albedoWater"] = os.path.join(Path(self.config['general']['input_folder']), 'landsurface', 'albedo', 'albedo_water.nc:albedoWater')
+        binding["cropgroupnumber"] = os.path.join(Path(self.config['general']['input_folder']), 'soil', 'cropgrp.tif')
+        binding["metaNetcdfFile"] = os.path.join(Path(self.config['general']['input_folder']), 'metaNetcdf.xml')
 
-        topo_path = os.path.join(INPUT, 'landsurface', 'topo')
-        grassland_path = os.path.join(INPUT, 'landcover', 'grassland')
-        groundwater_path = os.path.join(INPUT, 'groundwater')
-        modflow_path = os.path.join(INPUT, 'groundwater', 'modflow')
+        topo_path = os.path.join(Path(self.config['general']['input_folder']), 'landsurface', 'topo')
+        grassland_path = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland')
+        groundwater_path = os.path.join(Path(self.config['general']['input_folder']), 'groundwater')
+        modflow_path = os.path.join(Path(self.config['general']['input_folder']), 'groundwater', 'modflow')
         binding['PathGroundwaterModflow'] = modflow_path
-        res_lakes_path = os.path.join(INPUT, 'routing', 'lakesreservoirs')
+        res_lakes_path = os.path.join(Path(self.config['general']['input_folder']), 'routing', 'lakesreservoirs')
 
-        path_soil = os.path.join(INPUT, 'soil')
+        path_soil = os.path.join(Path(self.config['general']['input_folder']), 'soil')
         
         binding["KSat1"] = os.path.join(path_soil, "ksat1.tif")
         binding["KSat2"] = os.path.join(path_soil, "ksat2.tif")
@@ -102,23 +101,23 @@ class CWatM_Model(CWATModel):
         binding["forest_thetar2"] = os.path.join(path_soil, "thetar2.tif")
         binding["forest_thetar3"] = os.path.join(path_soil, "thetar3.tif")
         
-        binding["forest_rootFraction1"] = os.path.join(INPUT, 'landcover', 'forest', "rootFraction1_forest.tif")
-        binding["forest_maxRootDepth"] = os.path.join(INPUT, 'landcover', 'forest', "maxRootDepth_forest.tif")
-        binding["forest_cropCoefficientNC"] = os.path.join(INPUT, 'landcover', 'forest', "cropCoefficientForest_10days.nc:cropCoefficientForest_10days")
-        binding["forest_interceptCapNC"] = os.path.join(INPUT, 'landcover', 'forest', "interceptCapForest_10days.nc:interceptCapForest_10days")
+        binding["forest_rootFraction1"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'forest', "rootFraction1_forest.tif")
+        binding["forest_maxRootDepth"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'forest', "maxRootDepth_forest.tif")
+        binding["forest_cropCoefficientNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'forest', "cropCoefficientForest_10days.nc:cropCoefficientForest_10days")
+        binding["forest_interceptCapNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'forest', "interceptCapForest_10days.nc:interceptCapForest_10days")
         
-        binding["grassland_rootFraction1"] = os.path.join(INPUT, 'landcover', 'grassland', "rootFraction1_grassland.tif")
-        binding["grassland_maxRootDepth"] = os.path.join(INPUT, 'landcover', 'grassland', "maxRootDepth_grassland.tif")
-        binding["grassland_cropCoefficientNC"] = os.path.join(INPUT, 'landcover', 'grassland', "cropCoefficientGrassland_10days.nc:cropCoefficientGrassland_10days")
-        binding["grassland_interceptCapNC"] = os.path.join(INPUT, 'landcover', 'grassland', "interceptCapGrassland_10days.nc:interceptCapGrassland_10days")
+        binding["grassland_rootFraction1"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland', "rootFraction1_grassland.tif")
+        binding["grassland_maxRootDepth"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland', "maxRootDepth_grassland.tif")
+        binding["grassland_cropCoefficientNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland', "cropCoefficientGrassland_10days.nc:cropCoefficientGrassland_10days")
+        binding["grassland_interceptCapNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland', "interceptCapGrassland_10days.nc:interceptCapGrassland_10days")
         
-        binding["irrPaddy_rootFraction1"] = os.path.join(INPUT, 'landcover', 'irrPaddy', "rootFraction1_irrPaddy.tif")
-        binding["irrPaddy_maxRootDepth"] = os.path.join(INPUT, 'landcover', 'irrPaddy', "maxRootDepth_irrPaddy.tif")
-        binding["irrPaddy_cropCoefficientNC"] = os.path.join(INPUT, 'landcover', 'irrPaddy', "cropCoefficientirrPaddy_10days.nc:cropCoefficientirrPaddy_10days")
+        binding["irrPaddy_rootFraction1"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrPaddy', "rootFraction1_irrPaddy.tif")
+        binding["irrPaddy_maxRootDepth"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrPaddy', "maxRootDepth_irrPaddy.tif")
+        binding["irrPaddy_cropCoefficientNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrPaddy', "cropCoefficientirrPaddy_10days.nc:cropCoefficientirrPaddy_10days")
         
-        binding["irrNonPaddy_rootFraction1"] = os.path.join(INPUT, 'landcover', 'irrNonPaddy', "rootFraction1_irrNonPaddy.tif")
-        binding["irrNonPaddy_maxRootDepth"] = os.path.join(INPUT, 'landcover', 'irrNonPaddy', "maxRootDepth_irrNonPaddy.tif")
-        binding["irrNonPaddy_cropCoefficientNC"] = os.path.join(INPUT, 'landcover', 'irrNonPaddy', "cropCoefficientirrNonPaddy_10days.nc:cropCoefficientirrNonPaddy_10days")
+        binding["irrNonPaddy_rootFraction1"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrNonPaddy', "rootFraction1_irrNonPaddy.tif")
+        binding["irrNonPaddy_maxRootDepth"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrNonPaddy', "maxRootDepth_irrNonPaddy.tif")
+        binding["irrNonPaddy_cropCoefficientNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrNonPaddy', "cropCoefficientirrNonPaddy_10days.nc:cropCoefficientirrNonPaddy_10days")
         
         binding["recessionCoeff"] = os.path.join(groundwater_path, "recessionCoeff.map")
         binding["specificYield"] = os.path.join(groundwater_path, "specificYield.map")
@@ -127,12 +126,12 @@ class CWatM_Model(CWATModel):
         binding["riverPercentage"] = os.path.join(modflow_path, "RiverPercentage.npy")
         binding["modflow_mask"] = os.path.join(modflow_path, "modflow_mask.tif")
         
-        binding["chanMan"] = os.path.join(INPUT, "routing", "kinematic", "mannings.tif")
-        binding["chanLength"] = os.path.join(INPUT, "routing", "kinematic", "channel_length.tif")
-        binding["chanWidth"] = os.path.join(INPUT, "routing", "kinematic", "channel_width.tif")
-        binding["chanDepth"] = os.path.join(INPUT, "routing", "kinematic", "channel_depth.tif")
-        binding["chanRatio"] = os.path.join(INPUT, "routing", "kinematic", "channel_ratio.tif")
-        binding["chanGrad"] = os.path.join(INPUT, "routing", "kinematic", "channel_slope.tif")
+        binding["chanMan"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "mannings.tif")
+        binding["chanLength"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_length.tif")
+        binding["chanWidth"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_width.tif")
+        binding["chanDepth"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_depth.tif")
+        binding["chanRatio"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_ratio.tif")
+        binding["chanGrad"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_slope.tif")
         
         binding["waterBodyID"] = os.path.join(res_lakes_path, "lakesResID.tif")
         binding["reservoir_command_areas"] =  os.path.join(res_lakes_path, "command_areas.tif")
