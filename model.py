@@ -159,6 +159,8 @@ class GEBModel(ABM_Model, CWatM_Model):
         for _ in range(self.n_timesteps):
             self.step()
 
+        CWatM_Model.finalize(self)
+
         if self.config['general']['couple_plantFATE']:
             self.data.HRU.plant_fate_df.to_csv('plantFATE.csv')
 

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from hydromt_geb import GEBModel
 from hydromt.config import configread
 
