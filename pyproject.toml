@@ -9,8 +9,18 @@ authors = [
     {name = "Maurice Kalthof", email = "w.m.l.kalthof@vu.nl"},
 ]
 dependencies = [
+    "rasterio",
+    "numba",
+    "tbb",
+    "pandas",
+    "openpyxl",
+    "geopandas",
+    "numpy",
+    "honeybees@git+https://github.com/jensdebruijn/honeybees",
+    "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
+    "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 readme = "README.md"
 classifiers = [
     # https://pypi.python.org/pypi?%3Aaction=list_classifiers
@@ -27,8 +37,14 @@ dynamic = ['version', 'description']
 test = [
 ]
 doc = [
+    "sphinx",
+    "sphinx-autodoc-typehints",
+    "sphinxcontrib-autoprogram",
+    "sphinx_rtd_theme",
+    "sphinxcontrib-autoyaml"
 ]
 full = [
+    "cupy"
 ]
 
 [project.scripts]
