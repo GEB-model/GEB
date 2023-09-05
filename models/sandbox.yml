@@ -46,6 +46,37 @@ agent_settings:
     return_fraction: .5
     farmers_going_out_of_business: false
     well_implementation_intention_behaviour_gap: .8
+  expected_utility:
+    general:
+      include_adaptation: true
+    drought_risk_calculations:
+      risk_perception:
+        base: 1.6
+        min: 0.001
+        max: 2
+        coef: -1.5
+      event_perception:
+        moving_average_threshold: 30
+        absolute_threshold: 40
+    adaptation_sprinkler: # Adaptation type 0
+      loan_duration: 11 
+      interest_rate: 0.04
+      adaptation_cost: 20000 # Per hectare 
+      reduced_damage: 0.1
+      lifespan: 15
+    adaptation_well: # Adaptation type 0
+      loan_duration: 11 
+      interest_rate: 0.04
+      adaptation_cost: 146000
+      upkeep_costs: 3000 # Per hectare
+      reduced_damage: 0.1
+      lifespan: 40
+    decisions:
+      risk_aversion: 1 # Sigma 
+      decision_horizon: 10
+      time_discounting: 0.032
+      expenditure_cap: 0.01
+
 ###
 # This sections contains settings for logging of the model. 
 logging:
