@@ -1843,18 +1843,18 @@ class Farmers(AgentBaseClass):
 
             # If there are no people in either the adapted or not adapted groups, the yield ratio difference becomes 0. TO DO: dynamic groupmaking
             if len(unadapted_yield_ratio) == 0 or len(adapted_yield_ratio) == 0:
-                if len(adapted_yield_ratio) == 0:
-                    print('Warning, adapted group size:', len(adapted_yield_ratio))
-                if len(unadapted_yield_ratio) == 0: 
-                    print('Warning, unadapted group size:', len(unadapted_yield_ratio))
+                # if len(adapted_yield_ratio) == 0:
+                #     # print('Warning, adapted group size:', len(adapted_yield_ratio))
+                # if len(unadapted_yield_ratio) == 0: 
+                #     # print('Warning, unadapted group size:', len(unadapted_yield_ratio))
                 unadapted_yield_ratio = np.array(1)
                 adapted_yield_ratio = np.array(1)
             
             # Calculate the relative yield ratio gain 
             yield_ratio_gain_relative = np.median(adapted_yield_ratio) / np.median(unadapted_yield_ratio)
 
-            # Calculate how big the adapted group is as opposed to the unadapted group 
-            adapted_unadapted_ratio = adapted_yield_ratio.size / (unadapted_yield_ratio.size + adapted_yield_ratio.size)
+            # Calculate how big the adapted group is as opposed to the unadapted group. if the groups are equal size or adapted is bigger, prob = 100%
+            adapted_unadapted_ratio = min(adapted_yield_ratio.size / unadapted_yield_ratio.size, 1.0)
 
             # If the adapted group size is large, there is a higher chance of changing the yield ratio
             # This is to prevent few adapted farmers changing the ratios of the whole group 
@@ -2129,10 +2129,10 @@ class Farmers(AgentBaseClass):
                     EU_neighbor = EU_do_nothing[farmer_neighbors_with_adaptation]
                     # Make sure that it is only neighbors that have adapted 
                     EU_neighbor = EU_neighbor[adapted[farmer_neighbors_with_adaptation] == 1]
-                    # Now check whether the EU of the neighbor is higher than that of the possibly adapting farmer 
-                    mean_neighbors = np.mean(EU_neighbor)
-                    if mean_neighbors > EU_farmer:
-                        invest_in_adaptation[farmer_idx] = True  
+                    if EU_neighbor.size > 0:  # Check if EU_neighbor is not empty
+                        mean_neighbors = np.mean(EU_neighbor)
+                        if mean_neighbors > EU_farmer:
+                            invest_in_adaptation[farmer_idx] = True
 
         return invest_in_adaptation
 

@@ -165,7 +165,7 @@ class DecisionModule:
         return EU_do_nothing_array
 
     @staticmethod
-    @njit(cache=True)
+    # @njit(cache=True)
     def calcEU_adapt(
         expenditure_cap: float,
         loan_duration: int,
@@ -257,7 +257,8 @@ class DecisionModule:
                                     (1 - sigma)) / (1 - sigma)
 
             # Calculate NPVs outcomes for each flood event
-            NPV_adapt = np.full((p_droughts.size, T[i]), total_profits_adaptation_i.reshape((p_droughts.size, 1)), dtype=np.float32)
+            fill_value = total_profits_adaptation_i.astype(np.float32).reshape((p_droughts.size, 1))
+            NPV_adapt = np.full((p_droughts.size, T[i]), fill_value, dtype=np.float32)
             
             NPV_adapt[:, :payment_remainder] -= adaptation_costs[i]
 
