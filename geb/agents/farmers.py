@@ -31,11 +31,8 @@ from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
-from data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_economic_data, load_sprinkler_prices
-# load_crop_factors
-
-## Import the DecisionModule class from the other file 
-from agents.decision_module import DecisionModule
+from ..data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_economic_data, load_sprinkler_prices
+from .decision_module import DecisionModule
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:

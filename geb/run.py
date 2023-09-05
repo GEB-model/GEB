@@ -11,7 +11,7 @@ from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules import ChartModule
 from honeybees.visualization.canvas import Canvas
 from honeybees.argparse import parser  
-from model import GEBModel
+from .model import GEBModel
 
 import faulthandler
 faulthandler.enable()
@@ -35,7 +35,7 @@ def get_study_area(input_folder):
     study_area['region'] = gdf.geometry[0]
     return study_area
 
-if __name__ == '__main__':
+def main():
     args = parser.parse_args()
     if args.use_gpu:
         import cupy
@@ -155,3 +155,6 @@ if __name__ == '__main__':
         from numba import cuda 
         device = cuda.get_current_device()
         device.reset()
+
+if __name__ == '__main__':
+    main()

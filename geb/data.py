@@ -5,7 +5,7 @@ import pandas as pd
 import json
 from pathlib import Path
 
-from config import INPUT
+from .config import INPUT
 
 class DateIndex:
     def __init__(self, dates):

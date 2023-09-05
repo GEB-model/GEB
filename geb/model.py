@@ -1,27 +1,29 @@
 # -*- coding: utf-8 -*-
 import datetime
 from pathlib import Path
-from honeybees.library.helpers import timeprint
-from honeybees.area import Area
-from reporter import Reporter
-from honeybees.model import Model as ABM_Model
-from agents import Agents
-from artists import Artists
-from HRUs import Data
-import argparse
-from cwatm_model import CWatM_Model
-from typing import Union
-import os
 from operator import attrgetter
-import numpy as np
+import argparse
+from typing import Union
 from time import time
+
 import pandas as pd
+import numpy as np
 try:
     import cupy as cp
 except ImportError:
     pass
 
-from sfincs import SFINCS
+from honeybees.library.helpers import timeprint
+from honeybees.area import Area
+from honeybees.model import Model as ABM_Model
+
+from .reporter import Reporter
+from .agents import Agents
+from .artists import Artists
+from .HRUs import Data
+from .cwatm_model import CWatM_Model
+
+from .sfincs import SFINCS
 
 class GEBModel(ABM_Model, CWatM_Model):
     """GEB parent class.

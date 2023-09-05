@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-from agents.farmers import Farmers
-from agents.ngo import NGO
-from agents.government import Government
-from agents.reservoir_operators import ReservoirOperators
+from .farmers import Farmers
+from .ngo import NGO
+from .government import Government
+from .reservoir_operators import ReservoirOperators
 
 class Agents:
     """This class initalizes all agent classes, and is used to activate the agents each timestep.

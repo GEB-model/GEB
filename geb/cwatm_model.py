@@ -5,13 +5,11 @@ import datetime
 
 from cwatm.cwatm_model import CWATModel
 from cwatm.management_modules.dynamicModel import ModelFrame
-from cwatm.management_modules.configuration import parse_configuration, read_metanetcdf
-from cwatm.management_modules.globals import settingsfile, binding, option, outDir
-from cwatm.management_modules.data_handling import cbinding
-from cwatm.management_modules.timestep import checkifDate
+from cwatm.management_modules.configuration import parse_configuration
+from cwatm.management_modules.globals import settingsfile, binding, outDir
 from cwatm.run_cwatm import headerinfo
 
-from config import INPUT
+from .config import INPUT
 
 class CWatM_Model(CWATModel):
     """
