@@ -9,7 +9,7 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
-from .agents.farmers import Farmers
+from geb.agents.farmers import Farmers
 
 class Artists(honeybeesArtists):
     """This class is used to configure how the display environment works.

@@ -11,7 +11,7 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
-from .config import INPUT
+from geb.config import INPUT
 
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""

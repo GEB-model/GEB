@@ -23,7 +23,7 @@ general:
     - [75.139, 17.972]
   poor_point:
     [75.895273, 17.370473]
-  CWatM_settings: CWatM.ini
+  CWatM_settings: models/CWatM.ini
   input_folder: ../DataDrive/GEB_Bhima/input/
   original_data: ../DataDrive/original_data/
   preprocessing_folder: ../DataDrive/GEB_Bhima/preprocessing/

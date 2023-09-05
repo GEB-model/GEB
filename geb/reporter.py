@@ -17,7 +17,6 @@ except ImportError:
     cp = np
 from operator import attrgetter
 
-
 from honeybees.reporter import Reporter as ABMReporter
 
 class CWatMReporter(ABMReporter):

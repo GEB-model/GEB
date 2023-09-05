@@ -9,7 +9,7 @@ from cwatm.management_modules.configuration import parse_configuration
 from cwatm.management_modules.globals import settingsfile, binding, outDir
 from cwatm.run_cwatm import headerinfo
 
-from .config import INPUT
+from geb.config import INPUT
 
 class CWatM_Model(CWATModel):
     """
@@ -27,8 +27,8 @@ class CWatM_Model(CWATModel):
         settingsfile.append(settings)
         parse_configuration(settings)
 
-        subfolder = self.args.scenario
-        if self.args.switch_crops:
+        subfolder = self.scenario
+        if self.switch_crops:
             subfolder += '_switch_crops'
 
         outDir['OUTPUT'] = os.path.join(self.config['general']['report_folder'], subfolder)

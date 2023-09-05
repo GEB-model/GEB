@@ -20,7 +20,7 @@ general:
     - [73.98727, 19.00464]
   poor_point:
     [73.98727, 19.00464]
-  CWatM_settings: CWatM.ini
+  CWatM_settings: models/CWatM.ini
   input_folder: ../DataDrive/GEB_Sanctuary/input/
   data_folder: ../DataDrive/
   original_data: ../DataDrive/GEB/original_data/
