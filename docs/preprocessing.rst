@@ -22,7 +22,7 @@ The preprocessing contains two steps:
 1. Creating all non-agent data
 2. Creating all data for agent attributes
 
-The file build_model.py contains the code to build the model, including step 1 and 2. In this script the agent attributes are generated randomly. This allows you to quickly try to model. As input, build_model.py requires a configuration file, which specifies the poor point (poor_point) of the (sub-)basin in the "general" section of the yml-file. This file also contains all other parameters that are required to run the model. The configuration file is a YAML file. An example configuration file is provided in the repository (sandbox.yml).
+The file build_model.py contains the code to build the model, including step 1 and 2. In this script the agent attributes are generated randomly. This allows you to quickly try to model. As input, build_model.py requires a configuration file, which specifies the pour point (pour_point) of the (sub-)basin in the "general" section of the yml-file. This file also contains all other parameters that are required to run the model. The configuration file is a YAML file. An example configuration file is provided in the repository (sandbox.yml).
 
 .. code-block:: python
 

@@ -210,12 +210,12 @@ def build(data_libs, yml, config):
         logger=create_logger(input_folder / 'hydromt.log'),
     )
 
-    poor_point = config['general']['poor_point']
+    pour_point = config['general']['pour_point']
     geb_model.build(
         opt=configread(yml),
         region={
             'subbasin': [
-                [poor_point[0]], [poor_point[1]]
+                [pour_point[0]], [pour_point[1]]
             ],
             'bounds': [66.55, 4.3, 93.17, 35.28]  # TODO: remove need to specify bounds
         },

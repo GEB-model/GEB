@@ -18,7 +18,7 @@ general:
   basin_id: 450000005
   gauges:
     - [73.98727, 19.00464]
-  poor_point:
+  pour_point:
     [73.98727, 19.00464]
   CWatM_settings: models/CWatM.ini
   input_folder: ../DataDrive/GEB_Sanctuary/input/

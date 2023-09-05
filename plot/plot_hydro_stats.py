@@ -146,7 +146,7 @@ def get_observed_discharge(dates):
     if 'gauges' in config['general']:
         gauges = config['general']['gauges']
     else:
-        gauges = config['general']['poor_point']
+        gauges = config['general']['pour_point']
     streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauges['lon']} {gauges['lat']}.csv")
     df = pd.read_csv(streamflow_path, parse_dates=['Dates'])
     df = df[df['Dates'].isin(dates)]

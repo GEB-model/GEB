@@ -42,7 +42,7 @@ class CWatM_Model(CWATModel):
             gauges = self.config['general']['gauges']
             binding['Gauges'] = ' '.join([str(item) for sublist in gauges for item in sublist])
         else:
-            binding['Gauges'] = f"{self.config['general']['poor_point'][0]} {self.config['general']['poor_point'][1]}"
+            binding['Gauges'] = f"{self.config['general']['pour_point'][0]} {self.config['general']['pour_point'][1]}"
         binding['StepStart'] = start_time.strftime('%d/%m/%Y')
         binding['SpinUp'] = '0'
         binding['StepEnd'] = str(n_steps)

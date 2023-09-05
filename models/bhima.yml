@@ -21,7 +21,7 @@ general:
     - [74.219, 18.545]
     - [74.000, 18.670]
     - [75.139, 17.972]
-  poor_point:
+  pour_point:
     [75.895273, 17.370473]
   CWatM_settings: models/CWatM.ini
   input_folder: ../DataDrive/GEB_Bhima/input/

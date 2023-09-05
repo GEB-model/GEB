@@ -16,7 +16,7 @@ general:
   # base folder where to report output data to
   gauges:
     - [73.98727, 19.00464]
-  poor_point:
+  pour_point:
     [73.98727, 19.00464]
   CWatM_settings: models/CWatM.ini
   input_folder: ../DataDrive/sandbox/input/
