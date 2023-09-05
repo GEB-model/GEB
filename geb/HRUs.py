@@ -223,7 +223,7 @@ class HRUs(BaseVariables):
             self.register_initial_data('HRU.HRU_to_grid')
             self.register_initial_data('HRU.grid_to_HRU')
             self.register_initial_data('HRU.unmerged_HRU_indices')
-        if self.model.args.use_gpu:
+        if self.model.use_gpu:
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
 
@@ -376,7 +376,7 @@ class HRUs(BaseVariables):
         Returns:
             array: Array with size of number of HRUs.
         """
-        if self.model.args.use_gpu:
+        if self.model.use_gpu:
             return cp.zeros(size, dtype, *args, **kwargs)
         else:
             return np.zeros(size, dtype, *args, **kwargs)        
@@ -392,7 +392,7 @@ class HRUs(BaseVariables):
             array: Array with size of number of HRUs.
         """
         if gpu is None:
-            gpu = self.model.args.use_gpu
+            gpu = self.model.use_gpu
         if gpu:
             return cp.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
         else:
@@ -407,7 +407,7 @@ class HRUs(BaseVariables):
         Returns:
             outarray: Decompressed HRU_array.
         """  
-        if self.model.args.use_gpu:
+        if self.model.use_gpu:
             HRU_array = HRU_array.get()
         if np.issubdtype(HRU_array.dtype, np.integer):
             nanvalue = -1
@@ -435,7 +435,7 @@ class HRUs(BaseVariables):
 
     def load_initial(self, name, default=.0, gpu=None):
         if gpu is None:
-            gpu = self.model.args.use_gpu
+            gpu = self.model.use_gpu
         return super().load_initial('HRU.' + name, default=default, gpu=gpu)
 
 
@@ -542,7 +542,7 @@ class Data:
             outdata = data
         else:
             outdata = self.to_HRU_numba(data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn=fn)
-            if self.model.args.use_gpu:
+            if self.model.use_gpu:
                 outdata = cp.asarray(outdata)
         
         if varname:
@@ -608,7 +608,7 @@ class Data:
         if isinstance(HRU_data, float):  # check if data is simple float. Otherwise should be numpy array.
             outdata = HRU_data
         else:
-            if self.model.args.use_gpu and isinstance(HRU_data, cp.ndarray):
+            if self.model.use_gpu and isinstance(HRU_data, cp.ndarray):
                 HRU_data = HRU_data.get()
             outdata = self.to_grid_numba(HRU_data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn)
 
@@ -621,7 +621,7 @@ class Data:
     def split_HRU_data(self, a, i, ratio=None):
         assert ratio is None or (ratio > 0 and ratio < 1)
         assert ratio is None or np.issubdtype(a.dtype, np.floating)
-        if self.model.args.use_gpu and isinstance(a, cp.ndarray):
+        if self.model.use_gpu and isinstance(a, cp.ndarray):
             is_cupy = True
             a = a.get()
         else:

@@ -245,8 +245,8 @@ class Reporter:
     """
     def __init__(self, model):
         self.model = model
-        subfolder = self.model.args.scenario
-        if self.model.args.switch_crops:
+        subfolder = self.model.scenario
+        if self.model.switch_crops:
             subfolder += '_switch_crops'
         self.abm_reporter = ABMReporter(model, subfolder=subfolder)
         self.cwatmreporter = CWatMReporter(model, subfolder=subfolder)

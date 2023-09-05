@@ -114,7 +114,7 @@ class Artists(honeybeesArtists):
             attributes = attrgetter(attr)(self.model)
             compressed_size = attributes.compressed_size
             for varname, variable in vars(attributes).items():
-                if isinstance(variable, (np.ndarray, cp.ndarray) if self.model.args.use_gpu else np.ndarray):
+                if isinstance(variable, (np.ndarray, cp.ndarray) if self.model.use_gpu else np.ndarray):
                     if variable.ndim == 1 and variable.size == compressed_size:
                         name = f'{attr}.{varname}'
                         self.variables_dict[name] = variable

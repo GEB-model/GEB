@@ -41,15 +41,15 @@ class GEBModel(ABM_Model, CWatM_Model):
     """
 
     description = """GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.\nGEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail. The model does so by coupling an agent-based model which simulates millions individual people or households and a hydrological model. While the model can be expanded to other agents and environmental interactions, we focus on farmers, high-level agents, irrigation behaviour and land management for now."""
-    def __init__(self, GEB_config_path: str, study_area: dict, args: argparse.Namespace, coordinate_system: str='WGS84'):
-        self.args = args
-        if self.args.use_gpu:
+    def __init__(self, GEB_config_path: str, study_area: dict, scenario: str, use_gpu: bool=False, coordinate_system: str='WGS84'):
+        self.use_gpu = use_gpu
+        if self.use_gpu:
             cp.cuda.Device(self.args.gpu_device).use()
         
         self.config = self.setup_config(GEB_config_path)
 
         self.initial_conditions_folder = Path(self.config['general']['initial_conditions_folder'])
-        if args.scenario == 'spinup':
+        if scenario == 'spinup':
             end_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
             current_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
             self.load_initial_data = False
@@ -72,7 +72,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         
         self.data = Data(self)
 
-        self.__init_ABM__(GEB_config_path, study_area, args, current_time, timestep_length, n_timesteps, coordinate_system)
+        self.__init_ABM__(GEB_config_path, study_area, current_time, timestep_length, n_timesteps, coordinate_system)
         self.__init_hydromodel__(self.config['general']['CWatM_settings'])
         if self.config['general']['simulate_floods']:
             bbox = [73.86941, 18.99371, 73.94790, 19.05860]
@@ -86,7 +86,7 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.running = True
 
-    def __init_ABM__(self, config_path: str, study_area: dict, args, current_time, timestep_length, n_timesteps, coordinate_system: str) -> None:
+    def __init_ABM__(self, config_path: str, study_area: dict, current_time, timestep_length, n_timesteps, coordinate_system: str) -> None:
         """Initializes the agent-based model.
         
         Args:
@@ -96,7 +96,7 @@ class GEBModel(ABM_Model, CWatM_Model):
             coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
         """
 
-        ABM_Model.__init__(self, current_time, timestep_length, config_path, args=args, n_timesteps=n_timesteps)
+        ABM_Model.__init__(self, current_time, timestep_length, config_path, args=None, n_timesteps=n_timesteps)
         
         study_area.update({
             'xmin': self.data.grid.bounds.left,

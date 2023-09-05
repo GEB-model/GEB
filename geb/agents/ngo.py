@@ -23,5 +23,5 @@ class NGO(AgentBaseClass):
 
     def step(self):
         """This function is run each timestep. However, only in the first timestep and if the scenario is `ngo_training` training is actually provided to farmers."""
-        if self.model.args.scenario == 'ngo_training' and self.model.current_timestep == 0:
+        if self.model.scenario == 'ngo_training' and self.model.current_timestep == 0:
             self.provide_training()

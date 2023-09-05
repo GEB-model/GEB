@@ -1570,7 +1570,7 @@ class Farmers(AgentBaseClass):
 
             harvesting_farmer_fields = self.var.land_owners[harvest]
             harvested_area = self.var.cellArea[harvest]
-            if self.model.args.use_gpu:
+            if self.model.use_gpu:
                 harvested_area = harvested_area.get()
             harvested_crops = self.var.crop_map[harvest]
             max_yield_per_crop = np.take(self.crop_variables['reference_yield_kg_m2'], harvested_crops)
@@ -1731,7 +1731,7 @@ class Farmers(AgentBaseClass):
             disposable_income=self.disposable_income,
             farmers_going_out_of_business=(
                 self.model.config['agent_settings']['farmers']['farmers_going_out_of_business']
-                and not self.model.args.scenario == 'spinup'  # farmers can only go out of business when not in spinup scenario
+                and not self.model.scenario == 'spinup'  # farmers can only go out of business when not in spinup scenario
             )
         )
         if farmers_selling_land.size > 0:
@@ -2171,7 +2171,7 @@ class Farmers(AgentBaseClass):
         return self.field_size_per_farmer_numba(
             self.field_indices_by_farmer,
             self.field_indices,
-            self.var.cellArea.get() if self.model.args.use_gpu else self.var.cellArea
+            self.var.cellArea.get() if self.model.use_gpu else self.var.cellArea
         )
 
     def expenses_and_income(self):
@@ -2292,7 +2292,7 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
             
-            if self.model.args.scenario not in ['spinup','noadaptation','base']:
+            if self.model.scenario not in ['spinup','noadaptation','base']:
                 # self.switch_crops(self.crop_names["Sugarcane"], self.n_water_accessible_years, self.crops, days_in_year)
                 self.switch_crops()
             
@@ -2301,7 +2301,7 @@ class Farmers(AgentBaseClass):
             self.store_long_term_damages_profits_rain()
             
             # Alternative scenarios: 'sprinkler'
-            if self.model.args.scenario not in ['spinup', 'noadaptation', 'base']:
+            if self.model.scenario not in ['spinup', 'noadaptation', 'base']:
                 # Convert the probability to yield ratio regardless of adaptation
                 self.convert_probability_to_yield_ratio()
                 self.adapt_irrigation_well()   

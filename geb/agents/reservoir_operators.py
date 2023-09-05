@@ -25,7 +25,7 @@ class ReservoirOperators(AgentBaseClass):
         assert (self.reservoirs['volume_total'] > 0).all()
         self.active_reservoirs = self.reservoirs.loc[waterBodyIDs]
 
-        np.save(os.path.join(self.model.config['general']['report_folder'], self.model.args.scenario, 'active_reservoirs_waterBodyIDs.npy'), waterBodyIDs)
+        np.save(os.path.join(self.model.config['general']['report_folder'], self.model.scenario, 'active_reservoirs_waterBodyIDs.npy'), waterBodyIDs)
 
         self.reservoir_release_factors = np.full(len(self.active_reservoirs), self.model.config['agent_settings']['reservoir_operators']['max_reservoir_release_factor'])
 
@@ -72,7 +72,7 @@ class ReservoirOperators(AgentBaseClass):
                                     (reservoir_fill < self.flood_limit_ratio), temp, reservoir_outflow)
         
         # make outflow same as inflow for a scenario without a reservoir 
-        if 'noHI' in self.model.args.scenario:
+        if 'noHI' in self.model.scenario:
             reservoir_outflow = inflowC
                         
         return reservoir_outflow
