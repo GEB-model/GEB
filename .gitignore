@@ -1,16 +1,7 @@
 # Custom
 .vscode
 .vs
-doctrees/
-.buildinfo
-cache/
 tmp/
-report/
-tests/plots/
-tests/benchmarks/
-tests/files/
-.benchmarks
-*.npy
 .DS_Store
 *.cprof
 .prof_stats
@@ -145,7 +136,5 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-models/slr/untitled0.py
-
 # workspaces 
 workspaces/

@@ -26,7 +26,7 @@ The figure below shows a schematic overview of the model. The lower part of the 
 
   Installation <installation>
   Updates <updates>
-  Preprocessing <preprocessing/preprocessing>
+  Preprocessing <preprocessing>
   Configuration <configuration>
   Running the model <running>
   Farm-level HRUs <HRUs>

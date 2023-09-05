@@ -5,140 +5,9 @@ import geopandas as gpd
 import pandas as pd
 from pathlib import Path
 
+from hydromt_geb.workflows import get_farm_distribution
+
 from preconfig import INPUT, PREPROCESSING_FOLDER
-
-def fits(n, estimate, farm_sizes, mean, offset, stalled=False):
-    target_area = n * mean + offset
-    n_farms = (estimate // 1).astype(int)
-    estimated_area_int = (n_farms * farm_sizes).sum()
-
-    extra = np.zeros_like(estimate, dtype=n_farms.dtype)
-    leftover_estimate = estimate % 1
-    for i in range(len(leftover_estimate)):
-        v = leftover_estimate[i]
-        if v > .5:
-            extra[i] += 1
-            if i < len(leftover_estimate) - 1:
-                leftover_estimate[i+1] -= (1 - v) / farm_sizes[i+1] * farm_sizes[i]
-        else:
-            if i < len(leftover_estimate) - 1:
-                leftover_estimate[i+1] += v / farm_sizes[i+1] * farm_sizes[i]
-    
-    n_farms = n_farms + extra
-    estimated_area_int = (n_farms * farm_sizes).sum()
-    
-    if estimated_area_int == target_area:
-        return n_farms, farm_sizes
-    
-    elif stalled and abs(estimated_area_int - target_area) < farm_sizes.size:
-        while True:
-            difference = target_area - estimated_area_int
-            if difference > 0:
-                for i in range(len(n_farms)):
-                    if n_farms[i] > 0:
-                        n_farms[i] -= 1
-                        if i == n_farms.size - 1:
-                            farm_sizes = np.append(farm_sizes, farm_sizes[i] + 1)
-                            n_farms = np.append(n_farms, 1)
-                        else:
-                            n_farms[min(i+difference, len(n_farms)-1)] += 1
-                        break
-            else:
-                for i in range(len(n_farms)-1, -1, -1):
-                    if n_farms[i] > 0:
-                        n_farms[i] -= 1
-                        n_farms[max(i+difference, 0)] += 1
-                        break
-            estimated_area_int = (n_farms * farm_sizes).sum()
-            if estimated_area_int == target_area:
-                break
-            elif n_farms[0] > 0 and (n_farms[1:] == 0).all():
-                n_farms[0] -= 1
-                n_farms = np.insert(n_farms, 0, 1)
-                farm_sizes = np.insert(farm_sizes, 0, max(farm_sizes[0] + target_area - estimated_area_int, 0))
-                break
-        return n_farms, farm_sizes
-
-    else:
-        return None
-
-def get_farm_distribution(n, x0, x1, mean, offset):
-    assert mean >= x0
-    assert mean <= x1
-
-    target_area = n * mean + offset
-    farm_sizes = np.arange(x0, x1+1)
-    n_farm_sizes = farm_sizes.size
-
-    if n == 0:
-        n_farms = np.zeros(n_farm_sizes, dtype=np.int32)
-        assert target_area == (n_farms * farm_sizes).sum()
-    
-    elif n == 1:
-        farm_sizes = np.array([mean + offset])
-        n_farms = np.array([1])
-        assert target_area == (n_farms * farm_sizes).sum()
-    
-    elif mean == x0:
-        n_farms = np.zeros(n_farm_sizes, dtype=np.int32)
-        n_farms[0] = n
-        if offset > 0:
-            if offset < n_farms[0]:
-                n_farms[0] -= offset
-                n_farms[1] += offset
-            else:
-                raise NotImplementedError
-        elif offset < 0:
-            n_farms[0] -= 1
-            n_farms = np.insert(n_farms, 0, 1)
-            farm_sizes = np.insert(farm_sizes, 0, farm_sizes[0] + offset)
-            assert (farm_sizes > 0).all()
-        assert target_area == (n_farms * farm_sizes).sum()
-
-    elif mean == x1:
-        n_farms = np.zeros(n_farm_sizes, dtype=np.int32)
-        n_farms[-1] = n
-        if offset < 0:
-            if n_farms[-1] > -offset:
-                n_farms[-1] += offset
-                n_farms[-2] -= offset
-            else:
-                raise NotImplementedError
-        elif offset > 0:
-            n_farms[-1] -= 1
-            n_farms = np.insert(n_farms, 0, 1)
-            farm_sizes = np.insert(farm_sizes, 0, farm_sizes[-1] + offset)
-            assert (farm_sizes > 0).all()
-        assert target_area == (n_farms * farm_sizes).sum()
-    
-    else:
-        growth_factor = 1
-
-        while True:
-            estimate = np.zeros(n_farm_sizes, dtype=np.float64)
-            estimate[0] = 1
-            for i in range(1, estimate.size):
-                estimate[i] = estimate[i-1] * growth_factor
-            estimate /= (estimate.sum() / n)
-            assert (estimate >= 0).all()
-
-            estimated_area = (estimate * farm_sizes).sum()
-            
-            res = fits(n, estimate, farm_sizes, mean, offset, stalled=True)
-            
-            if res is not None:
-                n_farms, farm_sizes = res
-                estimated_area_int = (n_farms * farm_sizes).sum()
-                assert estimated_area_int == target_area
-                assert (n_farms >= 0).all()
-                assert target_area == (n_farms * farm_sizes).sum()
-                break
-            
-            difference = (target_area / estimated_area) ** (1 / (n_farm_sizes - 1))
-            growth_factor *= difference
-
-    return n_farms, farm_sizes
-
 
 def main():
     SIZE_CLASSES = (
@@ -155,7 +24,7 @@ def main():
     )
 
     SIZE_CLASSES_BOUNDARIES = {
-        'Below 0.5': (2_500, 5_000),  # farm is assumed to be at least 2500 m2
+        'Below 0.5': (0, 5_000),  # farm is assumed to be at least 2500 m2
         '0.5-1.0': (5_000, 10_000),
         '1.0-2.0': (10_000, 20_000),
         '2.0-3.0': (20_000, 30_000),
@@ -164,7 +33,7 @@ def main():
         '5.0-7.5': (50_000, 75_000),
         '7.5-10.0': (75_000, 100_000),
         '10.0-20.0': (100_000, 200_000),
-        '20.0 & ABOVE': (200_000, 400_000),
+        '20.0 & ABOVE': (200_000, np.inf),
     }
 
     with rasterio.open(Path(INPUT, 'landsurface', 'full_region_cultivated_land.tif'), 'r') as src:
@@ -259,10 +128,19 @@ def main():
                 continue
             
             min_size_m2, max_size_m2 = SIZE_CLASSES_BOUNDARIES[size_class]
+            assert max_size_m2 >= avg_farm_size.loc[(state, district, tehsil), size_class] >= min_size_m2, "average farm size is outside of the size class boundaries"
+            
+            # if minimum farm size is 0, assume it is half of the average farm size for that class
+            if min_size_m2 == 0:
+                min_size_m2 = avg_farm_size.loc[(state, district, tehsil), size_class] / 2
+            # if maximum farm size is inf, assume it is twice the average farm size for that class
+            if max_size_m2 == np.inf:
+                max_size_m2 = avg_farm_size.loc[(state, district, tehsil), size_class] * 2
 
-            min_size_cells = int(min_size_m2 / average_cell_area_region)
+            min_size_cells = math.floor(min_size_m2 / average_cell_area_region)
             min_size_cells = max(min_size_cells, 1)  # farm can never be smaller than one cell
-            max_size_cells = int(max_size_m2 / average_cell_area_region) - 1  # otherwise they overlap with next size class
+            max_size_cells = math.ceil(max_size_m2 / average_cell_area_region)  # otherwise they overlap with next size class
+            
             mean_cells_per_agent = int(avg_farm_size.loc[(state, district, tehsil), size_class] / average_cell_area_region)
 
             if mean_cells_per_agent < min_size_cells or mean_cells_per_agent > max_size_cells:  # there must be an error in the data, thus assume centred
@@ -272,7 +150,7 @@ def main():
             # if there is agricultural land, but there are no agents rounded down, we assume there is one agent
             if number_of_agents_size_class == 0 and whole_cells_per_size_class[size_class] > 0:
                 number_of_agents_size_class = 1
-
+            
             ipfs[size_class]['adjusted_weight'] = ipfs[size_class]['weight'] / ipfs[size_class]['weight'].sum() * number_of_agents_size_class
             ipfs[size_class]['n'] = (ipfs[size_class]['adjusted_weight'] // 1).astype(int)
 
@@ -287,15 +165,22 @@ def main():
 
             population = ipfs[size_class].loc[ipfs[size_class].index.repeat(ipfs[size_class]['n'])]
             population = population.drop(['crops', 'weight', 'adjusted_weight', 'size_class', 'n'], axis=1)            
-            offset = whole_cells_per_size_class[size_class] - number_of_agents_size_class * mean_cells_per_agent
-
-            n_farms_size_class, farm_sizes_size_class = get_farm_distribution(number_of_agents_size_class, min_size_cells, max_size_cells, mean_cells_per_agent, offset)
+            
+            if number_of_agents_size_class == 1:
+                n_farms_size_class = np.array([1])
+                farm_sizes_size_class = np.array([whole_cells_per_size_class[size_class]])
+            else:
+                offset = whole_cells_per_size_class[size_class] - number_of_agents_size_class * mean_cells_per_agent
+                n_farms_size_class, farm_sizes_size_class = get_farm_distribution(number_of_agents_size_class, min_size_cells, max_size_cells, mean_cells_per_agent, offset)
+        
             assert n_farms_size_class.sum() == number_of_agents_size_class
             assert (farm_sizes_size_class > 0).all()
             assert (n_farms_size_class * farm_sizes_size_class).sum() == whole_cells_per_size_class[size_class]
             farm_sizes = farm_sizes_size_class.repeat(n_farms_size_class)
             np.random.shuffle(farm_sizes)
+            
             population['area_n_cells'] = farm_sizes
+            
             region_agents.append(population)
 
             assert population['area_n_cells'].sum() == whole_cells_per_size_class[size_class]

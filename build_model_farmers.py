@@ -1,17 +1,23 @@
 from hydromt_geb import GEBModel
 from hydromt.config import configread
 
+from config import INPUT, parser
+
+from build_model import create_logger
+
+parser.add_argument('--data_libs', '-d', type=str, nargs='+', default=[r"../DataDrive/original_data/data_catalog.yml"])
+args = parser.parse_known_args()[0]
+
 if __name__ == '__main__':
     yml = r"./hydromt.yml"
-    root = r"../DataDrive/sandbox/input"
 
-    data_libs = [r"../DataDrive/original_data/data_catalog.yml"]
     opt = configread(yml)
     
-    geb_model = GEBModel(root=root, mode='w+', data_libs=data_libs)
+    geb_model = GEBModel(root=INPUT, mode='w+', data_libs=args.data_libs, logger=create_logger())
     geb_model.read()
     geb_model.update(opt={
-        "setup_farmers": {
+        "setup_farmers_from_csv": {
+            "path": INPUT.parent / 'preprocessing' / "agents" / "farmers" / "farmers.csv",
             'irrigation_sources': {
                 'no_irrigation': 0,
                 'canals': 1,
@@ -23,4 +29,3 @@ if __name__ == '__main__':
             'n_seasons': 3
         }
     })
-    

@@ -15,6 +15,7 @@ dependencies:
   - dask
   - tqdm
   - esmpy
+  - deap
   - s3fs
   - pip
   - pip:

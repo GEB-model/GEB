@@ -78,8 +78,8 @@ for gauge in gauges:
 	observed_streamflow[gauge].name = 'observed'
 	assert (observed_streamflow[gauge] >= 0).all()
 
-with open(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
-	irrigation_source_key = json.load(f)
+# with open(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
+# 	irrigation_source_key = json.load(f)
 
 def get_observed_well_ratio():
 	observed_irrigation_sources = gpd.read_file(os.path.join(config['general']['original_data'], 'census', 'output', 'irrigation_source_2010-2011.geojson')).to_crs(3857)
@@ -292,7 +292,7 @@ def run_model(individual):
 				print(command, flush=True)
 
 				# run the command and capture the output and errors
-				p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
+				p = Popen(command, stdout=PIPE, stderr=PIPE)
 				output, errors = p.communicate()
 
 				# check the return code of the command and handle accordingly
@@ -458,7 +458,7 @@ if __name__ == "__main__":
         # Create a multiprocessing pool with the specified number of processes
         # Initialize the pool with the shared variable and lock, and the number of GPUs available
 		pool = multiprocessing.Pool(processes=pool_size, initializer=init_pool, initargs=(
-			current_gpu_use_count, manager_lock, calibration_config['DEAP']['gpus'], calibration_config['DEAP']['models_per_gpu'])
+			current_gpu_use_count, manager_lock, calibration_config['gpus'], calibration_config['models_per_gpu'] if 'models_per_gpu' in calibration_config else 1)
 		)
         # Register the map function to use the multiprocessing pool
 		toolbox.register("map", pool.map)
@@ -466,7 +466,7 @@ if __name__ == "__main__":
         # Initialize the pool without multiprocessing
 		init_pool(
 			current_gpu_use_count,
-			manager_lock, calibration_config['DEAP']['gpus'], calibration_config['DEAP']['models_per_gpu'])
+			manager_lock, calibration_config['gpus'], calibration_config['models_per_gpu'] if 'models_per_gpu' in calibration_config else 1)
 
     # Set the probabilities of mating and mutation
 	cxpb = 0.7 # The probability of mating two individuals
