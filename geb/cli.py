@@ -4,19 +4,27 @@ import cProfile
 from pstats import Stats
 import geopandas as gpd
 import yaml
+import logging
 import faulthandler
+from pathlib import Path
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules import ChartModule
 from honeybees.visualization.canvas import Canvas
 
-from geb.model import GEBModel
-from geb import __version__
+from hydromt.config import configread
+import hydromt_geb
+import geb    
 
 faulthandler.enable()
 
+def parse_config(config):
+    """Parse config."""
+    config = yaml.load(open(config, 'r'), Loader=yaml.FullLoader)
+    return config
+
 @click.group()
-@click.version_option(__version__, message="GEB version: %(version)s")
+@click.version_option(geb.__version__, message="GEB version: %(version)s")
 @click.pass_context
 def main(ctx):  # , quiet, verbose):
     """Command line interface for hydromt models."""
@@ -125,7 +133,7 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, gui, no_
     }
 
     if not gui:
-        model = GEBModel(**model_params)
+        model = geb.GEBModel(**model_params)
         if profiling:
             with cProfile.Profile() as pr:
                 model.run()
@@ -153,13 +161,64 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, gui, no_
             'year'
         ]
 
-        server = ModularServer(MODEL_NAME, GEBModel, server_elements, DISPLAY_TIMESTEPS, model_params=model_params, port=None)
+        server = ModularServer(MODEL_NAME, geb.GEBModel, server_elements, DISPLAY_TIMESTEPS, model_params=model_params, port=None)
         server.launch(port=port, browser=no_browser)
 
     if use_gpu:
         from numba import cuda 
         device = cuda.get_current_device()
         device.reset()
+
+@main.command()
+@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../DataDrive/original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--yml', '-y', type=str, default=r"models/hydromt.yml", help="""Path to the YAML file containing the model configuration.""")
+@click.option('--config', default='models/sandbox.yml', help="Path of the model configuration file.")
+def build(data_libs, yml, config):
+    """Build model."""
+    
+    config = parse_config(config)
+    input_folder = Path(config['general']['input_folder'])
+    
+    def create_logger():
+        logger = logging.getLogger(__name__)
+        # set log level to debug
+        logger.setLevel(logging.DEBUG)
+        # create console handler and set level to debug
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.DEBUG)
+        # create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(message)s'
+        )
+        # add formatter to ch
+        ch.setFormatter(formatter)
+        # add ch to logger
+        logger.addHandler(ch)
+        # add file handler
+        input_folder.mkdir(exist_ok=True, parents=True)
+        fh = logging.FileHandler(input_folder / 'hydromt.log')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+        return logger
+    
+    geb_model = hydromt_geb.GEBModel(
+        root=input_folder,
+        mode='w+',
+        data_libs=data_libs,
+        logger=create_logger(),
+    )
+
+    poor_point = config['general']['poor_point']
+    geb_model.build(
+        opt=configread(yml),
+        region={
+            'subbasin': [
+                [poor_point[0]], [poor_point[1]]
+            ],
+            'bounds': [66.55, 4.3, 93.17, 35.28]  # TODO: remove need to specify bounds
+        },
+    )
 
 if __name__ == "__main__":
     main()
