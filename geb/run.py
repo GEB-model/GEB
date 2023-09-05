@@ -45,7 +45,7 @@ if __name__ == '__main__':
     faulthandler.enable()
 
     MODEL_NAME = 'GEB'
-    config = yaml.load(open(os.path.join(os.path.dirname(__file__), args.config), 'r'), Loader=yaml.FullLoader)
+    config = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
     study_area = get_study_area(config['general']['input_folder'])
 
     series_to_plot = [
