@@ -1,11 +1,7 @@
 # Custom
 .vscode
-.vs
-tmp/
 .DS_Store
-*.cprof
-.prof_stats
-*.out
+workspaces/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -136,5 +132,3 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-# workspaces 
-workspaces/
