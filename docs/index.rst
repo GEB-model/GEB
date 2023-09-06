@@ -3,7 +3,7 @@ GEB
 
 :Copyright: .. include:: copyright.rst
 :Authors: .. include:: authors.rst
-:Version: 0.2
+:Version: |release|
 :Version Date: |today|
 
 Welcome to GEB's documentation! GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.
