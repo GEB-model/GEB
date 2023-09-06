@@ -1,6 +1,9 @@
 Configuration
 #####################
 
-The model can be configured through using `GEB.yml` (YALM-format). In the model code, this configution file is parsed and can be accessed through `self.model.config`. Below the various sections of the configuration file are discussed. CWatM can be configured using its own configuration file `CWatM_GEB.ini`. To configure this file we refer to the `CWatM documentation <https://cwatm.iiasa.ac.at/>`_.
+The GEB model uses 2 configuration files in YAML-format:
 
-.. autoyaml:: sandbox.yml
+* The first one is build the model (see example in "examples/sandbox/build.yml"). These are that hydroMT uses.
+* The configuration file configures the model (see example in "examples/sandbox/model.yml"), which options are discussed below. Not that this yml-file also refers to the CWatM configuration file, which can be seperately configured if needed. To configure this file we refer to the `CWatM documentation <https://cwatm.iiasa.ac.at/>`_.
+
+.. autoyaml:: examples/sandbox/model.yml

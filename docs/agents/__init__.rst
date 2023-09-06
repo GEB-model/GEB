@@ -1,5 +1,5 @@
 Agents
 ##########
 
-.. automodule:: agents
+.. automodule:: geb.agents
     :members:

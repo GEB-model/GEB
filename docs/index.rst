@@ -3,7 +3,7 @@ GEB
 
 :Copyright: .. include:: copyright.rst
 :Authors: .. include:: authors.rst
-:Version: 0.2
+:Version: |release|
 :Version Date: |today|
 
 Welcome to GEB's documentation! GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.
@@ -13,8 +13,9 @@ GEB aims to simulate both environment, for now the hydrological system, the indi
 Building on the shoulders of giants
 ----------------------------------------
 GEB builds on, couples and extends several models.
-- The hydrological component of GEB is mainly build on the `CWatM model <https://cwatm.iiasa.ac.at/>`_.
-- The agent-based component of GEB extends the `ADOPT model <https://vu-ivm.github.io/WCR-models-and-data/models/ADOPT/index.html>`_
+
+* The hydrological component of GEB is mainly build on the `CWatM model <https://cwatm.iiasa.ac.at/>`_.
+* The agent-based component of GEB extends the `ADOPT model <https://vu-ivm.github.io/WCR-models-and-data/models/ADOPT/index.html>`_
 
 The figure below shows a schematic overview of the model. The lower part of the figure shows the hydrological model, CWatM, while the upper part shows the agent-based model. Both models are imported in a single file and run iteratively at a daily timestep.
 
@@ -25,11 +26,9 @@ The figure below shows a schematic overview of the model. The lower part of the 
   :caption: Getting Started
 
   Installation <installation>
-  Updates <updates>
-  Preprocessing <preprocessing>
   Configuration <configuration>
+  Preprocessing <preprocessing>
   Running the model <running>
-  Farm-level HRUs <HRUs>
 
 .. toctree::
   :maxdepth: 1
@@ -47,6 +46,7 @@ The figure below shows a schematic overview of the model. The lower part of the 
   Model <model>
   CWatM Model <cwatm_model>
   Report <report>
+  Farm-level HRUs <HRUs>
   Artists <artists>
 
 .. toctree::
@@ -54,3 +54,4 @@ The figure below shows a schematic overview of the model. The lower part of the 
   :caption: About
 
   Authors <authors_page>
+  Updates <updates>

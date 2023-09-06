@@ -1,9 +1,0 @@
-xarray
-selenium
-chromedriver_autoinstaller
-arcgis2geojson
-scipy
-tqdm
-lxml
-html5lib
-beautifulsoup4

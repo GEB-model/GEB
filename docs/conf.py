@@ -13,7 +13,8 @@
 #
 import os
 import sys
-import sphinx_rtd_theme
+from geb import __version__ as release
+
 sys.path.insert(0, os.path.abspath('..'))
 
 # -- Project information -----------------------------------------------------
@@ -23,9 +24,6 @@ with open('copyright.rst', 'r') as f:
     copyright = f.read()
 with open('authors.rst', 'r') as f:
     author = f.read()
-
-# The full version, including alpha/beta/rc tags
-release = '0.1'
 
 # -- General configuration ---------------------------------------------------
 

@@ -1,11 +1,7 @@
 # Custom
 .vscode
-.vs
-tmp/
 .DS_Store
-*.cprof
-.prof_stats
-*.out
+workspaces/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

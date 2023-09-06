@@ -1,5 +1,5 @@
 NGO
 ##########
 
-.. automodule:: agents.ngo
+.. automodule:: geb.agents.ngo
     :members:

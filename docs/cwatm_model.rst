@@ -1,5 +1,5 @@
 CWatM Model
 #################
 
-.. automodule:: cwatm_model
+.. automodule:: geb.cwatm_model
     :members:

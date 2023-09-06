@@ -1,1 +1,1 @@
-Jens de Bruijn, Mikhail Smilovic, Luca Guillamot, Peter Burek, Yoshihide Wada, Jeroen Aerts
+Jens de Bruijn, Maurice Kalthof, Mikhail Smilovic, Luca Guillamot, Peter Burek
