@@ -28,14 +28,14 @@ jobs:
       - name: Install Python
         uses: actions/setup-python@v2
         with:
-          python-version: 3.9
+          python-version: 3.11.4
       # https://docs.github.com/en/actions/guides/building-and-testing-python#caching-dependencies
       # ^-- How to set up caching for pip on Ubuntu
       - name: Cache pip
         uses: actions/cache@v2
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-
             ${{ runner.os }}-
@@ -49,7 +49,7 @@ jobs:
           pip install GDAL==$(gdal-config --version)
           git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
           python -m pip install --upgrade pip
-          pip install -r requirements/requirements.txt -r requirements/docs.txt -r requirements/preprocessing.txt
+          pip install .[docs]
           # pip install cupy-cuda112
       - name: GA fixes
         run: |
