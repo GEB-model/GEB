@@ -196,10 +196,10 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, gui, no_
         device.reset()
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../DataDrive/original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
-@click.option('--yml', '-y', type=str, default=r"models/hydromt.yml", help="""Path to the YAML file containing the model configuration.""")
-@click.option('--config', '-c', default='models/sandbox.yml', help="Path of the model configuration file.")
-def build(data_libs, yml, config):
+@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
+@click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
+def build(data_libs, config, build_config):
     """Build model."""
     
     config = parse_config(config)
@@ -209,12 +209,12 @@ def build(data_libs, yml, config):
         root=input_folder,
         mode='w+',
         data_libs=data_libs,
-        logger=create_logger(input_folder / 'hydromt.log'),
+        logger=create_logger('build.log'),
     )
 
     pour_point = config['general']['pour_point']
     geb_model.build(
-        opt=configread(yml),
+        opt=configread(build_config),
         region={
             'subbasin': [
                 [pour_point[0]], [pour_point[1]]
@@ -224,12 +224,11 @@ def build(data_libs, yml, config):
     )
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../DataDrive/original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
-@click.option('--yml', '-y', type=str, default=r"models/hydromt_farmers.yml", help="""Path to the YAML file containing the model configuration.""")
+@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
 @click.option('--config', '-c', default='models/sandbox.yml', help="Path of the model configuration file.")
-def update(data_libs, yml, config):
+@click.option('--build-update', '-b', default='build_update.yml', help="Path of the model build update configuration file.")
+def update(data_libs, config, build_update):
     """Update model."""
-    opt = configread(yml)
     config = parse_config(config)
     input_folder = Path(config['general']['input_folder'])
 
@@ -237,10 +236,10 @@ def update(data_libs, yml, config):
         root=input_folder,
         mode='r+',
         data_libs=data_libs,
-        logger=create_logger(input_folder / 'hydromt_update.log')
+        logger=create_logger('build_update.log')
     )
     geb_model.read()
-    geb_model.update(opt=opt)
+    geb_model.update(opt=configread(build_update))
 
 if __name__ == "__main__":
     main()
