@@ -25,9 +25,8 @@ The figure below shows a schematic overview of the model. The lower part of the 
   :caption: Getting Started
 
   Installation <installation>
-  Updates <updates>
-  Preprocessing <preprocessing>
   Configuration <configuration>
+  Preprocessing <preprocessing>
   Running the model <running>
   Farm-level HRUs <HRUs>
 
@@ -54,3 +53,4 @@ The figure below shows a schematic overview of the model. The lower part of the 
   :caption: About
 
   Authors <authors_page>
+  Updates <updates>
