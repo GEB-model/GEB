@@ -124,7 +124,7 @@ class Farmers(AgentBaseClass):
         "_adapted",
         "_time_adapted",
         "_wealth",
-        "_risk_multiplier",
+        "_risk_perception",
         "_drought_timer",
         "_drought_loss",
         "_risk_perc_min",
@@ -384,7 +384,7 @@ class Farmers(AgentBaseClass):
                 "dtype": np.float32,
                 "nodata": [np.nan],
             },
-            "_risk_multiplier": {
+            "_risk_perception": {
                 "dtype": np.float32,
                 "nodata": -1,
             },
@@ -729,12 +729,12 @@ class Farmers(AgentBaseClass):
         self._drought_timer[:self.n] = value
 
     @property
-    def risk_multiplier(self):
-        return self._risk_multiplier[:self.n]
+    def risk_perception(self):
+        return self._risk_perception[:self.n]
 
-    @risk_multiplier.setter
-    def risk_multiplier(self, value):
-        self._risk_multiplier[:self.n] = value
+    @risk_perception.setter
+    def risk_perception(self, value):
+        self._risk_perception[:self.n] = value
 
     @property
     def annual_costs_all_adaptations(self):
@@ -872,7 +872,7 @@ class Farmers(AgentBaseClass):
             self.wealth = self.daily_expenses_per_capita * self.household_size * ((365/12)*18)
         
             ## Risk perception variables 
-            self.risk_multiplier = np.full(self.n, self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'], dtype = np.float32)
+            self.risk_perception = np.full(self.n, self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'], dtype = np.float32)
             self.drought_timer = np.full(self.n, 99, dtype = np.float32)
             self.drought_loss = np.zeros((self.n, 6), dtype=np.float32)
 
@@ -1769,8 +1769,8 @@ class Farmers(AgentBaseClass):
         self.drought_timer[np.logical_and(harvesting_farmers_long, experienced_drought_event)] = 0
 
         # Calculate the updated risk perception of all farmers 
-        risk_perception = ((self.risk_perc_max * 1.6) ** (self.risk_decr * self.drought_timer)) + self.risk_perc_min
-        self.risk_multiplier = 10 ** (2 * risk_perception - 1)
+        self.risk_perception = self.risk_perc_max * (1.6 ** (self.risk_decr * self.drought_timer)) + self.risk_perc_min
+        # self.risk_perception = 10 ** (2 * risk_perception - 1)
 
         # fig, ax = plt.subplots()
         # ax.violinplot(risk_perception)
@@ -1780,7 +1780,7 @@ class Farmers(AgentBaseClass):
         # ax.set_ylabel("Risk perception")
         # plt.show()
 
-        print('Risk perception mean = ',np.mean(self.risk_multiplier))
+        print('Risk perception mean = ',np.mean(self.risk_perception))
     
     def profits_SEUT(self, adaptation_type):
         yield_ratios = self.yield_ratios_drought_event[:]
@@ -1938,7 +1938,7 @@ class Farmers(AgentBaseClass):
                         'total_profits_adaptation': total_profits_adaptation,
                         'profits_no_event': profits_no_event,
                         'profits_no_event_adaptation': profits_no_event_adaptation,
-                        'risk_perception': self.risk_multiplier, 
+                        'risk_perception': self.risk_perception, 
                         'total_annual_costs': total_annual_costs,
                         'adaptation_costs': annual_cost, 
                         'adapted': self.adapted[:,adaptation_type], 

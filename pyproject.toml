@@ -20,7 +20,7 @@ dependencies = [
     "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
     "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 readme = "README.md"
 classifiers = [
     # https://pypi.python.org/pypi?%3Aaction=list_classifiers
