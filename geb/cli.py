@@ -61,7 +61,7 @@ def main(ctx):  # , quiet, verbose):
 @click.option('--gpu_device', type=int, default=0, help="""Specify the GPU to use (zero-indexed).""")
 @click.option('--profiling', is_flag=True, help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.")
 @click.option('--use_gpu', is_flag=True, help="Whether a GPU can be used to run the model. This requires CuPy to be installed.")
-@click.option('--config', default='models/sandbox.yml', help="Path of the model configuration file.")
+@click.option('--config', '-c', default='models/sandbox.yml', help="Path of the model configuration file.")
 @click.option('--gui', is_flag=True, help="""The model can be run with or without a visual interface. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""")
 @click.option('--no-browser', is_flag=True, help="""Do not open browser when running the model. This option is, for example, useful when running the model on a server, and you would like to remotely access the model.""")
 @click.option('--port', type=int, default=8521, help="""Port used for display environment (default: 8521)""")
@@ -196,7 +196,7 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, gui, no_
 @main.command()
 @click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../DataDrive/original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
 @click.option('--yml', '-y', type=str, default=r"models/hydromt.yml", help="""Path to the YAML file containing the model configuration.""")
-@click.option('--config', default='models/sandbox.yml', help="Path of the model configuration file.")
+@click.option('--config', '-c', default='models/sandbox.yml', help="Path of the model configuration file.")
 def build(data_libs, yml, config):
     """Build model."""
     
@@ -224,7 +224,7 @@ def build(data_libs, yml, config):
 @main.command()
 @click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../DataDrive/original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
 @click.option('--yml', '-y', type=str, default=r"models/hydromt_farmers.yml", help="""Path to the YAML file containing the model configuration.""")
-@click.option('--config', default='models/sandbox.yml', help="Path of the model configuration file.")
+@click.option('--config', '-c', default='models/sandbox.yml', help="Path of the model configuration file.")
 def update(data_libs, yml, config):
     """Update model."""
     opt = configread(yml)
