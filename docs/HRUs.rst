@@ -15,5 +15,5 @@ While soil processes are simulated in the HRUs (e.g., percolation, capillary ris
 .. image:: images/aggregate_HRUs.svg
   :align: center
 
-.. automodule:: HRUs
+.. automodule:: geb.HRUs
     :members:

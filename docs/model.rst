@@ -1,5 +1,5 @@
 Model
 #################
 
-.. automodule:: model
+.. automodule:: geb.model
     :members:

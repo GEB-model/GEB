@@ -1,5 +1,5 @@
 Report
 ########
 
-.. automodule:: reporter
+.. automodule:: geb.reporter
     :members:

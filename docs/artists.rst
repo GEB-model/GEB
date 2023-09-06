@@ -1,5 +1,5 @@
 Artists
 #################
 
-.. automodule:: artists
+.. automodule:: geb.artists
     :members:

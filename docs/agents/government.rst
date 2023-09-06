@@ -1,5 +1,5 @@
 Government
 ##########
 
-.. automodule:: agents.government
+.. automodule:: geb.agents.government
     :members:
