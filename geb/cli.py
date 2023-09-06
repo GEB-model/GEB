@@ -233,8 +233,8 @@ def build(data_libs, config, build_config, working_directory):
     )
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
-@click.option('--config', '-c', default='models/sandbox.yml', help="Path of the model configuration file.")
+@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
 @click.option('--build-update', '-b', default='build_update.yml', help="Path of the model build update configuration file.")
 @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
 def update(data_libs, config, build_update, working_directory):
