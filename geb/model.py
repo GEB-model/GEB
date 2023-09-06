@@ -41,12 +41,12 @@ class GEBModel(ABM_Model, CWatM_Model):
     """
 
     description = """GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.\nGEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail. The model does so by coupling an agent-based model which simulates millions individual people or households and a hydrological model. While the model can be expanded to other agents and environmental interactions, we focus on farmers, high-level agents, irrigation behaviour and land management for now."""
-    def __init__(self, GEB_config_path: str, study_area: dict, scenario: str, switch_crops: bool=False, use_gpu: bool=False, coordinate_system: str='WGS84'):
+    def __init__(self, GEB_config_path: str, study_area: dict, scenario: str, switch_crops: bool=False, use_gpu: bool=False, gpu_device=0, coordinate_system: str='WGS84'):
         self.use_gpu = use_gpu
         self.scenario = scenario
         self.switch_crops = switch_crops
         if self.use_gpu:
-            cp.cuda.Device(self.args.gpu_device).use()
+            cp.cuda.Device(gpu_device).use()
         
         self.config = self.setup_config(GEB_config_path)
 

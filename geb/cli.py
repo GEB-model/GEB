@@ -152,8 +152,10 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, gui, no_
     model_params = {
         "GEB_config_path": config,
         "use_gpu": use_gpu,
+        "gpu_device": gpu_device,
         "scenario": scenario,
-        "study_area": study_area
+        "study_area": study_area,
+        "switch_crops": switch_crops,
     }
 
     if not gui:
