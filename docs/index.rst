@@ -13,8 +13,9 @@ GEB aims to simulate both environment, for now the hydrological system, the indi
 Building on the shoulders of giants
 ----------------------------------------
 GEB builds on, couples and extends several models.
-- The hydrological component of GEB is mainly build on the `CWatM model <https://cwatm.iiasa.ac.at/>`_.
-- The agent-based component of GEB extends the `ADOPT model <https://vu-ivm.github.io/WCR-models-and-data/models/ADOPT/index.html>`_
+
+* The hydrological component of GEB is mainly build on the `CWatM model <https://cwatm.iiasa.ac.at/>`_.
+* The agent-based component of GEB extends the `ADOPT model <https://vu-ivm.github.io/WCR-models-and-data/models/ADOPT/index.html>`_
 
 The figure below shows a schematic overview of the model. The lower part of the figure shows the hydrological model, CWatM, while the upper part shows the agent-based model. Both models are imported in a single file and run iteratively at a daily timestep.
 
