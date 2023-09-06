@@ -28,7 +28,6 @@ The figure below shows a schematic overview of the model. The lower part of the 
   Configuration <configuration>
   Preprocessing <preprocessing>
   Running the model <running>
-  Farm-level HRUs <HRUs>
 
 .. toctree::
   :maxdepth: 1
@@ -46,6 +45,7 @@ The figure below shows a schematic overview of the model. The lower part of the 
   Model <model>
   CWatM Model <cwatm_model>
   Report <report>
+  Farm-level HRUs <HRUs>
   Artists <artists>
 
 .. toctree::
