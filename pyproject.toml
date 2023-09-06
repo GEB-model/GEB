@@ -36,7 +36,7 @@ dynamic = ['version', 'description']
 [project.optional-dependencies]
 test = [
 ]
-doc = [
+docs = [
     "sphinx",
     "sphinx-autodoc-typehints",
     "sphinxcontrib-autoprogram",
