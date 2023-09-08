@@ -17,7 +17,12 @@ jobs:
         python-version: 3.11
     - name: Install dependencies
       run: |
+        sudo apt-add-repository ppa:ubuntugis/ubuntugis-unstable
+        sudo apt-get update
+        sudo apt-get install gdal-bin libgdal-dev
+        pip install GDAL==$(gdal-config --version)
+        git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
         python -m pip install --upgrade pip
-        pip install .
+        pip install .[tests]
     - name: Run tests
       run: pytest
