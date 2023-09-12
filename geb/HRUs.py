@@ -470,14 +470,23 @@ class Data:
     def load_forcing(self):
         # loading forcing data
         self.grid.hurs_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'hurs.nc')['hurs']
+        assert self.grid.hurs_ds.y[0] > self.grid.hurs_ds.y[-1]
         self.grid.pr_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'pr.nc')['pr']
+        assert self.grid.pr_ds.y[0] > self.grid.pr_ds.y[-1]
         self.grid.ps_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'ps.nc')['ps'] 
+        assert self.grid.ps_ds.y[0] > self.grid.ps_ds.y[-1]
         self.grid.rlds_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'rlds.nc')['rlds']
+        assert self.grid.rlds_ds.y[0] > self.grid.rlds_ds.y[-1]
         self.grid.rsds_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'rsds.nc')['rsds']
+        assert self.grid.rsds_ds.y[0] > self.grid.rsds_ds.y[-1]
         self.grid.tas_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'tas.nc')['tas']
+        assert self.grid.tas_ds.y[0] > self.grid.tas_ds.y[-1]
         self.grid.tasmax_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'tasmax.nc')['tasmax']
+        assert self.grid.tasmax_ds.y[0] > self.grid.tasmax_ds.y[-1]
         self.grid.tasmin_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'tasmin.nc')['tasmin']
+        assert self.grid.tasmin_ds.y[0] > self.grid.tasmin_ds.y[-1]
         self.grid.sfcWind_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'wind.nc')['wind']
+        assert self.grid.sfcWind_ds.y[0] > self.grid.sfcWind_ds.y[-1]
 
     def load_water_demand(self):
         self.model.domestic_water_consumption_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'water_demand' / 'domestic_water_consumption.nc')
