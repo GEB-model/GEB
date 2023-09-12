@@ -1472,9 +1472,9 @@ class Farmers(AgentBaseClass):
             poly_yield_probability= np.poly1d(coefficients_yield_probability)
             group_yield_probability_relation.append(poly_yield_probability)
 
-            slope_yield, intercept_yield, r_value_yield, p_value_yield, std_err_yield = linregress(row1, row3)
 
             if len(masked_unique_yearly_yield_ratio[0,:]) > 20:
+                slope_yield, intercept_yield, r_value_yield, p_value_yield, std_err_yield = linregress(row1, row3)
                 yield_probability_R2_scipy.append(r_value_yield**2)
                 yield_probability_p_scipy.append(p_value_yield)
 
@@ -1598,6 +1598,7 @@ class Farmers(AgentBaseClass):
 
             # Take the mean of the growing months and change the sign to fit the GEV distribution 
             cum_SPEI_latest_harvest = np.mean(self.monthly_SPEI[harvesting_farmers, :int((crop_age[0] / 30))], axis=1) * -1
+            
 
             ## Add the yield ratio, precipitation and the crop age to the array corresponding to the current season. Precipitation is already converted to daily rainfall
             if self.current_season_idx == 0:
