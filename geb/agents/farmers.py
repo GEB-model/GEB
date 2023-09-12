@@ -33,6 +33,7 @@ from honeybees.library.neighbors import find_neighbors
 
 from ..data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_economic_data, load_sprinkler_prices
 from .decision_module import DecisionModule
+from .general import AgentArray
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -158,7 +159,6 @@ class Farmers(AgentBaseClass):
         self.absolute_threshold = self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['event_perception']['absolute_threshold']
        
         # Assign risk aversion sigma, time discounting preferences, expendature cap 
-        self.sigma = self.model.config['agent_settings']['expected_utility']['decisions']['risk_aversion']
         self.r_time = self.model.config['agent_settings']['expected_utility']['decisions']['time_discounting']
         self.expenditure_cap = self.model.config['agent_settings']['expected_utility']['decisions']['expenditure_cap']
 
@@ -810,6 +810,9 @@ class Farmers(AgentBaseClass):
 
             self.locations = pixels_to_coords(pixels + .5, self.var.gt)
 
+            self.risk_aversion = AgentArray(n=self.n, max_size=self.max_n, dtype=np.float32, fill_value=np.nan)
+            self.risk_aversion[:] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'risk_aversion.npz'))['data']
+
             # Load the region_code of each farmer.
             self.region_id = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'region_id.npz'))['data']
 
@@ -1429,13 +1432,13 @@ class Farmers(AgentBaseClass):
         mask_rows = np.any((unique_yearly_profits != 0), axis=1) & np.any((unique_yearly_yield_ratio != 0), axis=1) & np.any((unique_SPEI_probability != 0), axis=1)
         unique_yearly_profits_mask = unique_yearly_profits[mask_rows]
         unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio[mask_rows]
-        unique_SPEI_probability_mask= unique_SPEI_probability[mask_rows]
+        unique_SPEI_probability_mask = unique_SPEI_probability[mask_rows]
         
         # Mask columns with only zeros
         mask_columns = np.any((unique_yearly_profits_mask != 0), axis=0) & np.any((unique_yearly_yield_ratio_mask != 0), axis=0) & np.any((unique_SPEI_probability_mask != 0), axis=0)
         unique_yearly_profits_mask = unique_yearly_profits_mask[:,mask_columns]
         unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio_mask[:,mask_columns]
-        unique_SPEI_probability_mask= unique_SPEI_probability_mask[:,mask_columns]
+        unique_SPEI_probability_mask = unique_SPEI_probability_mask[:,mask_columns]
 
         ## Mask the minimum and the maximum value 
         arrays = [unique_yearly_profits_mask, unique_yearly_yield_ratio_mask, unique_SPEI_probability_mask]
@@ -1573,7 +1576,7 @@ class Farmers(AgentBaseClass):
             if self.model.use_gpu:
                 harvested_area = harvested_area.get()
             harvested_crops = self.var.crop_map[harvest]
-            max_yield_per_crop = np.take(self.crop_variables['reference_yield_kg_m2'], harvested_crops)
+            max_yield_per_crop = np.take(self.crop_variables['reference_yield_kg_m2'].values, harvested_crops)
       
             crop_prices = self.crop_prices[1][self.crop_prices[0].get(self.model.current_time)]
             assert not np.isnan(crop_prices).any()
@@ -1932,7 +1935,7 @@ class Farmers(AgentBaseClass):
         decision_params = {'loan_duration': loan_duration,  
                         'expenditure_cap': self.expenditure_cap, 
                         'n_agents':  self.n, 
-                        'sigma': self.sigma,
+                        'sigma': self.risk_aversion,
                         'p_droughts': 1 / self.p_droughts[:-1], 
                         'total_profits': total_profits,
                         'total_profits_adaptation': total_profits_adaptation,
