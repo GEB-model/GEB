@@ -25,7 +25,7 @@ class AgentArray(np.ndarray):
         elif input_array is not None and dtype is not None:
             raise ValueError("Only one of input_array or dtype can be given")
         
-        if input_array:
+        if input_array is not None:
             if n is None and max_size is None:
                 raise ValueError("Either n or max_size must be given")
             elif n is not None and max_size is not None:
@@ -56,13 +56,21 @@ class AgentArray(np.ndarray):
         self._n = getattr(obj, 'n', None)
 
     def __array_function__(self, func, types, args, kwargs):
+        # Convert args to ndarray before calling function
         args_ = []
         for arg in args:
             if isinstance(arg, AgentArray):
                 args_.append(arg[:arg.n].view(np.ndarray))
             else:
                 args_.append(arg)
-        return func(*args_, **kwargs)
+        # Convert kwargs to ndarray before calling function
+        kwargs_ = {}
+        for key, value in kwargs.items():
+            if isinstance(value, AgentArray):
+                kwargs_[key] = value[:value.n].view(np.ndarray)
+            else:
+                kwargs_[key] = value
+        return func(*args_, **kwargs_)
 
     def __getattribute__(self, name):
         if name in AgentArray.implemented_methods:

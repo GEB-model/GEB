@@ -1,10 +1,14 @@
 import numpy as np
 
-from geb.agents import AgentArray
+from geb.agents.general import AgentArray
     
 def test_agent_array():
     # Test initialization with max_size
     a = AgentArray(np.array([1, 2, 3]), max_size=10)
+    a_ = AgentArray(dtype=np.int64, n=3, max_size=10)
+    a_[:3] = np.array([1, 2, 3])
+    assert np.array_equal(a, a_)
+
     assert np.array_equal(a, np.array([1, 2, 3]))
     assert a.max_size == 10
     assert a.n == 3
