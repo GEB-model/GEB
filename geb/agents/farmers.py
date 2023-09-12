@@ -137,6 +137,10 @@ class Farmers(AgentBaseClass):
         "_yield_ratios_drought_event",
     ]
     __slots__.extend(agent_attributes)
+    agent_attributes_new = [
+        "risk_aversion"
+    ]
+    __slots__.extend(agent_attributes_new)
 
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
@@ -772,6 +776,11 @@ class Farmers(AgentBaseClass):
                     break
         return farmer_is_in_command_area
 
+    def get_max_n(self, n):
+        max_n = math.ceil(n * (1 + self.redundancy))
+        assert max_n < 4294967295 # max value of uint32, consider replacing with uint64
+        return max_n
+
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
         """
@@ -781,6 +790,13 @@ class Farmers(AgentBaseClass):
                 fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npz")
                 values = np.load(fp)['data']
                 setattr(self, attribute, values)
+            for attribute in self.agent_attributes_new:
+                fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npz")
+                values = np.load(fp)['data']
+                if not hasattr(self, 'max_n'):
+                    self.max_n = self.get_max_n(values.shape[0])
+                values = AgentArray(values, max_size=self.max_n)
+                setattr(self, attribute, values)
             self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
             self.max_n = self._locations.shape[0]
         else:
@@ -788,8 +804,7 @@ class Farmers(AgentBaseClass):
 
             # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
             self.n = np.unique(farms[farms != -1]).size
-            self.max_n = math.ceil(self.n * (1 + self.redundancy))
-            assert self.max_n < 4294967295 # max value of uint32, consider replacing with uint64
+            self.max_n = self.get_max_n(self.n)
 
             # The code below obtains the coordinates of the farmers' locations.
             # First the horizontal and vertical indices of the pixels that are not -1 are obtained. Then, for each farmer the
@@ -1475,9 +1490,8 @@ class Farmers(AgentBaseClass):
             poly_yield_probability= np.poly1d(coefficients_yield_probability)
             group_yield_probability_relation.append(poly_yield_probability)
 
-            slope_yield, intercept_yield, r_value_yield, p_value_yield, std_err_yield = linregress(row1, row3)
-
             if len(masked_unique_yearly_yield_ratio[0,:]) > 20:
+                slope_yield, intercept_yield, r_value_yield, p_value_yield, std_err_yield = linregress(row1, row3)
                 yield_probability_R2_scipy.append(r_value_yield**2)
                 yield_probability_p_scipy.append(p_value_yield)
 
@@ -1914,9 +1928,9 @@ class Farmers(AgentBaseClass):
                 inverse_coefficients = [1/a, -b/a]
                 inverse_polynomial = np.poly1d(inverse_coefficients)
             else:
-                print("The relationship is not invertible, as the slope is zero.")
+                print("The relationship is not invertible, as the slope is zero. Perhaps the spinup period is too short?")
             # Calculate the yield ratio per farmer, placeholder name 
-            yield_ratios[i,:] = inverse_polynomial(1/self.p_droughts) 
+            yield_ratios[i, :] = inverse_polynomial(1 / self.p_droughts) 
         
         # Change all negative yield ratios to 0 
         yield_ratios[yield_ratios < 0] = 0
