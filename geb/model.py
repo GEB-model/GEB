@@ -54,6 +54,8 @@ class GEBModel(ABM_Model, CWatM_Model):
         if scenario == 'spinup':
             end_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
             current_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
+            if end_time.year - current_time.year < 10:
+                print('Spinup time is less than 10 years. This is not recommended and may lead to issues later.')
             self.load_initial_data = False
             self.save_initial_data = self.config['general']['export_inital_on_spinup']
             self.initial_conditions = []
@@ -179,6 +181,11 @@ class GEBModel(ABM_Model, CWatM_Model):
                     np.savez_compressed(fp, data=values)
 
             for attribute in self.agents.farmers.agent_attributes:
+                fp = Path(self.initial_conditions_folder, f"farmers.{attribute}.npz")
+                values = attrgetter(attribute)(self.agents.farmers)
+                np.savez_compressed(fp, data=values)
+            
+            for attribute in self.agents.farmers.agent_attributes_new:
                 fp = Path(self.initial_conditions_folder, f"farmers.{attribute}.npz")
                 values = attrgetter(attribute)(self.agents.farmers)
                 np.savez_compressed(fp, data=values)

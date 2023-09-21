@@ -37,6 +37,7 @@ import xarray as xr
 
 from ..data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_economic_data
 from .decision_module import DecisionModule
+from .general import AgentArray
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -140,6 +141,10 @@ class Farmers(AgentBaseClass):
         "_yield_ratios_drought_event",
     ]
     __slots__.extend(agent_attributes)
+    agent_attributes_new = [
+        "risk_aversion"
+    ]
+    __slots__.extend(agent_attributes_new)
 
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
@@ -159,7 +164,6 @@ class Farmers(AgentBaseClass):
         self.absolute_threshold = self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['event_perception']['absolute_threshold']
        
         # Assign risk aversion sigma, time discounting preferences, expendature cap 
-        self.sigma = self.model.config['agent_settings']['expected_utility']['decisions']['risk_aversion']
         self.r_time = self.model.config['agent_settings']['expected_utility']['decisions']['time_discounting']
         self.expenditure_cap = self.model.config['agent_settings']['expected_utility']['decisions']['expenditure_cap']
 
@@ -756,6 +760,11 @@ class Farmers(AgentBaseClass):
                     break
         return farmer_is_in_command_area
 
+    def get_max_n(self, n):
+        max_n = math.ceil(n * (1 + self.redundancy))
+        assert max_n < 4294967295 # max value of uint32, consider replacing with uint64
+        return max_n
+
     def initiate_agents(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted. 
         """
@@ -765,6 +774,13 @@ class Farmers(AgentBaseClass):
                 fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npz")
                 values = np.load(fp)['data']
                 setattr(self, attribute, values)
+            for attribute in self.agent_attributes_new:
+                fp = os.path.join(self.model.initial_conditions_folder, f"farmers.{attribute}.npz")
+                values = np.load(fp)['data']
+                if not hasattr(self, 'max_n'):
+                    self.max_n = self.get_max_n(values.shape[0])
+                values = AgentArray(values, max_size=self.max_n)
+                setattr(self, attribute, values)
             self.n = np.where(np.isnan(self._locations[:,0]))[0][0]  # first value where location is not defined (np.nan)
             self.max_n = self._locations.shape[0]
         else:
@@ -772,8 +788,7 @@ class Farmers(AgentBaseClass):
 
             # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
             self.n = np.unique(farms[farms != -1]).size
-            self.max_n = math.ceil(self.n * (1 + self.redundancy))
-            assert self.max_n < 4294967295 # max value of uint32, consider replacing with uint64
+            self.max_n = self.get_max_n(self.n)
 
             # The code below obtains the coordinates of the farmers' locations.
             # First the horizontal and vertical indices of the pixels that are not -1 are obtained. Then, for each farmer the
@@ -793,6 +808,9 @@ class Farmers(AgentBaseClass):
                 setattr(self, attribute, np.full(shape, self.agent_attributes_meta[attribute]["nodata"], dtype=self.agent_attributes_meta[attribute]["dtype"]))
 
             self.locations = pixels_to_coords(pixels + .5, self.var.gt)
+
+            self.risk_aversion = AgentArray(n=self.n, max_size=self.max_n, dtype=np.float32, fill_value=np.nan)
+            self.risk_aversion[:] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'risk_aversion.npz'))['data']
 
             # Load the region_code of each farmer.
             self.region_id = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'region_id.npz'))['data']
@@ -1395,12 +1413,12 @@ class Farmers(AgentBaseClass):
         # Mask rows that consist only of 0s --> no relation possible 
         mask_rows = np.any((unique_yearly_yield_ratio != 0), axis=1) & np.any((unique_SPEI_probability != 0), axis=1)
         unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio[mask_rows]
-        unique_SPEI_probability_mask= unique_SPEI_probability[mask_rows]
+        unique_SPEI_probability_mask = unique_SPEI_probability[mask_rows]
         
         # Mask columns with only zeros
         mask_columns = np.any((unique_yearly_yield_ratio_mask != 0), axis=0) & np.any((unique_SPEI_probability_mask != 0), axis=0)
         unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio_mask[:,mask_columns]
-        unique_SPEI_probability_mask= unique_SPEI_probability_mask[:,mask_columns]
+        unique_SPEI_probability_mask = unique_SPEI_probability_mask[:,mask_columns]
 
         ## Mask the minimum and the maximum value 
         arrays = [ unique_yearly_yield_ratio_mask, unique_SPEI_probability_mask]
@@ -1545,7 +1563,7 @@ class Farmers(AgentBaseClass):
             if self.model.use_gpu:
                 harvested_area = harvested_area.get()
             harvested_crops = self.var.crop_map[harvest]
-            max_yield_per_crop = np.take(self.crop_variables['reference_yield_kg_m2'], harvested_crops)
+            max_yield_per_crop = np.take(self.crop_variables['reference_yield_kg_m2'].values, harvested_crops)
       
             crop_prices = self.crop_prices[1][self.crop_prices[0].get(self.model.current_time)]
             assert not np.isnan(crop_prices).any()
@@ -1876,7 +1894,7 @@ class Farmers(AgentBaseClass):
             else:
                 raise AssertionError("The relationship is not invertible, as the slope is zero.")
             # Calculate the yield ratio per farmer, placeholder name 
-            yield_ratios[i,:] = inverse_polynomial(1/self.p_droughts) 
+            yield_ratios[i, :] = inverse_polynomial(1 / self.p_droughts) 
         
         # Change all negative yield ratios to 0 
         yield_ratios[yield_ratios < 0] = 0
@@ -1895,7 +1913,7 @@ class Farmers(AgentBaseClass):
         decision_params = {'loan_duration': loan_duration,  
                         'expenditure_cap': self.expenditure_cap, 
                         'n_agents':  self.n, 
-                        'sigma': self.sigma,
+                        'sigma': self.risk_aversion,
                         'p_droughts': 1 / self.p_droughts[:-1], 
                         'total_profits': total_profits,
                         'total_profits_adaptation': total_profits_adaptation,

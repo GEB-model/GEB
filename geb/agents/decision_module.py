@@ -148,10 +148,7 @@ class DecisionModule:
 
         # Calculate expected utility
         ## NPV_Summed here is the wealth and income minus the expected damages of a certain probabilty event 
-        if sigma == 1:
-            EU_store = np.log(NPV_summed)
-        else:
-            EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+        EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
 
         # Use composite trapezoidal rule integrate EU over event probability
         ## Here all 
@@ -250,11 +247,8 @@ class DecisionModule:
             NPV_adapt_no_flood = np.sum(NPV_adapt_no_flood / (1 + r)**t_agent)
 
             # Apply utility function to NPVs
-            if sigma == 1:
-                EU_adapt_no_flood = np.log(NPV_adapt_no_flood)
-            else:
-                EU_adapt_no_flood = (NPV_adapt_no_flood **
-                                    (1 - sigma)) / (1 - sigma)
+
+            EU_adapt_no_flood = (NPV_adapt_no_flood ** (1 - sigma[i])) / (1 - sigma[i])
 
             # Calculate NPVs outcomes for each flood event
             fill_value = total_profits_adaptation_i.astype(np.float32).reshape((p_droughts.size, 1))
@@ -271,10 +265,7 @@ class DecisionModule:
             #         f'Warning, {np.sum(NPV_adapt_summed == 1)} negative NPVs encountered')
 
             # Calculate expected utility
-            if sigma == 1:
-                EU_adapt_flood = np.log(NPV_adapt_summed)
-            else:
-                EU_adapt_flood = (NPV_adapt_summed ** (1 - sigma)) / (1 - sigma)
+            EU_adapt_flood = (NPV_adapt_summed ** (1 - sigma[i])) / (1 - sigma[i])
 
             # Store results
             EU_adapt_dict[1:EU_adapt_flood.size + 1] = EU_adapt_flood
