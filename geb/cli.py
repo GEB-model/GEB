@@ -16,6 +16,7 @@ from hydromt.config import configread
 import hydromt_geb
 import geb
 from geb.model import GEBModel
+from geb.calibrate import calibrate as geb_calibrate
 
 faulthandler.enable()
 
@@ -86,7 +87,7 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
 
 
     MODEL_NAME = 'GEB'
-    config = yaml.load(open(config, 'r'), Loader=yaml.FullLoader)
+    config = parse_config(config)
     study_area = get_study_area(config['general']['input_folder'])
 
     series_to_plot = [
@@ -199,6 +200,17 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
         from numba import cuda 
         device = cuda.get_current_device()
         device.reset()
+
+@main.command()
+@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
+@click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
+def calibrate(config, working_directory):
+    
+    # set the working directory
+    os.chdir(working_directory)
+
+    config = parse_config(config)
+    geb_calibrate(config, working_directory)
 
 @main.command()
 @click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")

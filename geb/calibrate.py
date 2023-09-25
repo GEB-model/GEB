@@ -12,74 +12,41 @@ Félix-Antoine Fortin, François-Michel De Rainville, Marc-André Gardner, Marc 
 The calibration tool was created by Hylke Beck 2014 (JRC, Princeton) hylkeb@princeton.edu
 Thanks Hylke for making it available for use and modification
 Modified by Peter Burek and Jens de Bruijn
-
-The submodule Hydrostats was created 2011 by:
-Sat Kumar Tomer (modified by Hylke Beck)
-Please see his book "Python in Hydrology"   http://greenteapress.com/pythonhydro/pythonhydro.pdf
-
 """
 import os
-import json
 import shutil
-import hydroStats
 import array
 import random
 import string
 import numpy as np
+from copy import deepcopy
 import signal
 import pandas as pd
 from datetime import timedelta
 import yaml
 import geopandas as gpd
 from deap import creator, base, tools, algorithms
-from functools import wraps
+from functools import wraps, partial
 
 import multiprocessing
 from subprocess import Popen, PIPE
 
 import pickle
-from calconfig import config, args
 
-calibration_config = config['calibration']
-
-CALIBRATION_VALUES = {
-	'KGE': 1,
-	'irrigation_wells': 1
-}
-
-calibration_path = calibration_config['path']
-os.makedirs(calibration_path, exist_ok=True)
-runs_path = os.path.join(calibration_path, 'runs')
-os.makedirs(runs_path, exist_ok=True)
-logs_path = os.path.join(calibration_path, 'logs')
-os.makedirs(logs_path, exist_ok=True)
-
-use_multiprocessing = calibration_config['DEAP']['use_multiprocessing']
-
-select_best_n_individuals = calibration_config['DEAP']['select_best']
-
-ngen = calibration_config['DEAP']['ngen']
-mu = calibration_config['DEAP']['mu']
-lambda_ = calibration_config['DEAP']['lambda_']
-SCENARIO = calibration_config['scenario']
-dischargetss = os.path.join(SCENARIO, 'var.discharge_daily.tss')
-
-target_variables = calibration_config['target_variables']
-
-# Load observed streamflow
-gauges = [tuple(gauge) for gauge in config['general']['gauges']]
-observed_streamflow = {}
-for gauge in gauges:
-	streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauge[0]} {gauge[1]}.csv")
-	streamflow_data = pd.read_csv(streamflow_path, sep=",", parse_dates=True, index_col=0)
-	observed_streamflow[gauge] = streamflow_data["flow"]
-	# drop all rows with NaN values
-	observed_streamflow[gauge] = observed_streamflow[gauge].dropna()
-	observed_streamflow[gauge].name = 'observed'
-	assert (observed_streamflow[gauge] >= 0).all()
-
-# with open(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
-# 	irrigation_source_key = json.load(f)
+def KGE(s, o):
+    """
+    Kling Gupta Efficiency (Kling et al., 2012, http://dx.doi.org/10.1016/j.jhydrol.2012.01.011)
+    input:
+        s: simulated
+        o: observed
+    output:
+        KGE: Kling Gupta Efficiency
+    """
+    B = np.mean(s) / np.mean(o)
+    y = (np.std(s) / np.mean(s)) / (np.std(o) / np.mean(o))
+    r = np.corrcoef(o, s)[0,1]
+    KGE = 1 - np.sqrt((r - 1) ** 2 + (B - 1) ** 2 + (y - 1) ** 2)
+    return KGE
 
 def get_observed_well_ratio():
 	observed_irrigation_sources = gpd.read_file(os.path.join(config['general']['original_data'], 'census', 'output', 'irrigation_source_2010-2011.geojson')).to_crs(3857)
@@ -139,9 +106,9 @@ def multi_set(dict_obj, value, *attrs):
 	d[attrs[-1]] = value
 
 def get_irrigation_wells_score(run_directory, individual):
-	tehsils = np.load(os.path.join(run_directory, SCENARIO, 'tehsil', '20110101.npy'))
-	field_size = np.load(os.path.join(run_directory, SCENARIO, 'field_size', '20110101.npy'))
-	irrigation_source = np.load(os.path.join(run_directory, SCENARIO, 'irrigation_source', '20110101.npy'))
+	tehsils = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'tehsil', '20110101.npy'))
+	field_size = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'field_size', '20110101.npy'))
+	irrigation_source = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'irrigation_source', '20110101.npy'))
 	well_irrigated = np.isin(irrigation_source, [irrigation_source_key['well'], irrigation_source_key['tubewell']])
 	# Calculate the ratio of farmers with a well per tehsil
 	farmers_per_tehsil = np.bincount(tehsils)
@@ -156,12 +123,12 @@ def get_irrigation_wells_score(run_directory, individual):
 	irrigation_well_score = 1 - abs(((ratio_holdings_with_well_simulated - ratio_holdings_with_well_observed) / ratio_holdings_with_well_observed))
 	irrigation_well_score = float(np.mean(irrigation_well_score))
 	print("run_id: " + str(individual.label)+", IWS: "+"{0:.3f}".format(irrigation_well_score))
-	with open(os.path.join(calibration_path,"IWS_log.csv"), "a") as myfile:
+	with open(os.path.join(config['calibration']['path'],"IWS_log.csv"), "a") as myfile:
 		myfile.write(str(individual.label)+"," + str(irrigation_well_score)+"\n")
 
 	return irrigation_well_score
 
-def get_KGE_score(run_directory, individual):
+def get_KGE_score(run_directory, individual, config):
     # Get the path of the simulated streamflow file
 	Qsim_tss = os.path.join(run_directory, dischargetss)
 	
@@ -194,25 +161,32 @@ def get_KGE_score(run_directory, individual):
 		# Calculate the monthly mean of the streamflow data
 		streamflows = [streamflows.resample('M').mean() for streamflows in streamflows]
 
-	KGEs = [hydroStats.KGE(s=streamflows['simulated'], o=streamflows['observed']) for streamflows in streamflows]
+	KGEs = [KGE(s=streamflows['simulated'], o=streamflows['observed']) for streamflows in streamflows]
 	assert KGEs  # Check if KGEs is not empty
 	KGE = np.mean(KGEs)
 	
 	print("run_id: " + str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
-	with open(os.path.join(calibration_path,"KGE_log.csv"), "a") as myfile:
+	with open(os.path.join(config['calibration']['path'],"KGE_log.csv"), "a") as myfile:
 		myfile.write(str(individual.label)+"," + str(KGE)+"\n")
 
 	return KGE
 
 
 @handle_ctrl_c
-def run_model(individual):
+def run_model(individual, config):
 	"""
 	This function takes an individual from the population and runs the model with the corresponding parameters.
 	It first checks if the run directory already exists and whether the model was run before. 
 	If the directory exists and the model was run before, it skips running the model. 
 	Otherwise, it runs the model and saves the results to the run directory.
 	"""
+
+	os.makedirs(config['calibration']['path'], exist_ok=True)
+	runs_path = os.path.join(config['calibration']['path'], 'runs')
+	os.makedirs(runs_path, exist_ok=True)
+	logs_path = os.path.join(config['calibration']['path'], 'logs')
+	os.makedirs(logs_path, exist_ok=True)
+	
 	# Define the directory where the model run will be stored
 	run_directory = os.path.join(runs_path, individual.label)
 
@@ -235,11 +209,10 @@ def run_model(individual):
 		individual_parameter_ratio = individual.tolist()
 		# Assert that all parameter ratios are between 0 and 1
 		assert (np.array(individual_parameter_ratio) >= 0).all() and (np.array(individual_parameter_ratio) <= 1).all()
-		calibration_parameters = calibration_config['parameters']
 		
 		# Create a dictionary of the individual's parameters
 		individual_parameters = {}
-		for i, parameter_data in enumerate(calibration_parameters.values()):
+		for i, parameter_data in enumerate(config['calibration']['parameters'].values()):
 			individual_parameters[parameter_data['variable']] = \
 				parameter_data['min'] + individual_parameter_ratio[i] * (parameter_data['max'] - parameter_data['min'])
 		
@@ -247,18 +220,17 @@ def run_model(individual):
 		config_path = os.path.join(run_directory, 'config.yml')
 		while True:
 			os.mkdir(run_directory)
-			with open(args.config, 'r') as f:
-				template = yaml.load(f, Loader=yaml.FullLoader)
+			template = deepcopy(config)
 
 			# Update the template configuration file with the individual's parameters
-			template['general']['spinup_time'] = calibration_config['spinup_time']
-			template['general']['start_time'] = calibration_config['start_time']
-			template['general']['end_time'] = calibration_config['end_time']
+			template['general']['spinup_time'] = config['calibration']['spinup_time']
+			template['general']['start_time'] = config['calibration']['start_time']
+			template['general']['end_time'] = config['calibration']['end_time']
 
 			template['report'] = {}
 			template['report_cwatm'] = {}
 			
-			template.update(target_variables)
+			template.update(config['calibration']['target_variables'])
 
 			# loop through individual parameters and set them in the template
 			for parameter, value in individual_parameters.items():
@@ -276,7 +248,7 @@ def run_model(individual):
 			# acquire lock to check and set GPU usage
 			lock.acquire()
 			if current_gpu_use_count.value < n_gpu_spots:
-				use_gpu = int(current_gpu_use_count.value / calibration_config['DEAP']['models_per_gpu'])
+				use_gpu = int(current_gpu_use_count.value / config['calibration']['DEAP']['models_per_gpu'])
 				current_gpu_use_count.value += 1
 				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 			else:
@@ -284,11 +256,11 @@ def run_model(individual):
 				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 			lock.release()
 
-			def run_model(scenario):
+			def run_model_scenario(scenario):
 				# build the command to run the script, including the use of a GPU if specified
-				command = f"python run.py --config {config_path} --scenario {scenario}"
+				command = ["geb", "run", "--config", config_path, "--scenario", scenario]
 				if use_gpu is not False:
-					command += f' --GPU --gpu_device {use_gpu}'
+					command.extend(["--GPU", "--gpu_device", use_gpu])
 				print(command, flush=True)
 
 				# run the command and capture the output and errors
@@ -315,9 +287,9 @@ def run_model(individual):
 				
 				return p.returncode
 				
-			return_code = run_model('spinup')
+			return_code = run_model_scenario('spinup')
 			if return_code == 0:
-				return_code = run_model(SCENARIO)
+				return_code = run_model_scenario(config['calibration']['scenario'])
 				if return_code == 0:
 					# release the GPU if it was used
 					if use_gpu is not False:
@@ -337,18 +309,18 @@ def run_model(individual):
 				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 
 	scores = []
-	for score in CALIBRATION_VALUES:
+	for score in config['calibration']['calibration_targets']:
 		if score == 'KGE':
-			scores.append(get_KGE_score(run_directory, individual))
+			scores.append(get_KGE_score(run_directory, individual, config))
 		if score == 'irrigation_wells':
 			scores.append(get_irrigation_wells_score(run_directory, individual))
 	return tuple(scores)
 
-def export_front_history(CALIBRATION_VALUES, effmax, effmin, effstd, effavg):
+def export_front_history(config, ngen, effmax, effmin, effstd, effavg):
 	# Save history of the change in objective function scores during calibration to csv file
 	print(">> Saving optimization history (front_history.csv)")
 	front_history = {}
-	for i, calibration_value in enumerate(CALIBRATION_VALUES):
+	for i, calibration_value in enumerate(config['calibration']['calibration_targets']):
 		front_history.update({
 			(calibration_value, 'effmax_R', ): effmax[:, i],
 			(calibration_value, 'effmin_R'): effmin[:, i],
@@ -359,7 +331,7 @@ def export_front_history(CALIBRATION_VALUES, effmax, effmin, effstd, effavg):
 		front_history,
 		index=list(range(ngen))
 	)
-	front_history.to_excel(os.path.join(calibration_path, "front_history.xlsx"))
+	front_history.to_excel(os.path.join(config['calibration']['path'], "front_history.xlsx"))
 
 def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu):
 	# set global variable for each process in the pool:
@@ -375,9 +347,40 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
 	lock = manager_lock
 	current_gpu_use_count = manager_current_gpu_use_count
 
-if __name__ == "__main__":
+def calibrate(config, working_directory):
+	calibration_config = config['calibration']
+
+	config['calibration']['calibration_targets'] = {
+		'KGE': 1,
+		'irrigation_wells': 1
+	}
+
+	use_multiprocessing = calibration_config['DEAP']['use_multiprocessing']
+
+	select_best_n_individuals = calibration_config['DEAP']['select_best']
+
+	ngen = calibration_config['DEAP']['ngen']
+	mu = calibration_config['DEAP']['mu']
+	lambda_ = calibration_config['DEAP']['lambda_']
+	config['calibration']['scenario'] = calibration_config['scenario']
+
+	# Load observed streamflow
+	gauges = [tuple(gauge) for gauge in config['general']['gauges']]
+	observed_streamflow = {}
+	for gauge in gauges:
+		streamflow_path = os.path.join(config['general']['original_data'], 'calibration', 'streamflow', f"{gauge[0]} {gauge[1]}.csv")
+		streamflow_data = pd.read_csv(streamflow_path, sep=",", parse_dates=True, index_col=0)
+		observed_streamflow[gauge] = streamflow_data["flow"]
+		# drop all rows with NaN values
+		observed_streamflow[gauge] = observed_streamflow[gauge].dropna()
+		observed_streamflow[gauge].name = 'observed'
+		assert (observed_streamflow[gauge] >= 0).all()
+
+	# with open(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
+	# 	irrigation_source_key = json.load(f)
+
     # Create the fitness class using DEAP's creator class
-	creator.create("FitnessMulti", base.Fitness, weights=tuple(CALIBRATION_VALUES.values()))
+	creator.create("FitnessMulti", base.Fitness, weights=tuple(config['calibration']['calibration_targets'].values()))
 	
     # Create the individual class using DEAP's creator class
     # The individual class is an array of typecode 'd' with the FitnessMulti class as its fitness attribute
@@ -419,7 +422,9 @@ if __name__ == "__main__":
 
     # Register the evaluation function
     # This function runs the model and returns the fitness value of an individual
-	toolbox.register("evaluate", run_model)
+	partial_run_model_with_extra_arguments = partial(run_model, config=config)
+	
+	toolbox.register("evaluate", partial_run_model_with_extra_arguments)
     
     # Register the crossover function
     # This function mates two individuals using a blend crossover with an alpha value of 0.15
@@ -447,7 +452,6 @@ if __name__ == "__main__":
 	current_gpu_use_count = manager.Value('i', 0)
     # Create a lock for managing access to the shared variable
 	manager_lock = manager.Lock()
-
     # Check if multiprocessing should be used
 	if use_multiprocessing is True:
         # Get the number of CPU cores available for the pool
@@ -475,13 +479,13 @@ if __name__ == "__main__":
 	assert cxpb + mutpb == 1, "cxpb + mutpb must be equal to 1"
 
     # Create arrays to hold statistics about the population
-	effmax = np.full((ngen, len(CALIBRATION_VALUES)), np.nan)
-	effmin = np.full((ngen, len(CALIBRATION_VALUES)), np.nan)
-	effavg = np.full((ngen, len(CALIBRATION_VALUES)), np.nan)
-	effstd = np.full((ngen, len(CALIBRATION_VALUES)), np.nan)
+	effmax = np.full((ngen, len(config['calibration']['calibration_targets'])), np.nan)
+	effmin = np.full((ngen, len(config['calibration']['calibration_targets'])), np.nan)
+	effavg = np.full((ngen, len(config['calibration']['calibration_targets'])), np.nan)
+	effstd = np.full((ngen, len(config['calibration']['calibration_targets'])), np.nan)
 
     # Define the checkpoint file path
-	checkpoint = os.path.join(calibration_path, "checkpoint.pkl")
+	checkpoint = os.path.join(config['calibration']['path'], "checkpoint.pkl")
     # Check if the checkpoint file exists
 	if os.path.exists(os.path.join(checkpoint)):
         # If the checkpoint file exists, load the population and other information from the checkpoint
@@ -494,6 +498,7 @@ if __name__ == "__main__":
 				offspring = cp["offspring"]
 			pareto_front =  cp["pareto_front"]
 	else:
+		os.makedirs(config['calibration']['path'], exist_ok=True)
         # If the checkpoint file does not exist, start from the first generation
 		start_gen = 0
         # Create the initial population
@@ -546,7 +551,7 @@ if __name__ == "__main__":
 
 		# Loop through the different objective functions and calculate some statistics
 		# from the Pareto optimal population
-		for ii in range(len(CALIBRATION_VALUES)):
+		for ii in range(len(config['calibration']['calibration_targets'])):
 			effmax[generation, ii] = np.amax([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 			effmin[generation, ii] = np.amin([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 			effavg[generation, ii] = np.average([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
@@ -564,4 +569,4 @@ if __name__ == "__main__":
 	ctrl_c_entered = False
 	default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
 
-	export_front_history(CALIBRATION_VALUES, effmax, effmin, effstd, effavg)
+	export_front_history(config, ngen, effmax, effmin, effstd, effavg)
