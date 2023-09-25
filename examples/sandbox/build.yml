@@ -264,12 +264,12 @@ setup_well_prices_by_reference_year:
   start_year: 1960
   end_year: 2020
 
-# setup_sprinkler_prices_by_reference_year:
-#   sprinkler_price: 40000
-#   upkeep_price_per_m2: 0
-#   reference_year: 2021
-#   start_year: 1960
-#   end_year: 2020
+setup_drip_irrigation_prices_by_reference_year:
+  drip_irrigation_price: 40000
+  upkeep_price_per_m2: 0
+  reference_year: 2021
+  start_year: 1960
+  end_year: 2020
 
 setup_farmers_simple:
   region_id_column: region_id
