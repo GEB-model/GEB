@@ -192,7 +192,7 @@ class Farmers(AgentBaseClass):
         ).get_data_array())
         
         self.SPEI_map = NetCDFReader(
-            fp=os.path.join(self.model.config['general']['input_folder'] , 'climate' , 'SPEI.nc'),
+            fp=os.path.join(self.model.config['general']['input_folder'] , 'climate' , 'spei.nc'),
             varname= 'spei',
             xmin=self.model.xmin,
             ymin=self.model.ymin,
