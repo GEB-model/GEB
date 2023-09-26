@@ -113,10 +113,17 @@ class CWatMReporter(ABMReporter):
         """
         slicer = re.search('\[([0-9]+)\]$', attr)
         if slicer:
-            array = attrgetter(attr[:slicer.span(0)[0]])(self.model)
-            array = array[int(slicer.group(1))]
+            try:
+                array = attrgetter(attr[:slicer.span(0)[0]])(self.model)
+            except AttributeError:
+                return None
+            else:
+                array = array[int(slicer.group(1))]
         else:
-            array = attrgetter(attr)(self.model)
+            try:
+                array = attrgetter(attr)(self.model)
+            except AttributeError:
+                return None                
         if decompress:
             decompressed_array = self.decompress(attr, array)
             return array, decompressed_array
@@ -217,24 +224,24 @@ class CWatMReporter(ABMReporter):
         for name, values in self.variables.items():
             if isinstance(values, xr.DataArray):
                 values.close()
-                continue
-
-            if isinstance(values[0], Iterable):
-                df = pd.DataFrame.from_dict(
-                    {
-                        k: v
-                        for k, v in zip(self.timesteps, values)
-                    }
-                )
             else:
-                df = pd.DataFrame(values, index=self.timesteps, columns=[name])
-            export_format = self.model.config['report_cwatm'][name]['format']
-            if export_format == 'csv':
-                df.to_csv(os.path.join(self.export_folder, name + '.' + export_format))
-            elif export_format == 'xlsx':
-                df.to_excel(os.path.join(self.export_folder, name + '.' + export_format))
-            else:
-                raise ValueError(f'save_to format {export_format} unknown')
+                if isinstance(values[0], Iterable):
+                    df = pd.DataFrame.from_dict(
+                        {
+                            k: v
+                            for k, v in zip(self.timesteps, values)
+                        }
+                    )
+                else:
+                    df = pd.DataFrame(values, index=self.timesteps, columns=[name])
+                df.index.name = 'time'
+                export_format = self.model.config['report_cwatm'][name]['format']
+                if export_format == 'csv':
+                    df.to_csv(os.path.join(self.export_folder, name + '.' + export_format))
+                elif export_format == 'xlsx':
+                    df.to_excel(os.path.join(self.export_folder, name + '.' + export_format))
+                else:
+                    raise ValueError(f'save_to format {export_format} unknown')
 
 class Reporter:
     """This is the main reporter class for the GEB model. On initialization the ABMReporter and CWatMReporter classes are initalized.
