@@ -180,6 +180,7 @@ class DecisionModule:
         adapted: np.ndarray,
         T: np.ndarray,
         r: float,
+        extra_constraint: np.ndarray,
 
     ) -> np.ndarray:
         '''This function calculates the discounted subjective utility for staying and implementing dry flood proofing measures for each agent.
@@ -220,9 +221,9 @@ class DecisionModule:
         p_droughts = np.sort(p_droughts)
 
         # Identify agents able to afford the adaptation and that have not yet adapted 
-        unconstrained = np.where((profits_no_event * expenditure_cap > total_annual_costs) & (adapted == 0))
+        unconstrained = np.where((profits_no_event * expenditure_cap > total_annual_costs) & (adapted == 0) & extra_constraint)
         # Create a mask to mask all constrained agents 
-        unconstrained_mask = (profits_no_event * expenditure_cap > total_annual_costs) & (adapted == 0)
+        unconstrained_mask = (profits_no_event * expenditure_cap > total_annual_costs) & (adapted == 0) & extra_constraint
 
         # Those who cannot affort it cannot adapt
         EU_adapt[~unconstrained_mask] = -np.inf

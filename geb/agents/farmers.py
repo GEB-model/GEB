@@ -173,7 +173,6 @@ class Farmers(AgentBaseClass):
         self.well_upkeep_price_per_m2 = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'upkeep_prices_well_per_m2.json'))
         self.drip_irrigation_price = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'drip_irrigation_prices.json'))
         self.drip_irrigation_upkeep_per_m2 = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'upkeep_prices_drip_irrigation_per_m2.json'))
-        self.well_investment_time_years = 10
         self.p_droughts = np.array([1000, 500, 250, 100, 50, 25, 10, 5, 2, 1])
 
         self.elevation_subgrid = MapReader(
@@ -407,7 +406,7 @@ class Farmers(AgentBaseClass):
             },
             "_yield_ratios_drought_event": {
                 "dtype": np.float32,
-                "nodata": [-1, -1, -1, -1, -1,-1, -1, -1, -1, -1],
+                "nodata": [-1] * self.p_droughts.size,
             },
         }
         self.initiate_agents()
@@ -836,11 +835,8 @@ class Farmers(AgentBaseClass):
             self.adapted[:,1][np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])] = 1
             # Set how long the agents have adapted somewhere across the lifespan of farmers, would need to be a bit more realistic likely 
             self.time_adapted[self.adapted[:,1] == 1, 1] = np.random.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan'], np.sum(self.adapted[:,1] == 1))
-            
-            #self.irrigation_source = np.zeros(15657)
 
             # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
-
             self.channel_abstraction_m3_by_farmer[:] = 0
             self.reservoir_abstraction_m3_by_farmer[:] = 0
             self.groundwater_abstraction_m3_by_farmer[:] = 0
@@ -1364,11 +1360,6 @@ class Farmers(AgentBaseClass):
                                                            self.GEV_parameters[self.per_harvest_SPEI[:,2] != 0 ,1], 
                                                            self.GEV_parameters[self.per_harvest_SPEI[:,2] != 0 ,2])
         
-        # seasonal_SPEI_probability[self.per_harvest_SPEI[:,0] != 0,0] = norm.cdf(self.per_harvest_SPEI[self.per_harvest_SPEI[:,0] != 0 ,0])
-        # seasonal_SPEI_probability[self.per_harvest_SPEI[:,1] != 0,1] = norm.cdf(self.per_harvest_SPEI[self.per_harvest_SPEI[:,1] != 0 ,1])
-        # seasonal_SPEI_probability[self.per_harvest_SPEI[:,2] != 0,2] = norm.cdf(self.per_harvest_SPEI[self.per_harvest_SPEI[:,2] != 0 ,2])
-        
-
         # Save the average yearly probability in the yearly precipitation probability by summing and dividing through the planting seasons
         nonzero_count = np.count_nonzero(seasonal_SPEI_probability, axis=1)
         nr_planting_seasons = np.where(nonzero_count == 0, 1, nonzero_count)
@@ -1903,7 +1894,7 @@ class Farmers(AgentBaseClass):
 
         self.yield_ratios_drought_event = yield_ratios[:] 
 
-    def adapt_SEUT(self, adaptation_type, annual_cost, loan_duration):
+    def adapt_SEUT(self, adaptation_type, annual_cost, loan_duration, extra_constraint):
         decision_module = DecisionModule(self)
         total_profits, total_profits_adaptation, profits_no_event, profits_no_event_adaptation = self.profits_SEUT(adaptation_type)
 
@@ -1926,6 +1917,7 @@ class Farmers(AgentBaseClass):
                         'time_adapted' : self.time_adapted[:,adaptation_type], 
                         'T': self.decision_horizon, 
                         'r': self.r_time, 
+                        'extra_constraint': extra_constraint,
                         }
 
         # Determine EU of adaptation or doing nothing            
@@ -1951,16 +1943,14 @@ class Farmers(AgentBaseClass):
             adaptation_type = adaptation_type,
             expenditure_cap = self.expenditure_cap,
             total_annual_costs = total_annual_costs,
-            profits_no_event = profits_no_event)
+            profits_no_event = profits_no_event,
+            extra_constraint = extra_constraint)
 
         adaptation_mask = np.logical_or(adapt_due_to_neighbor, EU_adapt_mask)
 
-        # For wells, also check whether the well can reach the groundwater 
-        if adaptation_type == 1:
-            well_depth = 30
-            well_reaches_groundwater = self.groundwater_depth < well_depth
-            # If the well doesnt reach the groundwater, let the farmer not adapt 
-            adaptation_mask = well_reaches_groundwater * adaptation_mask
+        # For sprinkler irrigation, check whether agents have access to irrigation water 
+        if adaptation_type == 0:
+            print('test')
 
         # Change the adaptation status of wells (1) to 1 if mask is true 
         self.adapted[adaptation_mask, adaptation_type] = 1
@@ -1988,8 +1978,11 @@ class Farmers(AgentBaseClass):
         self.adapted[:,adaptation_type][self.time_adapted[:,adaptation_type] == self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan']] = 0
         self.time_adapted[:,adaptation_type][self.time_adapted[:,adaptation_type] == self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan']] = -1 
         
+        # Farmers have to have an irrigation source for drip irrigation 
+        extra_constraint = self.irrigation_source != 0
+
         # Calculate which farmers will adapt
-        adaptation_mask = self.adapt_SEUT(adaptation_type, annual_cost, loan_duration)
+        adaptation_mask = self.adapt_SEUT(adaptation_type, annual_cost, loan_duration, extra_constraint)
         
         ## Print the percentage of adapted households 
         percentage_adapted = round(np.sum(self.adapted[:,0])/ len(self.adapted[:,0]) * 100, 2)
@@ -2018,8 +2011,13 @@ class Farmers(AgentBaseClass):
         self.adapted[:,adaptation_type][self.time_adapted[:,adaptation_type] == self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan']] = 0
         self.time_adapted[:,adaptation_type][self.time_adapted[:,adaptation_type] == self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan']] = -1 
         
+        # If the well doesnt reach the groundwater, farmer wont adapt
+        well_depth = 30
+        well_reaches_groundwater = self.groundwater_depth < well_depth
+        extra_constraint = well_reaches_groundwater
+    
         # Calculate which farmers will adapt
-        adaptation_mask = self.adapt_SEUT(adaptation_type, annual_cost, loan_duration)
+        adaptation_mask = self.adapt_SEUT(adaptation_type, annual_cost, loan_duration, extra_constraint)
         
         ## Print the percentage of adapted households 
         percentage_adapted = round(np.sum(self.adapted[:,adaptation_type])/ len(self.adapted[:,adaptation_type]) * 100, 2)
@@ -2033,7 +2031,7 @@ class Farmers(AgentBaseClass):
         ## Reduce the wealth of the farmer by the annual cost of the adaptation
         self.disposable_income[self.time_adapted[:,adaptation_type] != -1] -= annual_cost[self.time_adapted[:,adaptation_type] != -1]
 
-    def compare_neighbor_EUT(self, EU_do_nothing, EU_adapt, adaptation_type, expenditure_cap, total_annual_costs, profits_no_event):
+    def compare_neighbor_EUT(self, EU_do_nothing, EU_adapt, adaptation_type, expenditure_cap, total_annual_costs, profits_no_event, extra_constraint):
         # Now check whether neighbors have adapted 
         nbits = 19
         # Check whether farmers have a adaptation 
@@ -2045,9 +2043,13 @@ class Farmers(AgentBaseClass):
             # Local enumeration for each unique crop_option
             local_indices = np.arange(len(farmers_with_crop_option))
 
+            # Identify agents able to afford the adaptation, can actually implement it and that have not yet done so
+            farmers_not_adapted = np.where((profits_no_event[farmers_with_crop_option] * expenditure_cap > total_annual_costs[farmers_with_crop_option]) & 
+                                     (self.adapted[farmers_with_crop_option, adaptation_type] == 0) 
+                                     & extra_constraint[farmers_with_crop_option])
+
             # Create boolean masks for adapted and not adapted farmers
             farmers_adapted = self.adapted[farmers_with_crop_option, adaptation_type] == 1
-            farmers_not_adapted = ~farmers_adapted
 
             # Using the conditions directly on the farmers_with_crop_option to get global indices
             filtered_indices_adapted = local_indices[farmers_adapted]
@@ -2078,9 +2080,11 @@ class Farmers(AgentBaseClass):
                     EU_adapt = EU_adapt,
                     adapted = self.adapted[:,adaptation_type],
                     n = self.n,
-                    expenditure_cap = expenditure_cap, 
-                    total_annual_costs = total_annual_costs, 
-                    profits_no_event = profits_no_event)
+                    profits_no_event= profits_no_event,
+                    expenditure_cap= expenditure_cap,
+                    total_annual_costs= total_annual_costs,
+                    extra_constraint= extra_constraint,
+                    )
                 
                 invest_in_adaptation[invest_in_adaptation_numba] = True
 
@@ -2094,18 +2098,24 @@ class Farmers(AgentBaseClass):
                      EU_adapt: np.ndarray,
                      adapted: np.ndarray,
                      n: int,
-                     expenditure_cap: float, 
-                     total_annual_costs: np.ndarray, 
                      profits_no_event: np.ndarray,
+                     expenditure_cap: float,
+                     total_annual_costs: np.ndarray,
+                     extra_constraint: np.ndarray,
                      ):
         
         invest_in_adaptation = np.zeros(n, dtype=np.bool_)
+        
         neighbor_nan_value = np.iinfo(neighbors_with_adaptation.dtype).max
         for i, farmer_idx in enumerate(farmers_without_adaptation):
-            # See whether the farmer can afford it
-            if (profits_no_event[farmer_idx] * expenditure_cap > total_annual_costs[farmer_idx]):
+            # Again make the condition, because the algorithm is still a bit wonky and sometimes agents that should not be able to adapt do. 
+            if (profits_no_event[farmer_idx] * expenditure_cap > total_annual_costs[farmer_idx]) & (adapted[farmer_idx] == 0) & extra_constraint[farmer_idx]:
                 # EU of farmer if they would adapt 
                 EU_farmer = EU_adapt[farmer_idx]
+                
+                # Check to make certain not adapting farmers dont slip through
+                assert EU_farmer != -np.inf, "EU farmer is not able to adapt!"
+
                 farmer_neighbors_with_adaptation = neighbors_with_adaptation[i]
                 farmer_neighbors_with_adaptation = farmer_neighbors_with_adaptation[farmer_neighbors_with_adaptation != neighbor_nan_value]
                 if farmer_neighbors_with_adaptation.size > 0:
@@ -2290,7 +2300,6 @@ class Farmers(AgentBaseClass):
 
             # Alternative scenarios: 'sprinkler'
             if self.model.scenario not in ['spinup', 'noadaptation', 'base']:
-                # Convert the probability to yield ratio regardless of adaptation
                 self.switch_crops()
                 # These adaptations can only be done if there is a yield-probability relation 
                 if not np.all(self.farmer_yield_probability_relation == 0): 
