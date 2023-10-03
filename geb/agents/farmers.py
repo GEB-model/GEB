@@ -1787,10 +1787,10 @@ class Farmers(AgentBaseClass):
 
         # Now iterate over each individual yield ratio to get the profit
         for col in range(yield_ratios.shape[1]):
-                YR_one_probability = yield_ratios[:, col]
-                total_profits[:,col] = self.yield_ratio_to_profit(YR_one_probability, crops_mask, array_with_reference)
-                YR_one_probability_adaptation = yield_ratios_adaptation[:, col]
-                total_profits_adaptation[:,col] = self.yield_ratio_to_profit(YR_one_probability_adaptation, crops_mask, array_with_reference)
+            YR_one_probability = yield_ratios[:, col]
+            total_profits[:,col] = self.yield_ratio_to_profit(YR_one_probability, crops_mask, array_with_reference)
+            YR_one_probability_adaptation = yield_ratios_adaptation[:, col]
+            total_profits_adaptation[:,col] = self.yield_ratio_to_profit(YR_one_probability_adaptation, crops_mask, array_with_reference)
 
         # Transpose columns because to fit the format of the decision module 
         total_profits = total_profits.T[:-1, :]
