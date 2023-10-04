@@ -5,6 +5,7 @@ from pstats import Stats
 import geopandas as gpd
 import yaml
 import logging
+import functools
 import faulthandler
 from pathlib import Path
 
@@ -56,13 +57,20 @@ def main(ctx):  # , quiet, verbose):
     if ctx.obj is None:
         ctx.obj = {}
 
+def click_config(func):
+    @click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
 @main.command()
+@click_config
 @click.option('--scenario', type=str, default='spinup', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""")
 @click.option('--switch_crops', is_flag=True, help="""Whether agents should switch crops or not.""")
 @click.option('--gpu_device', type=int, default=0, help="""Specify the GPU to use (zero-indexed).""")
 @click.option('--profiling', is_flag=True, help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.")
 @click.option('--use_gpu', is_flag=True, help="Whether a GPU can be used to run the model. This requires CuPy to be installed.")
-@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
 @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
 @click.option('--gui', is_flag=True, help="""The model can be run with or without a visual interface. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""")
 @click.option('--no-browser', is_flag=True, help="""Do not open browser when running the model. This option is, for example, useful when running the model on a server, and you would like to remotely access the model.""")
@@ -207,21 +215,26 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
         device.reset()
 
 @main.command()
-@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
+@click_config
 @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
 def calibrate(config, working_directory):
-    
-    # set the working directory
     os.chdir(working_directory)
 
     config = parse_config(config)
     geb_calibrate(config, working_directory)
 
+def click_build_options(func):
+    @click_config
+    @click.option('--data_libs', '-d', type=str, multiple=True, default=[os.environ.get('GEB_DATA_CATALOG', 'data_catalog.yml')], help="""A list of paths to the data library YAML files.""")
+    @click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
+    @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
-@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
-@click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
-@click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
+@click_build_options
 def build(data_libs, config, build_config, working_directory):
     """Build model."""
 
@@ -250,10 +263,7 @@ def build(data_libs, config, build_config, working_directory):
     )
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
-@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
-@click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
-@click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
+@click_build_options
 @click.option('--model', '-m', default='../base', help="Folder for base model.")
 def alter(data_libs, config, build_config, working_directory, model):
     """Build model."""
@@ -276,10 +286,7 @@ def alter(data_libs, config, build_config, working_directory, model):
     geb_model.update(opt=configread(build_config), model_out=Path('.') / Path(config['general']['input_folder']))
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
-@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
-@click.option('--build-update', '-b', default='build_update.yml', help="Path of the model build update configuration file.")
-@click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
+@click_build_options
 def update(data_libs, config, build_update, working_directory):
     """Update model."""
 
