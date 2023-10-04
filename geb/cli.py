@@ -225,7 +225,7 @@ def calibrate(config, working_directory):
 
 def click_build_options(func):
     @click_config
-    @click.option('--data_libs', '-d', type=str, multiple=True, default=[os.environ.get('GEB_DATA_CATALOG', 'data_catalog.yml')], help="""A list of paths to the data library YAML files.""")
+    @click.option('--data-catalog', '-d', type=str, multiple=True, default=[os.environ.get('GEB_DATA_CATALOG', 'data_catalog.yml')], help="""A list of paths to the data library YAML files. By default the GEB_DATA_CATALOG environment variable is used. If this is not set, defaults to data_catalog.yml""")
     @click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
     @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
     @functools.wraps(func)
