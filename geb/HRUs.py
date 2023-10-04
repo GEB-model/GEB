@@ -83,18 +83,16 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        mask_fn = os.path.join(Path(self.model.config['general']['input_folder']), 'areamaps', 'grid_mask.tif')
-        with rasterio.open(mask_fn) as mask_src:
+        with rasterio.open(self.model.model_structure['grid']["areamaps/grid_mask"]) as mask_src:
             self.mask = mask_src.read(1).astype(bool)
             self.gt = mask_src.transform.to_gdal()
             self.bounds = mask_src.bounds
             self.cell_size = mask_src.transform.a
-        with rxr.open_rasterio(mask_fn) as mask_src:
+        with rxr.open_rasterio(self.model.model_structure['grid']["areamaps/grid_mask"]) as mask_src:
             self.crs = mask_src.rio.crs
             self.lon = mask_src.x.values
             self.lat = mask_src.y.values
-        cell_area_fn = os.path.join(Path(self.model.config['general']['input_folder']), 'areamaps', 'cell_area.tif')
-        with rasterio.open(cell_area_fn) as cell_area_src:
+        with rasterio.open(self.model.model_structure['grid']["areamaps/cell_area"]) as cell_area_src:
             self.cell_area_uncompressed = cell_area_src.read(1)
         
         self.mask_flat = self.mask.ravel()
@@ -190,8 +188,7 @@ class HRUs(BaseVariables):
     def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
-        submask_fn = os.path.join(Path(self.model.config['general']['input_folder']), 'areamaps', 'sub_grid_mask.tif')
-        with rasterio.open(submask_fn) as mask_src:
+        with rasterio.open(self.model.model_structure['subgrid']["areamaps/sub_grid_mask"]) as mask_src:
             submask_height = mask_src.profile['height']
             submask_width = mask_src.profile['width']
         self.scaling = submask_height // self.data.grid.shape[0]
@@ -361,7 +358,7 @@ class HRUs(BaseVariables):
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             unmerged_HRU_indices: The index of the HRU to the subcell.
             """
-        with rasterio.open(os.path.join(Path(self.model.config['general']['input_folder']), 'landsurface', 'land_use_classes.tif'), 'r') as src:
+        with rasterio.open(self.model.model_structure['subgrid']['landsurface/land_use_classes'], 'r') as src:
             land_use_classes = src.read()[0]
         return self.create_HRUs_numba(self.data.farms, land_use_classes, self.data.grid.mask, self.scaling)
 
@@ -457,7 +454,7 @@ class Data:
     def __init__(self, model):
         self.model = model
 
-        with rasterio.open(os.path.join(Path(self.model.config['general']['input_folder']), 'agents', 'farmers', 'farms.tif'), 'r') as farms_src:
+        with rasterio.open(self.model.model_structure['subgrid']["agents/farmers/farms"], 'r') as farms_src:
             self.farms = farms_src.read()[0]
 
         self.grid = Grid(self, model)
@@ -469,31 +466,31 @@ class Data:
 
     def load_forcing(self):
         # loading forcing data
-        self.grid.hurs_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'hurs.nc')['hurs']
+        self.grid.hurs_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/hurs'])['hurs']
         assert self.grid.hurs_ds.y[0] > self.grid.hurs_ds.y[-1]
-        self.grid.pr_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'pr.nc')['pr']
+        self.grid.pr_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/pr'])['pr']
         assert self.grid.pr_ds.y[0] > self.grid.pr_ds.y[-1]
-        self.grid.ps_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'ps.nc')['ps'] 
+        self.grid.ps_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/ps'])['ps'] 
         assert self.grid.ps_ds.y[0] > self.grid.ps_ds.y[-1]
-        self.grid.rlds_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'rlds.nc')['rlds']
+        self.grid.rlds_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/rlds'])['rlds']
         assert self.grid.rlds_ds.y[0] > self.grid.rlds_ds.y[-1]
-        self.grid.rsds_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'rsds.nc')['rsds']
+        self.grid.rsds_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/rsds'])['rsds']
         assert self.grid.rsds_ds.y[0] > self.grid.rsds_ds.y[-1]
-        self.grid.tas_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'tas.nc')['tas']
+        self.grid.tas_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/tas'])['tas']
         assert self.grid.tas_ds.y[0] > self.grid.tas_ds.y[-1]
-        self.grid.tasmax_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'tasmax.nc')['tasmax']
+        self.grid.tasmax_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/tasmax'])['tasmax']
         assert self.grid.tasmax_ds.y[0] > self.grid.tasmax_ds.y[-1]
-        self.grid.tasmin_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'tasmin.nc')['tasmin']
+        self.grid.tasmin_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/tasmin'])['tasmin']
         assert self.grid.tasmin_ds.y[0] > self.grid.tasmin_ds.y[-1]
-        self.grid.sfcWind_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'climate' / 'wind.nc')['wind']
+        self.grid.sfcWind_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/wind'])['wind']
         assert self.grid.sfcWind_ds.y[0] > self.grid.sfcWind_ds.y[-1]
 
     def load_water_demand(self):
-        self.model.domestic_water_consumption_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'water_demand' / 'domestic_water_consumption.nc')
-        self.model.domestic_water_demand_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'water_demand' / 'domestic_water_demand.nc')
-        self.model.industry_water_consumption_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'water_demand' / 'industry_water_consumption.nc')
-        self.model.industry_water_demand_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'water_demand' / 'industry_water_demand.nc')
-        self.model.livestock_water_consumption_ds = xr.open_dataset(Path(self.model.config['general']['input_folder']) / 'water_demand' / 'livestock_water_consumption.nc')
+        self.model.domestic_water_consumption_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/domestic_water_consumption'])
+        self.model.domestic_water_demand_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/domestic_water_demand'])
+        self.model.industry_water_consumption_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/industry_water_consumption'])
+        self.model.industry_water_demand_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/industry_water_demand'])
+        self.model.livestock_water_consumption_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/livestock_water_consumption'])
 
     @staticmethod
     @njit(cache=True)

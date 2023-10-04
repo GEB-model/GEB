@@ -36,8 +36,7 @@ class CWatM_Model(CWATModel):
         for parameter, value in self.config['parameters'].items():
             binding[parameter] = value
         
-        # read_metanetcdf(cbinding('metaNetcdfFile'), 'metaNetcdfFile')
-        binding['MaskMap'] = os.path.join(Path(self.config['general']['input_folder']), 'areamaps', 'grid_mask.tif')
+        binding['MaskMap'] = self.model_structure['grid']["areamaps/grid_mask"]
         if 'gauges' in self.config['general']:
             gauges = self.config['general']['gauges']
             binding['Gauges'] = ' '.join([str(item) for sublist in gauges for item in sublist])
@@ -49,97 +48,71 @@ class CWatM_Model(CWATModel):
         binding['Modflow_resolution'] = 1000
         
         # setting file paths for CWatM
-        binding["Ldd"] = os.path.join(Path(self.config['general']['input_folder']), 'routing', 'kinematic', 'ldd.tif')
-        binding["ElevationStD"] = os.path.join(Path(self.config['general']['input_folder']), 'landsurface', 'topo', 'elevation_STD.tif')
-        binding["CellArea"] = os.path.join(Path(self.config['general']['input_folder']), 'areamaps', 'cell_area.tif')
-        binding["albedoLand"] = os.path.join(Path(self.config['general']['input_folder']), 'landsurface', 'albedo', 'albedo_land.nc:albedoLand')
-        binding["albedoWater"] = os.path.join(Path(self.config['general']['input_folder']), 'landsurface', 'albedo', 'albedo_water.nc:albedoWater')
-        binding["cropgroupnumber"] = os.path.join(Path(self.config['general']['input_folder']), 'soil', 'cropgrp.tif')
-        binding["metaNetcdfFile"] = os.path.join(Path(self.config['general']['input_folder']), 'metaNetcdf.xml')
+        binding["Ldd"] = self.model_structure['grid']['routing/kinematic/ldd']
+        binding["ElevationStD"] = self.model_structure['grid']['landsurface/topo/elevation_STD']
+        binding["CellArea"] = self.model_structure['grid']['areamaps/cell_area']
+        binding["cropgroupnumber"] = self.model_structure['grid']['soil/cropgrp']
+        binding["KSat1"] = self.model_structure['grid']['soil/ksat1']
+        binding["KSat2"] = self.model_structure['grid']['soil/ksat2']
+        binding["KSat3"] = self.model_structure['grid']['soil/ksat3']
+        binding["alpha1"] = self.model_structure['grid']['soil/alpha1']
+        binding["alpha2"] = self.model_structure['grid']['soil/alpha2']
+        binding["alpha3"] = self.model_structure['grid']['soil/alpha3']
+        binding["lambda1"] = self.model_structure['grid']['soil/lambda1']
+        binding["lambda2"] = self.model_structure['grid']['soil/lambda2']
+        binding["lambda3"] = self.model_structure['grid']['soil/lambda3']
+        binding["thetas1"] = self.model_structure['grid']['soil/thetas1']
+        binding["thetas2"] = self.model_structure['grid']['soil/thetas2']
+        binding["thetas3"] = self.model_structure['grid']['soil/thetas3']
+        binding["thetar1"] = self.model_structure['grid']['soil/thetar1']
+        binding["thetar2"] = self.model_structure['grid']['soil/thetar2']
+        binding["thetar3"] = self.model_structure['grid']['soil/thetar3']
+        binding["percolationImp"] = self.model_structure['grid']['soil/percolation_impeded']
+        binding["StorDepth1"] = self.model_structure['grid']['soil/storage_depth1']
+        binding["StorDepth2"] = self.model_structure['grid']['soil/storage_depth2']
+        
+        binding["forest_KSat1"] = self.model_structure['grid']['soil/ksat1']
+        binding["forest_KSat2"] = self.model_structure['grid']['soil/ksat2']
+        binding["forest_KSat3"] = self.model_structure['grid']['soil/ksat3']
+        binding["forest_alpha1"] = self.model_structure['grid']['soil/alpha1']
+        binding["forest_alpha2"] = self.model_structure['grid']['soil/alpha2']
+        binding["forest_alpha3"] = self.model_structure['grid']['soil/alpha3']
+        binding["forest_lambda1"] = self.model_structure['grid']['soil/lambda1']
+        binding["forest_lambda2"] = self.model_structure['grid']['soil/lambda2']
+        binding["forest_lambda3"] = self.model_structure['grid']['soil/lambda3']
+        binding["forest_thetas1"] = self.model_structure['grid']['soil/thetas1']
+        binding["forest_thetas2"] = self.model_structure['grid']['soil/thetas2']
+        binding["forest_thetas3"] = self.model_structure['grid']['soil/thetas3']
+        binding["forest_thetar1"] = self.model_structure['grid']['soil/thetar1']
+        binding["forest_thetar2"] = self.model_structure['grid']['soil/thetar2']
+        binding["forest_thetar3"] = self.model_structure['grid']['soil/thetar3']
+        
+        binding["forest_rootFraction1"] = self.model_structure['grid']['landcover/forest/rootFraction1_forest']
+        binding["forest_maxRootDepth"] = self.model_structure['grid']['landcover/forest/maxRootDepth_forest']
+        
+        binding["grassland_rootFraction1"] = self.model_structure['grid']['landcover/grassland/rootFraction1_grassland']
+        binding["grassland_maxRootDepth"] = self.model_structure['grid']['landcover/grassland/maxRootDepth_grassland']
+        binding["grassland_cropCoefficientNC"] = self.model_structure['forcing']['landcover/grassland/cropCoefficientGrassland_10days']
+        
+        binding["irrPaddy_rootFraction1"] = self.model_structure['grid']['landcover/irrPaddy/rootFraction1_irrPaddy']
+        binding["irrPaddy_maxRootDepth"] = self.model_structure['grid']['landcover/irrPaddy/maxRootDepth_irrPaddy']
+        binding["irrPaddy_cropCoefficientNC"] = self.model_structure['forcing']['landcover/irrPaddy/cropCoefficientirrPaddy_10days']
+        
+        binding["irrNonPaddy_rootFraction1"] = self.model_structure['grid']['landcover/irrNonPaddy/rootFraction1_irrNonPaddy']
+        binding["irrNonPaddy_maxRootDepth"] = self.model_structure['grid']['landcover/irrNonPaddy/maxRootDepth_irrNonPaddy']
+        binding["irrNonPaddy_cropCoefficientNC"] = self.model_structure['forcing']['landcover/irrNonPaddy/cropCoefficientirrNonPaddy_10days']
+        
+        binding["chanMan"] = self.model_structure['grid']["routing/kinematic/mannings"]
+        binding["chanLength"] = self.model_structure['grid']["routing/kinematic/channel_length"]
+        binding["chanWidth"] = self.model_structure['grid']["routing/kinematic/channel_width"]
+        binding["chanDepth"] = self.model_structure['grid']["routing/kinematic/channel_depth"]
+        binding["chanRatio"] = self.model_structure['grid']["routing/kinematic/channel_ratio"]
+        binding["chanGrad"] = self.model_structure['grid']["routing/kinematic/channel_slope"]
+        
+        binding["waterBodyID"] = self.model_structure['grid']["routing/lakesreservoirs/lakesResID"]
+        binding["reservoir_command_areas"] = self.model_structure['grid']["routing/lakesreservoirs/command_areas"]
 
-        topo_path = os.path.join(Path(self.config['general']['input_folder']), 'landsurface', 'topo')
-        grassland_path = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland')
-        groundwater_path = os.path.join(Path(self.config['general']['input_folder']), 'groundwater')
-        modflow_path = os.path.join(Path(self.config['general']['input_folder']), 'groundwater', 'modflow')
-        binding['PathGroundwaterModflow'] = modflow_path
-        res_lakes_path = os.path.join(Path(self.config['general']['input_folder']), 'routing', 'lakesreservoirs')
-
-        path_soil = os.path.join(Path(self.config['general']['input_folder']), 'soil')
-        
-        binding["KSat1"] = os.path.join(path_soil, "ksat1.tif")
-        binding["KSat2"] = os.path.join(path_soil, "ksat2.tif")
-        binding["KSat3"] = os.path.join(path_soil, "ksat3.tif")
-        binding["alpha1"] = os.path.join(path_soil, "alpha1.tif")
-        binding["alpha2"] = os.path.join(path_soil, "alpha2.tif")
-        binding["alpha3"] = os.path.join(path_soil, "alpha3.tif")
-        binding["lambda1"] = os.path.join(path_soil, "lambda1.tif")
-        binding["lambda2"] = os.path.join(path_soil, "lambda2.tif")
-        binding["lambda3"] = os.path.join(path_soil, "lambda3.tif")
-        binding["thetas1"] = os.path.join(path_soil, "thetas1.tif")
-        binding["thetas2"] = os.path.join(path_soil, "thetas2.tif")
-        binding["thetas3"] = os.path.join(path_soil, "thetas3.tif")
-        binding["thetar1"] = os.path.join(path_soil, "thetar1.tif")
-        binding["thetar2"] = os.path.join(path_soil, "thetar2.tif")
-        binding["thetar3"] = os.path.join(path_soil, "thetar3.tif")
-        binding["percolationImp"] = os.path.join(path_soil, "percolation_impeded.tif")
-        binding["StorDepth1"] = os.path.join(path_soil, "storage_depth1.tif")
-        binding["StorDepth2"] = os.path.join(path_soil, "storage_depth2.tif")
-        
-        binding["forest_KSat1"] = os.path.join(path_soil, "ksat1.tif")
-        binding["forest_KSat2"] = os.path.join(path_soil, "ksat2.tif")
-        binding["forest_KSat3"] = os.path.join(path_soil, "ksat3.tif")
-        binding["forest_alpha1"] = os.path.join(path_soil, "alpha1.tif")
-        binding["forest_alpha2"] = os.path.join(path_soil, "alpha2.tif")
-        binding["forest_alpha3"] = os.path.join(path_soil, "alpha3.tif")
-        binding["forest_lambda1"] = os.path.join(path_soil, "lambda1.tif")
-        binding["forest_lambda2"] = os.path.join(path_soil, "lambda2.tif")
-        binding["forest_lambda3"] = os.path.join(path_soil, "lambda3.tif")
-        binding["forest_thetas1"] = os.path.join(path_soil, "thetas1.tif")
-        binding["forest_thetas2"] = os.path.join(path_soil, "thetas2.tif")
-        binding["forest_thetas3"] = os.path.join(path_soil, "thetas3.tif")
-        binding["forest_thetar1"] = os.path.join(path_soil, "thetar1.tif")
-        binding["forest_thetar2"] = os.path.join(path_soil, "thetar2.tif")
-        binding["forest_thetar3"] = os.path.join(path_soil, "thetar3.tif")
-        
-        binding["forest_rootFraction1"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'forest', "rootFraction1_forest.tif")
-        binding["forest_maxRootDepth"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'forest', "maxRootDepth_forest.tif")
-        binding["forest_cropCoefficientNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'forest', "cropCoefficientForest_10days.nc:cropCoefficientForest_10days")
-        binding["forest_interceptCapNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'forest', "interceptCapForest_10days.nc:interceptCapForest_10days")
-        
-        binding["grassland_rootFraction1"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland', "rootFraction1_grassland.tif")
-        binding["grassland_maxRootDepth"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland', "maxRootDepth_grassland.tif")
-        binding["grassland_cropCoefficientNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland', "cropCoefficientGrassland_10days.nc:cropCoefficientGrassland_10days")
-        binding["grassland_interceptCapNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'grassland', "interceptCapGrassland_10days.nc:interceptCapGrassland_10days")
-        
-        binding["irrPaddy_rootFraction1"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrPaddy', "rootFraction1_irrPaddy.tif")
-        binding["irrPaddy_maxRootDepth"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrPaddy', "maxRootDepth_irrPaddy.tif")
-        binding["irrPaddy_cropCoefficientNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrPaddy', "cropCoefficientirrPaddy_10days.nc:cropCoefficientirrPaddy_10days")
-        
-        binding["irrNonPaddy_rootFraction1"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrNonPaddy', "rootFraction1_irrNonPaddy.tif")
-        binding["irrNonPaddy_maxRootDepth"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrNonPaddy', "maxRootDepth_irrNonPaddy.tif")
-        binding["irrNonPaddy_cropCoefficientNC"] = os.path.join(Path(self.config['general']['input_folder']), 'landcover', 'irrNonPaddy', "cropCoefficientirrNonPaddy_10days.nc:cropCoefficientirrNonPaddy_10days")
-        
-        binding["recessionCoeff"] = os.path.join(groundwater_path, "recessionCoeff.map")
-        binding["specificYield"] = os.path.join(groundwater_path, "specificYield.map")
-        binding["kSatAquifer"] = os.path.join(groundwater_path, "kSatAquifer.map")
-        binding["topo_modflow"] = os.path.join(modflow_path, "modflow_elevation.tif")
-        binding["riverPercentage"] = os.path.join(modflow_path, "RiverPercentage.npy")
-        binding["modflow_mask"] = os.path.join(modflow_path, "modflow_mask.tif")
-        
-        binding["chanMan"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "mannings.tif")
-        binding["chanLength"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_length.tif")
-        binding["chanWidth"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_width.tif")
-        binding["chanDepth"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_depth.tif")
-        binding["chanRatio"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_ratio.tif")
-        binding["chanGrad"] = os.path.join(Path(self.config['general']['input_folder']), "routing", "kinematic", "channel_slope.tif")
-        
-        binding["waterBodyID"] = os.path.join(res_lakes_path, "lakesResID.tif")
-        binding["reservoir_command_areas"] =  os.path.join(res_lakes_path, "command_areas.tif")
-        binding["smallLakesRes"] = os.path.join(res_lakes_path, "smallLakesRes.nc")
-        binding["smallwaterBodyDis"] = os.path.join(res_lakes_path, "smallLakesResDis.nc")
-
-        binding["slopeLength"] = os.path.join(topo_path, "slopeLength.map")
-        binding["relativeElevation"] = os.path.join(topo_path, "dzRel.nc")
+        binding['PathGroundwaterModflow'] = 'modflow'
 
         headerinfo()
 

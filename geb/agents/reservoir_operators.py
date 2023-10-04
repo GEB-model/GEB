@@ -15,8 +15,7 @@ class ReservoirOperators(AgentBaseClass):
         self.model = model
         self.agents = agents
         AgentBaseClass.__init__(self)
-        fn = os.path.join(self.model.config['general']['input_folder'], 'routing', 'lakesreservoirs', 'basin_lakes_data.csv')
-        df = pd.read_csv(fn).set_index('waterbody_id')
+        df = pd.read_csv(self.model.model_structure['table']["routing/lakesreservoirs/basin_lakes_data"]).set_index('waterbody_id')
 
         self.reservoirs = df[df['waterbody_type'] == 2].copy()
 

@@ -76,11 +76,11 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
     if use_gpu:
         import cupy
 
-    def get_study_area(input_folder):
+    def get_study_area(model_structure):
         study_area = {
             "name": "GEB"
         }
-        gdf = gpd.read_file(os.path.join(input_folder, 'areamaps', 'region.geojson')).to_crs(epsg=4326)
+        gdf = gpd.read_file(model_structure['geoms']['areamaps/region']).to_crs(epsg=4326)
         assert len(gdf) == 1, "There should be only one region in the region.geojson file."
         study_area['region'] = gdf.geometry[0]
         return study_area
@@ -88,7 +88,11 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
 
     MODEL_NAME = 'GEB'
     config = parse_config(config)
-    study_area = get_study_area(config['general']['input_folder'])
+    model_structure = parse_config('input/model_structure.json' if not 'model_stucture' in config['general'] else config['general']['model_stucture'])
+    for data in model_structure.values():
+        for key, value in data.items():
+            data[key] = Path(config['general']['input_folder']) / value
+    study_area = get_study_area(model_structure)
 
     series_to_plot = [
         # crop_series,
@@ -157,6 +161,7 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
 
     model_params = {
         "GEB_config_path": config,
+        "model_structure": model_structure,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
         "scenario": scenario,
@@ -213,7 +218,7 @@ def calibrate(config, working_directory):
     geb_calibrate(config, working_directory)
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
 @click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
 @click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
 @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
@@ -245,7 +250,33 @@ def build(data_libs, config, build_config, working_directory):
     )
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
+@click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
+@click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
+@click.option('--model', '-m', default='../base', help="Folder for base model.")
+def alter(data_libs, config, build_config, working_directory, model):
+    """Build model."""
+
+    # set the working directory
+    os.chdir(working_directory)
+    
+    config = parse_config(config)
+    reference_model_folder = Path(model) / Path(config['general']['input_folder'])
+    
+    geb_model = hydromt_geb.GEBModel(
+        root=reference_model_folder,
+        mode='w+',
+        data_libs=data_libs,
+        logger=create_logger('build.log'),
+    )
+
+    geb_model.read()
+    geb_model.set_alternate_root(Path('.') / Path(config['general']['input_folder']), mode='w+')
+    geb_model.update(opt=configread(build_config), model_out=Path('.') / Path(config['general']['input_folder']))
+
+@main.command()
+@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
 @click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
 @click.option('--build-update', '-b', default='build_update.yml', help="Path of the model build update configuration file.")
 @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
