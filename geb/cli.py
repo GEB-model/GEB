@@ -218,7 +218,7 @@ def calibrate(config, working_directory):
     geb_calibrate(config, working_directory)
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
 @click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
 @click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
 @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
@@ -250,7 +250,7 @@ def build(data_libs, config, build_config, working_directory):
     )
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
 @click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
 @click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
 @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
@@ -276,7 +276,7 @@ def alter(data_libs, config, build_config, working_directory, model):
     geb_model.update(opt=configread(build_config), model_out=Path('.') / Path(config['general']['input_folder']))
 
 @main.command()
-@click.option('--data_libs', '-d', type=str, multiple=True, default=[r"../original_data/data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
+@click.option('--data_libs', '-d', type=str, multiple=True, default=["data_catalog.yml"], help="""A list of paths to the data library YAML files.""")
 @click.option('--config', '-c', default='model.yml', help="Path of the model configuration file.")
 @click.option('--build-update', '-b', default='build_update.yml', help="Path of the model build update configuration file.")
 @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
