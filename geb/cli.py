@@ -235,7 +235,7 @@ def click_build_options(func):
 
 @main.command()
 @click_build_options
-def build(data_libs, config, build_config, working_directory):
+def build(data_catalog, config, build_config, working_directory):
     """Build model."""
 
     # set the working directory
@@ -247,7 +247,7 @@ def build(data_libs, config, build_config, working_directory):
     geb_model = hydromt_geb.GEBModel(
         root=input_folder,
         mode='w+',
-        data_libs=data_libs,
+        data_libs=data_catalog,
         logger=create_logger('build.log'),
     )
 
@@ -265,7 +265,7 @@ def build(data_libs, config, build_config, working_directory):
 @main.command()
 @click_build_options
 @click.option('--model', '-m', default='../base', help="Folder for base model.")
-def alter(data_libs, config, build_config, working_directory, model):
+def alter(data_catalog, config, build_config, working_directory, model):
     """Build model."""
 
     # set the working directory
@@ -277,7 +277,7 @@ def alter(data_libs, config, build_config, working_directory, model):
     geb_model = hydromt_geb.GEBModel(
         root=reference_model_folder,
         mode='w+',
-        data_libs=data_libs,
+        data_libs=data_catalog,
         logger=create_logger('build.log'),
     )
 
@@ -287,7 +287,7 @@ def alter(data_libs, config, build_config, working_directory, model):
 
 @main.command()
 @click_build_options
-def update(data_libs, config, build_update, working_directory):
+def update(data_catalog, config, build_update, working_directory):
     """Update model."""
 
     # set the working directory
@@ -299,7 +299,7 @@ def update(data_libs, config, build_update, working_directory):
     geb_model = hydromt_geb.GEBModel(
         root=input_folder,
         mode='r+',
-        data_libs=data_libs,
+        data_libs=data_catalog,
         logger=create_logger('build_update.log')
     )
     geb_model.read()
