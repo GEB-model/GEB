@@ -76,11 +76,11 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
     if use_gpu:
         import cupy
 
-    def get_study_area(input_folder):
+    def get_study_area(model_structure):
         study_area = {
             "name": "GEB"
         }
-        gdf = gpd.read_file(os.path.join(input_folder, 'areamaps', 'region.geojson')).to_crs(epsg=4326)
+        gdf = gpd.read_file(model_structure['geoms']['areamaps/region']).to_crs(epsg=4326)
         assert len(gdf) == 1, "There should be only one region in the region.geojson file."
         study_area['region'] = gdf.geometry[0]
         return study_area
@@ -88,7 +88,11 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
 
     MODEL_NAME = 'GEB'
     config = parse_config(config)
-    study_area = get_study_area(config['general']['input_folder'])
+    model_structure = parse_config('input/model_structure.json' if not 'model_stucture' in config['general'] else config['general']['model_stucture'])
+    for data in model_structure.values():
+        for key, value in data.items():
+            data[key] = Path(config['general']['input_folder']) / value
+    study_area = get_study_area(model_structure)
 
     series_to_plot = [
         # crop_series,
@@ -157,6 +161,7 @@ def run(scenario, switch_crops, gpu_device, profiling, use_gpu, config, working_
 
     model_params = {
         "GEB_config_path": config,
+        "model_structure": model_structure,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
         "scenario": scenario,

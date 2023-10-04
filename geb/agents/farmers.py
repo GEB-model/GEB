@@ -153,10 +153,10 @@ class Farmers(AgentBaseClass):
         self.var = model.data.HRU
         self.redundancy = reduncancy
 
-        self.crop_ids = load_crop_ids(Path(self.model.config['general']['input_folder']))
+        self.crop_ids = load_crop_ids(self.model.model_structure)
         # reverse dictionary
         self.crop_names = {crop_name: crop_id for crop_id, crop_name in self.crop_ids.items()}
-        self.crop_variables = load_crop_variables(Path(self.model.config['general']['input_folder']))
+        self.crop_variables = load_crop_variables(self.model.model_structure)
         
         ## Set parameters required for drought event perception, risk perception and SEUT 
         self.previous_month = 0
@@ -167,24 +167,24 @@ class Farmers(AgentBaseClass):
         self.r_time = self.model.config['agent_settings']['expected_utility']['decisions']['time_discounting']
         self.expenditure_cap = self.model.config['agent_settings']['expected_utility']['decisions']['expenditure_cap']
 
-        self.inflation_rate = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'inflation_rates.json'))
-        self.lending_rate = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'lending_rates.json'))
-        self.well_price = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'well_prices.json'))
-        self.well_upkeep_price_per_m2 = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'upkeep_prices_well_per_m2.json'))
-        self.drip_irrigation_price = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'drip_irrigation_prices.json'))
-        self.drip_irrigation_upkeep_per_m2 = load_economic_data(Path(self.model.config['general']['input_folder']), Path('economics', 'upkeep_prices_drip_irrigation_per_m2.json'))
+        self.inflation_rate = load_economic_data(self.model.model_structure['dict']['economics/inflation_rates'])
+        self.lending_rate = load_economic_data(self.model.model_structure['dict']['economics/lending_rates'])
+        self.well_price = load_economic_data(self.model.model_structure['dict']['economics/well_prices'])
+        self.well_upkeep_price_per_m2 = load_economic_data(self.model.model_structure['dict']['economics/upkeep_prices_well_per_m2'])
+        self.drip_irrigation_price = load_economic_data(self.model.model_structure['dict']['economics/drip_irrigation_prices'])
+        self.drip_irrigation_upkeep_per_m2 = load_economic_data(self.model.model_structure['dict']['economics/upkeep_prices_drip_irrigation_per_m2'])
         self.well_investment_time_years = 10
         self.p_droughts = np.array([1000, 500, 250, 100, 50, 25, 10, 5, 2, 1])
 
         self.elevation_subgrid = MapReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'subgrid_elevation.tif'),
+            fp=self.model.model_structure['MERIT_grid']["landsurface/topo/subgrid_elevation"],
             xmin=self.model.xmin,
             ymin=self.model.ymin,
             xmax=self.model.xmax,
             ymax=self.model.ymax,
         )
         self.elevation_grid = self.model.data.grid.compress(MapReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'landsurface', 'topo', 'elevation.tif'),
+            fp=self.model.model_structure['grid']["landsurface/topo/elevation"],
             xmin=self.model.xmin,
             ymin=self.model.ymin,
             xmax=self.model.xmax,
@@ -192,7 +192,7 @@ class Farmers(AgentBaseClass):
         ).get_data_array())
         
         self.SPEI_map = NetCDFReader(
-            fp=os.path.join(self.model.config['general']['input_folder'] , 'climate' , 'spei.nc'),
+            fp=self.model.model_structure['forcing']["climate/spei"],
             varname= 'spei',
             xmin=self.model.xmin,
             ymin=self.model.ymin,
@@ -203,21 +203,20 @@ class Farmers(AgentBaseClass):
             timename= 'time'
         )
 
-        with open(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_sources.json')) as f:
+        with open(self.model.model_structure['dict']["agents/farmers/irrigation_sources"], 'r') as f:
             self.irrigation_source_key = json.load(f)
 
         # load map of all subdistricts
-        print('test subdistrict map')
         self.subdistrict_map = MapReader(
-            fp=os.path.join(self.model.config['general']['input_folder'], 'areamaps', 'region_subgrid.tif'),
+            fp=self.model.model_structure['region_subgrid']["areamaps/region_subgrid"],
             xmin=self.model.xmin,
             ymin=self.model.ymin,
             xmax=self.model.xmax,
             ymax=self.model.ymax,
         )
    
-        self.crop_prices = load_crop_prices(Path(self.model.config['general']['input_folder']))
-        self.cultivation_costs = load_cultivation_costs(Path(self.model.config['general']['input_folder']))
+        self.crop_prices = load_crop_prices(self.model.model_structure)
+        self.cultivation_costs = load_cultivation_costs(self.model.model_structure)
         self.total_spinup_time = self.model.config['general']['start_time'].year - self.model.config['general']['spinup_time'].year
 
         self.agent_attributes_meta = {
@@ -810,10 +809,10 @@ class Farmers(AgentBaseClass):
             self.locations = pixels_to_coords(pixels + .5, self.var.gt)
 
             self.risk_aversion = AgentArray(n=self.n, max_size=self.max_n, dtype=np.float32, fill_value=np.nan)
-            self.risk_aversion[:] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'risk_aversion.npz'))['data']
+            self.risk_aversion[:] = np.load(self.model.model_structure['binary']["agents/farmers/risk_aversion"])['data']
 
             # Load the region_code of each farmer.
-            self.region_id = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'region_id.npz'))['data']
+            self.region_id = np.load(self.model.model_structure['binary']["agents/farmers/region_id"])['data']
 
             # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
             self.elevation = self.elevation_subgrid.sample_coords(self.locations)
@@ -825,13 +824,13 @@ class Farmers(AgentBaseClass):
 
 
             # Load the crops planted for each farmer in the season #1, season #2 and season #3.
-            self.crops[:, 0] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#1_crop.npz'))['data']
-            self.crops[:, 1] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#2_crop.npz'))['data']
-            self.crops[:, 2] = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'season_#3_crop.npz'))['data']
+            self.crops[:, 0] = np.load(self.model.model_structure['binary']["agents/farmers/season_#1_crop"])['data']
+            self.crops[:, 1] = np.load(self.model.model_structure['binary']["agents/farmers/season_#2_crop"])['data']
+            self.crops[:, 2] = np.load(self.model.model_structure['binary']["agents/farmers/season_#3_crop"])['data']
             assert self.crops.max() < len(self.crop_ids)
 
             # Set irrigation source 
-            self.irrigation_source = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'irrigation_source.npz'))['data']
+            self.irrigation_source = np.load(self.model.model_structure['binary']["agents/farmers/irrigation_source"])['data']
             # set the adaptation of wells to 1 if farmers have well 
             self.adapted[:,1][np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])] = 1
             # Set how long the agents have adapted somewhere across the lifespan of farmers, would need to be a bit more realistic likely 
@@ -862,9 +861,9 @@ class Farmers(AgentBaseClass):
             self.yearly_SPEI_probability = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
             self.monthly_SPEI = np.zeros((self.n, 10), dtype=np.float32)
             self.disposable_income[:] = 0
-            self.household_size = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'household_size.npz'))['data']
-            self.daily_non_farm_income = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily_non_farm_income_family.npz'))['data']
-            self.daily_expenses_per_capita = np.load(os.path.join(self.model.config['general']['input_folder'], 'agents', 'farmers', 'daily_consumption_per_capita.npz'))['data']
+            self.household_size = np.load(self.model.model_structure['binary']["agents/farmers/household_size"])['data']
+            self.daily_non_farm_income = np.load(self.model.model_structure['binary']["agents/farmers/daily_non_farm_income_family"])['data']
+            self.daily_expenses_per_capita = np.load(self.model.model_structure['binary']["agents/farmers/daily_consumption_per_capita"])['data']
             self.flooded[:] = False
 
             self.farmer_yield_probability_relation = np.zeros((self.n, 2), dtype=np.float32)
@@ -899,7 +898,7 @@ class Farmers(AgentBaseClass):
 
             for i, varname in enumerate(parameter_names):
                 GEV_map = MapReader(
-                    fp=os.path.join(self.model.config['general']['input_folder'] , 'climate' , f'gev_{varname}.tif'),
+                    fp=self.model.model_structure['grid'][f"climate/gev_{varname}"],
                     xmin=self.model.xmin,
                     ymin=self.model.ymin,
                     xmax=self.model.xmax,

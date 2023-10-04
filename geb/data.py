@@ -16,9 +16,8 @@ class DateIndex:
     def __len__(self):
         return self.dates.size
 
-def load_cultivation_costs(input_folder):
-    fp = os.path.join(input_folder, 'crops', 'cultivation_costs.json')
-    with open(fp, 'r') as f:
+def load_cultivation_costs(model_structure) -> tuple[DateIndex, np.ndarray]:
+    with open(model_structure['dict']["crops/cultivation_costs"], 'r') as f:
         costs = json.load(f)
     dates = parse_dates(costs['time'])
     date_index = DateIndex(dates)
@@ -30,15 +29,14 @@ def load_cultivation_costs(input_folder):
     assert not np.isnan(cultivation_costs).any()
     return date_index, cultivation_costs
 
-def load_crop_prices(input_folder) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
+def load_crop_prices(model_structure) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
     """Load crop prices per state from the input data and return a dictionary of states containing 2D array of prices.
     
     Returns:
         date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
         crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop."""
     
-    fp = Path(input_folder, 'crops', 'crop_prices.json')
-    with open(fp, 'r') as f:
+    with open(model_structure['dict']["crops/crop_prices"], 'r') as f:
         crop_prices = json.load(f)
 
     dates = parse_dates(crop_prices['time'])
@@ -53,13 +51,13 @@ def load_crop_prices(input_folder) -> tuple[dict[dict[date, int]], dict[str, np.
     
     return date_index, crop_prices_array
 
-def load_crop_variables(input_folder) -> dict[np.ndarray]:
+def load_crop_variables(model_structure) -> dict[np.ndarray]:
     """Read csv-file of values for crop water depletion.
     
     Returns:
         yield_factors: dictonary with np.ndarray of values per crop for each variable.
     """
-    with open(os.path.join(input_folder, 'crops', 'crop_variables.json'), 'r') as f:
+    with open(model_structure['dict']['crops/crop_variables'], 'r') as f:
         crop_variables = json.load(f)
     return pd.DataFrame.from_dict(crop_variables, orient='index')
 
@@ -106,15 +104,15 @@ def parse_dates(date_strings, date_formats = ['%Y-%m-%dT%H%M%S', '%Y-%m-%d', '%Y
     else:
         raise ValueError('No valid date format found for date strings: {}'.format(date_strings[0]))
 
-def load_crop_ids(input_folder):
-    with open(os.path.join(input_folder, 'crops', 'crop_ids.json'), 'r') as f:
+def load_crop_ids(model_structure):
+    with open(model_structure['dict']["crops/crop_ids"], 'r') as f:
         crop_ids = json.load(f)
     # convert keys to int
     crop_ids = {int(key): value for key, value in crop_ids.items()}
     return crop_ids
 
-def load_economic_data(input_folder, fp: str) -> tuple[DateIndex, dict[int, np.ndarray]]:
-    with open(input_folder / fp, 'r') as f:
+def load_economic_data(fp: str) -> tuple[DateIndex, dict[int, np.ndarray]]:
+    with open(fp, 'r') as f:
         data = json.load(f)
     dates = parse_dates(data['time'])
     date_index = DateIndex(dates)
