@@ -287,7 +287,7 @@ def alter(data_catalog, config, build_config, working_directory, model):
 
 @main.command()
 @click_build_options
-def update(data_catalog, config, build_update, working_directory):
+def update(data_catalog, config, build_config, working_directory):
     """Update model."""
 
     # set the working directory
@@ -303,7 +303,7 @@ def update(data_catalog, config, build_update, working_directory):
         logger=create_logger('build_update.log')
     )
     geb_model.read()
-    geb_model.update(opt=configread(build_update))
+    geb_model.update(opt=configread(build_config))
 
 if __name__ == "__main__":
     main()
