@@ -258,7 +258,6 @@ def build(data_catalog, config, build_config, working_directory):
             'subbasin': [
                 [pour_point[0]], [pour_point[1]]
             ],
-            'bounds': [66.55, 4.3, 93.17, 35.28]  # TODO: remove need to specify bounds
         },
     )
 
