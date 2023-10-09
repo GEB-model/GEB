@@ -482,7 +482,7 @@ class Data:
         assert self.grid.tasmax_ds.y[0] > self.grid.tasmax_ds.y[-1]
         self.grid.tasmin_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/tasmin'])['tasmin']
         assert self.grid.tasmin_ds.y[0] > self.grid.tasmin_ds.y[-1]
-        self.grid.sfcWind_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/wind'])['wind']
+        self.grid.sfcWind_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/sfcwind'])['sfcwind']
         assert self.grid.sfcWind_ds.y[0] > self.grid.sfcWind_ds.y[-1]
 
     def load_water_demand(self):
