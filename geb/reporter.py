@@ -274,3 +274,4 @@ class Reporter:
         """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM. """
         self.abm_reporter.report()
         self.cwatmreporter.report()
+        print(f"Reported data")
