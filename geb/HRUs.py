@@ -716,21 +716,24 @@ class Data:
         return HRU
     
     def step(self):
-        self.grid.hurs = self.grid.compress(self.grid.hurs_ds.sel(time=self.model.current_time).data)
+        self.grid.hurs = self.grid.compress(self.grid.hurs_ds.sel(time=self.model.current_time).data) # %
+        assert (self.grid.hurs > 1).all() and (self.grid.hurs <= 100).all(), "hurs out of range"
         
-        self.grid.pr = self.grid.compress(self.grid.pr_ds.sel(time=self.model.current_time).data)
+        self.grid.pr = self.grid.compress(self.grid.pr_ds.sel(time=self.model.current_time).data) # kg m-2 s-1
         assert (self.grid.pr >= 0).all(), "Precipitation must be positive or zero"
         
-        self.grid.ps = self.grid.compress(self.grid.ps_ds.sel(time=self.model.current_time).data)
+        self.grid.ps = self.grid.compress(self.grid.ps_ds.sel(time=self.model.current_time).data)  # Pa
+        assert (self.grid.ps > 30_000).all() and (self.grid.ps < 120_000).all(), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
         
-        self.grid.rlds = self.grid.compress(self.grid.rlds_ds.sel(time=self.model.current_time).data)
-        self.grid.rsds = self.grid.compress(self.grid.rsds_ds.sel(time=self.model.current_time).data)
+        self.grid.rlds = self.grid.compress(self.grid.rlds_ds.sel(time=self.model.current_time).data)  # W m-2
+        self.grid.rsds = self.grid.compress(self.grid.rsds_ds.sel(time=self.model.current_time).data)  # W m-2
         
-        self.grid.tas = self.grid.compress(self.grid.tas_ds.sel(time=self.model.current_time).data)
-        self.grid.tasmax = self.grid.compress(self.grid.tasmax_ds.sel(time=self.model.current_time).data)
-        self.grid.tasmin = self.grid.compress(self.grid.tasmin_ds.sel(time=self.model.current_time).data)
+        self.grid.tas = self.grid.compress(self.grid.tas_ds.sel(time=self.model.current_time).data) # K
+        self.grid.tasmax = self.grid.compress(self.grid.tasmax_ds.sel(time=self.model.current_time).data) # K
+        self.grid.tasmin = self.grid.compress(self.grid.tasmin_ds.sel(time=self.model.current_time).data) # K
         
         assert (self.grid.tas > -100).all() and (self.grid.tas < 370).all(), "tas out of range"
         assert (self.grid.tasmax > -100).all() and (self.grid.tasmax < 370).all(), "tas out of range"
         assert (self.grid.tasmin > -100).all() and (self.grid.tasmin < 370).all(), "tas out of range"
-        self.grid.sfcWind = self.grid.compress(self.grid.sfcWind_ds.sel(time=self.model.current_time).data)
+        self.grid.sfcWind = self.grid.compress(self.grid.sfcWind_ds.sel(time=self.model.current_time).data)  # m/s
+        assert (self.grid.sfcWind >= 0).all() and (self.grid.sfcWind < 150).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
