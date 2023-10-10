@@ -190,6 +190,7 @@ class GEBModel(ABM_Model, CWatM_Model):
                 fp = Path(self.initial_conditions_folder, f"farmers.{attribute}.npz")
                 values = attrgetter(attribute)(self.agents.farmers)
                 np.savez_compressed(fp, data=values)
+        print("Model run finished")
 
     @property
     def current_day_of_year(self) -> int:
