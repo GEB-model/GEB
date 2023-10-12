@@ -17,6 +17,7 @@ dependencies = [
     "geopandas",
     "numpy",
     "deap",
+    "pybind11",
     "honeybees@git+https://github.com/jensdebruijn/honeybees",
     "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
     "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
