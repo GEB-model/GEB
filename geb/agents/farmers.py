@@ -35,7 +35,7 @@ from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 import xarray as xr
 
-from ..data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_economic_data
+from ..data import load_regional_crop_data_from_dict, load_crop_variables, load_crop_ids, load_economic_data
 from .decision_module import DecisionModule
 from .general import AgentArray
 
@@ -215,8 +215,8 @@ class Farmers(AgentBaseClass):
             ymax=self.model.ymax,
         )
    
-        self.crop_prices = load_crop_prices(self.model.model_structure)
-        self.cultivation_costs = load_cultivation_costs(self.model.model_structure)
+        self.crop_prices = load_regional_crop_data_from_dict(self.model.model_structure, "crops/crop_prices")
+        self.cultivation_costs = load_regional_crop_data_from_dict(self.model.model_structure, "crops/cultivation_costs")
         self.total_spinup_time = self.model.config['general']['start_time'].year - self.model.config['general']['spinup_time'].year
 
         self.agent_attributes_meta = {
@@ -1682,6 +1682,7 @@ class Farmers(AgentBaseClass):
                 continue
             assert farmer_crop != -1
             cultivation_cost = cultivation_cost_per_crop[farmer_crop] * field_size_per_farmer[farmer_idx]
+            assert not np.isnan(cultivation_cost)
             if not farmers_going_out_of_business or disposable_income[farmer_idx] > cultivation_cost:
                 disposable_income[farmer_idx] -= cultivation_cost
                 field_harvest_age = growth_length[farmer_crop, season_idx]

@@ -14,7 +14,7 @@ dependencies = [
     "tbb",
     "pandas",
     "openpyxl",
-    "geopandas",
+    "geopandas>=0.14",
     "numpy",
     "deap",
     "honeybees@git+https://github.com/jensdebruijn/honeybees",
@@ -38,7 +38,6 @@ dynamic = ['version', 'description']
 tests = [
     "pytest"
 ]
-
 docs = [
     "sphinx",
     "sphinx-autodoc-typehints",
