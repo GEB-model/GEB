@@ -66,7 +66,7 @@ def click_config(func):
 
 @main.command()
 @click_config
-@click.option('--scenario', type=str, default='spinup', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""")
+@click.option('--scenario', "-s", type=str, default='spinup', required=True, help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""")
 @click.option('--switch_crops', is_flag=True, help="""Whether agents should switch crops or not.""")
 @click.option('--gpu_device', type=int, default=0, help="""Specify the GPU to use (zero-indexed).""")
 @click.option('--profiling', is_flag=True, help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.")
