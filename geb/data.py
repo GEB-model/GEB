@@ -16,14 +16,14 @@ class DateIndex:
     def __len__(self):
         return self.dates.size
 
-def load_regional_crop_data_from_dict(model_structure, name) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
+def load_regional_crop_data_from_dict(model, name) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
     """Load crop prices per state from the input data and return a dictionary of states containing 2D array of prices.
     
     Returns:
         date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
         crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop."""
     
-    with open(model_structure['dict'][name], 'r') as f:
+    with open(model.model_structure['dict'][name], 'r') as f:
         timedata = json.load(f)
 
     dates = parse_dates(timedata['time'])
@@ -31,14 +31,12 @@ def load_regional_crop_data_from_dict(model_structure, name) -> tuple[dict[dict[
 
     data = timedata['data']
 
-    d = {}
+    d = np.full((len(date_index), len(model.regions), len(data['0'])), np.nan, dtype=np.float32)  # all lengths should be the same, so just taking data from region 0.
     for region_id, region_data in data.items():
-        crop_array = np.full((len(date_index), len(region_data)), np.nan, dtype=np.float32)  # first index for date, second index for crops
         for ID, region_crop_data in region_data.items():
-            crop_array[:, int(ID)] = region_crop_data
-        assert not np.isnan(crop_array).any()
-        d[region_id] = crop_array
+            d[:, int(region_id), int(ID)] = region_crop_data
     
+    assert not np.isnan(d).any()
     return date_index, d
 
 def load_crop_variables(model_structure) -> dict[np.ndarray]:

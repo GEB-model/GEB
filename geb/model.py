@@ -2,7 +2,7 @@
 import datetime
 from pathlib import Path
 from operator import attrgetter
-import argparse
+import geopandas as gpd
 from typing import Union
 from time import time
 
@@ -75,6 +75,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         n_timesteps = int(n_timesteps)
         assert n_timesteps > 0
         
+        self.regions = gpd.read_file(self.model_structure['geoms']['areamaps/regions'])
         self.data = Data(self)
 
         self.__init_ABM__(GEB_config_path, study_area, current_time, timestep_length, n_timesteps, coordinate_system)
