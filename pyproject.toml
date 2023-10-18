@@ -14,9 +14,17 @@ dependencies = [
     "tbb",
     "pandas",
     "openpyxl",
-    "geopandas",
+    "geopandas>=0.14",
     "numpy",
     "deap",
+    "pyyaml",
+    "xarray",
+    "dask>=2023.3.0",
+    "rioxarray>=0.15",
+    "pybind11",
+    "cppimport",
+    "hydromt>=0.8",
+    "hydromt-sfincs>=1.0.1",
     "honeybees@git+https://github.com/jensdebruijn/honeybees",
     "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
     "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
@@ -38,7 +46,6 @@ dynamic = ['version', 'description']
 tests = [
     "pytest"
 ]
-
 docs = [
     "sphinx",
     "sphinx-autodoc-typehints",
