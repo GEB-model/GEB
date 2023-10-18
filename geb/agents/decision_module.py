@@ -2,6 +2,7 @@ from numba.core.decorators import njit
 import numpy as np
 from scipy import interpolate
 import matplotlib.pyplot as plt
+from typing import Optional
 
 class DecisionModule:
     def __init__(self, agents) -> None:
@@ -67,19 +68,17 @@ class DecisionModule:
 
         return NPV_summed
 
-
-
     def calcEU_do_nothing(
         self,
         n_agents: int,
         risk_perception: np.ndarray,
         total_profits: np.ndarray,
         profits_no_event: np.ndarray,
-        adapted: np.ndarray,
         p_droughts: np.ndarray,
         T: np.ndarray,
         r: float,
         sigma: float,
+        subjective: bool = True,
         **kwargs
     ) -> np.ndarray:
         '''This function calculates the time discounted subjective utility of not undertaking any action.
@@ -111,7 +110,11 @@ class DecisionModule:
 
         # calculate perceived risk
         perc_risk = p_droughts.repeat(n_agents).reshape(p_droughts.size, n_agents)
-        perc_risk *= risk_perception
+        
+        # If 
+        if subjective == True: 
+            perc_risk *= risk_perception
+        
         p_all_events[1:-2, :] = perc_risk
 
         # Cap percieved probability at 0.998. People cannot percieve any flood
@@ -181,7 +184,7 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         extra_constraint: np.ndarray,
-
+        **kwargs,
     ) -> np.ndarray:
         '''This function calculates the discounted subjective utility for staying and implementing dry flood proofing measures for each agent.
         We take into account the current adaptation status of each agent, so that agents also consider the number of years of remaining loan payment.
