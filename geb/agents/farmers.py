@@ -36,7 +36,7 @@ from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 import xarray as xr
 
-from ..data import load_crop_prices, load_cultivation_costs, load_crop_variables, load_crop_ids, load_economic_data
+from ..data import load_regional_crop_data_from_dict, load_crop_variables, load_crop_ids, load_economic_data
 from .decision_module import DecisionModule
 from .general import AgentArray
 
@@ -216,8 +216,8 @@ class Farmers(AgentBaseClass):
             ymax=self.model.ymax,
         )
    
-        self.crop_prices = load_crop_prices(self.model.model_structure)
-        self.cultivation_costs = load_cultivation_costs(self.model.model_structure)
+        self.crop_prices = load_regional_crop_data_from_dict(self.model, "crops/crop_prices")
+        self.cultivation_costs = load_regional_crop_data_from_dict(self.model, "crops/cultivation_costs")
         self.total_spinup_time = self.model.config['general']['start_time'].year - self.model.config['general']['spinup_time'].year
         self.yield_ratio_multiplier_value = self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['yield_multiplier']
         
@@ -1430,15 +1430,19 @@ class Farmers(AgentBaseClass):
             crop_prices = self.crop_prices[1][self.crop_prices[0].get(self.model.current_time)]
             assert not np.isnan(crop_prices).any()
             
-            harvesting_farmers = np.unique(harvesting_farmer_fields)
+            harvesting_farmers, index_farmer_to_field = np.unique(harvesting_farmer_fields, return_inverse=True)
 
             yield_ratio_total = self.yield_ratio_management[harvesting_farmer_fields] * yield_ratio
             
             # get potential crop profit per farmer
             crop_yield_kg = harvested_area * yield_ratio_total * max_yield_per_crop
             assert (crop_yield_kg >= 0).all()
-            crop_prices_per_field = crop_prices[harvested_crops]
-            profit = crop_yield_kg * crop_prices_per_field
+            region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
+            crop_prices_per_farmer = crop_prices[region_ids_harvesting_farmers]
+            crop_prices_per_field = crop_prices_per_farmer[index_farmer_to_field]
+            crop_price_per_field = crop_prices_per_field[np.arange(crop_prices_per_field.shape[0]), harvested_crops].shape
+
+            profit = crop_yield_kg * crop_price_per_field
             assert (profit >= 0).all()
             
             profit_farmer = np.bincount(harvesting_farmer_fields, weights=profit, minlength=self.n)
@@ -1471,11 +1475,15 @@ class Farmers(AgentBaseClass):
                 self.total_crop_age[harvesting_farmers, 2] = total_crop_age[harvesting_farmers]
                 self.per_harvest_yield_ratio[harvesting_farmers, 2] = yield_ratio_agent[harvesting_farmers]
                 self.per_harvest_SPEI[harvesting_farmers,2] = cum_SPEI_latest_harvest
+           
+            # get potential crop profit per farmer
+            potential_crop_yield = harvested_area * max_yield_per_crop
+            potential_profit = potential_crop_yield * crop_price_per_field
+            potential_profit = np.bincount(harvesting_farmer_fields, weights=potential_profit, minlength=self.n)
       
             
             self.save_yearly_profits(harvesting_farmers,profit_farmer, potential_profit)
             self.drought_risk_perception(harvesting_farmers)
-            
             ## After updating the drought risk perception, set the previous month for the next timestep as the current for this timestep.
             self.previous_month = self.model.current_time.month
 
@@ -1551,7 +1559,8 @@ class Farmers(AgentBaseClass):
         crop_map: np.ndarray,
         crop_harvest_age_days: np.ndarray,
         crops: np.ndarray,
-        cultivation_cost_per_crop: np.ndarray,
+        cultivation_cost_per_region_per_crop: np.ndarray,
+        region_ids_per_farmer: np.ndarray,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
         field_size_per_farmer: np.ndarray,
@@ -1583,7 +1592,9 @@ class Farmers(AgentBaseClass):
             else:
                 continue
             assert farmer_crop != -1
-            cultivation_cost = cultivation_cost_per_crop[farmer_crop] * field_size_per_farmer[farmer_idx]
+            farmer_region_id = region_ids_per_farmer[farmer_idx]
+            cultivation_cost = cultivation_cost_per_region_per_crop[farmer_region_id, farmer_crop] * field_size_per_farmer[farmer_idx]
+            assert not np.isnan(cultivation_cost)
             if not farmers_going_out_of_business or disposable_income[farmer_idx] > cultivation_cost:
                 disposable_income[farmer_idx] -= cultivation_cost
                 field_harvest_age = growth_length[farmer_crop, season_idx]
@@ -1602,7 +1613,9 @@ class Farmers(AgentBaseClass):
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU.
         """
         index = self.cultivation_costs[0].get(self.model.current_time)
-        cultivation_cost_per_crop = self.cultivation_costs[1][index]
+        cultivation_cost_per_region_per_crop = self.cultivation_costs[1][index]
+        assert cultivation_cost_per_region_per_crop.shape[0] == len(self.model.regions)
+        assert cultivation_cost_per_region_per_crop.shape[1] == len(self.crop_ids)
 
         # create numpy stack of growth length per crop and season
         growth_length = np.stack([
@@ -1619,7 +1632,8 @@ class Farmers(AgentBaseClass):
             crop_map=self.var.crop_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
             crops=self.crops,
-            cultivation_cost_per_crop=cultivation_cost_per_crop,
+            cultivation_cost_per_region_per_crop=cultivation_cost_per_region_per_crop,
+            region_ids_per_farmer=self.region_id,
             field_indices_by_farmer=self.field_indices_by_farmer,
             field_indices=self.field_indices,
             field_size_per_farmer=self.field_size_per_farmer,
