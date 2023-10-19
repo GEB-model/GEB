@@ -36,20 +36,34 @@ As per instructions in PlantFATE readme, install natively in C++.
 You may need to install additional libraries, specifically pybind: 
 
 * pip
+
   * pip install pybind11
+
   * pip install cppimport
 * libpspm
+
   * cd libpspm
+
   * make clean testclean
+
   * make
+
   * make check
+
 * Phydro
+
   * cd phydro
+
   * make clean testclean
+
   * make check
+
 * PlantFATE
+
   * cd Plant-FATE
+
   * make clean testclean
+  
   * make python
 
 3) RUN PLANTFATE COUPLING FROM PYTHON
