@@ -1268,6 +1268,7 @@ class Farmers(AgentBaseClass):
             well_depth=self.well_depth 
         )
         self.n_water_accessible_days += has_access_to_irrigation_water
+        # sample from elevation not subgrid grid
         self.groundwater_depth = self.elevation - hydraulic_head_per_farmer
         return (
             water_withdrawal_m,
