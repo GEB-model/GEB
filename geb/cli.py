@@ -228,7 +228,7 @@ def click_build_options(func):
     @click.option('--data-catalog', '-d', type=str, multiple=True, default=[os.environ.get('GEB_DATA_CATALOG', 'data_catalog.yml')], help="""A list of paths to the data library YAML files. By default the GEB_DATA_CATALOG environment variable is used. If this is not set, defaults to data_catalog.yml""")
     @click.option('--build-config', '-b', default='build.yml', help="Path of the model build configuration file.")
     @click.option('--working-directory', '-wd', default='.', help="Working directory for model.")
-    @click.option('--data-variant', '-v', default=None, help="Data variant to use from data catalog (see hydroMT documentation).")
+    @click.option('--data-provider', '-p', default=os.environ.get('GEB_DATA_PROVIDER', None), help="Data variant to use from data catalog (see hydroMT documentation).")
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         return func(*args, **kwargs)
@@ -236,7 +236,7 @@ def click_build_options(func):
 
 @main.command()
 @click_build_options
-def build(data_catalog, config, build_config, working_directory, data_variant):
+def build(data_catalog, config, build_config, working_directory, data_provider):
     """Build model."""
 
     # set the working directory
@@ -250,7 +250,7 @@ def build(data_catalog, config, build_config, working_directory, data_variant):
         mode='w+',
         data_libs=data_catalog,
         logger=create_logger('build.log'),
-        data_variant=data_variant,
+        data_provider=data_provider,
     )
 
     pour_point = config['general']['pour_point']
@@ -266,7 +266,7 @@ def build(data_catalog, config, build_config, working_directory, data_variant):
 @main.command()
 @click_build_options
 @click.option('--model', '-m', default='../base', help="Folder for base model.")
-def alter(data_catalog, config, build_config, working_directory, model, data_variant):
+def alter(data_catalog, config, build_config, working_directory, model, data_provider):
     """Build model."""
 
     # set the working directory
@@ -280,7 +280,7 @@ def alter(data_catalog, config, build_config, working_directory, model, data_var
         mode='w+',
         data_libs=data_catalog,
         logger=create_logger('build.log'),
-        data_variant=data_variant,
+        data_provider=data_provider,
     )
 
     geb_model.read()
@@ -289,7 +289,7 @@ def alter(data_catalog, config, build_config, working_directory, model, data_var
 
 @main.command()
 @click_build_options
-def update(data_catalog, config, build_config, working_directory, data_variant):
+def update(data_catalog, config, build_config, working_directory, data_provider):
     """Update model."""
 
     # set the working directory
@@ -303,7 +303,7 @@ def update(data_catalog, config, build_config, working_directory, data_variant):
         mode='r+',
         data_libs=data_catalog,
         logger=create_logger('build_update.log'),
-        data_variant=data_variant,
+        data_provider=data_provider,
     )
     geb_model.read()
     geb_model.update(opt=configread(build_config))
