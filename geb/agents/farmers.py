@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
 import os
 import math
-from datetime import datetime, timedelta
-import pandas as pd
-import cftime
+from datetime import datetime
 import json
-import random
 import calendar
 from typing import Tuple
 
@@ -13,22 +10,11 @@ from scipy.stats import genextreme
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
 
-from pathlib import Path
-
 import numpy as np
 from numba import njit
 from pyproj import Transformer
 
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
-
-
-import matplotlib.pyplot as plt
-
 from honeybees.library.mapIO import NetCDFReader
-from honeybees.library.mapIO import ArrayReader
 from honeybees.library.mapIO import MapReader
 from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords, sample_from_map

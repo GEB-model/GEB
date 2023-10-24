@@ -80,7 +80,7 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.__init_ABM__(GEB_config_path, study_area, current_time, timestep_length, n_timesteps, coordinate_system)
         self.__init_hydromodel__(self.config['general']['CWatM_settings'])
-        if self.config['general']['couple_SFINCS']:
+        if self.config['general']['simulate_floods']:
             self.sfincs = SFINCS(self, config=self.config)
         self.reporter = Reporter(self)
 
@@ -149,13 +149,14 @@ class GEBModel(ABM_Model, CWatM_Model):
             CWatM_Model.step(self, 1)
 
             if self.config['general']['simulate_floods']:
-                n_routing_steps = self.data.grid.noRoutingSteps
-                n_days = 2
-                previous_discharges = pd.DataFrame(self.data.grid.previous_discharges).set_index('time').tail(n_days * n_routing_steps)
-                print('multiplying discharge by 100 to create a flood')
-                previous_discharges *= 100
-                flood, crs, gt = self.sfincs.run(previous_discharges, lons=[73.87007], lats=[19.05390], plot=())  # plot can be basemap, forcing, max_flood_depth
-                self.agents.farmers.flood(flood, crs, gt)
+                pass
+                # n_routing_steps = self.data.grid.noRoutingSteps
+                # n_days = 2
+                # previous_discharges = pd.DataFrame(self.data.grid.previous_discharges).set_index('time').tail(n_days * n_routing_steps)
+                # print('multiplying discharge by 100 to create a flood')
+                # previous_discharges *= 100
+                # flood, crs, gt = self.sfincs.run(previous_discharges, lons=[73.87007], lats=[19.05390], plot=())  # plot can be basemap, forcing, max_flood_depth
+                # self.agents.farmers.flood(flood, crs, gt)
          
             self.reporter.step()
             t1 = time()
@@ -168,7 +169,7 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         CWatM_Model.finalize(self)
 
-        if self.config['general']['couple_plantFATE']:
+        if self.config['general']['simulate_forest']:
             self.data.HRU.plant_fate_df.to_csv('plantFATE.csv')
 
         if self.save_initial_data:
