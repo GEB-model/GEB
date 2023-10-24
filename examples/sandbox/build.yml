@@ -92,10 +92,10 @@ setup_crops:
       d3a: 47.0
       d3b: 0.0
       d4: 29.0
-      season_#1_duration: 515.0
-      season_#2_duration: 480.0
-      reference_yield_kg_m2: 15.0
-      season_#3_duration: 445.0
+      season_#1_duration: 170
+      season_#2_duration: 160
+      reference_yield_kg_m2: 5.0
+      season_#3_duration: 150
     5:
       Kc1: 0.3
       Kc3: 1.1

@@ -22,7 +22,6 @@ dependencies = [
     "dask>=2023.3.0",
     "rioxarray>=0.15",
     "pybind11",
-    "hydromt>=0.8",
     "hydromt-sfincs>=1.0.1",
     "honeybees@git+https://github.com/jensdebruijn/honeybees",
     "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
