@@ -80,9 +80,8 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.__init_ABM__(GEB_config_path, study_area, current_time, timestep_length, n_timesteps, coordinate_system)
         self.__init_hydromodel__(self.config['general']['CWatM_settings'])
-        if self.config['general']['simulate_floods']:
-            bbox = [73.86941, 18.99371, 73.94790, 19.05860]
-            self.sfincs = SFINCS(self, self.config, bbox=bbox)
+        if self.config['general']['couple_SFINCS']:
+            self.sfincs = SFINCS(self, config=self.config)
         self.reporter = Reporter(self)
 
         np.savez_compressed(Path(self.reporter.abm_reporter.export_folder, 'land_owners.npz'), data=self.data.HRU.land_owners)
