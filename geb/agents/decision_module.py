@@ -171,7 +171,6 @@ class DecisionModule:
         loan_duration: int,
         n_agents: int,
         sigma: float,
-        total_profits: np.ndarray,
         profits_no_event: np.ndarray,
         total_profits_adaptation: np.ndarray,
         profits_no_event_adaptation: np.ndarray,
