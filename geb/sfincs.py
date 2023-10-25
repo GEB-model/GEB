@@ -5,9 +5,12 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 from hydromt_sfincs import SfincsModel
 from hydromt.config import configread
+
+from sfincs_river_flood_simulator import build_sfincs
 
 SFINCS_EXE = os.path.abspath(r'../SFINCS/sfincs.exe')
 
@@ -17,7 +20,16 @@ class SFINCS:
         self.config = config
 
     def setup(self, basin_id):
-        pass
+        data_folder = Path(os.environ.get('GEB_DATA_CATALOG')).parent / 'SFINCS'
+        config_fn = data_folder / 'sfincs_cli_build.yml'
+        build_sfincs(
+            basin_id=basin_id,
+            config_fn=str(config_fn),
+            basins_fn=str(data_folder / 'basins.gpkg'),
+            root=str(data_folder / 'models' / str(basin_id)),
+            data_dir=data_folder,
+            data_catalogs=[str(data_folder / 'global_data' / 'data_catalog.yml')],
+        )
 
     def run(self, basin_id, discharge_map):
         pass

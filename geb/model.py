@@ -73,7 +73,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         n_timesteps = (end_time - current_time) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
-        assert n_timesteps > 0
+        assert n_timesteps > 0, "End time is before or identical to start time"
         
         self.regions = gpd.read_file(self.model_structure['geoms']['areamaps/regions'])
         self.data = Data(self)
@@ -149,7 +149,7 @@ class GEBModel(ABM_Model, CWatM_Model):
             CWatM_Model.step(self, 1)
 
             if self.config['general']['simulate_floods']:
-                pass
+                self.sfincs.setup(basin_id=16082)
                 # n_routing_steps = self.data.grid.noRoutingSteps
                 # n_days = 2
                 # previous_discharges = pd.DataFrame(self.data.grid.previous_discharges).set_index('time').tail(n_days * n_routing_steps)
