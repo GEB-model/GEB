@@ -1046,7 +1046,6 @@ class Farmers(AgentBaseClass):
         activation_order: np.ndarray,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
-        elevation_grid: np.ndarray,
         irrigation_efficiency: np.ndarray,
         surface_irrigated: np.ndarray,
         well_irrigated: np.ndarray,
@@ -1056,7 +1055,7 @@ class Farmers(AgentBaseClass):
         totalPotIrrConsumption: np.ndarray,
         available_channel_storage_m3: np.ndarray,
         available_groundwater_m3: np.ndarray,
-        groundwater_head: np.ndarray,
+        groundwater_depth: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
         command_areas: np.ndarray,
         return_fraction: float,
@@ -1109,20 +1108,25 @@ class Farmers(AgentBaseClass):
         channel_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
         reservoir_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
         groundwater_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
-        hydraulic_head_per_farmer = np.zeros(activation_order.size, dtype=np.float32)
+        groundwater_depth_per_farmer = np.zeros(activation_order.size, dtype=np.float32)
   
         has_access_to_irrigation_water = np.zeros(activation_order.size, dtype=np.bool_)
         for activated_farmer_index in range(activation_order.size):
             farmer = activation_order[activated_farmer_index]
             farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
             irrigation_efficiency_farmer = irrigation_efficiency[farmer]
+            
 
             # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
             farmer_has_access_to_irrigation_water = False
             for field in farmer_fields:
                 f_var = HRU_to_grid[field]
+
+                # Convert the groundwater depth to groundwater depth per farmer 
+                groundwater_depth_per_farmer[farmer] = groundwater_depth[f_var]
+
                 if well_irrigated[farmer] == 1:
-                    if elevation_grid[f_var] - groundwater_head[f_var] < well_depth:
+                    if groundwater_depth[f_var] < well_depth:
                         farmer_has_access_to_irrigation_water = True
                         break
                 elif surface_irrigated[farmer] == 1:
@@ -1135,12 +1139,11 @@ class Farmers(AgentBaseClass):
                         farmer_has_access_to_irrigation_water = True
                         break
             has_access_to_irrigation_water[activated_farmer_index] = farmer_has_access_to_irrigation_water
-      
+            
             # Actual irrigation from surface, reservoir and groundwater
             if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
                 for field in farmer_fields:
                     f_var = HRU_to_grid[field]
-                    hydraulic_head_per_farmer[farmer] = groundwater_head[f_var]
                     if crop_map[field] != -1:
                         irrigation_water_demand_field = totalPotIrrConsumption[field] / irrigation_efficiency_farmer
 
@@ -1174,8 +1177,7 @@ class Farmers(AgentBaseClass):
 
                         if well_irrigated[farmer]:
                             # groundwater irrigation
-                            groundwater_depth = elevation_grid[f_var] - groundwater_head[f_var] 
-                            if groundwater_depth < well_depth:
+                            if groundwater_depth[f_var] < well_depth:
                                 available_groundwater_cell_m = available_groundwater_m3[f_var] / cell_area[field]
                                 groundwater_abstraction_cell_m = min(available_groundwater_cell_m, irrigation_water_demand_field)
                                 groundwater_abstraction_cell_m3 = groundwater_abstraction_cell_m * cell_area[field]
@@ -1203,7 +1205,7 @@ class Farmers(AgentBaseClass):
             returnFlowIrr_m,
             addtoevapotrans_m,
             has_access_to_irrigation_water,
-            hydraulic_head_per_farmer
+            groundwater_depth_per_farmer
         )
 
     def abstract_water(
@@ -1214,6 +1216,7 @@ class Farmers(AgentBaseClass):
         available_channel_storage_m3: np.ndarray,
         available_groundwater_m3: np.ndarray,
         groundwater_head: np.ndarray,
+        groundwater_depth: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
         command_areas: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -1245,13 +1248,12 @@ class Farmers(AgentBaseClass):
             returnFlowIrr_m,
             addtoevapotrans_m,
             has_access_to_irrigation_water,
-            hydraulic_head_per_farmer
+            groundwater_depth_per_farmer
         ) = self.abstract_water_numba(
             self.n,
             self.activation_order_by_elevation,
             self.field_indices_by_farmer,
             self.field_indices,
-            self.elevation_grid,
             self.irrigation_efficiency,
             surface_irrigated=np.isin(self.irrigation_source, [self.irrigation_source_key['canals'], self.irrigation_source_key['other']]),
             well_irrigated=np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']]),
@@ -1261,14 +1263,14 @@ class Farmers(AgentBaseClass):
             totalPotIrrConsumption=totalPotIrrConsumption,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
-            groundwater_head=groundwater_head,
+            groundwater_depth=groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             command_areas=command_areas,
             return_fraction=self.model.config['agent_settings']['farmers']['return_fraction'],
             well_depth=self.well_depth 
         )
         self.n_water_accessible_days += has_access_to_irrigation_water
-        self.groundwater_depth = self.elevation - hydraulic_head_per_farmer
+        self.groundwater_depth = groundwater_depth_per_farmer
         return (
             water_withdrawal_m,
             water_consumption_m,
@@ -2034,19 +2036,19 @@ class Farmers(AgentBaseClass):
         # Fetch lifespan of the adaptation
         lifespan_adaptation = self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan']
 
-        # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
-        expired_adaptations = self.time_adapted[:, ADAPTATION_TYPE] == lifespan_adaptation
+        # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation 
+        # and who's wells are much shallower than the groundwater depth
+        expired_adaptations = (self.time_adapted[:, ADAPTATION_TYPE] == lifespan_adaptation) | (self.groundwater_depth > self.well_depth * 1.50)
         self.adapted[expired_adaptations, ADAPTATION_TYPE] = 0
         self.time_adapted[expired_adaptations, ADAPTATION_TYPE] = -1
         self.irrigation_source[expired_adaptations] = self.irrigation_source_key['no_irrigation']
 
         # Define extra constraints (farmers' wells must reach groundwater)
-        well_reaches_groundwater = np.full(self.n, 1, dtype=bool)
-        # well_reaches_groundwater = self.well_depth > self.groundwater_depth
+        well_reaches_groundwater = self.well_depth > self.groundwater_depth
         extra_constraint = well_reaches_groundwater
 
-        # To calculate the benefit of irrigation, also the other irrigation sources need to count as having a "well"
-        adapted = np.where(self.irrigation_source != 0, 1, 0)
+        # To determine the benefit of irrigation, you could set different sources as being considered a "well"
+        adapted = np.where((self.farmer_class == 2), 1, 0)
 
         # Get the mask of farmers who will adapt
         adaptation_mask = self.adapt_SEUT(ADAPTATION_TYPE, annual_cost, loan_duration, extra_constraint, adapted)
@@ -2185,8 +2187,10 @@ class Farmers(AgentBaseClass):
         if adaptation_type != 0:
             # Compute the yield ratios when an adaptation strategy is applied
             gains_adaptation = self.adaptation_yield_ratio_difference(adapted)
+            assert np.max(gains_adaptation) != np.inf, "gains adaptation value is inf"
+
             yield_ratios_adaptation = yield_ratios * gains_adaptation[:, None]
-            print(np.mean(yield_ratios_adaptation), 'with adaptation', np.mean(yield_ratios), 'without adaptation')
+            print(np.median(yield_ratios_adaptation), 'with adaptation', np.median(yield_ratios), 'without adaptation')
 
             # Ensure yield ratios do not exceed 1
             yield_ratios_adaptation[yield_ratios_adaptation > 1] = 1
@@ -2277,6 +2281,7 @@ class Farmers(AgentBaseClass):
         Returns:
             An array representing the relative yield ratio improvement for each agent.
 
+        TO DO: vectorize 
         """
 
         # Add a column of zeros to represent farmers who have not adapted yet
@@ -2318,65 +2323,6 @@ class Farmers(AgentBaseClass):
 
         # Convert group-based results into agent-specific results
         return unique_yield_ratio_gain_relative[exact_position]
-
-    # def adaptation_yield_ratio_difference(self, yield_ratios: np.ndarray, adapted: np.ndarray) -> np.ndarray:
-    #     """
-    #     Calculate the relative yield ratio improvement for farmers adopting a certain adaptation.
-        
-    #     This function determines how much better farmers that have adopted a particular adaptation
-    #     are doing in terms of their yield ratio as compared to those who haven't.
-        
-    #     Args:
-    #         adaptation_type: The type of adaptation being considered.
-        
-    #     Returns:
-    #         An array representing the relative yield ratio improvement for each agent.
-
-    #     TODO: Consider refining group generation logic for edge cases.
-    #     """
-
-    #     # Add a column of zeros to represent farmers who have not adapted yet
-    #     crop_groups_onlyzeros = np.hstack((self.crops, np.zeros(self.n).reshape(-1,1)))
-
-    #     # Combine current crops with their respective adaptation status
-    #     crop_groups = np.hstack((self.crops, adapted.reshape(-1,1)))
-
-    #     # Initialize array to store relative yield ratio improvement for unique groups
-    #     unique_yield_ratio_gain_relative = np.full((len(np.unique(crop_groups_onlyzeros, axis=0)), self.p_droughts.size), 1, dtype=np.float32)
-
-    #     # Loop over each unique group of farmers to determine their average yield ratio
-    #     for idx, unique_combination in enumerate(np.unique(crop_groups_onlyzeros, axis=0)):
-    #         unique_farmer_groups = (crop_groups == unique_combination[None, ...]).all(axis=1)
-
-    #         # Identify the adapted counterpart of the current group
-    #         unique_combination_adapted = unique_combination.copy()
-    #         unique_combination_adapted[-1] = 1
-    #         unique_farmer_groups_adapted = (crop_groups == unique_combination_adapted[None, ...]).all(axis=1)
-
-    #         if np.count_nonzero(unique_farmer_groups) != 0 and np.count_nonzero(unique_farmer_groups_adapted) != 0:
-    #             # Calculate mean yield ratio over past years for both adapted and unadapted groups
-    #             unadapted_yield_ratio = np.median(yield_ratios[unique_farmer_groups, :], axis=0)
-    #             adapted_yield_ratio = np.median(yield_ratios[unique_farmer_groups_adapted, :], axis=0)
-    
-    #             # Calculate relative improvement in yield ratio due to adaptation
-    #             yield_ratio_gain_relative = adapted_yield_ratio / unadapted_yield_ratio
-
-    #             # Determine the size of adapted group relative to unadapted group
-    #             unadapted_group_size = np.count_nonzero(unique_farmer_groups)
-    #             # determine the size ratio between groups 
-    #             adapted_unadapted_ratio = min(np.count_nonzero(unique_farmer_groups_adapted) / unadapted_group_size if unadapted_group_size != 0 else 0, 1.0)
-    #             # print(np.mean(yield_ratio_gain_relative), 'increase ratio', adapted_unadapted_ratio, 'size ratio')
-            
-    #             # Add to results depending on relative group sizes and random chance. Probability is currently set a bit higher, might need to change 
-    #             if np.random.rand() < (adapted_unadapted_ratio + 0.5) :
-    #                 unique_yield_ratio_gain_relative[idx] = yield_ratio_gain_relative
-        
-    #     # Identify each agent's position within the unique groups
-    #     positions_agent = np.where(np.all(crop_groups_onlyzeros[:, np.newaxis, :] == np.unique(crop_groups_onlyzeros, axis=0), axis=-1))
-    #     exact_position = positions_agent[1]
-
-    #     # Convert group-based results into agent-specific results
-    #     return unique_yield_ratio_gain_relative[exact_position]
 
     def yield_ratio_to_profit(self, yield_ratios: np.ndarray, crops_mask: np.ndarray, nan_array: np.ndarray) -> np.ndarray:
         """
@@ -2788,7 +2734,7 @@ class Farmers(AgentBaseClass):
                 if not np.all(self.farmer_yield_probability_relation == 0): 
                     pass
                     self.adapt_irrigation_well()   
-                    # self.adapt_drip_irrigation()   
+                    self.adapt_drip_irrigation()   
                 else:
                     raise AssertionError("Cannot adapt without yield - probability relation")
                 
