@@ -29,7 +29,7 @@ general:
   #
   export_inital_on_spinup: true
   simulate_floods: false
-  couple_plantFATE: false
+  simulate_forest: false
 
 ###
 # This section can contain settings to change the behavior of the agents.

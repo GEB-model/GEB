@@ -73,7 +73,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         n_timesteps = (end_time - current_time) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
-        assert n_timesteps > 0
+        assert n_timesteps > 0, "End time is before or identical to start time"
         
         self.regions = gpd.read_file(self.model_structure['geoms']['areamaps/regions'])
         self.data = Data(self)
@@ -81,8 +81,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         self.__init_ABM__(GEB_config_path, study_area, current_time, timestep_length, n_timesteps, coordinate_system)
         self.__init_hydromodel__(self.config['general']['CWatM_settings'])
         if self.config['general']['simulate_floods']:
-            bbox = [73.86941, 18.99371, 73.94790, 19.05860]
-            self.sfincs = SFINCS(self, self.config, bbox=bbox)
+            self.sfincs = SFINCS(self, config=self.config)
         self.reporter = Reporter(self)
 
         np.savez_compressed(Path(self.reporter.abm_reporter.export_folder, 'land_owners.npz'), data=self.data.HRU.land_owners)
@@ -150,13 +149,14 @@ class GEBModel(ABM_Model, CWatM_Model):
             CWatM_Model.step(self, 1)
 
             if self.config['general']['simulate_floods']:
-                n_routing_steps = self.data.grid.noRoutingSteps
-                n_days = 2
-                previous_discharges = pd.DataFrame(self.data.grid.previous_discharges).set_index('time').tail(n_days * n_routing_steps)
-                print('multiplying discharge by 100 to create a flood')
-                previous_discharges *= 100
-                flood, crs, gt = self.sfincs.run(previous_discharges, lons=[73.87007], lats=[19.05390], plot=())  # plot can be basemap, forcing, max_flood_depth
-                self.agents.farmers.flood(flood, crs, gt)
+                self.sfincs.setup(basin_id=16082)
+                # n_routing_steps = self.data.grid.noRoutingSteps
+                # n_days = 2
+                # previous_discharges = pd.DataFrame(self.data.grid.previous_discharges).set_index('time').tail(n_days * n_routing_steps)
+                # print('multiplying discharge by 100 to create a flood')
+                # previous_discharges *= 100
+                # flood, crs, gt = self.sfincs.run(previous_discharges, lons=[73.87007], lats=[19.05390], plot=())  # plot can be basemap, forcing, max_flood_depth
+                # self.agents.farmers.flood(flood, crs, gt)
          
             self.reporter.step()
             t1 = time()
@@ -169,7 +169,7 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         CWatM_Model.finalize(self)
 
-        if self.config['general']['couple_plantFATE']:
+        if self.config['general']['simulate_forest']:
             self.data.HRU.plant_fate_df.to_csv('plantFATE.csv')
 
         if self.save_initial_data:
