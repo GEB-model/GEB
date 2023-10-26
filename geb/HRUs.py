@@ -732,8 +732,8 @@ class Data:
         self.grid.tasmax = self.grid.compress(self.grid.tasmax_ds.sel(time=self.model.current_time).data) # K
         self.grid.tasmin = self.grid.compress(self.grid.tasmin_ds.sel(time=self.model.current_time).data) # K
         
-        assert (self.grid.tas > -100).all() and (self.grid.tas < 370).all(), "tas out of range"
-        assert (self.grid.tasmax > -100).all() and (self.grid.tasmax < 370).all(), "tas out of range"
-        assert (self.grid.tasmin > -100).all() and (self.grid.tasmin < 370).all(), "tas out of range"
+        assert (self.grid.tas > 170).all() and (self.grid.tas < 370).all(), "tas out of range"
+        assert (self.grid.tasmax > 170).all() and (self.grid.tasmax < 370).all(), "tasmax out of range"
+        assert (self.grid.tasmin > 170).all() and (self.grid.tasmin < 370).all(), "tasmin out of range"
         self.grid.sfcWind = self.grid.compress(self.grid.sfcWind_ds.sel(time=self.model.current_time).data)  # m/s
         assert (self.grid.sfcWind >= 0).all() and (self.grid.sfcWind < 150).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."

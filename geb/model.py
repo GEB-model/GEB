@@ -169,9 +169,6 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         CWatM_Model.finalize(self)
 
-        if self.config['general']['simulate_forest']:
-            self.data.HRU.plant_fate_df.to_csv('plantFATE.csv')
-
         if self.save_initial_data:
             self.initial_conditions_folder.mkdir(parents=True, exist_ok=True)
             with open(Path(self.initial_conditions_folder, 'initial_conditions.txt'), 'w') as f:
