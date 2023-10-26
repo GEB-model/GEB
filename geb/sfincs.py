@@ -1,15 +1,23 @@
 import os
 from pathlib import Path
+from collections import deque
+from datetime import datetime
+import xarray as xr
+import numpy as np
+import pandas as pd
 
-from sfincs_river_flood_simulator import build_sfincs, update_sfincs
+from sfincs_river_flood_simulator import build_sfincs, update_sfincs_model_forcing
 
 SFINCS_EXE = os.path.abspath(r'../SFINCS/sfincs.exe')
 
 class SFINCS:
-    def __init__(self, model, config):
+    def __init__(self, model, config, n_timesteps=5):
         self.model = model
         self.config = config
+        self.n_timesteps = n_timesteps
         self.data_folder = Path(os.environ.get('GEB_DATA_CATALOG')).parent / 'SFINCS'
+        
+        self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
     def setup(self, basin_id, force_overwrite=False):
         config_fn = self.data_folder / 'sfincs_cli_build.yml'
@@ -18,19 +26,48 @@ class SFINCS:
                 basin_id=basin_id,
                 config_fn=str(config_fn),
                 basins_fn=str(self.data_folder / 'basins.gpkg'),
-                root=self.data_folder / 'models' / str(basin_id),
+                model_root=self.data_folder / 'models' / str(basin_id),
                 data_dir=self.data_folder,
                 data_catalogs=[str(self.data_folder / 'global_data' / 'data_catalog.yml')],
+                mask=self.model.area.geoms['region']
             )
 
-    def run(self, basin_id, discharge_map):
-        update_sfincs(
-            "test",
-            {'tstart': '20050723  000000', 'tend': '20050816  000000'},
-            self.data_folder / 'models' / str(basin_id),
-            [str(self.data_folder / 'global_data' / 'data_catalog.yml')]
+    def to_sfincs_datetime(self, dt: datetime):
+        return dt.strftime('%Y%m%d %H%M%S')
+
+    def run(self, basin_id):
+        n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
+        substeps = self.discharge_per_timestep[0].shape[0]
+        discharge_grid = xr.DataArray(
+            data=self.model.data.grid.decompress(np.vstack(self.discharge_per_timestep)),
+            coords={
+                'time': pd.date_range(
+                    start=self.model.current_time,
+                    periods=n_timesteps * substeps,
+                    freq=self.model.timestep_length / substeps, inclusive='left'
+                ),
+                'y': self.model.data.grid.lat,
+                'x': self.model.data.grid.lon,
+            },
+            dims=['time', 'y', 'x'],
+            name='discharge',
+        )
+        discharge_grid = xr.Dataset({'discharge': discharge_grid})
+        discharge_grid.raster.set_crs(self.model.data.grid.crs)
+        update_sfincs_model_forcing(
+            event_name=f"{self.model.current_time.strftime('%Y%m%dT%H%M%S')}_{basin_id}",
+            current_event={
+                'tstart': self.to_sfincs_datetime(self.model.current_time - self.model.timestep_length * n_timesteps),
+                'tend': self.to_sfincs_datetime(self.model.current_time)
+            },
+            discharge_grid=discharge_grid,
+            model_root=self.data_folder / 'models' / str(basin_id),
+            data_catalogs=[str(self.data_folder / 'global_data' / 'data_catalog.yml')],
         )
         return None
+    
+    def save_discharge(self):
+        self.discharge_per_timestep.append(self.model.data.grid.discharge_substep)  # this is a deque, so it will automatically remove the oldest discharge
 
 # class SFINCS:
 #     def __init__(self, model, config: dict, bbox: list[float, float, float, float]):
@@ -139,8 +176,3 @@ class SFINCS:
 
 #     def to_sfincs_datetime(self, dt: datetime):
 #         return dt.strftime('%Y%m%d %H%M%S')
-
-
-if __name__ == '__main__':
-    from config import config
-    sfincs = SFINCS(config)

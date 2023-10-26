@@ -82,7 +82,7 @@ class GEBModel(ABM_Model, CWatM_Model):
             from geb.sfincs import SFINCS
             self.sfincs = SFINCS(self, config=self.config)
             self.basin_id = 16139
-            self.sfincs.setup(basin_id=self.basin_id)
+            self.sfincs.setup(basin_id=self.basin_id, force_overwrite=False)
         
         self.reporter = Reporter(self)
 
@@ -151,7 +151,8 @@ class GEBModel(ABM_Model, CWatM_Model):
             CWatM_Model.step(self, 1)
 
             if self.config['general']['simulate_floods']:
-                self.sfincs.run(self.basin_id, None)
+                self.sfincs.save_discharge()
+                self.sfincs.run(self.basin_id)
                 
                 # n_routing_steps = self.data.grid.noRoutingSteps
                 # n_days = 2
