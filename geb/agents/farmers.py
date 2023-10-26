@@ -4,7 +4,6 @@ import math
 from datetime import datetime
 import json
 import calendar
-from pprint import pprint 
 from typing import Tuple
 
 from scipy.stats import genextreme
@@ -20,8 +19,6 @@ from honeybees.library.mapIO import MapReader
 from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
-
-import xarray as xr
 
 from ..data import load_regional_crop_data_from_dict, load_crop_variables, load_crop_ids, load_economic_data
 from .decision_module import DecisionModule

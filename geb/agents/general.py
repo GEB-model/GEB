@@ -31,8 +31,14 @@ class AgentArray(np.ndarray):
             elif n is not None and max_size is not None:
                 raise ValueError("Only one of n or max_size can be given")
             if max_size:
-                obj = np.empty_like(input_array, shape=max_size).view(cls)
-                n = input_array.size
+                if input_array.ndim == 1:
+                    shape = max_size
+                elif input_array.ndim == 2:
+                    shape = (max_size, input_array.shape[1])
+                else:
+                    raise ValueError("input_array can only be 1D or 2D")
+                obj = np.empty_like(input_array, shape=shape).view(cls)
+                n = input_array.shape[0]
                 obj[:n] = input_array
                 obj._n = n
             elif n:
