@@ -1,16 +1,7 @@
-import logging
 import os
-from datetime import datetime
-import numpy as np
-import pandas as pd
-import geopandas as gpd
-import matplotlib.pyplot as plt
 from pathlib import Path
 
-from hydromt_sfincs import SfincsModel
-from hydromt.config import configread
-
-from sfincs_river_flood_simulator import build_sfincs
+from sfincs_river_flood_simulator import build_sfincs, update_sfincs
 
 SFINCS_EXE = os.path.abspath(r'../SFINCS/sfincs.exe')
 
@@ -18,21 +9,28 @@ class SFINCS:
     def __init__(self, model, config):
         self.model = model
         self.config = config
+        self.data_folder = Path(os.environ.get('GEB_DATA_CATALOG')).parent / 'SFINCS'
 
-    def setup(self, basin_id):
-        data_folder = Path(os.environ.get('GEB_DATA_CATALOG')).parent / 'SFINCS'
-        config_fn = data_folder / 'sfincs_cli_build.yml'
-        build_sfincs(
-            basin_id=basin_id,
-            config_fn=str(config_fn),
-            basins_fn=str(data_folder / 'basins.gpkg'),
-            root=str(data_folder / 'models' / str(basin_id)),
-            data_dir=data_folder,
-            data_catalogs=[str(data_folder / 'global_data' / 'data_catalog.yml')],
-        )
+    def setup(self, basin_id, force_overwrite=False):
+        config_fn = self.data_folder / 'sfincs_cli_build.yml'
+        if force_overwrite or not os.path.exists(self.data_folder / 'models' / str(basin_id) / 'sfincs.inp'):
+            build_sfincs(
+                basin_id=basin_id,
+                config_fn=str(config_fn),
+                basins_fn=str(self.data_folder / 'basins.gpkg'),
+                root=self.data_folder / 'models' / str(basin_id),
+                data_dir=self.data_folder,
+                data_catalogs=[str(self.data_folder / 'global_data' / 'data_catalog.yml')],
+            )
 
     def run(self, basin_id, discharge_map):
-        pass
+        update_sfincs(
+            "test",
+            {'tstart': '20050723  000000', 'tend': '20050816  000000'},
+            self.data_folder / 'models' / str(basin_id),
+            [str(self.data_folder / 'global_data' / 'data_catalog.yml')]
+        )
+        return None
 
 # class SFINCS:
 #     def __init__(self, model, config: dict, bbox: list[float, float, float, float]):

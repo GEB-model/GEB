@@ -23,8 +23,6 @@ from geb.artists import Artists
 from geb.HRUs import Data
 from geb.cwatm_model import CWatM_Model
 
-from geb.sfincs import SFINCS
-
 class GEBModel(ABM_Model, CWatM_Model):
     """GEB parent class.
     
@@ -81,7 +79,11 @@ class GEBModel(ABM_Model, CWatM_Model):
         self.__init_ABM__(GEB_config_path, study_area, current_time, timestep_length, n_timesteps, coordinate_system)
         self.__init_hydromodel__(self.config['general']['CWatM_settings'])
         if self.config['general']['simulate_floods']:
+            from geb.sfincs import SFINCS
             self.sfincs = SFINCS(self, config=self.config)
+            self.basin_id = 16139
+            self.sfincs.setup(basin_id=self.basin_id)
+        
         self.reporter = Reporter(self)
 
         np.savez_compressed(Path(self.reporter.abm_reporter.export_folder, 'land_owners.npz'), data=self.data.HRU.land_owners)
@@ -149,7 +151,8 @@ class GEBModel(ABM_Model, CWatM_Model):
             CWatM_Model.step(self, 1)
 
             if self.config['general']['simulate_floods']:
-                self.sfincs.setup(basin_id=16082)
+                self.sfincs.run(self.basin_id, None)
+                
                 # n_routing_steps = self.data.grid.noRoutingSteps
                 # n_days = 2
                 # previous_discharges = pd.DataFrame(self.data.grid.previous_discharges).set_index('time').tail(n_days * n_routing_steps)
