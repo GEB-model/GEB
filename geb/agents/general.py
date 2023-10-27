@@ -7,6 +7,7 @@ class AgentArray(np.ndarray):
         'std',
         'min',
         'max',
+        'fill',
         'n',
         '_n',
         'ndim',
@@ -157,9 +158,13 @@ class AgentArray(np.ndarray):
         return self.view(np.ndarray).size
 
     def __setitem__(self, key, value):
+        if isinstance(key, AgentArray):
+            key = key[:key.n].view(np.ndarray)
         self[:self._n].view(np.ndarray).__setitem__(key, value)
 
     def __getitem__(self, key):
+        if isinstance(key, AgentArray):
+            key = key[:key.n].view(np.ndarray)
         return self.view(np.ndarray)[:self._n].__getitem__(key)
 
     def __repr__(self):

@@ -66,5 +66,8 @@ def test_agent_array():
     # Test size property
     assert a.size == 4
 
+    a.fill(42)
+    assert np.array_equal(a, np.array([42, 42, 42, 42]))
+
 if __name__ == '__main__':
     test_agent_array()
