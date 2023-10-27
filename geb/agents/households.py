@@ -1,5 +1,4 @@
 import numpy as np
-# import xarray as xr
 import pyproj
 
 from .general import AgentArray

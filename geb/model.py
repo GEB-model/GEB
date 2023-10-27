@@ -142,9 +142,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         else:
             n = step_size
         for _ in range(n):
-            # print model information 
             print(self.current_time)
-            #print('random_test_message')
             t0 = time()
             self.data.step()
             ABM_Model.step(self, 1, report=False)
@@ -152,15 +150,8 @@ class GEBModel(ABM_Model, CWatM_Model):
 
             if self.config['general']['simulate_floods']:
                 self.sfincs.save_discharge()
-                self.sfincs.run(self.basin_id)
-                
-                # n_routing_steps = self.data.grid.noRoutingSteps
-                # n_days = 2
-                # previous_discharges = pd.DataFrame(self.data.grid.previous_discharges).set_index('time').tail(n_days * n_routing_steps)
-                # print('multiplying discharge by 100 to create a flood')
-                # previous_discharges *= 100
-                # flood, crs, gt = self.sfincs.run(previous_discharges, lons=[73.87007], lats=[19.05390], plot=())  # plot can be basemap, forcing, max_flood_depth
-                # self.agents.farmers.flood(flood, crs, gt)
+                if self.current_timestep > 5:
+                    self.sfincs.run(self.basin_id)
          
             self.reporter.step()
             t1 = time()
