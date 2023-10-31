@@ -9,7 +9,7 @@ import pandas as pd
 from sfincs_river_flood_simulator import build_sfincs, update_sfincs_model_forcing, run_sfincs_simulation, read_flood_map
 
 class SFINCS:
-    def __init__(self, model, config, n_timesteps=5):
+    def __init__(self, model, config, n_timesteps=1):
         self.model = model
         self.config = config
         self.n_timesteps = n_timesteps
@@ -19,6 +19,7 @@ class SFINCS:
 
     def setup(self, basin_id, force_overwrite=False):
         config_fn = self.data_folder / 'sfincs_cli_build.yml'
+        # force_overwrite = True
         if force_overwrite or not os.path.exists(self.data_folder / 'models' / str(basin_id) / 'sfincs.inp'):
             build_sfincs(
                 basin_id=basin_id,
@@ -77,12 +78,13 @@ class SFINCS:
         event_name = f"{self.model.current_time.strftime('%Y%m%dT%H%M%S')}_{basin_id}"
         self.set_forcing(basin_id, event_name)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
+        simulation_root = self.data_folder / 'models' / str(basin_id) / 'simulations' / event_name
         run_sfincs_simulation(
-            root=self.data_folder / 'models' / str(basin_id) / 'simulations' / event_name,
+            simulation_root=simulation_root,
         )
         flood_map = read_flood_map(
             model_root=self.data_folder / 'models' / str(basin_id),
-            event_name=event_name,
+            simulation_root=simulation_root,
         )  # xc, yc is for x and y in rotated grid
         self.flood(flood_map)
 
