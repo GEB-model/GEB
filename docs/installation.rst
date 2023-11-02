@@ -25,11 +25,15 @@ If you want to contribute to GEB, you can install it in development mode. This w
 
 Then you can install GEB in editable mode, however, first make sure to comment out the following line in the pyproject.toml file to ensure that previously installed packages are not overruled.
 
+.. code-block:: python
+
     "honeybees@git+https://github.com/jensdebruijn/honeybees",
     "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
     "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
 
 to
+
+.. code-block:: python
 
     # "honeybees@git+https://github.com/jensdebruijn/honeybees",
     # "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
