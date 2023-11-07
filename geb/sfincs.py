@@ -46,6 +46,7 @@ class SFINCS:
     def set_forcing(self, basin_id):
         n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
         substeps = self.discharge_per_timestep[0].shape[0]
+        print("WARNING: Multiplying discharge by 10.000!!! Remove this later for real data.")
         discharge_grid = self.model.data.grid.decompress(np.vstack(self.discharge_per_timestep)) * 10000
         
         # when SFINCS starts with high values, this leads to numerical instabilities. Therefore, we first start with very low discharge and then build up slowly to timestep 0
