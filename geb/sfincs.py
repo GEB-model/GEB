@@ -17,15 +17,23 @@ class SFINCS:
         
         self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
-    def setup(self, basin_id, force_overwrite=False):
-        config_fn = self.data_folder / 'sfincs_cli_build.yml'
-        # force_overwrite = True
-        if force_overwrite or not os.path.exists(self.data_folder / 'models' / str(basin_id) / 'sfincs.inp'):
+    def sfincs_model_root(self, basin_id):
+        folder = self.model.simulation_root / 'SFINCS' / str(basin_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+    
+    def sfincs_simulation_root(self, basin_id):
+        folder = self.sfincs_model_root(basin_id) / 'simulations' / f"{self.model.current_time.strftime('%Y%m%dT%H%M%S')}"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def setup(self, basin_id, config_fn='sfincs.yml', force_overwrite=False):
+        if force_overwrite or not (self.sfincs_model_root(basin_id) / 'sfincs.inp').exists():
             build_sfincs(
                 basin_id=basin_id,
                 config_fn=str(config_fn),
                 basins_fn=str(self.data_folder / 'basins.gpkg'),
-                model_root=self.data_folder / 'models' / str(basin_id),
+                model_root=self.sfincs_model_root(basin_id),
                 data_dir=self.data_folder,
                 data_catalogs=[str(self.data_folder / 'global_data' / 'data_catalog.yml')],
             )
@@ -35,7 +43,7 @@ class SFINCS:
     def to_sfincs_datetime(self, dt: datetime):
         return dt.strftime('%Y%m%d %H%M%S')
 
-    def set_forcing(self, basin_id, event_name):
+    def set_forcing(self, basin_id):
         n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
         substeps = self.discharge_per_timestep[0].shape[0]
         discharge_grid = self.model.data.grid.decompress(np.vstack(self.discharge_per_timestep)) * 10000
@@ -64,28 +72,24 @@ class SFINCS:
         discharge_grid = xr.Dataset({'discharge': discharge_grid})
         discharge_grid.raster.set_crs(self.model.data.grid.crs)
         update_sfincs_model_forcing(
-            event_name=event_name,
+            model_root=self.sfincs_model_root(basin_id),
+            simulation_root=self.sfincs_simulation_root(basin_id),
             current_event={
                 'tstart': self.to_sfincs_datetime(discharge_grid.time[0].dt).item(),
                 'tend': self.to_sfincs_datetime((discharge_grid.time[-1] + pd.Timedelta(self.model.timestep_length / substeps)).dt).item()
             },
             discharge_grid=discharge_grid,
-            model_root=self.data_folder / 'models' / str(basin_id),
             data_catalogs=[str(self.data_folder / 'global_data' / 'data_catalog.yml')],
         )
         return None
 
     def run(self, basin_id):
-        event_name = f"{self.model.current_time.strftime('%Y%m%dT%H%M%S')}_{basin_id}"
-        self.set_forcing(basin_id, event_name)
+        self.set_forcing(basin_id)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
-        simulation_root = self.data_folder / 'models' / str(basin_id) / 'simulations' / event_name
-        run_sfincs_simulation(
-            simulation_root=simulation_root,
-        )
+        run_sfincs_simulation(simulation_root=self.sfincs_simulation_root(basin_id))
         flood_map = read_flood_map(
-            model_root=self.data_folder / 'models' / str(basin_id),
-            simulation_root=simulation_root,
+            model_root=self.sfincs_model_root(basin_id),
+            simulation_root=self.sfincs_simulation_root(basin_id),
         )  # xc, yc is for x and y in rotated grid
         self.flood(flood_map)
 

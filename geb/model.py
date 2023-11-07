@@ -193,3 +193,15 @@ class GEBModel(ABM_Model, CWatM_Model):
             day: current day of the year.
         """
         return self.current_time.timetuple().tm_yday
+    
+
+    @property
+    def simulation_root(self) -> Path:
+        """Gets the simulation root.
+        
+        Returns:
+            simulation_root: Path of the simulation root.
+        """
+        folder = Path('simulation_root')
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
