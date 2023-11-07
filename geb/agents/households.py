@@ -25,8 +25,10 @@ class Households(AgentBaseClass):
     def flood(self, flood_map):
         self.flood_depth.fill(0)  # Reset flood depth for all households
 
-        flood_map.plot()
         import matplotlib.pyplot as plt
+        plt.figure()
+        
+        flood_map.plot()
         plt.savefig('flood.png')
 
         transformer = pyproj.Transformer.from_crs(

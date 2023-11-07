@@ -28,8 +28,9 @@ class SFINCS:
                 model_root=self.data_folder / 'models' / str(basin_id),
                 data_dir=self.data_folder,
                 data_catalogs=[str(self.data_folder / 'global_data' / 'data_catalog.yml')],
-                mask=self.model.area.geoms['region']
             )
+
+        return None
 
     def to_sfincs_datetime(self, dt: datetime):
         return dt.strftime('%Y%m%d %H%M%S')
@@ -37,22 +38,22 @@ class SFINCS:
     def set_forcing(self, basin_id, event_name):
         n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
         substeps = self.discharge_per_timestep[0].shape[0]
-        discharge_grid = self.model.data.grid.decompress(np.vstack(self.discharge_per_timestep))
+        discharge_grid = self.model.data.grid.decompress(np.vstack(self.discharge_per_timestep)) * 10000
         
         # when SFINCS starts with high values, this leads to numerical instabilities. Therefore, we first start with very low discharge and then build up slowly to timestep 0
         # TODO: Check if this is a right approach
         discharge_grid = np.vstack([np.full_like(discharge_grid[:substeps,:,:], fill_value=np.nan), discharge_grid])  # prepend zeros
         for i in range(substeps - 1, -1, -1):
-            discharge_grid[i] = discharge_grid[i+1] * 0.9
+            discharge_grid[i] = discharge_grid[i+1] * 0.3
         
         # convert the discharge grid to an xarray DataArray
         discharge_grid = xr.DataArray(
             data=discharge_grid,
             coords={
                 'time': pd.date_range(
-                    start=self.model.current_time,
-                    periods=(n_timesteps + 1) * substeps,  # +1 because we prepend the discharge
-                    freq=self.model.timestep_length / substeps, inclusive='left'
+                    end=self.model.current_time - self.model.timestep_length / substeps,
+                    periods=(n_timesteps + 1) * substeps,  # +1 because we prepend the discharge above
+                    freq=self.model.timestep_length / substeps, inclusive='right'
                 ),
                 'y': self.model.data.grid.lat,
                 'x': self.model.data.grid.lon,
@@ -65,8 +66,8 @@ class SFINCS:
         update_sfincs_model_forcing(
             event_name=event_name,
             current_event={
-                'tstart': self.to_sfincs_datetime(self.model.current_time - self.model.timestep_length * n_timesteps),
-                'tend': self.to_sfincs_datetime(self.model.current_time)
+                'tstart': self.to_sfincs_datetime(discharge_grid.time[0].dt).item(),
+                'tend': self.to_sfincs_datetime((discharge_grid.time[-1] + pd.Timedelta(self.model.timestep_length / substeps)).dt).item()
             },
             discharge_grid=discharge_grid,
             model_root=self.data_folder / 'models' / str(basin_id),
