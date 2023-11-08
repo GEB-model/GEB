@@ -9,7 +9,7 @@ import pandas as pd
 from sfincs_river_flood_simulator import build_sfincs, update_sfincs_model_forcing, run_sfincs_simulation, read_flood_map
 
 class SFINCS:
-    def __init__(self, model, config, n_timesteps=1):
+    def __init__(self, model, config, n_timesteps=10):
         self.model = model
         self.config = config
         self.n_timesteps = n_timesteps
@@ -43,7 +43,7 @@ class SFINCS:
     def to_sfincs_datetime(self, dt: datetime):
         return dt.strftime('%Y%m%d %H%M%S')
 
-    def set_forcing(self, basin_id):
+    def set_forcing(self, basin_id, start_time):
         n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
         substeps = self.discharge_per_timestep[0].shape[0]
         print("WARNING: Multiplying discharge by 10.000!!! Remove this later for real data.")
@@ -76,7 +76,7 @@ class SFINCS:
             model_root=self.sfincs_model_root(basin_id),
             simulation_root=self.sfincs_simulation_root(basin_id),
             current_event={
-                'tstart': self.to_sfincs_datetime(discharge_grid.time[0].dt).item(),
+                'tstart': self.to_sfincs_datetime(start_time),
                 'tend': self.to_sfincs_datetime((discharge_grid.time[-1] + pd.Timedelta(self.model.timestep_length / substeps)).dt).item()
             },
             discharge_grid=discharge_grid,
@@ -84,8 +84,9 @@ class SFINCS:
         )
         return None
 
-    def run(self, basin_id):
-        self.set_forcing(basin_id)
+    def run(self, basin_id, start_time):
+        self.setup(basin_id)
+        self.set_forcing(basin_id, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         run_sfincs_simulation(simulation_root=self.sfincs_simulation_root(basin_id))
         flood_map = read_flood_map(
