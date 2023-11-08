@@ -12,7 +12,7 @@ GEB aims to simulate both environment, the individual behaviour of people and th
 
 Building on the shoulders of giants
 ----------------------------------------
-GEB builds on, couples and extends several models, depected in the figure below.
+GEB builds on, couples and extends several models, depicted in the figure below.
 
 .. image:: images/models_overview.svg
 
