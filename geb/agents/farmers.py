@@ -408,14 +408,6 @@ class Farmers(AgentBaseClass):
         self.initiate_agents()
 
     @property
-    def locations(self):
-        return self._locations[:self.n]
-
-    @locations.setter
-    def locations(self, value):
-        self._locations[:self.n] = value
-
-    @property
     def region_id(self):
         return self._region_id[:self.n]
 
@@ -818,9 +810,9 @@ class Farmers(AgentBaseClass):
                     shape = self.max_n
                 setattr(self, attribute, np.full(shape, self.agent_attributes_meta[attribute]["nodata"], dtype=self.agent_attributes_meta[attribute]["dtype"]))
 
-            self.locations = pixels_to_coords(pixels + .5, self.var.gt)
+            self.locations = AgentArray(pixels_to_coords(pixels + .5, self.var.gt), max_n=self.max_n)
 
-            self.risk_aversion = AgentArray(n=self.n, max_size=self.max_n, dtype=np.float32, fill_value=np.nan)
+            self.risk_aversion = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan)
             self.risk_aversion[:] = np.load(self.model.model_structure['binary']["agents/farmers/risk_aversion"])['data']
 
             # Load the region_code of each farmer.
