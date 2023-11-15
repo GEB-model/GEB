@@ -46,8 +46,7 @@ class SFINCS:
     def set_forcing(self, basin_id, start_time):
         n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
         substeps = self.discharge_per_timestep[0].shape[0]
-        print("WARNING: Multiplying discharge by 10.000!!! Remove this later for real data.")
-        discharge_grid = self.model.data.grid.decompress(np.vstack(self.discharge_per_timestep)) * 10000
+        discharge_grid = self.model.data.grid.decompress(np.vstack(self.discharge_per_timestep))
         
         # when SFINCS starts with high values, this leads to numerical instabilities. Therefore, we first start with very low discharge and then build up slowly to timestep 0
         # TODO: Check if this is a right approach
@@ -72,15 +71,19 @@ class SFINCS:
         )
         discharge_grid = xr.Dataset({'discharge': discharge_grid})
         discharge_grid.raster.set_crs(self.model.data.grid.crs)
+        tstart = start_time
+        tend = (discharge_grid.time[-1] + pd.Timedelta(self.model.timestep_length / substeps))
+        discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
         update_sfincs_model_forcing(
             model_root=self.sfincs_model_root(basin_id),
             simulation_root=self.sfincs_simulation_root(basin_id),
             current_event={
-                'tstart': self.to_sfincs_datetime(start_time),
-                'tend': self.to_sfincs_datetime((discharge_grid.time[-1] + pd.Timedelta(self.model.timestep_length / substeps)).dt).item()
+                'tstart': self.to_sfincs_datetime(tstart),
+                'tend': self.to_sfincs_datetime(tend.dt).item()
             },
             discharge_grid=discharge_grid,
             data_catalogs=[str(self.data_folder / 'global_data' / 'data_catalog.yml')],
+            uparea='merit_hydro_30sec',
         )
         return None
 
