@@ -208,3 +208,110 @@ class AgentArray:
         self.data = self.data.__pow__(other)
         return self
     
+from numba import types
+from numba.extending import typeof_impl, as_numba_type, type_callable, models, register_model, make_attribute_wrapper, lower_builtin
+from numba.core import cgutils
+from numba.extending import box, unbox, NativeValue
+from contextlib import ExitStack
+from numba.np import numpy_support
+
+class AgentArrayType(types.Type):
+    def __init__(self):
+        super(AgentArrayType, self).__init__(name='AgentArray')
+
+agent_array_type = AgentArrayType()
+print(agent_array_type)
+
+@typeof_impl.register(AgentArray)
+def typeof_index(val, c):
+    return agent_array_type
+
+as_numba_type.register(AgentArray, agent_array_type)
+
+# to fix
+@type_callable(AgentArray)
+def type_interval(context):
+    def typer(data):
+        if isinstance(data, types.Float):
+            return agent_array_type
+    return typer
+
+@register_model(AgentArrayType)
+class AgentArrayModel(models.StructModel):
+    def __init__(self, dmm, fe_type):
+        members = [('data', types.float64)]
+        models.StructModel.__init__(self, dmm, fe_type, members)
+
+make_attribute_wrapper(AgentArrayType, 'data', 'data')
+
+@lower_builtin(AgentArray, types.Float)
+def impl_interval(context, builder, sig, args):
+    typ = sig.return_type
+    data, = args
+    interval = cgutils.create_struct_proxy(typ)(context, builder)
+    interval.data = data
+    return interval._getvalue()
+
+@unbox(AgentArrayType)
+def unbox_array(typ, obj, c):
+    """
+    Convert a Numpy array object to a native array structure.
+    """
+    # This is necessary because unbox_buffer() does not work on some
+    # dtypes, e.g. datetime64 and timedelta64.
+    # TODO check matching dtype.
+    #      currently, mismatching dtype will still work and causes
+    #      potential memory corruption
+    nativearycls = c.context.make_array(typ)
+    nativeary = nativearycls(c.context, c.builder)
+    aryptr = nativeary._getpointer()
+
+    ptr = c.builder.bitcast(aryptr, c.pyapi.voidptr)
+    if c.context.enable_nrt:
+        errcode = c.pyapi.nrt_adapt_ndarray_from_python(obj, ptr)
+    else:
+        errcode = c.pyapi.numba_array_adaptor(obj, ptr)
+
+    # TODO: here we have minimal typechecking by the itemsize.
+    #       need to do better
+    try:
+        expected_itemsize = numpy_support.as_dtype(typ.dtype).itemsize
+    except NumbaNotImplementedError:
+        # Don't check types that can't be `as_dtype()`-ed
+        itemsize_mismatch = cgutils.false_bit
+    else:
+        expected_itemsize = nativeary.itemsize.type(expected_itemsize)
+        itemsize_mismatch = c.builder.icmp_unsigned(
+            '!=',
+            nativeary.itemsize,
+            expected_itemsize,
+            )
+
+    failed = c.builder.or_(
+        cgutils.is_not_null(c.builder, errcode),
+        itemsize_mismatch,
+    )
+    # Handle error
+    with c.builder.if_then(failed, likely=False):
+        c.pyapi.err_set_string("PyExc_TypeError",
+                               "can't unbox array from PyObject into "
+                               "native value.  The object maybe of a "
+                               "different type")
+    return NativeValue(c.builder.load(aryptr), is_error=failed)
+
+
+@box(AgentArrayType)
+def box_array(typ, val, c):
+    nativearycls = c.context.make_array(typ)
+    nativeary = nativearycls(c.context, c.builder, value=val)
+    if c.context.enable_nrt:
+        np_dtype = numpy_support.as_dtype(typ.dtype)
+        dtypeptr = c.env_manager.read_const(c.env_manager.add_const(np_dtype))
+        newary = c.pyapi.nrt_adapt_ndarray_to_python(typ, val, dtypeptr)
+        # Steals NRT ref
+        c.context.nrt.decref(c.builder, typ, val)
+        return newary
+    else:
+        parent = nativeary.parent
+        c.pyapi.incref(parent)
+        return parent
