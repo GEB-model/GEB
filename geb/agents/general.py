@@ -207,3 +207,34 @@ class AgentArray:
     def __ipow__(self, other):
         self.data = self.data.__pow__(other)
         return self
+    
+    def __eq__(self, value: object) -> bool:
+        if isinstance(value, AgentArray):
+            return AgentArray(self.data.__eq__(value.data), max_n=self._data.shape[0])
+        return self.data.__eq__(value)
+
+    def __ne__(self, value: object) -> bool:
+        if isinstance(value, AgentArray):
+            return AgentArray(self.data.__ne__(value.data), max_n=self._data.shape[0])
+        return self.data.__ne__(value)
+    
+    def __gt__(self, value: object) -> bool:
+        if isinstance(value, AgentArray):
+            return AgentArray(self.data.__gt__(value.data), max_n=self._data.shape[0])
+        return self.data.__gt__(value)
+    
+    def __ge__(self, value: object) -> bool:
+        if isinstance(value, AgentArray):
+            return AgentArray(self.data.__ge__(value.data), max_n=self._data.shape[0])
+        return self.data.__ge__(value)
+    
+    def __lt__(self, value: object) -> bool:
+        if isinstance(value, AgentArray):
+            return AgentArray(self.data.__lt__(value.data), max_n=self._data.shape[0])
+        return self.data.__lt__(value)
+    
+    def __le__(self, value: object) -> bool:
+        if isinstance(value, AgentArray):
+            return AgentArray(self.data.__le__(value.data), max_n=self._data.shape[0])
+        return self.data.__le__(value)
+    

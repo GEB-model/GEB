@@ -819,7 +819,7 @@ class Farmers(AgentBaseClass):
             self.region_id = np.load(self.model.model_structure['binary']["agents/farmers/region_id"])['data']
 
             # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
-            self.elevation = self.elevation_subgrid.sample_coords(self.locations)
+            self.elevation = self.elevation_subgrid.sample_coords(self.locations.data)
 
             # Initiate adaptation status. 0 = not adapted, 1 adapted. Column 0 = no cost adaptation, 1 = well, 2 = sprinkler
             self.adapted = np.zeros((self.n, 3), dtype=np.int32) 
@@ -917,7 +917,7 @@ class Farmers(AgentBaseClass):
                     xmax=self.model.xmax,
                     ymax=self.model.ymax,
                 )
-                self.GEV_parameters[:, i] = GEV_map.sample_coords(self.locations)
+                self.GEV_parameters[:, i] = GEV_map.sample_coords(self.locations.data)
             
         self.var.actual_transpiration_crop = self.var.load_initial('actual_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)
         self.var.potential_transpiration_crop = self.var.load_initial('potential_transpiration_crop', default=self.var.full_compressed(0, dtype=np.float32, gpu=False), gpu=False)

@@ -9,6 +9,14 @@ def test_agent_array():
     a_[:3] = np.array([1, 2, 3])
     assert np.array_equal(a, a_)
 
+    assert (a == 2).sum() == 1
+    assert (a != 2).sum() == 2
+
+    assert (a > 2).sum() == 1
+    assert (a >= 2).sum() == 2
+    assert (a < 2).sum() == 1
+    assert (a <= 2).sum() == 2
+
     assert np.array(a) is not a
     assert isinstance(np.array(a), np.ndarray)
     assert np.array(a).size == 3
