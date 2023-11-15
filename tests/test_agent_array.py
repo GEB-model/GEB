@@ -3,14 +3,23 @@ import numpy as np
 from geb.agents.general import AgentArray
     
 def test_agent_array():
-    # Test initialization with max_size
-    a = AgentArray(np.array([1, 2, 3]), max_size=10)
-    a_ = AgentArray(dtype=np.int64, n=3, max_size=10)
+    # Test initialization with max_n
+    a = AgentArray(np.array([1, 2, 3]), max_n=10)
+    a_ = AgentArray(dtype=np.int64, n=3, max_n=10)
     a_[:3] = np.array([1, 2, 3])
     assert np.array_equal(a, a_)
 
+    assert np.array(a) is not a
+    assert isinstance(np.array(a), np.ndarray)
+    assert np.array(a).size == 3
+    
+    # test reshaping (to not Agent array)
+    assert a.reshape(-1, 1).shape == (3, 1)
+
+    assert a.max_n == 10 == (a * 10).max_n
+
     assert np.array_equal(a, np.array([1, 2, 3]))
-    assert a.max_size == 10
+    assert a.max_n == 10
     assert a.n == 3
 
     # Test addition with scalar
@@ -22,8 +31,58 @@ def test_agent_array():
     a += b
     assert np.array_equal(a, np.array([3, 5, 7]))
 
+    # Test multiplication with scalar
+    a *= 2
+    assert np.array_equal(a, np.array([6, 10, 14]))
+
+    # Test multiplication with array
+    a *= b
+    assert np.array_equal(a, np.array([6, 20, 42]))
+
+    # Test subtraction with scalar
+    a -= 1
+    assert np.array_equal(a, np.array([5, 19, 41]))
+
+    # Test subtraction with array
+    a -= b
+    assert np.array_equal(a, np.array([4, 17, 38]))
+
+    # Test division with scalar
+    a /= 2
+    assert np.array_equal(a, np.array([2, 8, 19]))
+
+    # Test division with array
+    a /= b
+    assert np.array_equal(a, np.array([2, 4, 6]))
+
+    # Test power with scalar
+    a **= 2
+    assert np.array_equal(a, np.array([4, 16, 36]))
+
+    # Test power with array
+    a **= b
+    assert np.array_equal(a, np.array([4, 256, 46656]))
+
+    # Test floor division with scalar
+    a //= 3
+    assert np.array_equal(a, np.array([1, 85, 15552]))
+
+    # Test floor division with array
+    a //= b
+    assert np.array_equal(a, np.array([1, 42, 5184]))
+
+    # Test modulo with scalar
+    a %= 25
+    assert np.array_equal(a, np.array([1, 17, 9]))
+
+    # Test modulo with array
+    a %= b
+    assert np.array_equal(a, np.array([0, 1, 0]))
+
     # Test item assignment
     a[0] = 4
+    a[1] = 5
+    a[2] = 7
     assert np.array_equal(a, np.array([4, 5, 7]))
 
     # Test slicing
@@ -48,14 +107,14 @@ def test_agent_array():
     assert np.array_equal(a, np.array([4, 5, 6]))
     assert a.n == 3
 
-    # Test setting n and adding new items beyond max_size
+    # Test setting n and adding new items beyond max_n
     a.n = 4
     a[3] = 7
     assert np.array_equal(a, np.array([4, 5, 6, 7]))
     assert a.n == 4
-    assert a.max_size == 10
+    assert a.max_n == 10
     
-    # Test setting n to exceed max_size
+    # Test setting n to exceed max_n
     try:
         a.n = 11
     except ValueError:
