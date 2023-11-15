@@ -10,15 +10,15 @@ class Households(AgentBaseClass):
         self.agents = agents
 
         locations = np.load(self.model.model_structure['binary']['agents/households/locations'])['data']
-        self.max_size = int(locations.shape[0] * (1 + reduncancy) + 1)
+        self.max_n = int(locations.shape[0] * (1 + reduncancy) + 1)
         
-        self.locations = AgentArray(locations, max_size=self.max_size)
+        self.locations = AgentArray(locations, max_n=self.max_n)
         
         sizes = np.load(self.model.model_structure['binary']['agents/households/sizes'])['data']
-        self.sizes = AgentArray(sizes, max_size=self.max_size)
+        self.sizes = AgentArray(sizes, max_n=self.max_n)
 
-        self.flood_depth = AgentArray(n=self.n, max_size=self.max_size, fill_value=False, dtype=bool)
-        self.risk_perception = AgentArray(n=self.n, max_size=self.max_size, fill_value=1, dtype=float)
+        self.flood_depth = AgentArray(n=self.n, max_n=self.max_n, fill_value=False, dtype=bool)
+        self.risk_perception = AgentArray(n=self.n, max_n=self.max_n, fill_value=1, dtype=float)
 
         return None
 
