@@ -19,6 +19,7 @@ from honeybees.model import Model as ABM_Model
 
 from geb.reporter import Reporter
 from geb.agents import Agents
+from geb.agents.general import AgentArray
 from geb.artists import Artists
 from geb.HRUs import Data
 from geb.cwatm_model import CWatM_Model
@@ -179,15 +180,11 @@ class GEBModel(ABM_Model, CWatM_Model):
                     values = attrgetter(var)(self.data)
                     np.savez_compressed(fp, data=values)
 
-            for attribute in self.agents.farmers.agent_attributes:
-                fp = Path(self.initial_conditions_folder, f"farmers.{attribute}.npz")
-                values = attrgetter(attribute)(self.agents.farmers)
-                np.savez_compressed(fp, data=values)
-            
-            for attribute in self.agents.farmers.agent_attributes_new:
-                fp = Path(self.initial_conditions_folder, f"farmers.{attribute}.npz")
-                values = attrgetter(attribute)(self.agents.farmers)
-                np.savez_compressed(fp, data=values)
+            for attribute, value in vars(self.agents.farmers).items():
+                if isinstance(value, AgentArray):
+                    fp = Path(self.initial_conditions_folder, f"farmers.{attribute}.npz")
+                    np.savez_compressed(fp, data=value.data)
+                
         print("Model run finished")
 
     @property

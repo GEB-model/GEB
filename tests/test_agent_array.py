@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 
 from geb.agents.general import AgentArray
@@ -8,6 +9,8 @@ def test_agent_array():
     a_ = AgentArray(dtype=np.int64, n=3, max_n=10)
     a_[:3] = np.array([1, 2, 3])
     assert np.array_equal(a, a_)
+
+    assert np.isin(a, np.array([1, 3])).sum() == 2
 
     assert (a == 2).sum() == 1
     assert (a != 2).sum() == 2
@@ -136,5 +139,40 @@ def test_agent_array():
     a.fill(42)
     assert np.array_equal(a, np.array([42, 42, 42, 42]))
 
+    # test that numba edits data in-place
+    def numba_function(data):
+        data[:] = -99
+
+    numba_function(a.data)
+    assert (a == -99).all()
+
+@pytest.fixture
+def array():
+    return AgentArray(np.array([1, 2, 3, 4, 5]), max_n=10)
+
+def test_add_ufunc(array):
+    result = np.add(array, 1)
+    np.testing.assert_array_equal(result.data, np.array([2, 3, 4, 5, 6]))
+
+def test_subtract_ufunc(array):
+    result = np.subtract(array, 1)
+    np.testing.assert_array_equal(result.data, np.array([0, 1, 2, 3, 4]))
+
+def test_multiply_ufunc(array):
+    result = np.multiply(array, 2)
+    np.testing.assert_array_equal(result.data, np.array([2, 4, 6, 8, 10]))
+
+def test_divide_ufunc(array):
+    result = np.divide(array, 2)
+    np.testing.assert_array_equal(result.data, np.array([0.5, 1.0, 1.5, 2.0, 2.5]))
+
+def test_power_ufunc(array):
+    result = np.power(array, 2)
+    np.testing.assert_array_equal(result.data, np.array([1, 4, 9, 16, 25]))
+
+def test_reduce_ufunc(array):
+    result = np.add.reduce(array)
+    assert result == 15
+
 if __name__ == '__main__':
-    test_agent_array()
+    pass
