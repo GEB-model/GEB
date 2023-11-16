@@ -16,12 +16,24 @@ from numba import njit
 from honeybees.library.mapIO import NetCDFReader
 from honeybees.library.mapIO import MapReader
 from honeybees.agents import AgentBaseClass
-from honeybees.library.raster import pixels_to_coords, sample_from_map
+from honeybees.library.raster import pixels_to_coords
 from honeybees.library.neighbors import find_neighbors
 
 from ..data import load_regional_crop_data_from_dict, load_crop_variables, load_crop_ids, load_economic_data
 from .decision_module import DecisionModule
 from .general import AgentArray
+
+class FarmerAgentArray(AgentArray):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def by_field(self, fields, nofieldvalue=-1):
+        if self.n:
+            by_field = np.take(self.data, fields)
+            by_field[fields == -1] = nofieldvalue
+            return by_field
+        else:
+            return np.full_like(fields, nofieldvalue)
 
 @njit(cache=True)
 def get_farmer_HRUs(field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int) -> np.ndarray:
@@ -151,7 +163,7 @@ class Farmers(AgentBaseClass):
                 values = np.load(fp)['data']
                 if not hasattr(self, 'max_n'):
                     self.max_n = self.get_max_n(values.shape[0])
-                values = AgentArray(values, max_n=self.max_n)
+                values = FarmerAgentArray(values, max_n=self.max_n)
                 setattr(self, attribute, values)
             self.n = self.locations.shape[0]  # first value where location is not defined (np.nan)
         else:
@@ -178,27 +190,27 @@ class Farmers(AgentBaseClass):
                 #     shape = self.max_n
                 # setattr(self, attribute, np.full(shape, self.agent_attributes_meta[attribute]["nodata"], dtype=self.agent_attributes_meta[attribute]["dtype"]))
 
-            self.locations = AgentArray(pixels_to_coords(pixels + .5, self.var.gt), max_n=self.max_n)
+            self.locations = FarmerAgentArray(pixels_to_coords(pixels + .5, self.var.gt), max_n=self.max_n)
 
-            self.risk_aversion = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan)
+            self.risk_aversion = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan)
             self.risk_aversion[:] = np.load(self.model.model_structure['binary']["agents/farmers/risk_aversion"])['data']
 
             # Load the region_code of each farmer.
-            self.region_id = AgentArray(input_array=np.load(self.model.model_structure['binary']["agents/farmers/region_id"])['data'], max_n=self.max_n)
+            self.region_id = FarmerAgentArray(input_array=np.load(self.model.model_structure['binary']["agents/farmers/region_id"])['data'], max_n=self.max_n)
 
             # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
-            self.elevation = AgentArray(input_array=self.elevation_subgrid.sample_coords(self.locations.data), max_n=self.max_n)
+            self.elevation = FarmerAgentArray(input_array=self.elevation_subgrid.sample_coords(self.locations.data), max_n=self.max_n)
 
             # Initiate adaptation status. 0 = not adapted, 1 adapted. Column 0 = no cost adaptation, 1 = well, 2 = sprinkler
-            self.adapted = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.int32, fill_value=0)
+            self.adapted = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.int32, fill_value=0)
             # the time each agent has been paying off their dry flood proofing investment loan. Column 0 = no cost adaptation, 1 = well, 2 = sprinkler.  -1 if they do not have adaptations
-            self.time_adapted = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.int32, fill_value=-1)
+            self.time_adapted = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.int32, fill_value=-1)
             # Set SEUT of all agents to 0 
-            self.SEUT_no_adapt = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
+            self.SEUT_no_adapt = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
             # Set EUT of all agents to 0
-            self.EUT_no_adapt = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
+            self.EUT_no_adapt = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
 
-            self.crops = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.int32, fill_value=-1)
+            self.crops = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.int32, fill_value=-1)
 
             # Load the crops planted for each farmer in the season #1, season #2 and season #3.
             self.crops[:, 0] = np.load(self.model.model_structure['binary']["agents/farmers/season_#1_crop"])['data']
@@ -207,55 +219,55 @@ class Farmers(AgentBaseClass):
             assert self.crops.max() < len(self.crop_ids)
 
             # Set irrigation source 
-            self.irrigation_source = AgentArray(np.load(self.model.model_structure['binary']["agents/farmers/irrigation_source"])['data'], max_n=self.max_n)
+            self.irrigation_source = FarmerAgentArray(np.load(self.model.model_structure['binary']["agents/farmers/irrigation_source"])['data'], max_n=self.max_n)
             # set the adaptation of wells to 1 if farmers have well 
             self.adapted[:,1][np.isin(self.irrigation_source, np.array([self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']]))] = 1
             # Set how long the agents have adapted somewhere across the lifespan of farmers, would need to be a bit more realistic likely 
             self.time_adapted[self.adapted[:,1] == 1, 1] = np.random.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan'], np.sum(self.adapted[:,1] == 1))
 
             # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
-            self.channel_abstraction_m3_by_farmer = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
-            self.reservoir_abstraction_m3_by_farmer = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
-            self.groundwater_abstraction_m3_by_farmer = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
+            self.channel_abstraction_m3_by_farmer = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
+            self.reservoir_abstraction_m3_by_farmer = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
+            self.groundwater_abstraction_m3_by_farmer = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
             
             # 2D-array for storing yearly abstraction by farmer. 0: channel abstraction, 1: reservoir abstraction, 2: groundwater abstraction, 3: total abstraction
-            self.yearly_abstraction_m3_by_farmer = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(4, ), dtype=np.float32, fill_value=0)
-            self.n_water_accessible_days = AgentArray(n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=0)
-            self.n_water_accessible_years = AgentArray(n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=0)
+            self.yearly_abstraction_m3_by_farmer = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(4, ), dtype=np.float32, fill_value=0)
+            self.n_water_accessible_days = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=0)
+            self.n_water_accessible_years = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=0)
 
             # Yield ratio and crop variables 
             # 0 = kharif age, 1 = rabi age, 2 = summer age, 3 = total growth time 
-            self.total_crop_age = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.float32, fill_value=0)
+            self.total_crop_age = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.float32, fill_value=0)
             # 0 = kharif yield_ratio, 1 = rabi yield_ratio, 2 = summer yield_ratio
-            self.per_harvest_yield_ratio = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.float32, fill_value=0)
-            self.per_harvest_SPEI = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.float32, fill_value=0)
-            self.yearly_SPEI_probability = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.total_spinup_time + 1, ), dtype=np.float32, fill_value=0)
-            self.monthly_SPEI = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(10, ), dtype=np.float32, fill_value=0)
-            self.yearly_yield_ratio = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.total_spinup_time + 1, ), dtype=np.float32, fill_value=0)
+            self.per_harvest_yield_ratio = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.float32, fill_value=0)
+            self.per_harvest_SPEI = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(3, ), dtype=np.float32, fill_value=0)
+            self.yearly_SPEI_probability = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.total_spinup_time + 1, ), dtype=np.float32, fill_value=0)
+            self.monthly_SPEI = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(10, ), dtype=np.float32, fill_value=0)
+            self.yearly_yield_ratio = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.total_spinup_time + 1, ), dtype=np.float32, fill_value=0)
 
             ## Base initial wealth on x days of daily expenses, sort of placeholder 
-            self.disposable_income = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
-            self.household_size = AgentArray(np.load(self.model.model_structure['binary']["agents/farmers/household_size"])['data'], max_n=self.max_n)
-            self.daily_non_farm_income = AgentArray(np.load(self.model.model_structure['binary']["agents/farmers/daily_non_farm_income_family"])['data'], max_n=self.max_n)
-            self.daily_expenses_per_capita = AgentArray(np.load(self.model.model_structure['binary']["agents/farmers/daily_consumption_per_capita"])['data'], max_n=self.max_n)
+            self.disposable_income = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
+            self.household_size = FarmerAgentArray(np.load(self.model.model_structure['binary']["agents/farmers/household_size"])['data'], max_n=self.max_n)
+            self.daily_non_farm_income = FarmerAgentArray(np.load(self.model.model_structure['binary']["agents/farmers/daily_non_farm_income_family"])['data'], max_n=self.max_n)
+            self.daily_expenses_per_capita = FarmerAgentArray(np.load(self.model.model_structure['binary']["agents/farmers/daily_consumption_per_capita"])['data'], max_n=self.max_n)
             
-            self.wealth = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=None)
+            self.wealth = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=None)
             self.wealth[:] = self.daily_expenses_per_capita * self.household_size * ((365 / 12) * 18)
 
-            self.farmer_yield_probability_relation = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(2, ), dtype=np.float32, fill_value=0)
-            self.yield_ratios_drought_event = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.p_droughts.size, ), dtype=np.float32, fill_value=0)
+            self.farmer_yield_probability_relation = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(2, ), dtype=np.float32, fill_value=0)
+            self.yield_ratios_drought_event = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.p_droughts.size, ), dtype=np.float32, fill_value=0)
             
             ## Risk perception variables
-            self.risk_perception = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'])
-            self.drought_timer = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=99)
-            self.yearly_profits = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.total_spinup_time + 1, ), dtype=np.float32, fill_value=0)
-            self.yearly_potential_profits = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.total_spinup_time + 1, ), dtype=np.float32, fill_value=0)
+            self.risk_perception = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'])
+            self.drought_timer = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=99)
+            self.yearly_profits = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.total_spinup_time + 1, ), dtype=np.float32, fill_value=0)
+            self.yearly_potential_profits = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(self.total_spinup_time + 1, ), dtype=np.float32, fill_value=0)
             
             # Create a random set of irrigating farmers --> chance that it does not line up with farmers that are expected to have this 
             # Create a random generator object with a seed
             rng = np.random.default_rng(42)
 
-            self.irrigation_efficiency = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
+            self.irrigation_efficiency = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
             self.irrigation_efficiency[:] = rng.uniform(0.50, 0.95, self.n)
             # Set the people who already have more van 90% irrigation efficiency to already adapted for the drip irrgation adaptation  
             self.adapted[:,2][self.irrigation_efficiency >= .90] = 1
@@ -266,7 +278,9 @@ class Farmers(AgentBaseClass):
             # Increase yield ratio of those who use better management practices 
             self.yield_ratio_management = self.yield_ratio_multiplier * self.base_management_yield_ratio
 
-            self.infiltration_multiplier = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=1)
+            self.infiltration_multiplier = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=1)
+            if self.model.scenario == 'cover-crops':
+                self.infiltration_multiplier.fill(1.1)
             
             self.time_adapted[self.adapted[:,2] == 1, 2] = np.random.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan'], np.sum(self.adapted[:,2] == 1))
             
@@ -274,14 +288,14 @@ class Farmers(AgentBaseClass):
             self.annual_costs_all_adaptations = np.zeros(self.n, dtype=np.float32) 
 
             # 0 is surface water / channel-dependent, 1 is reservoir-dependent, 2 is groundwater-dependent, 3 is rainwater-dependent
-            self.farmer_class = AgentArray(n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1)
-            self.water_use = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(4, ), dtype=np.int32, fill_value=0)
+            self.farmer_class = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1)
+            self.water_use = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(4, ), dtype=np.int32, fill_value=0)
 
-            self.farmer_is_in_command_area = AgentArray(n=self.n, max_n=self.max_n, dtype=bool, fill_value=False)
+            self.farmer_is_in_command_area = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=bool, fill_value=False)
 
             ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data 
             parameter_names = ['c', 'loc', 'scale']
-            self.GEV_parameters = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(len(parameter_names), ), dtype=np.float32, fill_value=0)
+            self.GEV_parameters = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(len(parameter_names), ), dtype=np.float32, fill_value=0)
 
             for i, varname in enumerate(parameter_names):
                 GEV_map = MapReader(
@@ -299,12 +313,12 @@ class Farmers(AgentBaseClass):
         self.var.crop_age_days_map = self.var.load_initial('crop_age_days_map', default=np.full_like(self.var.land_owners, -1), gpu=False)
         self.var.crop_harvest_age_days = self.var.load_initial('crop_harvest_age_days', default=np.full_like(self.var.land_owners, -1), gpu=False)
 
-        self.risk_perc_min = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'])
-        self.risk_perc_max = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['max'])
-        self.risk_decr = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['coef'])
-        self.decision_horizon = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'])
+        self.risk_perc_min = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'])
+        self.risk_perc_max = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['max'])
+        self.risk_decr = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['coef'])
+        self.decision_horizon = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=self.model.config['agent_settings']['expected_utility']['decisions']['decision_horizon'])
 
-        self.field_indices_by_farmer = AgentArray(n=self.n, max_n=self.max_n, extra_dims=(2, ), dtype=np.int32, fill_value=-1)
+        self.field_indices_by_farmer = FarmerAgentArray(n=self.n, max_n=self.max_n, extra_dims=(2, ), dtype=np.int32, fill_value=-1)
 
         self.update_field_indices()
 
@@ -674,14 +688,6 @@ class Farmers(AgentBaseClass):
     def update_yield_ratio_management(self) -> None:
         # Increase yield ratio of those who use better management practices 
         self.yield_ratio_management = self.yield_ratio_multiplier * self.base_management_yield_ratio
-
-    def by_field(self, var, nofieldvalue=-1):
-        if self.n:
-            by_field = np.take(var, self.var.land_owners)
-            by_field[self.var.land_owners == -1] = nofieldvalue
-            return by_field
-        else:
-            return np.full_like(self.var.land_owners, nofieldvalue)
 
     def decompress(self, array):
         if np.issubsctype(array, np.floating):
