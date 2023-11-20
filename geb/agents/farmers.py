@@ -183,13 +183,6 @@ class Farmers(AgentBaseClass):
             pixels[:,0] = np.round(np.bincount(farms[farms != -1], horizontal_index) / np.bincount(farms[farms != -1])).astype(int)
             pixels[:,1] = np.round(np.bincount(farms[farms != -1], vertical_index) / np.bincount(farms[farms != -1])).astype(int)
 
-            # for attribute in self.agent_attributes:
-                # if isinstance(self.agent_attributes_meta[attribute]["nodata"], list):
-                #     shape = (self.max_n, len(self.agent_attributes_meta[attribute]["nodata"]))
-                # else:
-                #     shape = self.max_n
-                # setattr(self, attribute, np.full(shape, self.agent_attributes_meta[attribute]["nodata"], dtype=self.agent_attributes_meta[attribute]["dtype"]))
-
             self.locations = FarmerAgentArray(pixels_to_coords(pixels + .5, self.var.gt), max_n=self.max_n)
 
             self.risk_aversion = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan)
@@ -272,8 +265,8 @@ class Farmers(AgentBaseClass):
             # Set the people who already have more van 90% irrigation efficiency to already adapted for the drip irrgation adaptation  
             self.adapted[:,2][self.irrigation_efficiency >= .90] = 1
             # set the yield_ratio_multiplier to x of people who have drip irrigation, set to 1 for all others 
-            self.yield_ratio_multiplier = np.where((self.irrigation_efficiency >= .90) & (self.irrigation_source_key != 0), self.yield_ratio_multiplier_value, 1)
-            self.base_management_yield_ratio = np.full(self.n, self.model.config['agent_settings']['farmers']['base_management_yield_ratio'], dtype=np.float32)
+            self.yield_ratio_multiplier = FarmerAgentArray(input_array=np.where((self.irrigation_efficiency >= .90) & (self.irrigation_source_key != 0), self.yield_ratio_multiplier_value, 1), max_n=self.max_n)
+            self.base_management_yield_ratio = FarmerAgentArray(n=self.n, max_n=self.max_n, fill_value=self.model.config['agent_settings']['farmers']['base_management_yield_ratio'], dtype=np.float32)
             
             # Increase yield ratio of those who use better management practices 
             self.yield_ratio_management = self.yield_ratio_multiplier * self.base_management_yield_ratio
@@ -285,7 +278,7 @@ class Farmers(AgentBaseClass):
             self.time_adapted[self.adapted[:,2] == 1, 2] = np.random.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan'], np.sum(self.adapted[:,2] == 1))
             
             # Initiate array that tracks the overall yearly costs for all adaptations 
-            self.annual_costs_all_adaptations = np.zeros(self.n, dtype=np.float32) 
+            self.annual_costs_all_adaptations = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0)
 
             # 0 is surface water / channel-dependent, 1 is reservoir-dependent, 2 is groundwater-dependent, 3 is rainwater-dependent
             self.farmer_class = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1)
@@ -687,14 +680,7 @@ class Farmers(AgentBaseClass):
 
     def update_yield_ratio_management(self) -> None:
         # Increase yield ratio of those who use better management practices 
-        self.yield_ratio_management = self.yield_ratio_multiplier * self.base_management_yield_ratio
-
-    def decompress(self, array):
-        if np.issubsctype(array, np.floating):
-            nofieldvalue = np.nan
-        else:
-            nofieldvalue = -1
-        return self.model.data.HRU.decompress(self.by_field(array, nofieldvalue=nofieldvalue))
+        self.yield_ratio_management[:] = self.yield_ratio_management * self.yield_ratio_multiplier
 
     @property
     def mask(self):
@@ -1106,7 +1092,7 @@ class Farmers(AgentBaseClass):
         
         # Sample the SPEI value for the current month from `SPEI_map` based on the given locations.
         # The sampling is done for the first day of the current month.
-        self.monthly_SPEI[:,0] = self.SPEI_map.sample_coords(self.locations, datetime(self.model.current_time.year, self.model.current_time.month, 1))
+        self.monthly_SPEI[:,0] = self.SPEI_map.sample_coords(self.locations.data, datetime(self.model.current_time.year, self.model.current_time.month, 1))
 
     def save_yearly_profits(self, harvesting_farmers: np.ndarray, profit: np.ndarray, potential_profit: np.ndarray) -> None:
         """
@@ -1222,7 +1208,7 @@ class Farmers(AgentBaseClass):
         # Step 1: Compute yearly values
         self.yearly_yield_ratio[:, 0] = self.calculate_yearly_yield_ratio()
         self.yearly_SPEI_probability[:, 0] = self.convert_seasonal_to_yearly_SPEI_probability()
-        self.per_harvest_SPEI = 0
+        self.per_harvest_SPEI[:] = 0
 
         # Step 2: Shift and reset matrices
         self._shift_and_reset_matrix(self.yearly_yield_ratio)
@@ -1790,7 +1776,7 @@ class Farmers(AgentBaseClass):
             # Check for neighbors with adaptations for non-adapted farmers
             if global_indices_not_adapted.size > 0 and global_indices_adapted.size > 0:
                 neighbors_with_adaptation = find_neighbors(
-                    self.locations,
+                    self.locations.data,
                     radius=RADIUS,
                     n_neighbor=N_NEIGHBOR,
                     bits=NBITS,
@@ -1933,7 +1919,7 @@ class Farmers(AgentBaseClass):
         self.disposable_income[self.disposable_income < 0] = 0  # for now, weassume that farmers cannot go into debt
 
     def upkeep_assets(self):
-        has_well = np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])
+        has_well = np.isin(self.irrigation_source, np.array([self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']]))
         well_upkeep_price_per_m2 = self.get_value_per_farmer_from_region_id(self.well_upkeep_price_per_m2, self.model.current_time)
 
         self.disposable_income -= well_upkeep_price_per_m2 * self.field_size_per_farmer * has_well
@@ -1967,7 +1953,7 @@ class Farmers(AgentBaseClass):
         for farmer_class in np.unique(self.farmer_class):
             ids = np.where(self.farmer_class == farmer_class)[0]
             neighbors = find_neighbors(
-                self.locations,
+                self.locations.data,
                 radius=1_000,
                 n_neighbor=3,
                 bits=19,
@@ -1978,7 +1964,15 @@ class Farmers(AgentBaseClass):
                 search_ids=ids,
                 search_target_ids=ids
             )
-            self.switch_crops_numba(ids, self.crops, neighbors, self.SEUT_no_adapt, self.EUT_no_adapt, self.yearly_yield_ratio, self.yearly_SPEI_probability)
+            self.switch_crops_numba(
+                ids.data,
+                self.crops.data,
+                neighbors,
+                self.SEUT_no_adapt.data,
+                self.EUT_no_adapt.data,
+                self.yearly_yield_ratio.data,
+                self.yearly_SPEI_probability.data
+            )
 
     def step(self) -> None:
         """
@@ -2020,7 +2014,7 @@ class Farmers(AgentBaseClass):
         ## yearly actions 
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
 
-            self.farmer_is_in_command_area = self.is_in_command_area(self.n, self.var.reservoir_command_areas, self.field_indices, self.field_indices_by_farmer)
+            self.farmer_is_in_command_area = self.is_in_command_area(self.n, self.var.reservoir_command_areas, self.field_indices, self.field_indices_by_farmer.data)
             # for now class is only dependent on being in a command area or not
             self.farmer_class = self.farmer_is_in_command_area.copy()
             
