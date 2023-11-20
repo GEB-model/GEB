@@ -18,7 +18,7 @@ class Households(AgentBaseClass):
         self.sizes = AgentArray(sizes, max_n=self.max_n)
 
         self.flood_depth = AgentArray(n=self.n, max_n=self.max_n, fill_value=False, dtype=bool)
-        self.risk_perception = AgentArray(n=self.n, max_n=self.max_n, fill_value=1, dtype=float)
+        self.risk_perception = AgentArray(n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32)
 
         return None
 
@@ -61,7 +61,7 @@ class Households(AgentBaseClass):
         return None
 
     def step(self) -> None:
-        self.risk_perception == self.risk_perception * 0.8
+        self.risk_perception *= self.risk_perception
         return None
 
     @property
