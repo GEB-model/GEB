@@ -51,17 +51,30 @@ class GEBModel(ABM_Model, CWatM_Model):
         self.model_structure = model_structure
 
         self.initial_conditions_folder = Path(self.config['general']['initial_conditions_folder'])
-        if scenario == 'spinup':
-            end_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
-            current_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
+        self.initial_relations_folder = Path(self.config['general']['initial_relations_folder'])
+        self.load_pre_spinup_data = self.config['general']['load_pre_spinup']
+        if scenario == 'pre_spinup':
+            end_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
+            current_time = datetime.datetime.combine(self.config['general']['pre_spinup_time'], datetime.time(0))
             if end_time.year - current_time.year < 10:
-                print('Spinup time is less than 10 years. This is not recommended and may lead to issues later.')
+                print('Pre-spinup time is less than 15 years. This is not recommended and may lead to issues later.')
+            print("Running pre-spinup")
             self.load_initial_data = False
             self.save_initial_data = self.config['general']['export_inital_on_spinup']
-            self.initial_conditions = []
+            self.initial_conditions = [] 
+        elif scenario == 'spinup':
+            end_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
+            current_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
+            if (end_time.year - current_time.year < 10) and not(self.config['general']['load_pre_spinup']):
+                print('Spinup time is less than 10 years. Without a pre-spinup this is not recommended and may lead to issues later.')
+            
+            self.load_initial_data = False
+            self.save_initial_data = self.config['general']['export_inital_on_spinup']
+            self.initial_conditions = [] 
         else:
             current_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
             end_time = datetime.datetime.combine(self.config['general']['end_time'], datetime.time(0))
+            self.load_pre_spinup_data = False
             self.load_initial_data = True
             self.save_initial_data = False
 

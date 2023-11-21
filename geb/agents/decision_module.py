@@ -17,7 +17,7 @@ class DecisionModule:
         profits_no_event: np.ndarray,
         max_T: int,
         n_agents: int,
-        r: float
+        discount_rate: np.ndarray
     ) -> np.ndarray:
         '''This function iterates through each (no)flood event i (see manuscript for details). It calculates the time discounted NPV of each event i:
 
@@ -54,8 +54,9 @@ class DecisionModule:
 
             # Calculate time discounted NPVs
             t_arr = np.arange(1, max_T, dtype=np.float32)
-            discounts = 1 / (1 + r)**t_arr
-            NPV_tx = np.sum(discounts) * NPV_flood_i
+
+            discounts = 1 / (1 + discount_rate.reshape(-1, 1))**t_arr
+            NPV_tx = np.sum(discounts, axis= 1) * NPV_flood_i
 
             # Add NPV at t0 (which is not discounted)
             NPV_tx += NPV_t0
@@ -76,7 +77,7 @@ class DecisionModule:
         profits_no_event: np.ndarray,
         p_droughts: np.ndarray,
         T: np.ndarray,
-        r: float,
+        discount_rate: float,
         sigma: float,
         subjective: bool = True,
         **kwargs
@@ -141,7 +142,7 @@ class DecisionModule:
             profits_no_event,
             max_T,
             n_agents,
-            r)
+            discount_rate)
 
         # Filter out negative NPVs
         NPV_summed = np.maximum(1, NPV_summed)
@@ -181,7 +182,7 @@ class DecisionModule:
         time_adapted: np.ndarray,
         adapted: np.ndarray,
         T: np.ndarray,
-        r: float,
+        discount_rate: float,
         extra_constraint: np.ndarray,
         **kwargs,
     ) -> np.ndarray:
@@ -247,10 +248,9 @@ class DecisionModule:
             NPV_adapt_no_flood[:payment_remainder] -= adaptation_costs[i]
             
             ## Calculate time discounted NPVs
-            NPV_adapt_no_flood = np.sum(NPV_adapt_no_flood / (1 + r)**t_agent)
-
+            NPV_adapt_no_flood = np.sum(NPV_adapt_no_flood / (1 + discount_rate[i])**t_agent)
+            
             # Apply utility function to NPVs
-
             EU_adapt_no_flood = (NPV_adapt_no_flood ** (1 - sigma[i])) / (1 - sigma[i])
 
             # Calculate NPVs outcomes for each flood event
@@ -259,7 +259,7 @@ class DecisionModule:
             
             NPV_adapt[:, :payment_remainder] -= adaptation_costs[i]
 
-            NPV_adapt /= (1 + r) ** t_agent
+            NPV_adapt /= (1 + discount_rate[i]) ** t_agent
             NPV_adapt_summed = np.sum(NPV_adapt, axis=1, dtype=np.float32)
             NPV_adapt_summed = np.maximum(np.full(NPV_adapt_summed.shape,1,dtype=np.float32), NPV_adapt_summed)  # Filter out negative NPVs
 

@@ -27,13 +27,16 @@ import yaml
 import geopandas as gpd
 from deap import creator, base, tools, algorithms
 from functools import wraps, partial
+import json
 
 import multiprocessing
 from subprocess import Popen, PIPE
 
 import pickle
 
-def KGE(s, o):
+SCENARIO = 'adaptation'
+
+def KGE_calculation(s, o):
     """
     Kling Gupta Efficiency (Kling et al., 2012, http://dx.doi.org/10.1016/j.jhydrol.2012.01.011)
     input:
@@ -45,19 +48,19 @@ def KGE(s, o):
     B = np.mean(s) / np.mean(o)
     y = (np.std(s) / np.mean(s)) / (np.std(o) / np.mean(o))
     r = np.corrcoef(o, s)[0,1]
-    KGE = 1 - np.sqrt((r - 1) ** 2 + (B - 1) ** 2 + (y - 1) ** 2)
-    return KGE
+    kge = 1 - np.sqrt((r - 1) ** 2 + (B - 1) ** 2 + (y - 1) ** 2)
+    return kge
 
-def get_observed_well_ratio():
+def get_observed_well_ratio(config):
 	observed_irrigation_sources = gpd.read_file(os.path.join(config['general']['original_data'], 'census', 'output', 'irrigation_source_2010-2011.geojson')).to_crs(3857)
-	simulated_subdistricts = gpd.read_file(os.path.join(config['general']['input_folder'], 'areamaps', 'subdistricts.geojson'))
+	simulated_subdistricts = gpd.read_file(os.path.join(config['general']['input_folder'], 'areamaps', 'regions.geojson'))
 	# set index to unique ID combination of state, district and subdistrict
 	observed_irrigation_sources.set_index(['state_code', 'district_c', 'sub_distri'], inplace=True)
 	simulated_subdistricts.set_index(['state_code', 'district_c', 'sub_distri'], inplace=True)
 	# select rows from observed_irrigation_sources where the index is in simulated_subdistricts
 	observed_irrigation_sources = observed_irrigation_sources.loc[simulated_subdistricts.index]
 
-	region_mask = gpd.read_file(os.path.join(config['general']['input_folder'], 'areamaps', 'mask.geojson')).to_crs(3857)
+	region_mask = gpd.read_file(os.path.join(config['general']['input_folder'], 'areamaps', 'region.geojson')).to_crs(3857)
 	assert len(region_mask) == 1
 	# get overlapping areas of observed_irrigation_sources and region_mask
 	observed_irrigation_sources['area_in_region_mask'] = (gpd.overlay(observed_irrigation_sources, region_mask, how='intersection').area / observed_irrigation_sources.area.values).values
@@ -65,8 +68,8 @@ def get_observed_well_ratio():
 	ANALYSIS_THRESHOLD = 0.5
 
 	observed_irrigation_sources = observed_irrigation_sources[observed_irrigation_sources['area_in_region_mask'] > ANALYSIS_THRESHOLD]
-	observed_irrigation_sources = observed_irrigation_sources.join(simulated_subdistricts['ID'])
-	observed_irrigation_sources.set_index('ID', inplace=True)
+	observed_irrigation_sources = observed_irrigation_sources.join(simulated_subdistricts['region_id'])
+	observed_irrigation_sources.set_index('region_id', inplace=True)
 
 	total_holdings_observed = observed_irrigation_sources[[c for c in observed_irrigation_sources.columns if c.endswith('total_holdings')]].sum(axis=1)
 	total_holdings_with_well_observed = (
@@ -105,17 +108,21 @@ def multi_set(dict_obj, value, *attrs):
 		raise KeyError(f"Key {attrs} does not exist in config file.")
 	d[attrs[-1]] = value
 
-def get_irrigation_wells_score(run_directory, individual):
-	tehsils = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'tehsil', '20110101.npy'))
-	field_size = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'field_size', '20110101.npy'))
-	irrigation_source = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'irrigation_source', '20110101.npy'))
+def get_irrigation_wells_score(run_directory, individual, config):
+	regions = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'region_id', '20110101T000000.npz'))['data']
+	field_size = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'field_size', '20110101T000000.npz'))['data']
+	irrigation_source = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'irrigation_source', '20110101T000000.npz'))['data']
+	
+	with open(os.path.join(config['general']['input_folder'], 'agents', 'farmers' , 'irrigation_sources.json')) as f:
+		irrigation_source_key = json.load(f)
+
 	well_irrigated = np.isin(irrigation_source, [irrigation_source_key['well'], irrigation_source_key['tubewell']])
 	# Calculate the ratio of farmers with a well per tehsil
-	farmers_per_tehsil = np.bincount(tehsils)
-	well_irrigated_per_tehsil = np.bincount(tehsils, weights=well_irrigated)
-	ratio_well_irrigated = well_irrigated_per_tehsil / farmers_per_tehsil
+	farmers_per_region = np.bincount(regions)
+	well_irrigated_per_tehsil = np.bincount(regions, weights=well_irrigated)
+	ratio_well_irrigated = well_irrigated_per_tehsil / farmers_per_region
 
-	ratio_holdings_with_well_observed = get_observed_well_ratio()
+	ratio_holdings_with_well_observed = get_observed_well_ratio(config)
 
 	ratio_holdings_with_well_simulated = ratio_well_irrigated[ratio_holdings_with_well_observed.index]
 	ratio_holdings_with_well_observed = ratio_holdings_with_well_observed.values
@@ -128,22 +135,25 @@ def get_irrigation_wells_score(run_directory, individual):
 
 	return irrigation_well_score
 
-def get_KGE_score(run_directory, individual, config):
-    # Get the path of the simulated streamflow file
-	Qsim_tss = os.path.join(run_directory, dischargetss)
-	
-	# Check if the simulated streamflow file exists
-	if not os.path.isfile(Qsim_tss):
-		print("run_id: " + str(individual.label)+" File: "+ Qsim_tss)
-		raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
-	
-	# Read the simulated streamflow data from the file
-	simulated_streamflow = pd.read_csv(Qsim_tss, index_col=0, skiprows=8, delim_whitespace=True, names=gauges)
-	# parse the dates in the index
-	simulated_streamflow.index = pd.date_range(calibration_config['start_time'] + timedelta(days=1), calibration_config['end_time'])
+def get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow):
 
-	def get_streamflows(simulated_streamflow, observed_streamflow, gauge):
-		simulated_streamflow_gauge = simulated_streamflow[gauge]
+	def get_streamflows(gauge, observed_streamflow):
+		# Get the path of the simulated streamflow file
+		Qsim_tss = os.path.join(run_directory, SCENARIO, f"{gauge[0]} {gauge[1]}.csv")
+		# os.path.join(run_directory, 'base/discharge.csv')
+		
+		# Check if the simulated streamflow file exists
+		if not os.path.isfile(Qsim_tss):
+			print("run_id: " + str(individual.label)+" File: "+ Qsim_tss)
+			raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
+		
+		# Read the simulated streamflow data from the file
+		simulated_streamflow = pd.read_csv(Qsim_tss, sep=",", parse_dates=True, index_col=0)
+		
+		# parse the dates in the index
+		# simulated_streamflow.index = pd.date_range(config['calibration']['start_time'] + timedelta(days=1), config['calibration']['end_time'])
+
+		simulated_streamflow_gauge = simulated_streamflow[' '.join(map(str, gauge))]
 		simulated_streamflow_gauge.name = 'simulated'
 		observed_streamflow_gauge = observed_streamflow[gauge]
 		observed_streamflow_gauge.name = 'observed'
@@ -155,25 +165,97 @@ def get_KGE_score(run_directory, individual, config):
 		streamflows['simulated'] += 0.0001
 		return streamflows
 	
-	streamflows = [get_streamflows(simulated_streamflow, observed_streamflow, gauge) for gauge in gauges]
+	streamflows = [get_streamflows(gauge, observed_streamflow) for gauge in gauges]
 	streamflows = [streamflow for streamflow in streamflows if not streamflow.empty]
 	if config['calibration']['monthly'] is True:
 		# Calculate the monthly mean of the streamflow data
 		streamflows = [streamflows.resample('M').mean() for streamflows in streamflows]
 
-	KGEs = [KGE(s=streamflows['simulated'], o=streamflows['observed']) for streamflows in streamflows]
-	assert KGEs  # Check if KGEs is not empty
-	KGE = np.mean(KGEs)
+	KGEs = []
+	for streamflow in streamflows:
+		# print(f"Processing: {streamflow}")
+		KGEs.append(KGE_calculation(s=streamflow['simulated'], o=streamflow['observed']))
 	
-	print("run_id: " + str(individual.label)+", KGE: "+"{0:.3f}".format(KGE))
+	assert KGEs  # Check if KGEs is not empty
+	kge = np.mean(KGEs)
+	
+	print("run_id: " + str(individual.label)+", KGE: "+"{0:.3f}".format(kge))
 	with open(os.path.join(config['calibration']['path'],"KGE_log.csv"), "a") as myfile:
-		myfile.write(str(individual.label)+"," + str(KGE)+"\n")
+		myfile.write(str(individual.label)+"," + str(kge)+"\n")
 
-	return KGE
+	return kge
 
+def get_KGE_yield_ratio(run_directory, individual, config):
+	observed_yield_ratios = get_observed_yield_ratios(run_directory, config)
+	yield_ratios_simulated_path = os.path.join(run_directory, SCENARIO, "yield_ratio.csv")
+	# Check if the simulated streamflow file exists
+	if not os.path.isfile(yield_ratios_simulated_path):
+		print("run_id: " + str(individual.label)+" File: "+ yield_ratios_simulated_path)
+		raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
+	
+	# Read the simulated yield ratios from the file
+	simulated_yield_ratio= pd.read_csv(yield_ratios_simulated_path, sep=",", parse_dates=True, index_col=0)
+	simulated_yield_ratio = simulated_yield_ratio['yield_ratio']
+	
+	# Name and resample to yearly data 
+	simulated_yield_ratio.name = 'simulated'
+	simulated_yield_ratio = simulated_yield_ratio.resample('Y').mean()
+	
+	# Take the first instead of last day of the year 
+	simulated_yield_ratio.index = simulated_yield_ratio.index.to_period('Y').start_time
+
+	yield_ratios_combined = pd.concat([simulated_yield_ratio, observed_yield_ratios], join='inner', axis=1)
+	# Add a small value to the simulated streamflow to avoid division by zero
+	yield_ratios_combined['simulated'] += 0.0001
+
+	kge = KGE_calculation(s=yield_ratios_combined['simulated'], o=yield_ratios_combined['observed'])
+
+	print("run_id: " + str(individual.label)+", KGE yield ratio: "+"{0:.3f}".format(kge))
+	with open(os.path.join(config['calibration']['path'],"KGE_yield_ratio_log.csv"), "a") as myfile:
+		myfile.write(str(individual.label)+"," + str(kge)+"\n")
+	
+	return kge
+
+def get_observed_yield_ratios(run_directory, config):
+	regions = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'region_id', '20030101T000000.npz'))['data']
+	simulated_subdistricts = gpd.read_file(os.path.join(config['general']['input_folder'], 'areamaps', 'regions.geojson'))
+	unique_subdistricts = np.unique(simulated_subdistricts['district_c'])
+	
+	observed_yield_ratios = {}
+	for subdistrict in unique_subdistricts:
+		district_path = os.path.join(config['general']['original_data'], 'calibration', 'yield_ratio', f"{subdistrict}.csv")
+		yield_ratio_data = pd.read_csv(district_path, sep=";", parse_dates=True, index_col=0)
+		
+		observed_yield_ratios[subdistrict] = yield_ratio_data["yield_ratio"]
+		assert (observed_yield_ratios[subdistrict] >= 0).all()
+	
+	# Determine the proportion of farmers per district 
+	district_c_series = simulated_subdistricts['district_c'].astype(int)
+	farmers_per_subregion = np.bincount(regions)
+
+	# combine the 
+	combined_dataframe = pd.DataFrame({
+		"district": district_c_series,
+		"total_farmers": farmers_per_subregion
+	})
+
+	# Determine the fractions of farmers per district 
+	farmers_per_district = combined_dataframe.groupby('district')['total_farmers'].sum()
+	total_farmers = farmers_per_district.sum()
+	farmers_fraction = farmers_per_district / total_farmers
+
+	summed_series = pd.Series(dtype=float)
+	# Use the fractions to get the average yield ratios for this region 
+	for subdistrict in unique_subdistricts:
+		yield_ratio_fraction = observed_yield_ratios[subdistrict] * farmers_fraction[int(subdistrict)]
+		summed_series = summed_series.add(yield_ratio_fraction, fill_value=0)
+	
+	summed_series.name = 'observed'
+
+	return summed_series
 
 @handle_ctrl_c
-def run_model(individual, config):
+def run_model(individual, config, gauges, observed_streamflow):
 	"""
 	This function takes an individual from the population and runs the model with the corresponding parameters.
 	It first checks if the run directory already exists and whether the model was run before. 
@@ -222,6 +304,22 @@ def run_model(individual, config):
 			os.mkdir(run_directory)
 			template = deepcopy(config)
 
+			# set the map from which to get the yield ratio - SPEI relations as the map of the generation's first run 
+			template['general']['load_pre_spinup'] = config['calibration']['load_pre_spinup']
+			if config['calibration']['load_pre_spinup']:
+				generation = individual.label[:2]
+				initial_run_label = generation + '_000'
+				initial_conditions_path = os.path.join(run_directory, '..', initial_run_label, 'initial_conditions')
+				template['general']['initial_relations_folder'] = initial_conditions_path
+			else:
+				template['general']['initial_relations_folder'] = os.path.join(run_directory, 'initial_conditions')
+			
+			template['general']['export_inital_on_spinup'] = True
+		
+			template['general']['report_folder'] = run_directory
+			template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial_conditions')
+			
+
 			# Update the template configuration file with the individual's parameters
 			template['general']['spinup_time'] = config['calibration']['spinup_time']
 			template['general']['start_time'] = config['calibration']['start_time']
@@ -235,11 +333,6 @@ def run_model(individual, config):
 			# loop through individual parameters and set them in the template
 			for parameter, value in individual_parameters.items():
 				multi_set(template, value, *parameter.split('.'))
-
-			# set the report folder in the general section of the template
-			template['general']['report_folder'] = run_directory
-			template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial_conditions')
-			template['general']['export_inital_on_spinup'] = True
 
 			# write the template to the specified config file
 			with open(config_path, 'w') as f:
@@ -286,7 +379,10 @@ def run_model(individual, config):
 					raise ValueError("Return code of run.py was not 0 or 1, but instead " + str(p.returncode) + ".")
 				
 				return p.returncode
-				
+			
+			if is_first_run(individual.label) and config['calibration']['load_pre_spinup']:		
+				run_model_scenario('pre_spinup')
+			
 			return_code = run_model_scenario('spinup')
 			if return_code == 0:
 				return_code = run_model_scenario(config['calibration']['scenario'])
@@ -310,11 +406,17 @@ def run_model(individual, config):
 
 	scores = []
 	for score in config['calibration']['calibration_targets']:
-		if score == 'KGE':
-			scores.append(get_KGE_score(run_directory, individual, config))
-		if score == 'irrigation_wells':
-			scores.append(get_irrigation_wells_score(run_directory, individual))
+		if score == 'KGE_discharge':
+			scores.append(get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow))
+		# if score == 'irrigation_wells':
+		# 	scores.append(get_irrigation_wells_score(run_directory, individual, config))
+		if score == 'KGE_yield_ratio':
+			scores.append(get_KGE_yield_ratio(run_directory, individual, config))
 	return tuple(scores)
+
+def is_first_run(label):
+    # Check if the last three characters of the string are '000', meaning the first of a new generation 
+    return label[-3:] == '000'
 
 def export_front_history(config, ngen, effmax, effmin, effstd, effavg):
 	# Save history of the change in objective function scores during calibration to csv file
@@ -351,8 +453,9 @@ def calibrate(config, working_directory):
 	calibration_config = config['calibration']
 
 	config['calibration']['calibration_targets'] = {
-		'KGE': 1,
-		'irrigation_wells': 1
+		'KGE_discharge': 1,
+		# 'irrigation_wells': 1,
+		'KGE_yield_ratio': 1
 	}
 
 	use_multiprocessing = calibration_config['DEAP']['use_multiprocessing']
@@ -376,7 +479,7 @@ def calibrate(config, working_directory):
 		observed_streamflow[gauge].name = 'observed'
 		assert (observed_streamflow[gauge] >= 0).all()
 
-	# with open(os.path.join(config['general']['input_folder'], 'agents', 'attributes', 'irrigation_sources.json')) as f:
+	# with open(os.path.join(config['general']['input_folder'], 'agents', 'farmers' ,'attributes', 'irrigation_sources.json')) as f:
 	# 	irrigation_source_key = json.load(f)
 
     # Create the fitness class using DEAP's creator class
@@ -422,7 +525,7 @@ def calibrate(config, working_directory):
 
     # Register the evaluation function
     # This function runs the model and returns the fitness value of an individual
-	partial_run_model_with_extra_arguments = partial(run_model, config=config)
+	partial_run_model_with_extra_arguments = partial(run_model, config=config, gauges = gauges, observed_streamflow = observed_streamflow)
 	
 	toolbox.register("evaluate", partial_run_model_with_extra_arguments)
     
