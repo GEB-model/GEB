@@ -115,7 +115,6 @@ class Farmers(AgentBaseClass):
         ## expected utility 
         "_adapted",
         "_time_adapted",
-        "_wealth",
         "_risk_perception",
         "_drought_timer",
         "_risk_perc_min",
@@ -154,10 +153,10 @@ class Farmers(AgentBaseClass):
         self.crop_variables = load_crop_variables(self.model.model_structure)
         
         ## Set parameters required for drought event perception, risk perception and SEUT 
-        self.moving_average_threshold = self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['event_perception']['moving_average_threshold']
+        self.moving_average_threshold = self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['event_perception']['drought_threshold']
         self.previous_month = 0
         
-        # Assign risk aversion sigma, time discounting preferences, expendature cap 
+        # Assign risk aversion sigma, time discounting preferences, expenditure_cap  
         self.expenditure_cap = self.model.config['agent_settings']['expected_utility']['decisions']['expenditure_cap']
 
         self.inflation_rate = load_economic_data(self.model.model_structure['dict']['economics/inflation_rates'])
@@ -222,7 +221,12 @@ class Farmers(AgentBaseClass):
    
         self.crop_prices = load_regional_crop_data_from_dict(self.model, "crops/crop_prices")
         self.cultivation_costs = load_regional_crop_data_from_dict(self.model, "crops/cultivation_costs")
-        self.total_spinup_time = (self.model.config['general']['start_time'].year - self.model.config['general']['spinup_time'].year) + 10
+        
+        if self.model.scenario == 'pre_spinup' or self.model.config['general']['load_pre_spinup']:
+            self.total_spinup_time = (self.model.config['general']['start_time'].year - self.model.config['general']['pre_spinup_time'].year) 
+        else: 
+            self.total_spinup_time = (self.model.config['general']['start_time'].year - self.model.config['general']['spinup_time'].year)
+
         self.yield_ratio_multiplier_value = self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['yield_multiplier']
         
         self.agent_attributes_meta = {
@@ -329,7 +333,7 @@ class Farmers(AgentBaseClass):
             },
             "_monthly_SPEI": {
                 "dtype": np.float32,
-                "nodata": [np.nan, np.nan, np.nan,np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan]
+                "nodata": [np.nan] * 12
             },
             "_yearly_potential_profits": {
                 "dtype": np.float32,
@@ -364,10 +368,6 @@ class Farmers(AgentBaseClass):
             "_time_adapted": {
                 "dtype": np.int32,
                 "nodata": [np.nan, np.nan, np.nan],
-            },
-            "_wealth": {
-                "dtype": np.float32,
-                "nodata": np.nan,
             },
             "_decision_horizon": {
                 "dtype": np.float32,
@@ -702,14 +702,6 @@ class Farmers(AgentBaseClass):
         self._time_adapted[:self.n] = value
 
     @property
-    def wealth(self):
-        return self._wealth[:self.n]
-
-    @wealth.setter
-    def wealth(self, value):
-        self._wealth[:self.n] = value
-
-    @property
     def drought_timer(self):
         return self._drought_timer[:self.n]
 
@@ -901,30 +893,38 @@ class Farmers(AgentBaseClass):
             # Yield ratio and crop variables 
             # 0 = kharif age, 1 = rabi age, 2 = summer age, 3 = total growth time 
             self.total_crop_age = np.zeros((self.n, 3), dtype=np.float32)
+            
             # 0 = kharif yield_ratio, 1 = rabi yield_ratio, 2 = summer yield_ratio
             self.per_harvest_yield_ratio = np.zeros((self.n, 3), dtype=np.float32)
             self.per_harvest_SPEI = np.zeros((self.n, 3), dtype=np.float32)
-            self.yearly_SPEI_probability = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
-            self.monthly_SPEI = np.zeros((self.n, 10), dtype=np.float32)
-            self.yearly_yield_ratio = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
-           
-            ## Base initial wealth on x days of daily expenses, sort of placeholder 
+    
+            self.monthly_SPEI = np.zeros((self.n, 12), dtype=np.float32)
+
+            if self.model.scenario == 'spinup' and self.model.load_pre_spinup_data:
+                agent_relation_attributes = ["_yearly_yield_ratio", "_yearly_SPEI_probability", "_yearly_profits", "_yearly_potential_profits", "_farmer_yield_probability_relation"]
+                for attribute in agent_relation_attributes:
+                    fp = os.path.join(self.model.initial_relations_folder, f"farmers.{attribute}.npz")
+                    values = np.load(fp)['data']
+                    setattr(self, attribute, values)
+            else:
+                self.yearly_SPEI_probability = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
+                self.yearly_yield_ratio = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
+                self.yearly_profits = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
+                self.yearly_potential_profits = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
+                self.farmer_yield_probability_relation = np.zeros((self.n, 2), dtype=np.float32)
+
             self.disposable_income[:] = 0
             self.household_size = np.load(self.model.model_structure['binary']["agents/farmers/household_size"])['data']
-            self.wealth = self.daily_expenses_per_capita * self.household_size * ((365/12)*18)
             self.daily_non_farm_income = np.load(self.model.model_structure['binary']["agents/farmers/daily_non_farm_income_family"])['data']
             self.daily_expenses_per_capita = np.load(self.model.model_structure['binary']["agents/farmers/daily_consumption_per_capita"])['data']
             self.flooded[:] = False
 
-            self.farmer_yield_probability_relation = np.zeros((self.n, 2), dtype=np.float32)
             self.yield_ratios_drought_event = np.full((self.n,  self.p_droughts.size), 0, dtype=np.float32)
             
             ## Risk perception variables 
             self.risk_perception = np.full(self.n, self.model.config['agent_settings']['expected_utility']['drought_risk_calculations']['risk_perception']['min'], dtype = np.float32)
             self.drought_timer = np.full(self.n, 99, dtype = np.float32)
-            self.yearly_profits = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
-            self.yearly_potential_profits = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
-            
+
             # Create a random set of irrigating farmers --> chance that it does not line up with farmers that are expected to have this 
             # Create a random generator object with a seed
             rng = np.random.default_rng(42)
@@ -1819,7 +1819,11 @@ class Farmers(AgentBaseClass):
         latest_potential_profits= potential_profit[harvesting_farmers]
 
         # Calculate the cumulative inflation from the start year to the current year for each farmer
-        inflation_arrays = [self.get_value_per_farmer_from_region_id(self.inflation_rate, datetime(year, 1, 1)) for year in range(self.model.config['general']['spinup_time'].year, self.model.current_time.year + 1)]
+        if self.model.scenario == 'pre_spinup':
+            inflation_arrays = [self.get_value_per_farmer_from_region_id(self.inflation_rate, datetime(year, 1, 1)) for year in range(self.model.config['general']['pre_spinup_time'].year, self.model.current_time.year + 1)]
+        else:
+            inflation_arrays = [self.get_value_per_farmer_from_region_id(self.inflation_rate, datetime(year, 1, 1)) for year in range(self.model.config['general']['spinup_time'].year, self.model.current_time.year + 1)]
+        
         cum_inflation = np.ones_like(inflation_arrays[0])
         for inflation in inflation_arrays:
             cum_inflation *= inflation
@@ -2417,8 +2421,8 @@ class Farmers(AgentBaseClass):
                 unadapted_median = np.median(unadapted_yield_ratio)
 
                 # Use max if median is 0, else use the median
-                adapted_value = np.mean(adapted_yield_ratio) if adapted_median == 0 else adapted_median
-                unadapted_value = np.mean(unadapted_yield_ratio) if unadapted_median == 0 else unadapted_median
+                adapted_value = np.mean(adapted_yield_ratio) + 0.0001 if adapted_median == 0 else adapted_median
+                unadapted_value = np.mean(unadapted_yield_ratio) + 0.0001 if unadapted_median == 0 else unadapted_median
 
                 yield_ratio_gain_relative = adapted_value / unadapted_value
 
@@ -2826,7 +2830,7 @@ class Farmers(AgentBaseClass):
                 print("No harvests occurred yet, no yield - probability relation saved this year ")
 
             # Alternative scenarios: 'sprinkler'
-            if self.model.scenario not in ['spinup','noadaptation', 'base']:
+            if self.model.scenario not in ['pre_spinup','spinup','noadaptation', 'base']:
                 # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
                 decision_params = {
@@ -2847,16 +2851,17 @@ class Farmers(AgentBaseClass):
                 if not np.all(self.farmer_yield_probability_relation == 0): 
                     pass
                     self.adapt_irrigation_well()   
-                    # self.adapt_drip_irrigation()   
                 else:
                     raise AssertionError("Cannot adapt without yield - probability relation")
-                
+            
+            if self.model.scenario not in ['pre_spinup','spinup','noadaptation', 'base', 'adaptation']:
+                if not np.all(self.farmer_yield_probability_relation == 0): 
+                    pass
+                    self.adapt_drip_irrigation()   
+                else:
+                    raise AssertionError("Cannot adapt without yield - probability relation")
             # Update management yield ratio score 
             self.update_yield_ratio_management()
-
-            self.wealth += self.disposable_income * 0.05
-
-            print(np.mean(self.wealth))
 
             # reset disposable income and profits
             self.disposable_income[:] = 0
@@ -2937,7 +2942,6 @@ class Farmers(AgentBaseClass):
         self.region_id[self.n-1] = self.subdistrict_map.sample_coords(np.expand_dims(agent_location, axis=0))
         self.crops[self.n-1] = 1
         self.irrigated[self.n-1] = False
-        self.wealth[self.n-1] = 0
         self.irrigation_efficiency[self.n-1] = False
         self.n_water_accessible_days[self.n-1] = 0
         self.n_water_accessible_years[self.n-1] = 0
