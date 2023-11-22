@@ -1,4 +1,4 @@
-name: Lint
+name: Black
 
 on: [push, pull_request]
 
@@ -10,5 +10,5 @@ jobs:
       - uses: psf/black@stable
         with:
           options: "--check --verbose"
-          src: "./src"
+          src: "."
           jupyter: true
