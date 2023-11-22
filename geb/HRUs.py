@@ -7,13 +7,16 @@ import os
 import xarray as xr
 import rioxarray as rxr
 import numpy as np
+
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
 
+
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
+
     def __init__(self):
         pass
 
@@ -23,12 +26,13 @@ class BaseVariables:
 
     def plot(self, data: np.ndarray, ax=None) -> None:
         """Create a simple plot for data.
-        
+
         Args:
             data: Array to plot.
             ax: Optional matplotlib axis object. If given, data will be plotted on given axes.
         """
         import matplotlib.pyplot as plt
+
         data = self.decompress(data)
         if ax:
             ax.imshow(data)
@@ -38,10 +42,10 @@ class BaseVariables:
 
     def MtoM3(self, array: np.ndarray) -> np.ndarray:
         """Convert array from meters to cubic meters.
-        
+
         Args:
             array: Data in meters.
-            
+
         Returns:
             array: Data in cubic meters.
         """
@@ -49,10 +53,10 @@ class BaseVariables:
 
     def M3toM(self, array: np.ndarray) -> np.ndarray:
         """Convert array from cubic meters to meters.
-        
+
         Args:
             array: Data in cubic meters.
-            
+
         Returns:
             array: Data in meters.
         """
@@ -61,40 +65,48 @@ class BaseVariables:
     def register_initial_data(self, name: str) -> None:
         self.model.initial_conditions.append(name)
 
-    def load_initial(self, name, default=.0, gpu=False):
+    def load_initial(self, name, default=0.0, gpu=False):
         if self.model.load_initial_data:
             fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npz")
             if gpu:
-                return cp.load(fp)['data']
+                return cp.load(fp)["data"]
             else:
-                return np.load(fp)['data']
+                return np.load(fp)["data"]
         else:
             self.register_initial_data(name)
             return default
 
+
 class Grid(BaseVariables):
     """This class is to store data in the 'normal' grid cells. This class works with compressed and uncompressed arrays. On initialization of the class, the mask of the study area is read from disk. This is the shape of any uncompressed array. Many values in this array, however, fall outside the stuy area as they are masked. Therefore, the array can be compressed by saving only the non-masked values.
-    
+
     On initialization, as well as geotransformation and cell size are set, and the cell area is read from disk.
 
     Then, the mask is compressed by removing all masked cells, resulting in a compressed array.
     """
+
     def __init__(self, data, model):
         self.data = data
         self.model = model
         self.scaling = 1
-        with rasterio.open(self.model.model_structure['grid']["areamaps/grid_mask"]) as mask_src:
+        with rasterio.open(
+            self.model.model_structure["grid"]["areamaps/grid_mask"]
+        ) as mask_src:
             self.mask = mask_src.read(1).astype(bool)
             self.gt = mask_src.transform.to_gdal()
             self.bounds = mask_src.bounds
             self.cell_size = mask_src.transform.a
-        with rxr.open_rasterio(self.model.model_structure['grid']["areamaps/grid_mask"]) as mask_src:
+        with rxr.open_rasterio(
+            self.model.model_structure["grid"]["areamaps/grid_mask"]
+        ) as mask_src:
             self.crs = mask_src.rio.crs
             self.lon = mask_src.x.values
             self.lat = mask_src.y.values
-        with rasterio.open(self.model.model_structure['grid']["areamaps/cell_area"]) as cell_area_src:
+        with rasterio.open(
+            self.model.model_structure["grid"]["areamaps/cell_area"]
+        ) as cell_area_src:
             self.cell_area_uncompressed = cell_area_src.read(1)
-        
+
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
         self.cellArea = self.compress(self.cell_area_uncompressed)
@@ -102,7 +114,7 @@ class Grid(BaseVariables):
 
     def full(self, *args, **kwargs) -> np.ndarray:
         """Return a full array with size of mask. Takes any other argument normally used in np.full.
-        
+
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
@@ -111,7 +123,7 @@ class Grid(BaseVariables):
 
     def full_compressed(self, *args, **kwargs) -> np.ndarray:
         """Return a full array with size of compressed array. Takes any other argument normally used in np.full.
-        
+
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
@@ -120,22 +132,24 @@ class Grid(BaseVariables):
 
     def compress(self, array: np.ndarray) -> np.ndarray:
         """Compress array.
-        
+
         Args:
             array: Uncompressed array.
-            
+
         Returns:
             array: Compressed array.
         """
         return array.ravel()[self.mask_flat == False]
 
-    def decompress(self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float]=None) -> np.ndarray:
+    def decompress(
+        self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
+    ) -> np.ndarray:
         """Decompress array.
-        
+
         Args:
             array: Compressed array.
             fillvalue: Value to use for masked values.
-            
+
         Returns:
             array: Decompressed array.
         """
@@ -155,25 +169,28 @@ class Grid(BaseVariables):
 
     def plot(self, array: np.ndarray) -> None:
         """Plot array.
-        
+
         Args:
             array: Array to plot.
         """
         import matplotlib.pyplot as plt
+
         plt.imshow(array)
         plt.show()
 
-    def plot_compressed(self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float]=None):
+    def plot_compressed(
+        self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
+    ):
         """Plot compressed array.
-        
+
         Args:
             array: Compressed array to plot.
             fillvalue: Value to use for masked values.
         """
         self.plot(self.decompress(array, fillvalue=fillvalue))
 
-    def load_initial(self, name, default=.0):
-        return super().load_initial('grid.' + name, default=default)
+    def load_initial(self, name, default=0.0):
+        return super().load_initial("grid." + name, default=default)
 
 
 class HRUs(BaseVariables):
@@ -185,25 +202,61 @@ class HRUs(BaseVariables):
         data: Data class for model.
         model: The GEB model.
     """
+
     def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
-        with rasterio.open(self.model.model_structure['subgrid']["areamaps/sub_grid_mask"]) as mask_src:
-            submask_height = mask_src.profile['height']
-            submask_width = mask_src.profile['width']
+        with rasterio.open(
+            self.model.model_structure["subgrid"]["areamaps/sub_grid_mask"]
+        ) as mask_src:
+            submask_height = mask_src.profile["height"]
+            submask_width = mask_src.profile["width"]
         self.scaling = submask_height // self.data.grid.shape[0]
         assert submask_width // self.data.grid.shape[1] == self.scaling
-        self.gt = (self.data.grid.gt[0], self.data.grid.gt[1] / self.scaling, self.data.grid.gt[2], self.data.grid.gt[3], self.data.grid.gt[4], self.data.grid.gt[5] / self.scaling)
+        self.gt = (
+            self.data.grid.gt[0],
+            self.data.grid.gt[1] / self.scaling,
+            self.data.grid.gt[2],
+            self.data.grid.gt[3],
+            self.data.grid.gt[4],
+            self.data.grid.gt[5] / self.scaling,
+        )
 
-        self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(self.scaling, axis=1)
+        self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(
+            self.scaling, axis=1
+        )
         self.cell_size = self.data.grid.cell_size / self.scaling
         if self.model.load_initial_data:
-            self.land_use_type = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_type.npz'))['data']
-            self.land_use_ratio = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_use_ratio.npz'))['data']
-            self.land_owners = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.land_owners.npz'))['data']
-            self.HRU_to_grid = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.HRU_to_grid.npz'))['data']
-            self.grid_to_HRU = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.grid_to_HRU.npz'))['data']
-            self.unmerged_HRU_indices  = np.load(os.path.join(self.model.initial_conditions_folder, 'HRU.unmerged_HRU_indices.npz'))['data']
+            self.land_use_type = np.load(
+                os.path.join(
+                    self.model.initial_conditions_folder, "HRU.land_use_type.npz"
+                )
+            )["data"]
+            self.land_use_ratio = np.load(
+                os.path.join(
+                    self.model.initial_conditions_folder, "HRU.land_use_ratio.npz"
+                )
+            )["data"]
+            self.land_owners = np.load(
+                os.path.join(
+                    self.model.initial_conditions_folder, "HRU.land_owners.npz"
+                )
+            )["data"]
+            self.HRU_to_grid = np.load(
+                os.path.join(
+                    self.model.initial_conditions_folder, "HRU.HRU_to_grid.npz"
+                )
+            )["data"]
+            self.grid_to_HRU = np.load(
+                os.path.join(
+                    self.model.initial_conditions_folder, "HRU.grid_to_HRU.npz"
+                )
+            )["data"]
+            self.unmerged_HRU_indices = np.load(
+                os.path.join(
+                    self.model.initial_conditions_folder, "HRU.unmerged_HRU_indices.npz"
+                )
+            )["data"]
         else:
             (
                 self.land_use_type,
@@ -211,14 +264,14 @@ class HRUs(BaseVariables):
                 self.land_owners,
                 self.HRU_to_grid,
                 self.grid_to_HRU,
-                self.unmerged_HRU_indices
+                self.unmerged_HRU_indices,
             ) = self.create_HRUs()
-            self.register_initial_data('HRU.land_use_type')
-            self.register_initial_data('HRU.land_use_ratio')
-            self.register_initial_data('HRU.land_owners')
-            self.register_initial_data('HRU.HRU_to_grid')
-            self.register_initial_data('HRU.grid_to_HRU')
-            self.register_initial_data('HRU.unmerged_HRU_indices')
+            self.register_initial_data("HRU.land_use_type")
+            self.register_initial_data("HRU.land_use_ratio")
+            self.register_initial_data("HRU.land_owners")
+            self.register_initial_data("HRU.HRU_to_grid")
+            self.register_initial_data("HRU.grid_to_HRU")
+            self.register_initial_data("HRU.unmerged_HRU_indices")
         if self.model.use_gpu:
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
@@ -226,7 +279,7 @@ class HRUs(BaseVariables):
     @property
     def compressed_size(self) -> int:
         """Gets the compressed size of a full HRU array.
-        
+
         Returns:
             compressed_size: Compressed size of HRU array.
         """
@@ -234,9 +287,19 @@ class HRUs(BaseVariables):
 
     @staticmethod
     @njit(cache=True)
-    def create_HRUs_numba(farms, land_use_classes, mask, scaling) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def create_HRUs_numba(
+        farms, land_use_classes, mask, scaling
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
         """Numba helper function to create HRUs.
-        
+
         Args:
             farms: Map of farms. Each unique integer is a unique farm. -1 is no farm.
             land_use_classes: CWatM land use class map [0-5].
@@ -274,9 +337,18 @@ class HRUs(BaseVariables):
             for x in range(0, xsize):
                 is_masked = mask[y, x]
                 if not is_masked:
-                    cell_farms = farms[y * scaling : (y + 1) * scaling, x * scaling : (x + 1) * scaling].ravel()  # find farms in cell
-                    cell_land_use_classes = land_use_classes[y * scaling : (y + 1) * scaling, x * scaling : (x + 1) * scaling].ravel()  # get land use classes for cells
-                    assert ((cell_land_use_classes == 0) | (cell_land_use_classes == 1) | (cell_land_use_classes == 4) | (cell_land_use_classes == 5)).all()
+                    cell_farms = farms[
+                        y * scaling : (y + 1) * scaling, x * scaling : (x + 1) * scaling
+                    ].ravel()  # find farms in cell
+                    cell_land_use_classes = land_use_classes[
+                        y * scaling : (y + 1) * scaling, x * scaling : (x + 1) * scaling
+                    ].ravel()  # get land use classes for cells
+                    assert (
+                        (cell_land_use_classes == 0)
+                        | (cell_land_use_classes == 1)
+                        | (cell_land_use_classes == 4)
+                        | (cell_land_use_classes == 5)
+                    ).all()
 
                     sort_idx = np.argsort(cell_farms)
                     cell_farms_sorted = cell_farms[sort_idx]
@@ -301,9 +373,14 @@ class HRUs(BaseVariables):
                             prev_farm = farm
                             HRU += 1
                         else:
-                            land_use_size[HRU-1] += 1
+                            land_use_size[HRU - 1] += 1
 
-                        unmerged_HRU_indices[y * scaling + sort_idx[i] // scaling, x * scaling + sort_idx[i] % scaling] = HRU - 1
+                        unmerged_HRU_indices[
+                            y * scaling + sort_idx[i] // scaling,
+                            x * scaling + sort_idx[i] % scaling,
+                        ] = (
+                            HRU - 1
+                        )
                         l += 1
 
                     sort_idx = np.argsort(cell_land_use_classes)
@@ -328,28 +405,50 @@ class HRUs(BaseVariables):
 
                             HRU += 1
                         else:
-                            land_use_size[HRU-1] += 1
+                            land_use_size[HRU - 1] += 1
 
-                        unmerged_HRU_indices[y * scaling + sort_idx[i] // scaling, x * scaling + sort_idx[i] % scaling] = HRU - 1
+                        unmerged_HRU_indices[
+                            y * scaling + sort_idx[i] // scaling,
+                            x * scaling + sort_idx[i] % scaling,
+                        ] = (
+                            HRU - 1
+                        )
                         l += 1
 
                     grid_to_HRU[var_cell_count_compressed] = HRU
                     var_cell_count_compressed += 1
                 # var_to_HRU_uncompressed[var_cell_count_uncompressed] = HRU
                 var_cell_count_uncompressed += 1
-        
+
         land_use_size = land_use_size[:HRU]
         land_use_array = land_use_array[:HRU]
         land_use_owner = land_use_owner[:HRU]
         HRU_to_grid = HRU_to_grid[:HRU]
         assert int(land_use_size.sum()) == n_nonmasked_cells * scaling * scaling
-        
-        land_use_ratio = land_use_size / (scaling ** 2)
-        return land_use_array, land_use_ratio, land_use_owner, HRU_to_grid, grid_to_HRU, unmerged_HRU_indices
 
-    def create_HRUs(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        land_use_ratio = land_use_size / (scaling**2)
+        return (
+            land_use_array,
+            land_use_ratio,
+            land_use_owner,
+            HRU_to_grid,
+            grid_to_HRU,
+            unmerged_HRU_indices,
+        )
+
+    def create_HRUs(
+        self,
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
         """Function to create HRUs.
-        
+
         Returns:
             land_use_array: Land use of each HRU.
             land_use_ratio: Relative size of HRU to grid.
@@ -357,14 +456,18 @@ class HRUs(BaseVariables):
             HRU_to_grid: Maps HRUs to index of compressed cell index.
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             unmerged_HRU_indices: The index of the HRU to the subcell.
-            """
-        with rasterio.open(self.model.model_structure['subgrid']['landsurface/land_use_classes'], 'r') as src:
+        """
+        with rasterio.open(
+            self.model.model_structure["subgrid"]["landsurface/land_use_classes"], "r"
+        ) as src:
             land_use_classes = src.read()[0]
-        return self.create_HRUs_numba(self.data.farms, land_use_classes, self.data.grid.mask, self.scaling)
+        return self.create_HRUs_numba(
+            self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
+        )
 
     def zeros(self, size, dtype, *args, **kwargs) -> np.ndarray:
         """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
-        
+
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
@@ -375,11 +478,13 @@ class HRUs(BaseVariables):
         if self.model.use_gpu:
             return cp.zeros(size, dtype, *args, **kwargs)
         else:
-            return np.zeros(size, dtype, *args, **kwargs)        
+            return np.zeros(size, dtype, *args, **kwargs)
 
-    def full_compressed(self, fill_value, dtype, gpu=None, *args, **kwargs) -> np.ndarray:
+    def full_compressed(
+        self, fill_value, dtype, gpu=None, *args, **kwargs
+    ) -> np.ndarray:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
-        
+
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
@@ -402,7 +507,7 @@ class HRUs(BaseVariables):
 
         Returns:
             outarray: Decompressed HRU_array.
-        """  
+        """
         if self.model.use_gpu:
             HRU_array = HRU_array.get()
         if np.issubdtype(HRU_array.dtype, np.integer):
@@ -413,7 +518,7 @@ class HRUs(BaseVariables):
         outarray[self.mask] = nanvalue
         return outarray
 
-    def plot(self, HRU_array: np.ndarray, ax=None, show: bool=True):
+    def plot(self, HRU_array: np.ndarray, ax=None, show: bool = True):
         """Function to plot HRU data.
 
         Args:
@@ -422,6 +527,7 @@ class HRUs(BaseVariables):
             show: Boolean whether to show the plot or not.
         """
         import matplotlib.pyplot as plt
+
         assert HRU_array.size == self.compressed_size
         if ax is None:
             fig, ax = plt.subplots()
@@ -429,10 +535,10 @@ class HRUs(BaseVariables):
         if show:
             plt.show()
 
-    def load_initial(self, name, default=.0, gpu=None):
+    def load_initial(self, name, default=0.0, gpu=None):
         if gpu is None:
             gpu = self.model.use_gpu
-        return super().load_initial('HRU.' + name, default=default, gpu=gpu)
+        return super().load_initial("HRU." + name, default=default, gpu=gpu)
 
 
 class Modflow(BaseVariables):
@@ -442,61 +548,99 @@ class Modflow(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def load_initial(self, name, default=.0):
-        return super().load_initial('modflow.' + name, default=default)
-    
+    def load_initial(self, name, default=0.0):
+        return super().load_initial("modflow." + name, default=default)
+
+
 class Data:
     """The base data class for the GEB model. This class contains the data for the normal grid, the HRUs, and has methods to convert between the grid and HRUs.
-    
+
     Args:
         model: The GEB model.
     """
+
     def __init__(self, model):
         self.model = model
 
-        with rasterio.open(self.model.model_structure['subgrid']["agents/farmers/farms"], 'r') as farms_src:
+        with rasterio.open(
+            self.model.model_structure["subgrid"]["agents/farmers/farms"], "r"
+        ) as farms_src:
             self.farms = farms_src.read()[0]
 
         self.grid = Grid(self, model)
         self.HRU = HRUs(self, model)
-        self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn='mean')
+        self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn="mean")
         self.modflow = Modflow(self, model)
         self.load_forcing()
         self.load_water_demand()
 
     def load_forcing(self):
         # loading forcing data
-        self.grid.hurs_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/hurs'])['hurs']
+        self.grid.hurs_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/hurs"]
+        )["hurs"]
         assert self.grid.hurs_ds.y[0] > self.grid.hurs_ds.y[-1]
-        self.grid.pr_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/pr'])['pr']
+        self.grid.pr_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/pr"]
+        )["pr"]
         assert self.grid.pr_ds.y[0] > self.grid.pr_ds.y[-1]
-        self.grid.ps_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/ps'])['ps'] 
+        self.grid.ps_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/ps"]
+        )["ps"]
         assert self.grid.ps_ds.y[0] > self.grid.ps_ds.y[-1]
-        self.grid.rlds_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/rlds'])['rlds']
+        self.grid.rlds_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/rlds"]
+        )["rlds"]
         assert self.grid.rlds_ds.y[0] > self.grid.rlds_ds.y[-1]
-        self.grid.rsds_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/rsds'])['rsds']
+        self.grid.rsds_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/rsds"]
+        )["rsds"]
         assert self.grid.rsds_ds.y[0] > self.grid.rsds_ds.y[-1]
-        self.grid.tas_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/tas'])['tas']
+        self.grid.tas_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/tas"]
+        )["tas"]
         assert self.grid.tas_ds.y[0] > self.grid.tas_ds.y[-1]
-        self.grid.tasmax_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/tasmax'])['tasmax']
+        self.grid.tasmax_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/tasmax"]
+        )["tasmax"]
         assert self.grid.tasmax_ds.y[0] > self.grid.tasmax_ds.y[-1]
-        self.grid.tasmin_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/tasmin'])['tasmin']
+        self.grid.tasmin_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/tasmin"]
+        )["tasmin"]
         assert self.grid.tasmin_ds.y[0] > self.grid.tasmin_ds.y[-1]
-        self.grid.sfcWind_ds = xr.open_dataset(self.model.model_structure['forcing']['climate/sfcwind'])['sfcwind']
+        self.grid.sfcWind_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["climate/sfcwind"]
+        )["sfcwind"]
         assert self.grid.sfcWind_ds.y[0] > self.grid.sfcWind_ds.y[-1]
 
     def load_water_demand(self):
-        self.model.domestic_water_consumption_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/domestic_water_consumption'])
-        self.model.domestic_water_demand_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/domestic_water_demand'])
-        self.model.industry_water_consumption_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/industry_water_consumption'])
-        self.model.industry_water_demand_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/industry_water_demand'])
-        self.model.livestock_water_consumption_ds = xr.open_dataset(self.model.model_structure['forcing']['water_demand/livestock_water_consumption'])
+        self.model.domestic_water_consumption_ds = xr.open_dataset(
+            self.model.model_structure["forcing"][
+                "water_demand/domestic_water_consumption"
+            ]
+        )
+        self.model.domestic_water_demand_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["water_demand/domestic_water_demand"]
+        )
+        self.model.industry_water_consumption_ds = xr.open_dataset(
+            self.model.model_structure["forcing"][
+                "water_demand/industry_water_consumption"
+            ]
+        )
+        self.model.industry_water_demand_ds = xr.open_dataset(
+            self.model.model_structure["forcing"]["water_demand/industry_water_demand"]
+        )
+        self.model.livestock_water_consumption_ds = xr.open_dataset(
+            self.model.model_structure["forcing"][
+                "water_demand/livestock_water_consumption"
+            ]
+        )
 
     @staticmethod
     @njit(cache=True)
     def to_HRU_numba(data, grid_to_HRU, land_use_ratio, fn=None):
         """Numba helper function to convert from grid to HRU.
-        
+
         Args:
             data: The grid data to be converted.
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
@@ -516,11 +660,13 @@ class Data:
                 cell_index = grid_to_HRU[i]
                 output_data[prev_index:cell_index] = data[i]
                 prev_index = cell_index
-        elif fn == 'mean':
+        elif fn == "mean":
             for i in range(grid_to_HRU.size):
                 cell_index = grid_to_HRU[i]
                 cell_sizes = land_use_ratio[prev_index:cell_index]
-                output_data[prev_index:cell_index] = data[i] / cell_sizes.sum() * cell_sizes
+                output_data[prev_index:cell_index] = (
+                    data[i] / cell_sizes.sum() * cell_sizes
+                )
                 prev_index = cell_index
         else:
             raise NotImplementedError
@@ -529,7 +675,7 @@ class Data:
 
     def to_HRU(self, *, data=None, varname=None, fn=None, delete=True):
         """Function to convert from grid to HRU.
-        
+
         Args:
             data: The grid data to be converted (if set, varname cannot be set).
             varname: Name of variable to be converted. Must be present in grid class. (if set, data cannot be set).
@@ -543,13 +689,17 @@ class Data:
         if varname:
             data = getattr(self.grid, varname)
         assert not isinstance(data, list)
-        if isinstance(data, (float, int)):  # check if data is simple float. Otherwise should be numpy array.
+        if isinstance(
+            data, (float, int)
+        ):  # check if data is simple float. Otherwise should be numpy array.
             outdata = data
         else:
-            outdata = self.to_HRU_numba(data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn=fn)
+            outdata = self.to_HRU_numba(
+                data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn=fn
+            )
             if self.model.use_gpu:
                 outdata = cp.asarray(outdata)
-        
+
         if varname:
             if delete:
                 delattr(self.grid, varname)
@@ -558,9 +708,9 @@ class Data:
 
     @staticmethod
     @njit(cache=True)
-    def to_grid_numba(data, grid_to_HRU, land_use_ratio, fn='mean'):
+    def to_grid_numba(data, grid_to_HRU, land_use_ratio, fn="mean"):
         """Numba helper function to convert from HRU to grid.
-        
+
         Args:
             data: The grid data to be converted.
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
@@ -576,18 +726,18 @@ class Data:
         prev_index = 0
         for i in range(grid_to_HRU.size):
             cell_index = grid_to_HRU[i]
-            if fn == 'mean':
+            if fn == "mean":
                 values = data[prev_index:cell_index]
                 weights = land_use_ratio[prev_index:cell_index]
                 output_data[i] = (values * weights).sum() / weights.sum()
-            elif fn == 'sum':
+            elif fn == "sum":
                 output_data[i] = np.sum(data[prev_index:cell_index])
-            elif fn == 'nansum':
+            elif fn == "nansum":
                 output_data[i] = np.nansum(data[prev_index:cell_index])
-            elif fn == 'max':
-                output_data[i] = np.max(data[prev_index: cell_index])
-            elif fn == 'min':
-                output_data[i] = np.min(data[prev_index: cell_index])
+            elif fn == "max":
+                output_data[i] = np.max(data[prev_index:cell_index])
+            elif fn == "min":
+                output_data[i] = np.min(data[prev_index:cell_index])
             else:
                 raise NotImplementedError
             prev_index = cell_index
@@ -595,7 +745,7 @@ class Data:
 
     def to_grid(self, *, HRU_data=None, varname=None, fn=None, delete=True):
         """Function to convert from HRUs to grid.
-        
+
         Args:
             HRU_data: The HRU data to be converted (if set, varname cannot be set).
             varname: Name of variable to be converted. Must be present in HRU class. (if set, data cannot be set).
@@ -610,12 +760,16 @@ class Data:
         if varname:
             HRU_data = getattr(self.HRU, varname)
         assert not isinstance(HRU_data, list)
-        if isinstance(HRU_data, float):  # check if data is simple float. Otherwise should be numpy array.
+        if isinstance(
+            HRU_data, float
+        ):  # check if data is simple float. Otherwise should be numpy array.
             outdata = HRU_data
         else:
             if self.model.use_gpu and isinstance(HRU_data, cp.ndarray):
                 HRU_data = HRU_data.get()
-            outdata = self.to_grid_numba(HRU_data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn)
+            outdata = self.to_grid_numba(
+                HRU_data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn
+            )
 
         if varname:
             if delete:
@@ -638,7 +792,7 @@ class Data:
         else:
             raise NotImplementedError
         if ratio is not None:
-            a[i+1] = (1 - ratio) * a[i+1]
+            a[i + 1] = (1 - ratio) * a[i + 1]
         if is_cupy:
             a = cp.array(a)
         return a
@@ -649,30 +803,42 @@ class Data:
 
     def split(self, HRU_indices):
         HRU = self.HRU.unmerged_HRU_indices[HRU_indices]
-        assert (HRU == HRU[0]).all()  # assert all indices belong to same HRU - so only works for single grid cell at this moment
+        assert (
+            HRU == HRU[0]
+        ).all()  # assert all indices belong to same HRU - so only works for single grid cell at this moment
         HRU = HRU[0]
         assert HRU != -1
 
-        all_HRU_indices = np.where(self.HRU.unmerged_HRU_indices == HRU)  # this could probably be speed up
-        assert all_HRU_indices[0].size > HRU_indices[0].size  # ensure that not all indices are split off
+        all_HRU_indices = np.where(
+            self.HRU.unmerged_HRU_indices == HRU
+        )  # this could probably be speed up
+        assert (
+            all_HRU_indices[0].size > HRU_indices[0].size
+        )  # ensure that not all indices are split off
         ratio = HRU_indices[0].size / all_HRU_indices[0].size
 
         self.HRU.unmerged_HRU_indices[self.HRU.unmerged_HRU_indices > HRU] += 1
         self.HRU.unmerged_HRU_indices[HRU_indices] += 1
 
         self.HRU.HRU_to_grid = self.split_HRU_data(self.HRU.HRU_to_grid, HRU)
-        self.HRU.grid_to_HRU[self.HRU.HRU_to_grid[HRU]:] += 1
-        
+        self.HRU.grid_to_HRU[self.HRU.HRU_to_grid[HRU] :] += 1
+
         self.HRU.land_owners = self.split_HRU_data(self.HRU.land_owners, HRU)
         self.model.agents.farmers.update_field_indices()
 
-        self.model.agents.farmers.field_indices = self.split_HRU_data(self.model.agents.farmers.field_indices, HRU)
-        
+        self.model.agents.farmers.field_indices = self.split_HRU_data(
+            self.model.agents.farmers.field_indices, HRU
+        )
+
         self.HRU.land_use_type = self.split_HRU_data(self.HRU.land_use_type, HRU)
-        self.HRU.land_use_ratio = self.split_HRU_data(self.HRU.land_use_ratio, HRU, ratio=ratio)
+        self.HRU.land_use_ratio = self.split_HRU_data(
+            self.HRU.land_use_ratio, HRU, ratio=ratio
+        )
         self.HRU.cellArea = self.split_HRU_data(self.HRU.cellArea, HRU, ratio=ratio)
         self.HRU.crop_map = self.split_HRU_data(self.HRU.crop_map, HRU)
-        self.HRU.crop_age_days_map = self.split_HRU_data(self.HRU.crop_age_days_map, HRU)
+        self.HRU.crop_age_days_map = self.split_HRU_data(
+            self.HRU.crop_age_days_map, HRU
+        )
         self.HRU.Precipitation = self.split_HRU_data(self.HRU.Precipitation, HRU)
         self.HRU.SnowCoverS = self.split_HRU_data(self.HRU.SnowCoverS, HRU)
         self.HRU.DeltaTSnow = self.split_HRU_data(self.HRU.DeltaTSnow, HRU)
@@ -711,29 +877,63 @@ class Data:
         self.HRU.totAvlWater = self.split_HRU_data(self.HRU.totAvlWater, HRU)
         self.HRU.minInterceptCap = self.split_HRU_data(self.HRU.minInterceptCap, HRU)
         self.HRU.interceptStor = self.split_HRU_data(self.HRU.interceptStor, HRU)
-        self.HRU.potential_transpiration_crop = self.split_HRU_data(self.HRU.potential_transpiration_crop, HRU)
-        self.HRU.actual_transpiration_crop = self.split_HRU_data(self.HRU.actual_transpiration_crop, HRU)
+        self.HRU.potential_transpiration_crop = self.split_HRU_data(
+            self.HRU.potential_transpiration_crop, HRU
+        )
+        self.HRU.actual_transpiration_crop = self.split_HRU_data(
+            self.HRU.actual_transpiration_crop, HRU
+        )
         return HRU
-    
+
     def step(self):
-        self.grid.hurs = self.grid.compress(self.grid.hurs_ds.sel(time=self.model.current_time).data) # %
-        assert (self.grid.hurs > 1).all() and (self.grid.hurs <= 100).all(), "hurs out of range"
-        
-        self.grid.pr = self.grid.compress(self.grid.pr_ds.sel(time=self.model.current_time).data) # kg m-2 s-1
+        self.grid.hurs = self.grid.compress(
+            self.grid.hurs_ds.sel(time=self.model.current_time).data
+        )  # %
+        assert (self.grid.hurs > 1).all() and (
+            self.grid.hurs <= 100
+        ).all(), "hurs out of range"
+
+        self.grid.pr = self.grid.compress(
+            self.grid.pr_ds.sel(time=self.model.current_time).data
+        )  # kg m-2 s-1
         assert (self.grid.pr >= 0).all(), "Precipitation must be positive or zero"
-        
-        self.grid.ps = self.grid.compress(self.grid.ps_ds.sel(time=self.model.current_time).data)  # Pa
-        assert (self.grid.ps > 30_000).all() and (self.grid.ps < 120_000).all(), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
-        
-        self.grid.rlds = self.grid.compress(self.grid.rlds_ds.sel(time=self.model.current_time).data)  # W m-2
-        self.grid.rsds = self.grid.compress(self.grid.rsds_ds.sel(time=self.model.current_time).data)  # W m-2
-        
-        self.grid.tas = self.grid.compress(self.grid.tas_ds.sel(time=self.model.current_time).data) # K
-        self.grid.tasmax = self.grid.compress(self.grid.tasmax_ds.sel(time=self.model.current_time).data) # K
-        self.grid.tasmin = self.grid.compress(self.grid.tasmin_ds.sel(time=self.model.current_time).data) # K
-        
-        assert (self.grid.tas > 170).all() and (self.grid.tas < 370).all(), "tas out of range"
-        assert (self.grid.tasmax > 170).all() and (self.grid.tasmax < 370).all(), "tasmax out of range"
-        assert (self.grid.tasmin > 170).all() and (self.grid.tasmin < 370).all(), "tasmin out of range"
-        self.grid.sfcWind = self.grid.compress(self.grid.sfcWind_ds.sel(time=self.model.current_time).data)  # m/s
-        assert (self.grid.sfcWind >= 0).all() and (self.grid.sfcWind < 150).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
+
+        self.grid.ps = self.grid.compress(
+            self.grid.ps_ds.sel(time=self.model.current_time).data
+        )  # Pa
+        assert (self.grid.ps > 30_000).all() and (
+            self.grid.ps < 120_000
+        ).all(), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
+
+        self.grid.rlds = self.grid.compress(
+            self.grid.rlds_ds.sel(time=self.model.current_time).data
+        )  # W m-2
+        self.grid.rsds = self.grid.compress(
+            self.grid.rsds_ds.sel(time=self.model.current_time).data
+        )  # W m-2
+
+        self.grid.tas = self.grid.compress(
+            self.grid.tas_ds.sel(time=self.model.current_time).data
+        )  # K
+        self.grid.tasmax = self.grid.compress(
+            self.grid.tasmax_ds.sel(time=self.model.current_time).data
+        )  # K
+        self.grid.tasmin = self.grid.compress(
+            self.grid.tasmin_ds.sel(time=self.model.current_time).data
+        )  # K
+
+        assert (self.grid.tas > 170).all() and (
+            self.grid.tas < 370
+        ).all(), "tas out of range"
+        assert (self.grid.tasmax > 170).all() and (
+            self.grid.tasmax < 370
+        ).all(), "tasmax out of range"
+        assert (self.grid.tasmin > 170).all() and (
+            self.grid.tasmin < 370
+        ).all(), "tasmin out of range"
+        self.grid.sfcWind = self.grid.compress(
+            self.grid.sfcWind_ds.sel(time=self.model.current_time).data
+        )  # m/s
+        assert (self.grid.sfcWind >= 0).all() and (
+            self.grid.sfcWind < 150
+        ).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."

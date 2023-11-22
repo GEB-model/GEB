@@ -2,7 +2,8 @@ import pytest
 import numpy as np
 
 from geb.agents.general import AgentArray
-    
+
+
 def test_agent_array():
     # Test initialization with max_n
     a = AgentArray(np.array([1, 2, 3]), max_n=10)
@@ -23,7 +24,7 @@ def test_agent_array():
     assert np.array(a) is not a
     assert isinstance(np.array(a), np.ndarray)
     assert np.array(a).size == 3
-    
+
     # test reshaping (to not Agent array)
     assert a.reshape(-1, 1).shape == (3, 1)
 
@@ -100,9 +101,11 @@ def test_agent_array():
     assert np.array_equal(a[:2], np.array([4, 5]))
 
     # Test array methods
-    assert np.array_equal(np.unique(a, return_counts=True), (np.array([4, 5, 7]), np.array([1, 1, 1])))
+    assert np.array_equal(
+        np.unique(a, return_counts=True), (np.array([4, 5, 7]), np.array([1, 1, 1]))
+    )
     assert a.sum() == 16
-    assert np.array_equal(a.mean(), 16/3)
+    assert np.array_equal(a.mean(), 16 / 3)
     assert a.std() == np.std(a)
     assert a.min() == np.min(a)
     assert a.max() == np.max(a)
@@ -124,7 +127,7 @@ def test_agent_array():
     assert np.array_equal(a, np.array([4, 5, 6, 7]))
     assert a.n == 4
     assert a.max_n == 10
-    
+
     # Test setting n to exceed max_n
     try:
         a.n = 11
@@ -146,33 +149,41 @@ def test_agent_array():
     numba_function(a.data)
     assert (a == -99).all()
 
+
 @pytest.fixture
 def array():
     return AgentArray(np.array([1, 2, 3, 4, 5]), max_n=10)
+
 
 def test_add_ufunc(array):
     result = np.add(array, 1)
     np.testing.assert_array_equal(result.data, np.array([2, 3, 4, 5, 6]))
 
+
 def test_subtract_ufunc(array):
     result = np.subtract(array, 1)
     np.testing.assert_array_equal(result.data, np.array([0, 1, 2, 3, 4]))
+
 
 def test_multiply_ufunc(array):
     result = np.multiply(array, 2)
     np.testing.assert_array_equal(result.data, np.array([2, 4, 6, 8, 10]))
 
+
 def test_divide_ufunc(array):
     result = np.divide(array, 2)
     np.testing.assert_array_equal(result.data, np.array([0.5, 1.0, 1.5, 2.0, 2.5]))
+
 
 def test_power_ufunc(array):
     result = np.power(array, 2)
     np.testing.assert_array_equal(result.data, np.array([1, 4, 9, 16, 25]))
 
+
 def test_reduce_ufunc(array):
     result = np.add.reduce(array)
     assert result == 15
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     pass

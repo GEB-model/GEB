@@ -5,12 +5,14 @@ from .ngo import NGO
 from .government import Government
 from .reservoir_operators import ReservoirOperators
 
+
 class Agents:
     """This class initalizes all agent classes, and is used to activate the agents each timestep.
 
     Args:
         model: The GEB model
     """
+
     def __init__(self, model) -> None:
         self.model = model
         self.households = Households(model, self, 0.1)

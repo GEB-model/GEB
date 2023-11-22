@@ -1,14 +1,25 @@
 import numpy as np
 
+
 class AgentArray:
-    def __init__(self, input_array=None, n=None, max_n=None, extra_dims=None, dtype=None, fill_value=None):
+    def __init__(
+        self,
+        input_array=None,
+        n=None,
+        max_n=None,
+        extra_dims=None,
+        dtype=None,
+        fill_value=None,
+    ):
         if input_array is None and dtype is None:
             raise ValueError("Either input_array or dtype must be given")
         elif input_array is not None and dtype is not None:
             raise ValueError("Only one of input_array or dtype can be given")
-        
+
         if input_array is not None:
-            assert extra_dims is None, "extra_dims cannot be given if input_array is given"
+            assert (
+                extra_dims is None
+            ), "extra_dims cannot be given if input_array is given"
             if n is None and max_n is None:
                 raise ValueError("Either n or max_n must be given")
             elif n is not None and max_n is not None:
@@ -43,16 +54,16 @@ class AgentArray:
 
     @property
     def data(self):
-        return self._data[:self.n]
-    
+        return self._data[: self.n]
+
     @data.setter
     def data(self, value):
-        self._data[:self.n] = value
-    
+        self._data[: self.n] = value
+
     @property
     def max_n(self):
         return self._data.shape[0]
-    
+
     @property
     def n(self):
         return self._n
@@ -75,10 +86,11 @@ class AgentArray:
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         modified_inputs = tuple(
-            input_.data if isinstance(input_, AgentArray) else input_ for input_ in inputs
+            input_.data if isinstance(input_, AgentArray) else input_
+            for input_ in inputs
         )
         result = self._data.__array_ufunc__(ufunc, method, *modified_inputs, **kwargs)
-        if method == 'reduce':
+        if method == "reduce":
             return result
         else:
             return AgentArray(result, max_n=self._data.shape[0])
@@ -91,52 +103,54 @@ class AgentArray:
         modified_types = tuple(
             type(arg.data) if isinstance(arg, AgentArray) else type(arg) for arg in args
         )
-        return self._data.__array_function__(func, modified_types, modified_args, kwargs)
-    
+        return self._data.__array_function__(
+            func, modified_types, modified_args, kwargs
+        )
+
     def __setitem__(self, key, value):
         self.data.__setitem__(key, value)
 
     def __getitem__(self, key):
         return self.data.__getitem__(key)
-    
+
     def __repr__(self):
-        return 'AgentArray(' + self.data.__str__() + ')'
+        return "AgentArray(" + self.data.__str__() + ")"
 
     def __str__(self):
         return self.data.__str__()
-    
+
     def __len__(self):
         return self._n
-    
+
     def __getattr__(self, name):
-        if name in ('_data', 'data', '_n', 'n'):
+        if name in ("_data", "data", "_n", "n"):
             return super().__getattr__(name)
         else:
             return getattr(self.data, name)
-    
+
     def __setattr__(self, name, value):
-        if name in ('_data', 'data', '_n', 'n'):
+        if name in ("_data", "data", "_n", "n"):
             super().__setattr__(name, value)
         else:
             setattr(self.data, name, value)
 
     def __getstate__(self):
         return self.data.__getstate__()
-    
+
     def __setstate__(self, state):
         self.data.__setstate__(state)
-    
+
     def __sizeof__(self):
         return self.data.__sizeof__()
-    
+
     def __add__(self, other):
         if isinstance(other, AgentArray):
-            other = other._data[:other._n]
+            other = other._data[: other._n]
         return AgentArray(self.data.__add__(other), max_n=self._data.shape[0])
-    
+
     def _perform_operation(self, other, operation: str, inplace: bool = False):
         if isinstance(other, AgentArray):
-            other = other._data[:other._n]
+            other = other._data[: other._n]
         result = getattr(self.data, operation)(other)
         if inplace:
             self.data = result
@@ -145,88 +159,89 @@ class AgentArray:
             return AgentArray(result, max_n=self._data.shape[0])
 
     def __add__(self, other):
-        return self._perform_operation(other, '__add__')
+        return self._perform_operation(other, "__add__")
 
     def __radd__(self, other):
-        return self._perform_operation(other, '__radd__', inplace=True)
+        return self._perform_operation(other, "__radd__", inplace=True)
 
     def __iadd__(self, other):
-        return self._perform_operation(other, '__add__', inplace=True)
+        return self._perform_operation(other, "__add__", inplace=True)
 
     def __sub__(self, other):
-        return self._perform_operation(other, '__sub__')
+        return self._perform_operation(other, "__sub__")
 
     def __rsub__(self, other):
-        return self._perform_operation(other, '__rsub__', inplace=True)
+        return self._perform_operation(other, "__rsub__", inplace=True)
 
     def __isub__(self, other):
-        return self._perform_operation(other, '__sub__', inplace=True)
+        return self._perform_operation(other, "__sub__", inplace=True)
 
     def __mul__(self, other):
-        return self._perform_operation(other, '__mul__')
+        return self._perform_operation(other, "__mul__")
 
     def __rmul__(self, other):
-        return self._perform_operation(other, '__rmul__', inplace=True)
+        return self._perform_operation(other, "__rmul__", inplace=True)
 
     def __imul__(self, other):
-        return self._perform_operation(other, '__mul__', inplace=True)
+        return self._perform_operation(other, "__mul__", inplace=True)
 
     def __truediv__(self, other):
-        return self._perform_operation(other, '__truediv__')
+        return self._perform_operation(other, "__truediv__")
 
     def __rtruediv__(self, other):
-        return self._perform_operation(other, '__rtruediv__', inplace=True)
+        return self._perform_operation(other, "__rtruediv__", inplace=True)
 
     def __itruediv__(self, other):
-        return self._perform_operation(other, '__truediv__', inplace=True)
+        return self._perform_operation(other, "__truediv__", inplace=True)
 
     def __floordiv__(self, other):
-        return self._perform_operation(other, '__floordiv__')
+        return self._perform_operation(other, "__floordiv__")
 
     def __rfloordiv__(self, other):
-        return self._perform_operation(other, '__rfloordiv__', inplace=True)
+        return self._perform_operation(other, "__rfloordiv__", inplace=True)
 
     def __ifloordiv__(self, other):
-        return self._perform_operation(other, '__floordiv__', inplace=True)
+        return self._perform_operation(other, "__floordiv__", inplace=True)
 
     def __mod__(self, other):
-        return self._perform_operation(other, '__mod__')
+        return self._perform_operation(other, "__mod__")
 
     def __rmod__(self, other):
-        return self._perform_operation(other, '__rmod__', inplace=True)
+        return self._perform_operation(other, "__rmod__", inplace=True)
 
     def __imod__(self, other):
-        return self._perform_operation(other, '__mod__', inplace=True)
+        return self._perform_operation(other, "__mod__", inplace=True)
 
     def __pow__(self, other):
-        return self._perform_operation(other, '__pow__')
+        return self._perform_operation(other, "__pow__")
 
     def __rpow__(self, other):
-        return self._perform_operation(other, '__rpow__', inplace=True)
+        return self._perform_operation(other, "__rpow__", inplace=True)
 
     def __ipow__(self, other):
-        return self._perform_operation(other, '__pow__', inplace=True)
-        
+        return self._perform_operation(other, "__pow__", inplace=True)
+
     def _compare(self, value: object, operation: str) -> bool:
         if isinstance(value, AgentArray):
-            return AgentArray(getattr(self.data, operation)(value.data), max_n=self._data.shape[0])
+            return AgentArray(
+                getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
+            )
         return getattr(self.data, operation)(value)
 
     def __eq__(self, value: object) -> bool:
-        return self._compare(value, '__eq__')
+        return self._compare(value, "__eq__")
 
     def __ne__(self, value: object) -> bool:
-        return self._compare(value, '__ne__')
+        return self._compare(value, "__ne__")
 
     def __gt__(self, value: object) -> bool:
-        return self._compare(value, '__gt__')
+        return self._compare(value, "__gt__")
 
     def __ge__(self, value: object) -> bool:
-        return self._compare(value, '__ge__')
+        return self._compare(value, "__ge__")
 
     def __lt__(self, value: object) -> bool:
-        return self._compare(value, '__lt__')
+        return self._compare(value, "__lt__")
 
     def __le__(self, value: object) -> bool:
-        return self._compare(value, '__le__')
-        
+        return self._compare(value, "__le__")
