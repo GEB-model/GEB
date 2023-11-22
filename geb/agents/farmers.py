@@ -141,7 +141,7 @@ class Farmers(AgentBaseClass):
         self.crop_prices = load_regional_crop_data_from_dict(self.model, "crops/crop_prices")
         self.cultivation_costs = load_regional_crop_data_from_dict(self.model, "crops/cultivation_costs")
         
-        if self.model.scenario == 'pre_spinup' or self.model.config['general']['load_pre_spinup']:
+        if self.model.scenario == 'pre_spinup' or self.model.load_pre_spinup_data:
             self.total_spinup_time = (self.model.config['general']['start_time'].year - self.model.config['general']['pre_spinup_time'].year) 
         else: 
             self.total_spinup_time = (self.model.config['general']['start_time'].year - self.model.config['general']['spinup_time'].year)
@@ -205,10 +205,10 @@ class Farmers(AgentBaseClass):
             self.risk_aversion = FarmerAgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan)
             self.risk_aversion[:] = np.load(self.model.model_structure['binary']["agents/farmers/risk_aversion"])['data']
 
-            self.interest_rate = AgentArray(n=self.n, max_size=self.max_n, dtype=np.float32, fill_value=np.nan)
+            self.interest_rate = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan)
             self.interest_rate[:] = np.load(self.model.model_structure['binary']["agents/farmers/interest_rate"])['data']
             
-            self.discount_rate = AgentArray(n=self.n, max_size=self.max_n, dtype=np.float32, fill_value=np.nan)
+            self.discount_rate = AgentArray(n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan)
             self.discount_rate[:] = np.load(self.model.model_structure['binary']["agents/farmers/discount_rate"])['data']
             
             # Load the region_code of each farmer.
@@ -653,7 +653,7 @@ class Farmers(AgentBaseClass):
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             command_areas=command_areas,
             return_fraction=self.model.config['agent_settings']['farmers']['return_fraction'],
-            well_depth=self.well_depth
+            well_depth=self.well_depth.data
         )
         self.n_water_accessible_days[:] += has_access_to_irrigation_water
         self.groundwater_depth = groundwater_depth_per_farmer

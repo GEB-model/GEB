@@ -51,8 +51,8 @@ class GEBModel(ABM_Model, CWatM_Model):
         self.model_structure = model_structure
 
         self.initial_conditions_folder = Path(self.config['general']['initial_conditions_folder'])
-        self.initial_relations_folder = Path(self.config['general']['initial_relations_folder'])
-        self.load_pre_spinup_data = self.config['general']['load_pre_spinup']
+        self.initial_relations_folder = self.initial_conditions_folder / 'relations'
+        self.load_pre_spinup_data = self.config['general']['load_pre_spinup'] if 'load_pre_spinup' in self.config['general'] else False
         if scenario == 'pre_spinup':
             end_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
             current_time = datetime.datetime.combine(self.config['general']['pre_spinup_time'], datetime.time(0))
