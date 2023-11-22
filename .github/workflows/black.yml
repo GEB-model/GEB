@@ -12,4 +12,3 @@ jobs:
           options: "--check --verbose"
           src: "./src"
           jupyter: true
-          version: "21.5b1"
