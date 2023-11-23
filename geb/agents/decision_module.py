@@ -138,7 +138,12 @@ class DecisionModule:
         # Part njit, iterate through floods
         n_agents = np.int32(n_agents)
         NPV_summed = self.IterateThroughFlood(
-            n_floods, total_profits, profits_no_event, max_T, n_agents, discount_rate.data
+            n_floods,
+            total_profits,
+            profits_no_event,
+            max_T,
+            n_agents,
+            discount_rate.data,
         )
 
         # Filter out negative NPVs

@@ -30,12 +30,15 @@ def multi_level_merge(dict1, dict2):
             dict1[key] = value
     return dict1
 
+
 def parse_config(config):
     """Parse config."""
     config = yaml.load(open(config, "r"), Loader=yaml.FullLoader)
-    if 'inherits' in config:
-        inherited_config = yaml.load(open(config['inherits'], "r"), Loader=yaml.FullLoader)
-        del config['inherits']
+    if "inherits" in config:
+        inherited_config = yaml.load(
+            open(config["inherits"], "r"), Loader=yaml.FullLoader
+        )
+        del config["inherits"]
         config = multi_level_merge(inherited_config, config)
     return config
 
