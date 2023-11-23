@@ -22,9 +22,21 @@ from geb.calibrate import calibrate as geb_calibrate
 faulthandler.enable()
 
 
+def multi_level_merge(dict1, dict2):
+    for key, value in dict2.items():
+        if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
+            multi_level_merge(dict1[key], value)
+        else:
+            dict1[key] = value
+    return dict1
+
 def parse_config(config):
     """Parse config."""
     config = yaml.load(open(config, "r"), Loader=yaml.FullLoader)
+    if 'inherits' in config:
+        inherited_config = yaml.load(open(config['inherits'], "r"), Loader=yaml.FullLoader)
+        del config['inherits']
+        config = multi_level_merge(inherited_config, config)
     return config
 
 
@@ -156,6 +168,7 @@ def run(
 
     MODEL_NAME = "GEB"
     config = parse_config(config)
+
     model_structure = parse_config(
         "input/model_structure.json"
         if not "model_stucture" in config["general"]
