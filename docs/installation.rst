@@ -8,7 +8,6 @@ We recommend to install GEB in a conda environment. If you don't have conda inst
 .. code-block:: bash
 
     conda config --add channels conda-forge
-    conda config --set channel_priority strict
     conda create -n geb python=3.11
     conda activate geb
 
