@@ -29,8 +29,6 @@ For ease of running and set up put these in one big project root folder (not nec
 - module load 2022
 - module load GSL/2.7-GCC-11.3.0
 
-
-
 As per instructions in PlantFATE readme, install natively in C++.
 
 You may need to install additional libraries, specifically pybind: 
@@ -65,9 +63,3 @@ You may need to install additional libraries, specifically pybind:
   * make clean testclean
   
   * make python
-
-3) RUN PLANTFATE COUPLING FROM PYTHON
-You can run the PLANTFATE model using the coupling.py file. 
-The crucial elements to have are 2 files: parameters file (p_daily.ini) and plant traits data (Amz_trait_filled_HD.csv). 
-The parameter file is in the repository but I am not sure about the plant trait data yet so it’s attached to this email instead (simply download and put in a data/Amz_trait_filled_HD.csv in the repository).
-Then you can run coupling.py. The code for running plantFATE is in the __main__() function and I’ve tried to comment it. 

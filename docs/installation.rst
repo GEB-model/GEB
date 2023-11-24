@@ -3,6 +3,22 @@ Installation
 
 GEB runs on Python 3.11+ and can be installed using pip. In the future, GEB will be available on PyPI, but for now, you can install it from GitHub:
 
+We recommend to install GEB in a conda environment. If you don't have conda installed, you can install it from https://docs.conda.io/en/latest/miniconda.html. Then create a conda environment with Python 3.11 and activate it:
+
+.. code-block:: bash
+
+    conda create -n geb python=3.11
+    conda activate geb
+
+Then install the required packages:
+
+.. code-block:: bash
+
+    conda config --set solver libmamba
+    conda install rasterio numba tbb pandas openpyxl 'geopandas>=0.14' numpy deap  pyyaml xarray 'dask>=2023.3.0' 'rioxarray>=0.15' pybind11 scipy netCDF4 flopy bmipy xmipy xlrd pyflow s3fs xesmf 'hydromt>=0.9' tqdm 'openpyxl>=3.1.2' xclim pyogrio xesmf
+
+Then install GEB from GitHub:
+
 .. code-block:: bash
 
     pip install git+https://github.com/jensdebruijn/GEB
