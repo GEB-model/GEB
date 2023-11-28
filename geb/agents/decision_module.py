@@ -239,7 +239,7 @@ class DecisionModule:
         )
 
         # Those who cannot affort it cannot adapt
-        EU_adapt[~unconstrained_mask] = -np.inf
+        EU_adapt[~unconstrained_mask.data] = -np.inf
 
         # Iterate only through agents who can afford to adapt
         for i in unconstrained[0]:

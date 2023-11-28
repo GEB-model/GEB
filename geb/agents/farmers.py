@@ -107,9 +107,6 @@ class Farmers(AgentBaseClass):
         )
 
         # Well cost variables
-        self.well_price = load_economic_data(
-            self.model.model_structure["dict"]["economics/well_prices"]
-        )
         self.borewell_cost_1 = load_economic_data(
             self.model.model_structure["dict"]["economics/borewell_cost_1"]
         )
@@ -719,7 +716,7 @@ class Farmers(AgentBaseClass):
         self.decision_horizon = FarmerAgentArray(
             n=self.n,
             max_n=self.max_n,
-            dtype=np.float32,
+            dtype=np.int32,
             fill_value=self.model.config["agent_settings"]["expected_utility"][
                 "decisions"
             ]["decision_horizon"],
@@ -1490,11 +1487,11 @@ class Farmers(AgentBaseClass):
         loaning_farmers = drought_loss_current >= loss_threshold
 
         # Determine their microcredit
-        if np.any(loaning_farmers) and self.model.scenario not in [
+        if np.any(loaning_farmers) and self.model.scenario not in (
+            "pre-spinup",
             "spinup",
             "noadaptation",
-            "base",
-        ]:
+        ):
             print(np.count_nonzero(loaning_farmers), "farmers are getting microcredit")
             self.microcredit(loaning_farmers, drought_loss_current, total_crop_age)
 
@@ -1674,7 +1671,7 @@ class Farmers(AgentBaseClass):
                     "farmers_going_out_of_business"
                 ]
                 and not self.model.scenario
-                == "spinup"  # farmers can only go out of business when not in spinup scenario
+                not in ("spinup", "pre-spinup", "noadaptation")  # farmers can only go out of business when not in spinup scenario
             ),
         )
         if farmers_selling_land.size > 0:
@@ -2571,10 +2568,10 @@ class Farmers(AgentBaseClass):
         """
 
         # Add a column of zeros to represent farmers who have not adapted yet
-        crop_groups_onlyzeros = np.hstack((self.crops, np.zeros(self.n).reshape(-1, 1)))
+        crop_groups_onlyzeros = np.hstack((self.crops.data, np.zeros(self.n).reshape(-1, 1)))
 
         # Combine current crops with their respective adaptation status
-        crop_groups = np.hstack((self.crops, adapted.reshape(-1, 1)))
+        crop_groups = np.hstack((self.crops.data, adapted.reshape(-1, 1)))
 
         # Initialize array to store relative yield ratio improvement for unique groups
         unique_yield_ratio_gain_relative = np.full(
@@ -2822,7 +2819,7 @@ class Farmers(AgentBaseClass):
                     self.n,
                     profits_no_event,
                     expenditure_cap,
-                    total_annual_costs,
+                    total_annual_costs.data,
                     extra_constraint,
                 )
 
@@ -3001,7 +2998,7 @@ class Farmers(AgentBaseClass):
                 search_target_ids=ids,
             )
             self.switch_crops_numba(
-                ids.data,
+                ids,
                 self.crops.data,
                 neighbors,
                 self.SEUT_no_adapt.data,
@@ -3132,12 +3129,11 @@ class Farmers(AgentBaseClass):
                 )
 
             # Alternative scenarios: 'sprinkler'
-            if self.model.scenario not in [
+            if self.model.scenario not in (
                 "pre_spinup",
                 "spinup",
                 "noadaptation",
-                "base",
-            ]:
+            ):
                 # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
                 decision_params = {
@@ -3150,10 +3146,10 @@ class Farmers(AgentBaseClass):
                     "total_profits": total_profits,
                     "profits_no_event": profits_no_event,
                 }
-                self.SEUT_no_adapt = self.decision_module.calcEU_do_nothing(
+                self.SEUT_no_adapt[:] = self.decision_module.calcEU_do_nothing(
                     **decision_params
                 )
-                self.EUT_no_adapt = self.decision_module.calcEU_do_nothing(
+                self.EUT_no_adapt[:] = self.decision_module.calcEU_do_nothing(
                     **decision_params, subjective=False
                 )
                 self.switch_crops()
@@ -3167,13 +3163,11 @@ class Farmers(AgentBaseClass):
                         "Cannot adapt without yield - probability relation"
                     )
 
-            if self.model.scenario not in [
+            if self.model.scenario not in (
                 "pre_spinup",
                 "spinup",
                 "noadaptation",
-                "base",
-                "adaptation",
-            ]:
+            ):
                 if not np.all(self.farmer_yield_probability_relation == 0):
                     pass
                     self.adapt_drip_irrigation()
