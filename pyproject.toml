@@ -22,10 +22,8 @@ dependencies = [
     "dask>=2023.3.0",
     "rioxarray>=0.15",
     "pybind11",
-    # "hydromt-sfincs>=1.0.1",
+    "hydromt-sfincs@git+https://github.com/Deltares/hydromt_sfincs",
     "honeybees@git+https://github.com/jensdebruijn/honeybees",
-    "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
-    "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -51,8 +49,13 @@ docs = [
     "sphinx_rtd_theme",
     "sphinxcontrib-autoyaml"
 ]
-full = [
+gpu = [
     "cupy"
+]
+
+full = [
+    "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
+    "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
 ]
 
 [project.scripts]
