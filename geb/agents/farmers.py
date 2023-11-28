@@ -163,7 +163,6 @@ class Farmers(AgentBaseClass):
         self.lending_rate = load_economic_data(self.model.model_structure['dict']['economics/lending_rates'])
         
         # Well cost variables
-        self.well_price = load_economic_data(self.model.model_structure['dict']['economics/well_prices'])
         self.borewell_cost_1 = load_economic_data(self.model.model_structure['dict']['economics/borewell_cost_1'])
         self.borewell_cost_2 = load_economic_data(self.model.model_structure['dict']['economics/borewell_cost_2'])
         self.pump_cost = load_economic_data(self.model.model_structure['dict']['economics/pump_cost'])
@@ -2849,14 +2848,12 @@ class Farmers(AgentBaseClass):
                 
                 # These adaptations can only be done if there is a yield-probability relation 
                 if not np.all(self.farmer_yield_probability_relation == 0): 
-                    pass
                     self.adapt_irrigation_well()   
                 else:
                     raise AssertionError("Cannot adapt without yield - probability relation")
             
             if self.model.scenario not in ['pre_spinup','spinup','noadaptation', 'base', 'adaptation']:
                 if not np.all(self.farmer_yield_probability_relation == 0): 
-                    pass
                     self.adapt_drip_irrigation()   
                 else:
                     raise AssertionError("Cannot adapt without yield - probability relation")
