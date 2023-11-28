@@ -1671,7 +1671,11 @@ class Farmers(AgentBaseClass):
                     "farmers_going_out_of_business"
                 ]
                 and not self.model.scenario
-                not in ("spinup", "pre-spinup", "noadaptation")  # farmers can only go out of business when not in spinup scenario
+                not in (
+                    "spinup",
+                    "pre-spinup",
+                    "noadaptation",
+                )  # farmers can only go out of business when not in spinup scenario
             ),
         )
         if farmers_selling_land.size > 0:
@@ -2568,7 +2572,9 @@ class Farmers(AgentBaseClass):
         """
 
         # Add a column of zeros to represent farmers who have not adapted yet
-        crop_groups_onlyzeros = np.hstack((self.crops.data, np.zeros(self.n).reshape(-1, 1)))
+        crop_groups_onlyzeros = np.hstack(
+            (self.crops.data, np.zeros(self.n).reshape(-1, 1))
+        )
 
         # Combine current crops with their respective adaptation status
         crop_groups = np.hstack((self.crops.data, adapted.reshape(-1, 1)))
