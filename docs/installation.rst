@@ -18,11 +18,11 @@ Then install the required packages:
     conda config --set solver libmamba
     conda install rasterio numba tbb pandas 'geopandas>=0.14' numpy deap  pyyaml xarray 'dask>=2023.3.0' 'rioxarray>=0.15' pybind11 scipy netCDF4 flopy bmipy xmipy xlrd pyflow s3fs xesmf 'hydromt>=0.9.1' tqdm 'openpyxl>=3.1.2' xclim xesmf
 
-Then install GEB from GitHub:
+Then install GEB from GitHub. You need to install the full version, which includes all dependencies:
 
 .. code-block:: bash
 
-    pip install git+https://github.com/jensdebruijn/GEB
+    pip install geb[full]@git+https://github.com/jensdebruijn/GEB
 
 Installation in development mode
 --------------------------------
@@ -31,30 +31,11 @@ If you want to contribute to GEB, you can install it in development mode. This w
 
 .. code-block:: bash
 
-    git clone https://github.com/jensdebruijn/honeybees
-    pip install -e honeybees
-
     git clone https://github.com/jensdebruijn/ABCWatM_private
     pip install -e ABCWatM_private
 
     git clone https://github.com/jensdebruijn/hydromt_geb
     pip install -e hydromt_geb
-
-Then you can install GEB in editable mode, however, first make sure to comment out the following line in the pyproject.toml file to ensure that previously installed packages are not overruled.
-
-.. code-block:: python
-
-    "honeybees@git+https://github.com/jensdebruijn/honeybees",
-    "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
-    "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
-
-to
-
-.. code-block:: python
-
-    # "honeybees@git+https://github.com/jensdebruijn/honeybees",
-    # "abcwatm@git+https://github.com/jensdebruijn/ABCWatM",
-    # "hydromt_geb@git+https://github.com/jensdebruijn/hydromt_geb",
 
 Then install GEB in editable mode:
 
