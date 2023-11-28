@@ -839,7 +839,9 @@ class Data:
         self.HRU.crop_age_days_map = self.split_HRU_data(
             self.HRU.crop_age_days_map, HRU
         )
-        self.HRU.Precipitation = self.split_HRU_data(self.HRU.Precipitation, HRU)
+        self.HRU.crop_harvest_age_days = self.split_HRU_data(
+            self.HRU.crop_harvest_age_days, HRU
+        )
         self.HRU.SnowCoverS = self.split_HRU_data(self.HRU.SnowCoverS, HRU)
         self.HRU.DeltaTSnow = self.split_HRU_data(self.HRU.DeltaTSnow, HRU)
         self.HRU.FrostIndex = self.split_HRU_data(self.HRU.FrostIndex, HRU)
