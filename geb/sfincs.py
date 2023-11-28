@@ -94,7 +94,7 @@ class SFINCS:
             name="discharge",
         )
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
-        discharge_grid.raster.set_crs(self.model.data.grid.crs)
+        discharge_grid.raster.set_crs(self.model.data.grid.crs.to_proj4())
         tstart = start_time
         tend = discharge_grid.time[-1] + pd.Timedelta(
             self.model.timestep_length / substeps
