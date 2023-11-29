@@ -3187,37 +3187,51 @@ class Farmers(AgentBaseClass):
             self.disposable_income[:] = 0
 
         if self.model.scenario in ("lulc",):
-            import geopandas as gpd
-            from rasterio.features import geometry_mask
-            from affine import Affine
+            # if self.model.current_timestep == 2:
+            #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
 
-            to_forest = gpd.read_file("to_forest.gpkg").to_crs(epsg=4326)
+            if self.model.current_timestep == 1:
+                import geopandas as gpd
+                from rasterio.features import geometry_mask
+                from affine import Affine
 
-            # Get the transform and dimensions from the existing mask
-            transform = Affine.from_gdal(*self.model.data.HRU.gt)
+                to_forest = gpd.read_file("to_forest.gpkg").to_crs(epsg=4326)
 
-            # Create a new mask that includes the areas to be converted to forest
-            forest_mask = geometry_mask(
-                [geom for geom in to_forest.geometry],
-                transform=transform,
-                out_shape=self.model.data.HRU.mask.shape,
-                invert=True,
-                all_touched=True,
-            )
+                # Get the transform and dimensions from the existing mask
+                transform = Affine.from_gdal(*self.model.data.HRU.gt)
 
-            if self.model.current_timestep == 2:
-                self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
-            if self.model.current_timestep == 5:
-                self.remove_agents(farmer_indices=[4, 5])
+                # Create a new mask that includes the areas to be converted to forest
+                forest_mask = geometry_mask(
+                    [geom for geom in to_forest.geometry],
+                    transform=transform,
+                    out_shape=self.model.data.HRU.mask.shape,
+                    invert=True,
+                    all_touched=True,
+                )
+
+                # decompress the land_owners array
+                land_owners_map = self.var.decompress(self.var.land_owners)
+                assert land_owners_map.shape == forest_mask.shape
+
+                # select the farmers that are in the areas to be converted to forest
+                farmers_to_convert = np.unique(land_owners_map[forest_mask])
+                farmers_to_convert = farmers_to_convert[farmers_to_convert != -1]
+
+                # remove the farmers that are not in the areas to be converted to forest
+                HRUs_to_forest = self.remove_agents(farmer_indices=farmers_to_convert)
+                self.var.land_use_type[HRUs_to_forest] = 0  # 0 is forest
 
     def remove_agents(self, farmer_indices: list[int]):
         farmer_indices = np.array(farmer_indices)
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
+            HRUs_with_removed_farmers = []
             for idx in farmer_indices:
-                self.remove_agent(idx)
+                HRUs_with_removed_farmers.append(self.remove_agent(idx))
+        return np.concatenate(HRUs_with_removed_farmers)
 
     def remove_agent(self, farmer_idx: int) -> np.ndarray:
+        assert farmer_idx >= 0, "Farmer index must be positive."
         last_farmer_HRUs = get_farmer_HRUs(
             self.field_indices, self.field_indices_by_farmer.data, -1
         )
