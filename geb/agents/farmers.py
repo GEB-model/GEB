@@ -3209,6 +3209,16 @@ class Farmers(AgentBaseClass):
                     all_touched=True,
                 )
 
+                HRU_indices = self.var.decompress(
+                    np.arange(self.model.data.HRU.land_use_type.size)
+                )
+                HRUs_to_forest = np.unique(HRU_indices[forest_mask])
+                HRUs_to_forest = HRUs_to_forest[HRUs_to_forest != -1]
+                HRUs_to_forest = HRUs_to_forest[
+                    self.var.land_use_type[HRUs_to_forest] == 1
+                ]  # only select HRUs that are grassland
+                self.var.land_use_type[HRUs_to_forest] = 0  # 0 is forest
+
                 # decompress the land_owners array
                 land_owners_map = self.var.decompress(self.var.land_owners)
                 assert land_owners_map.shape == forest_mask.shape
@@ -3218,8 +3228,10 @@ class Farmers(AgentBaseClass):
                 farmers_to_convert = farmers_to_convert[farmers_to_convert != -1]
 
                 # remove the farmers that are not in the areas to be converted to forest
-                HRUs_to_forest = self.remove_agents(farmer_indices=farmers_to_convert)
-                self.var.land_use_type[HRUs_to_forest] = 0  # 0 is forest
+                HRUs_to_forest_for_farmers = self.remove_agents(
+                    farmer_indices=farmers_to_convert
+                )
+                self.var.land_use_type[HRUs_to_forest_for_farmers] = 0  # 0 is forest
 
     def remove_agents(self, farmer_indices: list[int]):
         farmer_indices = np.array(farmer_indices)
