@@ -182,70 +182,6 @@ def run(
             data[key] = Path(config["general"]["input_folder"]) / value
     study_area = get_study_area(model_structure)
 
-    series_to_plot = [
-        # crop_series,
-        # [
-        #     {"name": "channel abstraction M3", "color": "#FF0000"},co
-        #     {"name": "groundwater abstraction M3", "color": "#000000"},
-        #     # {"name": "total potential irrigation consumption M3", "color": "#FF00FF"},
-        # ],
-        # [
-        #     {"name": "channel irrigation", "color": "#FF0000"},
-        #     {"name": "reservoir irrigation", "color": "#FFFF00"},
-        #     {"name": "groundwater irrigation", "color": "#000000"},
-        # ],
-        # [
-        #     {"name": "crop_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
-        # ],
-        # [
-        #     {"name": "surface_irrigated_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
-        # ],
-        # [
-        #     {"name": "groundwater_irrigated_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
-        # ],
-        # [
-        #     {
-        #         "name": "groundwater_irrigated_tehsil",
-        #         "ID": f"{admin['properties']['id']}"
-        #     }
-        #     for admin in study_area['admin']
-        # ],
-        # [
-        #     {"name": "surface_irrigated_per_district", "IDs": TEHSILS, "color": [colors[tehsil] for tehsil in TEHSILS]},
-        # ],
-        # [
-        #     {"name": "wealth_sample", "size": 3, "color": ["#ff0000", "#00ff00", "#0000ff"]},
-        # ],
-        # [
-        #     {"name": "discharge", "color": "#FF0000"},
-        # ],
-        # [
-        #     {"name": "reservoir storage", "color": "#FF0000"},
-        # ],
-        # [
-        #     {"name": "w1", "color": "#FF0000"},
-        #     {"name": "w2", "color": "#FFAA00"},
-        #     {"name": "w3", "color": "#FF00AA"},
-        #     {"name": "potevap", "color": "#FFFF00"},
-        #     {"name": "actevap", "color": "#000000"},
-        # ],
-        [
-            {"name": "hydraulic head", "color": "#FF0000"},
-        ],
-        [
-            {"name": "precipitation", "color": "#FF0000"},
-        ],
-        [
-            {"name": "disposable_income sample", "color": "#FF0000"},
-        ],
-        [
-            {"name": "wealth sample", "color": "#FF0000"},
-        ],
-        [
-            {"name": "mean_risk_perception", "color": "#FF0000"},
-        ],
-    ]
-
     model_params = {
         "GEB_config_path": config,
         "model_structure": model_structure,
@@ -275,7 +211,7 @@ def run(
         if profiling:
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)] + [
-            ChartModule(series) for series in series_to_plot
+            ChartModule(series) for series in config["draw"]["plot"]
         ]
 
         DISPLAY_TIMESTEPS = ["day", "week", "month", "year"]
