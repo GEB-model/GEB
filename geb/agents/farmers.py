@@ -5,7 +5,6 @@ from datetime import datetime
 import json
 import calendar
 from typing import Tuple
-import matplotlib as plt
 
 from scipy.stats import genextreme
 from scipy.stats import linregress
@@ -3188,6 +3187,24 @@ class Farmers(AgentBaseClass):
             self.disposable_income[:] = 0
 
         if self.model.scenario in ("lulc",):
+            import geopandas as gpd
+            from rasterio.features import geometry_mask
+            from affine import Affine
+
+            to_forest = gpd.read_file("to_forest.gpkg").to_crs(epsg=4326)
+
+            # Get the transform and dimensions from the existing mask
+            transform = Affine.from_gdal(*self.model.data.HRU.gt)
+
+            # Create a new mask that includes the areas to be converted to forest
+            forest_mask = geometry_mask(
+                [geom for geom in to_forest.geometry],
+                transform=transform,
+                out_shape=self.model.data.HRU.mask.shape,
+                invert=True,
+                all_touched=True,
+            )
+
             if self.model.current_timestep == 2:
                 self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
             if self.model.current_timestep == 5:
