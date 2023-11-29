@@ -3254,6 +3254,9 @@ class Farmers(AgentBaseClass):
             self.field_indices, self.field_indices_by_farmer.data, farmer_idx
         )
         self.var.land_owners[HRUs_farmer_to_be_removed] = -1
+        self.var.crop_map[HRUs_farmer_to_be_removed] = -1
+        self.var.crop_age_days_map[HRUs_farmer_to_be_removed] = -1
+        self.var.crop_harvest_age_days[HRUs_farmer_to_be_removed] = -1
 
         # reduce number of agents
         self.n -= 1
