@@ -3187,12 +3187,14 @@ class Farmers(AgentBaseClass):
             # reset disposable income and profits
             self.disposable_income[:] = 0
 
-        if self.model.current_timestep == 2:
-            self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
-        if self.model.current_timestep == 5:
-            self.remove_agent(farmer_idx=4)
+        if self.model.scenario in ("lulc",):
+            if self.model.current_timestep == 2:
+                self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
+            if self.model.current_timestep == 5:
+                self.remove_agents(farmer_indices=[4, 5])
 
     def remove_agents(self, farmer_indices: list[int]):
+        farmer_indices = np.array(farmer_indices)
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
             for idx in farmer_indices:
@@ -3200,14 +3202,9 @@ class Farmers(AgentBaseClass):
 
     def remove_agent(self, farmer_idx: int) -> np.ndarray:
         last_farmer_HRUs = get_farmer_HRUs(
-            self.field_indices, self.field_indices_by_farmer.data, self.n - 1
+            self.field_indices, self.field_indices_by_farmer.data, -1
         )
-        last_farmer_field_size = self.field_size_per_farmer[self.n - 1]
-        for _, agent_array in self.agent_arrays.items():
-            # move data of last agent to the agent that is to be removed, effectively removing that agent.
-            agent_array[farmer_idx] = agent_array[self.n - 1]
-            # reduce the number of agents by 1
-            agent_array.n -= 1
+        last_farmer_field_size = self.field_size_per_farmer[-1]  # for testing only
 
         # disown the farmer.
         HRUs_farmer_to_be_removed = get_farmer_HRUs(
@@ -3218,11 +3215,15 @@ class Farmers(AgentBaseClass):
         # reduce number of agents
         self.n -= 1
 
-        if self.n != farmer_idx:  # only move agent when agent was not the last agent
-            HRUs_farmer_moved = get_farmer_HRUs(
-                self.field_indices, self.field_indices_by_farmer.data, self.n
-            )
-            self.var.land_owners[HRUs_farmer_moved] = farmer_idx
+        # move data of last agent to the index of the agent that is to be removed, effectively removing that agent.
+        for agent_array in self.agent_arrays.values():
+            agent_array[farmer_idx] = agent_array[-1]
+            # reduce the number of agents by 1
+            assert agent_array.n == self.n + 1
+            agent_array.n = self.n
+
+        # update the field indices of the last agent
+        self.var.land_owners[last_farmer_HRUs] = farmer_idx
 
         # TODO: Speed up field index updating.
         self.update_field_indices()
@@ -3238,7 +3239,9 @@ class Farmers(AgentBaseClass):
                 np.sort(last_farmer_HRUs),
                 np.sort(
                     get_farmer_HRUs(
-                        self.field_indices, self.field_indices_by_farmer, farmer_idx
+                        self.field_indices,
+                        self.field_indices_by_farmer.data,
+                        farmer_idx,
                     )
                 ),
             )
@@ -3248,67 +3251,62 @@ class Farmers(AgentBaseClass):
                 abs_tol=1,
             )
 
-        for attr in self.agent_attributes:
-            assert attr.startswith("_")
-            assert getattr(self, attr[1:]).shape[0] == self.n
-            assert np.array_equal(
-                getattr(self, attr)[self.n],
-                self.agent_attributes_meta[attr]["nodata"],
-                equal_nan=True,
-            )
-
         assert (self.var.land_owners[HRUs_farmer_to_be_removed] == -1).all()
         return HRUs_farmer_to_be_removed
 
-    def add_agent(self, indices, values={
-        "risk_aversion": 1,
-        'interest_rate': 1,
-        'discount_rate': 1,
-        'adapted': False,
-        'time_adapted': False,
-        'SEUT_no_adapt': 1,
-        'EUT_no_adapt': 1,
-        'crops': -1,
-        'irrigation_source': -1,
-        'well_depth': -1,
-        'channel_abstraction_m3_by_farmer': 0,
-        'reservoir_abstraction_m3_by_farmer': 0,
-        'groundwater_abstraction_m3_by_farmer': 0,
-        'yearly_abstraction_m3_by_farmer': 0,
-        'n_water_accessible_days': 0,
-        'n_water_accessible_years': 0,
-        'total_crop_age': 0,
-        'per_harvest_yield_ratio': 0,
-        'per_harvest_SPEI': 0,
-        'monthly_SPEI': 0,
-        'disposable_income': 0,
-        'household_size': 2,
-        'daily_non_farm_income': 10,
-        'daily_expenses_per_capita': 1,
-        'wealth': 1000,
-        'yield_ratios_drought_event': 1,
-        'risk_perception': 1,
-        'drought_timer': 1,
-        'yearly_SPEI_probability': 1,
-        'yearly_yield_ratio': 1,
-        'yearly_profits': 1,
-        'yearly_potential_profits': 1,
-        'farmer_yield_probability_relation': 1,
-        'irrigation_efficiency': .9,
-        'yield_ratio_multiplier': 1,
-        'base_management_yield_ratio': 1,
-        'yield_ratio_management': 1,
-        'infiltration_multiplier': 1,
-        'annual_costs_all_adaptations': 1,
-        'farmer_class': 1,
-        'water_use': 1,
-        'farmer_is_in_command_area': False,
-        'GEV_parameters': 1,
-        'risk_perc_min': 1,
-        'risk_perc_max': 1,
-        'risk_decr': 1,
-        'decision_horizon': 1,
-    }):
+    def add_agent(
+        self,
+        indices,
+        values={
+            "risk_aversion": 1,
+            "interest_rate": 1,
+            "discount_rate": 1,
+            "adapted": False,
+            "time_adapted": False,
+            "SEUT_no_adapt": 1,
+            "EUT_no_adapt": 1,
+            "crops": -1,
+            "irrigation_source": -1,
+            "well_depth": -1,
+            "channel_abstraction_m3_by_farmer": 0,
+            "reservoir_abstraction_m3_by_farmer": 0,
+            "groundwater_abstraction_m3_by_farmer": 0,
+            "yearly_abstraction_m3_by_farmer": 0,
+            "n_water_accessible_days": 0,
+            "n_water_accessible_years": 0,
+            "total_crop_age": 0,
+            "per_harvest_yield_ratio": 0,
+            "per_harvest_SPEI": 0,
+            "monthly_SPEI": 0,
+            "disposable_income": 0,
+            "household_size": 2,
+            "daily_non_farm_income": 10,
+            "daily_expenses_per_capita": 1,
+            "wealth": 1000,
+            "yield_ratios_drought_event": 1,
+            "risk_perception": 1,
+            "drought_timer": 1,
+            "yearly_SPEI_probability": 1,
+            "yearly_yield_ratio": 1,
+            "yearly_profits": 1,
+            "yearly_potential_profits": 1,
+            "farmer_yield_probability_relation": 1,
+            "irrigation_efficiency": 0.9,
+            "yield_ratio_multiplier": 1,
+            "base_management_yield_ratio": 1,
+            "yield_ratio_management": 1,
+            "infiltration_multiplier": 1,
+            "annual_costs_all_adaptations": 1,
+            "farmer_class": 1,
+            "water_use": 1,
+            "farmer_is_in_command_area": False,
+            "GEV_parameters": 1,
+            "risk_perc_min": 1,
+            "risk_perc_max": 1,
+            "risk_decr": 1,
+            "decision_horizon": 1,
+        },
+    ):
         """This function can be used to add new farmers."""
         HRU = self.model.data.split(indices)
         assert self.var.land_owners[HRU] == -1, "There is already a farmer here."
@@ -3340,4 +3338,8 @@ class Farmers(AgentBaseClass):
 
     @property
     def agent_arrays(self):
-        return {name: value for name, value in vars(self).items() if isinstance(value, AgentArray)}
+        return {
+            name: value
+            for name, value in vars(self).items()
+            if isinstance(value, AgentArray)
+        }
