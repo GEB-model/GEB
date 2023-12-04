@@ -7,7 +7,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from hydromt_sfincs import SfincsModel
+# from hydromt_sfincs import SfincsModel
 from hydromt.config import configread
 
 from sfincs_river_flood_simulator import build_sfincs

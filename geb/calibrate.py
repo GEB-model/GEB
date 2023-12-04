@@ -33,6 +33,8 @@ import multiprocessing
 from subprocess import Popen, PIPE
 
 import pickle
+from honeybees.library.raster import coord_to_pixel, sample_from_map
+import rasterio
 
 SCENARIO = 'adaptation'
 
@@ -309,15 +311,15 @@ def run_model(individual, config, gauges, observed_streamflow):
 			if config['calibration']['load_pre_spinup']:
 				generation = individual.label[:2]
 				initial_run_label = generation + '_000'
-				initial_conditions_path = os.path.join(run_directory, '..', initial_run_label, 'initial_conditions')
-				template['general']['initial_relations_folder'] = initial_conditions_path
+				initial_relations_path = os.path.join(run_directory, '..', initial_run_label, 'initial_relations')
+				template['general']['initial_relations_folder'] = initial_relations_path
 			else:
-				template['general']['initial_relations_folder'] = os.path.join(run_directory, 'initial_conditions')
+				template['general']['initial_relations_folder'] = os.path.join(run_directory, 'initial')
 			
 			template['general']['export_inital_on_spinup'] = True
 		
 			template['general']['report_folder'] = run_directory
-			template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial_conditions')
+			template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial')
 			
 
 			# Update the template configuration file with the individual's parameters
@@ -408,8 +410,8 @@ def run_model(individual, config, gauges, observed_streamflow):
 	for score in config['calibration']['calibration_targets']:
 		if score == 'KGE_discharge':
 			scores.append(get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow))
-		# if score == 'irrigation_wells':
-		# 	scores.append(get_irrigation_wells_score(run_directory, individual, config))
+		if score == 'irrigation_wells':
+			scores.append(get_irrigation_wells_score(run_directory, individual, config))
 		if score == 'KGE_yield_ratio':
 			scores.append(get_KGE_yield_ratio(run_directory, individual, config))
 	return tuple(scores)
@@ -454,7 +456,7 @@ def calibrate(config, working_directory):
 
 	config['calibration']['calibration_targets'] = {
 		'KGE_discharge': 1,
-		# 'irrigation_wells': 1,
+		'irrigation_wells': 1,
 		'KGE_yield_ratio': 1
 	}
 

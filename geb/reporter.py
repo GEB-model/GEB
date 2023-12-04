@@ -10,6 +10,8 @@ import numpy as np
 import re
 import xarray as xr
 import rioxarray as rxr
+import rasterio
+from honeybees.library.raster import coord_to_pixel, sample_from_map
 from pathlib import Path
 try:
     import cupy as cp
@@ -212,6 +214,19 @@ class CWatMReporter(ABMReporter):
                                 if np.isnan(value):
                                     value = None
                             elif function == 'sample':
+                                # Test for gauges sample locations 
+                                # tif_file_path = 'input/routing/kinematic/upstream_area.tif'
+                                
+                                # with rasterio.open(tif_file_path) as src:
+                                #     # Get the geotransform
+                                #     geotransform = src.transform.to_gdal()
+                                #     river_areas = src.read(1)
+                                # gauges = self.model.config['general']['gauges']
+                                # raster_values = []
+                                # for gauge in gauges:
+                                #     raster_value = coord_to_pixel(gauge, geotransform)
+                                #     raster_values.append(raster_value)
+                
                                 decompressed_array = self.decompress(conf['varname'], array)
                                 value = decompressed_array[int(args[0]), int(args[1])]
                                 assert not np.isnan(value)

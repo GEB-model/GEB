@@ -6,7 +6,7 @@ import json
 import calendar
 from pprint import pprint 
 from typing import Tuple
-import matplotlib as plt
+import matplotlib.pyplot as plt
 
 from scipy.stats import genextreme
 from scipy.stats import linregress
@@ -260,10 +260,6 @@ class Farmers(AgentBaseClass):
                 "dtype": np.int32,
                 "nodata": -1,
             },
-            "_loan_tracker": {
-                "dtype": np.int32,
-                "nodata": [np.nan] * self.n_loans
-            },
             "_daily_non_farm_income": {
                 "dtype": np.float32,
                 "nodata": np.nan
@@ -393,11 +389,17 @@ class Farmers(AgentBaseClass):
             },
             "_risk_decr": {
                 "dtype": np.float32,
-                "nodata": False,
+                "nodata": [np.nan],
             },
             "_all_loans_annual_cost": {
                 "dtype": np.float32,
-                "nodata": [np.nan] * (self.n_loans + 1),
+                "nodata": [[np.nan] * 5] * (self.n_loans + 1),
+                "nodatacheck": False,
+            },
+            "_loan_tracker": {
+                "dtype": np.int32,
+                "nodata": [[np.nan] * 5] * self.n_loans,
+                "nodatacheck": False
             },
             "_GEV_parameters": {
                 "dtype": np.float32,
@@ -836,7 +838,11 @@ class Farmers(AgentBaseClass):
 
             for attribute in self.agent_attributes:
                 if isinstance(self.agent_attributes_meta[attribute]["nodata"], list):
-                    shape = (self.max_n, len(self.agent_attributes_meta[attribute]["nodata"]))
+                    agent_attribute_array = np.array(self.agent_attributes_meta[attribute]["nodata"])
+                    if agent_attribute_array.ndim > 1:
+                        shape = (self.max_n, agent_attribute_array.shape[0], agent_attribute_array.shape[1])
+                    else:
+                        shape = (self.max_n, agent_attribute_array.shape[0])
                 else:
                     shape = self.max_n
                 setattr(self, attribute, np.full(shape, self.agent_attributes_meta[attribute]["nodata"], dtype=self.agent_attributes_meta[attribute]["dtype"]))
@@ -943,9 +949,9 @@ class Farmers(AgentBaseClass):
             
             # Initiate array that tracks the overall yearly costs for all adaptations 
             # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation), last is total 
-            self.all_loans_annual_cost = np.zeros((self.n, self.n_loans + 1), dtype=np.float32) 
+            self.all_loans_annual_cost = np.zeros((self.n, self.n_loans + 1, 5), dtype=np.float32) 
             # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation)
-            self.loan_tracker = np.zeros((self.n, self.n_loans), dtype=np.int32)
+            self.loan_tracker = np.zeros((self.n, self.n_loans, 5), dtype=np.int32)
 
             # 0 is surface water / channel-dependent, 1 is reservoir-dependent, 2 is groundwater-dependent, 3 is rainwater-dependent
             self.farmer_class[:] = 0  
@@ -1641,12 +1647,36 @@ class Farmers(AgentBaseClass):
         # Compute the annual cost of the loan using the interest rate and loan duration
         annual_cost_microcredit = total_loan * (self.interest_rate[loaning_farmers] * (1 + self.interest_rate[loaning_farmers] ) ** loan_duration / ((1 + self.interest_rate[loaning_farmers] ) ** loan_duration - 1))
 
-        # Update the agent's loans and total annual costs with the computed annual cost
-        self.all_loans_annual_cost[loaning_farmers, 1] += annual_cost_microcredit # Microcredit specific
-        self.all_loans_annual_cost[loaning_farmers, -1] += annual_cost_microcredit # All loans 
+        # Add the amounts to the individual loan slots
+        self.set_loans_numba(
+            all_loans_annual_cost=self.all_loans_annual_cost, 
+            loan_tracker=self.loan_tracker, 
+            loaning_farmers=loaning_farmers, 
+            annual_cost_microcredit=annual_cost_microcredit, 
+            loan_duration=loan_duration
+        )
 
-        # Set the loan tracker
-        self.loan_tracker[loaning_farmers, 1] += loan_duration
+        # Add it to the loan total 
+        self.all_loans_annual_cost[loaning_farmers, -1, 0] += annual_cost_microcredit
+    
+    @staticmethod
+    @njit(cache=True)
+    def set_loans_numba(
+        all_loans_annual_cost: np.ndarray, 
+        loan_tracker: np.ndarray, 
+        loaning_farmers: np.ndarray, 
+        annual_cost_microcredit: np.ndarray, 
+        loan_duration: int
+    ) -> None:
+        
+        # Update the agent's loans and total annual costs with the computed annual cost
+        # Make sure it is in an empty loan slot
+        for farmer in loaning_farmers:
+            for i in range(4):
+                if all_loans_annual_cost[farmer, 1, i] == 0:
+                    all_loans_annual_cost[farmer, 1, i] += annual_cost_microcredit
+                    loan_tracker[farmer, 1, i] = loan_duration
+                    break  # Exit the loop after adding to the first zero value
 
     @staticmethod
     @njit(cache=True)
@@ -1699,9 +1729,14 @@ class Farmers(AgentBaseClass):
             if not farmers_going_out_of_business:
                 interest_rate_farmer = interest_rate[farmer_idx]
                 annual_cost_input_loan = cultivation_cost * (interest_rate_farmer  * (1 + interest_rate_farmer ) ** 1 / ((1 + interest_rate_farmer ) ** 1 - 1))
-                all_loans_annual_cost[farmer_idx, 0] += annual_cost_input_loan # Add the amount to the input specific loan
-                all_loans_annual_cost[farmer_idx, -1] += annual_cost_input_loan # Add the amount to the total loan amount
-                loan_tracker[farmer_idx, 0] = 1
+                
+                for i in range(4):
+                    if all_loans_annual_cost[farmer_idx, 1, i] == 0:
+                        all_loans_annual_cost[farmer_idx, 0, i] += annual_cost_input_loan # Add the amount to the input specific loan
+                        loan_tracker[farmer_idx, 0, i] = 1
+                        break
+                all_loans_annual_cost[farmer_idx, -1, 0] += annual_cost_input_loan # Add the amount to the total loan amount
+
                 field_harvest_age = growth_length[farmer_crop, season_idx]
                 for field in farmer_fields:
                     # a crop is still growing here.
@@ -1936,13 +1971,23 @@ class Farmers(AgentBaseClass):
         self.total_crop_age[:, :] = 0
         self.per_harvest_yield_ratio[:, :] = 0
 
-        # Step 3: Group farmers based on crop combinations and compute averages
+        # Step 3: Group farmers based on crop combinations and location in basin and compute averages
         unique_yearly_yield_ratio = np.empty((0, self.total_spinup_time))
         unique_SPEI_probability = np.empty((0, self.total_spinup_time))
-        crop_irrigation_groups = self.crops[:]
+        
+        # Create unique groups 
+        # Calculating the thresholds for the top, middle, and lower thirds
+        basin_elevation_thresholds = np.percentile(self.elevation, [33.33, 66.67])
+        # 0 for upper, 1 for mid, and 2 for lower
+        distribution_array = np.zeros_like(self.elevation)
+        distribution_array[self.elevation > basin_elevation_thresholds[1]] = 0  # Upper
+        distribution_array[(self.elevation > basin_elevation_thresholds[0]) & (self.elevation <= basin_elevation_thresholds[1])] = 1  # Mid
+        distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
-        for crop_combination in np.unique(crop_irrigation_groups, axis=0):
-            unique_farmer_groups = np.where((crop_irrigation_groups == crop_combination[None, ...]).all(axis=1))[0]
+        crop_elevation_group = np.hstack((self.crops, distribution_array.reshape(-1,1)))
+
+        for crop_combination in np.unique(crop_elevation_group, axis=0):
+            unique_farmer_groups = np.where((crop_elevation_group == crop_combination[None, ...]).all(axis=1))[0]
             average_yield_ratio = np.mean(self.yearly_yield_ratio[unique_farmer_groups, 1:], axis=0)
             average_probability = np.mean(self.yearly_SPEI_probability[unique_farmer_groups, 1:], axis=0)
             unique_yearly_yield_ratio = np.vstack((unique_yearly_yield_ratio, average_yield_ratio))
@@ -1950,11 +1995,15 @@ class Farmers(AgentBaseClass):
 
         # Step 4: Mask rows and columns with zeros
         mask_rows = np.any((unique_yearly_yield_ratio != 0), axis=1) & np.any((unique_SPEI_probability != 0), axis=1)
-        unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio[mask_rows]
-        unique_SPEI_probability_mask = unique_SPEI_probability[mask_rows]
-        mask_columns = np.any((unique_yearly_yield_ratio_mask != 0), axis=0) & np.any((unique_SPEI_probability_mask != 0), axis=0)
-        unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio_mask[:, mask_columns]
-        unique_SPEI_probability_mask = unique_SPEI_probability_mask[:, mask_columns]
+        if np.any([~mask_rows]):
+            # Sometimes very few farmer (groups) (1 in a million) get yield ratios of only 0
+            # If so, give it the mean of all groups for both the spei and yield ratio 
+            unique_yearly_yield_ratio[~mask_rows] = np.mean(unique_yearly_yield_ratio, axis = 0)
+            unique_SPEI_probability[~mask_rows] = np.mean(unique_SPEI_probability, axis = 0)
+
+        mask_columns = np.any((unique_yearly_yield_ratio != 0), axis=0) & np.any((unique_SPEI_probability != 0), axis=0)
+        unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio[:, mask_columns]
+        unique_SPEI_probability_mask = unique_SPEI_probability[:, mask_columns]
 
         # Step 5: Determine the relation between yield ratio and profit
         group_yield_probability_relation = []
@@ -1990,7 +2039,7 @@ class Farmers(AgentBaseClass):
                 yield_probability_p_scipy.append(linregress(row1, row3)[3])
 
         # Assign relations to agents
-        exact_positions = np.where(np.all(crop_irrigation_groups[:, np.newaxis, :] == np.unique(crop_irrigation_groups, axis=0), axis=-1))[1]
+        exact_positions = np.where(np.all(crop_elevation_group[:, np.newaxis, :] == np.unique(crop_elevation_group, axis=0), axis=-1))[1]
         if len(group_yield_probability_relation) > max(exact_positions):
             self.farmer_yield_probability_relation = np.array(group_yield_probability_relation)[exact_positions]
             assert isinstance(self.farmer_yield_probability_relation, np.ndarray), "self.farmer_yield_probability_relation must be a np.ndarray"
@@ -2045,11 +2094,11 @@ class Farmers(AgentBaseClass):
         self.yield_ratio_multiplier[adaptation_mask] = self.yield_ratio_multiplier_value
 
         # Update annual costs 
-        self.all_loans_annual_cost[adaptation_mask, ADAPTATION_TYPE + 1] += annual_cost[adaptation_mask] # For drip irrigation specifically 
-        self.all_loans_annual_cost[adaptation_mask, -1] += annual_cost[adaptation_mask] # Total loan costs 
+        self.all_loans_annual_cost[adaptation_mask, ADAPTATION_TYPE + 1, 0] += annual_cost[adaptation_mask] # For drip irrigation specifically 
+        self.all_loans_annual_cost[adaptation_mask, -1, 0] += annual_cost[adaptation_mask] # Total loan costs 
         
         # set loan tracker
-        self.loan_tracker[adaptation_mask, ADAPTATION_TYPE + 1] += loan_duration
+        self.loan_tracker[adaptation_mask, ADAPTATION_TYPE + 1, 0] += loan_duration
 
         # Print the percentage of adapted households
         percentage_adapted = round(np.sum(self.adapted[:, ADAPTATION_TYPE]) / len(self.adapted[:, ADAPTATION_TYPE]) * 100, 2)
@@ -2107,11 +2156,11 @@ class Farmers(AgentBaseClass):
         self.well_depth[adaptation_mask] = well_depth[adaptation_mask]           
 
         # Update annual costs and disposable income for adapted farmers
-        self.all_loans_annual_cost[adaptation_mask, ADAPTATION_TYPE + 1] += annual_cost[adaptation_mask] # For wells specifically 
-        self.all_loans_annual_cost[adaptation_mask, -1] += annual_cost[adaptation_mask] # Total loan amount 
+        self.all_loans_annual_cost[adaptation_mask, ADAPTATION_TYPE + 1, 0] += annual_cost[adaptation_mask] # For wells specifically 
+        self.all_loans_annual_cost[adaptation_mask, -1, 0] += annual_cost[adaptation_mask] # Total loan amount 
 
         # set loan tracker
-        self.loan_tracker[adaptation_mask, ADAPTATION_TYPE + 1] += loan_duration
+        self.loan_tracker[adaptation_mask, ADAPTATION_TYPE + 1, 0] += loan_duration
 
         # Print the percentage of adapted households
         percentage_adapted = round(np.sum(self.adapted[:, ADAPTATION_TYPE]) / len(self.adapted[:, ADAPTATION_TYPE]) * 100, 2)
@@ -2219,7 +2268,7 @@ class Farmers(AgentBaseClass):
         # Compute the total annual per square meter costs if farmers adapt during this cycle
         # This cost is the cost if the farmer would adapt, plus its current costs of previous 
         # adaptations 
-        total_annual_costs_m2 = (annual_cost + self.all_loans_annual_cost[:,-1]) / farm_area
+        total_annual_costs_m2 = (annual_cost + self.all_loans_annual_cost[:,-1, 0]) / farm_area
 
         # Solely the annual cost of the adaptation 
         annual_cost /= farm_area
@@ -2405,12 +2454,22 @@ class Farmers(AgentBaseClass):
 
         TO DO: vectorize 
         """
+        # Create unique groups 
+        # Calculating the thresholds for the top, middle, and lower thirds
+        basin_elevation_thresholds = np.percentile(self.elevation, [33.33, 66.67])
+        # 0 for upper, 1 for mid, and 2 for lower
+        distribution_array = np.zeros_like(self.elevation)
+        distribution_array[self.elevation > basin_elevation_thresholds[1]] = 0  # Upper
+        distribution_array[(self.elevation > basin_elevation_thresholds[0]) & (self.elevation <= basin_elevation_thresholds[1])] = 1  # Mid
+        distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
+        crop_elevation_group = np.hstack((self.crops, distribution_array.reshape(-1,1)))
+         
         # Add a column of zeros to represent farmers who have not adapted yet
-        crop_groups_onlyzeros = np.hstack((self.crops, np.zeros(self.n).reshape(-1,1)))
+        crop_groups_onlyzeros = np.hstack((crop_elevation_group, np.zeros(self.n).reshape(-1,1)))
 
         # Combine current crops with their respective adaptation status
-        crop_groups = np.hstack((self.crops, adapted.reshape(-1,1)))
+        crop_groups = np.hstack((crop_elevation_group, adapted.reshape(-1,1)))
 
         # Initialize array to store relative yield ratio improvement for unique groups
         unique_yield_ratio_gain_relative = np.full(len(np.unique(crop_groups_onlyzeros, axis=0)), 1, dtype=np.float32)
@@ -2680,23 +2739,20 @@ class Farmers(AgentBaseClass):
     def update_loans(self) -> None:
         # Subtract 1 off each loan duration, except if that loan is at 0
         self.loan_tracker = np.where(self.loan_tracker != 0, self.loan_tracker - 1, self.loan_tracker)
-
         # If the loan tracker is at 0, cancel the loan amount and subtract it of the total 
         expired_loan_mask = self.loan_tracker == 0
+
         # Add a column to make it the same shape as the loan amount array 
-        new_column = np.full((self.n,), False)
+        new_column = np.full((self.n,1, 5), False)
         expired_loan_mask = np.column_stack((expired_loan_mask, new_column))
         
-        # Determine which loans will end and sum them 
+        # Sum the expired loan amounts 
         ending_loans = expired_loan_mask * self.all_loans_annual_cost
-        total_loan_reduction = np.sum(ending_loans, axis=1)
+        total_loan_reduction = np.sum(ending_loans, axis=(1, 2))
 
-        # Subtract it from the total loans 
-        self.all_loans_annual_cost[:,4] -= total_loan_reduction
-
-        # Set the loans to 0 
+        # Subtract it from the total loans and set expired loans to 0 
+        self.all_loans_annual_cost[:,-1, 0] -= total_loan_reduction
         self.all_loans_annual_cost[expired_loan_mask] = 0
-
 
     def get_value_per_farmer_from_region_id(self, data, time) -> np.ndarray:
         index = data[0].get(time)
@@ -2882,12 +2938,7 @@ class Farmers(AgentBaseClass):
                 # These adaptations can only be done if there is a yield-probability relation 
                 if not np.all(self.farmer_yield_probability_relation == 0): 
                     self.adapt_irrigation_well()   
-                else:
-                    raise AssertionError("Cannot adapt without yield - probability relation")
-            
-            if self.model.scenario not in ['pre_spinup','spinup','noadaptation','adaptation']:
-                if not np.all(self.farmer_yield_probability_relation == 0): 
-                    self.adapt_drip_irrigation()   
+                    # self.adapt_drip_irrigation()  
                 else:
                     raise AssertionError("Cannot adapt without yield - probability relation")
             

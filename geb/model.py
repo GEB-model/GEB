@@ -63,6 +63,7 @@ class GEBModel(ABM_Model, CWatM_Model):
             self.load_initial_data = False
             self.save_initial_data = self.config['general']['export_inital_on_spinup']
             self.initial_conditions = [] 
+            self.initial_relations = [] 
         elif scenario == 'spinup':
             end_time = datetime.datetime.combine(self.config['general']['start_time'], datetime.time(0))
             current_time = datetime.datetime.combine(self.config['general']['spinup_time'], datetime.time(0))
@@ -204,6 +205,23 @@ class GEBModel(ABM_Model, CWatM_Model):
                 fp = Path(self.initial_conditions_folder, f"farmers.{attribute}.npz")
                 values = attrgetter(attribute)(self.agents.farmers)
                 np.savez_compressed(fp, data=values)
+        
+        if self.load_pre_spinup_data and self.scenario == 'pre_spinup':
+            self.initial_relations_folder.mkdir(parents=True, exist_ok=True)
+            with open(Path(self.initial_relations_folder, 'initial_relations.txt'), 'w') as f:
+                for var in self.initial_relations:
+                    f.write(f"{var}\n")
+            
+                    fp = self.initial_relations_folder / f"{var}.npz"
+                    values = attrgetter(var)(self.data)
+                    np.savez_compressed(fp, data=values)
+            agent_relation_attributes = ["_yearly_yield_ratio", "_yearly_SPEI_probability", "_yearly_profits", "_yearly_potential_profits", "_farmer_yield_probability_relation"]
+            
+            for attribute in agent_relation_attributes:
+                fp = Path(self.initial_relations_folder, f"farmers.{attribute}.npz")
+                values = attrgetter(attribute)(self.agents.farmers)
+                np.savez_compressed(fp, data=values)
+        
         print("Model run finished")
 
     @property
