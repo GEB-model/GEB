@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import genextreme
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
+from scipy.spatial.distance import euclidean
 
 import numpy as np
 from numba import njit
@@ -1943,18 +1944,14 @@ class Farmers(AgentBaseClass):
         matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
         matrix[:, 0] = 0                  # Reset the first column to 0
 
-    def calculate_yield_spei_relation(self) -> None:
+    def set_yearly_yield_spei(self) -> None:
         """
-        Computes the yearly yield ratios and SPEI probabilities, then calculates the yearly mean for each unique farmer type.
+        Sets the yearly yield and spei, then shifts each matrix
 
         Note:
             This function performs the following operations:
                 1. Compute the yearly yield ratios and SPEI probabilities.
                 2. Shift and reset the matrices.
-                3. Group farmers based on crop combinations and compute averages for each group.
-                4. Mask rows and columns with only zeros.
-                5. Determine the relation between yield ratio and profit for all farmer types.
-                6. Sample the individual agent relation from the agent groups and assign to agents.
         """
 
         # Step 1: Compute yearly values
@@ -1971,7 +1968,19 @@ class Farmers(AgentBaseClass):
         self.total_crop_age[:, :] = 0
         self.per_harvest_yield_ratio[:, :] = 0
 
-        # Step 3: Group farmers based on crop combinations and location in basin and compute averages
+        
+    def calculate_yield_spei_relation(self) -> None:
+        """
+        Computes the yearly yield ratios and SPEI probabilities, then calculates the yearly mean for each unique farmer type.
+
+        Note:
+            This function performs the following operations:
+                1. Group farmers based on crop combinations and compute averages for each group.
+                2. Mask rows and columns with only zeros.
+                3. Determine the relation between yield ratio and profit for all farmer types.
+                4. Sample the individual agent relation from the agent groups and assign to agents.
+        """
+        # Step 1: Group farmers based on crop combinations and location in basin and compute averages
         unique_yearly_yield_ratio = np.empty((0, self.total_spinup_time))
         unique_SPEI_probability = np.empty((0, self.total_spinup_time))
         
@@ -1993,7 +2002,7 @@ class Farmers(AgentBaseClass):
             unique_yearly_yield_ratio = np.vstack((unique_yearly_yield_ratio, average_yield_ratio))
             unique_SPEI_probability = np.vstack((unique_SPEI_probability, average_probability))
 
-        # Step 4: Mask rows and columns with zeros
+        # Step 2: Mask rows and columns with zeros
         mask_rows = np.any((unique_yearly_yield_ratio != 0), axis=1) & np.any((unique_SPEI_probability != 0), axis=1)
         if np.any([~mask_rows]):
             # Sometimes very few farmer (groups) (1 in a million) get yield ratios of only 0
@@ -2005,43 +2014,66 @@ class Farmers(AgentBaseClass):
         unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio[:, mask_columns]
         unique_SPEI_probability_mask = unique_SPEI_probability[:, mask_columns]
 
-        # Step 5: Determine the relation between yield ratio and profit
-        group_yield_probability_relation = []
+        # Step 3: Determine the relation between yield ratio and profit
+        group_yield_probability_relation_lin = []
+        group_yield_probability_relation_log = []
         yield_probability_R2_scipy = []
         yield_probability_R2_log = []
         yield_probability_p_scipy = []
+        
+        # Variables to store the last yield_ratio and spei_prob
+        last_yield_ratio = None
+        last_spei_prob = None
 
         def logarithmic_natural(x, a, b):
             return a * np.log2(x) + b
 
-        for row1, row3 in zip(unique_yearly_yield_ratio_mask, unique_SPEI_probability_mask):
-            # Filter out zeros
-            mask = row1 != 0
-            row1 = row1[mask]
-            row3 = row3[mask]
+        for idx, (yield_ratio, spei_prob) in enumerate(zip(unique_yearly_yield_ratio_mask, unique_SPEI_probability_mask)):
+            # Filter out zeros, some agents are nearly always at 0 yield ratio
+            # This is a problem for the fitting (and likely an outlier)
+            mask = (yield_ratio != 0) | (spei_prob != 0)
+            yield_ratio = yield_ratio[mask]
+            spei_prob = spei_prob[mask]
+
+            # Fit logarithmic function, except when there is an error 
+            try:
+                # Attempt to fit the logarithmic_natural function
+                a, b = curve_fit(logarithmic_natural, yield_ratio, spei_prob)[0]
+
+            except RuntimeError:
+                # RuntimeError is raised when curve_fit fails to converge
+                # In this case, take the values of the previous (similar) group
+                if last_yield_ratio is not None:
+                    yield_ratio = last_yield_ratio
+                    spei_prob = last_spei_prob
+                    # Recalculate a, b with the previous values
+                    a, b = curve_fit(logarithmic_natural, last_yield_ratio, last_spei_prob)[0]
 
             # Polynomial fit
-            coefficients = np.polyfit(row1, row3, 1)
+            coefficients = np.polyfit(yield_ratio, spei_prob, 1)
             poly_function = np.poly1d(coefficients)
-            group_yield_probability_relation.append(poly_function)
+            group_yield_probability_relation_lin.append(poly_function)
 
-            # If there are more than 15 columns, fit a logarithmic curve and calculate R-squared values
-            if len(unique_yearly_yield_ratio_mask[0, :]) > 15:
-                a, b = curve_fit(logarithmic_natural, row1, row3)[0]
-                residuals = row3 - logarithmic_natural(row1, a, b)
-                ss_tot = np.sum((row3 - np.mean(row3)) ** 2)
-                ss_res = np.sum(residuals ** 2)
-                
-                yield_probability_R2_log.append(1 - (ss_res / ss_tot))
-                r_value = linregress(row1, row3)[2]
-                
-                yield_probability_R2_scipy.append(r_value ** 2)
-                yield_probability_p_scipy.append(linregress(row1, row3)[3])
+            group_yield_probability_relation_log.append(np.array([a, b]))
+
+            residuals = spei_prob - logarithmic_natural(yield_ratio, a, b)
+            ss_tot = np.sum((spei_prob - np.mean(spei_prob)) ** 2)
+            ss_res = np.sum(residuals ** 2)
+            
+            yield_probability_R2_log.append(1 - (ss_res / ss_tot))
+            r_value = linregress(yield_ratio, spei_prob)[2]
+            
+            yield_probability_R2_scipy.append(r_value ** 2)
+            yield_probability_p_scipy.append(linregress(yield_ratio, spei_prob)[3])
+
+            # Update last_yield_ratio and last_spei_prob
+            last_yield_ratio = yield_ratio
+            last_spei_prob = spei_prob
 
         # Assign relations to agents
         exact_positions = np.where(np.all(crop_elevation_group[:, np.newaxis, :] == np.unique(crop_elevation_group, axis=0), axis=-1))[1]
-        if len(group_yield_probability_relation) > max(exact_positions):
-            self.farmer_yield_probability_relation = np.array(group_yield_probability_relation)[exact_positions]
+        if len(group_yield_probability_relation_log) > max(exact_positions):
+            self.farmer_yield_probability_relation = np.array(group_yield_probability_relation_log)[exact_positions]
             assert isinstance(self.farmer_yield_probability_relation, np.ndarray), "self.farmer_yield_probability_relation must be a np.ndarray"
 
         print('r2:', np.median(yield_probability_R2_scipy), 'r2_log:', np.median(yield_probability_R2_log), 'p:', np.median(yield_probability_p_scipy))
@@ -2414,22 +2446,30 @@ class Farmers(AgentBaseClass):
             - Adjusts yield ratios to be non-negative and capped at 1.0.
         """
         
-        # Initialize a 2D array to store yield ratios for each drought probability.
-        yield_ratios = np.zeros((self.farmer_yield_probability_relation.shape[0], self.p_droughts.size))
+        # # Initialize a 2D array to store yield ratios for each drought probability.
+        # yield_ratios = np.zeros((self.farmer_yield_probability_relation.shape[0], self.p_droughts.size))
 
-        for i, coeffs in enumerate(self.farmer_yield_probability_relation):
-            # Invert the polynomial relationship to get the probability-yield ratio relationship
-            a = coeffs[0]
-            b = coeffs[1]
-            if a != 0:
-                inverse_coefficients = [1/a, -b/a]
-                inverse_polynomial = np.poly1d(inverse_coefficients)
-            else:
-                raise AssertionError("The relationship is not invertible, as the slope is zero.")
+        # for i, coeffs in enumerate(self.farmer_yield_probability_relation):
+        #     # Invert the polynomial relationship to get the probability-yield ratio relationship
+        #     a = coeffs[0]
+        #     b = coeffs[1]
+        #     if a != 0:
+        #         inverse_coefficients = [1/a, -b/a]
+        #         inverse_polynomial = np.poly1d(inverse_coefficients)
+        #     else:
+        #         raise AssertionError("The relationship is not invertible, as the slope is zero.")
             
-            # Calculate the yield ratio for each probability
-            yield_ratios[i, :] = inverse_polynomial(1 / self.p_droughts)
+        #     # Calculate the yield ratio for each probability
+        #     yield_ratios[i, :] = inverse_polynomial(1 / self.p_droughts)
         
+        def inverse_logarithmic_natural(probability, params):
+            a = params[:, 0]
+            b = params[:, 1]
+
+            return np.power(2, (probability[:, np.newaxis] - b) / a)
+        
+        yield_ratios = inverse_logarithmic_natural(1 / self.p_droughts, self.farmer_yield_probability_relation).T
+  
         # Adjust the yield ratios to lie between 0 and 1
         yield_ratios[yield_ratios < 0] = 0  # Ensure non-negative yield ratios
         yield_ratios[yield_ratios > 1] = 1  # Cap the yield ratios at 1
@@ -2474,6 +2514,8 @@ class Farmers(AgentBaseClass):
         # Initialize array to store relative yield ratio improvement for unique groups
         unique_yield_ratio_gain_relative = np.full(len(np.unique(crop_groups_onlyzeros, axis=0)), 1, dtype=np.float32)
 
+        # unique_yield_ratio_gain_relative_2 = np.full((len(np.unique(crop_groups_onlyzeros, axis=0)), 6), 1, dtype=np.float32)
+
         # Loop over each unique group of farmers to determine their average yield ratio
         for idx, unique_combination in enumerate(np.unique(crop_groups_onlyzeros, axis=0)):
             unique_farmer_groups = (crop_groups == unique_combination[None, ...]).all(axis=1)
@@ -2488,15 +2530,16 @@ class Farmers(AgentBaseClass):
                 unadapted_yield_ratio = np.mean(self.yearly_yield_ratio[unique_farmer_groups, :10], axis=1)
                 adapted_yield_ratio = np.mean(self.yearly_yield_ratio[unique_farmer_groups_adapted, :10], axis=1)
                 
-                adapted_median = np.median(adapted_yield_ratio)
                 unadapted_median = np.median(unadapted_yield_ratio)
+                adapted_median = np.median(adapted_yield_ratio)
 
                 # add a small value to prevent division by 0
                 adapted_value = adapted_median + 0.0001 
                 unadapted_value = unadapted_median + 0.0001 
 
                 yield_ratio_gain_relative = adapted_value / unadapted_value
-
+                # yield_ratio_gain_relative_2 = np.median(yield_ratios[unique_farmer_groups_adapted, :], axis=0) / np.median(yield_ratios[unique_farmer_groups, :], axis=0)
+                # unique_yield_ratio_gain_relative_2[idx] = yield_ratio_gain_relative_2
                 # Determine the size of adapted group relative to unadapted group
                 adapted_unadapted_ratio = min(adapted_yield_ratio.size / unadapted_yield_ratio.size, 1.0)
 
@@ -2909,16 +2952,13 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0 # reset water accessible days
             
-            # self.upkeep_assets()
-            # Save all profits, damages and rainfall for farmer estimations 
-            # Can only be done if there has been a harvest of any sort 
-            if not np.all(self.total_crop_age == 0):
-                self.calculate_yield_spei_relation()
-            else: 
-                print("No harvests occurred yet, no yield - probability relation saved this year ")
+            self.set_yearly_yield_spei()
 
             # Alternative scenarios: 'sprinkler'
             if self.model.scenario not in ['pre_spinup','spinup','noadaptation']:
+                # Determine the relation between drought probability and yield 
+                self.calculate_yield_spei_relation()
+                
                 # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
                 decision_params = {

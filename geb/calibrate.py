@@ -126,8 +126,8 @@ def get_irrigation_wells_score(run_directory, individual, config):
 
 	ratio_holdings_with_well_observed = get_observed_well_ratio(config)
 
-	ratio_holdings_with_well_simulated = ratio_well_irrigated[ratio_holdings_with_well_observed.index]
-	ratio_holdings_with_well_observed = ratio_holdings_with_well_observed.values
+	ratio_holdings_with_well_simulated = ratio_well_irrigated[ratio_holdings_with_well_observed.index] + 0.0001 # Add to prevent division by 0
+	ratio_holdings_with_well_observed = ratio_holdings_with_well_observed.values + 0.0001 # Add to prevent division by 0
 
 	irrigation_well_score = 1 - abs(((ratio_holdings_with_well_simulated - ratio_holdings_with_well_observed) / ratio_holdings_with_well_observed))
 	irrigation_well_score = float(np.mean(irrigation_well_score))
