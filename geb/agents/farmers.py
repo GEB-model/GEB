@@ -1670,12 +1670,15 @@ class Farmers(AgentBaseClass):
         loan_duration: int
     ) -> None:
         
+        farmers_getting_loan = np.where(loaning_farmers)[0]
+
         # Update the agent's loans and total annual costs with the computed annual cost
         # Make sure it is in an empty loan slot
-        for farmer in loaning_farmers:
+        for farmer in farmers_getting_loan:
             for i in range(4):
                 if all_loans_annual_cost[farmer, 1, i] == 0:
-                    all_loans_annual_cost[farmer, 1, i] += annual_cost_microcredit
+                    local_index =  np.where(farmers_getting_loan == farmer)[0][0]
+                    all_loans_annual_cost[farmer, 1, i] += annual_cost_microcredit[local_index]
                     loan_tracker[farmer, 1, i] = loan_duration
                     break  # Exit the loop after adding to the first zero value
 
@@ -2035,6 +2038,12 @@ class Farmers(AgentBaseClass):
             yield_ratio = yield_ratio[mask]
             spei_prob = spei_prob[mask]
 
+            # Set the a and b values of last year to prevent no values on this year
+            if not((self.farmer_yield_probability_relation == None).all()):
+                a, b = np.median(self.farmer_yield_probability_relation[np.where((crop_elevation_group == np.unique(crop_elevation_group, axis=0)[idx]).all(axis=1))[0]], axis = 0)
+            else:
+                a, b = 2, 3
+            
             # Fit logarithmic function, except when there is an error 
             try:
                 # Attempt to fit the logarithmic_natural function
@@ -2049,11 +2058,6 @@ class Farmers(AgentBaseClass):
                     # Recalculate a, b with the previous values
                     a, b = curve_fit(logarithmic_natural, last_yield_ratio, last_spei_prob)[0]
 
-            # Polynomial fit
-            coefficients = np.polyfit(yield_ratio, spei_prob, 1)
-            poly_function = np.poly1d(coefficients)
-            group_yield_probability_relation_lin.append(poly_function)
-
             group_yield_probability_relation_log.append(np.array([a, b]))
 
             residuals = spei_prob - logarithmic_natural(yield_ratio, a, b)
@@ -2061,10 +2065,6 @@ class Farmers(AgentBaseClass):
             ss_res = np.sum(residuals ** 2)
             
             yield_probability_R2_log.append(1 - (ss_res / ss_tot))
-            r_value = linregress(yield_ratio, spei_prob)[2]
-            
-            yield_probability_R2_scipy.append(r_value ** 2)
-            yield_probability_p_scipy.append(linregress(yield_ratio, spei_prob)[3])
 
             # Update last_yield_ratio and last_spei_prob
             last_yield_ratio = yield_ratio
@@ -2076,7 +2076,7 @@ class Farmers(AgentBaseClass):
             self.farmer_yield_probability_relation = np.array(group_yield_probability_relation_log)[exact_positions]
             assert isinstance(self.farmer_yield_probability_relation, np.ndarray), "self.farmer_yield_probability_relation must be a np.ndarray"
 
-        print('r2:', np.median(yield_probability_R2_scipy), 'r2_log:', np.median(yield_probability_R2_log), 'p:', np.median(yield_probability_p_scipy))
+        print('r2_log:', np.median(yield_probability_R2_log), 'p:', np.median(yield_probability_p_scipy))
     
     def adapt_drip_irrigation(self) -> None:
         """
