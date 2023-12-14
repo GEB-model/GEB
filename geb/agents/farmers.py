@@ -2446,22 +2446,6 @@ class Farmers(AgentBaseClass):
             - Adjusts yield ratios to be non-negative and capped at 1.0.
         """
         
-        # # Initialize a 2D array to store yield ratios for each drought probability.
-        # yield_ratios = np.zeros((self.farmer_yield_probability_relation.shape[0], self.p_droughts.size))
-
-        # for i, coeffs in enumerate(self.farmer_yield_probability_relation):
-        #     # Invert the polynomial relationship to get the probability-yield ratio relationship
-        #     a = coeffs[0]
-        #     b = coeffs[1]
-        #     if a != 0:
-        #         inverse_coefficients = [1/a, -b/a]
-        #         inverse_polynomial = np.poly1d(inverse_coefficients)
-        #     else:
-        #         raise AssertionError("The relationship is not invertible, as the slope is zero.")
-            
-        #     # Calculate the yield ratio for each probability
-        #     yield_ratios[i, :] = inverse_polynomial(1 / self.p_droughts)
-        
         def inverse_logarithmic_natural(probability, params):
             a = params[:, 0]
             b = params[:, 1]
