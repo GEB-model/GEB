@@ -9,8 +9,8 @@ from collections.abc import Iterable
 import numpy as np
 import re
 import xarray as xr
-import rioxarray as rxr
 from pathlib import Path
+import netCDF4
 
 try:
     import cupy as cp
@@ -121,8 +121,20 @@ class CWatMReporter(ABMReporter):
                     self.variables[name].to_netcdf(
                         netcdf_path,
                         mode="a",
-                        encoding={name: {"zlib": True, "complevel": 5}},
+                        encoding={
+                            name: {
+                                "chunksizes": (
+                                    1,
+                                    self.variables[name].y.size,
+                                    self.variables[name].x.size,
+                                ),
+                                "zlib": True,
+                                "complevel": 5,
+                            }
+                        },
+                        engine="netcdf4",
                     )
+                    self.variables[name].close()
                 else:
                     self.variables[name] = []
 
@@ -218,22 +230,21 @@ class CWatMReporter(ABMReporter):
             if np.isin(
                 np.datetime64(self.model.current_time), self.variables[name].time
             ):
-                if "substeps" in conf:
-                    self.variables[name].loc[
-                        {
-                            "time": slice(
-                                self.model.current_time,
-                                self.model.current_time
-                                + self.model.timestep_length
-                                - self.model.timestep_length / conf["substeps"],
-                            )
-                        }
-                    ] = value
-                else:
-                    self.variables[name].loc[{"time": self.model.current_time}] = value
-                self.variables[name].to_netcdf(
-                    self.model.config["report_cwatm"][name]["absolute_path"], mode="a"
-                )
+                with netCDF4.Dataset(
+                    self.model.config["report_cwatm"][name]["absolute_path"], "a"
+                ) as nc:
+                    var = nc.variables[name]
+                    time_index = self.variables[name].time == np.datetime64(
+                        self.model.current_time
+                    )
+                    if "substeps" in conf:
+                        time_index_start = np.where(time_index)[0][0]
+                        time_index_end = time_index_start + conf["substeps"]
+                        var[time_index_start:time_index_end, ...] = value
+                    else:
+                        var[
+                            time_index, ...
+                        ] = value  # Assuming new_data is the new values for that time slice
         else:
             raise ValueError(f"{conf['format']} not recognized")
 
