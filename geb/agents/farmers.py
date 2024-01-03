@@ -1596,12 +1596,11 @@ class Farmers(AgentBaseClass):
 
         print('Risk perception mean = ',np.mean(self.risk_perception))
 
-        # Determine which farmers need emergency microcredit to keep farming
-        loss_threshold = self.model.config['agent_settings']['farmers']['microcredit']['loss_threshold']
-        loaning_farmers = drought_loss_current >= loss_threshold
+        # Determine which farmers need emergency microcredit to keep farming, same as the drought experience threshold 
+        loaning_farmers = drought_loss_current >= self.moving_average_threshold
         
         # Determine their microcredit 
-        if np.any(loaning_farmers) and self.model.scenario not in ['spinup','noadaptation','pre_spinup']:
+        if np.any(loaning_farmers) and self.model.scenario not in ['noadaptation','pre_spinup']:
             print(np.count_nonzero(loaning_farmers),'farmers are getting microcredit')
             self.microcredit(loaning_farmers, drought_loss_current, total_crop_age)
 
@@ -2175,7 +2174,7 @@ class Farmers(AgentBaseClass):
         well_reaches_groundwater = self.well_depth > self.groundwater_depth
         extra_constraint = well_reaches_groundwater
 
-        # To determine the benefit of irrigation, you could set different sources as being considered a "well"
+        # To determine the benefit of irrigation, those who have a well are adapted 
         adapted = np.where((self.farmer_class == 2), 1, 0)
 
         # Get the mask of farmers who will adapt
@@ -2303,7 +2302,7 @@ class Farmers(AgentBaseClass):
         total_annual_costs_m2 = (annual_cost + self.all_loans_annual_cost[:,-1, 0]) / farm_area
 
         # Solely the annual cost of the adaptation 
-        annual_cost /= farm_area
+        annual_cost_m2 = annual_cost / farm_area
         
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params = {
@@ -2317,7 +2316,7 @@ class Farmers(AgentBaseClass):
                             'profits_no_event_adaptation': profits_no_event_adaptation,
                             'risk_perception': self.risk_perception, 
                             'total_annual_costs': total_annual_costs_m2,
-                            'adaptation_costs': annual_cost, 
+                            'adaptation_costs': annual_cost_m2, 
                             'adapted': adapted, 
                             'time_adapted' : self.time_adapted[:,adaptation_type], 
                             'T': self.decision_horizon, 
