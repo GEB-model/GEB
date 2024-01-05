@@ -215,7 +215,7 @@ class GEBModel(ABM_Model, CWatM_Model):
                     fp = self.initial_relations_folder / f"{var}.npz"
                     values = attrgetter(var)(self.data)
                     np.savez_compressed(fp, data=values)
-            agent_relation_attributes = ["_yearly_yield_ratio", "_yearly_SPEI_probability", "_yearly_profits", "_yearly_potential_profits", "_farmer_yield_probability_relation"]
+            agent_relation_attributes = ["_yearly_yield_ratio", "_yearly_SPEI_probability", "_yearly_profits", "_yearly_potential_profits", "_farmer_probability_yield_relation"]
             
             for attribute in agent_relation_attributes:
                 fp = Path(self.initial_relations_folder, f"farmers.{attribute}.npz")
