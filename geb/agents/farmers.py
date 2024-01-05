@@ -108,7 +108,7 @@ class Farmers(AgentBaseClass):
         "_per_harvest_SPEI",
         "_yearly_SPEI_probability",
         "_monthly_SPEI",
-        "_farmer_probability_yield_relation",
+        "_farmer_yield_probability_relation",
         "_farmer_is_in_command_area",
         "_farmer_class",
         "_water_use",
@@ -337,7 +337,7 @@ class Farmers(AgentBaseClass):
                 "dtype": np.float32,
                 "nodata": [np.nan] * (self.total_spinup_time + 1),
             },
-            "_farmer_probability_yield_relation": {
+            "_farmer_yield_probability_relation": {
                 "dtype": np.float32,
                 "nodata": [np.nan, np.nan],
             },
@@ -650,12 +650,12 @@ class Farmers(AgentBaseClass):
         self._farmer_is_in_command_area[:self.n] = value
 
     @property
-    def farmer_probability_yield_relation(self):
-        return self._farmer_probability_yield_relation[:self.n]
+    def farmer_yield_probability_relation(self):
+        return self._farmer_yield_probability_relation[:self.n]
 
-    @farmer_probability_yield_relation.setter
-    def farmer_probability_yield_relation(self, value):
-        self._farmer_probability_yield_relation[:self.n] = value
+    @farmer_yield_probability_relation.setter
+    def farmer_yield_probability_relation(self, value):
+        self._farmer_yield_probability_relation[:self.n] = value
 
     @property
     def farmer_class(self):
@@ -909,7 +909,7 @@ class Farmers(AgentBaseClass):
             self.monthly_SPEI = np.zeros((self.n, 12), dtype=np.float32)
 
             if self.model.scenario == 'spinup' and self.model.load_pre_spinup_data:
-                agent_relation_attributes = ["_yearly_yield_ratio", "_yearly_SPEI_probability", "_yearly_profits", "_yearly_potential_profits", "_farmer_probability_yield_relation"]
+                agent_relation_attributes = ["_yearly_yield_ratio", "_yearly_SPEI_probability", "_yearly_profits", "_yearly_potential_profits", "_farmer_yield_probability_relation"]
                 for attribute in agent_relation_attributes:
                     fp = os.path.join(self.model.initial_relations_folder, f"farmers.{attribute}.npz")
                     values = np.load(fp)['data']
@@ -919,7 +919,7 @@ class Farmers(AgentBaseClass):
                 self.yearly_yield_ratio = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
                 self.yearly_profits = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
                 self.yearly_potential_profits = np.zeros((self.n, self.total_spinup_time + 1), dtype=np.float32)
-                self.farmer_probability_yield_relation = np.zeros((self.n, 2), dtype=np.float32)
+                self.farmer_yield_probability_relation = np.zeros((self.n, 2), dtype=np.float32)
 
             self.household_size = np.load(self.model.model_structure['binary']["agents/farmers/household_size"])['data']
             self.daily_non_farm_income = np.load(self.model.model_structure['binary']["agents/farmers/daily_non_farm_income_family"])['data']
@@ -1596,7 +1596,7 @@ class Farmers(AgentBaseClass):
 
         print('Risk perception mean = ',np.mean(self.risk_perception))
 
-        # Determine which farmers need emergency microcredit to keep farming, same as the drought experience threshold 
+        # Determine which farmers need emergency microcredit to keep farming
         loaning_farmers = drought_loss_current >= self.moving_average_threshold
         
         # Determine their microcredit 
@@ -2204,8 +2204,8 @@ class Farmers(AgentBaseClass):
         Calculate the construction and yearly costs of well and pump for irrigation, based on various parameters 
         such as well depth, crop growth seasons, pump horsepower, and regional costs. The function considers 
         different seasonal durations, well failure probabilities, and irrigation efficiency. Based on Robert, M., 
-        Bergez, J. E., & Thomas, A. (2018). A stochastic dynamic programming approach to analyze adaptation to climate change – 
-        Application to groundwater irrigation in India. European Journal of Operational Research, 265(3), 1033–1045. 
+        Bergez, J. E., & Thomas, A. (2018). A stochastic dynamic programming approach to analyze adaptation to climate change â€“ 
+        Application to groundwater irrigation in India. European Journal of Operational Research, 265(3), 1033â€“1045. 
         https://doi.org/10.1016/j.ejor.2017.08.029
 
         Returns:
@@ -2959,7 +2959,7 @@ class Farmers(AgentBaseClass):
                 self.switch_crops()
                 
                 # These adaptations can only be done if there is a yield-probability relation 
-                if not np.all(self.farmer_probability_yield_relation == 0): 
+                if not np.all(self.farmer_yield_probability_relation == 0): 
                     self.adapt_irrigation_well()   
                     # self.adapt_drip_irrigation()  
                 else:
