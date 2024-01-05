@@ -69,7 +69,7 @@ def get_observed_well_ratio(config):
 
 	ANALYSIS_THRESHOLD = 0.5
 
-	observed_irrigation_sources = observed_irrigation_sources[observed_irrigation_sources['area_in_region_mask'] > ANALYSIS_THRESHOLD]
+	# observed_irrigation_sources = observed_irrigation_sources[observed_irrigation_sources['area_in_region_mask'] > ANALYSIS_THRESHOLD]
 	observed_irrigation_sources = observed_irrigation_sources.join(simulated_subdistricts['region_id'])
 	observed_irrigation_sources.set_index('region_id', inplace=True)
 
@@ -122,15 +122,22 @@ def get_irrigation_wells_score(run_directory, individual, config):
 	# Calculate the ratio of farmers with a well per tehsil
 	farmers_per_region = np.bincount(regions)
 	well_irrigated_per_tehsil = np.bincount(regions, weights=well_irrigated)
-	ratio_well_irrigated = well_irrigated_per_tehsil / farmers_per_region
+	minimum_farmer_mask = np.where(farmers_per_region > 100)
+	ratio_well_irrigated = well_irrigated_per_tehsil[minimum_farmer_mask] / farmers_per_region[minimum_farmer_mask]
 
 	ratio_holdings_with_well_observed = get_observed_well_ratio(config)
 
-	ratio_holdings_with_well_simulated = ratio_well_irrigated[ratio_holdings_with_well_observed.index] + 0.0001 # Add to prevent division by 0
-	ratio_holdings_with_well_observed = ratio_holdings_with_well_observed.values + 0.0001 # Add to prevent division by 0
+	ratio_holdings_with_well_observed = ratio_holdings_with_well_observed[minimum_farmer_mask[0]].values 
+	ratio_holdings_with_well_simulated = ratio_well_irrigated 
 
+	minimum_well_mask = np.where(ratio_holdings_with_well_observed > 0.01)
+	
 	irrigation_well_score = 1 - abs(((ratio_holdings_with_well_simulated - ratio_holdings_with_well_observed) / ratio_holdings_with_well_observed))
-	irrigation_well_score = float(np.mean(irrigation_well_score))
+
+	total_farmers = farmers_per_region.sum()
+	farmers_fraction = farmers_per_region[minimum_farmer_mask] / total_farmers
+
+	irrigation_well_score = float(np.sum(irrigation_well_score[minimum_well_mask] * farmers_fraction[minimum_well_mask]))
 	print("run_id: " + str(individual.label)+", IWS: "+"{0:.3f}".format(irrigation_well_score))
 	with open(os.path.join(config['calibration']['path'],"IWS_log.csv"), "a") as myfile:
 		myfile.write(str(individual.label)+"," + str(irrigation_well_score)+"\n")
@@ -412,8 +419,8 @@ def run_model(individual, config, gauges, observed_streamflow):
 			scores.append(get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow))
 		if score == 'irrigation_wells':
 			scores.append(get_irrigation_wells_score(run_directory, individual, config))
-		if score == 'KGE_yield_ratio':
-			scores.append(get_KGE_yield_ratio(run_directory, individual, config))
+		# if score == 'KGE_yield_ratio':
+		# 	scores.append(get_KGE_yield_ratio(run_directory, individual, config))
 	return tuple(scores)
 
 def is_first_run(label):
@@ -457,7 +464,7 @@ def calibrate(config, working_directory):
 	config['calibration']['calibration_targets'] = {
 		'KGE_discharge': 1,
 		'irrigation_wells': 1,
-		'KGE_yield_ratio': 1
+		# 'KGE_yield_ratio': 1
 	}
 
 	use_multiprocessing = calibration_config['DEAP']['use_multiprocessing']
@@ -661,8 +668,9 @@ def calibrate(config, working_directory):
 			effmin[generation, ii] = np.amin([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 			effavg[generation, ii] = np.average([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
 			effstd[generation, ii] = np.std([pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))])
+			# print(">> gen: " + str(generation) + ", effmax_KGE: "+"{0:.3f}".format(effmax[generation, 0]))
 		
-		print(">> gen: " + str(generation) + ", effmax_KGE: "+"{0:.3f}".format(effmax[generation, 0]))
+		
 		# print(">> gen: " + str(generation) + ", effmax_irrigation_equipment: "+"{0:.3f}".format(effmax[generation, 1]))
 
 	# Closing the multiprocessing pool
