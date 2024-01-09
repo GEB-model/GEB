@@ -115,6 +115,7 @@ class Farmers(AgentBaseClass):
         "_flooded",
         ## expected utility 
         "_adapted",
+        "_adaptation_mechanism",
         "_time_adapted",
         "_risk_perception",
         "_drought_timer",
@@ -360,6 +361,10 @@ class Farmers(AgentBaseClass):
                 "nodatacheck": False
             },
             "_adapted": {
+                "dtype": np.int32,
+                "nodata": [np.nan, np.nan, np.nan],
+            },
+            "_adaptation_mechanism": {
                 "dtype": np.int32,
                 "nodata": [np.nan, np.nan, np.nan],
             },
@@ -690,6 +695,14 @@ class Farmers(AgentBaseClass):
         self._field_indices_by_farmer[:self.n] = value
 
     @property
+    def adaptation_mechanism(self):
+        return self._adaptation_mechanism[:self.n]
+
+    @adaptation_mechanism.setter
+    def adaptation_mechanism(self, value):
+        self._adaptation_mechanism[:self.n] = value
+
+    @property
     def adapted(self):
         return self._adapted[:self.n]
 
@@ -869,10 +882,13 @@ class Farmers(AgentBaseClass):
             self.adapted = np.zeros((self.n, 3), dtype=np.int32) 
             # the time each agent has been paying off their dry flood proofing investment loan. Column 0 = no cost adaptation, 1 = well, 2 = sprinkler.  -1 if they do not have adaptations
             self.time_adapted = np.full((self.n, 3), -1, dtype = np.int32)
+            # Set an array to track through what process new adaptations are done. Column 0 = no cost adaptation, 1 = well, 2 = sprinkler
+            # Value 0 = unadapted, 1 = adapted at the start, 2 = through global/spontaneous, 3 = through neighbors 
+            self.adaptation_mechanism = np.zeros_like(self.adapted, dtype=np.int32)
+
             # Set SEUT of all agents to 0 
             self.SEUT_no_adapt[:] = 0
             self.EUT_no_adapt[:] = 0
-
 
             # Load the crops planted for each farmer in the season #1, season #2 and season #3.
             self.crops[:, 0] = np.load(self.model.model_structure['binary']["agents/farmers/season_#1_crop"])['data']
@@ -884,10 +900,14 @@ class Farmers(AgentBaseClass):
             self.irrigation_source = np.load(self.model.model_structure['binary']["agents/farmers/irrigation_source"])['data']
             # set the adaptation of wells to 1 if farmers have well 
             self.adapted[:,1][np.isin(self.irrigation_source, [self.irrigation_source_key['well'], self.irrigation_source_key['tubewell']])] = 1
+            # Set the adaptation mechanism
+            self.adaptation_mechanism[self.adapted[:,1] == 1, 1] = 1
+            
             # Set the initial well depth
             self.well_depth = np.full(self.n, self.model.config['agent_settings']['expected_utility']['adaptation_well']['initial_depth'], dtype = np.float32)
             # Set how long the agents have adapted somewhere across the lifespan of farmers, would need to be a bit more realistic likely 
-            self.time_adapted[self.adapted[:,1] == 1, 1] = np.random.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan'], np.sum(self.adapted[:,1] == 1))
+            rng_wells = np.random.default_rng(17)
+            self.time_adapted[self.adapted[:,1] == 1, 1] = rng_wells.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan'], np.sum(self.adapted[:,1] == 1))
 
             # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
             self.channel_abstraction_m3_by_farmer[:] = 0
@@ -939,6 +959,7 @@ class Farmers(AgentBaseClass):
             self.irrigation_efficiency = rng.uniform(0.50, 0.95, self.n)
             # Set the people who already have more van 90% irrigation efficiency to already adapted for the drip irrgation adaptation  
             self.adapted[:,2][self.irrigation_efficiency >= .90] = 1
+            self.adaptation_mechanism[self.adapted[:,2] == 1, 2] = 1
             # set the yield_ratio_multiplier to x of people who have drip irrigation, set to 1 for all others 
             self.yield_ratio_multiplier = np.where((self.irrigation_efficiency >= .90) & (self.irrigation_source_key != 0), self.yield_ratio_multiplier_value, 1)
             self.base_management_yield_ratio = np.full(self.n, self.model.config['agent_settings']['farmers']['base_management_yield_ratio'], dtype=np.float32)
@@ -946,7 +967,8 @@ class Farmers(AgentBaseClass):
             # Increase yield ratio of those who use better management practices 
             self.yield_ratio_management = self.yield_ratio_multiplier * self.base_management_yield_ratio
             
-            self.time_adapted[self.adapted[:,2] == 1, 2] = np.random.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['lifespan'], np.sum(self.adapted[:,2] == 1))
+            rng_drip = np.random.default_rng(70)
+            self.time_adapted[self.adapted[:,2] == 1, 2] = rng.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan'], np.sum(self.adapted[:,2] == 1))
             
             # Initiate array that tracks the overall yearly costs for all adaptations 
             # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation), last is total 
@@ -2109,6 +2131,7 @@ class Farmers(AgentBaseClass):
 
         # Reset farmers' status who exceeded the lifespan of their adaptation
         expired_adaptations = self.time_adapted[:, ADAPTATION_TYPE] == lifespan_adaptation
+        self.adaptation_mechanism[expired_adaptations, ADAPTATION_TYPE] = 0
         self.adapted[expired_adaptations, ADAPTATION_TYPE] = 0
         self.time_adapted[expired_adaptations, ADAPTATION_TYPE] = -1
         self.irrigation_efficiency[expired_adaptations] = 0.50
@@ -2166,6 +2189,7 @@ class Farmers(AgentBaseClass):
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation 
         # and who's wells are much shallower than the groundwater depth
         expired_adaptations = (self.time_adapted[:, ADAPTATION_TYPE] == lifespan_adaptation) | (self.groundwater_depth > self.well_depth * 1.50)
+        self.adaptation_mechanism[expired_adaptations, ADAPTATION_TYPE] = 0
         self.adapted[expired_adaptations, ADAPTATION_TYPE] = 0
         self.time_adapted[expired_adaptations, ADAPTATION_TYPE] = -1
         self.irrigation_source[expired_adaptations] = self.irrigation_source_key['no_irrigation']
@@ -2340,6 +2364,7 @@ class Farmers(AgentBaseClass):
 
         # Update the mask based on EU decisions
         SEUT_adapt_mask[adapted == 0] = SEUT_adaptation_decision
+        self.adaptation_mechanism[SEUT_adapt_mask == 1, adaptation_type] = 2
 
         # Consider the influence of neighbors' decisions on adaptation 
         adapt_due_to_neighbor = self.compare_neighbor_EUT(
@@ -2350,6 +2375,8 @@ class Farmers(AgentBaseClass):
             total_annual_costs = total_annual_costs_m2,
             profits_no_event = profits_no_event,
             extra_constraint = extra_constraint)
+        
+        self.adaptation_mechanism[adapt_due_to_neighbor == 1, adaptation_type] = 3
 
         # Get the final decision mask considering individual and neighbor influences
         adaptation_mask = np.logical_or(adapt_due_to_neighbor, SEUT_adapt_mask)
