@@ -968,7 +968,7 @@ class Farmers(AgentBaseClass):
             self.yield_ratio_management = self.yield_ratio_multiplier * self.base_management_yield_ratio
             
             rng_drip = np.random.default_rng(70)
-            self.time_adapted[self.adapted[:,2] == 1, 2] = rng.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan'], np.sum(self.adapted[:,2] == 1))
+            self.time_adapted[self.adapted[:,2] == 1, 2] = rng_drip.uniform(1, self.model.config['agent_settings']['expected_utility']['adaptation_well']['lifespan'], np.sum(self.adapted[:,2] == 1))
             
             # Initiate array that tracks the overall yearly costs for all adaptations 
             # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation), last is total 
@@ -2188,7 +2188,7 @@ class Farmers(AgentBaseClass):
 
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation 
         # and who's wells are much shallower than the groundwater depth
-        expired_adaptations = (self.time_adapted[:, ADAPTATION_TYPE] == lifespan_adaptation) | (self.groundwater_depth > self.well_depth * 1.50)
+        expired_adaptations = (self.time_adapted[:, ADAPTATION_TYPE] == lifespan_adaptation) | (self.groundwater_depth > self.well_depth)
         self.adaptation_mechanism[expired_adaptations, ADAPTATION_TYPE] = 0
         self.adapted[expired_adaptations, ADAPTATION_TYPE] = 0
         self.time_adapted[expired_adaptations, ADAPTATION_TYPE] = -1
