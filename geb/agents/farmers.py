@@ -2887,7 +2887,7 @@ class Farmers(AgentBaseClass):
                 search_ids=ids,
                 search_target_ids=ids
             )
-            self.switch_crops_numba(ids, self.crops, neighbors, self.SEUT_no_adapt, self.EUT_no_adapt, self.yearly_yield_ratio, self.yearly_SPEI_probability)
+            self.switch_crops_numba(ids, self.crops, neighbors, self.SEUT_no_adapt_crops, self.EUT_no_adapt_crops, self.yearly_yield_ratio, self.yearly_SPEI_probability)
 
     def step(self) -> None:
         """
@@ -2971,6 +2971,7 @@ class Farmers(AgentBaseClass):
                 
                 # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
+
                 decision_params = {
                         'n_agents':  self.n, 
                         'T': self.decision_horizon, 
@@ -2981,8 +2982,39 @@ class Farmers(AgentBaseClass):
                         'total_profits': total_profits,
                         'profits_no_event': profits_no_event,
                     }
+                
                 self.SEUT_no_adapt = self.decision_module.calcEU_do_nothing(**decision_params)
                 self.EUT_no_adapt = self.decision_module.calcEU_do_nothing(**decision_params, subjective = False)
+
+                # Calculate the SEUT with regards to crops and planting decisions
+                index = self.cultivation_costs[0].get(self.model.current_time)
+                cultivation_cost_per_crop = self.cultivation_costs[1][index][self.region_id]
+                
+                nan_array = np.full_like(self.crops, fill_value=np.nan, dtype=float)
+                mask_crops = self.crops != -1
+                nan_array[mask_crops] = np.take(cultivation_cost_per_crop, self.crops[mask_crops].astype(int))
+                cultivation_costs = np.nansum(nan_array, axis= 1)
+                total_cultivation_costs = cultivation_costs * (self.interest_rate  * (1 + self.interest_rate ) ** 1 / ((1 + self.interest_rate ) ** 1 - 1))
+
+                total_profits_crops = total_profits - total_cultivation_costs
+                total_profits_crops = np.where(total_profits_crops <= 0, 0, total_profits_crops)
+                profits_no_event_crops = profits_no_event - total_cultivation_costs
+                profits_no_event_crops = np.where(profits_no_event_crops <= 0, 0, profits_no_event_crops)
+
+                decision_params_crops = {
+                        'n_agents':  self.n, 
+                        'T': self.decision_horizon, 
+                        'discount_rate': self.discount_rate, 
+                        'sigma': self.risk_aversion,
+                        'risk_perception': self.risk_perception, 
+                        'p_droughts': 1 / self.p_droughts[:-1],
+                        'total_profits': total_profits_crops,
+                        'profits_no_event': profits_no_event_crops,
+                    }
+
+                self.SEUT_no_adapt_crops = self.decision_module.calcEU_do_nothing(**decision_params_crops)
+                self.EUT_no_adapt_crops = self.decision_module.calcEU_do_nothing(**decision_params_crops, subjective = False)
+
                 self.switch_crops()
                 
                 # These adaptations can only be done if there is a yield-probability relation 
