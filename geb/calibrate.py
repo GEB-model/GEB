@@ -33,6 +33,8 @@ import multiprocessing
 from subprocess import Popen, PIPE
 
 import pickle
+from honeybees.library.raster import coord_to_pixel, sample_from_map
+import rasterio
 
 SCENARIO = "adaptation"
 
@@ -89,32 +91,11 @@ def get_observed_well_ratio(config):
 
     ANALYSIS_THRESHOLD = 0.5
 
-    observed_irrigation_sources = observed_irrigation_sources[
-        observed_irrigation_sources["area_in_region_mask"] > ANALYSIS_THRESHOLD
-    ]
+    # observed_irrigation_sources = observed_irrigation_sources[observed_irrigation_sources['area_in_region_mask'] > ANALYSIS_THRESHOLD]
     observed_irrigation_sources = observed_irrigation_sources.join(
         simulated_subdistricts["region_id"]
     )
     observed_irrigation_sources.set_index("region_id", inplace=True)
-
-    total_holdings_observed = observed_irrigation_sources[
-        [c for c in observed_irrigation_sources.columns if c.endswith("total_holdings")]
-    ].sum(axis=1)
-    total_holdings_with_well_observed = observed_irrigation_sources[
-        [c for c in observed_irrigation_sources.columns if c.endswith("well_holdings")]
-    ].sum(axis=1) + observed_irrigation_sources[
-        [
-            c
-            for c in observed_irrigation_sources.columns
-            if c.endswith("tubewell_holdings")
-        ]
-    ].sum(
-        axis=1
-    )
-    ratio_holdings_with_well_observed = (
-        total_holdings_with_well_observed / total_holdings_observed
-    )
-    return ratio_holdings_with_well_observed
 
 
 def handle_ctrl_c(func):
@@ -176,15 +157,18 @@ def get_irrigation_wells_score(run_directory, individual, config):
         )
     )["data"]
 
-    with open(
-        os.path.join(
-            config["general"]["input_folder"],
-            "agents",
-            "farmers",
-            "irrigation_sources.json",
-        )
-    ) as f:
-        irrigation_source_key = json.load(f)
+    well_irrigated = np.isin(
+        irrigation_source,
+        [irrigation_source_key["well"], irrigation_source_key["tubewell"]],
+    )
+    # Calculate the ratio of farmers with a well per tehsil
+    farmers_per_region = np.bincount(regions)
+    well_irrigated_per_tehsil = np.bincount(regions, weights=well_irrigated)
+    minimum_farmer_mask = np.where(farmers_per_region > 100)
+    ratio_well_irrigated = (
+        well_irrigated_per_tehsil[minimum_farmer_mask]
+        / farmers_per_region[minimum_farmer_mask]
+    )
 
     well_irrigated = np.isin(
         irrigation_source,
@@ -195,12 +179,12 @@ def get_irrigation_wells_score(run_directory, individual, config):
     well_irrigated_per_tehsil = np.bincount(regions, weights=well_irrigated)
     ratio_well_irrigated = well_irrigated_per_tehsil / farmers_per_region
 
-    ratio_holdings_with_well_observed = get_observed_well_ratio(config)
+    ratio_holdings_with_well_observed = ratio_holdings_with_well_observed[
+        minimum_farmer_mask[0]
+    ].values
+    ratio_holdings_with_well_simulated = ratio_well_irrigated
 
-    ratio_holdings_with_well_simulated = ratio_well_irrigated[
-        ratio_holdings_with_well_observed.index
-    ]
-    ratio_holdings_with_well_observed = ratio_holdings_with_well_observed.values
+    minimum_well_mask = np.where(ratio_holdings_with_well_observed > 0.01)
 
     irrigation_well_score = 1 - abs(
         (
@@ -208,7 +192,16 @@ def get_irrigation_wells_score(run_directory, individual, config):
             / ratio_holdings_with_well_observed
         )
     )
-    irrigation_well_score = float(np.mean(irrigation_well_score))
+
+    total_farmers = farmers_per_region.sum()
+    farmers_fraction = farmers_per_region[minimum_farmer_mask] / total_farmers
+
+    irrigation_well_score = float(
+        np.sum(
+            irrigation_well_score[minimum_well_mask]
+            * farmers_fraction[minimum_well_mask]
+        )
+    )
     print(
         "run_id: "
         + str(individual.label)
@@ -219,8 +212,6 @@ def get_irrigation_wells_score(run_directory, individual, config):
         os.path.join(config["calibration"]["path"], "IWS_log.csv"), "a"
     ) as myfile:
         myfile.write(str(individual.label) + "," + str(irrigation_well_score) + "\n")
-
-    return irrigation_well_score
 
 
 def get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow):
@@ -424,13 +415,28 @@ def run_model(individual, config, gauges, observed_streamflow):
         # If the directory does not exist, set runmodel to True
         runmodel = True
 
-    if runmodel:
-        # Convert the individual's parameter ratios to the corresponding parameter values
-        individual_parameter_ratio = individual.tolist()
-        # Assert that all parameter ratios are between 0 and 1
-        assert (np.array(individual_parameter_ratio) >= 0).all() and (
-            np.array(individual_parameter_ratio) <= 1
-        ).all()
+        # set the map from which to get the yield ratio - SPEI relations as the map of the generation's first run
+        template["general"]["load_pre_spinup"] = config["calibration"][
+            "load_pre_spinup"
+        ]
+        if config["calibration"]["load_pre_spinup"]:
+            generation = individual.label[:2]
+            initial_run_label = generation + "_000"
+            initial_relations_path = os.path.join(
+                run_directory, "..", initial_run_label, "initial_relations"
+            )
+            template["general"]["initial_relations_folder"] = initial_relations_path
+        else:
+            template["general"]["initial_relations_folder"] = os.path.join(
+                run_directory, "initial"
+            )
+
+        template["general"]["export_inital_on_spinup"] = True
+
+        template["general"]["report_folder"] = run_directory
+        template["general"]["initial_conditions_folder"] = os.path.join(
+            run_directory, "initial"
+        )
 
         # Create a dictionary of the individual's parameters
         individual_parameters = {}
@@ -615,9 +621,23 @@ def run_model(individual, config, gauges, observed_streamflow):
                 )
             )
         # if score == 'irrigation_wells':
-        # 	scores.append(get_irrigation_wells_score(run_directory, individual, config))
+        #     scores.append(get_irrigation_wells_score(run_directory, individual, config))
         if score == "KGE_yield_ratio":
             scores.append(get_KGE_yield_ratio(run_directory, individual, config))
+    return tuple(scores)
+
+    scores = []
+    for score in config["calibration"]["calibration_targets"]:
+        if score == "KGE_discharge":
+            scores.append(
+                get_KGE_discharge(
+                    run_directory, individual, config, gauges, observed_streamflow
+                )
+            )
+        if score == "irrigation_wells":
+            scores.append(get_irrigation_wells_score(run_directory, individual, config))
+        # if score == 'KGE_yield_ratio':
+        #     scores.append(get_KGE_yield_ratio(run_directory, individual, config))
     return tuple(scores)
 
 
@@ -668,8 +688,8 @@ def calibrate(config, working_directory):
 
     config["calibration"]["calibration_targets"] = {
         "KGE_discharge": 1,
-        # 'irrigation_wells': 1,
-        "KGE_yield_ratio": 1,
+        "irrigation_wells": 1,
+        # 'KGE_yield_ratio': 1
     }
 
     use_multiprocessing = calibration_config["DEAP"]["use_multiprocessing"]
@@ -701,7 +721,7 @@ def calibrate(config, working_directory):
         assert (observed_streamflow[gauge] >= 0).all()
 
     # with open(os.path.join(config['general']['input_folder'], 'agents', 'farmers' ,'attributes', 'irrigation_sources.json')) as f:
-    # 	irrigation_source_key = json.load(f)
+    #     irrigation_source_key = json.load(f)
 
     # Create the fitness class using DEAP's creator class
     creator.create(
@@ -940,6 +960,9 @@ def calibrate(config, working_directory):
             effstd[generation, ii] = np.std(
                 [pareto_front[x].fitness.values[ii] for x in range(len(pareto_front))]
             )
+            # print(">> gen: " + str(generation) + ", effmax_KGE: "+"{0:.3f}".format(effmax[generation, 0]))
+
+        # print(">> gen: " + str(generation) + ", effmax_irrigation_equipment: "+"{0:.3f}".format(effmax[generation, 1]))
 
         print(
             ">> gen: "
