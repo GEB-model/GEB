@@ -651,6 +651,12 @@ class Farmers(AgentBaseClass):
                 self.yield_ratio_multiplier * self.base_management_yield_ratio
             )
 
+            self.infiltration_multiplier = FarmerAgentArray(
+                n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=1
+            )
+            if self.model.scenario == "cover-crops":
+                self.infiltration_multiplier.fill(1.1)
+
             rng_drip = np.random.default_rng(70)
             self.time_adapted[self.adapted[:, 2] == 1, 2] = rng_drip.uniform(
                 1,
