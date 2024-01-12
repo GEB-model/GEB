@@ -27,10 +27,8 @@ class AgentArray:
             if max_n:
                 if input_array.ndim == 1:
                     shape = max_n
-                elif input_array.ndim == 2:
-                    shape = (max_n, input_array.shape[1])
                 else:
-                    raise ValueError("input_array can only be 1D or 2D")
+                    shape = (max_n, *input_array.shape[1:])
                 self._data = np.empty_like(input_array, shape=shape)
                 n = input_array.shape[0]
                 self._n = n
