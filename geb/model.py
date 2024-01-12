@@ -96,7 +96,8 @@ class GEBModel(ABM_Model, CWatM_Model):
                 self.config["general"]["spinup_time"], datetime.time(0)
             )
             if (end_time.year - current_time.year < 10) and not (
-                self.config["general"]["load_pre_spinup"]
+                "load_pre_spinup" in self.config["general"]
+                and self.config["general"]["load_pre_spinup"]
             ):
                 print(
                     "Spinup time is less than 10 years. Without a pre-spinup this is not recommended and may lead to issues later."

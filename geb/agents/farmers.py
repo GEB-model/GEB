@@ -668,11 +668,22 @@ class Farmers(AgentBaseClass):
 
             # Initiate array that tracks the overall yearly costs for all adaptations
             # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation), last is total
-            self.all_loans_annual_cost = np.zeros(
-                (self.n, self.n_loans + 1, 5), dtype=np.float32
+            self.all_loans_annual_cost = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                extra_dims=(self.n_loans + 1, 5),
+                dtype=np.float32,
+                fill_value=0,
             )
+
             # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation)
-            self.loan_tracker = np.zeros((self.n, self.n_loans, 5), dtype=np.int32)
+            self.loan_tracker = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                extra_dims=(self.n_loans, 5),
+                dtype=np.int32,
+                fill_value=0,
+            )
 
             # 0 is surface water / channel-dependent, 1 is reservoir-dependent, 2 is groundwater-dependent, 3 is rainwater-dependent
             self.farmer_class = FarmerAgentArray(
@@ -1604,7 +1615,7 @@ class Farmers(AgentBaseClass):
 
         # Add the amounts to the individual loan slots
         self.set_loans_numba(
-            all_loans_annual_cost=self.all_loans_annual_cost,
+            all_loans_annual_cost=self.all_loans_annual_cost.data,
             loan_tracker=self.loan_tracker,
             loaning_farmers=loaning_farmers,
             annual_cost_microcredit=annual_cost_microcredit,
