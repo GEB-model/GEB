@@ -168,7 +168,7 @@ class DecisionModule:
         return EU_do_nothing_array
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def calcEU_adapt(
         expenditure_cap: float,
         loan_duration: int,
@@ -186,7 +186,6 @@ class DecisionModule:
         T: np.ndarray,
         discount_rate: float,
         extra_constraint: np.ndarray,
-        **kwargs,
     ) -> np.ndarray:
         """This function calculates the discounted subjective utility for staying and implementing dry flood proofing measures for each agent.
         We take into account the current adaptation status of each agent, so that agents also consider the number of years of remaining loan payment.
@@ -239,7 +238,7 @@ class DecisionModule:
         )
 
         # Those who cannot affort it cannot adapt
-        EU_adapt[~unconstrained_mask.data] = -np.inf
+        EU_adapt[~unconstrained_mask] = -np.inf
 
         # Iterate only through agents who can afford to adapt
         for i in unconstrained[0]:
@@ -266,11 +265,11 @@ class DecisionModule:
             # Apply utility function to NPVs
             EU_adapt_no_flood = (NPV_adapt_no_flood ** (1 - sigma[i])) / (1 - sigma[i])
 
-            # Calculate NPVs outcomes for each flood event
-            fill_value = total_profits_adaptation_i.astype(np.float32).reshape(
-                (p_droughts.size, 1)
-            )
-            NPV_adapt = np.full((p_droughts.size, T[i]), fill_value, dtype=np.float32)
+            # # Calculate NPVs outcomes for each flood event
+            NPV_adapt = np.empty((p_droughts.size, T[i]), dtype=np.float32)
+
+            for j in range(p_droughts.size):
+                NPV_adapt[j, :] = total_profits_adaptation_i[j]
 
             NPV_adapt[:, :payment_remainder] -= adaptation_costs[i]
 
