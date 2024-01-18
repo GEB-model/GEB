@@ -734,6 +734,8 @@ class Data:
                 output_data[i] = np.sum(data[prev_index:cell_index])
             elif fn == "nansum":
                 output_data[i] = np.nansum(data[prev_index:cell_index])
+            elif fn == "nanmean":
+                output_data[i] = np.nanmean(data[prev_index:cell_index])
             elif fn == "max":
                 output_data[i] = np.max(data[prev_index:cell_index])
             elif fn == "min":
