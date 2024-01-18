@@ -248,6 +248,7 @@ class CWatMReporter(ABMReporter):
                         var[
                             time_index, ...
                         ] = value  # Assuming new_data is the new values for that time slice
+                    nc.sync()
         else:
             raise ValueError(f"{conf['format']} not recognized")
 
