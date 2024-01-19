@@ -90,6 +90,8 @@ class AgentArray:
         result = self._data.__array_ufunc__(ufunc, method, *modified_inputs, **kwargs)
         if method == "reduce":
             return result
+        elif not isinstance(inputs[0], AgentArray):
+            return result
         else:
             return AgentArray(result, max_n=self._data.shape[0])
 
@@ -160,7 +162,7 @@ class AgentArray:
         return self._perform_operation(other, "__add__")
 
     def __radd__(self, other):
-        return self._perform_operation(other, "__radd__", inplace=True)
+        return self._perform_operation(other, "__radd__")
 
     def __iadd__(self, other):
         return self._perform_operation(other, "__add__", inplace=True)
@@ -169,7 +171,7 @@ class AgentArray:
         return self._perform_operation(other, "__sub__")
 
     def __rsub__(self, other):
-        return self._perform_operation(other, "__rsub__", inplace=True)
+        return self._perform_operation(other, "__rsub__")
 
     def __isub__(self, other):
         return self._perform_operation(other, "__sub__", inplace=True)
@@ -178,7 +180,7 @@ class AgentArray:
         return self._perform_operation(other, "__mul__")
 
     def __rmul__(self, other):
-        return self._perform_operation(other, "__rmul__", inplace=True)
+        return self._perform_operation(other, "__rmul__")
 
     def __imul__(self, other):
         return self._perform_operation(other, "__mul__", inplace=True)
@@ -187,7 +189,7 @@ class AgentArray:
         return self._perform_operation(other, "__truediv__")
 
     def __rtruediv__(self, other):
-        return self._perform_operation(other, "__rtruediv__", inplace=True)
+        return self._perform_operation(other, "__rtruediv__")
 
     def __itruediv__(self, other):
         return self._perform_operation(other, "__truediv__", inplace=True)
@@ -196,7 +198,7 @@ class AgentArray:
         return self._perform_operation(other, "__floordiv__")
 
     def __rfloordiv__(self, other):
-        return self._perform_operation(other, "__rfloordiv__", inplace=True)
+        return self._perform_operation(other, "__rfloordiv__")
 
     def __ifloordiv__(self, other):
         return self._perform_operation(other, "__floordiv__", inplace=True)
@@ -205,7 +207,7 @@ class AgentArray:
         return self._perform_operation(other, "__mod__")
 
     def __rmod__(self, other):
-        return self._perform_operation(other, "__rmod__", inplace=True)
+        return self._perform_operation(other, "__rmod__")
 
     def __imod__(self, other):
         return self._perform_operation(other, "__mod__", inplace=True)
@@ -214,7 +216,7 @@ class AgentArray:
         return self._perform_operation(other, "__pow__")
 
     def __rpow__(self, other):
-        return self._perform_operation(other, "__rpow__", inplace=True)
+        return self._perform_operation(other, "__rpow__")
 
     def __ipow__(self, other):
         return self._perform_operation(other, "__pow__", inplace=True)
@@ -243,3 +245,9 @@ class AgentArray:
 
     def __le__(self, value: object) -> bool:
         return self._compare(value, "__le__")
+
+    def __and__(self, other):
+        return self._perform_operation(other, "__and__")
+
+    def __or__(self, other):
+        return self._perform_operation(other, "__or__")
