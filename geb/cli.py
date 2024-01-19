@@ -246,36 +246,42 @@ def calibrate(config, working_directory):
     geb_calibrate(config, working_directory)
 
 
-def click_build_options(func):
-    @click_config
-    @click.option(
-        "--data-catalog",
-        "-d",
-        type=str,
-        multiple=True,
-        default=[os.environ.get("GEB_DATA_CATALOG", "data_catalog.yml")],
-        help="""A list of paths to the data library YAML files. By default the GEB_DATA_CATALOG environment variable is used. If this is not set, defaults to data_catalog.yml""",
-    )
-    @click.option(
-        "--build-config",
-        "-b",
-        default="build.yml",
-        help="Path of the model build configuration file.",
-    )
-    @click.option(
-        "--working-directory", "-wd", default=".", help="Working directory for model."
-    )
-    @click.option(
-        "--data-provider",
-        "-p",
-        default=os.environ.get("GEB_DATA_PROVIDER", None),
-        help="Data variant to use from data catalog (see hydroMT documentation).",
-    )
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
+def click_build_options(build_config="build.yml"):
+    def decorator(func):
+        @click_config
+        @click.option(
+            "--data-catalog",
+            "-d",
+            type=str,
+            multiple=True,
+            default=[os.environ.get("GEB_DATA_CATALOG", "data_catalog.yml")],
+            help="""A list of paths to the data library YAML files. By default the GEB_DATA_CATALOG environment variable is used. If this is not set, defaults to data_catalog.yml""",
+        )
+        @click.option(
+            "--build-config",
+            "-b",
+            default=build_config,
+            help="Path of the model build configuration file.",
+        )
+        @click.option(
+            "--working-directory",
+            "-wd",
+            default=".",
+            help="Working directory for model.",
+        )
+        @click.option(
+            "--data-provider",
+            "-p",
+            default=os.environ.get("GEB_DATA_PROVIDER", None),
+            help="Data variant to use from data catalog (see hydroMT documentation).",
+        )
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
 
-    return wrapper
+        return wrapper
+
+    return decorator
 
 
 @main.command()
@@ -337,7 +343,7 @@ def alter(data_catalog, config, build_config, working_directory, model, data_pro
 
 
 @main.command()
-@click_build_options
+@click_build_options(build_config="update.yml")
 def update(data_catalog, config, build_config, working_directory, data_provider):
     """Update model."""
 
