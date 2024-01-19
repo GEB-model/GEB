@@ -18,46 +18,21 @@ class Government(AgentBaseClass):
         AgentBaseClass.__init__(self)
 
     def provide_subsidies(self) -> None:
-        """Provides subsidies to a number of farmers that are not yet efficient in their water usage."""
-        total_water_use = (
-            self.agents.farmers.reservoir_abstraction_m3_by_farmer
-            + self.agents.farmers.groundwater_abstraction_m3_by_farmer
-            + self.agents.farmers.channel_abstraction_m3_by_farmer
-        )
-        total_water_use_m = total_water_use / self.agents.farmers.field_size_per_farmer
-        n_farmers_to_upgrade = int(
-            self.agents.farmers.n
-            * self.ratio_farmers_to_provide_subsidies_per_year
-            / 365
-        )
+        if self.model.current_timestep == 1:
+            for region in self.agents.farmers.borewell_cost_1[1].keys():
+                self.agents.farmers.borewell_cost_1[1][region] = [
+                    0.5 * x for x in self.agents.farmers.borewell_cost_1[1][region]
+                ]
+                self.agents.farmers.borewell_cost_2[1][region] = [
+                    0.5 * x for x in self.agents.farmers.borewell_cost_2[1][region]
+                ]
 
-        farmer_indices = np.arange(0, self.agents.farmers.n)
-        ## Changed, not it is not an boolean array of whether they are efficient, but a percentage starting at 70%
-        indices_not_yet_water_efficient = farmer_indices[
-            ~self.agents.farmers.is_water_efficient
-        ]
-
-        if indices_not_yet_water_efficient.size <= n_farmers_to_upgrade:
-            self.agents.farmers.is_water_efficient[:] = True
-        else:
-            # upgrade least water efficient farmers
-            # total_water_use_m_not_yet_water_efficient = total_water_use_m[~self.agents.farmers.is_water_efficient]
-            # self.agents.farmers.is_water_efficient[indices_not_yet_water_efficient[np.argpartition(-total_water_use_m_not_yet_water_efficient, n_farmers_to_upgrade)[:n_farmers_to_upgrade]]] = True
-            self.agents.farmers.is_water_efficient[
-                np.random.choice(
-                    indices_not_yet_water_efficient,
-                    size=n_farmers_to_upgrade,
-                    replace=False,
-                )
-            ] = True
+        return
 
     def request_flood_cushions(self, reservoirIDs):
         pass
 
     def step(self) -> None:
         """This function is run each timestep. However, only in on the first day of each year and if the scenario is `government_subsidies` subsidies is actually provided to farmers."""
-        if (
-            self.model.scenario == "government_subsidies"
-            and self.model.current_timestep != 0
-        ):
+        if self.model.scenario == "government_subsidies":
             self.provide_subsidies()
