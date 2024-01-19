@@ -519,6 +519,13 @@ class Farmers(AgentBaseClass):
                 fill_value=0,
             )
 
+            self.yield_ratio_multiplier = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                dtype=np.float32,
+                fill_value=1,
+            )
+
             ## Risk perception variables
             self.risk_perception = FarmerAgentArray(
                 n=self.n,
@@ -632,7 +639,7 @@ class Farmers(AgentBaseClass):
             self.adapted[:, 2][self.irrigation_efficiency >= 0.90] = 1
             self.adaptation_mechanism[self.adapted[:, 2] == 1, 2] = 1
             # set the yield_ratio_multiplier to x of people who have drip irrigation, set to 1 for all others
-            self.yield_ratio_multiplier = np.where(
+            self.yield_ratio_multiplier[:] = np.where(
                 (self.irrigation_efficiency >= 0.90)
                 & (self.irrigation_source_key != 0),
                 self.yield_ratio_multiplier_value,
@@ -1189,7 +1196,9 @@ class Farmers(AgentBaseClass):
             well_depth=self.well_depth.data,
         )
         self.n_water_accessible_days[:] += has_access_to_irrigation_water
-        self.groundwater_depth = groundwater_depth_per_farmer
+        self.groundwater_depth = FarmerAgentArray(
+            groundwater_depth_per_farmer, max_n=self.max_n
+        )
         return (
             water_withdrawal_m,
             water_consumption_m,
@@ -1259,6 +1268,7 @@ class Farmers(AgentBaseClass):
         self.yield_ratio_management[:] = (
             self.yield_ratio_management * self.yield_ratio_multiplier
         )
+        return None
 
     @property
     def mask(self):
@@ -1616,7 +1626,7 @@ class Farmers(AgentBaseClass):
         # Add the amounts to the individual loan slots
         self.set_loans_numba(
             all_loans_annual_cost=self.all_loans_annual_cost.data,
-            loan_tracker=self.loan_tracker,
+            loan_tracker=self.loan_tracker.data,
             loaning_farmers=loaning_farmers,
             annual_cost_microcredit=annual_cost_microcredit,
             loan_duration=loan_duration,
@@ -2028,7 +2038,7 @@ class Farmers(AgentBaseClass):
 
         # Create unique groups
         # Calculating the thresholds for the top, middle, and lower thirds
-        basin_elevation_thresholds = np.percentile(self.elevation, [33.33, 66.67])
+        basin_elevation_thresholds = np.percentile(self.elevation.data, [33.33, 66.67])
         # 0 for upper, 1 for mid, and 2 for lower
         distribution_array = np.zeros_like(self.elevation)
         distribution_array[self.elevation > basin_elevation_thresholds[1]] = 0  # Upper
@@ -2039,7 +2049,7 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops, distribution_array.reshape(-1, 1))
+            (self.crops.data, distribution_array.reshape(-1, 1))
         )
 
         for crop_combination in np.unique(crop_elevation_group, axis=0):
@@ -2320,6 +2330,7 @@ class Farmers(AgentBaseClass):
         adaptation_mask = self.adapt_SEUT(
             ADAPTATION_TYPE, annual_cost, loan_duration, extra_constraint, adapted
         )
+        print("Adaptation mask:", adaptation_mask.sum())
 
         # Update irrigation source for farmers who adapted
         self.irrigation_source[adaptation_mask] = self.irrigation_source_key["tubewell"]
@@ -2527,19 +2538,19 @@ class Farmers(AgentBaseClass):
             "loan_duration": loan_duration,
             "expenditure_cap": self.expenditure_cap,
             "n_agents": self.n,
-            "sigma": self.risk_aversion,
+            "sigma": self.risk_aversion.data,
             "p_droughts": 1 / self.p_droughts[:-1],
             "total_profits_adaptation": total_profits_adaptation,
             "profits_no_event": profits_no_event,
             "profits_no_event_adaptation": profits_no_event_adaptation,
-            "risk_perception": self.risk_perception,
+            "risk_perception": self.risk_perception.data,
             "total_annual_costs": total_annual_costs_m2,
             "adaptation_costs": annual_cost_m2,
             "adapted": adapted,
             "time_adapted": self.time_adapted[:, adaptation_type],
-            "T": self.decision_horizon,
-            "discount_rate": self.discount_rate,
-            "extra_constraint": extra_constraint,
+            "T": self.decision_horizon.data,
+            "discount_rate": self.discount_rate.data,
+            "extra_constraint": extra_constraint.data,
         }
 
         # Calculate the EU of not adapting and adapting respectively
@@ -2720,7 +2731,7 @@ class Farmers(AgentBaseClass):
         """
         # Create unique groups
         # Calculating the thresholds for the top, middle, and lower thirds
-        basin_elevation_thresholds = np.percentile(self.elevation, [33.33, 66.67])
+        basin_elevation_thresholds = np.percentile(self.elevation.data, [33.33, 66.67])
         # 0 for upper, 1 for mid, and 2 for lower
         distribution_array = np.zeros_like(self.elevation)
         distribution_array[self.elevation > basin_elevation_thresholds[1]] = 0  # Upper
@@ -2731,7 +2742,7 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops, distribution_array.reshape(-1, 1))
+            (self.crops.data, distribution_array.reshape(-1, 1))
         )
 
         # Add a column of zeros to represent farmers who have not adapted yet
@@ -2957,7 +2968,6 @@ class Farmers(AgentBaseClass):
             global_indices_not_adapted = farmers_with_crop_option[
                 local_indices[farmers_not_adapted]
             ]
-
             # Check for neighbors with adaptations for non-adapted farmers
             if global_indices_not_adapted.size > 0 and global_indices_adapted.size > 0:
                 neighbors_with_adaptation = find_neighbors(
@@ -2979,14 +2989,14 @@ class Farmers(AgentBaseClass):
                     global_indices_not_adapted,
                     EUT_do_nothing,
                     SEUT_adapt,
-                    self.yearly_yield_ratio,
-                    self.yearly_SPEI_probability,
+                    self.yearly_yield_ratio.data,
+                    self.yearly_SPEI_probability.data,
                     adapted,
                     self.n,
                     profits_no_event,
                     expenditure_cap,
                     total_annual_costs.data,
-                    extra_constraint,
+                    extra_constraint.data,
                 )
 
                 invest_in_adaptation[invest_decision] = True
@@ -3077,9 +3087,7 @@ class Farmers(AgentBaseClass):
 
     def update_loans(self) -> None:
         # Subtract 1 off each loan duration, except if that loan is at 0
-        self.loan_tracker = np.where(
-            self.loan_tracker != 0, self.loan_tracker - 1, self.loan_tracker
-        )
+        self.loan_tracker -= self.loan_tracker != 0
         # If the loan tracker is at 0, cancel the loan amount and subtract it of the total
         expired_loan_mask = self.loan_tracker == 0
 
@@ -3195,8 +3203,8 @@ class Farmers(AgentBaseClass):
                 ids,
                 self.crops.data,
                 neighbors,
-                self.SEUT_no_adapt_crops.data,
-                self.EUT_no_adapt_crops.data,
+                self.SEUT_no_adapt_crops,
+                self.EUT_no_adapt_crops,
                 self.yearly_yield_ratio.data,
                 self.yearly_SPEI_probability.data,
             )
@@ -3246,7 +3254,7 @@ class Farmers(AgentBaseClass):
                 self.field_indices_by_farmer.data,
             )
             # for now class is only dependent on being in a command area or not
-            self.farmer_class = self.farmer_is_in_command_area.copy()
+            self.farmer_class = self.farmer_is_in_command_area.copy().astype(np.int32)
 
             # Set to 0 if channel abstraction is bigger than reservoir and groundwater, 1 for reservoir, 2 for groundwater
             self.farmer_class[
