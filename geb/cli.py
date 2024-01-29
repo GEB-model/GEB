@@ -285,7 +285,7 @@ def click_build_options(build_config="build.yml"):
 
 
 @main.command()
-@click_build_options
+@click_build_options()
 def build(data_catalog, config, build_config, working_directory, data_provider):
     """Build model."""
 
@@ -313,7 +313,7 @@ def build(data_catalog, config, build_config, working_directory, data_provider):
 
 
 @main.command()
-@click_build_options
+@click_build_options()
 @click.option("--model", "-m", default="../base", help="Folder for base model.")
 def alter(data_catalog, config, build_config, working_directory, model, data_provider):
     """Build model."""
