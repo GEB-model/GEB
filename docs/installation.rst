@@ -22,7 +22,7 @@ Then install GEB from GitHub. You need to install the full version, which includ
 
 .. code-block:: bash
 
-    pip install geb[full]@git+https://github.com/jensdebruijn/GEB
+    pip install geb[full]@git+https://github.com/GEB-model/GEB
 
 Installation in development mode
 --------------------------------
@@ -31,15 +31,15 @@ If you want to contribute to GEB, you can install it in development mode. This w
 
 .. code-block:: bash
 
-    git clone https://github.com/jensdebruijn/ABCWatM_private
-    pip install -e ABCWatM_private
+    git clone https://github.com/GEB-model/ABCWatM
+    pip install -e ABCWatM
 
-    git clone https://github.com/jensdebruijn/hydromt_geb
+    git clone https://github.com/GEB-model/hydromt_geb
     pip install -e hydromt_geb
 
 Then install GEB in editable mode:
 
 .. code-block:: bash
 
-    git clone https://github.com/jensdebruijn/GEB_private
-    pip install -e GEB_private
+    git clone https://github.com/GEB-model/GEB
+    pip install -e GEB
