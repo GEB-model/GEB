@@ -27,7 +27,7 @@ Then install GEB from GitHub. You need to install the full version, which includ
 Installation in development mode
 --------------------------------
 
-If you want to contribute to GEB, you can install it in development mode. This will install the package in editable mode, so that changes to the source code are immediately available. In that case, you need to clone the following repositories, and install in editable mode. Please note that some of these packages are private, so you need to have access to them. For that you can contact the authors.
+If you want to contribute to GEB, you can install it in development mode. This will install the package in editable mode, so that changes to the source code are immediately available. In that case, you need to clone the following repositories, and install in editable mode.
 
 .. code-block:: bash
 
