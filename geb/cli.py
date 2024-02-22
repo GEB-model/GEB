@@ -99,11 +99,6 @@ def click_config(func):
     help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""",
 )
 @click.option(
-    "--switch_crops",
-    is_flag=True,
-    help="""Whether agents should switch crops or not.""",
-)
-@click.option(
     "--gpu_device",
     type=int,
     default=0,
@@ -140,7 +135,6 @@ def click_config(func):
 )
 def run(
     scenario,
-    switch_crops,
     gpu_device,
     profiling,
     use_gpu,
@@ -183,13 +177,11 @@ def run(
     study_area = get_study_area(model_structure)
 
     model_params = {
-        "GEB_config_path": config,
+        "config": config,
         "model_structure": model_structure,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
         "scenario": scenario,
-        "study_area": study_area,
-        "switch_crops": switch_crops,
     }
 
     if not gui:

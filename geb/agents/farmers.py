@@ -2312,9 +2312,7 @@ class Farmers(AgentBaseClass):
         self.adaptation_mechanism[expired_adaptations, ADAPTATION_TYPE] = 0
         self.adapted[expired_adaptations, ADAPTATION_TYPE] = 0
         self.time_adapted[expired_adaptations, ADAPTATION_TYPE] = -1
-        self.irrigation_source[expired_adaptations] = self.irrigation_source_key[
-            "no_irrigation"
-        ]
+        self.irrigation_source[expired_adaptations] = self.irrigation_source_key["no"]
 
         # Define extra constraints (farmers' wells must reach groundwater)
         well_reaches_groundwater = self.well_depth > self.groundwater_depth
