@@ -10,7 +10,7 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
-from geb.agents.farmers import Farmers
+from geb.agents.farmers import FarmerAgentArray
 
 
 class Artists(honeybeesArtists):
@@ -164,14 +164,12 @@ class Artists(honeybeesArtists):
         add_CWatM_var("data.grid")
         add_CWatM_var("data.HRU")
 
-        farmer_properties = inspect.getmembers(
-            Farmers, lambda o: isinstance(o, property)
-        )
-        for name, prop in farmer_properties:
-            self.variables_dict["agents.farmers." + name] = (
-                self.model.agents.farmers,
-                name,
-            )
+        for name, value in vars(self.model.agents.farmers).items():
+            if isinstance(value, FarmerAgentArray):
+                self.variables_dict["agents.farmers." + name] = (
+                    self.model.agents.farmers,
+                    name,
+                )
 
     def get_background_variables(self) -> list:
         """This function gets a list of variables that can be used to show in the background.
@@ -203,12 +201,18 @@ class Artists(honeybeesArtists):
             background: RGBA-array to display as background.
             legend: Dictionary with data and formatting rules for background legend.
         """
-        compressed_array, array = self.model.reporter.cwatmreporter.get_array(
-            self.background_variable, decompress=True
-        )
-        mask = attrgetter(".".join(self.background_variable.split(".")[:-1]))(
-            self.model
-        ).mask
+        if self.background_variable.startswith("agents.farmers"):
+            array = attrgetter(".".join(self.background_variable.split(".")))(
+                self.model
+            )
+            mask = self.model.data.HRU.mask
+        else:
+            compressed_array, array = self.model.reporter.cwatmreporter.get_array(
+                self.background_variable, decompress=True
+            )
+            mask = attrgetter(".".join(self.background_variable.split(".")[:-1]))(
+                self.model
+            ).mask
 
         if self.background_variable in self.custom_plot:
             options = self.custom_plot[self.background_variable]
@@ -233,6 +237,11 @@ class Artists(honeybeesArtists):
                 options["nanvalue"] = -1
             else:
                 raise ValueError
+
+        if self.background_variable.startswith("agents.farmers"):
+            compressed_array = array.copy()
+            array = array.by_field(self.model.data.HRU.land_owners, options["nanvalue"])
+            array = self.model.data.HRU.decompress(array)
 
         if options["type"] == "bool":
             minvalue, maxvalue = 0, 1

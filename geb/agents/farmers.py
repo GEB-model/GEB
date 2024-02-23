@@ -43,6 +43,9 @@ class FarmerAgentArray(AgentArray):
         else:
             return np.full_like(fields, nofieldvalue)
 
+    def __repr__(self):
+        return "FarmerAgentArray(" + self.data.__str__() + ")"
+
 
 @njit(cache=True)
 def get_farmer_HRUs(
@@ -297,14 +300,14 @@ class Farmers(AgentBaseClass):
                 self.model.model_structure["binary"]["agents/farmers/risk_aversion"]
             )["data"]
 
-            self.interest_rate = AgentArray(
+            self.interest_rate = FarmerAgentArray(
                 n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
             )
             self.interest_rate[:] = np.load(
                 self.model.model_structure["binary"]["agents/farmers/interest_rate"]
             )["data"]
 
-            self.discount_rate = AgentArray(
+            self.discount_rate = FarmerAgentArray(
                 n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
             )
             self.discount_rate[:] = np.load(
@@ -3563,5 +3566,5 @@ class Farmers(AgentBaseClass):
         return {
             name: value
             for name, value in vars(self).items()
-            if isinstance(value, AgentArray)
+            if isinstance(value, FarmerAgentArray)
         }
