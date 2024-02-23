@@ -203,7 +203,7 @@ def run(
         if profiling:
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
-        if config["draw"]["plot"]:
+        if "plot" in config["draw"] and config["draw"]["plot"]:
             server_elements = server_elements
             +[ChartModule(series) for series in config["draw"]["plot"]]
 

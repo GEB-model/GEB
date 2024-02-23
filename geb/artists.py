@@ -2,7 +2,7 @@
 from typing import Union
 from honeybees.artists import Artists as honeybeesArtists
 import numpy as np
-import inspect
+import re
 from operator import attrgetter
 
 try:
@@ -10,7 +10,7 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
-from geb.agents.farmers import Farmers
+from geb.agents.farmers import FarmerAgentArray
 
 
 class Artists(honeybeesArtists):
@@ -143,35 +143,43 @@ class Artists(honeybeesArtists):
         """
         self.variables_dict = {}
 
-        def add_CWatM_var(attr):
-            attributes = attrgetter(attr)(self.model)
-            compressed_size = attributes.compressed_size
-            for varname, variable in vars(attributes).items():
-                if isinstance(
-                    variable,
-                    (np.ndarray, cp.ndarray) if self.model.use_gpu else np.ndarray,
-                ):
+        def add_vars(name, compressed_size, dtypes, variant_dim, invariant_dim):
+            assert np.intersect1d(variant_dim, invariant_dim).size == 0
+            container = attrgetter(name)(self.model)
+            for varname, variable in vars(container).items():
+                if isinstance(variable, dtypes):
                     if variable.ndim == 1 and variable.size == compressed_size:
-                        name = f"{attr}.{varname}"
-                        self.variables_dict[name] = variable
-                    if variable.ndim == 2 and variable.shape[1] == compressed_size:
-                        for i in range(variable.shape[0]):
-                            name = f"{attr}.{varname}[{i}]"
-                            self.variables_dict[name] = variable[i]
+                        self.variables_dict[f"{name}.{varname}"] = variable
+                    if (
+                        variable.ndim == 2
+                        and variable.shape[invariant_dim] == compressed_size
+                    ):
+                        for i in range(variable.shape[variant_dim]):
+                            self.variables_dict[f"{name}.{varname}[{i}]"] = variable[i]
                     else:
                         continue
 
-        add_CWatM_var("data.grid")
-        add_CWatM_var("data.HRU")
-
-        farmer_properties = inspect.getmembers(
-            Farmers, lambda o: isinstance(o, property)
+        add_vars(
+            "data.grid",
+            compressed_size=self.model.data.grid.compressed_size,
+            dtypes=(np.ndarray, cp.ndarray) if self.model.use_gpu else np.ndarray,
+            variant_dim=0,
+            invariant_dim=1,
         )
-        for name, prop in farmer_properties:
-            self.variables_dict["agents.farmers." + name] = (
-                self.model.agents.farmers,
-                name,
-            )
+        add_vars(
+            "data.HRU",
+            compressed_size=self.model.data.HRU.compressed_size,
+            dtypes=(np.ndarray, cp.ndarray) if self.model.use_gpu else np.ndarray,
+            variant_dim=0,
+            invariant_dim=1,
+        )
+        add_vars(
+            "agents.farmers",
+            compressed_size=self.model.agents.farmers.n,
+            dtypes=FarmerAgentArray,
+            variant_dim=1,
+            invariant_dim=0,
+        )
 
     def get_background_variables(self) -> list:
         """This function gets a list of variables that can be used to show in the background.
@@ -203,12 +211,26 @@ class Artists(honeybeesArtists):
             background: RGBA-array to display as background.
             legend: Dictionary with data and formatting rules for background legend.
         """
-        compressed_array, array = self.model.reporter.cwatmreporter.get_array(
-            self.background_variable, decompress=True
-        )
-        mask = attrgetter(".".join(self.background_variable.split(".")[:-1]))(
-            self.model
-        ).mask
+        if self.background_variable.startswith("agents.farmers"):
+            slicer = re.search(r"\[([0-9]+)\]$", self.background_variable)
+            if slicer:
+                array = attrgetter(self.background_variable[: slicer.span(0)[0]])(
+                    self.model
+                )
+                array = FarmerAgentArray(
+                    array[:, int(slicer.group(1))], n=array.shape[0]
+                )
+            else:
+                array = attrgetter(self.background_variable)(self.model)
+
+            mask = self.model.data.HRU.mask
+        else:
+            compressed_array, array = self.model.reporter.cwatmreporter.get_array(
+                self.background_variable, decompress=True
+            )
+            mask = attrgetter(".".join(self.background_variable.split(".")[:-1]))(
+                self.model
+            ).mask
 
         if self.background_variable in self.custom_plot:
             options = self.custom_plot[self.background_variable]
@@ -233,6 +255,11 @@ class Artists(honeybeesArtists):
                 options["nanvalue"] = -1
             else:
                 raise ValueError
+
+        if self.background_variable.startswith("agents.farmers"):
+            compressed_array = array.copy()
+            array = array.by_field(self.model.data.HRU.land_owners, options["nanvalue"])
+            array = self.model.data.HRU.decompress(array)
 
         if options["type"] == "bool":
             minvalue, maxvalue = 0, 1
