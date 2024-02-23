@@ -287,9 +287,7 @@ class HRUs(BaseVariables):
 
     @staticmethod
     @njit(cache=True)
-    def create_HRUs_numba(
-        farms, land_use_classes, mask, scaling
-    ) -> tuple[
+    def create_HRUs_numba(farms, land_use_classes, mask, scaling) -> tuple[
         np.ndarray,
         np.ndarray,
         np.ndarray,

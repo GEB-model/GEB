@@ -335,9 +335,9 @@ class Artists(honeybeesArtists):
                     if unique_values[0] < 0:
                         color_array_size += abs(unique_values[0])
                     color_array = np.zeros(color_array_size, dtype=np.float32)
-                    color_array[
-                        np.array(unique_values).astype(np.int32)
-                    ] = channel_colors
+                    color_array[np.array(unique_values).astype(np.int32)] = (
+                        channel_colors
+                    )
                     background[:, :, channel] = color_array[array.astype(np.int32)]
 
             legend = {
