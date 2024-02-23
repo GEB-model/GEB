@@ -34,13 +34,10 @@ class CWatMReporter(ABMReporter):
     def __init__(self, model, subfolder=None) -> None:
         self.model = model
 
+        self.export_folder = Path(self.model.config["general"]["report_folder"])
         if subfolder:
-            self.export_folder = os.path.join(
-                self.model.config["general"]["report_folder"], subfolder
-            )
-        else:
-            self.export_folder = self.model.config["general"]["report_folder"]
-        self.maybe_create_export_folder()
+            self.export_folder = self.export_folder / subfolder
+        self.export_folder.mkdir(parents=True, exist_ok=True)
 
         self.variables = {}
         self.timesteps = []
@@ -245,9 +242,9 @@ class CWatMReporter(ABMReporter):
                         time_index_end = time_index_start + conf["substeps"]
                         var[time_index_start:time_index_end, ...] = value
                     else:
-                        var[
-                            time_index, ...
-                        ] = value  # Assuming new_data is the new values for that time slice
+                        var[time_index, ...] = (
+                            value  # Assuming new_data is the new values for that time slice
+                        )
                     nc.sync()
         else:
             raise ValueError(f"{conf['format']} not recognized")
@@ -348,11 +345,8 @@ class Reporter:
 
     def __init__(self, model):
         self.model = model
-        subfolder = self.model.scenario
-        if self.model.switch_crops:
-            subfolder += "_switch_crops"
-        self.abm_reporter = ABMReporter(model, subfolder=subfolder)
-        self.cwatmreporter = CWatMReporter(model, subfolder=subfolder)
+        self.abm_reporter = ABMReporter(model, subfolder=self.model.scenario)
+        self.cwatmreporter = CWatMReporter(model, subfolder=self.model.scenario)
 
     @property
     def variables(self):

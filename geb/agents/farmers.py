@@ -393,7 +393,6 @@ class Farmers(AgentBaseClass):
                     np.array(
                         [
                             self.irrigation_source_key["well"],
-                            self.irrigation_source_key["tubewell"],
                         ]
                     ),
                 )
@@ -989,9 +988,9 @@ class Farmers(AgentBaseClass):
                     ):
                         farmer_has_access_to_irrigation_water = True
                         break
-            has_access_to_irrigation_water[
-                activated_farmer_index
-            ] = farmer_has_access_to_irrigation_water
+            has_access_to_irrigation_water[activated_farmer_index] = (
+                farmer_has_access_to_irrigation_water
+            )
 
             # Actual irrigation from surface, reservoir and groundwater
             if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
@@ -1073,9 +1072,9 @@ class Farmers(AgentBaseClass):
                                 groundwater_abstraction_cell_m3 = (
                                     groundwater_abstraction_cell_m * cell_area[field]
                                 )
-                                groundwater_abstraction_m3[
-                                    f_var
-                                ] = groundwater_abstraction_cell_m3
+                                groundwater_abstraction_m3[f_var] = (
+                                    groundwater_abstraction_cell_m3
+                                )
                                 available_groundwater_m3[
                                     f_var
                                 ] -= groundwater_abstraction_cell_m3
@@ -1167,8 +1166,7 @@ class Farmers(AgentBaseClass):
                 self.irrigation_source,
                 np.array(
                     [
-                        self.irrigation_source_key["canals"],
-                        self.irrigation_source_key["other"],
+                        self.irrigation_source_key["canal"],
                     ]
                 ),
             ),
@@ -1177,7 +1175,6 @@ class Farmers(AgentBaseClass):
                 np.array(
                     [
                         self.irrigation_source_key["well"],
-                        self.irrigation_source_key["tubewell"],
                     ]
                 ),
             ),
@@ -2007,9 +2004,9 @@ class Farmers(AgentBaseClass):
         self.yearly_yield_ratio[:, 0] = self.calculate_yearly_mean(
             self.per_harvest_yield_ratio
         )
-        self.yearly_SPEI_probability[
-            :, 0
-        ] = self.convert_seasonal_to_yearly_SPEI_probability()
+        self.yearly_SPEI_probability[:, 0] = (
+            self.convert_seasonal_to_yearly_SPEI_probability()
+        )
         self.per_harvest_SPEI[:] = 0
 
         # Step 2: Shift and reset matrices
@@ -2315,9 +2312,7 @@ class Farmers(AgentBaseClass):
         self.adaptation_mechanism[expired_adaptations, ADAPTATION_TYPE] = 0
         self.adapted[expired_adaptations, ADAPTATION_TYPE] = 0
         self.time_adapted[expired_adaptations, ADAPTATION_TYPE] = -1
-        self.irrigation_source[expired_adaptations] = self.irrigation_source_key[
-            "no_irrigation"
-        ]
+        self.irrigation_source[expired_adaptations] = self.irrigation_source_key["no"]
 
         # Define extra constraints (farmers' wells must reach groundwater)
         well_reaches_groundwater = self.well_depth > self.groundwater_depth
@@ -2330,10 +2325,9 @@ class Farmers(AgentBaseClass):
         adaptation_mask = self.adapt_SEUT(
             ADAPTATION_TYPE, annual_cost, loan_duration, extra_constraint, adapted
         )
-        print("Adaptation mask:", adaptation_mask.sum())
 
         # Update irrigation source for farmers who adapted
-        self.irrigation_source[adaptation_mask] = self.irrigation_source_key["tubewell"]
+        self.irrigation_source[adaptation_mask] = self.irrigation_source_key["well"]
 
         # Set their well depth
         self.well_depth[adaptation_mask] = well_depth[adaptation_mask]

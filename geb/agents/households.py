@@ -1,4 +1,5 @@
 import numpy as np
+import geopandas as gpd
 import pyproj
 
 from .general import AgentArray
@@ -27,6 +28,10 @@ class Households(AgentBaseClass):
         )
         self.risk_perception = AgentArray(
             n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
+        )
+
+        self.buildings = gpd.read_file(
+            self.model.model_structure["geoms"]["assets/buildings"]
         )
 
         return None
