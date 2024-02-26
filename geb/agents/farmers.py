@@ -222,11 +222,6 @@ class Farmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_sprinkler"]["yield_multiplier"]
 
-        # set no irrigation limit for farmers by default
-        self.irrigation_limit_m3 = FarmerAgentArray(
-            n=self.HRU_n, max_n=self.HRU_n, dtype=np.float32, fill_value=np.nan  # m3
-        )
-
         self.initiate_agents()
 
     @staticmethod
@@ -509,6 +504,11 @@ class Farmers(AgentBaseClass):
                     ]
                 )["data"],
                 max_n=self.max_n,
+            )
+
+            # set no irrigation limit for farmers by default
+            self.irrigation_limit_m3 = FarmerAgentArray(
+                n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan  # m3
             )
 
             self.wealth = FarmerAgentArray(
