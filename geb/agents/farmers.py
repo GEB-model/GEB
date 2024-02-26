@@ -222,6 +222,11 @@ class Farmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_sprinkler"]["yield_multiplier"]
 
+        # set no irrigation limit for farmers by default
+        self.irrigation_limit_m3 = FarmerAgentArray(
+            n=self.HRU_n, max_n=self.HRU_n, dtype=np.float32, fill_value=np.nan  # m3
+        )
+
         self.initiate_agents()
 
     @staticmethod
@@ -897,6 +902,7 @@ class Farmers(AgentBaseClass):
         command_areas: np.ndarray,
         return_fraction: float,
         well_depth: float,
+        irrigation_limit_m3: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -975,11 +981,11 @@ class Farmers(AgentBaseClass):
                 # Convert the groundwater depth to groundwater depth per farmer
                 groundwater_depth_per_farmer[farmer] = groundwater_depth[f_var]
 
-                if well_irrigated[farmer] == 1:
+                if well_irrigated[farmer]:
                     if groundwater_depth[f_var] < well_depth[farmer]:
                         farmer_has_access_to_irrigation_water = True
                         break
-                elif surface_irrigated[farmer] == 1:
+                elif surface_irrigated[farmer]:
                     if available_channel_storage_m3[f_var] > 100:
                         farmer_has_access_to_irrigation_water = True
                         break
@@ -997,6 +1003,29 @@ class Farmers(AgentBaseClass):
 
             # Actual irrigation from surface, reservoir and groundwater
             if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
+                # if irrigation limit is active, reduce the irrigation demand
+                if not np.isnan(irrigation_limit_m3[farmer]):
+                    # first find the total irrigation demand for the farmer in m3
+                    irrigation_water_demand_farmer_m3 = (
+                        totalPotIrrConsumption[farmer_fields]
+                        * cell_area[farmer_fields]
+                        / irrigation_efficiency_farmer
+                    )
+                    irrigation_water_demand_farmer_m3_sum = (
+                        irrigation_water_demand_farmer_m3.sum()
+                    )
+                    # if the irrigation demand is higher than the limit, reduce the irrigation demand by the calculated reduction factor
+                    if (
+                        irrigation_water_demand_farmer_m3_sum
+                        > irrigation_limit_m3[farmer]
+                    ):
+                        reduction_factor = (
+                            irrigation_limit_m3[farmer]
+                            / irrigation_water_demand_farmer_m3_sum
+                        )
+                        totalPotIrrConsumption[farmer_fields] = (
+                            totalPotIrrConsumption[farmer_fields] * reduction_factor
+                        )
                 for field in farmer_fields:
                     f_var = HRU_to_grid[field]
                     if crop_map[field] != -1:
@@ -1194,6 +1223,7 @@ class Farmers(AgentBaseClass):
                 "return_fraction"
             ],
             well_depth=self.well_depth.data,
+            irrigation_limit_m3=self.irrigation_limit_m3.data,
         )
         self.n_water_accessible_days[:] += has_access_to_irrigation_water
         self.groundwater_depth = FarmerAgentArray(
