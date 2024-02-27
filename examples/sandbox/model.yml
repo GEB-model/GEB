@@ -374,11 +374,11 @@ report:
 #   - **function**: whether to use a function to parse the data. For example, 'mean' takes the mean etc. Options are 'mean', 'sum', 'nanmean' and 'nansum'.
 #   - **format**: format to save to.
 report_cwatm:
-  # hydraulic head:
-  #   varname: data.grid.head
-  #   function: mean
-  #   format: csv
-  #   save: save
+   hydraulic head:
+    varname: data.grid.head
+    function: mean
+    format: csv
+    save: save
   # precipitation:
   #   varname: data.grid.Precipitation
   #   function: mean

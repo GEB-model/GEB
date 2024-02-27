@@ -30,7 +30,6 @@ from ..data import (
 from .decision_module import DecisionModule
 from .general import AgentArray
 
-
 class FarmerAgentArray(AgentArray):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -62,7 +61,6 @@ def get_farmer_HRUs(
             farmer_index, 1
         ]
     ]
-
 
 class Farmers(AgentBaseClass):
     """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
@@ -793,6 +791,7 @@ class Farmers(AgentBaseClass):
 
         print(f"Loaded {self.n} farmer agents")
 
+
     @staticmethod
     @njit(cache=True)
     def update_field_indices_numba(
@@ -838,6 +837,7 @@ class Farmers(AgentBaseClass):
             self.field_indices_by_farmer[:],
             self.field_indices,
         ) = self.update_field_indices_numba(self.var.land_owners)
+
 
     @property
     def activation_order_by_elevation(self):
@@ -1493,7 +1493,7 @@ class Farmers(AgentBaseClass):
         TODO: Perhaps move the constant to the model.yml
         """
         # constants
-        HISTORICAL_PERIOD = 5  # years
+        HISTORICAL_PERIOD = 1  # years
 
         # Convert the harvesting farmers index array to a boolean array of full length
         harvesting_farmers_long = np.zeros(self.n, dtype=bool)
@@ -1692,6 +1692,7 @@ class Farmers(AgentBaseClass):
         Returns:
             plant: Subarray map of what crops are planted this day.
         """
+        
         plant = np.full_like(crop_map, -1, dtype=np.int32)
         sell_land = np.zeros(n, dtype=np.bool_)
         for farmer_idx in range(n):
@@ -3110,6 +3111,47 @@ class Farmers(AgentBaseClass):
         for i, region_id in enumerate(unique_region_ids):
             values[i] = data[1][region_id][index]
         return values[inv]
+    
+    
+        
+    def land_use_change(self) -> None:
+        import matplotlib.pyplot as plt
+        import rioxarray
+        to_forest =  rioxarray.open_rasterio("C:/Users/servaas/GEB/GEB_models/geul/base/input/to_forest/to_forest.tif", masked = True)
+
+        # Get the transform and dimensions from the existing mask
+        # transform = Affine.from_gdal(*self.model.data.HRU.gt)
+
+        # Create a mask for areas with value 1 in the raster, everything else = 0 
+        forest_mask_3d = np.where(to_forest.values == 1,1,0)
+        forest_mask_3d_boolean = forest_mask_3d == 1
+        forest_mask = forest_mask_3d_boolean[0, :, :]
+
+        HRU_indices = self.var.decompress(
+            np.arange(self.model.data.HRU.land_use_type.size)
+        )
+        HRUs_to_forest = np.unique(HRU_indices[forest_mask])
+        HRUs_to_forest = HRUs_to_forest[HRUs_to_forest != -1]
+        HRUs_to_forest = HRUs_to_forest[
+            self.var.land_use_type[HRUs_to_forest] == 1
+        ]  # only select HRUs that are grassland
+        self.var.land_use_type[HRUs_to_forest] = 0  # 0 is forest
+
+        # decompress the land_owners array
+        land_owners_map = self.var.decompress(self.var.land_owners)
+        assert land_owners_map.shape == forest_mask.shape
+
+        # select the farmers that are in the areas to be converted to forest
+        farmers_to_convert = np.unique(land_owners_map[forest_mask])
+        #farmers_to_convert = farmers_to_convert[farmers_to_convert != -1]
+        farmers_to_convert = farmers_to_convert[1:-1]
+
+        # remove the farmers that are not in the areas to be converted to forest
+        HRUs_to_forest_for_farmers = self.remove_agents(
+            farmer_indices=farmers_to_convert
+        )
+        self.var.land_use_type[HRUs_to_forest_for_farmers] = 0  # 0 is forest
+
 
     @staticmethod
     @njit(cache=True)
@@ -3240,10 +3282,8 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.water_abstraction_sum()
-
-        # monthly actions
-        if self.model.current_time.day == 1:
-            self.SPEI_sum()
+        if self.model.scenario == "lulc" and self.model.config["general"]["start_time"].year - self.model.current_time.year == 0 and self.model.current_time.month == 1 and self.model.current_time.day == 2:
+           self.land_use_change()
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
@@ -3323,7 +3363,7 @@ class Farmers(AgentBaseClass):
             self.set_yearly_yield_spei()
 
             # Alternative scenarios: 'sprinkler'
-            if self.model.scenario not in ["pre_spinup", "spinup", "noadaptation"]:
+            if self.model.scenario not in ["pre_spinup", "spinup", "noadaptation","lulc"]:
                 # Determine the relation between drought probability and yield
                 self.calculate_yield_spei_relation()
 
@@ -3404,6 +3444,8 @@ class Farmers(AgentBaseClass):
                         "Cannot adapt without yield - probability relation"
                     )
 
+                
+            
             # Update management yield ratio score
             self.update_yield_ratio_management()
 
@@ -3417,12 +3459,17 @@ class Farmers(AgentBaseClass):
 
     def remove_agents(self, farmer_indices: list[int]):
         farmer_indices = np.array(farmer_indices)
+        HRUs_with_removed_farmers = []
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
-            HRUs_with_removed_farmers = []
             for idx in farmer_indices:
-                HRUs_with_removed_farmers.append(self.remove_agent(idx))
-        return np.concatenate(HRUs_with_removed_farmers)
+                removed_farmer = self.remove_agent(idx)
+                if removed_farmer is not None:  # Check if an array is returned
+                    HRUs_with_removed_farmers.append(removed_farmer)
+        if HRUs_with_removed_farmers:
+            return np.concatenate(HRUs_with_removed_farmers)
+        else:
+            return np.array([])
 
     def remove_agent(self, farmer_idx: int) -> np.ndarray:
         assert farmer_idx >= 0, "Farmer index must be positive."

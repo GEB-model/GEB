@@ -890,6 +890,7 @@ class Data:
         return HRU
 
     def step(self):
+
         self.grid.hurs = self.grid.compress(
             self.grid.hurs_ds.sel(time=self.model.current_time).data
         )  # %

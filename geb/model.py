@@ -237,6 +237,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         Args:
             step_size: Number of steps the model should take. Can be integer or string `day`, `week`, `month`, `year`, `decade` or `century`.
         """
+
         if isinstance(step_size, str):
             n = self.parse_step_str(step_size)
         else:
