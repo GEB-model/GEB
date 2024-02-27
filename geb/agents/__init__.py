@@ -15,7 +15,7 @@ class Agents:
 
     def __init__(self, model) -> None:
         self.model = model
-        self.households = Households(model, self, 0.1)
+        # self.households = Households(model, self, 0.1)
         self.farmers = Farmers(model, self, 0.1)
         self.reservoir_operators = ReservoirOperators(model, self)
         self._ngo = NGO(model, self)
@@ -23,7 +23,7 @@ class Agents:
 
     def step(self) -> None:
         """This function is called every timestep and activates the agents in order of NGO, government and then farmers."""
-        self.households.step()
+        # self.households.step()
         self._ngo.step()
         self.government.step()
         self.farmers.step()
