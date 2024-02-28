@@ -152,17 +152,6 @@ def run(
     if use_gpu:
         import cupy
 
-    def get_study_area(model_structure):
-        study_area = {"name": "GEB"}
-        gdf = gpd.read_file(model_structure["geoms"]["areamaps/region"]).to_crs(
-            epsg=4326
-        )
-        assert (
-            len(gdf) == 1
-        ), "There should be only one region in the region.geojson file."
-        study_area["region"] = gdf.geometry[0]
-        return study_area
-
     MODEL_NAME = "GEB"
     config = parse_config(config)
 
@@ -174,7 +163,6 @@ def run(
     for data in model_structure.values():
         for key, value in data.items():
             data[key] = Path(config["general"]["input_folder"]) / value
-    study_area = get_study_area(model_structure)
 
     model_params = {
         "config": config,
