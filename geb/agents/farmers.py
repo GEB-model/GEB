@@ -1523,7 +1523,7 @@ class Farmers(AgentBaseClass):
         TODO: Perhaps move the constant to the model.yml
         """
         # constants
-        HISTORICAL_PERIOD = 5  # years
+        HISTORICAL_PERIOD = min(5, self.yearly_potential_profits.shape[1])  # years
 
         # Convert the harvesting farmers index array to a boolean array of full length
         harvesting_farmers_long = np.zeros(self.n, dtype=bool)
