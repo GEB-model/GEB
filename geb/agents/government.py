@@ -14,6 +14,11 @@ class Government(AgentBaseClass):
     def __init__(self, model, agents):
         self.model = model
         self.agents = agents
+        self.config = (
+            self.model.config["agent_settings"]["government"]
+            if "government" in self.model.config["agent_settings"]
+            else {}
+        )
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
         AgentBaseClass.__init__(self)
 
@@ -32,7 +37,21 @@ class Government(AgentBaseClass):
     def request_flood_cushions(self, reservoirIDs):
         pass
 
+    def set_irrigation_limit(self) -> None:
+        if not "irrigation_limit" in self.config:
+            return None
+        irrigation_limit = self.config["irrigation_limit"]
+        if irrigation_limit["per"] == "capita":
+            self.agents.farmers.irrigation_limit_m3[:] = (
+                self.agents.farmers.household_size * irrigation_limit["limit"]
+            )
+        else:
+            raise NotImplementedError(
+                "Only 'capita' is implemented for irrigation limit"
+            )
+
     def step(self) -> None:
         """This function is run each timestep. However, only in on the first day of each year and if the scenario is `government_subsidies` subsidies is actually provided to farmers."""
+        self.set_irrigation_limit()
         if self.model.scenario == "government_subsidies":
             self.provide_subsidies()

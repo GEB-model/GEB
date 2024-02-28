@@ -33,8 +33,6 @@ class CWatM_Model(CWATModel):
         parse_configuration(settings)
 
         subfolder = self.scenario
-        if self.switch_crops:
-            subfolder += "_switch_crops"
 
         outDir["OUTPUT"] = os.path.join(
             self.config["general"]["report_folder"], subfolder
@@ -51,9 +49,9 @@ class CWatM_Model(CWATModel):
                 [str(item) for sublist in gauges for item in sublist]
             )
         else:
-            binding[
-                "Gauges"
-            ] = f"{self.config['general']['pour_point'][0]} {self.config['general']['pour_point'][1]}"
+            binding["Gauges"] = (
+                f"{self.config['general']['pour_point'][0]} {self.config['general']['pour_point'][1]}"
+            )
         binding["StepStart"] = start_time.strftime("%d/%m/%Y")
         binding["SpinUp"] = "0"
         binding["StepEnd"] = str(n_steps)

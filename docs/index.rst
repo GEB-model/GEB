@@ -35,6 +35,7 @@ The figure below shows a schematic overview of some parts of the model, showing 
   Configuration <configuration>
   Preprocessing <preprocessing>
   Running the model <running>
+  Visualisation <visualisation>
 
 .. toctree::
   :maxdepth: 1
