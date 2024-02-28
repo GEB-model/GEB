@@ -339,7 +339,7 @@ def update(data_catalog, config, build_config, working_directory, data_provider)
         mode="r+",
         data_libs=data_catalog,
         logger=create_logger("build_update.log"),
-        # data_provider=data_provider,
+        data_provider=data_provider,
     )
     geb_model.read()
     geb_model.update(opt=configread(build_config))
