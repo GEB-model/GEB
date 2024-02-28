@@ -59,6 +59,11 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.config = self.setup_config(config)
         self.model_structure = model_structure
+        self.run_name = (
+            self.config["general"]["name"]
+            if "name" in self.config["general"]
+            else self.scenario
+        )
 
         self.initial_conditions_folder = Path(
             self.config["general"]["initial_conditions_folder"]
