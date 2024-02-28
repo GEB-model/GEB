@@ -42,6 +42,9 @@ class FarmerAgentArray(AgentArray):
         else:
             return np.full_like(fields, nofieldvalue)
 
+    def __repr__(self):
+        return "FarmerAgentArray(" + self.data.__str__() + ")"
+
 
 @njit(cache=True)
 def get_farmer_HRUs(
@@ -295,14 +298,14 @@ class Farmers(AgentBaseClass):
                 self.model.model_structure["binary"]["agents/farmers/risk_aversion"]
             )["data"]
 
-            self.interest_rate = AgentArray(
+            self.interest_rate = FarmerAgentArray(
                 n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
             )
             self.interest_rate[:] = np.load(
                 self.model.model_structure["binary"]["agents/farmers/interest_rate"]
             )["data"]
 
-            self.discount_rate = AgentArray(
+            self.discount_rate = FarmerAgentArray(
                 n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
             )
             self.discount_rate[:] = np.load(
@@ -391,7 +394,6 @@ class Farmers(AgentBaseClass):
                     np.array(
                         [
                             self.irrigation_source_key["well"],
-                            self.irrigation_source_key["tubewell"],
                         ]
                     ),
                 )
@@ -500,6 +502,11 @@ class Farmers(AgentBaseClass):
                     ]
                 )["data"],
                 max_n=self.max_n,
+            )
+
+            # set no irrigation limit for farmers by default
+            self.irrigation_limit_m3 = FarmerAgentArray(
+                n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan  # m3
             )
 
             self.wealth = FarmerAgentArray(
@@ -895,6 +902,7 @@ class Farmers(AgentBaseClass):
         command_areas: np.ndarray,
         return_fraction: float,
         well_depth: float,
+        irrigation_limit_m3: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -973,11 +981,11 @@ class Farmers(AgentBaseClass):
                 # Convert the groundwater depth to groundwater depth per farmer
                 groundwater_depth_per_farmer[farmer] = groundwater_depth[f_var]
 
-                if well_irrigated[farmer] == 1:
+                if well_irrigated[farmer]:
                     if groundwater_depth[f_var] < well_depth[farmer]:
                         farmer_has_access_to_irrigation_water = True
                         break
-                elif surface_irrigated[farmer] == 1:
+                elif surface_irrigated[farmer]:
                     if available_channel_storage_m3[f_var] > 100:
                         farmer_has_access_to_irrigation_water = True
                         break
@@ -989,12 +997,35 @@ class Farmers(AgentBaseClass):
                     ):
                         farmer_has_access_to_irrigation_water = True
                         break
-            has_access_to_irrigation_water[
-                activated_farmer_index
-            ] = farmer_has_access_to_irrigation_water
+            has_access_to_irrigation_water[activated_farmer_index] = (
+                farmer_has_access_to_irrigation_water
+            )
 
             # Actual irrigation from surface, reservoir and groundwater
             if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
+                # if irrigation limit is active, reduce the irrigation demand
+                if not np.isnan(irrigation_limit_m3[farmer]):
+                    # first find the total irrigation demand for the farmer in m3
+                    irrigation_water_demand_farmer_m3 = (
+                        totalPotIrrConsumption[farmer_fields]
+                        * cell_area[farmer_fields]
+                        / irrigation_efficiency_farmer
+                    )
+                    irrigation_water_demand_farmer_m3_sum = (
+                        irrigation_water_demand_farmer_m3.sum()
+                    )
+                    # if the irrigation demand is higher than the limit, reduce the irrigation demand by the calculated reduction factor
+                    if (
+                        irrigation_water_demand_farmer_m3_sum
+                        > irrigation_limit_m3[farmer]
+                    ):
+                        reduction_factor = (
+                            irrigation_limit_m3[farmer]
+                            / irrigation_water_demand_farmer_m3_sum
+                        )
+                        totalPotIrrConsumption[farmer_fields] = (
+                            totalPotIrrConsumption[farmer_fields] * reduction_factor
+                        )
                 for field in farmer_fields:
                     f_var = HRU_to_grid[field]
                     if crop_map[field] != -1:
@@ -1073,9 +1104,9 @@ class Farmers(AgentBaseClass):
                                 groundwater_abstraction_cell_m3 = (
                                     groundwater_abstraction_cell_m * cell_area[field]
                                 )
-                                groundwater_abstraction_m3[
-                                    f_var
-                                ] = groundwater_abstraction_cell_m3
+                                groundwater_abstraction_m3[f_var] = (
+                                    groundwater_abstraction_cell_m3
+                                )
                                 available_groundwater_m3[
                                     f_var
                                 ] -= groundwater_abstraction_cell_m3
@@ -1167,8 +1198,7 @@ class Farmers(AgentBaseClass):
                 self.irrigation_source,
                 np.array(
                     [
-                        self.irrigation_source_key["canals"],
-                        self.irrigation_source_key["other"],
+                        self.irrigation_source_key["canal"],
                     ]
                 ),
             ),
@@ -1177,7 +1207,6 @@ class Farmers(AgentBaseClass):
                 np.array(
                     [
                         self.irrigation_source_key["well"],
-                        self.irrigation_source_key["tubewell"],
                     ]
                 ),
             ),
@@ -1194,6 +1223,7 @@ class Farmers(AgentBaseClass):
                 "return_fraction"
             ],
             well_depth=self.well_depth.data,
+            irrigation_limit_m3=self.irrigation_limit_m3.data,
         )
         self.n_water_accessible_days[:] += has_access_to_irrigation_water
         self.groundwater_depth = FarmerAgentArray(
@@ -2008,9 +2038,9 @@ class Farmers(AgentBaseClass):
         self.yearly_yield_ratio[:, 0] = self.calculate_yearly_mean(
             self.per_harvest_yield_ratio
         )
-        self.yearly_SPEI_probability[
-            :, 0
-        ] = self.convert_seasonal_to_yearly_SPEI_probability()
+        self.yearly_SPEI_probability[:, 0] = (
+            self.convert_seasonal_to_yearly_SPEI_probability()
+        )
         self.per_harvest_SPEI[:] = 0
 
         # Step 2: Shift and reset matrices
@@ -2316,9 +2346,7 @@ class Farmers(AgentBaseClass):
         self.adaptation_mechanism[expired_adaptations, ADAPTATION_TYPE] = 0
         self.adapted[expired_adaptations, ADAPTATION_TYPE] = 0
         self.time_adapted[expired_adaptations, ADAPTATION_TYPE] = -1
-        self.irrigation_source[expired_adaptations] = self.irrigation_source_key[
-            "no_irrigation"
-        ]
+        self.irrigation_source[expired_adaptations] = self.irrigation_source_key["no"]
 
         # Define extra constraints (farmers' wells must reach groundwater)
         well_reaches_groundwater = self.well_depth > self.groundwater_depth
@@ -2331,10 +2359,9 @@ class Farmers(AgentBaseClass):
         adaptation_mask = self.adapt_SEUT(
             ADAPTATION_TYPE, annual_cost, loan_duration, extra_constraint, adapted
         )
-        print("Adaptation mask:", adaptation_mask.sum())
 
         # Update irrigation source for farmers who adapted
-        self.irrigation_source[adaptation_mask] = self.irrigation_source_key["tubewell"]
+        self.irrigation_source[adaptation_mask] = self.irrigation_source_key["well"]
 
         # Set their well depth
         self.well_depth[adaptation_mask] = well_depth[adaptation_mask]
@@ -3616,5 +3643,5 @@ class Farmers(AgentBaseClass):
         return {
             name: value
             for name, value in vars(self).items()
-            if isinstance(value, AgentArray)
+            if isinstance(value, FarmerAgentArray)
         }

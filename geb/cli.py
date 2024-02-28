@@ -99,11 +99,6 @@ def click_config(func):
     help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""",
 )
 @click.option(
-    "--switch_crops",
-    is_flag=True,
-    help="""Whether agents should switch crops or not.""",
-)
-@click.option(
     "--gpu_device",
     type=int,
     default=0,
@@ -140,7 +135,6 @@ def click_config(func):
 )
 def run(
     scenario,
-    switch_crops,
     gpu_device,
     profiling,
     use_gpu,
@@ -183,13 +177,11 @@ def run(
     study_area = get_study_area(model_structure)
 
     model_params = {
-        "GEB_config_path": config,
+        "config": config,
         "model_structure": model_structure,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
         "scenario": scenario,
-        "study_area": study_area,
-        "switch_crops": switch_crops,
     }
 
     if not gui:
@@ -211,7 +203,7 @@ def run(
         if profiling:
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
-        if config["draw"]["plot"]:
+        if "plot" in config["draw"] and config["draw"]["plot"]:
             server_elements = server_elements
             +[ChartModule(series) for series in config["draw"]["plot"]]
 

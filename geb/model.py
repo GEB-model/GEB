@@ -30,7 +30,7 @@ class GEBModel(ABM_Model, CWatM_Model):
     """GEB parent class.
 
     Args:
-        GEB_config_path: Filepath of the YAML-configuration file.
+        config: Filepath of the YAML-configuration file.
         CwatM_settings: Path of CWatM settings file.
         name: Name of model.
         xmin: Minimum x coordinate.
@@ -45,22 +45,19 @@ class GEBModel(ABM_Model, CWatM_Model):
 
     def __init__(
         self,
-        GEB_config_path: str,
+        config: dict,
         model_structure: dict,
-        study_area: dict,
         scenario: str,
-        switch_crops: bool = False,
         use_gpu: bool = False,
         gpu_device=0,
         coordinate_system: str = "WGS84",
     ):
         self.use_gpu = use_gpu
         self.scenario = scenario
-        self.switch_crops = switch_crops
         if self.use_gpu:
             cp.cuda.Device(gpu_device).use()
 
-        self.config = self.setup_config(GEB_config_path)
+        self.config = self.setup_config(config)
         self.model_structure = model_structure
 
         self.initial_conditions_folder = Path(
@@ -130,8 +127,6 @@ class GEBModel(ABM_Model, CWatM_Model):
         self.data = Data(self)
 
         self.__init_ABM__(
-            GEB_config_path,
-            study_area,
             current_time,
             timestep_length,
             n_timesteps,
@@ -174,8 +169,6 @@ class GEBModel(ABM_Model, CWatM_Model):
 
     def __init_ABM__(
         self,
-        config_path: str,
-        study_area: dict,
         current_time,
         timestep_length,
         n_timesteps,
@@ -185,7 +178,6 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         Args:
             config_path: Filepath of the YAML-configuration file.
-            study_area: Dictionary with study area name, xmin, xmax, ymin and ymax.
             args: Run arguments.
             coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
         """
@@ -194,19 +186,16 @@ class GEBModel(ABM_Model, CWatM_Model):
             self,
             current_time,
             timestep_length,
-            config_path,
             args=None,
             n_timesteps=n_timesteps,
         )
 
-        study_area.update(
-            {
-                "xmin": self.data.grid.bounds.left,
-                "xmax": self.data.grid.bounds.right,
-                "ymin": self.data.grid.bounds.bottom,
-                "ymax": self.data.grid.bounds.top,
-            }
-        )
+        study_area = {
+            "xmin": self.data.grid.bounds.left,
+            "xmax": self.data.grid.bounds.right,
+            "ymin": self.data.grid.bounds.bottom,
+            "ymax": self.data.grid.bounds.top,
+        }
 
         self.area = Area(self, study_area)
         self.agents = Agents(self)

@@ -829,9 +829,11 @@ def calibrate(config, working_directory):
                 current_gpu_use_count,
                 manager_lock,
                 calibration_config["gpus"],
-                calibration_config["models_per_gpu"]
-                if "models_per_gpu" in calibration_config
-                else 1,
+                (
+                    calibration_config["models_per_gpu"]
+                    if "models_per_gpu" in calibration_config
+                    else 1
+                ),
             ),
         )
         # Register the map function to use the multiprocessing pool
@@ -842,9 +844,11 @@ def calibrate(config, working_directory):
             current_gpu_use_count,
             manager_lock,
             calibration_config["gpus"],
-            calibration_config["models_per_gpu"]
-            if "models_per_gpu" in calibration_config
-            else 1,
+            (
+                calibration_config["models_per_gpu"]
+                if "models_per_gpu" in calibration_config
+                else 1
+            ),
         )
 
         # Set the probabilities of mating and mutation
