@@ -391,7 +391,7 @@ class Farmers(AgentBaseClass):
                     np.array(
                         [
                             self.irrigation_source_key["well"],
-                            self.irrigation_source_key["tubewell"],
+                           # self.irrigation_source_key["tubewell"],
                         ]
                     ),
                 )
