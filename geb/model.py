@@ -51,14 +51,16 @@ class GEBModel(ABM_Model, CWatM_Model):
         gpu_device=0,
         coordinate_system: str = "WGS84",
     ):
+        self.spinup = spinup
         self.use_gpu = use_gpu
         if self.use_gpu:
             cp.cuda.Device(gpu_device).use()
 
         self.config = self.setup_config(config)
+        if self.spinup:
+            self.config["report"] = {}
         self.model_structure = model_structure
 
-        self.spinup = spinup
         if spinup is True:
             self.run_name = "spinup"
         elif "name" in self.config["general"]:

@@ -89,51 +89,57 @@ def click_config(func):
     return wrapper
 
 
-@main.command()
-@click_config
-@click.option(
-    "--spinup",
-    "-s",
-    default=False,
-    is_flag=True,
-    help="""Use this flag to run the model in spinup mode""",
-)
-@click.option(
-    "--gpu_device",
-    type=int,
-    default=0,
-    help="""Specify the GPU to use (zero-indexed).""",
-)
-@click.option(
-    "--profiling",
-    is_flag=True,
-    help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
-)
-@click.option(
-    "--use_gpu",
-    is_flag=True,
-    help="Whether a GPU can be used to run the model. This requires CuPy to be installed.",
-)
-@click.option(
-    "--working-directory", "-wd", default=".", help="Working directory for model."
-)
-@click.option(
-    "--gui",
-    is_flag=True,
-    help="""The model can be run with or without a visual interface. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
-)
-@click.option(
-    "--no-browser",
-    is_flag=True,
-    help="""Do not open browser when running the model. This option is, for example, useful when running the model on a server, and you would like to remotely access the model.""",
-)
-@click.option(
-    "--port",
-    type=int,
-    default=8521,
-    help="""Port used for display environment (default: 8521)""",
-)
-def run(
+def click_run_options():
+    def decorator(func):
+        @click_config
+        @click.option(
+            "--gpu_device",
+            type=int,
+            default=0,
+            help="""Specify the GPU to use (zero-indexed).""",
+        )
+        @click.option(
+            "--profiling",
+            is_flag=True,
+            help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
+        )
+        @click.option(
+            "--use_gpu",
+            is_flag=True,
+            help="Whether a GPU can be used to run the model. This requires CuPy to be installed.",
+        )
+        @click.option(
+            "--working-directory",
+            "-wd",
+            default=".",
+            help="Working directory for model.",
+        )
+        @click.option(
+            "--gui",
+            is_flag=True,
+            help="""The model can be run with or without a visual interface. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
+        )
+        @click.option(
+            "--no-browser",
+            is_flag=True,
+            help="""Do not open browser when running the model. This option is, for example, useful when running the model on a server, and you would like to remotely access the model.""",
+        )
+        @click.option(
+            "--port",
+            type=int,
+            default=8521,
+            help="""Port used for display environment (default: 8521)""",
+        )
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def run_model(
     spinup,
     gpu_device,
     profiling,
@@ -212,6 +218,18 @@ def run(
 
         device = cuda.get_current_device()
         device.reset()
+
+
+@main.command()
+@click_run_options()
+def run(*args, **kwargs):
+    run_model(spinup=False, *args, **kwargs)
+
+
+@main.command()
+@click_run_options()
+def spinup(*args, **kwargs):
+    run_model(spinup=True, *args, **kwargs)
 
 
 @main.command()
