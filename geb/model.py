@@ -59,11 +59,18 @@ class GEBModel(ABM_Model, CWatM_Model):
 
         self.config = self.setup_config(config)
         self.model_structure = model_structure
-        self.run_name = (
-            self.config["general"]["name"]
-            if "name" in self.config["general"]
-            else self.scenario
+        if scenario in ("pre_spinup", "spinup"):
+            self.run_name = scenario
+        else:
+            self.run_name = (
+                self.config["general"]["name"]
+                if "name" in self.config["general"]
+                else self.scenario
+            )
+        self.report_folder = (
+            Path(self.config["general"]["report_folder"]) / self.run_name
         )
+        self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.initial_conditions_folder = Path(
             self.config["general"]["initial_conditions_folder"]

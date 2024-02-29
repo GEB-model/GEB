@@ -31,13 +31,10 @@ class CWatMReporter(ABMReporter):
         model: The GEB model.
     """
 
-    def __init__(self, model, subfolder=None) -> None:
+    def __init__(self, model, folder: str) -> None:
         self.model = model
 
-        self.export_folder = Path(self.model.config["general"]["report_folder"])
-        if subfolder:
-            self.export_folder = self.export_folder / subfolder
-        self.export_folder.mkdir(parents=True, exist_ok=True)
+        self.export_folder = folder
 
         self.variables = {}
         self.timesteps = []
@@ -345,8 +342,8 @@ class Reporter:
 
     def __init__(self, model):
         self.model = model
-        self.abm_reporter = ABMReporter(model, subfolder=self.model.run_name)
-        self.cwatmreporter = CWatMReporter(model, subfolder=self.model.run_name)
+        self.abm_reporter = ABMReporter(model, folder=self.model.report_folder)
+        self.cwatmreporter = CWatMReporter(model, folder=self.model.report_folder)
 
     @property
     def variables(self):

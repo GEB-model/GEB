@@ -30,11 +30,7 @@ class ReservoirOperators(AgentBaseClass):
         self.active_reservoirs = self.reservoirs.loc[waterBodyIDs]
 
         np.save(
-            os.path.join(
-                self.model.config["general"]["report_folder"],
-                self.model.scenario,
-                "active_reservoirs_waterBodyIDs.npy",
-            ),
+            self.model.report_folder / "active_reservoirs_waterBodyIDs.npy",
             waterBodyIDs,
         )
 
