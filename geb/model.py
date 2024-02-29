@@ -46,7 +46,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         self,
         config: dict,
         model_structure: dict,
-        spinup: bool,
+        spinup: bool = False,
         use_gpu: bool = False,
         gpu_device=0,
         coordinate_system: str = "WGS84",
