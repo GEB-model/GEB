@@ -1796,7 +1796,7 @@ class Farmers(AgentBaseClass):
             all_loans_annual_cost=self.all_loans_annual_cost.data,
             loan_tracker=self.loan_tracker.data,
             interest_rate=self.interest_rate.data,
-            farmers_going_out_of_business=False
+            farmers_going_out_of_business=False,
         )
         if farmers_selling_land.size > 0:
             self.remove_agents(farmers_selling_land)
@@ -3319,7 +3319,7 @@ class Farmers(AgentBaseClass):
 
             self.set_yearly_yield_spei()
 
-            if self.model.spinup is True or (
+            if self.model.spinup is False or (
                 "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
             ):
                 # Determine the relation between drought probability and yield
