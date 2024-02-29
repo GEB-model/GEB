@@ -92,12 +92,11 @@ def click_config(func):
 @main.command()
 @click_config
 @click.option(
-    "--scenario",
+    "--spinup",
     "-s",
-    type=str,
-    default="spinup",
-    required=True,
-    help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""",
+    default=False,
+    is_flag=True,
+    help="""Use this flag to run the model in spinup mode""",
 )
 @click.option(
     "--gpu_device",
@@ -135,7 +134,7 @@ def click_config(func):
     help="""Port used for display environment (default: 8521)""",
 )
 def run(
-    scenario,
+    spinup,
     gpu_device,
     profiling,
     use_gpu,
@@ -170,7 +169,7 @@ def run(
         "model_structure": model_structure,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
-        "scenario": scenario,
+        "spinup": spinup,
     }
 
     if not gui:

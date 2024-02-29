@@ -6,7 +6,6 @@ import geopandas as gpd
 from typing import Union
 from time import time
 
-import pandas as pd
 import numpy as np
 
 try:
@@ -47,26 +46,29 @@ class GEBModel(ABM_Model, CWatM_Model):
         self,
         config: dict,
         model_structure: dict,
-        scenario: str,
+        spinup: bool,
         use_gpu: bool = False,
         gpu_device=0,
         coordinate_system: str = "WGS84",
     ):
         self.use_gpu = use_gpu
-        self.scenario = scenario
         if self.use_gpu:
             cp.cuda.Device(gpu_device).use()
 
         self.config = self.setup_config(config)
         self.model_structure = model_structure
-        if scenario in ("pre_spinup", "spinup"):
-            self.run_name = scenario
+
+        self.spinup = spinup
+        if spinup is True:
+            self.run_name = "spinup"
+        elif "name" in self.config["general"]:
+            self.run_name = self.config["general"]["name"]
         else:
-            self.run_name = (
-                self.config["general"]["name"]
-                if "name" in self.config["general"]
-                else self.scenario
+            print(
+                'No "run_name" specified in config file under general. Using "default".'
             )
+            self.run_name = "default"
+
         self.report_folder = (
             Path(self.config["general"]["report_folder"]) / self.run_name
         )
@@ -81,23 +83,8 @@ class GEBModel(ABM_Model, CWatM_Model):
             if "load_pre_spinup" in self.config["general"]
             else False
         )
-        if scenario == "pre_spinup":
-            end_time = datetime.datetime.combine(
-                self.config["general"]["spinup_time"], datetime.time(0)
-            )
-            current_time = datetime.datetime.combine(
-                self.config["general"]["pre_spinup_time"], datetime.time(0)
-            )
-            if end_time.year - current_time.year < 10:
-                print(
-                    "Pre-spinup time is less than 15 years. This is not recommended and may lead to issues later."
-                )
-            print("Running pre-spinup")
-            self.load_initial_data = False
-            self.save_initial_data = self.config["general"]["export_inital_on_spinup"]
-            self.initial_conditions = []
-            self.initial_relations = []
-        elif scenario == "spinup":
+
+        if self.spinup is True:
             end_time = datetime.datetime.combine(
                 self.config["general"]["start_time"], datetime.time(0)
             )
@@ -176,8 +163,6 @@ class GEBModel(ABM_Model, CWatM_Model):
             Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
             data=self.agents.farmers.activation_order_by_elevation,
         )
-
-        self.running = True
 
     def __init_ABM__(
         self,
@@ -286,30 +271,6 @@ class GEBModel(ABM_Model, CWatM_Model):
                         self.initial_conditions_folder, f"farmers.{attribute}.npz"
                     )
                     np.savez_compressed(fp, data=value.data)
-
-        if self.load_pre_spinup_data and self.scenario == "pre_spinup":
-            self.initial_relations_folder.mkdir(parents=True, exist_ok=True)
-            with open(
-                Path(self.initial_relations_folder, "initial_relations.txt"), "w"
-            ) as f:
-                for var in self.initial_relations:
-                    f.write(f"{var}\n")
-
-                    fp = self.initial_relations_folder / f"{var}.npz"
-                    values = attrgetter(var)(self.data)
-                    np.savez_compressed(fp, data=values)
-            agent_relation_attributes = [
-                "_yearly_yield_ratio",
-                "_yearly_SPEI_probability",
-                "_yearly_profits",
-                "_yearly_potential_profits",
-                "_farmer_probability_yield_relation",
-            ]
-
-            for attribute in agent_relation_attributes:
-                fp = Path(self.initial_relations_folder, f"farmers.{attribute}.npz")
-                values = attrgetter(attribute)(self.agents.farmers)
-                np.savez_compressed(fp, data=values)
 
         print("Model run finished")
 
