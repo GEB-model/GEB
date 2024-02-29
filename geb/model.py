@@ -80,11 +80,6 @@ class GEBModel(ABM_Model, CWatM_Model):
             self.config["general"]["initial_conditions_folder"]
         )
         self.initial_relations_folder = self.initial_conditions_folder / "relations"
-        self.load_pre_spinup_data = (
-            self.config["general"]["load_pre_spinup"]
-            if "load_pre_spinup" in self.config["general"]
-            else False
-        )
 
         if self.spinup is True:
             end_time = datetime.datetime.combine(
@@ -93,12 +88,9 @@ class GEBModel(ABM_Model, CWatM_Model):
             current_time = datetime.datetime.combine(
                 self.config["general"]["spinup_time"], datetime.time(0)
             )
-            if (end_time.year - current_time.year < 10) and not (
-                "load_pre_spinup" in self.config["general"]
-                and self.config["general"]["load_pre_spinup"]
-            ):
+            if end_time.year - current_time.year < 10:
                 print(
-                    "Spinup time is less than 10 years. Without a pre-spinup this is not recommended and may lead to issues later."
+                    "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
                 )
 
             self.load_initial_data = False
@@ -111,7 +103,6 @@ class GEBModel(ABM_Model, CWatM_Model):
             end_time = datetime.datetime.combine(
                 self.config["general"]["end_time"], datetime.time(0)
             )
-            self.load_pre_spinup_data = False
             self.load_initial_data = True
             self.save_initial_data = False
 
