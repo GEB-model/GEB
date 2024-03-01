@@ -8,6 +8,7 @@ import logging
 import functools
 import faulthandler
 from pathlib import Path
+import importlib
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules import ChartModule
@@ -289,6 +290,9 @@ def get_model(custom_model):
     if custom_model is None:
         return hydromt_geb.GEBModel
     else:
+        importlib.import_module(
+            "." + custom_model.split(".")[0], package="hydromt_geb.custom_models"
+        )
         return attrgetter(custom_model)(hydromt_geb.custom_models)
 
 
