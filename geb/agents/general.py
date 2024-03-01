@@ -93,7 +93,7 @@ class AgentArray:
         elif not isinstance(inputs[0], AgentArray):
             return result
         else:
-            return AgentArray(result, max_n=self._data.shape[0])
+            return self.__class__(result, max_n=self._data.shape[0])
 
     def __array_function__(self, func, types, args, kwargs):
         # Explicitly call __array_function__ of the underlying NumPy array
@@ -146,7 +146,7 @@ class AgentArray:
     def __add__(self, other):
         if isinstance(other, AgentArray):
             other = other._data[: other._n]
-        return AgentArray(self.data.__add__(other), max_n=self._data.shape[0])
+        return self.__class__(self.data.__add__(other), max_n=self._data.shape[0])
 
     def _perform_operation(self, other, operation: str, inplace: bool = False):
         if isinstance(other, AgentArray):
@@ -156,7 +156,7 @@ class AgentArray:
             self.data = result
             return self
         else:
-            return AgentArray(result, max_n=self._data.shape[0])
+            return self.__class__(result, max_n=self._data.shape[0])
 
     def __add__(self, other):
         return self._perform_operation(other, "__add__")
@@ -223,7 +223,7 @@ class AgentArray:
 
     def _compare(self, value: object, operation: str) -> bool:
         if isinstance(value, AgentArray):
-            return AgentArray(
+            return self.__class__(
                 getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
             )
         return getattr(self.data, operation)(value)

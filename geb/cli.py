@@ -31,12 +31,13 @@ def multi_level_merge(dict1, dict2):
     return dict1
 
 
-def parse_config(config):
+def parse_config(config_path):
     """Parse config."""
-    config = yaml.load(open(config, "r"), Loader=yaml.FullLoader)
+    config = yaml.load(open(config_path, "r"), Loader=yaml.FullLoader)
     if "inherits" in config:
         inherited_config = yaml.load(
-            open(config["inherits"], "r"), Loader=yaml.FullLoader
+            open(Path(config_path).parent / config["inherits"], "r"),
+            Loader=yaml.FullLoader,
         )
         del config["inherits"]
         config = multi_level_merge(inherited_config, config)
@@ -99,11 +100,6 @@ def click_config(func):
     help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""",
 )
 @click.option(
-    "--switch_crops",
-    is_flag=True,
-    help="""Whether agents should switch crops or not.""",
-)
-@click.option(
     "--gpu_device",
     type=int,
     default=0,
@@ -140,7 +136,6 @@ def click_config(func):
 )
 def run(
     scenario,
-    switch_crops,
     gpu_device,
     profiling,
     use_gpu,
@@ -158,17 +153,6 @@ def run(
     if use_gpu:
         import cupy
 
-    def get_study_area(model_structure):
-        study_area = {"name": "GEB"}
-        gdf = gpd.read_file(model_structure["geoms"]["areamaps/region"]).to_crs(
-            epsg=4326
-        )
-        assert (
-            len(gdf) == 1
-        ), "There should be only one region in the region.geojson file."
-        study_area["region"] = gdf.geometry[0]
-        return study_area
-
     MODEL_NAME = "GEB"
     config = parse_config(config)
 
@@ -180,16 +164,13 @@ def run(
     for data in model_structure.values():
         for key, value in data.items():
             data[key] = Path(config["general"]["input_folder"]) / value
-    study_area = get_study_area(model_structure)
 
     model_params = {
-        "GEB_config_path": config,
+        "config": config,
         "model_structure": model_structure,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
         "scenario": scenario,
-        "study_area": study_area,
-        "switch_crops": switch_crops,
     }
 
     if not gui:
@@ -211,7 +192,7 @@ def run(
         if profiling:
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
-        if config["draw"]["plot"]:
+        if "plot" in config["draw"] and config["draw"]["plot"]:
             server_elements = server_elements
             +[ChartModule(series) for series in config["draw"]["plot"]]
 
@@ -358,7 +339,7 @@ def update(data_catalog, config, build_config, working_directory, data_provider)
         mode="r+",
         data_libs=data_catalog,
         logger=create_logger("build_update.log"),
-        # data_provider=data_provider,
+        data_provider=data_provider,
     )
     geb_model.read()
     geb_model.update(opt=configread(build_config))
