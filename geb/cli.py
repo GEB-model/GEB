@@ -166,9 +166,6 @@ def run_model(
         if not "model_stucture" in config["general"]
         else config["general"]["model_stucture"]
     )
-    for data in model_structure.values():
-        for key, value in data.items():
-            data[key] = Path(config["general"]["input_folder"]) / value
 
     model_params = {
         "config": config,

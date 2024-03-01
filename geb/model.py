@@ -59,7 +59,11 @@ class GEBModel(ABM_Model, CWatM_Model):
         self.config = self.setup_config(config)
         if self.spinup:
             self.config["report"] = {}
+
         self.model_structure = model_structure
+        for data in self.model_structure.values():
+            for key, value in data.items():
+                data[key] = Path(config["general"]["input_folder"]) / value
 
         if spinup is True:
             self.run_name = "spinup"
