@@ -2,7 +2,7 @@ import click
 import os
 import cProfile
 from pstats import Stats
-import geopandas as gpd
+from operator import attrgetter
 import yaml
 import logging
 import functools
@@ -259,6 +259,12 @@ def click_build_options(build_config="build.yml"):
             help="Path of the model build configuration file.",
         )
         @click.option(
+            "--custom-model",
+            default=None,
+            type=str,
+            help="name of custom preprocessing model",
+        )
+        @click.option(
             "--working-directory",
             "-wd",
             default=".",
@@ -279,9 +285,18 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
+def get_model(custom_model):
+    if custom_model is None:
+        return hydromt_geb.GEBModel
+    else:
+        return attrgetter(custom_model)(hydromt_geb.custom_models)
+
+
 @main.command()
 @click_build_options()
-def build(data_catalog, config, build_config, working_directory, data_provider):
+def build(
+    data_catalog, config, build_config, custom_model, working_directory, data_provider
+):
     """Build model."""
 
     # set the working directory
@@ -290,13 +305,15 @@ def build(data_catalog, config, build_config, working_directory, data_provider):
     config = parse_config(config)
     input_folder = Path(config["general"]["input_folder"])
 
-    geb_model = hydromt_geb.GEBModel(
-        root=input_folder,
-        mode="w+",
-        data_libs=data_catalog,
-        logger=create_logger("build.log"),
-        data_provider=data_provider,
-    )
+    arguments = {
+        "root": input_folder,
+        "mode": "w+",
+        "data_libs": data_catalog,
+        "logger": create_logger("build.log"),
+        "data_provider": data_provider,
+    }
+
+    geb_model = get_model(custom_model)(**arguments)
 
     pour_point = config["general"]["pour_point"]
     geb_model.build(
@@ -310,7 +327,15 @@ def build(data_catalog, config, build_config, working_directory, data_provider):
 @main.command()
 @click_build_options()
 @click.option("--model", "-m", default="../base", help="Folder for base model.")
-def alter(data_catalog, config, build_config, working_directory, model, data_provider):
+def alter(
+    data_catalog,
+    config,
+    build_config,
+    custom_model,
+    working_directory,
+    model,
+    data_provider,
+):
     """Build model."""
 
     # set the working directory
@@ -319,14 +344,15 @@ def alter(data_catalog, config, build_config, working_directory, model, data_pro
     config = parse_config(config)
     reference_model_folder = Path(model) / Path(config["general"]["input_folder"])
 
-    geb_model = hydromt_geb.GEBModel(
-        root=reference_model_folder,
-        mode="w+",
-        data_libs=data_catalog,
-        logger=create_logger("build.log"),
-        data_provider=data_provider,
-    )
+    arguments = {
+        "root": reference_model_folder,
+        "mode": "r+",
+        "data_libs": data_catalog,
+        "logger": create_logger("build.log"),
+        "data_provider": data_provider,
+    }
 
+    geb_model = get_model(custom_model)(**arguments)
     geb_model.read()
     geb_model.set_alternate_root(
         Path(".") / Path(config["general"]["input_folder"]), mode="w+"
@@ -339,7 +365,9 @@ def alter(data_catalog, config, build_config, working_directory, model, data_pro
 
 @main.command()
 @click_build_options(build_config="update.yml")
-def update(data_catalog, config, build_config, working_directory, data_provider):
+def update(
+    data_catalog, config, build_config, custom_model, working_directory, data_provider
+):
     """Update model."""
 
     # set the working directory
@@ -348,13 +376,15 @@ def update(data_catalog, config, build_config, working_directory, data_provider)
     config = parse_config(config)
     input_folder = Path(config["general"]["input_folder"])
 
-    geb_model = hydromt_geb.GEBModel(
-        root=input_folder,
-        mode="r+",
-        data_libs=data_catalog,
-        logger=create_logger("build_update.log"),
-        data_provider=data_provider,
-    )
+    arguments = {
+        "root": input_folder,
+        "mode": "r+",
+        "data_libs": data_catalog,
+        "logger": create_logger("build_update.log"),
+        "data_provider": data_provider,
+    }
+
+    geb_model = get_model(custom_model)(**arguments)
     geb_model.read()
     geb_model.update(opt=configread(build_config))
 
