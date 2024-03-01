@@ -249,8 +249,6 @@ class GEBModel(ABM_Model, CWatM_Model):
         for _ in range(self.n_timesteps):
             self.step()
 
-        CWatM_Model.finalize(self)
-
         if self.save_initial_data:
             self.initial_conditions_folder.mkdir(parents=True, exist_ok=True)
             with open(
@@ -291,3 +289,9 @@ class GEBModel(ABM_Model, CWatM_Model):
         folder = Path("simulation_root")
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        CWatM_Model.finalize(self)

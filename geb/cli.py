@@ -176,20 +176,20 @@ def run_model(
     }
 
     if not gui:
-        model = GEBModel(**model_params)
-        if profiling:
-            with cProfile.Profile() as pr:
+        with GEBModel(**model_params) as model:
+            if profiling:
+                with cProfile.Profile() as pr:
+                    model.run()
+                with open("profiling_stats.cprof", "w") as stream:
+                    stats = Stats(pr, stream=stream)
+                    stats.strip_dirs()
+                    stats.sort_stats("cumtime")
+                    stats.dump_stats(".prof_stats")
+                    stats.print_stats()
+                pr.dump_stats("profile.prof")
+            else:
                 model.run()
-            with open("profiling_stats.cprof", "w") as stream:
-                stats = Stats(pr, stream=stream)
-                stats.strip_dirs()
-                stats.sort_stats("cumtime")
-                stats.dump_stats(".prof_stats")
-                stats.print_stats()
-            pr.dump_stats("profile.prof")
-        else:
-            model.run()
-        report = model.report()
+            report = model.report()
     else:
         if profiling:
             print("Profiling not available for browser version")
