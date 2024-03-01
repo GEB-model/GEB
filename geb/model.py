@@ -290,8 +290,12 @@ class GEBModel(ABM_Model, CWatM_Model):
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
+    def close(self) -> None:
+        """Finalizes the model."""
+        CWatM_Model.finalize(self)
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        CWatM_Model.finalize(self)
+        self.close()
