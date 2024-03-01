@@ -5,7 +5,7 @@ from operator import attrgetter
 import geopandas as gpd
 from typing import Union
 from time import time
-
+import copy
 import numpy as np
 
 try:
@@ -60,7 +60,8 @@ class GEBModel(ABM_Model, CWatM_Model):
         if self.spinup:
             self.config["report"] = {}
 
-        self.model_structure = model_structure
+        # make a deep copy to avoid issues when the model is initialized multiple times
+        self.model_structure = copy.deepcopy(model_structure)
         for data in self.model_structure.values():
             for key, value in data.items():
                 data[key] = Path(config["general"]["input_folder"]) / value
