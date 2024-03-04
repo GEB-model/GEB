@@ -71,9 +71,7 @@ class GEBModel(ABM_Model, CWatM_Model):
         elif "name" in self.config["general"]:
             self.run_name = self.config["general"]["name"]
         else:
-            print(
-                'No "run_name" specified in config file under general. Using "default".'
-            )
+            print('No "name" specified in config file under general. Using "default".')
             self.run_name = "default"
 
         self.report_folder = (
