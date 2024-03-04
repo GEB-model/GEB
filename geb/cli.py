@@ -31,12 +31,13 @@ def multi_level_merge(dict1, dict2):
     return dict1
 
 
-def parse_config(config):
+def parse_config(config_path):
     """Parse config."""
-    config = yaml.load(open(config, "r"), Loader=yaml.FullLoader)
+    config = yaml.load(open(config_path, "r"), Loader=yaml.FullLoader)
     if "inherits" in config:
         inherited_config = yaml.load(
-            open(config["inherits"], "r"), Loader=yaml.FullLoader
+            open(Path(config_path).parent / config["inherits"], "r"),
+            Loader=yaml.FullLoader,
         )
         del config["inherits"]
         config = multi_level_merge(inherited_config, config)
@@ -152,17 +153,6 @@ def run(
     if use_gpu:
         import cupy
 
-    def get_study_area(model_structure):
-        study_area = {"name": "GEB"}
-        gdf = gpd.read_file(model_structure["geoms"]["areamaps/region"]).to_crs(
-            epsg=4326
-        )
-        assert (
-            len(gdf) == 1
-        ), "There should be only one region in the region.geojson file."
-        study_area["region"] = gdf.geometry[0]
-        return study_area
-
     MODEL_NAME = "GEB"
     config = parse_config(config)
 
@@ -174,7 +164,6 @@ def run(
     for data in model_structure.values():
         for key, value in data.items():
             data[key] = Path(config["general"]["input_folder"]) / value
-    study_area = get_study_area(model_structure)
 
     model_params = {
         "config": config,
@@ -350,7 +339,7 @@ def update(data_catalog, config, build_config, working_directory, data_provider)
         mode="r+",
         data_libs=data_catalog,
         logger=create_logger("build_update.log"),
-        # data_provider=data_provider,
+        data_provider=data_provider,
     )
     geb_model.read()
     geb_model.update(opt=configread(build_config))
