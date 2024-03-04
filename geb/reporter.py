@@ -306,7 +306,7 @@ class CWatMReporter(ABMReporter):
                                 if conf["varname"].startswith("data.grid"):
                                     gt = self.model.data.grid.gt
                                 elif conf["varname"].startswith("data.HRU"):
-                                    gt = self.model.data.routing.gt
+                                    gt = self.model.data.HRU.gt
                                 else:
                                     raise ValueError
                                 x, y = coord_to_pixel(
