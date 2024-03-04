@@ -297,26 +297,27 @@ class CWatMReporter(ABMReporter):
                                 if np.isnan(value):
                                     value = None
                             elif function == "sample":
-                                # Test for gauges sample locations
-                                # tif_file_path = 'input/routing/kinematic/upstream_area.tif'
-
-                                # with rasterio.open(tif_file_path) as src:
-                                #     # Get the geotransform
-                                #     geotransform = src.transform.to_gdal()
-                                #     river_areas = src.read(1)
-                                # gauges = self.model.config['general']['gauges']
-                                # raster_values = []
-                                # for gauge in gauges:
-                                #     raster_value = coord_to_pixel(gauge, geotransform)
-                                #     raster_values.append(raster_value)
-
                                 decompressed_array = self.decompress(
                                     conf["varname"], array
                                 )
                                 value = decompressed_array[int(args[0]), int(args[1])]
                                 assert not np.isnan(value)
+                            elif function == "sample_coord":
+                                if conf["varname"].startswith("data.grid"):
+                                    gt = self.model.data.grid.gt
+                                elif conf["varname"].startswith("data.HRU"):
+                                    gt = self.model.data.routing.gt
+                                else:
+                                    raise ValueError
+                                x, y = coord_to_pixel(
+                                    (float(args[0]), float(args[1])), gt
+                                )
+                                decompressed_array = self.decompress(
+                                    conf["varname"], array
+                                )
+                                value = decompressed_array[y, x]
                             else:
-                                raise ValueError()
+                                raise ValueError(f"Function {function} not recognized")
                     self.report_value(name, value, conf)
 
     def report(self) -> None:
