@@ -105,7 +105,7 @@ calibration:
     report_cwatm:
       discharge:
         varname: data.grid.discharge
-        function: sample,25,54
+        function: sample,1,0
         format: csv
         save: save
     report:

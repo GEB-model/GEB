@@ -29,7 +29,16 @@ class AgentArray:
                     shape = max_n
                 else:
                     shape = (max_n, *input_array.shape[1:])
-                self._data = np.empty_like(input_array, shape=shape)
+                if isinstance(shape, tuple):
+                    if shape[0] >  input_array.shape[0]:
+                        self._data = np.empty_like(input_array, shape = shape)
+                    else:
+                        self._data = np.empty_like(input_array)
+                else: 
+                    if shape >  input_array.shape[0]:
+                        self._data = np.empty_like(input_array, shape = shape)
+                    else:
+                        self._data = np.empty_like(input_array)
                 n = input_array.shape[0]
                 self._n = n
                 self._data[:n] = input_array

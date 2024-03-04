@@ -3310,8 +3310,8 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.water_abstraction_sum()
-        if self.model.scenario == "lulc" and self.model.config["general"]["start_time"].year - self.model.current_time.year == 0 and self.model.current_time.month == 1 and self.model.current_time.day == 2:
-           self.land_use_change()
+        #if self.model.scenario == "lulc" and self.model.config["general"]["start_time"].year - self.model.current_time.year == 0 and self.model.current_time.month == 1 and self.model.current_time.day == 2:
+        #   self.land_use_change()
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
