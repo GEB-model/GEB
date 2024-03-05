@@ -32,11 +32,7 @@ class CWatM_Model(CWATModel):
         settingsfile.append(settings)
         parse_configuration(settings)
 
-        subfolder = self.scenario
-
-        outDir["OUTPUT"] = os.path.join(
-            self.config["general"]["report_folder"], subfolder
-        )
+        outDir["OUTPUT"] = self.report_folder
 
         # calibration
         for parameter, value in self.config["parameters"].items():
