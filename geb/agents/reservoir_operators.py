@@ -16,6 +16,11 @@ class ReservoirOperators(AgentBaseClass):
     def __init__(self, model, agents):
         self.model = model
         self.agents = agents
+        self.config = (
+            self.model.config["agent_settings"]["reservoir_operators"]
+            if "reservoir_operators" in self.model.config["agent_settings"]
+            else {}
+        )
         AgentBaseClass.__init__(self)
         df = pd.read_csv(
             self.model.model_structure["table"][
@@ -30,11 +35,7 @@ class ReservoirOperators(AgentBaseClass):
         self.active_reservoirs = self.reservoirs.loc[waterBodyIDs]
 
         np.save(
-            os.path.join(
-                self.model.config["general"]["report_folder"],
-                self.model.scenario,
-                "active_reservoirs_waterBodyIDs.npy",
-            ),
+            self.model.report_folder / "active_reservoirs_waterBodyIDs.npy",
             waterBodyIDs,
         )
 
@@ -122,8 +123,8 @@ class ReservoirOperators(AgentBaseClass):
             reservoir_outflow,
         )
 
-        # make outflow same as inflow for a scenario without a reservoir
-        if "noHI" in self.model.scenario:
+        # make outflow same as inflow for a setting without a reservoir
+        if "ruleset" in self.config and self.config["ruleset"] == "no-human-influence":
             reservoir_outflow = inflowC
 
         return reservoir_outflow

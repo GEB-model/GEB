@@ -23,6 +23,8 @@ class Government(AgentBaseClass):
         AgentBaseClass.__init__(self)
 
     def provide_subsidies(self) -> None:
+        if not "subsidies" in self.config:
+            return None
         if self.model.current_timestep == 1:
             for region in self.agents.farmers.borewell_cost_1[1].keys():
                 self.agents.farmers.borewell_cost_1[1][region] = [
@@ -51,7 +53,6 @@ class Government(AgentBaseClass):
             )
 
     def step(self) -> None:
-        """This function is run each timestep. However, only in on the first day of each year and if the scenario is `government_subsidies` subsidies is actually provided to farmers."""
+        """This function is run each timestep."""
         self.set_irrigation_limit()
-        if self.model.scenario == "government_subsidies":
-            self.provide_subsidies()
+        self.provide_subsidies()

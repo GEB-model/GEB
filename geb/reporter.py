@@ -22,6 +22,7 @@ except ImportError:
 from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
+import time
 
 
 class CWatMReporter(ABMReporter):
@@ -31,13 +32,10 @@ class CWatMReporter(ABMReporter):
         model: The GEB model.
     """
 
-    def __init__(self, model, subfolder=None) -> None:
+    def __init__(self, model, folder: str) -> None:
         self.model = model
 
-        self.export_folder = Path(self.model.config["general"]["report_folder"])
-        if subfolder:
-            self.export_folder = self.export_folder / subfolder
-        self.export_folder.mkdir(parents=True, exist_ok=True)
+        self.export_folder = folder
 
         self.variables = {}
         self.timesteps = []
@@ -230,22 +228,33 @@ class CWatMReporter(ABMReporter):
             if np.isin(
                 np.datetime64(self.model.current_time), self.variables[name].time
             ):
-                with netCDF4.Dataset(
-                    self.model.config["report_cwatm"][name]["absolute_path"], "a"
-                ) as nc:
-                    var = nc.variables[name]
-                    time_index = self.variables[name].time == np.datetime64(
-                        self.model.current_time
-                    )
-                    if "substeps" in conf:
-                        time_index_start = np.where(time_index)[0][0]
-                        time_index_end = time_index_start + conf["substeps"]
-                        var[time_index_start:time_index_end, ...] = value
-                    else:
-                        var[time_index, ...] = (
-                            value  # Assuming new_data is the new values for that time slice
-                        )
-                    nc.sync()
+                max_retries = 10
+                retry_delay = 1
+
+                for retry in range(max_retries):
+                    try:
+                        with netCDF4.Dataset(
+                            self.model.config["report_cwatm"][name]["absolute_path"],
+                            "a",
+                        ) as nc:
+                            var = nc.variables[name]
+                            time_index = self.variables[name].time == np.datetime64(
+                                self.model.current_time
+                            )
+                            if "substeps" in conf:
+                                time_index_start = np.where(time_index)[0][0]
+                                time_index_end = time_index_start + conf["substeps"]
+                                var[time_index_start:time_index_end, ...] = value
+                            else:
+                                var[time_index, ...] = (
+                                    value  # Assuming new_data is the new values for that time slice
+                                )
+                            nc.sync()
+                        break
+                    except FileNotFoundError:
+                        if retry == max_retries - 1:
+                            raise
+                        time.sleep(retry_delay)
         else:
             raise ValueError(f"{conf['format']} not recognized")
 
@@ -288,26 +297,27 @@ class CWatMReporter(ABMReporter):
                                 if np.isnan(value):
                                     value = None
                             elif function == "sample":
-                                # Test for gauges sample locations
-                                # tif_file_path = 'input/routing/kinematic/upstream_area.tif'
-
-                                # with rasterio.open(tif_file_path) as src:
-                                #     # Get the geotransform
-                                #     geotransform = src.transform.to_gdal()
-                                #     river_areas = src.read(1)
-                                # gauges = self.model.config['general']['gauges']
-                                # raster_values = []
-                                # for gauge in gauges:
-                                #     raster_value = coord_to_pixel(gauge, geotransform)
-                                #     raster_values.append(raster_value)
-
                                 decompressed_array = self.decompress(
                                     conf["varname"], array
                                 )
                                 value = decompressed_array[int(args[0]), int(args[1])]
                                 assert not np.isnan(value)
+                            elif function == "sample_coord":
+                                if conf["varname"].startswith("data.grid"):
+                                    gt = self.model.data.grid.gt
+                                elif conf["varname"].startswith("data.HRU"):
+                                    gt = self.model.data.HRU.gt
+                                else:
+                                    raise ValueError
+                                x, y = coord_to_pixel(
+                                    (float(args[0]), float(args[1])), gt
+                                )
+                                decompressed_array = self.decompress(
+                                    conf["varname"], array
+                                )
+                                value = decompressed_array[y, x]
                             else:
-                                raise ValueError()
+                                raise ValueError(f"Function {function} not recognized")
                     self.report_value(name, value, conf)
 
     def report(self) -> None:
@@ -345,8 +355,8 @@ class Reporter:
 
     def __init__(self, model):
         self.model = model
-        self.abm_reporter = ABMReporter(model, subfolder=self.model.run_name)
-        self.cwatmreporter = CWatMReporter(model, subfolder=self.model.run_name)
+        self.abm_reporter = ABMReporter(model, folder=self.model.report_folder)
+        self.cwatmreporter = CWatMReporter(model, folder=self.model.report_folder)
 
     @property
     def variables(self):

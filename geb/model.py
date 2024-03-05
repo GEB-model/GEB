@@ -5,8 +5,7 @@ from operator import attrgetter
 import geopandas as gpd
 from typing import Union
 from time import time
-
-import pandas as pd
+import copy
 import numpy as np
 
 try:
@@ -47,62 +46,54 @@ class GEBModel(ABM_Model, CWatM_Model):
         self,
         config: dict,
         model_structure: dict,
-        scenario: str,
+        spinup: bool = False,
         use_gpu: bool = False,
         gpu_device=0,
         coordinate_system: str = "WGS84",
     ):
+        self.spinup = spinup
         self.use_gpu = use_gpu
-        self.scenario = scenario
         if self.use_gpu:
             cp.cuda.Device(gpu_device).use()
 
         self.config = self.setup_config(config)
-        self.model_structure = model_structure
-        self.run_name = (
-            self.config["general"]["name"]
-            if "name" in self.config["general"]
-            else self.scenario
+        if self.spinup:
+            self.config["report"] = {}
+
+        # make a deep copy to avoid issues when the model is initialized multiple times
+        self.model_structure = copy.deepcopy(model_structure)
+        for data in self.model_structure.values():
+            for key, value in data.items():
+                data[key] = Path(config["general"]["input_folder"]) / value
+
+        if spinup is True:
+            self.run_name = "spinup"
+        elif "name" in self.config["general"]:
+            self.run_name = self.config["general"]["name"]
+        else:
+            print('No "name" specified in config file under general. Using "default".')
+            self.run_name = "default"
+
+        self.report_folder = (
+            Path(self.config["general"]["report_folder"]) / self.run_name
         )
+        self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.initial_conditions_folder = Path(
             self.config["general"]["initial_conditions_folder"]
         )
         self.initial_relations_folder = self.initial_conditions_folder / "relations"
-        self.load_pre_spinup_data = (
-            self.config["general"]["load_pre_spinup"]
-            if "load_pre_spinup" in self.config["general"]
-            else False
-        )
-        if scenario == "pre_spinup":
-            end_time = datetime.datetime.combine(
-                self.config["general"]["spinup_time"], datetime.time(0)
-            )
-            current_time = datetime.datetime.combine(
-                self.config["general"]["pre_spinup_time"], datetime.time(0)
-            )
-            if end_time.year - current_time.year < 10:
-                print(
-                    "Pre-spinup time is less than 15 years. This is not recommended and may lead to issues later."
-                )
-            print("Running pre-spinup")
-            self.load_initial_data = False
-            self.save_initial_data = self.config["general"]["export_inital_on_spinup"]
-            self.initial_conditions = []
-            self.initial_relations = []
-        elif scenario == "spinup":
+
+        if self.spinup is True:
             end_time = datetime.datetime.combine(
                 self.config["general"]["start_time"], datetime.time(0)
             )
             current_time = datetime.datetime.combine(
                 self.config["general"]["spinup_time"], datetime.time(0)
             )
-            if (end_time.year - current_time.year < 10) and not (
-                "load_pre_spinup" in self.config["general"]
-                and self.config["general"]["load_pre_spinup"]
-            ):
+            if end_time.year - current_time.year < 10:
                 print(
-                    "Spinup time is less than 10 years. Without a pre-spinup this is not recommended and may lead to issues later."
+                    "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
                 )
 
             self.load_initial_data = False
@@ -115,7 +106,6 @@ class GEBModel(ABM_Model, CWatM_Model):
             end_time = datetime.datetime.combine(
                 self.config["general"]["end_time"], datetime.time(0)
             )
-            self.load_pre_spinup_data = False
             self.load_initial_data = True
             self.save_initial_data = False
 
@@ -169,8 +159,6 @@ class GEBModel(ABM_Model, CWatM_Model):
             Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
             data=self.agents.farmers.activation_order_by_elevation,
         )
-
-        self.running = True
 
     def __init_ABM__(
         self,
@@ -259,8 +247,6 @@ class GEBModel(ABM_Model, CWatM_Model):
         for _ in range(self.n_timesteps):
             self.step()
 
-        CWatM_Model.finalize(self)
-
         if self.save_initial_data:
             self.initial_conditions_folder.mkdir(parents=True, exist_ok=True)
             with open(
@@ -279,30 +265,6 @@ class GEBModel(ABM_Model, CWatM_Model):
                         self.initial_conditions_folder, f"farmers.{attribute}.npz"
                     )
                     np.savez_compressed(fp, data=value.data)
-
-        if self.load_pre_spinup_data and self.scenario == "pre_spinup":
-            self.initial_relations_folder.mkdir(parents=True, exist_ok=True)
-            with open(
-                Path(self.initial_relations_folder, "initial_relations.txt"), "w"
-            ) as f:
-                for var in self.initial_relations:
-                    f.write(f"{var}\n")
-
-                    fp = self.initial_relations_folder / f"{var}.npz"
-                    values = attrgetter(var)(self.data)
-                    np.savez_compressed(fp, data=values)
-            agent_relation_attributes = [
-                "_yearly_yield_ratio",
-                "_yearly_SPEI_probability",
-                "_yearly_profits",
-                "_yearly_potential_profits",
-                "_farmer_probability_yield_relation",
-            ]
-
-            for attribute in agent_relation_attributes:
-                fp = Path(self.initial_relations_folder, f"farmers.{attribute}.npz")
-                values = attrgetter(attribute)(self.agents.farmers)
-                np.savez_compressed(fp, data=values)
 
         print("Model run finished")
 
@@ -325,3 +287,13 @@ class GEBModel(ABM_Model, CWatM_Model):
         folder = Path("simulation_root")
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    def close(self) -> None:
+        """Finalizes the model."""
+        CWatM_Model.finalize(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
