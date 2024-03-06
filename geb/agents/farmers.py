@@ -3415,13 +3415,13 @@ class Farmers(AgentBaseClass):
         # if self.model.current_timestep == 105:
         #     self.remove_agent(farmer_idx=1000)
 
-    def remove_agents(self, farmer_indices: list[int]):
+    def remove_agents(self, farmer_indices: list[int], land_use_type: int) -> np.ndarray:
         farmer_indices = np.array(farmer_indices)
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
             HRUs_with_removed_farmers = []
             for idx in farmer_indices:
-                HRUs_with_removed_farmers.append(self.remove_agent(idx))
+                HRUs_with_removed_farmers.append(self.remove_agent(idx, land_use_type))
         return np.concatenate(HRUs_with_removed_farmers)
 
     def remove_agent(self, farmer_idx: int, land_use_type: int) -> np.ndarray:
