@@ -293,8 +293,22 @@ class CWatMReporter(ABMReporter):
                                 )
                                 value = decompressed_array[int(args[0]), int(args[1])]
                                 assert not np.isnan(value)
+                            elif function == "sample_coord":
+                                if conf["varname"].startswith("data.grid"):
+                                    gt = self.model.data.grid.gt
+                                elif conf["varname"].startswith("data.HRU"):
+                                    gt = self.model.data.routing.gt
+                                else:
+                                    raise ValueError
+                                x, y = coord_to_pixel(
+                                    (float(args[0]), float(args[1])), gt
+                                )
+                                decompressed_array = self.decompress(
+                                    conf["varname"], array
+                                )
+                                value = decompressed_array[y, x]
                             else:
-                                raise ValueError()
+                                raise ValueError(f"Function {function} not recognized")
                     self.report_value(name, value, conf)
 
     def report(self) -> None:
@@ -308,7 +322,7 @@ class CWatMReporter(ABMReporter):
                         {k: v for k, v in zip(self.timesteps, values)}
                     )
                 else:
-                    df = pd.DataFrame(values, index=self.timesteps, columns=[name])
+                    df = pd.DataFrame(values, index=self.timesteps, columns=["discharge_sample"])
                 df.index.name = "time"
                 export_format = self.model.config["report_cwatm"][name]["format"]
                 if export_format == "csv":

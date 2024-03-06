@@ -3145,7 +3145,7 @@ class Farmers(AgentBaseClass):
     def land_use_change(self) -> None:
         import matplotlib.pyplot as plt
         import rioxarray
-        to_forest =  rioxarray.open_rasterio("C:/Users/servaas/GEB/GEB_models/geul/base/input/to_forest/to_forest.tif", masked = True)
+        to_forest =  rioxarray.open_rasterio("C:/Users/romij/GEB/GEB_models/meuse/models/meuse/base/input/to_forest/forested_grassland_and_agricultural_land.tif", masked = True)
 
         # Get the transform and dimensions from the existing mask
         # transform = Affine.from_gdal(*self.model.data.HRU.gt)
@@ -3176,9 +3176,8 @@ class Farmers(AgentBaseClass):
 
         # remove the farmers that are not in the areas to be converted to forest
         HRUs_to_forest_for_farmers = self.remove_agents(
-            farmer_indices=farmers_to_convert
+            farmer_indices=farmers_to_convert, land_use_type = 0
         )
-        self.var.land_use_type[HRUs_to_forest_for_farmers] = 0  # 0 is forest
 
 
     @staticmethod
@@ -3310,8 +3309,9 @@ class Farmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.water_abstraction_sum()
-        #if self.model.scenario == "lulc" and self.model.config["general"]["start_time"].year - self.model.current_time.year == 0 and self.model.current_time.month == 1 and self.model.current_time.day == 2:
-        #   self.land_use_change()
+
+        if self.model.scenario == "lulc" and self.model.config["general"]["start_time"].year - self.model.current_time.year == 0 and self.model.config["general"]["start_time"].month == 6 and self.model.current_time.day == 2:
+           self.land_use_change()
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
@@ -3524,6 +3524,7 @@ class Farmers(AgentBaseClass):
             # reduce the number of agents by 1
             assert agent_array.n == self.n + 1
             agent_array.n = self.n
+        
 
         # update the field indices of the last agent
         self.var.land_owners[last_farmer_HRUs] = farmer_idx
