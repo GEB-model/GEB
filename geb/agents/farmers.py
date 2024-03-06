@@ -77,6 +77,11 @@ class Farmers(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
         self.agents = agents
+        self.config = (
+            self.model.config["agent_settings"]["farmers"]
+            if "farmers" in self.model.config["agent_settings"]
+            else {}
+        )
         self.sample = [2000, 5500, 10000]
         self.var = model.data.HRU
         self.redundancy = reduncancy
@@ -205,16 +210,10 @@ class Farmers(AgentBaseClass):
             self.model, "crops/cultivation_costs"
         )
 
-        if self.model.scenario == "pre_spinup" or self.model.load_pre_spinup_data:
-            self.total_spinup_time = (
-                self.model.config["general"]["start_time"].year
-                - self.model.config["general"]["pre_spinup_time"].year
-            )
-        else:
-            self.total_spinup_time = (
-                self.model.config["general"]["start_time"].year
-                - self.model.config["general"]["spinup_time"].year
-            )
+        self.total_spinup_time = (
+            self.model.config["general"]["start_time"].year
+            - self.model.config["general"]["spinup_time"].year
+        )
 
         self.yield_ratio_multiplier_value = self.model.config["agent_settings"][
             "expected_utility"
@@ -552,49 +551,42 @@ class Farmers(AgentBaseClass):
                 "yearly_potential_profits",
                 "farmer_yield_probability_relation",
             ]
-            if self.model.scenario == "spinup" and self.model.load_pre_spinup_data:
-                for attribute in agent_relation_attributes:
-                    fp = os.path.join(
-                        self.model.initial_relations_folder, f"farmers.{attribute}.npz"
-                    )
-                    values = np.load(fp)["data"]
-                    setattr(self, attribute, FarmerAgentArray(values, max_n=self.max_n))
-            else:
-                self.yearly_SPEI_probability = FarmerAgentArray(
-                    n=self.n,
-                    max_n=self.max_n,
-                    extra_dims=(self.total_spinup_time + 1,),
-                    dtype=np.float32,
-                    fill_value=0,
-                )
-                self.yearly_yield_ratio = FarmerAgentArray(
-                    n=self.n,
-                    max_n=self.max_n,
-                    extra_dims=(self.total_spinup_time + 1,),
-                    dtype=np.float32,
-                    fill_value=0,
-                )
-                self.yearly_profits = FarmerAgentArray(
-                    n=self.n,
-                    max_n=self.max_n,
-                    extra_dims=(self.total_spinup_time + 1,),
-                    dtype=np.float32,
-                    fill_value=0,
-                )
-                self.yearly_potential_profits = FarmerAgentArray(
-                    n=self.n,
-                    max_n=self.max_n,
-                    extra_dims=(self.total_spinup_time + 1,),
-                    dtype=np.float32,
-                    fill_value=0,
-                )
-                self.farmer_yield_probability_relation = FarmerAgentArray(
-                    n=self.n,
-                    max_n=self.max_n,
-                    extra_dims=(2,),
-                    dtype=np.float32,
-                    fill_value=0,
-                )
+
+            self.yearly_SPEI_probability = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                extra_dims=(self.total_spinup_time + 1,),
+                dtype=np.float32,
+                fill_value=0,
+            )
+            self.yearly_yield_ratio = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                extra_dims=(self.total_spinup_time + 1,),
+                dtype=np.float32,
+                fill_value=0,
+            )
+            self.yearly_profits = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                extra_dims=(self.total_spinup_time + 1,),
+                dtype=np.float32,
+                fill_value=0,
+            )
+            self.yearly_potential_profits = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                extra_dims=(self.total_spinup_time + 1,),
+                dtype=np.float32,
+                fill_value=0,
+            )
+            self.farmer_yield_probability_relation = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                extra_dims=(2,),
+                dtype=np.float32,
+                fill_value=0,
+            )
             for attribute in agent_relation_attributes:
                 assert (
                     getattr(self, attribute).shape[0] == self.n
@@ -667,8 +659,6 @@ class Farmers(AgentBaseClass):
             self.infiltration_multiplier = FarmerAgentArray(
                 n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=1
             )
-            if self.model.scenario == "cover-crops":
-                self.infiltration_multiplier.fill(1.1)
 
             rng_drip = np.random.default_rng(70)
             self.time_adapted[self.adapted[:, 2] == 1, 2] = rng_drip.uniform(
@@ -1578,10 +1568,11 @@ class Farmers(AgentBaseClass):
         loaning_farmers = drought_loss_current >= self.moving_average_threshold
 
         # Determine their microcredit
-        if np.any(loaning_farmers) and self.model.scenario not in [
-            "noadaptation",
-            "pre_spinup",
-        ]:
+        if (
+            np.any(loaning_farmers)
+            and "ruleset" in self.config
+            and not self.config["ruleset"] == "no-adaptation"
+        ):
             print(np.count_nonzero(loaning_farmers), "farmers are getting microcredit")
             self.microcredit(loaning_farmers, drought_loss_current, total_crop_age)
 
@@ -1807,17 +1798,7 @@ class Farmers(AgentBaseClass):
             all_loans_annual_cost=self.all_loans_annual_cost.data,
             loan_tracker=self.loan_tracker.data,
             interest_rate=self.interest_rate.data,
-            farmers_going_out_of_business=(
-                self.model.config["agent_settings"]["farmers"][
-                    "farmers_going_out_of_business"
-                ]
-                and not self.model.scenario
-                not in (
-                    "spinup",
-                    "pre-spinup",
-                    "noadaptation",
-                )  # farmers can only go out of business when not in spinup scenario
-            ),
+            farmers_going_out_of_business=False,
         )
         if farmers_selling_land.size > 0:
             self.remove_agents(farmers_selling_land)
@@ -1921,26 +1902,15 @@ class Farmers(AgentBaseClass):
         latest_potential_profits = potential_profit[harvesting_farmers]
 
         # Calculate the cumulative inflation from the start year to the current year for each farmer
-        if self.model.scenario == "pre_spinup":
-            inflation_arrays = [
-                self.get_value_per_farmer_from_region_id(
-                    self.inflation_rate, datetime(year, 1, 1)
-                )
-                for year in range(
-                    self.model.config["general"]["pre_spinup_time"].year,
-                    self.model.current_time.year + 1,
-                )
-            ]
-        else:
-            inflation_arrays = [
-                self.get_value_per_farmer_from_region_id(
-                    self.inflation_rate, datetime(year, 1, 1)
-                )
-                for year in range(
-                    self.model.config["general"]["spinup_time"].year,
-                    self.model.current_time.year + 1,
-                )
-            ]
+        inflation_arrays = [
+            self.get_value_per_farmer_from_region_id(
+                self.inflation_rate, datetime(year, 1, 1)
+            )
+            for year in range(
+                self.model.config["general"]["spinup_time"].year,
+                self.model.current_time.year + 1,
+            )
+        ]
 
         cum_inflation = np.ones_like(inflation_arrays[0])
         for inflation in inflation_arrays:
@@ -3383,13 +3353,16 @@ class Farmers(AgentBaseClass):
 
             # check if current year is a leap year
             days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
-            has_access_to_water_all_year = self.n_water_accessible_days >= 365
+            has_access_to_water_all_year = self.n_water_accessible_days >= days_in_year
             self.n_water_accessible_years[has_access_to_water_all_year] += 1
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0  # reset water accessible days
 
             self.set_yearly_yield_spei()
 
+            if self.model.spinup is False or (
+                "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
+            ):
             # Alternative scenarios: 'sprinkler'
             if self.model.scenario not in ["pre_spinup", "spinup", "noadaptation","lulc"]:
                 # Determine the relation between drought probability and yield

@@ -2,12 +2,13 @@ import click
 import os
 import cProfile
 from pstats import Stats
-import geopandas as gpd
+from operator import attrgetter
 import yaml
 import logging
 import functools
 import faulthandler
 from pathlib import Path
+import importlib
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules import ChartModule
@@ -89,53 +90,58 @@ def click_config(func):
     return wrapper
 
 
-@main.command()
-@click_config
-@click.option(
-    "--scenario",
-    "-s",
-    type=str,
-    default="spinup",
-    required=True,
-    help="""Here you can specify which scenario you would like to run. Currently 4 scenarios (base, self_investement, ngo_training, government_subsidies) are implemented, and model spinup are implemented.""",
-)
-@click.option(
-    "--gpu_device",
-    type=int,
-    default=0,
-    help="""Specify the GPU to use (zero-indexed).""",
-)
-@click.option(
-    "--profiling",
-    is_flag=True,
-    help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
-)
-@click.option(
-    "--use_gpu",
-    is_flag=True,
-    help="Whether a GPU can be used to run the model. This requires CuPy to be installed.",
-)
-@click.option(
-    "--working-directory", "-wd", default=".", help="Working directory for model."
-)
-@click.option(
-    "--gui",
-    is_flag=True,
-    help="""The model can be run with or without a visual interface. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
-)
-@click.option(
-    "--no-browser",
-    is_flag=True,
-    help="""Do not open browser when running the model. This option is, for example, useful when running the model on a server, and you would like to remotely access the model.""",
-)
-@click.option(
-    "--port",
-    type=int,
-    default=8521,
-    help="""Port used for display environment (default: 8521)""",
-)
-def run(
-    scenario,
+def click_run_options():
+    def decorator(func):
+        @click_config
+        @click.option(
+            "--gpu_device",
+            type=int,
+            default=0,
+            help="""Specify the GPU to use (zero-indexed).""",
+        )
+        @click.option(
+            "--profiling",
+            is_flag=True,
+            help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
+        )
+        @click.option(
+            "--use_gpu",
+            is_flag=True,
+            help="Whether a GPU can be used to run the model. This requires CuPy to be installed.",
+        )
+        @click.option(
+            "--working-directory",
+            "-wd",
+            default=".",
+            help="Working directory for model.",
+        )
+        @click.option(
+            "--gui",
+            is_flag=True,
+            help="""The model can be run with or without a visual interface. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
+        )
+        @click.option(
+            "--no-browser",
+            is_flag=True,
+            help="""Do not open browser when running the model. This option is, for example, useful when running the model on a server, and you would like to remotely access the model.""",
+        )
+        @click.option(
+            "--port",
+            type=int,
+            default=8521,
+            help="""Port used for display environment (default: 8521)""",
+        )
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def run_model(
+    spinup,
     gpu_device,
     profiling,
     use_gpu,
@@ -161,33 +167,30 @@ def run(
         if not "model_stucture" in config["general"]
         else config["general"]["model_stucture"]
     )
-    for data in model_structure.values():
-        for key, value in data.items():
-            data[key] = Path(config["general"]["input_folder"]) / value
 
     model_params = {
         "config": config,
         "model_structure": model_structure,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
-        "scenario": scenario,
+        "spinup": spinup,
     }
 
     if not gui:
-        model = GEBModel(**model_params)
-        if profiling:
-            with cProfile.Profile() as pr:
+        with GEBModel(**model_params) as model:
+            if profiling:
+                with cProfile.Profile() as pr:
+                    model.run()
+                with open("profiling_stats.cprof", "w") as stream:
+                    stats = Stats(pr, stream=stream)
+                    stats.strip_dirs()
+                    stats.sort_stats("cumtime")
+                    stats.dump_stats(".prof_stats")
+                    stats.print_stats()
+                pr.dump_stats("profile.prof")
+            else:
                 model.run()
-            with open("profiling_stats.cprof", "w") as stream:
-                stats = Stats(pr, stream=stream)
-                stats.strip_dirs()
-                stats.sort_stats("cumtime")
-                stats.dump_stats(".prof_stats")
-                stats.print_stats()
-            pr.dump_stats("profile.prof")
-        else:
-            model.run()
-        report = model.report()
+            report = model.report()
     else:
         if profiling:
             print("Profiling not available for browser version")
@@ -213,6 +216,18 @@ def run(
 
         device = cuda.get_current_device()
         device.reset()
+
+
+@main.command()
+@click_run_options()
+def run(*args, **kwargs):
+    run_model(spinup=False, *args, **kwargs)
+
+
+@main.command()
+@click_run_options()
+def spinup(*args, **kwargs):
+    run_model(spinup=True, *args, **kwargs)
 
 
 @main.command()
@@ -245,6 +260,12 @@ def click_build_options(build_config="build.yml"):
             help="Path of the model build configuration file.",
         )
         @click.option(
+            "--custom-model",
+            default=None,
+            type=str,
+            help="name of custom preprocessing model",
+        )
+        @click.option(
             "--working-directory",
             "-wd",
             default=".",
@@ -265,9 +286,21 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
+def get_model(custom_model):
+    if custom_model is None:
+        return hydromt_geb.GEBModel
+    else:
+        importlib.import_module(
+            "." + custom_model.split(".")[0], package="hydromt_geb.custom_models"
+        )
+        return attrgetter(custom_model)(hydromt_geb.custom_models)
+
+
 @main.command()
 @click_build_options()
-def build(data_catalog, config, build_config, working_directory, data_provider):
+def build(
+    data_catalog, config, build_config, custom_model, working_directory, data_provider
+):
     """Build model."""
 
     # set the working directory
@@ -276,13 +309,15 @@ def build(data_catalog, config, build_config, working_directory, data_provider):
     config = parse_config(config)
     input_folder = Path(config["general"]["input_folder"])
 
-    geb_model = hydromt_geb.GEBModel(
-        root=input_folder,
-        mode="w+",
-        data_libs=data_catalog,
-        logger=create_logger("build.log"),
-        data_provider=data_provider,
-    )
+    arguments = {
+        "root": input_folder,
+        "mode": "w+",
+        "data_libs": data_catalog,
+        "logger": create_logger("build.log"),
+        "data_provider": data_provider,
+    }
+
+    geb_model = get_model(custom_model)(**arguments)
 
     pour_point = config["general"]["pour_point"]
     geb_model.build(
@@ -296,7 +331,15 @@ def build(data_catalog, config, build_config, working_directory, data_provider):
 @main.command()
 @click_build_options()
 @click.option("--model", "-m", default="../base", help="Folder for base model.")
-def alter(data_catalog, config, build_config, working_directory, model, data_provider):
+def alter(
+    data_catalog,
+    config,
+    build_config,
+    custom_model,
+    working_directory,
+    model,
+    data_provider,
+):
     """Build model."""
 
     # set the working directory
@@ -305,14 +348,15 @@ def alter(data_catalog, config, build_config, working_directory, model, data_pro
     config = parse_config(config)
     reference_model_folder = Path(model) / Path(config["general"]["input_folder"])
 
-    geb_model = hydromt_geb.GEBModel(
-        root=reference_model_folder,
-        mode="w+",
-        data_libs=data_catalog,
-        logger=create_logger("build.log"),
-        data_provider=data_provider,
-    )
+    arguments = {
+        "root": reference_model_folder,
+        "mode": "r+",
+        "data_libs": data_catalog,
+        "logger": create_logger("build.log"),
+        "data_provider": data_provider,
+    }
 
+    geb_model = get_model(custom_model)(**arguments)
     geb_model.read()
     geb_model.set_alternate_root(
         Path(".") / Path(config["general"]["input_folder"]), mode="w+"
@@ -325,7 +369,9 @@ def alter(data_catalog, config, build_config, working_directory, model, data_pro
 
 @main.command()
 @click_build_options(build_config="update.yml")
-def update(data_catalog, config, build_config, working_directory, data_provider):
+def update(
+    data_catalog, config, build_config, custom_model, working_directory, data_provider
+):
     """Update model."""
 
     # set the working directory
@@ -334,13 +380,15 @@ def update(data_catalog, config, build_config, working_directory, data_provider)
     config = parse_config(config)
     input_folder = Path(config["general"]["input_folder"])
 
-    geb_model = hydromt_geb.GEBModel(
-        root=input_folder,
-        mode="r+",
-        data_libs=data_catalog,
-        logger=create_logger("build_update.log"),
-        data_provider=data_provider,
-    )
+    arguments = {
+        "root": input_folder,
+        "mode": "r+",
+        "data_libs": data_catalog,
+        "logger": create_logger("build_update.log"),
+        "data_provider": data_provider,
+    }
+
+    geb_model = get_model(custom_model)(**arguments)
     geb_model.read()
     geb_model.update(opt=configread(build_config))
 
