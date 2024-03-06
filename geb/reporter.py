@@ -346,7 +346,7 @@ class Reporter:
 
     def __init__(self, model):
         self.model = model
-        self.abm_reporter = ABMReporter(model, subfolder=self.model.run_name)
+        self.abm_reporter = ABMReporter(model, subfolder=self.model.scenario)
         self.cwatmreporter = CWatMReporter(model, subfolder=self.model.run_name)
 
     @property
