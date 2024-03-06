@@ -3212,6 +3212,8 @@ class Farmers(AgentBaseClass):
 
         Then, farmers harvest and plant crops.
         """
+        # for i in range(self.n):
+        #     self.remove_agent(self.n - 1, land_use_type=1)
         month = self.model.current_time.month
         if month in (6, 7, 8, 9, 10):
             self.current_season_idx = 0  # season #1
@@ -3413,17 +3415,20 @@ class Farmers(AgentBaseClass):
         # if self.model.current_timestep == 105:
         #     self.remove_agent(farmer_idx=1000)
 
-    def remove_agents(self, farmer_indices: list[int]):
+    def remove_agents(self, farmer_indices: list[int], land_use_type: int) -> np.ndarray:
         farmer_indices = np.array(farmer_indices)
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
             HRUs_with_removed_farmers = []
             for idx in farmer_indices:
-                HRUs_with_removed_farmers.append(self.remove_agent(idx))
+                HRUs_with_removed_farmers.append(self.remove_agent(idx, land_use_type))
         return np.concatenate(HRUs_with_removed_farmers)
 
-    def remove_agent(self, farmer_idx: int) -> np.ndarray:
+    def remove_agent(self, farmer_idx: int, land_use_type: int) -> np.ndarray:
         assert farmer_idx >= 0, "Farmer index must be positive."
+        assert (
+            farmer_idx < self.n
+        ), "Farmer index must be less than the number of agents."
         last_farmer_HRUs = get_farmer_HRUs(
             self.field_indices, self.field_indices_by_farmer.data, -1
         )
@@ -3437,26 +3442,31 @@ class Farmers(AgentBaseClass):
         self.var.crop_map[HRUs_farmer_to_be_removed] = -1
         self.var.crop_age_days_map[HRUs_farmer_to_be_removed] = -1
         self.var.crop_harvest_age_days[HRUs_farmer_to_be_removed] = -1
+        self.var.land_use_type[HRUs_farmer_to_be_removed] = land_use_type
 
         # reduce number of agents
         self.n -= 1
 
-        # move data of last agent to the index of the agent that is to be removed, effectively removing that agent.
-        for agent_array in self.agent_arrays.values():
-            agent_array[farmer_idx] = agent_array[-1]
-            # reduce the number of agents by 1
-            assert agent_array.n == self.n + 1
-            agent_array.n = self.n
+        if not self.n == farmer_idx:
+            # move data of last agent to the index of the agent that is to be removed, effectively removing that agent.
+            for agent_array in self.agent_arrays.values():
+                agent_array[farmer_idx] = agent_array[-1]
+                # reduce the number of agents by 1
+                assert agent_array.n == self.n + 1
+                agent_array.n = self.n
 
-        # update the field indices of the last agent
-        self.var.land_owners[last_farmer_HRUs] = farmer_idx
+            # update the field indices of the last agent
+            self.var.land_owners[last_farmer_HRUs] = farmer_idx
+        else:
+            for agent_array in self.agent_arrays.values():
+                agent_array.n = self.n
 
         # TODO: Speed up field index updating.
         self.update_field_indices()
         if self.n == farmer_idx:
             assert (
                 get_farmer_HRUs(
-                    self.field_indices, self.field_indices_by_farmer, farmer_idx
+                    self.field_indices, self.field_indices_by_farmer.data, farmer_idx
                 ).size
                 == 0
             )
