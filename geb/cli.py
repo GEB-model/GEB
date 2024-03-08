@@ -336,6 +336,10 @@ def build(
         region_config = {
             "subbasin": [[pour_point[0]], [pour_point[1]]],
         }
+    elif "geometry" in region:
+        region_config = {
+            "geom": region["geometry"],
+        }
 
     geb_model.build(
         opt=configread(build_config),
