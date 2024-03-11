@@ -180,17 +180,17 @@ class Farmers(AgentBaseClass):
             ).get_data_array()
         )
 
-        # self.SPEI_map = NetCDFReader(
-        #     fp=self.model.model_structure["forcing"]["climate/spei"],
-        #     varname="spei",
-        #     xmin=self.model.xmin,
-        #     ymin=self.model.ymin,
-        #     xmax=self.model.xmax,
-        #     ymax=self.model.ymax,
-        #     latname="y",
-        #     lonname="x",
-        #     timename="time",
-        # )
+        self.SPEI_map = NetCDFReader(
+            fp=self.model.model_structure["forcing"]["climate/spei"],
+            varname="spei",
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
+            latname="y",
+            lonname="x",
+            timename="time",
+        )
 
         with open(
             self.model.model_structure["dict"]["agents/farmers/irrigation_sources"], "r"
