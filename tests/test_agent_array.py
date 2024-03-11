@@ -206,9 +206,6 @@ def test_agent_array():
     numba_function(a.data)
     assert (a == -99).all()
 
-    c = np.stack([a, a, a], axis=1)
-    print(c)
-
 
 @pytest.fixture
 def array():
