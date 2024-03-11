@@ -7,7 +7,7 @@ from pathlib import Path
 from cwatm.cwatm_model import CWATModel
 from cwatm.management_modules.dynamicModel import ModelFrame
 from cwatm.management_modules.configuration import parse_configuration
-from cwatm.management_modules.globals import settingsfile, binding, outDir
+from cwatm.management_modules.globals import settingsfile, binding, outDir, Flags
 from cwatm.run_cwatm import headerinfo
 
 
@@ -33,6 +33,8 @@ class CWatM_Model(CWATModel):
         parse_configuration(settings)
 
         outDir["OUTPUT"] = self.report_folder
+        Flags["quiet"] = True
+        Flags["veryquiet"] = True
 
         # calibration
         for parameter, value in self.config["parameters"].items():
