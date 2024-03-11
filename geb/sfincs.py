@@ -107,10 +107,15 @@ class SFINCS:
             self.model.timestep_length / substeps
         )
         discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
-        sfincs_precipitation = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/pr_hourly"]
-        ).rename(pr_hourly='precip')['precip'] * 3600 # convert from kg/m2/s to mm/h for 
-        sfincs_precipitation.raster.set_crs(4326)  # TODO: Remove when this is added to hydromt_sfincs
+        sfincs_precipitation = (
+            xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/pr_hourly"]
+            ).rename(pr_hourly="precip")["precip"]
+            * 3600
+        )  # convert from kg/m2/s to mm/h for
+        sfincs_precipitation.raster.set_crs(
+            4326
+        )  # TODO: Remove when this is added to hydromt_sfincs
         sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
         update_sfincs_model_forcing(
             model_root=self.sfincs_model_root(basin_id),

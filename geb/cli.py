@@ -327,8 +327,8 @@ def build(
             "The `pour_point` option is deprecated and will be removed in future versions. Please use `region.pour_point` instead.",
             DeprecationWarning,
         )
-        config['general']['region'] = {}
-        config["general"]['region']["pour_point"] = config["general"]["pour_point"]
+        config["general"]["region"] = {}
+        config["general"]["region"]["pour_point"] = config["general"]["pour_point"]
 
     region = config["general"]["region"]
     if "pour_point" in region:
