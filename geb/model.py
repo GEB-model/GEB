@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import datetime
 from pathlib import Path
-from operator import attrgetter
 import geopandas as gpd
 from typing import Union
 from time import time
@@ -19,7 +18,6 @@ from honeybees.model import Model as ABM_Model
 
 from geb.reporter import Reporter
 from geb.agents import Agents
-from geb.agents.general import AgentArray
 from geb.artists import Artists
 from geb.HRUs import Data
 from geb.cwatm_model import CWatM_Model
@@ -98,7 +96,6 @@ class GEBModel(ABM_Model, CWatM_Model):
 
             self.load_initial_data = False
             self.save_initial_data = self.config["general"]["export_inital_on_spinup"]
-            self.initial_conditions = []
         else:
             current_time = datetime.datetime.combine(
                 self.config["general"]["start_time"], datetime.time(0)
@@ -248,17 +245,7 @@ class GEBModel(ABM_Model, CWatM_Model):
             self.step()
 
         if self.save_initial_data:
-            self.initial_conditions_folder.mkdir(parents=True, exist_ok=True)
-            with open(
-                Path(self.initial_conditions_folder, "initial_conditions.txt"), "w"
-            ) as f:
-                for var in self.initial_conditions:
-                    f.write(f"{var}\n")
-
-                    fp = self.initial_conditions_folder / f"{var}.npz"
-                    values = attrgetter(var)(self.data)
-                    np.savez_compressed(fp, data=values)
-
+            self.data.save_state()
             self.agents.farmers.save_state()
 
         print("Model run finished")

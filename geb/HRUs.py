@@ -4,6 +4,7 @@ from numba import njit
 from pathlib import Path
 import rasterio
 import os
+from operator import attrgetter
 import xarray as xr
 import rioxarray as rxr
 import numpy as np
@@ -63,11 +64,11 @@ class BaseVariables:
         return array / self.cellArea
 
     def register_initial_data(self, name: str) -> None:
-        self.model.initial_conditions.append(name)
+        self.data.initial_conditions.append(name)
 
     def load_initial(self, name, default=0.0, gpu=False):
         if self.model.load_initial_data:
-            fp = os.path.join(self.model.initial_conditions_folder, f"{name}.npz")
+            fp = os.path.join(self.data.save_state_path, f"{name}.npz")
             if gpu:
                 return cp.load(fp)["data"]
             else:
@@ -228,34 +229,22 @@ class HRUs(BaseVariables):
         self.cell_size = self.data.grid.cell_size / self.scaling
         if self.model.load_initial_data:
             self.land_use_type = np.load(
-                os.path.join(
-                    self.model.initial_conditions_folder, "HRU.land_use_type.npz"
-                )
+                os.path.join(self.data.save_state_path, "HRU.land_use_type.npz")
             )["data"]
             self.land_use_ratio = np.load(
-                os.path.join(
-                    self.model.initial_conditions_folder, "HRU.land_use_ratio.npz"
-                )
+                os.path.join(self.data.save_state_path, "HRU.land_use_ratio.npz")
             )["data"]
             self.land_owners = np.load(
-                os.path.join(
-                    self.model.initial_conditions_folder, "HRU.land_owners.npz"
-                )
+                os.path.join(self.data.save_state_path, "HRU.land_owners.npz")
             )["data"]
             self.HRU_to_grid = np.load(
-                os.path.join(
-                    self.model.initial_conditions_folder, "HRU.HRU_to_grid.npz"
-                )
+                os.path.join(self.data.save_state_path, "HRU.HRU_to_grid.npz")
             )["data"]
             self.grid_to_HRU = np.load(
-                os.path.join(
-                    self.model.initial_conditions_folder, "HRU.grid_to_HRU.npz"
-                )
+                os.path.join(self.data.save_state_path, "HRU.grid_to_HRU.npz")
             )["data"]
             self.unmerged_HRU_indices = np.load(
-                os.path.join(
-                    self.model.initial_conditions_folder, "HRU.unmerged_HRU_indices.npz"
-                )
+                os.path.join(self.data.save_state_path, "HRU.unmerged_HRU_indices.npz")
             )["data"]
         else:
             (
@@ -564,6 +553,8 @@ class Data:
             self.model.model_structure["subgrid"]["agents/farmers/farms"], "r"
         ) as farms_src:
             self.farms = farms_src.read()[0]
+
+        self.initial_conditions = []
 
         self.grid = Grid(self, model)
         self.HRU = HRUs(self, model)
@@ -939,3 +930,18 @@ class Data:
         assert (self.grid.sfcWind >= 0).all() and (
             self.grid.sfcWind < 150
         ).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
+
+    @property
+    def save_state_path(self):
+        folder = Path(self.model.initial_conditions_folder, "grid")
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def save_state(self):
+        with open(Path(self.save_state_path, "state.txt"), "w") as f:
+            for var in self.initial_conditions:
+                f.write(f"{var}\n")
+                fp = self.save_state_path / f"{var}.npz"
+                values = attrgetter(var)(self)
+                np.savez_compressed(fp, data=values)
+        return True
