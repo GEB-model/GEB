@@ -9,9 +9,7 @@ from typing import Tuple
 import matplotlib.pyplot as plt
 
 from scipy.stats import genextreme
-from scipy.stats import linregress
 from scipy.optimize import curve_fit
-from scipy.spatial.distance import euclidean
 
 import numpy as np
 from numba import njit
