@@ -9,6 +9,7 @@ import functools
 import faulthandler
 from pathlib import Path
 import importlib
+import warnings
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules import ChartModule
@@ -319,12 +320,30 @@ def build(
 
     geb_model = get_model(custom_model)(**arguments)
 
-    pour_point = config["general"]["pour_point"]
+    # TODO: remove pour_point option in future versions
+    if "pour_point" in config["general"]:
+        assert "region" not in config
+        warnings.warn(
+            "The `pour_point` option is deprecated and will be removed in future versions. Please use `region.pour_point` instead.",
+            DeprecationWarning,
+        )
+        config["general"]["region"] = {}
+        config["general"]["region"]["pour_point"] = config["general"]["pour_point"]
+
+    region = config["general"]["region"]
+    if "pour_point" in region:
+        pour_point = region["pour_point"]
+        region_config = {
+            "subbasin": [[pour_point[0]], [pour_point[1]]],
+        }
+    elif "geometry" in region:
+        region_config = {
+            "geom": region["geometry"],
+        }
+
     geb_model.build(
         opt=configread(build_config),
-        region={
-            "subbasin": [[pour_point[0]], [pour_point[1]]],
-        },
+        region=region_config,
     )
 
 

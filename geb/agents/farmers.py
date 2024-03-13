@@ -3,14 +3,13 @@ import os
 import math
 from datetime import datetime
 import json
+from pathlib import Path
 import calendar
 from typing import Tuple
 import matplotlib.pyplot as plt
 
 from scipy.stats import genextreme
-from scipy.stats import linregress
 from scipy.optimize import curve_fit
-from scipy.spatial.distance import euclidean
 
 import numpy as np
 from numba import njit
@@ -246,19 +245,7 @@ class Farmers(AgentBaseClass):
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
         if self.model.load_initial_data:
-            for fn in os.listdir(self.model.initial_conditions_folder):
-                if not fn.startswith("farmers."):
-                    continue
-                attribute = fn.split(".")[1]
-                fp = os.path.join(self.model.initial_conditions_folder, fn)
-                values = np.load(fp)["data"]
-                if not hasattr(self, "max_n"):
-                    self.max_n = self.get_max_n(values.shape[0])
-                values = FarmerAgentArray(values, max_n=self.max_n)
-                setattr(self, attribute, values)
-            self.n = self.locations.shape[
-                0
-            ]  # first value where location is not defined (np.nan)
+            self.restore_state()
         else:
             farms = self.model.data.farms
 
@@ -3212,8 +3199,10 @@ class Farmers(AgentBaseClass):
 
         Then, farmers harvest and plant crops.
         """
+        # import random
+
         # for i in range(self.n):
-        #     self.remove_agent(self.n - 1, land_use_type=1)
+        #     self.remove_agent(random.randint(0, self.n), land_use_type=1)
         month = self.model.current_time.month
         if month in (6, 7, 8, 9, 10):
             self.current_season_idx = 0  # season #1
@@ -3415,7 +3404,9 @@ class Farmers(AgentBaseClass):
         # if self.model.current_timestep == 105:
         #     self.remove_agent(farmer_idx=1000)
 
-    def remove_agents(self, farmer_indices: list[int], land_use_type: int) -> np.ndarray:
+    def remove_agents(
+        self, farmer_indices: list[int], land_use_type: int
+    ) -> np.ndarray:
         farmer_indices = np.array(farmer_indices)
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
@@ -3449,7 +3440,7 @@ class Farmers(AgentBaseClass):
 
         if not self.n == farmer_idx:
             # move data of last agent to the index of the agent that is to be removed, effectively removing that agent.
-            for agent_array in self.agent_arrays.values():
+            for name, agent_array in self.agent_arrays.items():
                 agent_array[farmer_idx] = agent_array[-1]
                 # reduce the number of agents by 1
                 assert agent_array.n == self.n + 1
@@ -3574,8 +3565,44 @@ class Farmers(AgentBaseClass):
 
     @property
     def agent_arrays(self):
-        return {
+        agent_arrays = {
             name: value
             for name, value in vars(self).items()
             if isinstance(value, FarmerAgentArray)
         }
+        ids = [id(v) for v in agent_arrays.values()]
+        if len(set(ids)) != len(ids):
+            duplicate_arrays = [
+                name for name, value in agent_arrays.items() if ids.count(id(value)) > 1
+            ]
+            raise AssertionError(
+                f"Duplicate agent array names: {', '.join(duplicate_arrays)}."
+            )
+        return agent_arrays
+
+    @property
+    def save_state_path(self):
+        folder = Path(self.model.initial_conditions_folder, "farmers")
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def save_state(self):
+        with open(self.save_state_path / "state.txt", "w") as f:
+            for attribute, value in self.agent_arrays.items():
+                f.write(f"{attribute}\n")
+                fp = self.save_state_path / f"{attribute}.npz"
+                np.savez_compressed(fp, data=value.data)
+
+    def restore_state(self):
+        with open(self.save_state_path / "state.txt", "r") as f:
+            for line in f:
+                attribute = line.strip()
+                fp = self.save_state_path / f"{attribute}.npz"
+                values = np.load(fp)["data"]
+                if not hasattr(self, "max_n"):
+                    self.max_n = self.get_max_n(values.shape[0])
+                values = FarmerAgentArray(values, max_n=self.max_n)
+
+                setattr(self, attribute, values)
+
+        self.n = self.locations.shape[0]
