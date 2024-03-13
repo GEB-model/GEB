@@ -134,7 +134,7 @@ class SFINCS:
         return None
 
     def run(self, basin_id, start_time):
-        self.setup(basin_id, force_overwrite=True)
+        self.setup(basin_id, force_overwrite=False)
         self.set_forcing(basin_id, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         run_sfincs_simulation(simulation_root=self.sfincs_simulation_root(basin_id))
