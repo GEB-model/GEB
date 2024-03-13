@@ -24,7 +24,7 @@ class Households(AgentBaseClass):
         self.sizes = AgentArray(sizes, max_n=self.max_n)
 
         self.flood_depth = AgentArray(
-            n=self.n, max_n=self.max_n, fill_value=False, dtype=bool
+            n=self.n, max_n=self.max_n, fill_value=0, dtype=np.float32
         )
         self.risk_perception = AgentArray(
             n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
@@ -69,7 +69,7 @@ class Households(AgentBaseClass):
         flood_depth_per_household = flood_map.values[pixel_y[mask], pixel_x[mask]]
         self.flood_depth[mask] = flood_depth_per_household > 0
 
-        self.risk_perception[self.flood_depth] *= 10
+        self.risk_perception[(self.flood_depth > 0)] *= 10
 
         print("mean risk perception", self.risk_perception.mean())
 
