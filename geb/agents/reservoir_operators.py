@@ -75,8 +75,13 @@ class ReservoirOperators(AgentBaseClass):
         return self
 
     def regulate_reservoir_outflow(self, reservoirStorageM3C, inflowC, waterBodyIDs):
+        print(reservoirStorageM3C.sum())
+        date = self.model.current_time
+        if self.config['ruleset'] == 'inflow_is_outflow':
+            return np.zeros_like(inflowC)
         assert reservoirStorageM3C.size == inflowC.size == waterBodyIDs.size
 
+        # Four types of outflow
         reservoir_fill = reservoirStorageM3C / self.reservoir_volume
         reservoir_outflow1 = np.minimum(
             self.minQC, reservoirStorageM3C * self.model.InvDtSec

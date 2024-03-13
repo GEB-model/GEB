@@ -3323,7 +3323,7 @@ class Farmers(AgentBaseClass):
                 "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
             ):
                 # Determine the relation between drought probability and yield
-                self.calculate_yield_spei_relation()
+                # self.calculate_yield_spei_relation()
 
                 # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
