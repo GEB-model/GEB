@@ -16,7 +16,7 @@ Then install the required packages:
 .. code-block:: bash
 
     conda config --set solver libmamba
-    conda install rasterio numba tbb pandas geopandas numpy deap  pyyaml xarray dask rioxarray pybind11 scipy netCDF4 flopy bmipy xmipy xlrd pyflow s3fs xesmf hydromt tqdm openpyxl xclim xesmf
+    conda install rasterio numba tbb pandas geopandas numpy deap pyyaml xarray dask rioxarray pybind11 scipy netCDF4 flopy bmipy xmipy xlrd s3fs xesmf hydromt tqdm openpyxl xclim xesmf tbb
 
 Then install GEB from GitHub. You need to install the full version, which includes all dependencies:
 
