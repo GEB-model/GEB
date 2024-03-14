@@ -21,7 +21,7 @@ from geb.agents import Agents
 from geb.artists import Artists
 from geb.HRUs import Data
 from geb.cwatm_model import CWatM_Model
-from geb.hazard_driver import HazardDriver
+from geb.hazards.driver import HazardDriver
 
 
 class ABM(ABM_Model):
@@ -180,19 +180,6 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             self.config["general"]["CWatM_settings"],
         )
 
-        if self.config["general"]["simulate_floods"]:
-            from geb.sfincs import SFINCS
-
-            # exract the longest flood event in days
-            flood_events = self.config["general"]["flood_events"]
-            flood_event_lengths = [
-                event["end_time"] - event["start_time"] for event in flood_events
-            ]
-            longest_flood_event = max(flood_event_lengths).days
-            self.sfincs = SFINCS(
-                self, config=self.config, n_timesteps=longest_flood_event
-            )
-
         self.reporter = Reporter(self)
 
         np.savez_compressed(
@@ -227,16 +214,9 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             print(self.current_time, flush=True)
             t0 = time()
             self.data.step()
+            HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
-
-            if self.config["general"]["simulate_floods"]:
-                self.sfincs.save_discharge()
-
-                for event in self.config["general"]["flood_events"]:
-                    assert type(self.current_time.date()) == type(event["end_time"])
-                    if self.current_time.date() == event["end_time"]:
-                        self.sfincs.run(event["basin_id"], event["start_time"])
 
             self.reporter.step()
             t1 = time()
