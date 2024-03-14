@@ -21,9 +21,54 @@ from geb.agents import Agents
 from geb.artists import Artists
 from geb.HRUs import Data
 from geb.cwatm_model import CWatM_Model
+from geb.hazards.driver import HazardDriver
 
 
-class GEBModel(ABM_Model, CWatM_Model):
+class ABM(ABM_Model):
+    def __init__(
+        self,
+        current_time,
+        timestep_length,
+        n_timesteps,
+        coordinate_system: str,
+    ) -> None:
+        """Initializes the agent-based model.
+
+        Args:
+            config_path: Filepath of the YAML-configuration file.
+            args: Run arguments.
+            coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
+        """
+
+        ABM_Model.__init__(
+            self,
+            current_time,
+            timestep_length,
+            args=None,
+            n_timesteps=n_timesteps,
+        )
+
+        study_area = {
+            "xmin": self.data.grid.bounds.left,
+            "xmax": self.data.grid.bounds.right,
+            "ymin": self.data.grid.bounds.bottom,
+            "ymax": self.data.grid.bounds.top,
+        }
+
+        self.area = Area(self, study_area)
+        self.agents = Agents(self)
+        self.artists = Artists(self)
+
+        assert (
+            coordinate_system == "WGS84"
+        )  # coordinate system must be WGS84. If not, all code needs to be reviewed
+
+        # This variable is required for the batch runner. To stop the model
+        # if some condition is met set running to False.
+        timeprint("Finished setup")
+
+
+class GEBModel(HazardDriver, ABM, CWatM_Model):
     """GEB parent class.
 
     Args:
@@ -118,25 +163,22 @@ class GEBModel(ABM_Model, CWatM_Model):
         self.regions = gpd.read_file(self.model_structure["geoms"]["areamaps/regions"])
         self.data = Data(self)
 
-        self.__init_ABM__(
+        HazardDriver.__init__(self)
+
+        ABM.__init__(
+            self,
             current_time,
             timestep_length,
             n_timesteps,
             coordinate_system,
         )
-        self.__init_hydromodel__(self.config["general"]["CWatM_settings"])
-        if self.config["general"]["simulate_floods"]:
-            from geb.sfincs import SFINCS
 
-            # exract the longest flood event in days
-            flood_events = self.config["general"]["flood_events"]
-            flood_event_lengths = [
-                event["end_time"] - event["start_time"] for event in flood_events
-            ]
-            longest_flood_event = max(flood_event_lengths).days
-            self.sfincs = SFINCS(
-                self, config=self.config, n_timesteps=longest_flood_event
-            )
+        CWatM_Model.__init__(
+            self,
+            self.current_time + self.timestep_length,
+            self.n_timesteps,
+            self.config["general"]["CWatM_settings"],
+        )
 
         self.reporter = Reporter(self)
 
@@ -157,58 +199,6 @@ class GEBModel(ABM_Model, CWatM_Model):
             data=self.agents.farmers.activation_order_by_elevation,
         )
 
-    def __init_ABM__(
-        self,
-        current_time,
-        timestep_length,
-        n_timesteps,
-        coordinate_system: str,
-    ) -> None:
-        """Initializes the agent-based model.
-
-        Args:
-            config_path: Filepath of the YAML-configuration file.
-            args: Run arguments.
-            coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
-        """
-
-        ABM_Model.__init__(
-            self,
-            current_time,
-            timestep_length,
-            args=None,
-            n_timesteps=n_timesteps,
-        )
-
-        study_area = {
-            "xmin": self.data.grid.bounds.left,
-            "xmax": self.data.grid.bounds.right,
-            "ymin": self.data.grid.bounds.bottom,
-            "ymax": self.data.grid.bounds.top,
-        }
-
-        self.area = Area(self, study_area)
-        self.agents = Agents(self)
-        self.artists = Artists(self)
-
-        assert (
-            coordinate_system == "WGS84"
-        )  # coordinate system must be WGS84. If not, all code needs to be reviewed
-
-        # This variable is required for the batch runner. To stop the model
-        # if some condition is met set running to False.
-        timeprint("Finished setup")
-
-    def __init_hydromodel__(self, settings: str) -> None:
-        """Function to initialize CWatM.
-
-        Args:
-            settings: Filepath of CWatM settingsfile
-        """
-        CWatM_Model.__init__(
-            self, self.current_time + self.timestep_length, self.n_timesteps, settings
-        )
-
     def step(self, step_size: Union[int, str] = 1) -> None:
         """
         Forward the model by the given the number of steps.
@@ -224,16 +214,9 @@ class GEBModel(ABM_Model, CWatM_Model):
             print(self.current_time, flush=True)
             t0 = time()
             self.data.step()
+            HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
             CWatM_Model.step(self, 1)
-
-            if self.config["general"]["simulate_floods"]:
-                self.sfincs.save_discharge()
-
-                for event in self.config["general"]["flood_events"]:
-                    assert type(self.current_time.date()) == type(event["end_time"])
-                    if self.current_time.date() == event["end_time"]:
-                        self.sfincs.run(event["basin_id"], event["start_time"])
 
             self.reporter.step()
             t1 = time()
