@@ -6,6 +6,7 @@ from typing import Union
 from time import time
 import copy
 import numpy as np
+import warnings
 
 try:
     import cupy as cp
@@ -100,6 +101,14 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             cp.cuda.Device(gpu_device).use()
 
         self.config = self.setup_config(config)
+
+        if "simulate_hydrology" not in self.config["general"]:
+            self.config["general"]["simulate_hydrology"] = True
+            warnings.warn(
+                "Please add 'simulate_hydrology' to the general section of the config file. For most cases this should be set to 'true'.",
+                DeprecationWarning,
+            )
+
         if self.spinup:
             self.config["report"] = {}
 
@@ -173,12 +182,13 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             coordinate_system,
         )
 
-        CWatM_Model.__init__(
-            self,
-            self.current_time + self.timestep_length,
-            self.n_timesteps,
-            self.config["general"]["CWatM_settings"],
-        )
+        if self.config["general"]["simulate_hydrology"]:
+            CWatM_Model.__init__(
+                self,
+                self.current_time + self.timestep_length,
+                self.n_timesteps,
+                self.config["general"]["CWatM_settings"],
+            )
 
         self.reporter = Reporter(self)
 
@@ -216,7 +226,8 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             self.data.step()
             HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
-            CWatM_Model.step(self, 1)
+            if self.config["general"]["simulate_hydrology"]:
+                CWatM_Model.step(self, 1)
 
             self.reporter.step()
             t1 = time()
@@ -255,7 +266,8 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
 
     def close(self) -> None:
         """Finalizes the model."""
-        CWatM_Model.finalize(self)
+        if self.config["general"]["simulate_hydrology"]:
+            CWatM_Model.finalize(self)
 
     def __enter__(self):
         return self
