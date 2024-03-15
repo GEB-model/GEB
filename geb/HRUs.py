@@ -193,6 +193,120 @@ class Grid(BaseVariables):
     def load_initial(self, name, default=0.0):
         return super().load_initial("grid." + name, default=default)
 
+    def load_forcing_ds(self, forcing_variables: set[str]):
+        # loading forcing data
+        if "hurs" in forcing_variables:
+            self.hurs_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/hurs"]
+            )["hurs"]
+            assert self.hurs_ds.y[0] > self.hurs_ds.y[-1]
+        if "pr" in forcing_variables:
+            self.pr_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/pr"]
+            )["pr"]
+            assert self.pr_ds.y[0] > self.pr_ds.y[-1]
+        if "ps" in forcing_variables:
+            self.ps_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/ps"]
+            )["ps"]
+            assert self.ps_ds.y[0] > self.ps_ds.y[-1]
+        if "rlds" in forcing_variables:
+            self.rlds_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/rlds"]
+            )["rlds"]
+            assert self.rlds_ds.y[0] > self.rlds_ds.y[-1]
+        if "rsds" in forcing_variables:
+            self.rsds_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/rsds"]
+            )["rsds"]
+            assert self.rsds_ds.y[0] > self.rsds_ds.y[-1]
+        if "tas" in forcing_variables:
+            self.tas_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/tas"]
+            )["tas"]
+            assert self.tas_ds.y[0] > self.tas_ds.y[-1]
+        if "tasmax" in forcing_variables:
+            self.tasmax_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/tasmax"]
+            )["tasmax"]
+            assert self.tasmax_ds.y[0] > self.tasmax_ds.y[-1]
+        if "tasmin" in forcing_variables:
+            self.tasmin_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/tasmin"]
+            )["tasmin"]
+            assert self.tasmin_ds.y[0] > self.tasmin_ds.y[-1]
+        if "sfcwind" in forcing_variables:
+            self.sfcWind_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/sfcwind"]
+            )["sfcwind"]
+            assert self.sfcWind_ds.y[0] > self.sfcWind_ds.y[-1]
+        if "spei" in forcing_variables:
+            self.spei_ds = xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/spei"]
+            )["spei"]
+            assert self.spei_ds.y[0] > self.spei_ds.y[-1]
+
+    def load_forcing(self, ds):
+        return self.compress(ds.sel(time=self.model.current_time).data)
+
+    @property
+    def hurs(self):
+        hurs = self.load_forcing(self.hurs_ds)
+        assert (hurs > 1).all() and (hurs <= 100).all(), "hurs out of range"
+        return hurs
+
+    @property
+    def pr(self):
+        pr = self.load_forcing(self.pr_ds)
+        assert (pr >= 0).all(), "Precipitation must be positive or zero"
+        return pr
+
+    @property
+    def ps(self):
+        ps = self.load_forcing(self.ps_ds)
+        assert (ps > 30_000).all() and (
+            ps < 120_000
+        ).all(), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
+        return ps
+
+    @property
+    def rlds(self):
+        rlds = self.load_forcing(self.rlds_ds)
+        assert (rlds >= 0).all(), "rlds must be positive or zero"
+        return rlds
+
+    @property
+    def rsds(self):
+        rsds = self.load_forcing(self.rsds_ds)
+        assert (rsds >= 0).all(), "rsds must be positive or zero"
+        return rsds
+
+    @property
+    def tas(self):
+        tas = self.load_forcing(self.tas_ds)
+        assert (tas > 170).all() and (tas < 370).all(), "tas out of range"
+        return tas
+
+    @property
+    def tasmin(self):
+        tasmin = self.load_forcing(self.tasmin_ds)
+        assert (tasmin > 170).all() and (tasmin < 370).all(), "tasmin out of range"
+        return tasmin
+
+    @property
+    def tasmax(self):
+        tasmax = self.load_forcing(self.tasmax_ds)
+        assert (tasmax > 170).all() and (tasmax < 370).all(), "tasmax out of range"
+        return tasmax
+
+    @property
+    def sfcWind(self):
+        sfcWind = self.load_forcing(self.sfcWind_ds)
+        assert (sfcWind >= 0).all() and (
+            sfcWind < 150
+        ).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
+        return sfcWind
+
 
 class HRUs(BaseVariables):
     """This class forms the basis for the HRUs. To create the `HRUs`, each individual field owned by a farmer becomes a `HRU` first. Then, in addition, each other land use type becomes a separate HRU. `HRUs` never cross cell boundaries. This means that farmers whose fields are dispersed across multiple cells are simulated by multiple `HRUs`. Here, we assume that each `HRU`, is relatively homogeneous as it each `HRU` is operated by 1) a single farmer, or by a single other (i.e., non-farm) land-use type and 2) never crosses the boundary a hydrological model cell.
@@ -527,6 +641,50 @@ class HRUs(BaseVariables):
             gpu = self.model.use_gpu
         return super().load_initial("HRU." + name, default=default, gpu=gpu)
 
+    @property
+    def hurs(self):
+        hurs = self.data.grid.hurs
+        return self.data.to_HRU(data=hurs, fn=None)
+
+    @property
+    def pr(self):
+        pr = self.data.grid.pr
+        return self.data.to_HRU(data=pr, fn=None)
+
+    @property
+    def ps(self):
+        ps = self.data.grid.ps
+        return self.data.to_HRU(data=ps, fn=None)
+
+    @property
+    def rlds(self):
+        rlds = self.data.grid.rlds
+        return self.data.to_HRU(data=rlds, fn=None)
+
+    @property
+    def rsds(self):
+        rsds = self.data.grid.rsds
+        return self.data.to_HRU(data=rsds, fn=None)
+
+    @property
+    def tas(self):
+        tas = self.data.grid.tas
+        return self.data.to_HRU(data=tas, fn=None)
+
+    @property
+    def tasmin(self):
+        tasmin = self.data.grid.tasmin
+        return self.data.to_HRU(data=tasmin, fn=None)
+
+    @property
+    def tasmax(self):
+        tasmax = self.data.grid.tasmax
+        return self.data.to_HRU(data=tasmax, fn=None)
+
+    @property
+    def sfcWind(self):
+        sfcWind = self.data.grid.sfcWind
+        return self.data.to_HRU(data=sfcWind, fn=None)
 
 class Modflow(BaseVariables):
     def __init__(self, data, model):
@@ -560,47 +718,27 @@ class Data:
         self.HRU = HRUs(self, model)
         self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn="mean")
         self.modflow = Modflow(self, model)
-        self.load_forcing()
-        self.load_water_demand()
 
-    def load_forcing(self):
-        # loading forcing data
-        self.grid.hurs_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/hurs"]
-        )["hurs"]
-        assert self.grid.hurs_ds.y[0] > self.grid.hurs_ds.y[-1]
-        self.grid.pr_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/pr"]
-        )["pr"]
-        assert self.grid.pr_ds.y[0] > self.grid.pr_ds.y[-1]
-        self.grid.ps_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/ps"]
-        )["ps"]
-        assert self.grid.ps_ds.y[0] > self.grid.ps_ds.y[-1]
-        self.grid.rlds_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/rlds"]
-        )["rlds"]
-        assert self.grid.rlds_ds.y[0] > self.grid.rlds_ds.y[-1]
-        self.grid.rsds_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/rsds"]
-        )["rsds"]
-        assert self.grid.rsds_ds.y[0] > self.grid.rsds_ds.y[-1]
-        self.grid.tas_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/tas"]
-        )["tas"]
-        assert self.grid.tas_ds.y[0] > self.grid.tas_ds.y[-1]
-        self.grid.tasmax_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/tasmax"]
-        )["tasmax"]
-        assert self.grid.tasmax_ds.y[0] > self.grid.tasmax_ds.y[-1]
-        self.grid.tasmin_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/tasmin"]
-        )["tasmin"]
-        assert self.grid.tasmin_ds.y[0] > self.grid.tasmin_ds.y[-1]
-        self.grid.sfcWind_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["climate/sfcwind"]
-        )["sfcwind"]
-        assert self.grid.sfcWind_ds.y[0] > self.grid.sfcWind_ds.y[-1]
+        forcing_variables = set("spei")
+        if self.model.config["general"]["simulate_hydrology"]:
+            forcing_variables = forcing_variables.union(
+                {
+                    "hurs",
+                    "pr",
+                    "ps",
+                    "rlds",
+                    "rsds",
+                    "tas",
+                    "tasmax",
+                    "tasmin",
+                    "sfcwind",
+                    "spei",
+                }
+            )
+
+        if self.model.config["general"]["simulate_hydrology"]:
+            self.grid.load_forcing_ds(forcing_variables)
+            self.load_water_demand()
 
     def load_water_demand(self):
         self.model.domestic_water_consumption_ds = xr.open_dataset(
@@ -879,57 +1017,7 @@ class Data:
         return HRU
 
     def step(self):
-        self.grid.hurs = self.grid.compress(
-            self.grid.hurs_ds.sel(time=self.model.current_time).data
-        )  # %
-        assert (self.grid.hurs > 1).all() and (
-            self.grid.hurs <= 100
-        ).all(), "hurs out of range"
-
-        self.grid.pr = self.grid.compress(
-            self.grid.pr_ds.sel(time=self.model.current_time).data
-        )  # kg m-2 s-1
-        assert (self.grid.pr >= 0).all(), "Precipitation must be positive or zero"
-
-        self.grid.ps = self.grid.compress(
-            self.grid.ps_ds.sel(time=self.model.current_time).data
-        )  # Pa
-        assert (self.grid.ps > 30_000).all() and (
-            self.grid.ps < 120_000
-        ).all(), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
-
-        self.grid.rlds = self.grid.compress(
-            self.grid.rlds_ds.sel(time=self.model.current_time).data
-        )  # W m-2
-        self.grid.rsds = self.grid.compress(
-            self.grid.rsds_ds.sel(time=self.model.current_time).data
-        )  # W m-2
-
-        self.grid.tas = self.grid.compress(
-            self.grid.tas_ds.sel(time=self.model.current_time).data
-        )  # K
-        self.grid.tasmax = self.grid.compress(
-            self.grid.tasmax_ds.sel(time=self.model.current_time).data
-        )  # K
-        self.grid.tasmin = self.grid.compress(
-            self.grid.tasmin_ds.sel(time=self.model.current_time).data
-        )  # K
-
-        assert (self.grid.tas > 170).all() and (
-            self.grid.tas < 370
-        ).all(), "tas out of range"
-        assert (self.grid.tasmax > 170).all() and (
-            self.grid.tasmax < 370
-        ).all(), "tasmax out of range"
-        assert (self.grid.tasmin > 170).all() and (
-            self.grid.tasmin < 370
-        ).all(), "tasmin out of range"
-        self.grid.sfcWind = self.grid.compress(
-            self.grid.sfcWind_ds.sel(time=self.model.current_time).data
-        )  # m/s
-        assert (self.grid.sfcWind >= 0).all() and (
-            self.grid.sfcWind < 150
-        ).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
+        pass
 
     @property
     def save_state_path(self):
