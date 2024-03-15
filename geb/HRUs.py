@@ -193,76 +193,40 @@ class Grid(BaseVariables):
     def load_initial(self, name, default=0.0):
         return super().load_initial("grid." + name, default=default)
 
-    def load_forcing_ds(self, forcing_variables: set[str]):
-        # loading forcing data
-        if "hurs" in forcing_variables:
-            self.hurs_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/hurs"]
-            )["hurs"]
-            assert self.hurs_ds.y[0] > self.hurs_ds.y[-1]
-        if "pr" in forcing_variables:
-            self.pr_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/pr"]
-            )["pr"]
-            assert self.pr_ds.y[0] > self.pr_ds.y[-1]
-        if "ps" in forcing_variables:
-            self.ps_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/ps"]
-            )["ps"]
-            assert self.ps_ds.y[0] > self.ps_ds.y[-1]
-        if "rlds" in forcing_variables:
-            self.rlds_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/rlds"]
-            )["rlds"]
-            assert self.rlds_ds.y[0] > self.rlds_ds.y[-1]
-        if "rsds" in forcing_variables:
-            self.rsds_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/rsds"]
-            )["rsds"]
-            assert self.rsds_ds.y[0] > self.rsds_ds.y[-1]
-        if "tas" in forcing_variables:
-            self.tas_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/tas"]
-            )["tas"]
-            assert self.tas_ds.y[0] > self.tas_ds.y[-1]
-        if "tasmax" in forcing_variables:
-            self.tasmax_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/tasmax"]
-            )["tasmax"]
-            assert self.tasmax_ds.y[0] > self.tasmax_ds.y[-1]
-        if "tasmin" in forcing_variables:
-            self.tasmin_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/tasmin"]
-            )["tasmin"]
-            assert self.tasmin_ds.y[0] > self.tasmin_ds.y[-1]
-        if "sfcwind" in forcing_variables:
-            self.sfcWind_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/sfcwind"]
-            )["sfcwind"]
-            assert self.sfcWind_ds.y[0] > self.sfcWind_ds.y[-1]
-        if "spei" in forcing_variables:
-            self.spei_ds = xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/spei"]
-            )["spei"]
-            assert self.spei_ds.y[0] > self.spei_ds.y[-1]
+    def load_forcing_ds(self, name):
+        ds = xr.open_dataset(self.model.model_structure["forcing"][f"climate/{name}"])[
+            name
+        ]
+        assert ds.y[0] > ds.y[-1]
+        return ds
 
-    def load_forcing(self, ds):
-        return self.compress(ds.sel(time=self.model.current_time).data)
+    def load_forcing(self, ds, compress=True):
+        data = ds.sel(time=self.model.current_time).data
+        if compress:
+            return self.compress(data)
+        else:
+            return data
 
     @property
     def hurs(self):
+        if not hasattr(self, "hurs_ds"):
+            self.hurs_ds = self.load_forcing_ds("hurs")
         hurs = self.load_forcing(self.hurs_ds)
         assert (hurs > 1).all() and (hurs <= 100).all(), "hurs out of range"
         return hurs
 
     @property
     def pr(self):
+        if not hasattr(self, "pr_ds"):
+            self.pr_ds = self.load_forcing_ds("pr")
         pr = self.load_forcing(self.pr_ds)
         assert (pr >= 0).all(), "Precipitation must be positive or zero"
         return pr
 
     @property
     def ps(self):
+        if not hasattr(self, "ps_ds"):
+            self.ps_ds = self.load_forcing_ds("ps")
         ps = self.load_forcing(self.ps_ds)
         assert (ps > 30_000).all() and (
             ps < 120_000
@@ -271,41 +235,69 @@ class Grid(BaseVariables):
 
     @property
     def rlds(self):
+        if not hasattr(self, "rlds_ds"):
+            self.rlds_ds = self.load_forcing_ds("rlds")
         rlds = self.load_forcing(self.rlds_ds)
         assert (rlds >= 0).all(), "rlds must be positive or zero"
         return rlds
 
     @property
     def rsds(self):
+        if not hasattr(self, "rsds_ds"):
+            self.rsds_ds = self.load_forcing_ds("rsds")
         rsds = self.load_forcing(self.rsds_ds)
         assert (rsds >= 0).all(), "rsds must be positive or zero"
         return rsds
 
     @property
     def tas(self):
+        if not hasattr(self, "tas_ds"):
+            self.tas_ds = self.load_forcing_ds("tas")
         tas = self.load_forcing(self.tas_ds)
         assert (tas > 170).all() and (tas < 370).all(), "tas out of range"
         return tas
 
     @property
     def tasmin(self):
+        if not hasattr(self, "tasmin_ds"):
+            self.tasmin_ds = self.load_forcing_ds("tasmin")
         tasmin = self.load_forcing(self.tasmin_ds)
         assert (tasmin > 170).all() and (tasmin < 370).all(), "tasmin out of range"
         return tasmin
 
     @property
     def tasmax(self):
+        if not hasattr(self, "tasmax_ds"):
+            self.tasmax_ds = self.load_forcing_ds("tasmax")
         tasmax = self.load_forcing(self.tasmax_ds)
         assert (tasmax > 170).all() and (tasmax < 370).all(), "tasmax out of range"
         return tasmax
 
     @property
     def sfcWind(self):
+        if not hasattr(self, "sfcWind_ds"):
+            self.sfcWind_ds = self.load_forcing_ds("sfcwind")
         sfcWind = self.load_forcing(self.sfcWind_ds)
         assert (sfcWind >= 0).all() and (
             sfcWind < 150
         ).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
         return sfcWind
+
+    @property
+    def spei_uncompressed(self):
+        if not hasattr(self, "spei_ds"):
+            self.spei_ds = self.load_forcing_ds("spei")
+        spei = self.load_forcing(self.spei_ds, compress=False)
+        assert (spei >= -5).all() and (spei <= 5).all(), "spei out of range"
+        return spei
+
+    @property
+    def spei(self):
+        if not hasattr(self, "spei_ds"):
+            self.spei_ds = self.load_forcing_ds("spei")
+        spei = self.load_forcing(self.spei_ds)
+        assert (spei >= -5).all() and (spei <= 5).all(), "spei out of range"
+        return spei
 
 
 class HRUs(BaseVariables):
@@ -686,6 +678,7 @@ class HRUs(BaseVariables):
         sfcWind = self.data.grid.sfcWind
         return self.data.to_HRU(data=sfcWind, fn=None)
 
+
 class Modflow(BaseVariables):
     def __init__(self, data, model):
         self.data = data
@@ -719,25 +712,7 @@ class Data:
         self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn="mean")
         self.modflow = Modflow(self, model)
 
-        forcing_variables = set("spei")
         if self.model.config["general"]["simulate_hydrology"]:
-            forcing_variables = forcing_variables.union(
-                {
-                    "hurs",
-                    "pr",
-                    "ps",
-                    "rlds",
-                    "rsds",
-                    "tas",
-                    "tasmax",
-                    "tasmin",
-                    "sfcwind",
-                    "spei",
-                }
-            )
-
-        if self.model.config["general"]["simulate_hydrology"]:
-            self.grid.load_forcing_ds(forcing_variables)
             self.load_water_demand()
 
     def load_water_demand(self):
