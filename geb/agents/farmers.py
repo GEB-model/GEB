@@ -683,7 +683,7 @@ class Farmers(AgentBaseClass):
             self.GEV_parameters = FarmerAgentArray(
                 n=self.n,
                 max_n=self.max_n,
-                extra_dims=(3, ),
+                extra_dims=(3,),
                 dtype=np.float32,
                 fill_value=np.nan,
             )
@@ -1244,12 +1244,15 @@ class Farmers(AgentBaseClass):
 
         TODO: Implement GAEZ crop stage function
         """
-        yield_ratio = self.get_yield_ratio_numba(
-            crop_map[harvest],
-            actual_transpiration[harvest] / potential_transpiration[harvest],
-            self.crop_variables["KyT"].values,
-        )
-        assert not np.isnan(yield_ratio).any()
+        if self.model.config["general"]["simulate_hydrology"]:
+            yield_ratio = self.get_yield_ratio_numba(
+                crop_map[harvest],
+                actual_transpiration[harvest] / potential_transpiration[harvest],
+                self.crop_variables["KyT"].values,
+            )
+            assert not np.isnan(yield_ratio).any()
+        else:
+            yield_ratio = np.full_like(crop_map[harvest], 1, dtype=np.float32)
         return yield_ratio
 
     def update_yield_ratio_management(self) -> None:

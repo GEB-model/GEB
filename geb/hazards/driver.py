@@ -3,7 +3,7 @@ class HazardDriver:
         if self.config["general"]["simulate_floods"]:
             assert self.config["general"][
                 "simulate_hydrology"
-            ]  # floods can only be simulated if hydrology is simulated
+            ], "floods can only be simulated if hydrology is simulated"
             from geb.hazards.floods.sfincs import SFINCS
 
             # exract the longest flood event in days
