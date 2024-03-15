@@ -680,24 +680,19 @@ class Farmers(AgentBaseClass):
             )
 
             ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
-            parameter_names = ["c", "loc", "scale"]
             self.GEV_parameters = FarmerAgentArray(
                 n=self.n,
                 max_n=self.max_n,
-                extra_dims=(len(parameter_names),),
+                extra_dims=(3, ),
                 dtype=np.float32,
-                fill_value=0,
+                fill_value=np.nan,
             )
 
-            for i, varname in enumerate(parameter_names):
-                GEV_map = MapReader(
-                    fp=self.model.model_structure["grid"][f"climate/gev_{varname}"],
-                    xmin=self.model.xmin,
-                    ymin=self.model.ymin,
-                    xmax=self.model.xmax,
-                    ymax=self.model.ymax,
+            for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
+                GEV_grid = getattr(self.model.data.grid, varname)
+                self.GEV_parameters[:, i] = sample_from_map(
+                    GEV_grid, self.locations.data, self.model.data.grid.gt
                 )
-                self.GEV_parameters[:, i] = GEV_map.sample_coords(self.locations.data)
 
         self.var.actual_transpiration_crop = self.var.load_initial(
             "actual_transpiration_crop",

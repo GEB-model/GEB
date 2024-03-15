@@ -299,6 +299,27 @@ class Grid(BaseVariables):
         assert (spei >= -5).all() and (spei <= 5).all(), "spei out of range"
         return spei
 
+    @property
+    def gev_c(self):
+        with rasterio.open(
+            self.model.model_structure["grid"]["climate/gev_c"]
+        ) as gev_c_src:
+            return gev_c_src.read(1)
+
+    @property
+    def gev_loc(self):
+        with rasterio.open(
+            self.model.model_structure["grid"]["climate/gev_loc"]
+        ) as gev_loc_src:
+            return gev_loc_src.read(1)
+
+    @property
+    def gev_scale(self):
+        with rasterio.open(
+            self.model.model_structure["grid"]["climate/gev_scale"]
+        ) as gev_scale_src:
+            return gev_scale_src.read(1)
+
 
 class HRUs(BaseVariables):
     """This class forms the basis for the HRUs. To create the `HRUs`, each individual field owned by a farmer becomes a `HRU` first. Then, in addition, each other land use type becomes a separate HRU. `HRUs` never cross cell boundaries. This means that farmers whose fields are dispersed across multiple cells are simulated by multiple `HRUs`. Here, we assume that each `HRU`, is relatively homogeneous as it each `HRU` is operated by 1) a single farmer, or by a single other (i.e., non-farm) land-use type and 2) never crosses the boundary a hydrological model cell.
