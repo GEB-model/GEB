@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import os
 import math
 from datetime import datetime
 import json
@@ -7,6 +6,7 @@ from pathlib import Path
 import calendar
 from typing import Tuple
 import matplotlib.pyplot as plt
+from honeybees.library.raster import sample_from_map
 
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
@@ -14,7 +14,6 @@ from scipy.optimize import curve_fit
 import numpy as np
 from numba import njit
 
-from honeybees.library.mapIO import NetCDFReader
 from honeybees.library.mapIO import MapReader
 from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords
@@ -176,18 +175,6 @@ class Farmers(AgentBaseClass):
                 xmax=self.model.xmax,
                 ymax=self.model.ymax,
             ).get_data_array()
-        )
-
-        self.SPEI_map = NetCDFReader(
-            fp=self.model.model_structure["forcing"]["climate/spei"],
-            varname="spei",
-            xmin=self.model.xmin,
-            ymin=self.model.ymin,
-            xmax=self.model.xmax,
-            ymax=self.model.ymax,
-            latname="y",
-            lonname="x",
-            timename="time",
         )
 
         with open(
@@ -1852,9 +1839,10 @@ class Farmers(AgentBaseClass):
 
         # Sample the SPEI value for the current month from `SPEI_map` based on the given locations.
         # The sampling is done for the first day of the current month.
-        self.monthly_SPEI[:, 0] = self.SPEI_map.sample_coords(
-            self.locations.data,
-            datetime(self.model.current_time.year, self.model.current_time.month, 1),
+        self.monthly_SPEI[:, 0] = sample_from_map(
+            array=self.model.data.grid.spei_uncompressed,
+            coords=self.locations.data,
+            gt=self.model.data.grid.gt,
         )
 
     def save_yearly_profits(
