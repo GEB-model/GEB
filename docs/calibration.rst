@@ -29,7 +29,8 @@ would setup calibration for x between 0.05 and 0.4 for the following variable:
         expected_utility:
             decisions:
                 expenditure cap: x
-7. Lastly, run the model with the command below, or use a bash script to run it on the cluster. 
+7. Next, set the DEAP parameters. ngen specifies the number of total generations, mu the initial population size, lambda the number of children to produce at each generation, and select_best controls the number of best individuals selected from the population for the next generation. 
+8. Lastly, run the model with the command below, or use a bash script to run it on the cluster. 
 
 .. code-block:: bash
 
@@ -87,7 +88,7 @@ would setup calibration for x between 0.05 and 0.4 for the following variable:
         ngen: 10
         mu: 60
         lambda_: 25
-        select_best: 20
+        select_best: 10
       target_variables:
         # Variables required to calculate calibration score from cwatm, e.g. discharge at a certain gauge 
         report_cwatm:
