@@ -96,12 +96,9 @@ class Farmers(AgentBaseClass):
         self.crop_variables = load_crop_variables(self.model.model_structure)
 
         ## Set parameters required for drought event perception, risk perception and SEUT
-        self.moving_average_threshold = (
-            self.model.config["agent_settings"]["expected_utility"][
-                "drought_risk_calculations"
-            ]["event_perception"]["drought_threshold"]
-            + self.drought_threshold_factor
-        )
+        self.moving_average_threshold = self.model.config["agent_settings"][
+            "expected_utility"
+        ]["drought_risk_calculations"]["event_perception"]["drought_threshold"]
         self.previous_month = 0
 
         # Assign risk aversion sigma, time discounting preferences, expenditure_cap
