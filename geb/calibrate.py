@@ -620,8 +620,8 @@ def run_model(individual, config, gauges, observed_streamflow):
                     run_directory, individual, config, gauges, observed_streamflow
                 )
             )
-        # if score == 'irrigation_wells':
-        #     scores.append(get_irrigation_wells_score(run_directory, individual, config))
+        if score == "irrigation_wells":
+            scores.append(get_irrigation_wells_score(run_directory, individual, config))
         if score == "KGE_yield_ratio":
             scores.append(get_KGE_yield_ratio(run_directory, individual, config))
     return tuple(scores)
