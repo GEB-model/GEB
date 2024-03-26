@@ -8,7 +8,7 @@ from typing import Tuple
 import matplotlib.pyplot as plt
 from honeybees.library.raster import sample_from_map
 
-from scipy.stats import genextreme
+from scipy.stats import genextreme, norm, linregress
 from scipy.optimize import curve_fit
 
 import numpy as np
@@ -96,9 +96,12 @@ class Farmers(AgentBaseClass):
         self.crop_variables = load_crop_variables(self.model.model_structure)
 
         ## Set parameters required for drought event perception, risk perception and SEUT
-        self.moving_average_threshold = self.model.config["agent_settings"][
-            "expected_utility"
-        ]["drought_risk_calculations"]["event_perception"]["drought_threshold"]
+        self.moving_average_threshold = (
+            self.model.config["agent_settings"]["expected_utility"][
+                "drought_risk_calculations"
+            ]["event_perception"]["drought_threshold"]
+            + self.drought_threshold_factor
+        )
         self.previous_month = 0
 
         # Assign risk aversion sigma, time discounting preferences, expenditure_cap
@@ -652,6 +655,14 @@ class Farmers(AgentBaseClass):
                 extra_dims=(self.n_loans + 1, 5),
                 dtype=np.float32,
                 fill_value=0,
+            )
+
+            self.adjusted_annual_loan_cost = FarmerAgentArray(
+                n=self.n,
+                max_n=self.max_n,
+                extra_dims=(self.n_loans + 1, 5),
+                dtype=np.float32,
+                fill_value=np.nan,
             )
 
             # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation)
@@ -1706,19 +1717,20 @@ class Farmers(AgentBaseClass):
             assert not np.isnan(cultivation_cost)
             if not farmers_going_out_of_business:
                 interest_rate_farmer = interest_rate[farmer_idx]
+                loan_duration = 2
                 annual_cost_input_loan = cultivation_cost * (
                     interest_rate_farmer
-                    * (1 + interest_rate_farmer) ** 1
-                    / ((1 + interest_rate_farmer) ** 1 - 1)
+                    * (1 + interest_rate_farmer) ** loan_duration
+                    / ((1 + interest_rate_farmer) ** loan_duration - 1)
                 )
-
                 for i in range(4):
-                    if all_loans_annual_cost[farmer_idx, 1, i] == 0:
+                    if all_loans_annual_cost[farmer_idx, 0, i] == 0:
                         all_loans_annual_cost[
                             farmer_idx, 0, i
                         ] += annual_cost_input_loan  # Add the amount to the input specific loan
-                        loan_tracker[farmer_idx, 0, i] = 1
-                        break
+                        loan_tracker[farmer_idx, 0, i] = loan_duration
+                        break  # Exit the loop after adding to the first zero value
+
                 all_loans_annual_cost[
                     farmer_idx, -1, 0
                 ] += annual_cost_input_loan  # Add the amount to the total loan amount
@@ -2332,7 +2344,7 @@ class Farmers(AgentBaseClass):
 
     def calculate_well_costs(
         self,
-    ) -> (np.ndarray, np.ndarray):
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate the construction and yearly costs of well and pump for irrigation, based on various parameters
         such as well depth, crop growth seasons, pump horsepower, and regional costs. The function considers
@@ -2751,10 +2763,10 @@ class Farmers(AgentBaseClass):
             ):
                 # Calculate mean yield ratio over past years for both adapted and unadapted groups
                 unadapted_yield_ratio = np.mean(
-                    self.yearly_yield_ratio[unique_farmer_groups, :10], axis=1
+                    self.yearly_yield_ratio[unique_farmer_groups, :5], axis=1
                 )
                 adapted_yield_ratio = np.mean(
-                    self.yearly_yield_ratio[unique_farmer_groups_adapted, :10], axis=1
+                    self.yearly_yield_ratio[unique_farmer_groups_adapted, :5], axis=1
                 )
 
                 unadapted_median = np.median(unadapted_yield_ratio)
@@ -3073,6 +3085,26 @@ class Farmers(AgentBaseClass):
         self.all_loans_annual_cost[:, -1, 0] -= total_loan_reduction
         self.all_loans_annual_cost[expired_loan_mask] = 0
 
+        # Adjust for inflation in separate array for export
+        # Calculate the cumulative inflation from the start year to the current year for each farmer
+        inflation_arrays = [
+            self.get_value_per_farmer_from_region_id(
+                self.inflation_rate, datetime(year, 1, 1)
+            )
+            for year in range(
+                self.model.config["general"]["spinup_time"].year,
+                self.model.current_time.year + 1,
+            )
+        ]
+
+        cum_inflation = np.ones_like(inflation_arrays[0])
+        for inflation in inflation_arrays:
+            cum_inflation *= inflation
+
+        self.adjusted_annual_loan_cost = (
+            self.all_loans_annual_cost / cum_inflation[..., None, None]
+        )
+
     def get_value_per_farmer_from_region_id(self, data, time) -> np.ndarray:
         index = data[0].get(time)
         unique_region_ids, inv = np.unique(self.region_id, return_inverse=True)
@@ -3173,8 +3205,8 @@ class Farmers(AgentBaseClass):
                 ids,
                 self.crops.data,
                 neighbors,
-                self.SEUT_no_adapt_crops,
-                self.EUT_no_adapt_crops,
+                self.SEUT_no_adapt,
+                self.EUT_no_adapt,
                 self.yearly_yield_ratio.data,
                 self.yearly_SPEI_probability.data,
             )
@@ -3321,51 +3353,6 @@ class Farmers(AgentBaseClass):
                 )
                 self.EUT_no_adapt = self.decision_module.calcEU_do_nothing(
                     **decision_params, subjective=False
-                )
-
-                # Calculate the SEUT with regards to crops and planting decisions
-                index = self.cultivation_costs[0].get(self.model.current_time)
-                cultivation_cost_per_crop = self.cultivation_costs[1][index][
-                    self.region_id
-                ]
-
-                nan_array = np.full_like(self.crops, fill_value=np.nan, dtype=float)
-                mask_crops = self.crops != -1
-                nan_array[mask_crops] = np.take(
-                    cultivation_cost_per_crop, self.crops[mask_crops].astype(int)
-                )
-                cultivation_costs = np.nansum(nan_array, axis=1)
-                total_cultivation_costs = cultivation_costs * (
-                    self.interest_rate
-                    * (1 + self.interest_rate) ** 1
-                    / ((1 + self.interest_rate) ** 1 - 1)
-                )
-
-                total_profits_crops = total_profits - total_cultivation_costs
-                total_profits_crops = np.where(
-                    total_profits_crops <= 0, 0, total_profits_crops
-                )
-                profits_no_event_crops = profits_no_event - total_cultivation_costs
-                profits_no_event_crops = np.where(
-                    profits_no_event_crops <= 0, 0, profits_no_event_crops
-                )
-
-                decision_params_crops = {
-                    "n_agents": self.n,
-                    "T": self.decision_horizon,
-                    "discount_rate": self.discount_rate,
-                    "sigma": self.risk_aversion,
-                    "risk_perception": self.risk_perception,
-                    "p_droughts": 1 / self.p_droughts[:-1],
-                    "total_profits": total_profits_crops,
-                    "profits_no_event": profits_no_event_crops,
-                }
-
-                self.SEUT_no_adapt_crops = self.decision_module.calcEU_do_nothing(
-                    **decision_params_crops
-                )
-                self.EUT_no_adapt_crops = self.decision_module.calcEU_do_nothing(
-                    **decision_params_crops, subjective=False
                 )
 
                 self.switch_crops()
