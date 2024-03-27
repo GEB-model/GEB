@@ -22,6 +22,7 @@ dependencies = [
     "dask>=2023.3.0",
     "rioxarray>=0.15",
     "pybind11",
+    "SALib>=1.4.8",
     "hydromt-sfincs@git+https://github.com/Deltares/hydromt_sfincs",
     "honeybees@git+https://github.com/jensdebruijn/honeybees",
 ]
