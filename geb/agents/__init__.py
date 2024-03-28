@@ -2,11 +2,11 @@
 import math
 import numpy as np
 from pathlib import Path
-from honeybees.agents import AgentBaseClass as HoneybeeAgentBaseClass
+from honeybees.agents import AgentBaseClass as HoneybeesAgentBaseClass
 from .general import AgentArray
 
 
-class AgentBaseClass(HoneybeeAgentBaseClass):
+class AgentBaseClass(HoneybeesAgentBaseClass):
     def __init__(self):
         if not hasattr(self, "redundancy"):
             self.redundancy = None  # default redundancy is None
