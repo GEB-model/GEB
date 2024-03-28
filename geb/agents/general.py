@@ -20,10 +20,8 @@ class AgentArray:
             assert (
                 extra_dims is None
             ), "extra_dims cannot be given if input_array is given"
-            if n is None and max_n is None:
-                raise ValueError("Either n or max_n must be given")
-            elif n is not None and max_n is not None:
-                raise ValueError("Only one of n or max_n can be given")
+            assert n is None, "n cannot be given if input_array is given"
+            n = input_array.shape[0]
             if max_n:
                 if input_array.ndim == 1:
                     shape = max_n

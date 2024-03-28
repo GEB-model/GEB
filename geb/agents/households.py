@@ -3,18 +3,22 @@ import geopandas as gpd
 import pyproj
 
 from .general import AgentArray
-from honeybees.agents import AgentBaseClass
+from . import AgentBaseClass
 
 
 class Households(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
         self.agents = agents
+        self.reduncancy = reduncancy
 
+        super().__init__()
+
+    def initiate(self) -> None:
         locations = np.load(
             self.model.model_structure["binary"]["agents/households/locations"]
         )["data"]
-        self.max_n = int(locations.shape[0] * (1 + reduncancy) + 1)
+        self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
 
         self.locations = AgentArray(locations, max_n=self.max_n)
 
@@ -33,8 +37,6 @@ class Households(AgentBaseClass):
         self.buildings = gpd.read_file(
             self.model.model_structure["geoms"]["assets/buildings"]
         )
-
-        return None
 
     def flood(self, flood_map):
         self.flood_depth.fill(0)  # Reset flood depth for all households

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-import numpy as np
-from honeybees.agents import AgentBaseClass
+from . import AgentBaseClass
 
 
 class Government(AgentBaseClass):
@@ -20,7 +19,11 @@ class Government(AgentBaseClass):
             else {}
         )
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
+
         AgentBaseClass.__init__(self)
+
+    def initiate(self) -> None:
+        pass
 
     def provide_subsidies(self) -> None:
         if not "subsidies" in self.config:

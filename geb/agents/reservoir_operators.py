@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-from honeybees.agents import AgentBaseClass
-import os
+from . import AgentBaseClass
 import numpy as np
 import pandas as pd
+from .general import AgentArray
 
 
 class ReservoirOperators(AgentBaseClass):
@@ -29,50 +29,55 @@ class ReservoirOperators(AgentBaseClass):
         ).set_index("waterbody_id")
 
         self.reservoirs = df[df["waterbody_type"] == 2].copy()
+        self.cons_limit_ratio = 0.02
+        self.flood_limit_ratio = 1
 
-    def initiate_agents(self, waterBodyIDs):
+        super().__init__()
+
+    def initiate(self):
         assert (self.reservoirs["volume_total"] > 0).all()
-        self.active_reservoirs = self.reservoirs.loc[waterBodyIDs]
+        self.active_reservoirs = self.reservoirs[self.reservoirs["waterbody_type"] == 2]
 
         np.save(
             self.model.report_folder / "active_reservoirs_waterBodyIDs.npy",
-            waterBodyIDs,
+            self.active_reservoirs.index.to_numpy(),
         )
 
-        self.reservoir_release_factors = np.full(
-            len(self.active_reservoirs),
-            self.model.config["agent_settings"]["reservoir_operators"][
-                "max_reservoir_release_factor"
-            ],
+        self.reservoir_release_factors = AgentArray(
+            np.full(
+                len(self.active_reservoirs),
+                self.model.config["agent_settings"]["reservoir_operators"][
+                    "max_reservoir_release_factor"
+                ],
+            )
         )
 
-        self.reservoir_volume = self.active_reservoirs["volume_total"].values
-        self.flood_volume = self.active_reservoirs["volume_flood"].values
-        self.dis_avg = self.active_reservoirs["average_discharge"].values
+        self.reservoir_volume = AgentArray(
+            self.active_reservoirs["volume_total"].values
+        )
+        self.flood_volume = AgentArray(self.active_reservoirs["volume_flood"].values)
+        self.dis_avg = AgentArray(self.active_reservoirs["average_discharge"].values)
 
-        self.cons_limit_ratio = 0.02
-        self.norm_limit_ratio = self.flood_volume / self.reservoir_volume
-        self.flood_limit_ratio = 1
-        self.norm_flood_limit_ratio = self.norm_limit_ratio + 0.5 * (
-            self.flood_limit_ratio - self.norm_limit_ratio
+        self.norm_limit_ratio = AgentArray(self.flood_volume / self.reservoir_volume)
+        self.norm_flood_limit_ratio = AgentArray(
+            self.norm_limit_ratio
+            + 0.5 * (self.flood_limit_ratio - self.norm_limit_ratio)
         )
 
-        self.minQC = (
+        self.minQC = AgentArray(
             self.model.config["agent_settings"]["reservoir_operators"]["MinOutflowQ"]
             * self.dis_avg
         )
-        self.normQC = (
+        self.normQC = AgentArray(
             self.model.config["agent_settings"]["reservoir_operators"]["NormalOutflowQ"]
             * self.dis_avg
         )
-        self.nondmgQC = (
+        self.nondmgQC = AgentArray(
             self.model.config["agent_settings"]["reservoir_operators"][
                 "NonDamagingOutflowQ"
             ]
             * self.dis_avg
         )
-
-        return self
 
     def regulate_reservoir_outflow(self, reservoirStorageM3C, inflowC, waterBodyIDs):
         assert reservoirStorageM3C.size == inflowC.size == waterBodyIDs.size
