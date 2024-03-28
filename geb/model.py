@@ -240,7 +240,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
 
         if self.save_initial_data:
             self.data.save_state()
-            self.agents.farmers.save_state()
+            self.agents.save_state()
 
         print("Model run finished")
 

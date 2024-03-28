@@ -10,7 +10,7 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
-from geb.agents.farmers import FarmerAgentArray
+from geb.agents.farmers import AgentArray
 
 
 class Artists(honeybeesArtists):
@@ -176,7 +176,7 @@ class Artists(honeybeesArtists):
         add_vars(
             "agents.farmers",
             compressed_size=self.model.agents.farmers.n,
-            dtypes=FarmerAgentArray,
+            dtypes=AgentArray,
             variant_dim=1,
             invariant_dim=0,
         )
@@ -217,9 +217,7 @@ class Artists(honeybeesArtists):
                 array = attrgetter(self.background_variable[: slicer.span(0)[0]])(
                     self.model
                 )
-                array = FarmerAgentArray(
-                    array[:, int(slicer.group(1))], n=array.shape[0]
-                )
+                array = AgentArray(array[:, int(slicer.group(1))], n=array.shape[0])
             else:
                 array = attrgetter(self.background_variable)(self.model)
 
