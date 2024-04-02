@@ -21,8 +21,7 @@ from honeybees.library.neighbors import find_neighbors
 
 from ..data import (
     load_regional_crop_data_from_dict,
-    load_crop_variables,
-    load_crop_ids,
+    load_crop_data,
     load_economic_data,
 )
 from .decision_module import DecisionModule
@@ -71,13 +70,13 @@ class Farmers(AgentBaseClass):
         self.redundancy = reduncancy
         self.decision_module = DecisionModule(self)
 
-        self.crop_ids = load_crop_ids(self.model.model_structure)
         self.HRU_n = len(self.var.land_owners)
+        self.crop_data_type, self.crop_data = load_crop_data(self.model.model_structure)
+        self.crop_ids = self.crop_data["name"].to_dict()
         # reverse dictionary
         self.crop_names = {
             crop_name: crop_id for crop_id, crop_name in self.crop_ids.items()
         }
-        self.crop_variables = load_crop_variables(self.model.model_structure)
 
         ## Set parameters required for drought event perception, risk perception and SEUT
         self.moving_average_threshold = self.model.config["agent_settings"][
@@ -334,25 +333,18 @@ class Farmers(AgentBaseClass):
             fill_value=0,
         )
 
-        self.crops = AgentArray(
+        self.crop_calendar = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(3,),
+            extra_dims=(3, 3),
             dtype=np.int32,
             fill_value=-1,
         )
+        self.crop_calendar = np.load(
+            self.model.model_structure["binary"]["agents/farmers/crop_calendar"]
+        )["data"]
 
-        # Load the crops planted for each farmer in the season #1, season #2 and season #3.
-        self.crops[:, 0] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/season_#1_crop"]
-        )["data"]
-        self.crops[:, 1] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/season_#2_crop"]
-        )["data"]
-        self.crops[:, 2] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/season_#3_crop"]
-        )["data"]
-        assert self.crops.max() < len(self.crop_ids)
+        assert self.crop_calendar[:, :, 0].max() < len(self.crop_ids)
 
         # Set irrigation source
         self.irrigation_source = AgentArray(
@@ -1226,7 +1218,7 @@ class Farmers(AgentBaseClass):
             yield_ratio = self.get_yield_ratio_numba(
                 crop_map[harvest],
                 actual_transpiration[harvest] / potential_transpiration[harvest],
-                self.crop_variables["KyT"].values,
+                self.crop_data["KyT"].values,
             )
             assert not np.isnan(yield_ratio).any()
         else:
@@ -1332,7 +1324,7 @@ class Farmers(AgentBaseClass):
 
             harvested_crops = self.var.crop_map[harvest]
             max_yield_per_crop = np.take(
-                self.crop_variables["reference_yield_kg_m2"].values, harvested_crops
+                self.crop_data["reference_yield_kg_m2"].values, harvested_crops
             )
 
             crop_prices = self.crop_prices[1][
@@ -1546,7 +1538,7 @@ class Farmers(AgentBaseClass):
 
         # Create a mask for valid crop indices
         crops_mask = (self.crops >= 0) & (
-            self.crops < len(self.crop_variables["season_#1_duration"])
+            self.crops < len(self.crop_data["season_#1_duration"])
         )
         nan_array = np.full_like(self.crops, fill_value=np.nan, dtype=float)
 
@@ -1563,7 +1555,7 @@ class Farmers(AgentBaseClass):
         for i, season_col in enumerate(season_selection):
             season_x_duration = nan_array.copy()
             season_x_duration[crops_mask] = np.take(
-                self.crop_variables[season_col].values,
+                self.crop_data[season_col].values,
                 self.crops[crops_mask].astype(int),
             )
             seasons_total[:, i] = season_x_duration[:, i]
@@ -1724,9 +1716,9 @@ class Farmers(AgentBaseClass):
         # create numpy stack of growth length per crop and season
         growth_length = np.stack(
             [
-                self.crop_variables["season_#1_duration"],
-                self.crop_variables["season_#2_duration"],
-                self.crop_variables["season_#3_duration"],
+                self.crop_data["season_#1_duration"],
+                self.crop_data["season_#2_duration"],
+                self.crop_data["season_#3_duration"],
             ],
             axis=1,
         )
@@ -2373,7 +2365,7 @@ class Farmers(AgentBaseClass):
 
         # Create a mask for valid crop indices
         crops_mask = (self.crops >= 0) & (
-            self.crops < len(self.crop_variables["season_#1_duration"])
+            self.crops < len(self.crop_data["season_#1_duration"])
         )
         nan_array = np.full_like(self.crops, fill_value=np.nan, dtype=float)
 
@@ -2390,7 +2382,7 @@ class Farmers(AgentBaseClass):
         for i, season_col in enumerate(season_selection):
             season_x_duration = nan_array.copy()
             season_x_duration[crops_mask] = np.take(
-                self.crop_variables[season_col].values,
+                self.crop_data[season_col].values,
                 self.crops[crops_mask].astype(int),
             )
             seasons_total[:, i] = season_x_duration[:, i]
@@ -2593,7 +2585,7 @@ class Farmers(AgentBaseClass):
 
         # Mask out all non-crops in the crops array
         crops_mask = (self.crops >= 0) & (
-            self.crops < len(self.crop_variables["reference_yield_kg_m2"])
+            self.crops < len(self.crop_data["reference_yield_kg_m2"])
         )
 
         # Output array with NaNs for storing reference data
@@ -2831,7 +2823,7 @@ class Farmers(AgentBaseClass):
             average_monthly_price, self.crops[crops_mask].astype(int)
         )
         array_with_reference_yield[crops_mask] = np.take(
-            self.crop_variables["reference_yield_kg_m2"].values,
+            self.crop_data["reference_yield_kg_m2"].values,
             self.crops[crops_mask].astype(int),
         )
 

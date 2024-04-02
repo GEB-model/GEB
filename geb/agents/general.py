@@ -31,7 +31,7 @@ class AgentArray:
                 n = input_array.shape[0]
                 self._n = n
                 self._data[:n] = input_array
-            elif n:
+            else:
                 self._data = input_array
                 self._n = n
         else:
