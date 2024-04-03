@@ -31,20 +31,27 @@ def load_regional_crop_data_from_dict(
     with open(model.model_structure["dict"][name], "r") as f:
         timedata = json.load(f)
 
-    dates = parse_dates(timedata["time"])
-    date_index = DateIndex(dates)
+    if timedata["type"] == "constant":
+        return None, timedata["data"]
+    elif timedata["type"] == "time_series":
+        dates = parse_dates(timedata["time"])
+        date_index = DateIndex(dates)
 
-    data = timedata["data"]
+        data = timedata["data"]
 
-    d = np.full(
-        (len(date_index), len(model.regions), len(data["0"])), np.nan, dtype=np.float32
-    )  # all lengths should be the same, so just taking data from region 0.
-    for region_id, region_data in data.items():
-        for ID, region_crop_data in region_data.items():
-            d[:, int(region_id), int(ID)] = region_crop_data
+        d = np.full(
+            (len(date_index), len(model.regions), len(data["0"])),
+            np.nan,
+            dtype=np.float32,
+        )  # all lengths should be the same, so just taking data from region 0.
+        for region_id, region_data in data.items():
+            for ID, region_crop_data in region_data.items():
+                d[:, int(region_id), int(ID)] = region_crop_data
 
-    assert not np.isnan(d).any()
-    return date_index, d
+        assert not np.isnan(d).any()
+        return date_index, d
+    else:
+        raise ValueError(f"Unknown type: {timedata['type']}")
 
 
 def load_crop_data(model_structure) -> dict[np.ndarray]:

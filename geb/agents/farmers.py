@@ -4,7 +4,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import calendar
-from typing import Tuple
+from typing import Tuple, Union
 import matplotlib.pyplot as plt
 from honeybees.library.raster import sample_from_map
 
@@ -306,6 +306,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(3,),
+            extra_dims_names=("adaptation_type",),
             dtype=np.int32,
             fill_value=0,
         )
@@ -314,6 +315,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(3,),
+            extra_dims_names=("adaptation_type",),
             dtype=np.int32,
             fill_value=-1,
         )
@@ -329,6 +331,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(3,),
+            extra_dims_names=("adaptation_type",),
             dtype=np.int32,
             fill_value=0,
         )
@@ -337,10 +340,11 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(3, 3),
+            extra_dims_names=("rotation", "calendar"),
             dtype=np.int32,
             fill_value=-1,
-        )
-        self.crop_calendar = np.load(
+        )  # first dimension is the farmers, second is the rotation, third is the crop, planting and growing length
+        self.crop_calendar[:] = np.load(
             self.model.model_structure["binary"]["agents/farmers/crop_calendar"]
         )["data"]
 
@@ -399,6 +403,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(4,),
+            extra_dims_names=("abstraction_type",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -415,6 +420,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(3,),
+            extra_dims_names=("season",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -423,6 +429,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(3,),
+            extra_dims_names=("season",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -430,6 +437,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(3,),
+            extra_dims_names=("season",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -437,6 +445,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(10,),
+            extra_dims_names=("month",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -484,6 +493,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.p_droughts.size,),
+            extra_dims_names=("drought_event",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -520,6 +530,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.total_spinup_time + 1,),
+            extra_dims_names=("year",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -527,6 +538,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.total_spinup_time + 1,),
+            extra_dims_names=("year",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -534,6 +546,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.total_spinup_time + 1,),
+            extra_dims_names=("year",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -541,6 +554,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.total_spinup_time + 1,),
+            extra_dims_names=("year",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -548,6 +562,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(2,),
+            extra_dims_names=("log function parameters",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -585,6 +600,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.p_droughts.size,),
+            extra_dims_names=("drought_event",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -638,6 +654,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.n_loans + 1, 5),
+            extra_dims_names=("loan_type", "loans"),
             dtype=np.float32,
             fill_value=0,
         )
@@ -646,6 +663,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.n_loans + 1, 5),
+            extra_dims_names=("loan_type", "loans"),
             dtype=np.float32,
             fill_value=np.nan,
         )
@@ -655,6 +673,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.n_loans, 5),
+            extra_dims_names=("loan_type", "loans"),
             dtype=np.int32,
             fill_value=0,
         )
@@ -667,6 +686,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(4,),
+            extra_dims_names=("water_source",),
             dtype=np.int32,
             fill_value=0,
         )
@@ -680,6 +700,7 @@ class Farmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             extra_dims=(3,),
+            extra_dims_names=("gev_parameters",),
             dtype=np.float32,
             fill_value=np.nan,
         )
@@ -724,7 +745,12 @@ class Farmers(AgentBaseClass):
         )
 
         self.field_indices_by_farmer = AgentArray(
-            n=self.n, max_n=self.max_n, extra_dims=(2,), dtype=np.int32, fill_value=-1
+            n=self.n,
+            max_n=self.max_n,
+            extra_dims=(2,),
+            dtype=np.int32,
+            fill_value=-1,
+            extra_dims_names=("index",),
         )
 
         self.update_field_indices()
@@ -1167,7 +1193,42 @@ class Farmers(AgentBaseClass):
 
     @staticmethod
     @njit
-    def get_yield_ratio_numba(crop_map: np.array, evap_ratios: np.array, KyT) -> float:
+    def get_yield_ratio_numba_GAEZ(
+        crop_map: np.ndarray, evap_ratios: np.ndarray, KyT
+    ) -> float:
+        """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031
+
+        Args:
+            crop_map: array of currently harvested crops.
+            evap_ratios: ratio of actual to potential evapotranspiration of harvested crops.
+            KyT: Water stress reduction factor from GAEZ.
+
+        Returns:
+            yield_ratios: yield ratio (as ratio of maximum obtainable yield) per harvested crop.
+        """
+        yield_ratios = np.full(evap_ratios.size, -1, dtype=np.float32)
+
+        assert crop_map.size == evap_ratios.size
+
+        for i in range(evap_ratios.size):
+            evap_ratio = evap_ratios[i]
+            crop = crop_map[i]
+            yield_ratios[i] = max(
+                1 - KyT[crop] * (1 - evap_ratio), 0
+            )  # Yield ratio is never lower than 0.
+
+        return yield_ratios
+
+    @staticmethod
+    @njit
+    def get_yield_ratio_numba_MIRCA2000(
+        crop_map: np.ndarray,
+        evap_ratios: np.ndarray,
+        alpha: np.ndarray,
+        beta: np.ndarray,
+        P0: np.ndarray,
+        P1: np.ndarray,
+    ) -> float:
         """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031
 
         Args:
@@ -1188,9 +1249,21 @@ class Farmers(AgentBaseClass):
         for i in range(evap_ratios.size):
             evap_ratio = evap_ratios[i]
             crop = crop_map[i]
-            yield_ratios[i] = max(
-                1 - KyT[crop] * (1 - evap_ratio), 0
-            )  # Yield ratio is never lower than 0.
+            if alpha[crop] * evap_ratio + beta[crop] > 1:
+                yield_ratio = 1
+            elif P0[crop] < evap_ratio < P1[crop]:
+                yield_ratio = (
+                    alpha[crop] * P1[crop]
+                    + beta[crop]
+                    - (P1[crop] - evap_ratio)
+                    * (alpha[crop] * P1[crop] + beta[crop])
+                    / (P1[crop] - P0[crop])
+                )
+            elif evap_ratio < P0[crop]:
+                yield_ratio = 0
+            else:
+                yield_ratio = alpha[crop] * evap_ratio + beta[crop]
+            yield_ratios[i] = yield_ratio
 
         return yield_ratios
 
@@ -1215,11 +1288,25 @@ class Farmers(AgentBaseClass):
         TODO: Implement GAEZ crop stage function
         """
         if self.model.config["general"]["simulate_hydrology"]:
-            yield_ratio = self.get_yield_ratio_numba(
-                crop_map[harvest],
-                actual_transpiration[harvest] / potential_transpiration[harvest],
-                self.crop_data["KyT"].values,
-            )
+            if self.crop_data_type == "GAEZ":
+                yield_ratio = self.get_yield_ratio_numba_GAEZ(
+                    crop_map[harvest],
+                    actual_transpiration[harvest] / potential_transpiration[harvest],
+                    self.crop_data["KyT"].values,
+                )
+            elif self.crop_data_type == "MIRCA2000":
+                yield_ratio = self.get_yield_ratio_numba_MIRCA2000(
+                    crop_map[harvest],
+                    actual_transpiration[harvest] / potential_transpiration[harvest],
+                    self.crop_data["a"].values,
+                    self.crop_data["b"].values,
+                    self.crop_data["P0"].values,
+                    self.crop_data["P1"].values,
+                )
+            else:
+                raise ValueError(
+                    f"Unknown crop data type: {self.crop_data_type}, must be 'GAEZ' or 'MIRCA2000'"
+                )
             assert not np.isnan(yield_ratio).any()
         else:
             yield_ratio = np.full_like(crop_map[harvest], 1, dtype=np.float32)
@@ -1326,27 +1413,32 @@ class Farmers(AgentBaseClass):
             max_yield_per_crop = np.take(
                 self.crop_data["reference_yield_kg_m2"].values, harvested_crops
             )
-
-            crop_prices = self.crop_prices[1][
-                self.crop_prices[0].get(self.model.current_time)
-            ]
-            assert not np.isnan(crop_prices).any()
-
             harvesting_farmers, index_farmer_to_field = np.unique(
                 harvesting_farmer_fields, return_inverse=True
             )
 
+            if self.crop_prices[0] is None:
+                crop_prices = self.crop_prices[1]
+                crop_price_per_field = np.full_like(
+                    harvested_crops, crop_prices, dtype=np.float32
+                )
+            else:
+                crop_prices = self.crop_prices[1][
+                    self.crop_prices[0].get(self.model.current_time)
+                ]
+                assert not np.isnan(crop_prices).any()
+
+                # Determine the region ids of harvesting farmers, as crop prices differ per region
+                region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
+
+                # Calculate the crop price per field
+                crop_prices_per_farmer = crop_prices[region_ids_harvesting_farmers]
+                crop_prices_per_field = crop_prices_per_farmer[index_farmer_to_field]
+                crop_price_per_field = np.take(crop_prices_per_field, harvested_crops)
+
             yield_ratio_total = (
                 self.yield_ratio_management[harvesting_farmer_fields] * yield_ratio
             )
-
-            # Determine the region ids of harvesting farmers, as crop prices differ per region
-            region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
-
-            # Calculate the crop price per field
-            crop_prices_per_farmer = crop_prices[region_ids_harvesting_farmers]
-            crop_prices_per_field = crop_prices_per_farmer[index_farmer_to_field]
-            crop_price_per_field = np.take(crop_prices_per_field, harvested_crops)
 
             # Determine the potential crop yield
             potential_crop_yield_field = (
@@ -1625,13 +1717,11 @@ class Farmers(AgentBaseClass):
     @njit(cache=True)
     def plant_numba(
         n: int,
-        season_idx: int,
-        is_first_day_of_season: bool,
-        growth_length: np.ndarray,
+        day_of_year: int,
+        crop_calendar: np.ndarray,
         crop_map: np.ndarray,
         crop_harvest_age_days: np.ndarray,
-        crops: np.ndarray,
-        cultivation_cost_per_region_per_crop: np.ndarray,
+        cultivation_cost: Union[np.ndarray, int, float],
         region_ids_per_farmer: np.ndarray,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
@@ -1655,29 +1745,52 @@ class Farmers(AgentBaseClass):
         Returns:
             plant: Subarray map of what crops are planted this day.
         """
+        assert (
+            farmers_going_out_of_business is False
+        ), "Farmers going out of business not implemented."
+
         plant = np.full_like(crop_map, -1, dtype=np.int32)
         sell_land = np.zeros(n, dtype=np.bool_)
-        for farmer_idx in range(n):
-            farmer_fields = get_farmer_HRUs(
-                field_indices, field_indices_by_farmer, farmer_idx
+
+        planting_farmers_per_season = crop_calendar[:, :, 1] == day_of_year
+        planting_farmers = planting_farmers_per_season.sum(axis=1)
+
+        assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
+
+        planting_farmers_idx = np.where(planting_farmers == 1)[0]
+        if not planting_farmers_idx.size == 0:
+            crop_rotation = np.argmax(
+                planting_farmers_per_season[planting_farmers_idx], axis=1
             )
-            if is_first_day_of_season:
-                farmer_crop = crops[farmer_idx, season_idx]
-                if farmer_crop == -1:
-                    continue
-            else:
-                continue
-            assert farmer_crop != -1
-            farmer_region_id = region_ids_per_farmer[farmer_idx]
-            cultivation_cost = (
-                cultivation_cost_per_region_per_crop[farmer_region_id, farmer_crop]
-                * field_size_per_farmer[farmer_idx]
-            )
-            assert not np.isnan(cultivation_cost)
-            if not farmers_going_out_of_business:
+
+            assert planting_farmers_idx.size == crop_rotation.size
+
+            for i in range(planting_farmers_idx.size):
+                farmer_idx = planting_farmers_idx[i]
+                farmer_crop_rotation = crop_rotation[i]
+
+                farmer_fields = get_farmer_HRUs(
+                    field_indices, field_indices_by_farmer, farmer_idx
+                )
+                farmer_crop_data = crop_calendar[farmer_idx, farmer_crop_rotation]
+                farmer_crop = farmer_crop_data[0]
+                field_harvest_age = farmer_crop_data[2]
+
+                assert farmer_crop != -1
+
+                if isinstance(cultivation_cost, (int, float)):
+                    cultivation_cost_farmer = cultivation_cost
+                else:
+                    farmer_region_id = region_ids_per_farmer[farmer_idx]
+                    cultivation_cost_farmer = (
+                        cultivation_cost[farmer_region_id, farmer_crop]
+                        * field_size_per_farmer[farmer_idx]
+                    )
+                assert not np.isnan(cultivation_cost_farmer)
+
                 interest_rate_farmer = interest_rate[farmer_idx]
                 loan_duration = 2
-                annual_cost_input_loan = cultivation_cost * (
+                annual_cost_input_loan = cultivation_cost_farmer * (
                     interest_rate_farmer
                     * (1 + interest_rate_farmer) ** loan_duration
                     / ((1 + interest_rate_farmer) ** loan_duration - 1)
@@ -1694,44 +1807,34 @@ class Farmers(AgentBaseClass):
                     farmer_idx, -1, 0
                 ] += annual_cost_input_loan  # Add the amount to the total loan amount
 
-                field_harvest_age = growth_length[farmer_crop, season_idx]
                 for field in farmer_fields:
                     # a crop is still growing here.
                     if crop_harvest_age_days[field] != -1:
                         continue
                     plant[field] = farmer_crop
                     crop_harvest_age_days[field] = field_harvest_age
-            else:
-                sell_land[farmer_idx] = True
+
         farmers_selling_land = np.where(sell_land)[0]
         return plant, farmers_selling_land
 
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU."""
-        index = self.cultivation_costs[0].get(self.model.current_time)
-        cultivation_cost_per_region_per_crop = self.cultivation_costs[1][index]
-        assert cultivation_cost_per_region_per_crop.shape[0] == len(self.model.regions)
-        assert cultivation_cost_per_region_per_crop.shape[1] == len(self.crop_ids)
 
-        # create numpy stack of growth length per crop and season
-        growth_length = np.stack(
-            [
-                self.crop_data["season_#1_duration"],
-                self.crop_data["season_#2_duration"],
-                self.crop_data["season_#3_duration"],
-            ],
-            axis=1,
-        )
+        if self.cultivation_costs[0] is None:
+            cultivation_cost = self.cultivation_costs[1]
+        else:
+            index = self.cultivation_costs[0].get(self.model.current_time)
+            cultivation_cost = self.cultivation_costs[1][index]
+            assert cultivation_cost.shape[0] == len(self.model.regions)
+            assert cultivation_cost.shape[1] == len(self.crop_ids)
 
         plant_map, farmers_selling_land = self.plant_numba(
             n=self.n,
-            season_idx=self.current_season_idx,
-            is_first_day_of_season=self.is_first_day_of_season,
-            growth_length=growth_length,
+            day_of_year=self.model.current_time.timetuple().tm_yday,
+            crop_calendar=self.crop_calendar.data,
             crop_map=self.var.crop_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
-            crops=self.crops.data,
-            cultivation_cost_per_region_per_crop=cultivation_cost_per_region_per_crop,
+            cultivation_cost=cultivation_cost,
             region_ids_per_farmer=self.region_id.data,
             field_indices_by_farmer=self.field_indices_by_farmer.data,
             field_indices=self.field_indices,
@@ -1749,7 +1852,7 @@ class Farmers(AgentBaseClass):
 
         assert (self.var.crop_age_days_map[self.var.crop_map > 0] >= 0).all()
 
-        field_is_paddy_irrigated = self.var.crop_map == self.crop_names["Paddy"]
+        field_is_paddy_irrigated = self.var.crop_map == self.crop_names["rice"]
         self.var.land_use_type[
             (self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)
         ] = 2
@@ -2044,7 +2147,7 @@ class Farmers(AgentBaseClass):
         last_yield_ratio = None
         last_spei_prob = None
 
-        def logarithmic_natural(x, a, b):
+        def logarithmic_function(x, a, b):
             return a * np.log2(x) + b
 
         for idx, (yield_ratio, spei_prob) in enumerate(
@@ -2074,8 +2177,8 @@ class Farmers(AgentBaseClass):
 
             # Fit logarithmic function, except when there is an error
             try:
-                # Attempt to fit the logarithmic_natural function
-                a, b = curve_fit(logarithmic_natural, yield_ratio, spei_prob)[0]
+                # Attempt to fit the logarithmic_function function
+                a, b = curve_fit(logarithmic_function, yield_ratio, spei_prob)[0]
 
             except RuntimeError:
                 # RuntimeError is raised when curve_fit fails to converge
@@ -2085,12 +2188,12 @@ class Farmers(AgentBaseClass):
                     spei_prob = last_spei_prob
                     # Recalculate a, b with the previous values
                     a, b = curve_fit(
-                        logarithmic_natural, last_yield_ratio, last_spei_prob
+                        logarithmic_function, last_yield_ratio, last_spei_prob
                     )[0]
 
             group_yield_probability_relation_log.append(np.array([a, b]))
 
-            residuals = spei_prob - logarithmic_natural(yield_ratio, a, b)
+            residuals = spei_prob - logarithmic_function(yield_ratio, a, b)
             ss_tot = np.sum((spei_prob - np.mean(spei_prob)) ** 2)
             ss_res = np.sum(residuals**2)
 
@@ -2636,13 +2739,13 @@ class Farmers(AgentBaseClass):
             - Adjusts yield ratios to be non-negative and capped at 1.0.
         """
 
-        def inverse_logarithmic_natural(probability, params):
+        def inverse_logarithmic_function(probability, params):
             a = params[:, 0]
             b = params[:, 1]
 
             return np.power(2, (probability[:, np.newaxis] - b) / a)
 
-        yield_ratios = inverse_logarithmic_natural(
+        yield_ratios = inverse_logarithmic_function(
             1 / self.p_droughts, self.farmer_yield_probability_relation
         ).T
 
@@ -3180,27 +3283,6 @@ class Farmers(AgentBaseClass):
 
         # for i in range(self.n):
         #     self.remove_agent(random.randint(0, self.n), land_use_type=1)
-        month = self.model.current_time.month
-        if month in (6, 7, 8, 9, 10):
-            self.current_season_idx = 0  # season #1
-            if month == 6 and self.model.current_time.day == 1:
-                self.is_first_day_of_season = True
-            else:
-                self.is_first_day_of_season = False
-        elif month in (11, 12, 1, 2):
-            self.current_season_idx = 1  # season #2
-            if month == 11 and self.model.current_time.day == 1:
-                self.is_first_day_of_season = True
-            else:
-                self.is_first_day_of_season = False
-        elif month in (3, 4, 5):
-            self.current_season_idx = 2  # season #3
-            if month == 3 and self.model.current_time.day == 1:
-                self.is_first_day_of_season = True
-            else:
-                self.is_first_day_of_season = False
-        else:
-            raise ValueError(f"Invalid month: {month}")
 
         self.harvest()
         self.plant()

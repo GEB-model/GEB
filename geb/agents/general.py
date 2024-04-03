@@ -8,6 +8,7 @@ class AgentArray:
         n=None,
         max_n=None,
         extra_dims=None,
+        extra_dims_names=None,
         dtype=None,
         fill_value=None,
     ):
@@ -42,6 +43,9 @@ class AgentArray:
                 shape = max_n
             else:
                 shape = (max_n,) + extra_dims
+                assert extra_dims_names is not None
+                assert len(extra_dims) == len(extra_dims_names)
+                self.extra_dims_names = extra_dims_names
             if fill_value is not None:
                 self._data = np.full(shape, fill_value, dtype=dtype)
             else:
@@ -63,6 +67,14 @@ class AgentArray:
     @property
     def n(self):
         return self._n
+
+    @property
+    def extra_dims_names(self):
+        return self._extra_dims_names
+
+    @extra_dims_names.setter
+    def extra_dims_names(self, value):
+        self._extra_dims_names = value
 
     @n.setter
     def n(self, value):
@@ -121,13 +133,27 @@ class AgentArray:
         return self._n
 
     def __getattr__(self, name):
-        if name in ("_data", "data", "_n", "n"):
+        if name in (
+            "_data",
+            "data",
+            "_n",
+            "n",
+            "_extra_dims_names",
+            "extra_dims_names",
+        ):
             return super().__getattr__(name)
         else:
             return getattr(self.data, name)
 
     def __setattr__(self, name, value):
-        if name in ("_data", "data", "_n", "n"):
+        if name in (
+            "_data",
+            "data",
+            "_n",
+            "n",
+            "_extra_dims_names",
+            "extra_dims_names",
+        ):
             super().__setattr__(name, value)
         else:
             setattr(self.data, name, value)
