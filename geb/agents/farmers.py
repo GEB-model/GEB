@@ -3396,8 +3396,6 @@ class Farmers(AgentBaseClass):
                     **decision_params, subjective=False
                 )
 
-                self.switch_crops()
-
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(self.farmer_yield_probability_relation == 0):
                     self.adapt_irrigation_well()
@@ -3406,6 +3404,8 @@ class Farmers(AgentBaseClass):
                     raise AssertionError(
                         "Cannot adapt without yield - probability relation"
                     )
+
+                self.switch_crops()
 
             # Update management yield ratio score
             self.update_yield_ratio_management()
