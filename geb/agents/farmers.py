@@ -2,13 +2,11 @@
 import math
 from datetime import datetime
 import json
-from pathlib import Path
-import calendar
 from typing import Tuple, Union
 import matplotlib.pyplot as plt
 from honeybees.library.raster import sample_from_map
 
-from scipy.stats import genextreme, norm, linregress
+from scipy.stats import genextreme
 from scipy.optimize import curve_fit
 
 import numpy as np
@@ -26,6 +24,35 @@ from ..data import (
 )
 from .decision_module import DecisionModule
 from .general import AgentArray
+
+
+def cumulative_mean(mean, counter, update, mask=None):
+    """Calculates the cumulative mean of a series of numbers. This function
+    operates in place.
+
+    Args:
+        mean: The cumulative mean.
+        counter: The number of elements that have been added to the mean.
+        update: The new elements that needs to be added to the mean.
+
+    """
+    if mask is not None:
+        mean[mask] = (mean[mask] * counter[mask] + update) / (counter[mask] + 1)
+        counter[mask] += 1
+    else:
+        mean[:] = (mean * counter + update) / (counter + 1)
+        counter += 1
+
+
+def shift_and_update(array, update):
+    """Shifts the array and updates the first element with the update value.
+
+    Args:
+        array: The array that needs to be shifted.
+        update: The value that needs to be added to the first element of the array.
+    """
+    array[:, 1:] = array[:, :-1]
+    array[:, 0] = update
 
 
 @njit(cache=True)
@@ -407,12 +434,6 @@ class Farmers(AgentBaseClass):
             dtype=np.float32,
             fill_value=0,
         )
-        self.n_water_accessible_days = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=0
-        )
-        self.n_water_accessible_years = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=0
-        )
 
         # Yield ratio and crop variables
         # 0 = kharif age, 1 = rabi age, 2 = summer age, 3 = total growth time
@@ -424,29 +445,30 @@ class Farmers(AgentBaseClass):
             dtype=np.float32,
             fill_value=0,
         )
-        # 0 = kharif yield_ratio, 1 = rabi yield_ratio, 2 = summer yield_ratio
-        self.per_harvest_yield_ratio = AgentArray(
+
+        self.cumulative_SPEI_during_growing_season = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(3,),
-            extra_dims_names=("season",),
             dtype=np.float32,
             fill_value=0,
         )
-        self.per_harvest_SPEI = AgentArray(
+        self.cumulative_SPEI_count_during_growing_season = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(3,),
-            extra_dims_names=("season",),
+            dtype=np.int32,
+            fill_value=0,
+        )
+
+        self.cumulative_yield_ratio = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
             dtype=np.float32,
             fill_value=0,
         )
-        self.monthly_SPEI = AgentArray(
+        self.cumulative_yield_ratio_count = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(10,),
-            extra_dims_names=("month",),
-            dtype=np.float32,
+            dtype=np.int32,
             fill_value=0,
         )
 
@@ -529,7 +551,7 @@ class Farmers(AgentBaseClass):
         self.yearly_SPEI_probability = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(self.total_spinup_time + 1,),
+            extra_dims=(self.total_spinup_time,),
             extra_dims_names=("year",),
             dtype=np.float32,
             fill_value=0,
@@ -537,7 +559,7 @@ class Farmers(AgentBaseClass):
         self.yearly_yield_ratio = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(self.total_spinup_time + 1,),
+            extra_dims=(self.total_spinup_time,),
             extra_dims_names=("year",),
             dtype=np.float32,
             fill_value=0,
@@ -545,7 +567,7 @@ class Farmers(AgentBaseClass):
         self.yearly_profits = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(self.total_spinup_time + 1,),
+            extra_dims=(self.total_spinup_time,),
             extra_dims_names=("year",),
             dtype=np.float32,
             fill_value=0,
@@ -553,7 +575,7 @@ class Farmers(AgentBaseClass):
         self.yearly_potential_profits = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(self.total_spinup_time + 1,),
+            extra_dims=(self.total_spinup_time,),
             extra_dims_names=("year",),
             dtype=np.float32,
             fill_value=0,
@@ -633,10 +655,6 @@ class Farmers(AgentBaseClass):
         # Increase yield ratio of those who use better management practices
         self.yield_ratio_management = (
             self.yield_ratio_multiplier * self.base_management_yield_ratio
-        )
-
-        self.infiltration_multiplier = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=1
         )
 
         rng_drip = np.random.default_rng(70)
@@ -1180,7 +1198,6 @@ class Farmers(AgentBaseClass):
             well_depth=self.well_depth.data,
             irrigation_limit_m3=self.irrigation_limit_m3.data,
         )
-        self.n_water_accessible_days[:] += has_access_to_irrigation_water
         self.groundwater_depth = AgentArray(
             groundwater_depth_per_farmer, max_n=self.max_n
         )
@@ -1344,7 +1361,6 @@ class Farmers(AgentBaseClass):
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
             crop_map: Subarray map of crops.
             crop_age_days: Subarray map of current crop age in days.
-            n_water_accessible_days: Number of days that crop was water limited.
             crop: Crops grown by each farmer.
             switch_crops: Whether to switch crops or not.
 
@@ -1460,51 +1476,23 @@ class Farmers(AgentBaseClass):
                 minlength=self.n,
             )
 
-            ## Set the current crop age
+            ## Convert the yield_ratio per field to the average yield ratio per farmer
+            yield_ratio_per_farmer = np.bincount(
+                harvesting_farmer_fields, weights=yield_ratio_total, minlength=self.n
+            ) / np.bincount(harvesting_farmer_fields, minlength=self.n)
+
+            ## Get the current crop age
             crop_age = self.var.crop_age_days_map[harvest]
             total_crop_age = np.bincount(
                 harvesting_farmer_fields, weights=crop_age, minlength=self.n
             ) / np.bincount(harvesting_farmer_fields, minlength=self.n)
 
-            ## Convert the yield_ratio per field to the average yield ratio per farmer
-            yield_ratio_agent = np.bincount(
-                harvesting_farmer_fields, weights=yield_ratio_total, minlength=self.n
-            ) / np.bincount(harvesting_farmer_fields, minlength=self.n)
-
-            # Take the mean of the growing months and change the sign to fit the GEV distribution
-            cum_SPEI_latest_harvest = (
-                np.mean(
-                    self.monthly_SPEI[harvesting_farmers, : int((crop_age[0] / 30))],
-                    axis=1,
-                )
-                * -1
+            # Update the cumulative yield ratio and count
+            cumulative_mean(
+                self.cumulative_yield_ratio[harvesting_farmers],
+                self.cumulative_yield_ratio_count[harvesting_farmers],
+                yield_ratio_per_farmer[harvesting_farmers],
             )
-
-            ## Add the yield ratio, precipitation and the crop age to the array corresponding to the current season. Precipitation is already converted to daily rainfall
-            if self.current_season_idx == 0:
-                self.total_crop_age[harvesting_farmers, 0] = total_crop_age[
-                    harvesting_farmers
-                ]
-                self.per_harvest_yield_ratio[harvesting_farmers, 0] = yield_ratio_agent[
-                    harvesting_farmers
-                ]
-                self.per_harvest_SPEI[harvesting_farmers, 0] = cum_SPEI_latest_harvest
-            elif self.current_season_idx == 1:
-                self.total_crop_age[harvesting_farmers, 1] = total_crop_age[
-                    harvesting_farmers
-                ]
-                self.per_harvest_yield_ratio[harvesting_farmers, 1] = yield_ratio_agent[
-                    harvesting_farmers
-                ]
-                self.per_harvest_SPEI[harvesting_farmers, 1] = cum_SPEI_latest_harvest
-            elif self.current_season_idx == 2:
-                self.total_crop_age[harvesting_farmers, 2] = total_crop_age[
-                    harvesting_farmers
-                ]
-                self.per_harvest_yield_ratio[harvesting_farmers, 2] = yield_ratio_agent[
-                    harvesting_farmers
-                ]
-                self.per_harvest_SPEI[harvesting_farmers, 2] = cum_SPEI_latest_harvest
 
             self.save_yearly_profits(
                 harvesting_farmers, profit_farmer, potential_profit_farmer
@@ -1512,6 +1500,7 @@ class Farmers(AgentBaseClass):
             self.drought_risk_perception(harvesting_farmers, total_crop_age)
 
             ## After updating the drought risk perception, set the previous month for the next timestep as the current for this timestep.
+            # TODO: This seems a bit like a quirky solution, perhaps there is a better way to do this.
             self.previous_month = self.model.current_time.month
 
         else:
@@ -1896,7 +1885,7 @@ class Farmers(AgentBaseClass):
             + self.groundwater_abstraction_m3_by_farmer
         )
 
-    def SPEI_sum(self) -> None:
+    def cumulative_SPEI(self) -> None:
         """
         Update the monthly Standardized Precipitation Evapotranspiration Index (SPEI) array by shifting past records and
         adding the SPEI for the current month.
@@ -1905,17 +1894,56 @@ class Farmers(AgentBaseClass):
             This method updates the `monthly_SPEI` attribute in place.
         """
 
-        # Shift the existing monthly SPEI records one position to the right.
-        # This effectively "moves" the SPEI of each month to the previous month's position, discarding the oldest record.
-        self.monthly_SPEI[:, 1:] = self.monthly_SPEI[:, 0:-1]
-
         # Sample the SPEI value for the current month from `SPEI_map` based on the given locations.
         # The sampling is done for the first day of the current month.
-        self.monthly_SPEI[:, 0] = sample_from_map(
+        assert self.model.current_time.day == 1
+
+        if self.model.current_time.month == 1:
+            # calculate the SPEI probability using GEV parameters
+            SPEI_probability = genextreme.sf(
+                self.cumulative_SPEI_during_growing_season,
+                self.GEV_parameters[:, 0],
+                self.GEV_parameters[:, 1],
+                self.GEV_parameters[:, 2],
+            )
+
+            shift_and_update(self.yearly_SPEI_probability, SPEI_probability)
+
+            # Reset the cumulative SPEI array at the beginning of the year
+            self.cumulative_SPEI_during_growing_season.fill(0)
+            self.cumulative_SPEI_count_during_growing_season.fill(0)
+
+        fields_with_growing_crops = self.var.crop_map[self.var.land_owners != -1] != -1
+        farmers_with_growing_crops = (
+            np.bincount(
+                self.var.land_owners[self.var.land_owners != -1],
+                weights=fields_with_growing_crops,
+            )
+            > 0
+        )
+        if farmers_with_growing_crops.sum() == 0:
+            return
+
+        current_SPEI_per_farmer = sample_from_map(
             array=self.model.data.grid.spei_uncompressed,
-            coords=self.locations.data,
+            coords=self.locations[farmers_with_growing_crops].data,
             gt=self.model.data.grid.gt,
         )
+
+        cumulative_mean(
+            mean=self.cumulative_SPEI_during_growing_season,
+            counter=self.cumulative_SPEI_count_during_growing_season,
+            update=current_SPEI_per_farmer,
+            mask=farmers_with_growing_crops,
+        )
+
+    def reset_cumulative_counts(self) -> None:
+        """
+        Reset the cumulative counts and count arrays for each farmer to zero.
+        """
+
+        self.cumulative_yield_ratio.fill(0)
+        self.cumulative_yield_ratio_count.fill(0)
 
     def save_yearly_profits(
         self,
@@ -1969,105 +1997,6 @@ class Farmers(AgentBaseClass):
             latest_potential_profits / cum_inflation[harvesting_farmers]
         )
 
-    def calculate_yearly_mean(self, per_harvest_array):
-        """
-        Calculate the yearly average yield ratio based on per-harvest yield ratios and total crop ages.
-
-        Returns:
-            numpy.ndarray: An array representing the yearly yield ratio for each data entry.
-        """
-
-        # Sum the total planted time across all three seasons.
-        total_planted_time = (
-            self.total_crop_age[:, 0]
-            + self.total_crop_age[:, 1]
-            + self.total_crop_age[:, 2]
-        )
-
-        # Mask (ignore) entries where the total planted time is zero to prevent division by zero.
-        total_planted_time = np.ma.masked_where(
-            total_planted_time == 0, total_planted_time
-        )
-
-        # Calculate the weighted average for each season based on the age of the crop and the array values.
-        # This gives an overall yearly average.
-        yearly_average = (
-            self.total_crop_age[:, 0] / total_planted_time * per_harvest_array[:, 0]
-            + self.total_crop_age[:, 1] / total_planted_time * per_harvest_array[:, 1]
-            + self.total_crop_age[:, 2] / total_planted_time * per_harvest_array[:, 2]
-        )
-        return yearly_average
-
-    def convert_seasonal_to_yearly_SPEI_probability(self):
-        """
-        Convert the seasonal Standardized Precipitation Evapotranspiration Index (SPEI) to yearly SPEI probability.
-        Uses Generalized Extreme Value (GEV) parameters to determine the seasonal SPEI probability.
-
-        Returns:
-            numpy.ndarray: An array representing the yearly SPEI probability for each data entry.
-        """
-
-        # Initialize an array to hold the SPEI probability for each season.
-        seasonal_SPEI_probability = np.zeros((self.n, 3), dtype=np.float32)
-
-        for i in range(3):
-            # Create a mask to identify entries where the SPEI for the given season is not zero.
-            mask = self.per_harvest_SPEI[:, i] != 0
-
-            # For each valid entry, calculate the SPEI probability using GEV parameters.
-            seasonal_SPEI_probability[mask, i] = genextreme.sf(
-                self.per_harvest_SPEI[mask, i],
-                self.GEV_parameters[mask, 0],
-                self.GEV_parameters[mask, 1],
-                self.GEV_parameters[mask, 2],
-            )
-
-        # Count the number of seasons with non-zero SPEI probability for each data entry.
-        nonzero_count = np.count_nonzero(seasonal_SPEI_probability, axis=1)
-
-        # Determine the number of planting seasons for each data entry.
-        # If no seasons have valid SPEI probabilities, assume one season to prevent division by zero.
-        nr_planting_seasons = np.where(nonzero_count == 0, 1, nonzero_count)
-
-        # Calculate the average SPEI probability over the planting seasons for each data entry.
-        yearly_prob = np.sum(seasonal_SPEI_probability, axis=1) / nr_planting_seasons
-        return yearly_prob
-
-    def _shift_and_reset_matrix(self, matrix: np.ndarray) -> None:
-        """
-        Shifts columns to the right in the matrix and sets the first column to zero.
-        """
-        matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
-        matrix[:, 0] = 0  # Reset the first column to 0
-
-    def set_yearly_yield_spei(self) -> None:
-        """
-        Sets the yearly yield and spei, then shifts each matrix
-
-        Note:
-            This function performs the following operations:
-                1. Compute the yearly yield ratios and SPEI probabilities.
-                2. Shift and reset the matrices.
-        """
-
-        # Step 1: Compute yearly values
-        self.yearly_yield_ratio[:, 0] = self.calculate_yearly_mean(
-            self.per_harvest_yield_ratio
-        )
-        self.yearly_SPEI_probability[:, 0] = (
-            self.convert_seasonal_to_yearly_SPEI_probability()
-        )
-        self.per_harvest_SPEI[:] = 0
-
-        # Step 2: Shift and reset matrices
-        self._shift_and_reset_matrix(self.yearly_yield_ratio)
-        self._shift_and_reset_matrix(self.yearly_SPEI_probability)
-        self._shift_and_reset_matrix(self.yearly_profits)
-        self._shift_and_reset_matrix(self.yearly_potential_profits)
-
-        self.total_crop_age[:, :] = 0
-        self.per_harvest_yield_ratio[:, :] = 0
-
     def calculate_yield_spei_relation(self) -> None:
         """
         Computes the yearly yield ratios and SPEI probabilities, then calculates the yearly mean for each unique farmer type.
@@ -2080,12 +2009,18 @@ class Farmers(AgentBaseClass):
                 4. Sample the individual agent relation from the agent groups and assign to agents.
         """
         # Step 1: Group farmers based on crop combinations and location in basin and compute averages
-        unique_yearly_yield_ratio = np.empty((0, self.total_spinup_time))
-        unique_SPEI_probability = np.empty((0, self.total_spinup_time))
+        unique_yearly_yield_ratio = np.empty(
+            (0, self.total_spinup_time), dtype=np.float32
+        )
+        unique_SPEI_probability = np.empty(
+            (0, self.total_spinup_time), dtype=np.float32
+        )
 
         # Create unique groups
         # Calculating the thresholds for the top, middle, and lower thirds
-        basin_elevation_thresholds = np.percentile(self.elevation.data, [33.33, 66.67])
+        basin_elevation_thresholds = np.percentile(
+            self.elevation.data, [100 / 3, 100 / 1.5]
+        )
         # 0 for upper, 1 for mid, and 2 for lower
         distribution_array = np.zeros_like(self.elevation)
         distribution_array[self.elevation > basin_elevation_thresholds[1]] = 0  # Upper
@@ -2137,9 +2072,7 @@ class Farmers(AgentBaseClass):
         unique_SPEI_probability_mask = unique_SPEI_probability[:, mask_columns]
 
         # Step 3: Determine the relation between yield ratio and profit
-        group_yield_probability_relation_lin = []
         group_yield_probability_relation_log = []
-        yield_probability_R2_scipy = []
         yield_probability_R2_log = []
         yield_probability_p_scipy = []
 
@@ -2939,6 +2872,7 @@ class Farmers(AgentBaseClass):
         ).all()  # Ensure all crop yields are non-negative
 
         # Calculate the farm area per agent
+        print("CORRECT THAT THE FARM AREA IS NOT USED?")
         farmer_fields_ID = self.var.land_owners
         farm_area = np.bincount(
             farmer_fields_ID[farmer_fields_ID != -1],
@@ -3290,7 +3224,7 @@ class Farmers(AgentBaseClass):
 
         # monthly actions
         if self.model.current_time.day == 1:
-            self.SPEI_sum()
+            self.cumulative_SPEI()
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
@@ -3359,15 +3293,6 @@ class Farmers(AgentBaseClass):
 
             # Reset the yearly abstraction
             self.yearly_abstraction_m3_by_farmer[:, :] = 0
-
-            # check if current year is a leap year
-            days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
-            has_access_to_water_all_year = self.n_water_accessible_days >= days_in_year
-            self.n_water_accessible_years[has_access_to_water_all_year] += 1
-            self.n_water_accessible_days[~has_access_to_water_all_year] = 0
-            self.n_water_accessible_days[:] = 0  # reset water accessible days
-
-            self.set_yearly_yield_spei()
 
             if self.model.spinup is False or (
                 "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
@@ -3513,8 +3438,6 @@ class Farmers(AgentBaseClass):
             "reservoir_abstraction_m3_by_farmer": 0,
             "groundwater_abstraction_m3_by_farmer": 0,
             "yearly_abstraction_m3_by_farmer": 0,
-            "n_water_accessible_days": 0,
-            "n_water_accessible_years": 0,
             "total_crop_age": 0,
             "per_harvest_yield_ratio": 0,
             "per_harvest_SPEI": 0,
@@ -3536,7 +3459,6 @@ class Farmers(AgentBaseClass):
             "yield_ratio_multiplier": 1,
             "base_management_yield_ratio": 1,
             "yield_ratio_management": 1,
-            "infiltration_multiplier": 1,
             "annual_costs_all_adaptations": 1,
             "farmer_class": 1,
             "water_use": 1,
