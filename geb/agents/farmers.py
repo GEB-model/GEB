@@ -3295,8 +3295,14 @@ class Farmers(AgentBaseClass):
             self.yearly_abstraction_m3_by_farmer[:, :] = 0
 
             if self.model.spinup is False or (
-                "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
+                "ruleset" in self.config
+                and not self.config["ruleset"] == "no-adaptation"
             ):
+                raise NotImplementedError(
+                    """Dynamic adaptation for farmers is not currently activated in the main branch, due
+                    to ongoing generalization efforts. Please use ruleset 'no-adaptation' for now. It is
+                    one of the main priorities to re-enable this functionality in the near future."""
+                )
                 # Determine the relation between drought probability and yield
                 self.calculate_yield_spei_relation()
 

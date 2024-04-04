@@ -22,6 +22,8 @@ class AgentArray:
                 extra_dims is None
             ), "extra_dims cannot be given if input_array is given"
             assert n is None, "n cannot be given if input_array is given"
+            # assert dtype is not object
+            assert input_array.dtype != object, "dtype cannot be object"
             n = input_array.shape[0]
             if max_n:
                 if input_array.ndim == 1:
@@ -37,6 +39,7 @@ class AgentArray:
                 self._n = n
         else:
             assert dtype is not None
+            assert dtype != object
             assert n is not None
             assert max_n is not None
             if extra_dims is None:
