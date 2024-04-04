@@ -70,6 +70,8 @@ from .households import Households
 from .farmers import Farmers
 from .government import Government
 from .reservoir_operators import ReservoirOperators
+from .town_managers import TownManagers
+from .tourism import Tourism
 
 
 class Agents:
@@ -84,7 +86,18 @@ class Agents:
         self.households = Households(model, self, 0.1)
         self.farmers = Farmers(model, self, 0.1)
         self.reservoir_operators = ReservoirOperators(model, self)
+        self.town_managers = TownManagers(model, self)
+        self.tourism = Tourism(model, self)
         self.government = Government(model, self)
+
+        self.agents = [
+            self.households,
+            self.farmers,
+            self.reservoir_operators,
+            self.town_managers,
+            self.tourism,
+            self.government,
+        ]
 
         if not self.model.load_initial_data:
             self.initiate()
@@ -93,28 +106,20 @@ class Agents:
 
     def initiate(self) -> None:
         """Initiate all agents."""
-        self.farmers.initiate()
-        self.households.initiate()
-        self.reservoir_operators.initiate()
-        self.government.initiate()
+        for agent_type in self.agents:
+            agent_type.initiate()
 
     def step(self) -> None:
         """This function is called every timestep and activates the agents in order of NGO, government and then farmers."""
-        self.households.step()
-        self.government.step()
-        self.farmers.step()
-        self.reservoir_operators.step()
+        for agent_type in self.agents:
+            agent_type.step()
 
     def save_state(self) -> None:
         """Save the state of all agents."""
-        self.farmers.save_state(folder="farmers")
-        self.households.save_state(folder="households")
-        self.reservoir_operators.save_state(folder="reservoir_operators")
-        self.government.save_state(folder="government")
+        for agent_type in self.agents:
+            agent_type.save_state(folder=agent_type.__class__.__name__)
 
     def restore_state(self) -> None:
         """Load the state of all agents."""
-        self.farmers.restore_state(folder="farmers")
-        self.households.restore_state(folder="households")
-        self.reservoir_operators.restore_state(folder="reservoir_operators")
-        self.government.restore_state(folder="government")
+        for agent_type in self.agents:
+            agent_type.restore_state(folder=agent_type.__class__.__name__)

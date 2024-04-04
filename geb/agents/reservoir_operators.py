@@ -25,7 +25,15 @@ class ReservoirOperators(AgentBaseClass):
         df = pd.read_csv(
             self.model.model_structure["table"][
                 "routing/lakesreservoirs/basin_lakes_data"
-            ]
+            ],
+            dtype={
+                "waterbody_type": int,
+                "volume_total": float,
+                "average_discharge": float,
+                "average_area": float,
+                "volume_flood": float,
+                "relative_area_in_region": float,
+            },
         ).set_index("waterbody_id")
 
         self.reservoirs = df[df["waterbody_type"] == 2].copy()
