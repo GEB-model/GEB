@@ -50,10 +50,10 @@ class ABM(ABM_Model):
         )
 
         study_area = {
-            "xmin": self.data.grid.bounds.left,
-            "xmax": self.data.grid.bounds.right,
-            "ymin": self.data.grid.bounds.bottom,
-            "ymax": self.data.grid.bounds.top,
+            "xmin": self.data.grid.bounds[0],
+            "xmax": self.data.grid.bounds[2],
+            "ymin": self.data.grid.bounds[1],
+            "ymax": self.data.grid.bounds[3],
         }
 
         self.area = Area(self, study_area)

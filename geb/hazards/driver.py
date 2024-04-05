@@ -1,9 +1,6 @@
 class HazardDriver:
     def __init__(self):
         if self.config["general"]["simulate_floods"]:
-            assert self.config["general"][
-                "simulate_hydrology"
-            ], "floods can only be simulated if hydrology is simulated"
             from geb.hazards.floods.sfincs import SFINCS
 
             # exract the longest flood event in days
@@ -18,9 +15,10 @@ class HazardDriver:
 
     def step(self, step_size):
         if self.config["general"]["simulate_floods"]:
-            self.sfincs.save_discharge()
+            if self.config["general"]["simulate_hydrology"]:
+                self.sfincs.save_discharge()
 
             for event in self.config["general"]["flood_events"]:
                 assert type(self.current_time.date()) == type(event["end_time"])
                 if self.current_time.date() == event["end_time"]:
-                    self.sfincs.run(event["basin_id"], event["start_time"])
+                    self.sfincs.run(event)

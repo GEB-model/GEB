@@ -723,11 +723,12 @@ class Farmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
-        for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
-            GEV_grid = getattr(self.model.data.grid, varname)
-            self.GEV_parameters[:, i] = sample_from_map(
-                GEV_grid, self.locations.data, self.model.data.grid.gt
-            )
+        if self.model.config["general"]["simulate_hydrology"]:
+            for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
+                GEV_grid = getattr(self.model.data.grid, varname)
+                self.GEV_parameters[:, i] = sample_from_map(
+                    GEV_grid, self.locations.data, self.model.data.grid.gt
+                )
 
         self.risk_perc_min = AgentArray(
             n=self.n,
@@ -3223,7 +3224,10 @@ class Farmers(AgentBaseClass):
         self.water_abstraction_sum()
 
         # monthly actions
-        if self.model.current_time.day == 1:
+        if (
+            self.model.current_time.day == 1
+            and self.model.config["general"]["simulate_hydrology"]
+        ):
             self.cumulative_SPEI()
 
         ## yearly actions

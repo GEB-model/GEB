@@ -95,7 +95,7 @@ class Grid(BaseVariables):
         ) as mask_src:
             self.mask = mask_src.read(1).astype(bool)
             self.gt = mask_src.transform.to_gdal()
-            self.bounds = mask_src.bounds
+            self.bounds = tuple(mask_src.bounds)
             self.cell_size = mask_src.transform.a
         with rxr.open_rasterio(
             self.model.model_structure["grid"]["areamaps/grid_mask"]
