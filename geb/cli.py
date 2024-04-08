@@ -74,7 +74,7 @@ def create_logger(fp):
 @click.version_option(geb.__version__, message="GEB version: %(version)s")
 @click.pass_context
 def main(ctx):  # , quiet, verbose):
-    """Command line interface for hydromt models."""
+    """Command line interface for GEB."""
     if ctx.obj is None:
         ctx.obj = {}
 
