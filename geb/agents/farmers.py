@@ -3298,9 +3298,8 @@ class Farmers(AgentBaseClass):
             # Reset the yearly abstraction
             self.yearly_abstraction_m3_by_farmer[:, :] = 0
 
-            if self.model.spinup is False or (
-                "ruleset" in self.config
-                and not self.config["ruleset"] == "no-adaptation"
+            if not self.model.spinup and not (
+                "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
             ):
                 raise NotImplementedError(
                     """Dynamic adaptation for farmers is not currently activated in the main branch, due
