@@ -1842,7 +1842,9 @@ class Farmers(AgentBaseClass):
 
         assert (self.var.crop_age_days_map[self.var.crop_map > 0] >= 0).all()
 
-        field_is_paddy_irrigated = self.var.crop_map == self.crop_names["rice"]
+        field_is_paddy_irrigated = np.isin(
+            self.var.crop_map, self.crop_data[self.crop_data["is_paddy"]].index
+        )
         self.var.land_use_type[
             (self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)
         ] = 2
