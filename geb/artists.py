@@ -41,13 +41,6 @@ class Artists(honeybeesArtists):
         Returns:
             portrayal: Portrayal of farmer.
         """
-        n_crops = (model.agents.farmers.crops[idx] != -1).sum()
-        if n_crops == 1:
-            color = "#ff0000"
-        elif n_crops == 2:
-            color = "#00ff00"
-        else:
-            color = "#0000ff"
         # if self.model.agents.farmers.flooded[idx] == True:
         #     color = '#ff0000'
         # else:
@@ -68,7 +61,7 @@ class Artists(honeybeesArtists):
             "shape": "circle",
             "r": r,
             "filled": True,
-            "color": color,
+            "color": "#ff0000",
         }
 
     def draw_tehsil(self, properties):
