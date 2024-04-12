@@ -414,20 +414,8 @@ def run_model(individual, config, gauges, observed_streamflow):
     else:
         # If the directory does not exist, set runmodel to True
         runmodel = True
-
-        # set the map from which to get the yield ratio - SPEI relations as the map of the generation's first run
-        template["general"]["load_pre_spinup"] = config["calibration"][
-            "load_pre_spinup"
-        ]
-        if config["calibration"]["load_pre_spinup"]:
-            generation = individual.label[:2]
-            initial_run_label = generation + "_000"
-            initial_relations_path = os.path.join(
-                run_directory, "..", initial_run_label, "initial_relations"
-            )
-            template["general"]["initial_relations_folder"] = initial_relations_path
-        else:
-            template["general"]["initial_relations_folder"] = os.path.join(
+    
+        template["general"]["initial_relations_folder"] = os.path.join(
                 run_directory, "initial"
             )
 
@@ -455,21 +443,7 @@ def run_model(individual, config, gauges, observed_streamflow):
             os.mkdir(run_directory)
             template = deepcopy(config)
 
-            # set the map from which to get the yield ratio - SPEI relations as the map of the generation's first run
-            template["general"]["load_pre_spinup"] = config["calibration"][
-                "load_pre_spinup"
-            ]
-            if config["calibration"]["load_pre_spinup"]:
-                generation = individual.label[:2]
-                initial_run_label = generation + "_000"
-                initial_conditions_path = os.path.join(
-                    run_directory, "..", initial_run_label, "initial_conditions"
-                )
-                template["general"][
-                    "initial_relations_folder"
-                ] = initial_conditions_path
-            else:
-                template["general"]["initial_relations_folder"] = os.path.join(
+            template["general"]["initial_relations_folder"] = os.path.join(
                     run_directory, "initial_conditions"
                 )
 
@@ -580,12 +554,6 @@ def run_model(individual, config, gauges, observed_streamflow):
                     )
 
                 return p.returncode
-
-            if (
-                is_first_run(individual.label)
-                and config["calibration"]["load_pre_spinup"]
-            ):
-                run_model_scenario("pre_spinup")
 
             return_code = run_model_scenario("spinup")
             if return_code == 0:
