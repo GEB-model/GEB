@@ -15,6 +15,94 @@ except (ModuleNotFoundError, ImportError):
     pass
 
 
+@njit(cache=True)
+def to_grid(data, grid_to_HRU, land_use_ratio, fn="weightedmean"):
+    """Numba helper function to convert from HRU to grid.
+
+    Args:
+        data: The grid data to be converted.
+        grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+        land_use_ratio: Relative size of HRU to grid.
+        fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
+
+    Returns:
+        ouput_data: Data converted to HRUs.
+    """
+    output_data = np.empty(grid_to_HRU.size, dtype=data.dtype)
+
+    assert (
+        grid_to_HRU[0] != 0
+    ), "First value of grid_to_HRU cannot be 0. This would mean that the first HRU is empty."
+    assert (
+        grid_to_HRU[-1] == land_use_ratio.size
+    ), "The last value of grid_to_HRU must be equal to the size of land_use_ratio. Otherwise, the last HRU would not be used."
+
+    prev_index = 0
+    for i in range(grid_to_HRU.size):
+        cell_index = grid_to_HRU[i]
+        if fn == "weightedmean":
+            values = data[prev_index:cell_index]
+            weights = land_use_ratio[prev_index:cell_index]
+            output_data[i] = (values * weights).sum() / weights.sum()
+        elif fn == "weightednanmean":
+            values = data[prev_index:cell_index]
+            weights = land_use_ratio[prev_index:cell_index]
+            weights = weights[~np.isnan(values)]
+            values = values[~np.isnan(values)]
+            if values.size == 0:
+                output_data[i] = np.nan
+            else:
+                output_data[i] = (values * weights).sum() / weights.sum()
+        elif fn == "sum":
+            output_data[i] = np.sum(data[prev_index:cell_index])
+        elif fn == "nansum":
+            output_data[i] = np.nansum(data[prev_index:cell_index])
+        elif fn == "max":
+            output_data[i] = np.max(data[prev_index:cell_index])
+        elif fn == "min":
+            output_data[i] = np.min(data[prev_index:cell_index])
+        else:
+            raise NotImplementedError
+        prev_index = cell_index
+    return output_data
+
+
+@njit(cache=True)
+def to_HRU(data, grid_to_HRU, land_use_ratio, fn=None):
+    """Numba helper function to convert from grid to HRU.
+
+    Args:
+        data: The grid data to be converted.
+        grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+        land_use_ratio: Relative size of HRU to grid.
+        fn: Name of function to apply to data. None if data should be directly inserted into HRUs - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
+
+    Returns:
+        ouput_data: Data converted to HRUs.
+    """
+    assert grid_to_HRU[0] != 0
+    assert grid_to_HRU[-1] == land_use_ratio.size
+    assert data.shape == grid_to_HRU.shape
+    output_data = np.zeros(land_use_ratio.size, dtype=data.dtype)
+    prev_index = 0
+
+    if fn is None:
+        for i in range(grid_to_HRU.size):
+            cell_index = grid_to_HRU[i]
+            output_data[prev_index:cell_index] = data[i]
+            prev_index = cell_index
+    elif fn == "weightedsplit":
+        for i in range(grid_to_HRU.size):
+            cell_index = grid_to_HRU[i]
+            cell_sizes = land_use_ratio[prev_index:cell_index]
+            output_data[prev_index:cell_index] = data[i] / cell_sizes.sum() * cell_sizes
+            prev_index = cell_index
+    else:
+        raise NotImplementedError
+
+    return output_data
+
+
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
 
@@ -730,7 +818,7 @@ class Data:
 
         self.grid = Grid(self, model)
         self.HRU = HRUs(self, model)
-        self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn="mean")
+        self.HRU.cellArea = self.to_HRU(data=self.grid.cellArea, fn="weightedsplit")
         self.modflow = Modflow(self, model)
 
         if self.model.config["general"]["simulate_hydrology"]:
@@ -759,43 +847,6 @@ class Data:
             ]
         )
 
-    @staticmethod
-    @njit(cache=True)
-    def to_HRU_numba(data, grid_to_HRU, land_use_ratio, fn=None):
-        """Numba helper function to convert from grid to HRU.
-
-        Args:
-            data: The grid data to be converted.
-            grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-            land_use_ratio: Relative size of HRU to grid.
-            fn: Name of function to apply to data. None if data should be directly inserted into HRUs - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
-
-        Returns:
-            ouput_data: Data converted to HRUs.
-        """
-        assert grid_to_HRU[-1] == land_use_ratio.size
-        assert data.shape == grid_to_HRU.shape
-        output_data = np.zeros(land_use_ratio.size, dtype=data.dtype)
-        prev_index = 0
-
-        if fn is None:
-            for i in range(grid_to_HRU.size):
-                cell_index = grid_to_HRU[i]
-                output_data[prev_index:cell_index] = data[i]
-                prev_index = cell_index
-        elif fn == "mean":
-            for i in range(grid_to_HRU.size):
-                cell_index = grid_to_HRU[i]
-                cell_sizes = land_use_ratio[prev_index:cell_index]
-                output_data[prev_index:cell_index] = (
-                    data[i] / cell_sizes.sum() * cell_sizes
-                )
-                prev_index = cell_index
-        else:
-            raise NotImplementedError
-
-        return output_data
-
     def to_HRU(self, *, data=None, varname=None, fn=None, delete=True):
         """Function to convert from grid to HRU.
 
@@ -817,9 +868,7 @@ class Data:
         ):  # check if data is simple float. Otherwise should be numpy array.
             outdata = data
         else:
-            outdata = self.to_HRU_numba(
-                data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn=fn
-            )
+            outdata = to_HRU(data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn=fn)
             if self.model.use_gpu:
                 outdata = cp.asarray(outdata)
 
@@ -828,45 +877,6 @@ class Data:
                 delattr(self.grid, varname)
             setattr(self.HRU, varname, outdata)
         return outdata
-
-    @staticmethod
-    @njit(cache=True)
-    def to_grid_numba(data, grid_to_HRU, land_use_ratio, fn="mean"):
-        """Numba helper function to convert from HRU to grid.
-
-        Args:
-            data: The grid data to be converted.
-            grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-            land_use_ratio: Relative size of HRU to grid.
-            fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
-
-        Returns:
-            ouput_data: Data converted to HRUs.
-        """
-        output_data = np.empty(grid_to_HRU.size, dtype=data.dtype)
-        assert grid_to_HRU[-1] == land_use_ratio.size
-
-        prev_index = 0
-        for i in range(grid_to_HRU.size):
-            cell_index = grid_to_HRU[i]
-            if fn == "mean":
-                values = data[prev_index:cell_index]
-                weights = land_use_ratio[prev_index:cell_index]
-                output_data[i] = (values * weights).sum() / weights.sum()
-            elif fn == "sum":
-                output_data[i] = np.sum(data[prev_index:cell_index])
-            elif fn == "nansum":
-                output_data[i] = np.nansum(data[prev_index:cell_index])
-            elif fn == "nanmean":
-                output_data[i] = np.nanmean(data[prev_index:cell_index])
-            elif fn == "max":
-                output_data[i] = np.max(data[prev_index:cell_index])
-            elif fn == "min":
-                output_data[i] = np.min(data[prev_index:cell_index])
-            else:
-                raise NotImplementedError
-            prev_index = cell_index
-        return output_data
 
     def to_grid(self, *, HRU_data=None, varname=None, fn=None, delete=True):
         """Function to convert from HRUs to grid.
@@ -892,7 +902,7 @@ class Data:
         else:
             if self.model.use_gpu and isinstance(HRU_data, cp.ndarray):
                 HRU_data = HRU_data.get()
-            outdata = self.to_grid_numba(
+            outdata = to_grid(
                 HRU_data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn
             )
 
