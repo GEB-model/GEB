@@ -1,19 +1,21 @@
 # -*- coding: utf-8 -*-
+import os
 import math
 from datetime import datetime
 import json
-from pathlib import Path
 import calendar
 from typing import Tuple
 import matplotlib.pyplot as plt
-from honeybees.library.raster import sample_from_map
 
-from scipy.stats import genextreme, norm, linregress
+from scipy.stats import genextreme
+from scipy.stats import linregress
 from scipy.optimize import curve_fit
+from scipy.spatial.distance import euclidean
 
 import numpy as np
 from numba import njit
 
+from honeybees.library.mapIO import NetCDFReader
 from honeybees.library.mapIO import MapReader
 from honeybees.agents import AgentBaseClass
 from honeybees.library.raster import pixels_to_coords
@@ -177,6 +179,18 @@ class Farmers(AgentBaseClass):
             ).get_data_array()
         )
 
+        self.SPEI_map = NetCDFReader(
+            fp=self.model.model_structure["forcing"]["climate/spei"],
+            varname="spei",
+            xmin=self.model.xmin,
+            ymin=self.model.ymin,
+            xmax=self.model.xmax,
+            ymax=self.model.ymax,
+            latname="y",
+            lonname="x",
+            timename="time",
+        )
+
         with open(
             self.model.model_structure["dict"]["agents/farmers/irrigation_sources"], "r"
         ) as f:
@@ -223,6 +237,21 @@ class Farmers(AgentBaseClass):
                     break
         return farmer_is_in_command_area
 
+
+    @staticmethod
+    def which_farmer_command_area(n, command_areas, field_indices, field_indices_by_farmer):
+        farmer_command_area = np.full(n, -1, dtype=np.int32)
+        for farmer_i in range(n):
+            farmer_fields = get_farmer_HRUs(
+                field_indices, field_indices_by_farmer, farmer_i
+            )
+            for field in farmer_fields:
+                command_area = command_areas[field]
+                if command_area != -1:
+                    farmer_command_area[farmer_i] = command_area
+                    break
+        return farmer_command_area
+
     def get_max_n(self, n):
         max_n = math.ceil(n * (1 + self.redundancy))
         assert max_n < 4294967295  # max value of uint32, consider replacing with uint64
@@ -232,7 +261,19 @@ class Farmers(AgentBaseClass):
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
         if self.model.load_initial_data:
-            self.restore_state()
+            for fn in os.listdir(self.model.initial_conditions_folder):
+                if not fn.startswith("farmers."):
+                    continue
+                attribute = fn.split(".")[1]
+                fp = os.path.join(self.model.initial_conditions_folder, fn)
+                values = np.load(fp)["data"]
+                if not hasattr(self, "max_n"):
+                    self.max_n = self.get_max_n(values.shape[0])
+                values = FarmerAgentArray(values, max_n=self.max_n)
+                setattr(self, attribute, values)
+            self.n = self.locations.shape[
+                0
+            ]  # first value where location is not defined (np.nan)
         else:
             farms = self.model.data.farms
 
@@ -654,14 +695,6 @@ class Farmers(AgentBaseClass):
                 fill_value=0,
             )
 
-            self.adjusted_annual_loan_cost = FarmerAgentArray(
-                n=self.n,
-                max_n=self.max_n,
-                extra_dims=(self.n_loans + 1, 5),
-                dtype=np.float32,
-                fill_value=np.nan,
-            )
-
             # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation)
             self.loan_tracker = FarmerAgentArray(
                 n=self.n,
@@ -688,19 +721,24 @@ class Farmers(AgentBaseClass):
             )
 
             ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
+            parameter_names = ["c", "loc", "scale"]
             self.GEV_parameters = FarmerAgentArray(
                 n=self.n,
                 max_n=self.max_n,
-                extra_dims=(3,),
+                extra_dims=(len(parameter_names),),
                 dtype=np.float32,
-                fill_value=np.nan,
+                fill_value=0,
             )
 
-            for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
-                GEV_grid = getattr(self.model.data.grid, varname)
-                self.GEV_parameters[:, i] = sample_from_map(
-                    GEV_grid, self.locations.data, self.model.data.grid.gt
+            for i, varname in enumerate(parameter_names):
+                GEV_map = MapReader(
+                    fp=self.model.model_structure["grid"][f"climate/gev_{varname}"],
+                    xmin=self.model.xmin,
+                    ymin=self.model.ymin,
+                    xmax=self.model.xmax,
+                    ymax=self.model.ymax,
                 )
+                self.GEV_parameters[:, i] = GEV_map.sample_coords(self.locations.data)
 
         self.var.actual_transpiration_crop = self.var.load_initial(
             "actual_transpiration_crop",
@@ -947,29 +985,28 @@ class Farmers(AgentBaseClass):
 
                 # Convert the groundwater depth to groundwater depth per farmer
                 groundwater_depth_per_farmer[farmer] = groundwater_depth[f_var]
+                command_area = command_areas[field]
 
                 if well_irrigated[farmer]:
                     if groundwater_depth[f_var] < well_depth[farmer]:
                         farmer_has_access_to_irrigation_water = True
                         break
-                elif surface_irrigated[farmer]:
-                    if available_channel_storage_m3[f_var] > 100:
-                        farmer_has_access_to_irrigation_water = True
-                        break
-                    command_area = command_areas[field]
+                elif available_channel_storage_m3[f_var] > 100:
+                    farmer_has_access_to_irrigation_water = True
+                    break
                     # -1 means no command area
-                    if (
-                        command_area != -1
-                        and available_reservoir_storage_m3[command_area] > 100
-                    ):
-                        farmer_has_access_to_irrigation_water = True
-                        break
+                elif (
+                    command_area != -1
+                    and available_reservoir_storage_m3[command_area] > 100
+                ):
+                    farmer_has_access_to_irrigation_water = True
+                    break
             has_access_to_irrigation_water[activated_farmer_index] = (
                 farmer_has_access_to_irrigation_water
             )
 
             # Actual irrigation from surface, reservoir and groundwater
-            if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
+            if has_access_to_irrigation_water[farmer]:
                 # if irrigation limit is active, reduce the irrigation demand
                 if not np.isnan(irrigation_limit_m3[farmer]):
                     # first find the total irrigation demand for the farmer in m3
@@ -1000,63 +1037,62 @@ class Farmers(AgentBaseClass):
                             totalPotIrrConsumption[field] / irrigation_efficiency_farmer
                         )
 
-                        if surface_irrigated[farmer]:
-                            # channel abstraction
-                            available_channel_storage_cell_m = (
-                                available_channel_storage_m3[f_var] / cell_area[field]
-                            )
-                            channel_abstraction_cell_m = min(
-                                available_channel_storage_cell_m,
-                                irrigation_water_demand_field,
-                            )
-                            channel_abstraction_cell_m3 = (
-                                channel_abstraction_cell_m * cell_area[field]
-                            )
-                            available_channel_storage_m3[
-                                f_var
-                            ] -= channel_abstraction_cell_m3
-                            water_withdrawal_m[field] += channel_abstraction_cell_m
-                            channel_abstraction_m3[f_var] = channel_abstraction_cell_m3
+                        # channel abstraction
+                        available_channel_storage_cell_m = (
+                            available_channel_storage_m3[f_var] / cell_area[field]
+                        )
+                        channel_abstraction_cell_m = min(
+                            available_channel_storage_cell_m,
+                            irrigation_water_demand_field,
+                        )
+                        channel_abstraction_cell_m3 = (
+                            channel_abstraction_cell_m * cell_area[field]
+                        )
+                        available_channel_storage_m3[
+                            f_var
+                        ] -= channel_abstraction_cell_m3
+                        water_withdrawal_m[field] += channel_abstraction_cell_m
+                        channel_abstraction_m3[f_var] = channel_abstraction_cell_m3
 
-                            channel_abstraction_m3_by_farmer[
+                        channel_abstraction_m3_by_farmer[
+                            farmer
+                        ] += channel_abstraction_cell_m3
+
+                        irrigation_water_demand_field -= channel_abstraction_cell_m
+
+                        # command areas
+                        command_area = command_areas[field]
+                        if command_area >= 0:  # -1 means no command area
+                            water_demand_cell_M3 = (
+                                irrigation_water_demand_field * cell_area[field]
+                            )
+                            reservoir_abstraction_m_cell_m3 = min(
+                                available_reservoir_storage_m3[command_area],
+                                water_demand_cell_M3,
+                            )
+                            available_reservoir_storage_m3[
+                                command_area
+                            ] -= reservoir_abstraction_m_cell_m3
+                            reservoir_abstraction_m_per_basin_m3[
+                                command_area
+                            ] += reservoir_abstraction_m_cell_m3
+                            reservoir_abstraction_m_cell = (
+                                reservoir_abstraction_m_cell_m3 / cell_area[field]
+                            )
+                            reservoir_abstraction_m[
+                                field
+                            ] += reservoir_abstraction_m_cell
+                            water_withdrawal_m[
+                                field
+                            ] += reservoir_abstraction_m_cell
+
+                            reservoir_abstraction_m3_by_farmer[
                                 farmer
-                            ] += channel_abstraction_cell_m3
+                            ] += reservoir_abstraction_m_cell_m3
 
-                            irrigation_water_demand_field -= channel_abstraction_cell_m
-
-                            # command areas
-                            command_area = command_areas[field]
-                            if command_area >= 0:  # -1 means no command area
-                                water_demand_cell_M3 = (
-                                    irrigation_water_demand_field * cell_area[field]
-                                )
-                                reservoir_abstraction_m_cell_m3 = min(
-                                    available_reservoir_storage_m3[command_area],
-                                    water_demand_cell_M3,
-                                )
-                                available_reservoir_storage_m3[
-                                    command_area
-                                ] -= reservoir_abstraction_m_cell_m3
-                                reservoir_abstraction_m_per_basin_m3[
-                                    command_area
-                                ] += reservoir_abstraction_m_cell_m3
-                                reservoir_abstraction_m_cell = (
-                                    reservoir_abstraction_m_cell_m3 / cell_area[field]
-                                )
-                                reservoir_abstraction_m[
-                                    field
-                                ] += reservoir_abstraction_m_cell
-                                water_withdrawal_m[
-                                    field
-                                ] += reservoir_abstraction_m_cell
-
-                                reservoir_abstraction_m3_by_farmer[
-                                    farmer
-                                ] += reservoir_abstraction_m_cell_m3
-
-                                irrigation_water_demand_field -= (
-                                    reservoir_abstraction_m_cell
-                                )
+                            irrigation_water_demand_field -= (
+                                reservoir_abstraction_m_cell
+                            )
 
                         if well_irrigated[farmer]:
                             # groundwater irrigation
@@ -1252,15 +1288,12 @@ class Farmers(AgentBaseClass):
 
         TODO: Implement GAEZ crop stage function
         """
-        if self.model.config["general"]["simulate_hydrology"]:
-            yield_ratio = self.get_yield_ratio_numba(
-                crop_map[harvest],
-                actual_transpiration[harvest] / potential_transpiration[harvest],
-                self.crop_variables["KyT"].values,
-            )
-            assert not np.isnan(yield_ratio).any()
-        else:
-            yield_ratio = np.full_like(crop_map[harvest], 1, dtype=np.float32)
+        yield_ratio = self.get_yield_ratio_numba(
+            crop_map[harvest],
+            actual_transpiration[harvest] / potential_transpiration[harvest],
+            self.crop_variables["KyT"].values,
+        )
+        assert not np.isnan(yield_ratio).any()
         return yield_ratio
 
     def update_yield_ratio_management(self) -> None:
@@ -1714,20 +1747,19 @@ class Farmers(AgentBaseClass):
             assert not np.isnan(cultivation_cost)
             if not farmers_going_out_of_business:
                 interest_rate_farmer = interest_rate[farmer_idx]
-                loan_duration = 2
                 annual_cost_input_loan = cultivation_cost * (
                     interest_rate_farmer
-                    * (1 + interest_rate_farmer) ** loan_duration
-                    / ((1 + interest_rate_farmer) ** loan_duration - 1)
+                    * (1 + interest_rate_farmer) ** 1
+                    / ((1 + interest_rate_farmer) ** 1 - 1)
                 )
+
                 for i in range(4):
-                    if all_loans_annual_cost[farmer_idx, 0, i] == 0:
+                    if all_loans_annual_cost[farmer_idx, 1, i] == 0:
                         all_loans_annual_cost[
                             farmer_idx, 0, i
                         ] += annual_cost_input_loan  # Add the amount to the input specific loan
-                        loan_tracker[farmer_idx, 0, i] = loan_duration
-                        break  # Exit the loop after adding to the first zero value
-
+                        loan_tracker[farmer_idx, 0, i] = 1
+                        break
                 all_loans_annual_cost[
                     farmer_idx, -1, 0
                 ] += annual_cost_input_loan  # Add the amount to the total loan amount
@@ -1846,10 +1878,9 @@ class Farmers(AgentBaseClass):
 
         # Sample the SPEI value for the current month from `SPEI_map` based on the given locations.
         # The sampling is done for the first day of the current month.
-        self.monthly_SPEI[:, 0] = sample_from_map(
-            array=self.model.data.grid.spei_uncompressed,
-            coords=self.locations.data,
-            gt=self.model.data.grid.gt,
+        self.monthly_SPEI[:, 0] = self.SPEI_map.sample_coords(
+            self.locations.data,
+            datetime(self.model.current_time.year, self.model.current_time.month, 1),
         )
 
     def save_yearly_profits(
@@ -2341,7 +2372,7 @@ class Farmers(AgentBaseClass):
 
     def calculate_well_costs(
         self,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> (np.ndarray, np.ndarray):
         """
         Calculate the construction and yearly costs of well and pump for irrigation, based on various parameters
         such as well depth, crop growth seasons, pump horsepower, and regional costs. The function considers
@@ -2760,10 +2791,10 @@ class Farmers(AgentBaseClass):
             ):
                 # Calculate mean yield ratio over past years for both adapted and unadapted groups
                 unadapted_yield_ratio = np.mean(
-                    self.yearly_yield_ratio[unique_farmer_groups, :5], axis=1
+                    self.yearly_yield_ratio[unique_farmer_groups, :10], axis=1
                 )
                 adapted_yield_ratio = np.mean(
-                    self.yearly_yield_ratio[unique_farmer_groups_adapted, :5], axis=1
+                    self.yearly_yield_ratio[unique_farmer_groups_adapted, :10], axis=1
                 )
 
                 unadapted_median = np.median(unadapted_yield_ratio)
@@ -3082,26 +3113,6 @@ class Farmers(AgentBaseClass):
         self.all_loans_annual_cost[:, -1, 0] -= total_loan_reduction
         self.all_loans_annual_cost[expired_loan_mask] = 0
 
-        # Adjust for inflation in separate array for export
-        # Calculate the cumulative inflation from the start year to the current year for each farmer
-        inflation_arrays = [
-            self.get_value_per_farmer_from_region_id(
-                self.inflation_rate, datetime(year, 1, 1)
-            )
-            for year in range(
-                self.model.config["general"]["spinup_time"].year,
-                self.model.current_time.year + 1,
-            )
-        ]
-
-        cum_inflation = np.ones_like(inflation_arrays[0])
-        for inflation in inflation_arrays:
-            cum_inflation *= inflation
-
-        self.adjusted_annual_loan_cost = (
-            self.all_loans_annual_cost / cum_inflation[..., None, None]
-        )
-
     def get_value_per_farmer_from_region_id(self, data, time) -> np.ndarray:
         index = data[0].get(time)
         unique_region_ids, inv = np.unique(self.region_id, return_inverse=True)
@@ -3202,8 +3213,8 @@ class Farmers(AgentBaseClass):
                 ids,
                 self.crops.data,
                 neighbors,
-                self.SEUT_no_adapt,
-                self.EUT_no_adapt,
+                self.SEUT_no_adapt_crops,
+                self.EUT_no_adapt_crops,
                 self.yearly_yield_ratio.data,
                 self.yearly_SPEI_probability.data,
             )
@@ -3214,10 +3225,19 @@ class Farmers(AgentBaseClass):
 
         Then, farmers harvest and plant crops.
         """
-        # import random
 
-        # for i in range(self.n):
-        #     self.remove_agent(random.randint(0, self.n), land_use_type=1)
+        if self.model.current_timestep == 1 and self.model.spinup is True:
+            self.farmer_command_area = FarmerAgentArray(
+                n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1
+            )
+
+            self.farmer_command_area[:] = self.which_farmer_command_area(
+                self.n,
+                self.var.reservoir_command_areas,
+                self.field_indices,
+                self.field_indices_by_farmer.data,
+            )
+
         month = self.model.current_time.month
         if month in (6, 7, 8, 9, 10):
             self.current_season_idx = 0  # season #1
@@ -3329,7 +3349,7 @@ class Farmers(AgentBaseClass):
                 "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
             ):
                 # Determine the relation between drought probability and yield
-                self.calculate_yield_spei_relation()
+                # self.calculate_yield_spei_relation()
 
                 # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
@@ -3352,16 +3372,63 @@ class Farmers(AgentBaseClass):
                     **decision_params, subjective=False
                 )
 
-                self.switch_crops()
+                # Calculate the SEUT with regards to crops and planting decisions
+                index = self.cultivation_costs[0].get(self.model.current_time)
+                cultivation_cost_per_crop = self.cultivation_costs[1][index][
+                    self.region_id
+                ]
+
+                nan_array = np.full_like(self.crops, fill_value=np.nan, dtype=float)
+                mask_crops = self.crops != -1
+                nan_array[mask_crops] = np.take(
+                    cultivation_cost_per_crop, self.crops[mask_crops].astype(int)
+                )
+                cultivation_costs = np.nansum(nan_array, axis=1)
+                total_cultivation_costs = cultivation_costs * (
+                    self.interest_rate
+                    * (1 + self.interest_rate) ** 1
+                    / ((1 + self.interest_rate) ** 1 - 1)
+                )
+
+                total_profits_crops = total_profits - total_cultivation_costs
+                total_profits_crops = np.where(
+                    total_profits_crops <= 0, 0, total_profits_crops
+                )
+                profits_no_event_crops = profits_no_event - total_cultivation_costs
+                profits_no_event_crops = np.where(
+                    profits_no_event_crops <= 0, 0, profits_no_event_crops
+                )
+
+                decision_params_crops = {
+                    "n_agents": self.n,
+                    "T": self.decision_horizon,
+                    "discount_rate": self.discount_rate,
+                    "sigma": self.risk_aversion,
+                    "risk_perception": self.risk_perception,
+                    "p_droughts": 1 / self.p_droughts[:-1],
+                    "total_profits": total_profits_crops,
+                    "profits_no_event": profits_no_event_crops,
+                }
+
+                self.SEUT_no_adapt_crops = self.decision_module.calcEU_do_nothing(
+                    **decision_params_crops
+                )
+                self.EUT_no_adapt_crops = self.decision_module.calcEU_do_nothing(
+                    **decision_params_crops, subjective=False
+                )
+
+                # self.switch_crops()
 
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(self.farmer_yield_probability_relation == 0):
-                    self.adapt_irrigation_well()
+                    pass
+                    # self.adapt_irrigation_well()
                     # self.adapt_drip_irrigation()
                 else:
-                    raise AssertionError(
-                        "Cannot adapt without yield - probability relation"
-                    )
+                    pass
+                    # raise AssertionError(
+                    #     "Cannot adapt without yield - probability relation"
+                    # )
 
             # Update management yield ratio score
             self.update_yield_ratio_management()
@@ -3374,22 +3441,17 @@ class Farmers(AgentBaseClass):
         # if self.model.current_timestep == 105:
         #     self.remove_agent(farmer_idx=1000)
 
-    def remove_agents(
-        self, farmer_indices: list[int], land_use_type: int
-    ) -> np.ndarray:
+    def remove_agents(self, farmer_indices: list[int]):
         farmer_indices = np.array(farmer_indices)
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
             HRUs_with_removed_farmers = []
             for idx in farmer_indices:
-                HRUs_with_removed_farmers.append(self.remove_agent(idx, land_use_type))
+                HRUs_with_removed_farmers.append(self.remove_agent(idx))
         return np.concatenate(HRUs_with_removed_farmers)
 
-    def remove_agent(self, farmer_idx: int, land_use_type: int) -> np.ndarray:
+    def remove_agent(self, farmer_idx: int) -> np.ndarray:
         assert farmer_idx >= 0, "Farmer index must be positive."
-        assert (
-            farmer_idx < self.n
-        ), "Farmer index must be less than the number of agents."
         last_farmer_HRUs = get_farmer_HRUs(
             self.field_indices, self.field_indices_by_farmer.data, -1
         )
@@ -3403,31 +3465,26 @@ class Farmers(AgentBaseClass):
         self.var.crop_map[HRUs_farmer_to_be_removed] = -1
         self.var.crop_age_days_map[HRUs_farmer_to_be_removed] = -1
         self.var.crop_harvest_age_days[HRUs_farmer_to_be_removed] = -1
-        self.var.land_use_type[HRUs_farmer_to_be_removed] = land_use_type
 
         # reduce number of agents
         self.n -= 1
 
-        if not self.n == farmer_idx:
-            # move data of last agent to the index of the agent that is to be removed, effectively removing that agent.
-            for name, agent_array in self.agent_arrays.items():
-                agent_array[farmer_idx] = agent_array[-1]
-                # reduce the number of agents by 1
-                assert agent_array.n == self.n + 1
-                agent_array.n = self.n
+        # move data of last agent to the index of the agent that is to be removed, effectively removing that agent.
+        for agent_array in self.agent_arrays.values():
+            agent_array[farmer_idx] = agent_array[-1]
+            # reduce the number of agents by 1
+            assert agent_array.n == self.n + 1
+            agent_array.n = self.n
 
-            # update the field indices of the last agent
-            self.var.land_owners[last_farmer_HRUs] = farmer_idx
-        else:
-            for agent_array in self.agent_arrays.values():
-                agent_array.n = self.n
+        # update the field indices of the last agent
+        self.var.land_owners[last_farmer_HRUs] = farmer_idx
 
         # TODO: Speed up field index updating.
         self.update_field_indices()
         if self.n == farmer_idx:
             assert (
                 get_farmer_HRUs(
-                    self.field_indices, self.field_indices_by_farmer.data, farmer_idx
+                    self.field_indices, self.field_indices_by_farmer, farmer_idx
                 ).size
                 == 0
             )
@@ -3535,44 +3592,8 @@ class Farmers(AgentBaseClass):
 
     @property
     def agent_arrays(self):
-        agent_arrays = {
+        return {
             name: value
             for name, value in vars(self).items()
             if isinstance(value, FarmerAgentArray)
         }
-        ids = [id(v) for v in agent_arrays.values()]
-        if len(set(ids)) != len(ids):
-            duplicate_arrays = [
-                name for name, value in agent_arrays.items() if ids.count(id(value)) > 1
-            ]
-            raise AssertionError(
-                f"Duplicate agent array names: {', '.join(duplicate_arrays)}."
-            )
-        return agent_arrays
-
-    @property
-    def save_state_path(self):
-        folder = Path(self.model.initial_conditions_folder, "farmers")
-        folder.mkdir(parents=True, exist_ok=True)
-        return folder
-
-    def save_state(self):
-        with open(self.save_state_path / "state.txt", "w") as f:
-            for attribute, value in self.agent_arrays.items():
-                f.write(f"{attribute}\n")
-                fp = self.save_state_path / f"{attribute}.npz"
-                np.savez_compressed(fp, data=value.data)
-
-    def restore_state(self):
-        with open(self.save_state_path / "state.txt", "r") as f:
-            for line in f:
-                attribute = line.strip()
-                fp = self.save_state_path / f"{attribute}.npz"
-                values = np.load(fp)["data"]
-                if not hasattr(self, "max_n"):
-                    self.max_n = self.get_max_n(values.shape[0])
-                values = FarmerAgentArray(values, max_n=self.max_n)
-
-                setattr(self, attribute, values)
-
-        self.n = self.locations.shape[0]
