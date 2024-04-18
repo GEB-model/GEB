@@ -476,28 +476,9 @@ class Farmers(AgentBaseClass):
         )
 
         ## Base initial wealth on x days of daily expenses, sort of placeholder
-        self.disposable_income = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0
-        )
         self.household_size = AgentArray(
             np.load(
                 self.model.model_structure["binary"]["agents/farmers/household_size"]
-            )["data"],
-            max_n=self.max_n,
-        )
-        self.daily_non_farm_income = AgentArray(
-            np.load(
-                self.model.model_structure["binary"][
-                    "agents/farmers/daily_non_farm_income_family"
-                ]
-            )["data"],
-            max_n=self.max_n,
-        )
-        self.daily_expenses_per_capita = AgentArray(
-            np.load(
-                self.model.model_structure["binary"][
-                    "agents/farmers/daily_consumption_per_capita"
-                ]
             )["data"],
             max_n=self.max_n,
         )
@@ -505,13 +486,6 @@ class Farmers(AgentBaseClass):
         # set no irrigation limit for farmers by default
         self.irrigation_limit_m3 = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan  # m3
-        )
-
-        self.wealth = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=None
-        )
-        self.wealth[:] = (
-            self.daily_expenses_per_capita * self.household_size * ((365 / 12) * 18)
         )
 
         self.yield_ratios_drought_event = AgentArray(
@@ -601,24 +575,6 @@ class Farmers(AgentBaseClass):
         )
         self.household_size[:] = np.load(
             self.model.model_structure["binary"]["agents/farmers/household_size"]
-        )["data"]
-
-        self.daily_non_farm_income = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
-        )
-        self.daily_non_farm_income[:] = np.load(
-            self.model.model_structure["binary"][
-                "agents/farmers/daily_non_farm_income_family"
-            ]
-        )["data"]
-
-        self.daily_expenses_per_capita = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
-        )
-        self.daily_expenses_per_capita[:] = np.load(
-            self.model.model_structure["binary"][
-                "agents/farmers/daily_consumption_per_capita"
-            ]
         )["data"]
 
         self.yield_ratios_drought_event = AgentArray(
@@ -3472,9 +3428,6 @@ class Farmers(AgentBaseClass):
             "monthly_SPEI": 0,
             "disposable_income": 0,
             "household_size": 2,
-            "daily_non_farm_income": 10,
-            "daily_expenses_per_capita": 1,
-            "wealth": 1000,
             "yield_ratios_drought_event": 1,
             "risk_perception": 1,
             "drought_timer": 1,
