@@ -50,6 +50,10 @@ class Government(AgentBaseClass):
             self.agents.farmers.irrigation_limit_m3[:] = (
                 self.agents.farmers.household_size * irrigation_limit["limit"]
             )
+        elif irrigation_limit["per"] == "area":  # limit per m2 of field
+            self.agents.farmers.irrigation_limit_m3[:] = (
+                self.agents.farmers.field_size_per_farmer * irrigation_limit["limit"]
+            )
         else:
             raise NotImplementedError(
                 "Only 'capita' is implemented for irrigation limit"
