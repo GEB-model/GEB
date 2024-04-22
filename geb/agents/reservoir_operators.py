@@ -113,6 +113,9 @@ class ReservoirOperators(AgentBaseClass):
         self.new_irrmean = np.zeros((self.N,), dtype='f8')
         self.nt = 0
 
+        # Import farmer data to get command areas
+
+
         return self
 
     def yearly_reservoir_calculations(self):
@@ -131,32 +134,27 @@ class ReservoirOperators(AgentBaseClass):
 
         return
     
-    def new_reservoir_management(self, inflow, totalPotET, dt):
+    def new_reservoir_management(self, inflow, pot_irrConsumption):
         """
         Management module, that manages reservoir outflow per day, based on Hanasaki protocol (Hanasaki et al., 2006).
 
         inflow = channel inflow value                                   (m^3/s)
-        totalPotEt = total PET, used to calculation irrigation demand   (m^3/s)
-        dt = time step                                                  (day)
+        totalPotEt = total PET, used to calculation irrigation demand   (...)
 
         What do I not have yet:
         - POSTPONED => Reservoir purpose (ppose) => Start with making all reservoir irrigation reservoirs.
-        - POSTPOINED => Downstream irrigation demand per timestep (wdirr)
-        - POSTPONED => Mean irrigation demand per month (irrmean)
-        - totalPotET
         - dt: do I need this, and should it give number of days or seconds or say 'day' or 'second'?
 
         Units:
-        Let's make sure that everything that goes into the function is in m^3/s and what flows out is also in m^3/s.
-        So, in this function I have to convert everything to m3/s.
+        Let's make sure that everything that goes into the subfunctions is in m^3/s and what flows out is also in m^3/s.
+        So, in this function I have to convert everything to m3/s, and only the results maybe have to be converted to something else.
 
         """
         # initialize daily variables
         self.inflow = inflow
-        pot_irrConsumption = self.irrigation.dynamic(totalPotET)
         self.irr_demand = pot_irrConsumption.copy()
-        self.dt = dt
-        Rres = self.inflow.copy()
+        #self.dt = dt
+        Rres = self.inflow.copy() # if there are no reservoirs, inflow equals outflow.
         Qin_resv = self.inflow.copy()
         date = self.model.current_time
 
@@ -171,15 +169,13 @@ class ReservoirOperators(AgentBaseClass):
                                                 self.mtifl,
                                                 self.irr_demand,
                                                 self.irrmean,
-                                                self.alpha,
-                                                dt)
+                                                self.alpha)
         Rres[self.condF] = self.flood_control_reservoir(self.cpa,
                                                     self.condF,
                                                     Qin_resv,
                                                     self.S_begin_yr,
                                                     self.mtifl,
-                                                    self.alpha,
-                                                    dt)
+                                                    self.alpha)
         
         # Ensure environmental flow requirements, no reservoir overflow and no negative storage.
         Qout_resv = Rres.copy()
@@ -189,13 +185,13 @@ class ReservoirOperators(AgentBaseClass):
                                                                               self.Sini_resv,
                                                                               self.cpa,
                                                                               self.mtifl,
-                                                                              self.alpha, dt,
+                                                                              self.alpha,
                                                                               self.cond_all)
 
         # Set new reservoir storage for next timestep.
         self.Sini_resv = Sending.copy()
 
-        # Add results of calculations to attributes, to calculate yearly averages at end of year.
+        # Add results of calculations to instances, to calculate yearly averages at end of year.
         self.new_mtifl += Qin_resv
         self.new_irrmean += self.irr_demand
         self.nt += 1
@@ -206,7 +202,7 @@ class ReservoirOperators(AgentBaseClass):
     
         return Qout_resv
 
-    def irrigation_reservoir(self, cpa, cond_ppose, qin, S_begin_yr, mtifl, irr_demand, irrmean, alpha, dt):
+    def irrigation_reservoir(self, cpa, cond_ppose, qin, S_begin_yr, mtifl, irr_demand, irrmean, alpha):
         """Computes release from irrigation reservoirs
         
         cpa = reservoir capacity (m^3)
@@ -271,7 +267,7 @@ class ReservoirOperators(AgentBaseClass):
 
         return Rirrg_final
     
-    def flood_control_reservoir(self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha, dt):
+    def flood_control_reservoir(self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha):
         """Computes release from flood control reservoirs
         
         cpa = reservoir capacity (m^3)
@@ -316,7 +312,7 @@ class ReservoirOperators(AgentBaseClass):
 
         return Rflood_final
     
-    def reservoir_water_balance(self, Qin, Qout, Sin, cpa, mtifl, alpha, dt, cond_all):
+    def reservoir_water_balance(self, Qin, Qout, Sin, cpa, mtifl, alpha, cond_all):
 
         """Re-adjusts release to ensure minimal environmental flow, and prevent overflow and negative storage;
         and computes the storage level after release for all reservoir types.
@@ -438,6 +434,57 @@ class ReservoirOperators(AgentBaseClass):
 
     def get_available_water_reservoir_command_areas(self, reservoir_storage_m3, pot_irrConsumption_m):
         return self.reservoir_release_factors * reservoir_storage_m3
+    
+    def get_irrigation_per_reservoir_command_area_original(
+            self, reservoir_storage_m3, potential_irrigation_consumption_m):
+        """
+        Jens' original code
+        """
+        potential_irrigation_consumption_m3 = (
+            potential_irrigation_consumption_m * self.model.data.HRU.cellArea
+        )
+
+        # Only keep the irrigation consumption for cells that are in a command area.
+        potential_irrigation_consumption_m3[self.model.data.HRU.land_owners != -1]
+
+        # Calculate the irrigation per farmer that is in the command area.
+        potential_irrigation_consumption_m3 = np.bincount(
+            self.model.data.HRU.land_owners[self.model.data.HRU.land_owners != -1],
+            weights= potential_irrigation_consumption_m3_total_area[self.model.data.HRU.land_owners != -1],
+            minlength=self.model.agents.farmers.n,
+        )
+
+        return self.reservoir_release_factors * reservoir_storage_m3
+    
+    def get_irrigation_per_command_area(
+        self, reservoir_storage_m3, potential_irrigation_consumption_m):
+
+        """
+        Function that retrieves the irrigation demand per command area.
+
+        Takes as inputs the potential irrigation consumption in meters, and ...
+        """
+        command_area = self.model.agents.farmers.farmer_command_area
+
+        # Transform irrigation consumption from meters to m3. 
+        potential_irrigation_consumption_m3_total_area = (
+            potential_irrigation_consumption_m * self.model.data.HRU.cellArea
+        )
+
+        # Only keep the irrigation consumption for cells that are in a command area.
+        potential_irrigation_consumption_in_ca = potential_irrigation_consumption_m3_total_area[self.model.data.HRU.land_owners != -1]
+
+        # Calculate the irrigation per farmer that is in the command area.
+        potential_irrigation_consumption_m3_per_farmer = np.bincount(
+            self.model.data.HRU.land_owners[self.model.data.HRU.land_owners != -1],
+            weights= potential_irrigation_consumption_in_ca,
+            minlength=self.model.agents.farmers.n,
+        )
+        consumption = potential_irrigation_consumption_m3_per_farmer
+
+        return self.reservoir_release_factors * reservoir_storage_m3
+    
+
 
     def step(self) -> None:
         return None
