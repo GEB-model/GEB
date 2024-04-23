@@ -98,6 +98,7 @@ class ReservoirOperators(AgentBaseClass):
         self.Sini_rsv = self.S_begin_yr.copy()
         self.alpha = np.full((self.N,), 0.8) # set all reservoirs to a capacity reduction factor of 0.8 for now.
         self.irrmean = 0.5 * self.mtifl # start with estimated mean irrigation demand of 0.5 of mtifl. 
+        self.irr_demand = np.zeros((self.N,), dtype='f8') # Initialize array for irrigation demand per command area.
         # self.res_ppose = self.active_reservoirs["purpose"].values # for now deactivated, data still needs to be added.
         
         ### Classify reservoirs based on purpose. ###
@@ -450,39 +451,64 @@ class ReservoirOperators(AgentBaseClass):
         # Calculate the irrigation per farmer that is in the command area.
         potential_irrigation_consumption_m3 = np.bincount(
             self.model.data.HRU.land_owners[self.model.data.HRU.land_owners != -1],
-            weights= potential_irrigation_consumption_m3_total_area[self.model.data.HRU.land_owners != -1],
+            weights= potential_irrigation_consumption_m3[self.model.data.HRU.land_owners != -1],
             minlength=self.model.agents.farmers.n,
         )
 
         return self.reservoir_release_factors * reservoir_storage_m3
     
-    def get_irrigation_per_command_area(
-        self, reservoir_storage_m3, potential_irrigation_consumption_m):
-
+    def get_irrigation_per_command_area(self, potential_irrigation_consumption_m):
         """
         Function that retrieves the irrigation demand per command area.
 
         Takes as inputs the potential irrigation consumption in meters, and ...
         """
+        # Create an array filled with -1s and a length of the total number of farmers in the area
+        # called farmer_command_area. This array specifies for each farmer in which command area it is.
+        # Then for every farmer get the farmer fields with get_farmer_HRUs.
+        # Then for every field for every farmer check in which command area it is, if one of the fields
+        # of the farmers is in a command area, set for that farmer the value in farmer_command_area
+        # to the command_area it is in. 
+
+        # So in the end you get an array with -1s, and values from 0 to n command areas, 
+        # specifying for each farmer in which command area it is.
         command_area = self.model.agents.farmers.farmer_command_area
 
         # Transform irrigation consumption from meters to m3. 
-        potential_irrigation_consumption_m3_total_area = (
+        pot_irr_consumption_m3_per_cell = (
             potential_irrigation_consumption_m * self.model.data.HRU.cellArea
         )
 
         # Only keep the irrigation consumption for cells that are in a command area.
-        potential_irrigation_consumption_in_ca = potential_irrigation_consumption_m3_total_area[self.model.data.HRU.land_owners != -1]
+        pot_irr_consumption_per_cell_in_command_area = pot_irr_consumption_m3_per_cell[self.model.data.HRU.land_owners != -1]
+
+        # Land owners ID
+        land_owner_ID_per_cell = self.model.data.HRU.land_owners[self.model.data.HRU.land_owners != -1]
 
         # Calculate the irrigation per farmer that is in the command area.
+        # Bincount counts the number of occurrences of each value in the land owners array
+        # and returns an array, where the index of the array matches the land owner ID and
+        # the value at that index is the number of cells of that land owner ID.
+        # The weights argument then multiplies the cell count by the irrigation consumption per cell.
         potential_irrigation_consumption_m3_per_farmer = np.bincount(
-            self.model.data.HRU.land_owners[self.model.data.HRU.land_owners != -1],
-            weights= potential_irrigation_consumption_in_ca,
+            land_owner_ID_per_cell,
+            weights= pot_irr_consumption_per_cell_in_command_area,
             minlength=self.model.agents.farmers.n,
         )
-        consumption = potential_irrigation_consumption_m3_per_farmer
+        
+        # Loop over the command area per farmer, and check at that index the irrigation consumption.
+        # Add the irrigation consumption to the command area.
 
-        return self.reservoir_release_factors * reservoir_storage_m3
+        for farmer in command_area:
+            # Get the command area number for the respective farmer.
+            command_area_nr = command_area[farmer]
+            # Get the irrigation consumption for the respective farmer.
+            irrigation_consumption = potential_irrigation_consumption_m3_per_farmer[farmer]
+            # Add the irrigation consumption from the to the command area it is in.
+            self.irr_demand[command_area_nr] += irrigation_consumption
+
+
+        return
     
 
 
