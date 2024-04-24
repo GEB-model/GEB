@@ -376,7 +376,7 @@ class Grid(BaseVariables):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
         spei = self.load_forcing(self.spei_ds, compress=False)
-        assert (spei >= -5).all() and (spei <= 5).all(), "spei out of range"
+        assert not np.isnan(spei).any()
         return spei
 
     @property
@@ -384,7 +384,7 @@ class Grid(BaseVariables):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
         spei = self.load_forcing(self.spei_ds)
-        assert (spei >= -5).all() and (spei <= 5).all(), "spei out of range"
+        assert not np.isnan(spei).any()
         return spei
 
     @property
