@@ -75,6 +75,23 @@ def get_farmer_HRUs(
     ]
 
 
+@njit(cache=True)
+def farmer_command_area(
+    n, field_indices, field_indices_by_farmer, reservoir_command_areas
+):
+    output = np.full(n, -1, dtype=np.int32)
+    for farmer_i in range(n):
+        farmer_fields = get_farmer_HRUs(
+            field_indices, field_indices_by_farmer, farmer_i
+        )
+        for field in farmer_fields:
+            command_area = reservoir_command_areas[field]
+            if command_area != -1:
+                output[farmer_i] = command_area
+                break
+    return output
+
+
 class Farmers(AgentBaseClass):
     """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
 
@@ -242,20 +259,6 @@ class Farmers(AgentBaseClass):
         )
 
         super().__init__()
-
-    @staticmethod
-    def is_in_command_area(n, command_areas, field_indices, field_indices_by_farmer):
-        farmer_is_in_command_area = np.zeros(n, dtype=bool)
-        for farmer_i in range(n):
-            farmer_fields = get_farmer_HRUs(
-                field_indices, field_indices_by_farmer, farmer_i
-            )
-            for field in farmer_fields:
-                command_area = command_areas[field]
-                if command_area != -1:
-                    farmer_is_in_command_area[farmer_i] = True
-                    break
-        return farmer_is_in_command_area
 
     def initiate(self) -> None:
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
@@ -473,28 +476,9 @@ class Farmers(AgentBaseClass):
         )
 
         ## Base initial wealth on x days of daily expenses, sort of placeholder
-        self.disposable_income = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0
-        )
         self.household_size = AgentArray(
             np.load(
                 self.model.model_structure["binary"]["agents/farmers/household_size"]
-            )["data"],
-            max_n=self.max_n,
-        )
-        self.daily_non_farm_income = AgentArray(
-            np.load(
-                self.model.model_structure["binary"][
-                    "agents/farmers/daily_non_farm_income_family"
-                ]
-            )["data"],
-            max_n=self.max_n,
-        )
-        self.daily_expenses_per_capita = AgentArray(
-            np.load(
-                self.model.model_structure["binary"][
-                    "agents/farmers/daily_consumption_per_capita"
-                ]
             )["data"],
             max_n=self.max_n,
         )
@@ -502,13 +486,6 @@ class Farmers(AgentBaseClass):
         # set no irrigation limit for farmers by default
         self.irrigation_limit_m3 = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan  # m3
-        )
-
-        self.wealth = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=None
-        )
-        self.wealth[:] = (
-            self.daily_expenses_per_capita * self.household_size * ((365 / 12) * 18)
         )
 
         self.yield_ratios_drought_event = AgentArray(
@@ -600,24 +577,6 @@ class Farmers(AgentBaseClass):
             self.model.model_structure["binary"]["agents/farmers/household_size"]
         )["data"]
 
-        self.daily_non_farm_income = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
-        )
-        self.daily_non_farm_income[:] = np.load(
-            self.model.model_structure["binary"][
-                "agents/farmers/daily_non_farm_income_family"
-            ]
-        )["data"]
-
-        self.daily_expenses_per_capita = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
-        )
-        self.daily_expenses_per_capita[:] = np.load(
-            self.model.model_structure["binary"][
-                "agents/farmers/daily_consumption_per_capita"
-            ]
-        )["data"]
-
         self.yield_ratios_drought_event = AgentArray(
             n=self.n,
             max_n=self.max_n,
@@ -707,10 +666,6 @@ class Farmers(AgentBaseClass):
             extra_dims_names=("water_source",),
             dtype=np.int32,
             fill_value=0,
-        )
-
-        self.farmer_is_in_command_area = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=bool, fill_value=False
         )
 
         ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
@@ -854,6 +809,30 @@ class Farmers(AgentBaseClass):
         if self.model.config["agent_settings"]["fix_activation_order"]:
             self.activation_order_by_elevation_fixed = (self.n, ranks)
         return ranks
+
+    @property
+    def farmer_command_area(self):
+        return farmer_command_area(
+            self.n,
+            self.field_indices,
+            self.field_indices_by_farmer.data,
+            self.var.reservoir_command_areas,
+        )
+        # output = np.full(self.n, -1, dtype=np.int32)
+        # for farmer_i in range(self.n):
+        #     farmer_fields = get_farmer_HRUs(
+        #         self.field_indices, self.field_indices_by_farmer.data, farmer_i
+        #     )
+        #     for field in farmer_fields:
+        #         command_area = self.var.reservoir_command_areas[field]
+        #         if command_area != -1:
+        #             output[farmer_i] = command_area
+        #             break
+        # return output
+
+    @property
+    def is_in_command_area(self):
+        return self.farmer_command_area != -1
 
     @staticmethod
     @njit(cache=True)
@@ -1842,7 +1821,9 @@ class Farmers(AgentBaseClass):
 
         assert (self.var.crop_age_days_map[self.var.crop_map > 0] >= 0).all()
 
-        field_is_paddy_irrigated = self.var.crop_map == self.crop_names["rice"]
+        field_is_paddy_irrigated = np.isin(
+            self.var.crop_map, self.crop_data[self.crop_data["is_paddy"]].index
+        )
         self.var.land_use_type[
             (self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)
         ] = 2
@@ -3232,14 +3213,8 @@ class Farmers(AgentBaseClass):
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
-            self.farmer_is_in_command_area = self.is_in_command_area(
-                self.n,
-                self.var.reservoir_command_areas,
-                self.field_indices,
-                self.field_indices_by_farmer.data,
-            )
             # for now class is only dependent on being in a command area or not
-            self.farmer_class = self.farmer_is_in_command_area.copy().astype(np.int32)
+            self.farmer_class = self.is_in_command_area.copy().astype(np.int32)
 
             # Set to 0 if channel abstraction is bigger than reservoir and groundwater, 1 for reservoir, 2 for groundwater
             self.farmer_class[
@@ -3453,9 +3428,6 @@ class Farmers(AgentBaseClass):
             "monthly_SPEI": 0,
             "disposable_income": 0,
             "household_size": 2,
-            "daily_non_farm_income": 10,
-            "daily_expenses_per_capita": 1,
-            "wealth": 1000,
             "yield_ratios_drought_event": 1,
             "risk_perception": 1,
             "drought_timer": 1,
@@ -3471,7 +3443,6 @@ class Farmers(AgentBaseClass):
             "annual_costs_all_adaptations": 1,
             "farmer_class": 1,
             "water_use": 1,
-            "farmer_is_in_command_area": False,
             "GEV_parameters": 1,
             "risk_perc_min": 1,
             "risk_perc_max": 1,
