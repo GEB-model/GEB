@@ -80,42 +80,43 @@ class ReservoirOperators(AgentBaseClass):
         """
         Initiate variables for new reservoir module
 
-        cpa:            reservoir capacity                          (m^3)
-        S_begin_yr:     storage at beginning of the year            (m^3). Set at 0.5*cpa at t == 0.
-        Sini_resv:      reservoir storage at start of day           (m^3). Set at 0.5*cpa at t == 0.
-        alpha:          reservoir capacity reduction factor.        (dimensionless)
-        irrmean:        mean irrigation demand                      (m^3/s)
-        mtifl:          annual mean total annual inflow             (m^3/s)
-        res_ppose:      array with each reservoir purpose           (1 == irrigation; 2 == flood control)
-        new_mtifl:      new mean total inflow after every year      (m3/s)
-        new_irrmean:    new mean irrigation demand after every year (m3/s)
+        cpa:            reservoir capacity                              (m^3)
+        S_begin_yr:     storage at beginning of the year                (m^3). Set at 0.5*cpa at t == 0.
+        Sini_resv:      reservoir storage at start of day               (m^3). Set at 0.5*cpa at t == 0.
+        alpha:          reservoir capacity reduction factor.            (dimensionless)
+        irrmean:        mean irrigation demand                          (m^3/s)
+        new_irrmean:    new mean irrigation demand after every year     (m3/s)
+        mtifl:          annual mean total annual inflow into reservoir  (m^3/s)
+        new_mtifl:      new mean total inflow after every year          (m3/s)
+        res_ppose:      array with each reservoir purpose               (1 == irrigation; 2 == flood control)
         """
         #### Variables taken from reservoir csv sheet, or inferred from there. ###
         self.cpa = self.active_reservoirs["volume_total"].values
         self.N = self.cpa.shape[0] # Number of reservoirs. All arrays will have this dimension: (N,)
-        self.mtifl = self.active_reservoirs["average_discharge"].values
         self.S_begin_yr = 0.5 * self.cpa.copy()
-        self.Sini_rsv = self.S_begin_yr.copy()
+        self.Sini_resv = self.S_begin_yr.copy()
         self.alpha = np.full((self.N,), 0.8) # set all reservoirs to a capacity reduction factor of 0.8 for now.
-        self.irrmean = 0.5 * self.mtifl # start with estimated mean irrigation demand of 0.5 of mtifl. 
-        self.irr_demand = np.zeros((self.N,), dtype='f8') # Initialize array for irrigation demand per command area.
-        # self.res_ppose = self.active_reservoirs["purpose"].values # for now deactivated, data still needs to be added.
+        self.mtifl = self.active_reservoirs["average_discharge"].values
+        self.irrmean = 0.5 * self.mtifl # start with estimated mean irrigation demand of 0.5 of mtifl.
         
-        ### Classify reservoirs based on purpose. ###
-        # condI = np.where(ppose == 1)[0] # condition for irrigation reservoir cells
-        # condF = np.where(ppose == 2)[0] # condition for flood reservoir cells
+
+
+        ### TEMPORARY CODE: Create selection mask, which selects reservoirs based on purpose. ###
         self.res_ppose = np.full((self.N,), 1) # temporarlily set all reservoirs to irrigation reservoirs, because data is still lacking.
-        self.condI = self.active_reservoirs[(self.res_ppose == 1)]  # irrigation reservoir cells
-        self.condF = self.active_reservoirs[(self.res_ppose == 2)]  # flood reservoir cells
-        self.cond_all = self.active_reservoirs[(self.res_ppose > 0)]
+        self.condI = (self.res_ppose == 1)  # irrigation reservoirs
+        self.condF = (self.res_ppose == 2)  # flood reservoirs
+        self.cond_all = (self.res_ppose > 0)
+
+        ### FUTURE CODE: WHEN RESERVOIR PURPOSE DATA IS AVAILABLE. ###
+        # self.res_ppose = self.active_reservoirs["purpose"].values 
+        # self.condI = (self.res_ppose == 1) # irrigation reservoirs
+        # self.condF = (self.res_ppose == 2)  # flood reservoirs
+        # self.cond_all = (self.res_ppose > 0)
 
         ### Initiate variables for yearly calculations. ###
         self.new_mtifl = np.zeros((self.N,), dtype='f8')
         self.new_irrmean = np.zeros((self.N,), dtype='f8')
         self.nt = 0
-
-        # Import farmer data to get command areas
-
 
         return self
 
@@ -135,32 +136,30 @@ class ReservoirOperators(AgentBaseClass):
 
         return
     
-    def new_reservoir_management(self, inflow, pot_irrConsumption):
+    def new_reservoir_management(self, inflow, pot_irrConsumption_m_per_cell):
         """
         Management module, that manages reservoir outflow per day, based on Hanasaki protocol (Hanasaki et al., 2006).
 
-        inflow = channel inflow value                                   (m^3/s)
-        totalPotEt = total PET, used to calculation irrigation demand   (...)
+        Input variables:                                                               Units
+        
+        inflow:         channel inflow value                                           (m^3/s)
+        pot_irrConsumption_m_per_cell: irrigation consumption per cell in meters       (m)
+        irr_demand:     irrigation demand per command area                             (...)
 
-        What do I not have yet:
-        - POSTPONED => Reservoir purpose (ppose) => Start with making all reservoir irrigation reservoirs.
-        - dt: do I need this, and should it give number of days or seconds or say 'day' or 'second'?
-
-        Units:
-        Let's make sure that everything that goes into the subfunctions is in m^3/s and what flows out is also in m^3/s.
-        So, in this function I have to convert everything to m3/s, and only the results maybe have to be converted to something else.
-
+        All other necessary variables defined in initiate_agents().
         """
         # initialize daily variables
         self.inflow = inflow
-        self.irr_demand = pot_irrConsumption.copy()
-        #self.dt = dt
         Rres = self.inflow.copy() # if there are no reservoirs, inflow equals outflow.
         Qin_resv = self.inflow.copy()
         date = self.model.current_time
 
+        # Call irrigation per command area module.
+        self.irr_demand = self.get_irrigation_per_command_area(pot_irrConsumption_m_per_cell)
+
         # Make sure all variables are in same shape and unit of m3, m3/s or s:
         assert self.inflow.size == self.irr_demand.size == self.cpa.size == self.mtifl.size, "Variables for reservoir management module are not same size"
+        assert self.inflow.shape == self.irr_demand.shape == self.cpa.shape == self.mtifl.shape, "Variables for reservoir management module are not same shape"
 
         # Calculate reservoir release for each reservoir type in m3/s
         Rres[self.condI] = self.irrigation_reservoir(self.cpa,
@@ -180,7 +179,7 @@ class ReservoirOperators(AgentBaseClass):
         
         # Ensure environmental flow requirements, no reservoir overflow and no negative storage.
         Qout_resv = Rres.copy()
-        Sending = self.Sini_resv.copy() # create final temporary final storage variable
+        Sending = self.Sini_resv.copy() # create temporary final storage variable. If nothing changes, initial storage will be final storage.
         Qout_resv[self.cond_all], Sending[self.cond_all] = self.reservoir_water_balance(Qin_resv,
                                                                               Rres,
                                                                               self.Sini_resv,
@@ -191,12 +190,17 @@ class ReservoirOperators(AgentBaseClass):
 
         # Set new reservoir storage for next timestep.
         self.Sini_resv = Sending.copy()
+        self.irr_demand = np.zeros((self.N,), dtype='f8')
+        self.irr_demand2 = np.zeros((self.N,), dtype='f8')
 
         # Add results of calculations to instances, to calculate yearly averages at end of year.
         self.new_mtifl += Qin_resv
         self.new_irrmean += self.irr_demand
         self.nt += 1
 
+        if date.hour == 12 and date.month > 3:
+            print("12 o'clock")
+            breakpoint()
         # if it is the last day of the year, calculate yearly averages.
         if date.month == 12 and date.day == 31:
             self.yearly_reservoir_calculations()
@@ -204,18 +208,18 @@ class ReservoirOperators(AgentBaseClass):
         return Qout_resv
 
     def irrigation_reservoir(self, cpa, cond_ppose, qin, S_begin_yr, mtifl, irr_demand, irrmean, alpha):
-        """Computes release from irrigation reservoirs
+        """
+        Computes release from irrigation reservoirs
         
-        cpa = reservoir capacity (m^3)
-        cond_ppose = array containing irrigation reservoir cells based on selection mask
-        qin = inflow (m^3/s)
-        Sini = initial storage (m^3)
-        mtifl = annual mean total annual inflow (m^3/s)
-        irr_demand = downstream irrigation demand
-        irrmean = mean irrigation demand
-        alpha = reservoir capacity reduction factor
-        dt = time step (day)
-        
+        cpa = reservoir capacity                                    (m^3)
+        cond_ppose = array containing irrigation reservoir cells 
+        based on selection mask
+        qin = inflow                                                (m^3/s)
+        Sini = initial storage                                      (m^3)
+        mtifl = annual mean total annual inflow                     (m^3/s)
+        irr_demand = downstream irrigation demand                   (...)
+        irrmean = mean irrigation demand                            (...)
+        alpha = reservoir capacity reduction factor                 (dimensionless)        
         """
         # irrigation Reservoirs
         # condI = np.where((cpa != 0) & (ppose ==2))[0] irrigation reservoir cells
@@ -269,16 +273,16 @@ class ReservoirOperators(AgentBaseClass):
         return Rirrg_final
     
     def flood_control_reservoir(self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha):
-        """Computes release from flood control reservoirs
+        """
+        Computes release from flood control reservoirs
         
-        cpa = reservoir capacity (m^3)
-        cond_ppose = array containing irrigation reservoir cells based on selection mask
-        qin = inflow (m^3/s)
-        Sini = initial storage (m^3)
-        mtifl = annual mean total annual inflow (m^3/s)
-        alpha = reservoir capacity reduction factor
-        dt = time step (day)
-        
+        cpa = reservoir capacity                                    (m^3)
+        cond_ppose = array containing irrigation reservoir cells 
+        based on selection mask
+        qin = inflow                                                (m^3/s)
+        Sini = initial storage                                      (m^3)
+        mtifl = annual mean total annual inflow                     (m^3/s)
+        alpha = reservoir capacity reduction factor                 (dimensionless) 
         """
         # flood Reservoirs
         # initialization
@@ -334,6 +338,7 @@ class ReservoirOperators(AgentBaseClass):
         Sin_ = Sin[cond_all]
         cpa_ = cpa[cond_all]
         mtifl_ = mtifl[cond_all]
+        dt = 24 * 3600  # time step in seconds
 
         # final storage and release initialization
         Nx = len(cond_all)
@@ -433,7 +438,7 @@ class ReservoirOperators(AgentBaseClass):
 
         return reservoir_outflow
 
-    def get_available_water_reservoir_command_areas(self, reservoir_storage_m3, pot_irrConsumption_m):
+    def get_available_water_reservoir_command_areas(self, reservoir_storage_m3):
         return self.reservoir_release_factors * reservoir_storage_m3
     
     def get_irrigation_per_reservoir_command_area_original(
@@ -459,56 +464,60 @@ class ReservoirOperators(AgentBaseClass):
     
     def get_irrigation_per_command_area(self, potential_irrigation_consumption_m):
         """
-        Function that retrieves the irrigation demand per command area.
+        Function that retrieves the irrigation demand per command area, which can be used
+        calculating reservoir release with Hanasaki protocol.
 
-        Takes as inputs the potential irrigation consumption in meters, and ...
+        Input variables:                    Function:                                               Units
+        potential_irrigation_consumption_m: potential irrigation consumption in meters per cell.    (m/day)    
+
         """
-        # Create an array filled with -1s and a length of the total number of farmers in the area
-        # called farmer_command_area. This array specifies for each farmer in which command area it is.
-        # Then for every farmer get the farmer fields with get_farmer_HRUs.
-        # Then for every field for every farmer check in which command area it is, if one of the fields
-        # of the farmers is in a command area, set for that farmer the value in farmer_command_area
-        # to the command_area it is in. 
+        # Create irrigation demand array, where irrigation demand per command area is stored.
+        irr_demand = np.zeros((self.N,), dtype='f8')
 
-        # So in the end you get an array with -1s, and values from 0 to n command areas, 
-        # specifying for each farmer in which command area it is.
-        command_area = self.model.agents.farmers.farmer_command_area
+        # Call arrays with land owners per HRU, command area per HRU and command area per farmer.
+        land_owner_per_cell = self.model.data.HRU.land_owners
+        command_area_per_cell = self.model.agents.farmers.var.reservoir_command_areas
+        command_area_per_farmer = self.model.agents.farmers.farmer_command_area
 
         # Transform irrigation consumption from meters to m3. 
         pot_irr_consumption_m3_per_cell = (
             potential_irrigation_consumption_m * self.model.data.HRU.cellArea
         )
-
-        # Only keep the irrigation consumption for cells that are in a command area.
-        pot_irr_consumption_per_cell_in_command_area = pot_irr_consumption_m3_per_cell[self.model.data.HRU.land_owners != -1]
-
-        # Land owners ID
-        land_owner_ID_per_cell = self.model.data.HRU.land_owners[self.model.data.HRU.land_owners != -1]
+        # Only keep the irrigation consumption for cells that are in a command area and have a farmer.
+        pot_irr_consumption_per_cell_in_ca = pot_irr_consumption_m3_per_cell[
+            (command_area_per_cell != -1) & (land_owner_per_cell != -1)]
+        
+        # Only keep cell with a farmer in the command area (this makes that both arrays line up again)
+        cells_with_farmer_in_ca = land_owner_per_cell[
+            (land_owner_per_cell != -1) & (command_area_per_cell != -1)]
 
         # Calculate the irrigation per farmer that is in the command area.
-        # Bincount counts the number of occurrences of each value in the land owners array
-        # and returns an array, where the index of the array matches the land owner ID and
-        # the value at that index is the number of cells of that land owner ID.
-        # The weights argument then multiplies the cell count by the irrigation consumption per cell.
-        potential_irrigation_consumption_m3_per_farmer = np.bincount(
-            land_owner_ID_per_cell,
-            weights= pot_irr_consumption_per_cell_in_command_area,
+        # Bincount counts the number of occurrences cells of a farmer in the command area and returns an array, where the index of the array matches the land owner ID the value at that index is the total irrigation consumption of that farmer. 
+        potential_irrigation_consumption_per_farmer_in_ca = np.bincount(
+            cells_with_farmer_in_ca, #land_owner_ID_per_farmer_in_ca,
+            weights= pot_irr_consumption_per_cell_in_ca,
             minlength=self.model.agents.farmers.n,
         )
         
-        # Loop over the command area per farmer, and check at that index the irrigation consumption.
-        # Add the irrigation consumption to the command area.
+        # Loop over all the command areas, and create an array of irrigation consumption per farmer
+        # situated in that command area. Then sum the entire array, to get the total irrigation 
+        # consumption for that command area and add it to the irrigation demand array.
+        for i in range(self.N):
+            total__irr_demand_in_ca = potential_irrigation_consumption_per_farmer_in_ca[
+                command_area_per_farmer == i].sum()
+            
+            irr_demand[i] = total__irr_demand_in_ca
+        
+        # Transform irrigation demand from m3/day to m3/s, as routing module works on hourly timestep
+        irr_demand_hourly = irr_demand / 24
+        irr_demand_yearly = irr_demand * 365
 
-        for farmer in command_area:
-            # Get the command area number for the respective farmer.
-            command_area_nr = command_area[farmer]
-            # Get the irrigation consumption for the respective farmer.
-            irrigation_consumption = potential_irrigation_consumption_m3_per_farmer[farmer]
-            # Add the irrigation consumption from the to the command area it is in.
-            self.irr_demand[command_area_nr] += irrigation_consumption
+        # Code for trying out the diff in timestep between routing and rest of model.
+        # Seems that hour remains at 0, but it does do 24 calculations in that timestep.
+        # if irr_demand[0] > 0:
+        #     print("irr_demand", irr_demand, " date:", date.hour, date.day)
 
-
-        return
+        return irr_demand_hourly
     
 
 
