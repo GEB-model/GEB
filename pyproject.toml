@@ -19,6 +19,8 @@ dependencies = [
     "deap",
     "pyyaml",
     "xarray",
+    "matplotlib",
+    "seaborn",
     "dask>=2023.3.0",
     "rioxarray>=0.15",
     "pybind11",
