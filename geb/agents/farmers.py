@@ -958,6 +958,7 @@ class Farmers(AgentBaseClass):
             if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
                 # if irrigation limit is active, reduce the irrigation demand
                 if not np.isnan(irrigation_limit_m3[farmer]):
+                    daily_irrigation_limit_m3 = irrigation_limit_m3[farmer] / 365
                     # first find the total irrigation demand for the farmer in m3
                     irrigation_water_demand_farmer_m3 = (
                         totalPotIrrConsumption[farmer_fields]
@@ -970,10 +971,10 @@ class Farmers(AgentBaseClass):
                     # if the irrigation demand is higher than the limit, reduce the irrigation demand by the calculated reduction factor
                     if (
                         irrigation_water_demand_farmer_m3_sum
-                        > irrigation_limit_m3[farmer]
+                        > daily_irrigation_limit_m3
                     ):
                         reduction_factor = (
-                            irrigation_limit_m3[farmer]
+                            daily_irrigation_limit_m3
                             / irrigation_water_demand_farmer_m3_sum
                         )
                         totalPotIrrConsumption[farmer_fields] = (

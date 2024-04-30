@@ -58,6 +58,10 @@ class Government(AgentBaseClass):
             raise NotImplementedError(
                 "Only 'capita' is implemented for irrigation limit"
             )
+        if "min" in irrigation_limit:
+            self.agents.farmers.irrigation_limit_m3[
+                self.agents.farmers.irrigation_limit_m3 < irrigation_limit["min"]
+            ] = irrigation_limit["min"]
 
     def step(self) -> None:
         """This function is run each timestep."""
