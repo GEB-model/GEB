@@ -40,103 +40,109 @@ class CWatMReporter(ABMReporter):
         self.variables = {}
         self.timesteps = []
 
-        if "report_cwatm" in self.model.config and self.model.config["report_cwatm"]:
-            for name, config in self.model.config["report_cwatm"].items():
-                if config["format"] == "netcdf":
-                    netcdf_path = Path(self.export_folder, name + ".nc")
-                    config["absolute_path"] = str(netcdf_path)
-                    if netcdf_path.exists():
-                        netcdf_path.unlink()
-                    if not "time_ranges" in config:
-                        if "substeps" in config:
-                            time = pd.date_range(
-                                start=self.model.current_time,
-                                periods=(self.model.n_timesteps + 1)
-                                * config["substeps"],
-                                freq=self.model.timestep_length / config["substeps"],
-                                inclusive="left",
-                            )
-                        else:
-                            time = pd.date_range(
-                                start=self.model.current_time,
-                                periods=self.model.n_timesteps + 1,
-                                freq=self.model.timestep_length,
-                            )
-                    else:
-                        time = []
-                        for time_range in config["time_ranges"]:
-                            start = time_range["start"]
-                            end = time_range["end"]
+        if self.model.mode == "w":
+            if (
+                "report_cwatm" in self.model.config
+                and self.model.config["report_cwatm"]
+            ):
+                for name, config in self.model.config["report_cwatm"].items():
+                    if config["format"] == "netcdf":
+                        netcdf_path = Path(self.export_folder, name + ".nc")
+                        config["absolute_path"] = str(netcdf_path)
+                        if netcdf_path.exists():
+                            netcdf_path.unlink()
+                        if not "time_ranges" in config:
                             if "substeps" in config:
-                                time.extend(
-                                    pd.date_range(
-                                        start=start,
-                                        end=end + self.model.timestep_length,
-                                        freq=self.model.timestep_length
-                                        / config["substeps"],
-                                        inclusive="left",
-                                    )
+                                time = pd.date_range(
+                                    start=self.model.current_time,
+                                    periods=(self.model.n_timesteps + 1)
+                                    * config["substeps"],
+                                    freq=self.model.timestep_length
+                                    / config["substeps"],
+                                    inclusive="left",
                                 )
                             else:
-                                time.extend(
-                                    pd.date_range(
-                                        start=start,
-                                        end=end,
-                                        freq=self.model.timestep_length,
-                                    )
+                                time = pd.date_range(
+                                    start=self.model.current_time,
+                                    periods=self.model.n_timesteps + 1,
+                                    freq=self.model.timestep_length,
                                 )
-                        # exlude time ranges that are not in the simulation period
-                        time = [
-                            t
-                            for t in time
-                            if t >= self.model.current_time
-                            and t
-                            <= self.model.current_time
-                            + (self.model.n_timesteps + 1) * self.model.timestep_length
-                        ]
-                        # remove duplicates and sort
-                        time = list(dict.fromkeys(time))
-                        time.sort()
-                        if not time:
-                            print(
-                                f"WARNING: None of the time ranges for {name} are in the simulation period."
-                            )
+                        else:
+                            time = []
+                            for time_range in config["time_ranges"]:
+                                start = time_range["start"]
+                                end = time_range["end"]
+                                if "substeps" in config:
+                                    time.extend(
+                                        pd.date_range(
+                                            start=start,
+                                            end=end + self.model.timestep_length,
+                                            freq=self.model.timestep_length
+                                            / config["substeps"],
+                                            inclusive="left",
+                                        )
+                                    )
+                                else:
+                                    time.extend(
+                                        pd.date_range(
+                                            start=start,
+                                            end=end,
+                                            freq=self.model.timestep_length,
+                                        )
+                                    )
+                            # exlude time ranges that are not in the simulation period
+                            time = [
+                                t
+                                for t in time
+                                if t >= self.model.current_time
+                                and t
+                                <= self.model.current_time
+                                + (self.model.n_timesteps + 1)
+                                * self.model.timestep_length
+                            ]
+                            # remove duplicates and sort
+                            time = list(dict.fromkeys(time))
+                            time.sort()
+                            if not time:
+                                print(
+                                    f"WARNING: None of the time ranges for {name} are in the simulation period."
+                                )
 
-                    self.variables[name] = xr.DataArray(
-                        coords={
-                            "time": time,
-                            "y": self.model.data.grid.lat,
-                            "x": self.model.data.grid.lon,
-                        },
-                        dims=["time", "y", "x"],
-                        name=name,
-                    )
-                    self.variables[name] = (
-                        self.variables[name]
-                        .rio.write_crs(self.model.data.grid.crs)
-                        .rio.write_coordinate_system()
-                    )
-                    self.variables[name].to_netcdf(
-                        netcdf_path,
-                        mode="a",
-                        encoding={
-                            name: {
-                                "chunksizes": (
-                                    1,
-                                    self.variables[name].y.size,
-                                    self.variables[name].x.size,
-                                ),
-                                "zlib": True,
-                                "complevel": 5,
-                            }
-                        },
-                        engine="netcdf4",
-                    )
-                    self.variables[name].close()
-                else:
-                    self.variables[name] = []
+                        self.variables[name] = xr.DataArray(
+                            coords={
+                                "time": time,
+                                "y": self.model.data.grid.lat,
+                                "x": self.model.data.grid.lon,
+                            },
+                            dims=["time", "y", "x"],
+                            name=name,
+                        )
+                        self.variables[name] = (
+                            self.variables[name]
+                            .rio.write_crs(self.model.data.grid.crs)
+                            .rio.write_coordinate_system()
+                        )
+                        self.variables[name].to_netcdf(
+                            netcdf_path,
+                            mode="a",
+                            encoding={
+                                name: {
+                                    "chunksizes": (
+                                        1,
+                                        self.variables[name].y.size,
+                                        self.variables[name].x.size,
+                                    ),
+                                    "zlib": True,
+                                    "complevel": 5,
+                                }
+                            },
+                            engine="netcdf4",
+                        )
+                        self.variables[name].close()
+                    else:
+                        self.variables[name] = []
 
-        self.step()  # report on inital state
+            self.step()  # report on inital state
 
     def decompress(self, attr: str, array: np.ndarray) -> np.ndarray:
         """This function decompresses an array for given attribute.
