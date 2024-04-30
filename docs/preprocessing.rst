@@ -10,15 +10,15 @@ Most of the data that the HydroMT plugin uses to create the input data for GEB i
 
 Building to model
 -------------------
-To set up the model you need two files, a "model.yml"-file and a "build.yml"-file. The "model.yml"-file specifies the configuration of the model, including start and end time of model runs, agent-paramters etc. The "build.yml"-file specifies the configuration of the preprocessing. An example of the "model.yml"-file and "build.yml"-file are provided in the repository.
+To set up the model you need two files, a `model.yml`-file and a `build.yml`-file. The `model.yml`-file specifies the configuration of the model, including start and end time of model runs, agent-paramters etc. The `build.yml`-file specifies the configuration of the preprocessing. An example of the `model.yml`-file and `build.yml`-file are provided in the repository.
 
-The "build.yml"-file contains the name of functions that should be run to preprocess the data. The functions are defined in the "geb" plugin of HydroMT. You can build the model using the following command, assuming you are in the working directory of the model which contains the "model.yml"-file and "build.yml"-file:
+The `build.yml`-file contains the name of functions that should be run to preprocess the data. The functions are defined in the HydroMT-geb plugin of HydroMT. You can build the model using the following command, assuming you are in the working directory of the model which contains the `model.yml`-file and `build.yml`-file:
 
 .. code-block:: python
 
     geb build
 
-This will preprocess all the data required for the model. The data will be stored in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model. Optionally, you can specify the path to the "build.yml"-file using the "-b" flag, and the path to the "model.yml"-file using the "-c" flag. You can find more information about the flags by running:
+This will preprocess all the data required for the model. The data will be stored in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model. Optionally, you can specify the path to the `build.yml`-file using the `-b/--build-config` flag, and the path to the `model.yml`-file using the `-c/--config` flag. You can find more information about the flags by running:
 
 .. code-block:: python
 
@@ -33,7 +33,7 @@ It is also possible to update an already existing model by running the following
 
     geb update
 
-This assumes you have a "update.yml"-file in the working directory. The "update.yml"-file contains the name of functions that should be run to update the data. The functions are defined in the "geb" plugin of HydroMT. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
+This assumes you have a "update.yml"-file in the working directory. The `update.yml`-file contains the name of functions that should be run to update the data. The functions are defined in the "geb" plugin of HydroMT. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
 
 For example to update the forcing data of the model, your "update.yml"-file could look like this:
 
@@ -47,7 +47,7 @@ For example to update the forcing data of the model, your "update.yml"-file coul
         forcing: gfdl-esm4
         ssp: ssp370
 
-Optionally, you can specify the path to the "update.yml"-file using the "-b" flag, and the path to the "model.yml"-file using the "-c" flag. You can find more information about the flags by running:
+Optionally, you can specify the path to the "update.yml"-file using the `-b/--build-config` flag, and the path to the `model.yml`-file using the `-c/--config` flag. You can find more information about the flags by running:
 
 .. code-block:: python
 
