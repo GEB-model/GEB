@@ -47,6 +47,9 @@ class CWatMReporter(ABMReporter):
             ):
                 for name, config in self.model.config["report_cwatm"].items():
                     if config["format"] == "netcdf":
+                        assert (
+                            "single_file" in config and config["single_file"] is True
+                        ), "Only single_file=True is supported for netcdf format."
                         netcdf_path = Path(self.export_folder, name + ".nc")
                         config["absolute_path"] = str(netcdf_path)
                         if netcdf_path.exists():
@@ -224,6 +227,8 @@ class CWatMReporter(ABMReporter):
             fp = os.path.join(folder, fn)
             if isinstance(value, (np.ndarray, cp.ndarray)):
                 value = value.tolist()
+            if isinstance(value, (float, int)):
+                value = [value]
             if len(value) > 100_000:
                 self.model.logger.info(
                     f"Exporting {len(value)} items to csv. This might take a long time and take a lot of space. Consider using NumPy (compressed) binary format (npy/npz)."
