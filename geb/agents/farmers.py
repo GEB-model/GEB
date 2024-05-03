@@ -1190,7 +1190,7 @@ class Farmers(AgentBaseClass):
         )
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def get_yield_ratio_numba_GAEZ(
         crop_map: np.ndarray, evap_ratios: np.ndarray, KyT
     ) -> float:
@@ -1218,7 +1218,7 @@ class Farmers(AgentBaseClass):
         return yield_ratios
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def get_yield_ratio_numba_MIRCA2000(
         crop_map: np.ndarray,
         evap_ratios: np.ndarray,
@@ -3133,7 +3133,7 @@ class Farmers(AgentBaseClass):
         )
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def switch_crops_numba(
         ids, crops, neighbours, SEUT, EUT, yield_ratio, SPEI_prob
     ) -> None:
