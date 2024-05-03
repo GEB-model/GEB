@@ -97,15 +97,10 @@ def click_run_options():
     def decorator(func):
         @click_config
         @click.option(
-            "--gpu_device",
-            type=int,
-            default=0,
-            help="""Specify the GPU to use (zero-indexed).""",
-        )
-        @click.option(
-            "--profiling",
-            is_flag=True,
-            help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
+            "--working-directory",
+            "-wd",
+            default=".",
+            help="Working directory for model.",
         )
         @click.option(
             "--use_gpu",
@@ -113,26 +108,31 @@ def click_run_options():
             help="Whether a GPU can be used to run the model. This requires CuPy to be installed.",
         )
         @click.option(
-            "--working-directory",
-            "-wd",
-            default=".",
-            help="Working directory for model.",
+            "--gpu_device",
+            type=int,
+            default=0,
+            help="""Specify the GPU to use (zero-indexed).""",
         )
         @click.option(
             "--gui",
             is_flag=True,
-            help="""The model can be run with or without a visual interface. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
+            help="""The model can be run with a graphical user interface in a browser. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
         )
         @click.option(
             "--no-browser",
             is_flag=True,
-            help="""Do not open browser when running the model. This option is, for example, useful when running the model on a server, and you would like to remotely access the model.""",
+            help="""Run graphical user interface, but serve interface through the server but do not open the browser. You may connect to the server from a browswer. This option is only works in combination with the graphical user interface.""",
         )
         @click.option(
             "--port",
             type=int,
             default=8521,
-            help="""Port used for display environment (default: 8521)""",
+            help="""Port used for graphical user interface (default: 8521)""",
+        )
+        @click.option(
+            "--profiling",
+            is_flag=True,
+            help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
         )
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
