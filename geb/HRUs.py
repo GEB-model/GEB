@@ -199,6 +199,9 @@ class Grid(BaseVariables):
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
         self.cellArea = self.compress(self.cell_area_uncompressed)
+
+        self.cache = {}
+
         BaseVariables.__init__(self)
 
     def full(self, *args, **kwargs) -> np.ndarray:
@@ -288,18 +291,25 @@ class Grid(BaseVariables):
         assert ds.y[0] > ds.y[-1]
         return ds
 
-    def load_forcing(self, ds, compress=True):
-        data = ds.sel(time=self.model.current_time).data
+    def load_forcing(self, ds, time, compress=True, cache=True):
+        ds_id = id(ds)
+        if cache and ds_id in self.cache:
+            cache_hit = self.cache[ds_id]
+            if cache_hit[0] == time:
+                return cache_hit[1]
+
+        data = ds.sel(time=time).data
         if compress:
-            return self.compress(data)
-        else:
-            return data
+            data = self.compress(data)
+        if cache:
+            self.cache[ds_id] = (time, data)
+        return data
 
     @property
     def hurs(self):
         if not hasattr(self, "hurs_ds"):
             self.hurs_ds = self.load_forcing_ds("hurs")
-        hurs = self.load_forcing(self.hurs_ds)
+        hurs = self.load_forcing(self.hurs_ds, self.model.current_time)
         assert (hurs > 1).all() and (hurs <= 100).all(), "hurs out of range"
         return hurs
 
@@ -307,7 +317,7 @@ class Grid(BaseVariables):
     def pr(self):
         if not hasattr(self, "pr_ds"):
             self.pr_ds = self.load_forcing_ds("pr")
-        pr = self.load_forcing(self.pr_ds)
+        pr = self.load_forcing(self.pr_ds, self.model.current_time)
         assert (pr >= 0).all(), "Precipitation must be positive or zero"
         return pr
 
@@ -315,7 +325,7 @@ class Grid(BaseVariables):
     def ps(self):
         if not hasattr(self, "ps_ds"):
             self.ps_ds = self.load_forcing_ds("ps")
-        ps = self.load_forcing(self.ps_ds)
+        ps = self.load_forcing(self.ps_ds, self.model.current_time)
         assert (ps > 30_000).all() and (
             ps < 120_000
         ).all(), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
@@ -325,7 +335,7 @@ class Grid(BaseVariables):
     def rlds(self):
         if not hasattr(self, "rlds_ds"):
             self.rlds_ds = self.load_forcing_ds("rlds")
-        rlds = self.load_forcing(self.rlds_ds)
+        rlds = self.load_forcing(self.rlds_ds, self.model.current_time)
         assert (rlds >= 0).all(), "rlds must be positive or zero"
         return rlds
 
@@ -333,7 +343,7 @@ class Grid(BaseVariables):
     def rsds(self):
         if not hasattr(self, "rsds_ds"):
             self.rsds_ds = self.load_forcing_ds("rsds")
-        rsds = self.load_forcing(self.rsds_ds)
+        rsds = self.load_forcing(self.rsds_ds, self.model.current_time)
         assert (rsds >= 0).all(), "rsds must be positive or zero"
         return rsds
 
@@ -341,7 +351,7 @@ class Grid(BaseVariables):
     def tas(self):
         if not hasattr(self, "tas_ds"):
             self.tas_ds = self.load_forcing_ds("tas")
-        tas = self.load_forcing(self.tas_ds)
+        tas = self.load_forcing(self.tas_ds, self.model.current_time)
         assert (tas > 170).all() and (tas < 370).all(), "tas out of range"
         return tas
 
@@ -349,7 +359,7 @@ class Grid(BaseVariables):
     def tasmin(self):
         if not hasattr(self, "tasmin_ds"):
             self.tasmin_ds = self.load_forcing_ds("tasmin")
-        tasmin = self.load_forcing(self.tasmin_ds)
+        tasmin = self.load_forcing(self.tasmin_ds, self.model.current_time)
         assert (tasmin > 170).all() and (tasmin < 370).all(), "tasmin out of range"
         return tasmin
 
@@ -357,7 +367,7 @@ class Grid(BaseVariables):
     def tasmax(self):
         if not hasattr(self, "tasmax_ds"):
             self.tasmax_ds = self.load_forcing_ds("tasmax")
-        tasmax = self.load_forcing(self.tasmax_ds)
+        tasmax = self.load_forcing(self.tasmax_ds, self.model.current_time)
         assert (tasmax > 170).all() and (tasmax < 370).all(), "tasmax out of range"
         return tasmax
 
@@ -365,7 +375,7 @@ class Grid(BaseVariables):
     def sfcWind(self):
         if not hasattr(self, "sfcWind_ds"):
             self.sfcWind_ds = self.load_forcing_ds("sfcwind")
-        sfcWind = self.load_forcing(self.sfcWind_ds)
+        sfcWind = self.load_forcing(self.sfcWind_ds, self.model.current_time)
         assert (sfcWind >= 0).all() and (
             sfcWind < 150
         ).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
@@ -375,7 +385,7 @@ class Grid(BaseVariables):
     def spei_uncompressed(self):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
-        spei = self.load_forcing(self.spei_ds, compress=False)
+        spei = self.load_forcing(self.spei_ds, self.model.current_time, compress=False)
         assert not np.isnan(spei).any()
         return spei
 
@@ -383,7 +393,7 @@ class Grid(BaseVariables):
     def spei(self):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
-        spei = self.load_forcing(self.spei_ds)
+        spei = self.load_forcing(self.spei_ds, self.model.current_time)
         assert not np.isnan(spei).any()
         return spei
 
