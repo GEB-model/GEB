@@ -132,7 +132,12 @@ def click_run_options():
         @click.option(
             "--profiling",
             is_flag=True,
-            help="Run GEB with with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
+            help="Run GEB with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
+        )
+        @click.option(
+            "--timing",
+            is_flag=True,
+            help="Run GEB with timing."
         )
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -153,6 +158,7 @@ def run_model(
     gui,
     no_browser,
     port,
+    timing,
 ):
     """Run model."""
 
@@ -177,6 +183,7 @@ def run_model(
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
         "spinup": spinup,
+        "timing": timing
     }
 
     if not gui:

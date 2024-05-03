@@ -93,9 +93,11 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         spinup: bool = False,
         use_gpu: bool = False,
         gpu_device=0,
+        timing=False,
         coordinate_system: str = "WGS84",
         mode="w",
     ):
+        self.timing = timing
         assert mode in ("w", "r")
         self.mode = mode
 
