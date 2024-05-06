@@ -63,18 +63,19 @@ class AsyncXarrayReader:
     async def read_timestep_async(self, index):
         assert index < self.ds.time.size, "Index out of bounds."
         assert index >= 0, "Index out of bounds."
-        # Check if the requested data is already preloaded
+        # Check if the requested data is already preloaded, if so, just return that data
         if index == self.current_index:
             return self.current_data
+        # Check if the data for the next timestep is preloaded, if so, await for it to complete
         if self.preloaded_data_future is not None and self.current_index + 1 == index:
             data = await self.preloaded_data_future
+        # Load the requested data if not preloaded
         else:
-            # Load the requested data immediately if not preloaded
             data = await self.loop.run_in_executor(
                 self.executor, lambda: self.load(index)
             )
 
-        # Initiate preloading the next timestep, do not await here
+        # Initiate preloading the next timestep, do not await here, this returns a future
         self.preloaded_data_future = self.preload_next(index)
         self.current_index = index
         self.current_data = data
