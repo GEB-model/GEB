@@ -42,6 +42,7 @@ class AsyncXarrayReader:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.preloaded_data_future = None
         self.current_index = -1  # Initialize to -1 to indicate no data loaded yet
+        self.time_index = self.ds.time.values
         try:
             self.loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -82,9 +83,9 @@ class AsyncXarrayReader:
     def get_index(self, date):
         # convert datetime object to dtype of time coordinate
         date = np.datetime64(date, "s")
-        indices = self.ds.time == np.datetime64(date, "ns")
+        indices = self.time_index == np.datetime64(date, "ns")
         assert np.count_nonzero(indices) == 1, "Date not found in the dataset."
-        return indices.argmax().item()
+        return indices.argmax()
 
     def read_timestep(self, date):
         index = self.get_index(date)
@@ -92,77 +93,8 @@ class AsyncXarrayReader:
 
     def read_timestep_not_async(self, date):
         index = self.get_index(date)
-        return self.ds.isel(time=index).load()
+        return self.load(index)
 
     def close(self):
         self.ds.close()
         self.executor.shutdown()
-
-
-if __name__ == "__main__":
-    import pandas as pd
-    from pathlib import Path
-    import numpy as np
-    from datetime import date
-
-    def netcdf_file(tmp_path, size):
-        # Create a temporary NetCDF file for testing
-        filename = tmp_path / "test_data.nc"
-
-        periods = 4
-
-        times = pd.date_range("2000-01-01", periods=periods, freq="D")
-        data = np.empty((periods, size, size))
-        for i in range(periods):
-            data[i][:] = i
-        ds = xr.Dataset(
-            {"temperature": (("time", "x", "y"), data)},
-            coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)},
-        )
-
-        ds.to_netcdf(filename)
-        return filename
-
-    def test_read_timestep(netcdf_file, size):
-        from time import time, sleep
-
-        reader = AsyncXarrayReader(netcdf_file)
-
-        data0 = reader.read_timestep(date(2000, 1, 1))
-
-        sleep(3)  # Simulate some processing time
-
-        t0 = time()
-        data1 = reader.read_timestep(date(2000, 1, 2))
-        t1 = time()
-        print("Load next timestep (quick): {:.2f}s".format(t1 - t0))
-
-        assert data0.temperature.shape == (
-            size,
-            size,
-        ), "Shape of the loaded data should match the expected shape."
-        assert data1.temperature.shape == (
-            size,
-            size,
-        ), "Shape of the loaded data should match the expected shape."
-        assert (data0 == 0).all()
-        assert (data1 == 1).all()
-
-        t0 = time()
-        data2 = reader.read_timestep(date(2000, 1, 2))
-        t1 = time()
-        print("Load same timestep (quick): {:.2f}s".format(t1 - t0))
-        assert (data2 == 1).all()
-
-        t0 = time()
-        data3 = reader.read_timestep(date(2000, 1, 1))
-        t1 = time()
-        print("Load previous timestep (slow): {:.2f}s".format(t1 - t0))
-        assert (data3 == 0).all()
-
-        reader.close()
-        netcdf_file.unlink()
-
-    size = 10_000
-    netcdf = netcdf_file(Path("."), size)
-    test_read_timestep(netcdf, size)

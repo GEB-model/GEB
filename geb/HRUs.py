@@ -8,6 +8,7 @@ from operator import attrgetter
 import xarray as xr
 import rioxarray as rxr
 import numpy as np
+from geb.workflows import AsyncXarrayReader
 
 try:
     import cupy as cp
@@ -200,8 +201,6 @@ class Grid(BaseVariables):
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
         self.cellArea = self.compress(self.cell_area_uncompressed)
 
-        self.cache = {}
-
         BaseVariables.__init__(self)
 
     def full(self, *args, **kwargs) -> np.ndarray:
@@ -285,24 +284,16 @@ class Grid(BaseVariables):
         return super().load_initial("grid." + name, default=default)
 
     def load_forcing_ds(self, name):
-        ds = xr.open_dataset(self.model.model_structure["forcing"][f"climate/{name}"])[
-            name
-        ]
-        assert ds.y[0] > ds.y[-1]
-        return ds
+        reader = AsyncXarrayReader(
+            self.model.model_structure["forcing"][f"climate/{name}"], name
+        )
+        assert reader.ds.y[0] > reader.ds.y[-1]
+        return reader
 
-    def load_forcing(self, ds, time, compress=True, cache=True):
-        ds_id = id(ds)
-        if cache and ds_id in self.cache:
-            cache_hit = self.cache[ds_id]
-            if cache_hit[0] == time:
-                return cache_hit[1]
-
-        data = ds.sel(time=time).data
+    def load_forcing(self, reader, time, compress=True):
+        data = reader.read_timestep(time)
         if compress:
             data = self.compress(data)
-        if cache:
-            self.cache[ds_id] = (time, data)
         return data
 
     @property

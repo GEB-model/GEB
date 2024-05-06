@@ -227,7 +227,6 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         else:
             n = step_size
         for _ in range(n):
-            print(self.current_time, flush=True)
             t0 = time()
             self.data.step()
             HazardDriver.step(self, 1)
@@ -237,7 +236,10 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
 
             self.reporter.step()
             t1 = time()
-            # print(t1-t0, 'seconds')
+            print(
+                f"{self.current_time} - (took {round(t1 - t0, 4)} seconds)",
+                flush=True,
+            )
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
