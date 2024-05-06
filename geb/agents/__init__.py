@@ -71,7 +71,6 @@ from .farmers import Farmers
 from .government import Government
 from .reservoir_operators import ReservoirOperators
 from .town_managers import TownManagers
-from .tourism import Tourism
 
 
 class Agents:
@@ -87,7 +86,6 @@ class Agents:
         self.farmers = Farmers(model, self, 0.1)
         self.reservoir_operators = ReservoirOperators(model, self)
         self.town_managers = TownManagers(model, self)
-        self.tourism = Tourism(model, self)
         self.government = Government(model, self)
 
         self.agents = [
@@ -95,7 +93,6 @@ class Agents:
             self.farmers,
             self.reservoir_operators,
             self.town_managers,
-            self.tourism,
             self.government,
         ]
 
