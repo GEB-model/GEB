@@ -237,7 +237,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             self.reporter.step()
             t1 = time()
             print(
-                f"{self.current_time} - (took {round(t1 - t0, 4)} seconds)",
+                f"{self.current_time} ({round(t1 - t0, 4)}s)",
                 flush=True,
             )
 
