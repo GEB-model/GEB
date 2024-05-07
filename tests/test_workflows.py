@@ -11,11 +11,11 @@ from geb.workflows import (
 
 @pytest.fixture
 def netcdf_file(tmp_path):
-    size = 10_000
+    size = 20_000
     # Create a temporary NetCDF file for testing
     filename = tmp_path / "test_data.nc"
 
-    periods = 4
+    periods = 5
 
     times = pd.date_range("2000-01-01", periods=periods, freq="D")
     data = np.empty((periods, size, size), dtype=np.int32)
@@ -42,22 +42,38 @@ def test_read_timestep(netcdf_file):
     t1 = time()
     print("Load next timestep (quick): {:.2f}s".format(t1 - t0))
 
-    assert (data0 == 0).all()
-    assert data0.dtype == np.int32
-    assert (data1 == 1).all()
+    # wait half the time it took to load the previous timestep to simulate a short
+    # processing time
+    sleep((t1 - t0) / 2)
 
     t0 = time()
-    data2 = reader.read_timestep(date(2000, 1, 2))
+    data2 = reader.read_timestep(date(2000, 1, 3))
+    t1 = time()
+    print("Load next timestep short waiting (semi-quick): {:.2f}s".format(t1 - t0))
+
+    assert (data0 == 0).all()
+    assert (data1 == 1).all()
+    assert (data2 == 2).all()
+    assert data0.dtype == np.int32
+
+    sleep(3)
+
+    t0 = time()
+    data3 = reader.read_timestep(date(2000, 1, 4))
+    t1 = time()
+    print("Load next timestep with waiting (quick): {:.2f}s".format(t1 - t0))
+
+    t0 = time()
+    data3 = reader.read_timestep(date(2000, 1, 4))
     t1 = time()
     print("Load same timestep (quick): {:.2f}s".format(t1 - t0))
-    assert (data2 == 1).all()
+    assert (data3 == 3).all()
 
     t0 = time()
-    data3 = reader.read_timestep(date(2000, 1, 1))
+    data0 = reader.read_timestep(date(2000, 1, 1))
     t1 = time()
     print("Load previous timestep (slow): {:.2f}s".format(t1 - t0))
-    assert data3.dtype == np.int32
-    assert (data3 == 0).all()
+    assert (data0 == 0).all()
 
     reader.close()
     netcdf_file.unlink()
