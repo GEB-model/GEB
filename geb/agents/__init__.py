@@ -67,10 +67,12 @@ class AgentBaseClass(HoneybeesAgentBaseClass):
 
 
 from .households import Households
-from .farmers import Farmers
-from .government import Government
+from .crop_farmers import CropFarmers
+from .livestock_farmers import LiveStockFarmers
+from .industry import Industry
 from .reservoir_operators import ReservoirOperators
 from .town_managers import TownManagers
+from .government import Government
 
 
 class Agents:
@@ -83,14 +85,18 @@ class Agents:
     def __init__(self, model) -> None:
         self.model = model
         self.households = Households(model, self, 0.1)
-        self.farmers = Farmers(model, self, 0.1)
+        self.crop_farmers = CropFarmers(model, self, 0.1)
+        self.livestock_farmers = LiveStockFarmers(model, self, 0.1)
+        self.industry = Industry(model, self)
         self.reservoir_operators = ReservoirOperators(model, self)
         self.town_managers = TownManagers(model, self)
         self.government = Government(model, self)
 
         self.agents = [
             self.households,
-            self.farmers,
+            self.crop_farmers,
+            self.livestock_farmers,
+            self.industry,
             self.reservoir_operators,
             self.town_managers,
             self.government,

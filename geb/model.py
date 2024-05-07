@@ -212,7 +212,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         )
         np.savez_compressed(
             Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
-            data=self.agents.farmers.activation_order_by_elevation,
+            data=self.agents.crop_farmers.activation_order_by_elevation,
         )
 
     def step(self, step_size: Union[int, str] = 1) -> None:

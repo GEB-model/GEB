@@ -92,7 +92,7 @@ def farmer_command_area(
     return output
 
 
-class Farmers(AgentBaseClass):
+class CropFarmers(AgentBaseClass):
     """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
 
     Args:

@@ -1,8 +1,8 @@
 import numpy as np
 import geopandas as gpd
 import pyproj
-
-from .general import AgentArray
+import calendar
+from .general import AgentArray, downscale_volume
 from . import AgentBaseClass
 
 
@@ -76,6 +76,71 @@ class Households(AgentBaseClass):
         print("mean risk perception", self.risk_perception.mean())
 
         return None
+
+    def water_demand(self):
+        """
+        Dynamic part of the water demand module - domestic
+        read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
+
+        """
+        downscale_mask = self.model.data.HRU.land_use_type != 4
+        if self.model.use_gpu:
+            downscale_mask = downscale_mask.get()
+        days_in_month = calendar.monthrange(
+            self.model.current_time.year, self.model.current_time.month
+        )[1]
+        water_demand = (
+            self.model.domestic_water_demand_ds.sel(
+                time=self.model.current_time, method="ffill"
+            ).domestic_water_demand
+            * 1_000_000
+            / days_in_month
+        )
+        water_demand = downscale_volume(
+            self.model.domestic_water_demand_ds.rio.transform().to_gdal(),
+            self.model.data.grid.gt,
+            water_demand.values,
+            self.model.data.grid.mask,
+            self.model.data.grid_to_HRU_uncompressed,
+            downscale_mask,
+            self.model.data.HRU.land_use_ratio,
+        )
+        if self.model.use_gpu:
+            water_demand = cp.array(water_demand)
+        water_demand = self.model.data.HRU.M3toM(water_demand)
+
+        water_consumption = (
+            self.model.domestic_water_consumption_ds.sel(
+                time=self.model.current_time, method="ffill"
+            ).domestic_water_consumption
+            * 1_000_000
+            / days_in_month
+        )
+        water_consumption = downscale_volume(
+            self.model.domestic_water_consumption_ds.rio.transform().to_gdal(),
+            self.model.data.grid.gt,
+            water_consumption.values,
+            self.model.data.grid.mask,
+            self.model.data.grid_to_HRU_uncompressed,
+            downscale_mask,
+            self.model.data.HRU.land_use_ratio,
+        )
+        if self.model.use_gpu:
+            water_consumption = cp.array(water_consumption)
+        water_consumption = self.model.data.HRU.M3toM(water_consumption)
+
+        efficiency = np.divide(
+            water_consumption,
+            water_demand,
+            out=np.zeros_like(water_consumption, dtype=float),
+            where=water_demand != 0,
+        )
+
+        efficiency = self.model.data.to_grid(HRU_data=efficiency, fn="max")
+
+        assert (efficiency <= 1).all()
+        assert (efficiency >= 0).all()
+        return water_demand, efficiency
 
     def step(self) -> None:
         self.risk_perception *= self.risk_perception
