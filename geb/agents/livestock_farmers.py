@@ -25,9 +25,11 @@ class LiveStockFarmers(AgentBaseClass):
         AgentBaseClass.__init__(self)
 
     def initiate(self) -> None:
-        return
+        water_demand, efficiency = self.update_water_demand()
+        self.current_water_demand = water_demand
+        self.current_efficiency = efficiency
 
-    def water_demand(self):
+    def update_water_demand(self):
         """
         Dynamic part of the water demand module - livestock
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
@@ -47,7 +49,7 @@ class LiveStockFarmers(AgentBaseClass):
         # transform from mio m3 per year (or month) to m/day
         water_consumption = (
             self.model.livestock_water_consumption_ds.sel(
-                time=self.model.current_time, method="ffill"
+                time=self.model.current_time, method="ffill", tolerance="366D"
             ).livestock_water_consumption
             * 1_000_000
             / days_in_month
@@ -67,7 +69,23 @@ class LiveStockFarmers(AgentBaseClass):
 
         efficiency = 1.0
         water_demand = water_consumption / efficiency
+        self.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
+
+    def water_demand(self):
+        if (
+            np.datetime64(self.model.current_time, "ns")
+            in self.model.livestock_water_consumption_ds.time
+        ):
+            water_demand, efficiency = self.update_water_demand()
+            self.current_water_demand = water_demand
+            self.current_efficiency = efficiency
+
+        assert (self.model.current_time - self.last_water_demand_update).days < 366, (
+            "Water demand has not been updated for over a year. "
+            "Please check the livestock water demand datasets."
+        )
+        return self.current_water_demand, self.current_efficiency
 
     def step(self) -> None:
         """This function is run each timestep."""

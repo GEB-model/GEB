@@ -26,9 +26,11 @@ class Industry(AgentBaseClass):
         AgentBaseClass.__init__(self)
 
     def initiate(self) -> None:
-        return
+        water_demand, efficiency = self.update_water_demand()
+        self.current_water_demand = water_demand
+        self.current_efficiency = efficiency
 
-    def water_demand(self):
+    def update_water_demand(self):
         downscale_mask = self.model.data.HRU.land_use_type != 4
         if self.model.use_gpu:
             downscale_mask = downscale_mask.get()
@@ -37,7 +39,7 @@ class Industry(AgentBaseClass):
 
         water_demand = (
             self.model.industry_water_demand_ds.sel(
-                time=self.model.current_time, method="ffill"
+                time=self.model.current_time, method="ffill", tolerance="366D"
             ).industry_water_demand
             * 1_000_000
             / days_in_year
@@ -86,7 +88,23 @@ class Industry(AgentBaseClass):
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()
+        self.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
+
+    def water_demand(self):
+        if (
+            np.datetime64(self.model.current_time, "ns")
+            in self.model.industry_water_consumption_ds.time
+        ):
+            water_demand, efficiency = self.update_water_demand()
+            self.current_water_demand = water_demand
+            self.current_efficiency = efficiency
+
+        assert (self.model.current_time - self.last_water_demand_update).days < 366, (
+            "Water demand has not been updated for over a year. "
+            "Please check the industry water demand datasets."
+        )
+        return self.current_water_demand, self.current_efficiency
 
     def step(self) -> None:
         """This function is run each timestep."""

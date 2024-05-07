@@ -37,6 +37,9 @@ class Households(AgentBaseClass):
         self.buildings = gpd.read_file(
             self.model.model_structure["geoms"]["assets/buildings"]
         )
+        water_demand, efficiency = self.update_water_demand()
+        self.current_water_demand = water_demand
+        self.current_efficiency = efficiency
 
     def flood(self, flood_map):
         self.flood_depth.fill(0)  # Reset flood depth for all households
@@ -77,7 +80,7 @@ class Households(AgentBaseClass):
 
         return None
 
-    def water_demand(self):
+    def update_water_demand(self):
         """
         Dynamic part of the water demand module - domestic
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
@@ -91,7 +94,7 @@ class Households(AgentBaseClass):
         )[1]
         water_demand = (
             self.model.domestic_water_demand_ds.sel(
-                time=self.model.current_time, method="ffill"
+                time=self.model.current_time, method="ffill", tolerance="366D"
             ).domestic_water_demand
             * 1_000_000
             / days_in_month
@@ -140,7 +143,23 @@ class Households(AgentBaseClass):
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()
+        self.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
+
+    def water_demand(self):
+        if (
+            np.datetime64(self.model.current_time, "ns")
+            in self.model.domestic_water_consumption_ds.time
+        ):
+            water_demand, efficiency = self.update_water_demand()
+            self.current_water_demand = water_demand
+            self.current_efficiency = efficiency
+
+        assert (self.model.current_time - self.last_water_demand_update).days < 366, (
+            "Water demand has not been updated for over a year. "
+            "Please check the household water demand datasets."
+        )
+        return self.current_water_demand, self.current_efficiency
 
     def step(self) -> None:
         self.risk_perception *= self.risk_perception
