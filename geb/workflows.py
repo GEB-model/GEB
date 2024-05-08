@@ -3,7 +3,8 @@ import xarray as xr
 import numpy as np
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-import threading
+
+all_async_readers = []
 
 
 class TimingModule:
@@ -35,24 +36,17 @@ class TimingModule:
 
 
 class AsyncXarrayReader:
-    def __init__(self, filepath, variable_name):
+    def __init__(self, filepath, variable_name, loop):
         self.filepath = filepath
         self.ds = xr.open_dataset(filepath)[
             variable_name
         ]  # Adjust chunk size based on your data
         self.executor = ThreadPoolExecutor(max_workers=1)
+        all_async_readers.append(self)
         self.preloaded_data_future = None
         self.current_index = -1  # Initialize to -1 to indicate no data loaded yet
         self.time_index = self.ds.time.values
-        try:
-            self.loop = asyncio.get_running_loop()
-        except RuntimeError:
-            self.loop = asyncio.new_event_loop()
-
-        if not self.loop.is_running():
-            self.loop_thread = threading.Thread(target=self.loop.run_forever)
-            self.loop_thread.start()
-
+        self.loop = loop
         return None
 
     def load(self, index):
@@ -113,5 +107,9 @@ class AsyncXarrayReader:
         return self.load(index)
 
     def close(self):
+        # cancel the preloading of the next timestep
+        if self.preloaded_data_future is not None:
+            self.preloaded_data_future.cancel()
+        # close the dataset and the executor
         self.ds.close()
-        self.executor.shutdown()
+        self.executor.shutdown(wait=False)

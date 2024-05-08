@@ -285,7 +285,9 @@ class Grid(BaseVariables):
 
     def load_forcing_ds(self, name):
         reader = AsyncXarrayReader(
-            self.model.model_structure["forcing"][f"climate/{name}"], name
+            self.model.model_structure["forcing"][f"climate/{name}"],
+            name,
+            self.model.loop,
         )
         assert reader.ds.y[0] > reader.ds.y[-1]
         return reader

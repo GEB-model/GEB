@@ -7,6 +7,8 @@ from time import time
 import copy
 import numpy as np
 import warnings
+import asyncio
+import threading
 
 try:
     import cupy as cp
@@ -100,6 +102,15 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         self.timing = timing
         assert mode in ("w", "r")
         self.mode = mode
+
+        try:
+            self.loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+
+        if not self.loop.is_running():
+            self.loop_thread = threading.Thread(target=self.loop.run_forever)
+            self.loop_thread.start()
 
         self.spinup = spinup
         self.use_gpu = use_gpu
@@ -276,6 +287,16 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         """Finalizes the model."""
         if self.config["general"]["simulate_hydrology"]:
             CWatM_Model.finalize(self)
+
+        from geb.workflows import all_async_readers
+
+        for reader in all_async_readers:
+            reader.close()
+
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        # Wait for the loop thread to finish
+        self.loop_thread.join()
+        self.loop.close()
 
     def __enter__(self):
         return self
