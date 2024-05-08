@@ -848,21 +848,34 @@ class Data:
             ]
         )
 
-    def to_HRU(self, *, data=None, varname=None, fn=None, delete=True):
-        """Function to convert from grid to HRU.
+    def to_HRU(self, *, data=None, fn=None):
+        """Function to convert from grid to HRU (Hydrologic Response Units).
+
+        This method is designed to transform spatial grid data into a format suitable for HRUs, which are used in to represent distinct areas with homogeneous land use, soil type, and management conditions.
 
         Args:
-            data: The grid data to be converted (if set, varname cannot be set).
-            varname: Name of variable to be converted. Must be present in grid class. (if set, data cannot be set).
-            fn: Name of function to apply to data. None if data should be directly inserted into HRUs - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
-            delete: Whether to delete the data from the grid class. Can only be set if varname is given.
+            data (array-like or None): The grid data to be converted. If this parameter is set, `varname` must not be provided. Data should be an array where each element corresponds to grid cell values.
+            fn (str or None): The name of the function to apply to the data before assigning it to HRUs. If `None`, the data is used as is. This is usually the case for variables that are independent of area, like temperature or precipitation fluxes. If 'weightedsplit', the data will be adjusted according to the ratios of land use within each HRU. This is important when dealing with variables that are area-dependent like precipitation or runoff volumes.
 
         Returns:
-            ouput_data: Data converted to HRUs.
+            output_data (array-like): Data converted to HRUs format. The structure and the type of the output depend on the input and the transformation function.
+
+        Example:
+            Suppose we have an instance of a class with a grid property containing temperature data under the attribute name 'temperature'. To convert this grid-based temperature data into HRU format, we would use:
+
+            ```python
+            temperature_HRU = instance.to_HRU(data=temperature, fn=None)
+            ```
+
+            This will fetch the temperature data from `instance.grid.temperature`, assigning the temperature to HRU within a grid cell. In other words, each HRU within a grid cell has the same temperature.
+
+            Another example, where want to plant forest in all HRUs with grassland within an area specified by a boolean mask.
+
+            ```python
+            mask_HRU = instance.to_HRU(data=mask_grid, fn=None)
+            mask_HRU[land_use_type == grass_land_use_type] = False  # set all non-grassland HRUs to False
+            ```
         """
-        assert bool(data is not None) != bool(varname is not None)
-        if varname:
-            data = getattr(self.grid, varname)
         assert not isinstance(data, list)
         if isinstance(
             data, (float, int)
@@ -873,28 +886,19 @@ class Data:
             if self.model.use_gpu:
                 outdata = cp.asarray(outdata)
 
-        if varname:
-            if delete:
-                delattr(self.grid, varname)
-            setattr(self.HRU, varname, outdata)
         return outdata
 
-    def to_grid(self, *, HRU_data=None, varname=None, fn=None, delete=True):
+    def to_grid(self, *, HRU_data=None, fn=None):
         """Function to convert from HRUs to grid.
 
         Args:
             HRU_data: The HRU data to be converted (if set, varname cannot be set).
-            varname: Name of variable to be converted. Must be present in HRU class. (if set, data cannot be set).
             fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
-            delete: Whether to delete the data from the grid class. Can only be set if varname is given.
 
         Returns:
             ouput_data: Data converted to grid units.
         """
-        assert bool(HRU_data is not None) != bool(varname is not None)
         assert fn is not None
-        if varname:
-            HRU_data = getattr(self.HRU, varname)
         assert not isinstance(HRU_data, list)
         if isinstance(
             HRU_data, float
@@ -907,10 +911,6 @@ class Data:
                 HRU_data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn
             )
 
-        if varname:
-            if delete:
-                delattr(self.HRU, varname)
-            setattr(self.var, varname, outdata)
         return outdata
 
     def split_HRU_data(self, a, i, ratio=None):
