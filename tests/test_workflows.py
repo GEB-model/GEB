@@ -4,6 +4,8 @@ import pandas as pd
 from datetime import date
 import xarray as xr
 from time import time, sleep
+import asyncio
+import threading
 from geb.workflows import (
     AsyncXarrayReader,
 )
@@ -31,7 +33,13 @@ def netcdf_file(tmp_path):
 
 
 def test_read_timestep(netcdf_file):
-    reader = AsyncXarrayReader(netcdf_file, variable_name="temperature")
+    loop = asyncio.new_event_loop()
+
+    if not loop.is_running():
+        loop_thread = threading.Thread(target=loop.run_forever)
+        loop_thread.start()
+
+    reader = AsyncXarrayReader(netcdf_file, variable_name="temperature", loop=loop)
 
     data0 = reader.read_timestep(date(2000, 1, 1))
 
@@ -76,4 +84,8 @@ def test_read_timestep(netcdf_file):
     assert (data0 == 0).all()
 
     reader.close()
+    loop.call_soon_threadsafe(loop.stop)
+    # Wait for the loop thread to finish
+    loop_thread.join()
+    loop.close()
     netcdf_file.unlink()
