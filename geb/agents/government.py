@@ -29,12 +29,12 @@ class Government(AgentBaseClass):
         if not "subsidies" in self.config:
             return None
         if self.model.current_timestep == 1:
-            for region in self.agents.farmers.borewell_cost_1[1].keys():
-                self.agents.farmers.borewell_cost_1[1][region] = [
-                    0.5 * x for x in self.agents.farmers.borewell_cost_1[1][region]
+            for region in self.agents.crop_farmers.borewell_cost_1[1].keys():
+                self.agents.crop_farmers.borewell_cost_1[1][region] = [
+                    0.5 * x for x in self.agents.crop_farmers.borewell_cost_1[1][region]
                 ]
-                self.agents.farmers.borewell_cost_2[1][region] = [
-                    0.5 * x for x in self.agents.farmers.borewell_cost_2[1][region]
+                self.agents.crop_farmers.borewell_cost_2[1][region] = [
+                    0.5 * x for x in self.agents.crop_farmers.borewell_cost_2[1][region]
                 ]
 
         return
@@ -47,20 +47,21 @@ class Government(AgentBaseClass):
             return None
         irrigation_limit = self.config["irrigation_limit"]
         if irrigation_limit["per"] == "capita":
-            self.agents.farmers.irrigation_limit_m3[:] = (
-                self.agents.farmers.household_size * irrigation_limit["limit"]
+            self.agents.crop_farmers.irrigation_limit_m3[:] = (
+                self.agents.crop_farmers.household_size * irrigation_limit["limit"]
             )
         elif irrigation_limit["per"] == "area":  # limit per m2 of field
-            self.agents.farmers.irrigation_limit_m3[:] = (
-                self.agents.farmers.field_size_per_farmer * irrigation_limit["limit"]
+            self.agents.crop_farmers.irrigation_limit_m3[:] = (
+                self.agents.crop_farmers.field_size_per_farmer
+                * irrigation_limit["limit"]
             )
         else:
             raise NotImplementedError(
                 "Only 'capita' is implemented for irrigation limit"
             )
         if "min" in irrigation_limit:
-            self.agents.farmers.irrigation_limit_m3[
-                self.agents.farmers.irrigation_limit_m3 < irrigation_limit["min"]
+            self.agents.crop_farmers.irrigation_limit_m3[
+                self.agents.crop_farmers.irrigation_limit_m3 < irrigation_limit["min"]
             ] = irrigation_limit["min"]
 
     def step(self) -> None:

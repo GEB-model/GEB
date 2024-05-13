@@ -14,6 +14,10 @@ class Households(AgentBaseClass):
 
         super().__init__()
 
+        water_demand, efficiency = self.update_water_demand()
+        self.current_water_demand = water_demand
+        self.current_efficiency = efficiency
+
     def initiate(self) -> None:
         locations = np.load(
             self.model.model_structure["binary"]["agents/households/locations"]
@@ -37,9 +41,6 @@ class Households(AgentBaseClass):
         self.buildings = gpd.read_file(
             self.model.model_structure["geoms"]["assets/buildings"]
         )
-        water_demand, efficiency = self.update_water_demand()
-        self.current_water_demand = water_demand
-        self.current_efficiency = efficiency
 
     def flood(self, flood_map):
         self.flood_depth.fill(0)  # Reset flood depth for all households

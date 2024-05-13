@@ -24,10 +24,12 @@ class LiveStockFarmers(AgentBaseClass):
 
         AgentBaseClass.__init__(self)
 
-    def initiate(self) -> None:
         water_demand, efficiency = self.update_water_demand()
         self.current_water_demand = water_demand
         self.current_efficiency = efficiency
+
+    def initiate(self) -> None:
+        pass
 
     def update_water_demand(self):
         """
