@@ -43,3 +43,8 @@ Then install GEB in editable mode:
 
     git clone https://github.com/GEB-model/GEB
     pip install -e GEB
+
+Installing SFINCS (flood model)
+--------------------------------
+
+If you want to simulate floods in GEB, the flood model SFINCS is required. To install this model you need to do the following:
