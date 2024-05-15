@@ -90,15 +90,13 @@ class Households(AgentBaseClass):
         downscale_mask = self.model.data.HRU.land_use_type != 4
         if self.model.use_gpu:
             downscale_mask = downscale_mask.get()
-        days_in_month = calendar.monthrange(
-            self.model.current_time.year, self.model.current_time.month
-        )[1]
+        days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
         water_demand = (
             self.model.domestic_water_demand_ds.sel(
                 time=self.model.current_time, method="ffill", tolerance="366D"
             ).domestic_water_demand
             * 1_000_000
-            / days_in_month
+            / days_in_year
         )
         water_demand = downscale_volume(
             self.model.domestic_water_demand_ds.rio.transform().to_gdal(),
@@ -118,7 +116,7 @@ class Households(AgentBaseClass):
                 time=self.model.current_time, method="ffill"
             ).domestic_water_consumption
             * 1_000_000
-            / days_in_month
+            / days_in_year
         )
         water_consumption = downscale_volume(
             self.model.domestic_water_consumption_ds.rio.transform().to_gdal(),

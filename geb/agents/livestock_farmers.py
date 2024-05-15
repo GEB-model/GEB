@@ -37,9 +37,7 @@ class LiveStockFarmers(AgentBaseClass):
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """
-        days_in_month = calendar.monthrange(
-            self.model.current_time.year, self.model.current_time.month
-        )[1]
+        days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         # grassland/non-irrigated land that is not owned by a crop farmer
         if self.model.use_gpu:
@@ -48,13 +46,13 @@ class LiveStockFarmers(AgentBaseClass):
             land_use_type = self.model.data.HRU.land_use_type
         downscale_mask = (land_use_type != 1) | (self.model.data.HRU.land_owners != -1)
 
-        # transform from mio m3 per year (or month) to m/day
+        # transform from mio m3 per year to m3/day
         water_consumption = (
             self.model.livestock_water_consumption_ds.sel(
                 time=self.model.current_time, method="ffill", tolerance="366D"
             ).livestock_water_consumption
             * 1_000_000
-            / days_in_month
+            / days_in_year
         )
         water_consumption = downscale_volume(
             self.model.livestock_water_consumption_ds.rio.transform().to_gdal(),
