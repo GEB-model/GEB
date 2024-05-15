@@ -295,7 +295,8 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
 
         self.loop.call_soon_threadsafe(self.loop.stop)
         # Wait for the loop thread to finish
-        self.loop_thread.join()
+        if hasattr(self, "loop_thread"):
+            self.loop_thread.join()
         self.loop.close()
 
     def __enter__(self):
