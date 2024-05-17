@@ -16,7 +16,7 @@ Then install the required packages:
 .. code-block:: bash
 
     conda config --set solver libmamba
-    conda install rasterio numba tbb pandas geopandas numpy deap pyyaml xarray dask rioxarray pybind11 scipy netCDF4 flopy bmipy xmipy xlrd s3fs xesmf hydromt tqdm openpyxl xclim xesmf tbb
+    conda install rasterio numba tbb pandas geopandas numpy deap pyyaml xarray dask rioxarray pybind11 scipy netCDF4 flopy bmipy xmipy xlrd s3fs xesmf hydromt tqdm openpyxl xclim xesmf tbb matplotlib seaborn
 
 Then install GEB from GitHub. You need to install the full version, which includes all dependencies:
 
@@ -43,3 +43,8 @@ Then install GEB in editable mode:
 
     git clone https://github.com/GEB-model/GEB
     pip install -e GEB
+
+Installing SFINCS (flood model)
+--------------------------------
+
+If you want to simulate floods in GEB, the flood model SFINCS is required. To install this model you need to do the following:

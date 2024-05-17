@@ -1,4 +1,4 @@
-from geb.agents.farmers import cumulative_mean, shift_and_update
+from geb.agents.crop_farmers import cumulative_mean, shift_and_update
 
 import numpy as np
 

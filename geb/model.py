@@ -7,6 +7,8 @@ from time import time
 import copy
 import numpy as np
 import warnings
+import asyncio
+import threading
 
 try:
     import cupy as cp
@@ -93,8 +95,23 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         spinup: bool = False,
         use_gpu: bool = False,
         gpu_device=0,
+        timing=False,
         coordinate_system: str = "WGS84",
+        mode="w",
     ):
+        self.timing = timing
+        assert mode in ("w", "r")
+        self.mode = mode
+
+        try:
+            self.loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+
+        if not self.loop.is_running():
+            self.loop_thread = threading.Thread(target=self.loop.run_forever)
+            self.loop_thread.start()
+
         self.spinup = spinup
         self.use_gpu = use_gpu
         if self.use_gpu:
@@ -206,7 +223,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         )
         np.savez_compressed(
             Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
-            data=self.agents.farmers.activation_order_by_elevation,
+            data=self.agents.crop_farmers.activation_order_by_elevation,
         )
 
     def step(self, step_size: Union[int, str] = 1) -> None:
@@ -221,7 +238,6 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         else:
             n = step_size
         for _ in range(n):
-            print(self.current_time, flush=True)
             t0 = time()
             self.data.step()
             HazardDriver.step(self, 1)
@@ -231,7 +247,10 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
 
             self.reporter.step()
             t1 = time()
-            # print(t1-t0, 'seconds')
+            print(
+                f"{self.current_time} ({round(t1 - t0, 4)}s)",
+                flush=True,
+            )
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
@@ -268,6 +287,17 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         """Finalizes the model."""
         if self.config["general"]["simulate_hydrology"]:
             CWatM_Model.finalize(self)
+
+        from geb.workflows import all_async_readers
+
+        for reader in all_async_readers:
+            reader.close()
+
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        # Wait for the loop thread to finish
+        if hasattr(self, "loop_thread"):
+            self.loop_thread.join()
+        self.loop.close()
 
     def __enter__(self):
         return self

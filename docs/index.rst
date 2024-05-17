@@ -43,8 +43,9 @@ The figure below shows a schematic overview of some parts of the model, showing 
   :caption: Agents
   
   Agents <agents/__init__>
+  Households <agents/households>
   Farmers <agents/farmers>
-  NGO <agents/ngo>
+  Reservoir operators <agents/reservoir_operators>
   Government <agents/government>
 
 .. toctree::

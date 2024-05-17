@@ -10,7 +10,7 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 
-from geb.agents.farmers import AgentArray
+from geb.agents.general import AgentArray
 
 
 class Artists(honeybeesArtists):
@@ -167,8 +167,8 @@ class Artists(honeybeesArtists):
             invariant_dim=1,
         )
         add_vars(
-            "agents.farmers",
-            compressed_size=self.model.agents.farmers.n,
+            "agents.crop_farmers",
+            compressed_size=self.model.agents.crop_farmers.n,
             dtypes=AgentArray,
             variant_dim=1,
             invariant_dim=0,

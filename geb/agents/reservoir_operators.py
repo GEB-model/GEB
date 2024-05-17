@@ -154,7 +154,7 @@ class ReservoirOperators(AgentBaseClass):
             weights=potential_irrigation_consumption_m3[
                 self.model.data.HRU.land_owners != -1
             ],
-            minlength=self.model.agents.farmers.n,
+            minlength=self.model.agents.crop_farmers.n,
         )
         return self.reservoir_release_factors * reservoir_storage_m3
 

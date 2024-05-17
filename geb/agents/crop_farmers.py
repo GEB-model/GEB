@@ -92,7 +92,7 @@ def farmer_command_area(
     return output
 
 
-class Farmers(AgentBaseClass):
+class CropFarmers(AgentBaseClass):
     """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
 
     Args:
@@ -958,6 +958,7 @@ class Farmers(AgentBaseClass):
             if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
                 # if irrigation limit is active, reduce the irrigation demand
                 if not np.isnan(irrigation_limit_m3[farmer]):
+                    daily_irrigation_limit_m3 = irrigation_limit_m3[farmer] / 365
                     # first find the total irrigation demand for the farmer in m3
                     irrigation_water_demand_farmer_m3 = (
                         totalPotIrrConsumption[farmer_fields]
@@ -970,10 +971,10 @@ class Farmers(AgentBaseClass):
                     # if the irrigation demand is higher than the limit, reduce the irrigation demand by the calculated reduction factor
                     if (
                         irrigation_water_demand_farmer_m3_sum
-                        > irrigation_limit_m3[farmer]
+                        > daily_irrigation_limit_m3
                     ):
                         reduction_factor = (
-                            irrigation_limit_m3[farmer]
+                            daily_irrigation_limit_m3
                             / irrigation_water_demand_farmer_m3_sum
                         )
                         totalPotIrrConsumption[farmer_fields] = (
@@ -1189,7 +1190,7 @@ class Farmers(AgentBaseClass):
         )
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def get_yield_ratio_numba_GAEZ(
         crop_map: np.ndarray, evap_ratios: np.ndarray, KyT
     ) -> float:
@@ -1217,7 +1218,7 @@ class Farmers(AgentBaseClass):
         return yield_ratios
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def get_yield_ratio_numba_MIRCA2000(
         crop_map: np.ndarray,
         evap_ratios: np.ndarray,
@@ -3132,7 +3133,7 @@ class Farmers(AgentBaseClass):
         )
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def switch_crops_numba(
         ids, crops, neighbours, SEUT, EUT, yield_ratio, SPEI_prob
     ) -> None:

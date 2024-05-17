@@ -11,18 +11,22 @@ GEB has a prebuilt calibration function. It can be used for both one- and multi-
            if score == 'KGE_discharge':
                scores.append(get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow))
 
-2. Determine the location of the gauge(s) for which you have observed discharge data. This should be a `.csv` file where the file name is the coordinates without a comma separation (in this example: "75.8477777 17.4130555.csv"). The first column should be "date" and the second "flow", i.e.:
+2. Determine the location of the gauge(s) for which you have observed discharge data. Make sure the coordinates match with the location of the river in the model. Do this by checking the upstream_area file of your model (input/routing/kinematic/upstream_area) and checking the location of the gauge(s). The location of the gauge should be in the river. The observed discharge data should be stored as a `.csv` file where the file name is the coordinates without a comma separation (in this example: "75.8477777 17.4130555.csv"). The first column should be "date" and the second "flow", i.e.:
 
    ::
    
        date, flow
        2001-07-21,184.8000031
 
+   Make sure to check which symbol is used as the seperator in the csv. file. In the calibration script, the comma (,) is assumed to be the seperator in the .csv file. 
+
 3. Store this file in the location below:
 
    ::
    
        original_data/calibration/streamflow/75.8477777 17.4130555.csv
+   
+   If this folder does not yet exist, create the folder manually and (if needed) change the path in the model.yml file.
 
 4. Next, add this location under `gauges` in the `model.yml` file and under `target_variables` and `report_cwatm`. See the example of the `model.yml` file below.
 

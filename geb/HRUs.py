@@ -8,6 +8,7 @@ from operator import attrgetter
 import xarray as xr
 import rioxarray as rxr
 import numpy as np
+from geb.workflows import AsyncXarrayReader
 
 try:
     import cupy as cp
@@ -199,6 +200,7 @@ class Grid(BaseVariables):
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
         self.cellArea = self.compress(self.cell_area_uncompressed)
+
         BaseVariables.__init__(self)
 
     def full(self, *args, **kwargs) -> np.ndarray:
@@ -282,24 +284,25 @@ class Grid(BaseVariables):
         return super().load_initial("grid." + name, default=default)
 
     def load_forcing_ds(self, name):
-        ds = xr.open_dataset(self.model.model_structure["forcing"][f"climate/{name}"])[
-            name
-        ]
-        assert ds.y[0] > ds.y[-1]
-        return ds
+        reader = AsyncXarrayReader(
+            self.model.model_structure["forcing"][f"climate/{name}"],
+            name,
+            self.model.loop,
+        )
+        assert reader.ds.y[0] > reader.ds.y[-1]
+        return reader
 
-    def load_forcing(self, ds, compress=True):
-        data = ds.sel(time=self.model.current_time).data
+    def load_forcing(self, reader, time, compress=True):
+        data = reader.read_timestep(time)
         if compress:
-            return self.compress(data)
-        else:
-            return data
+            data = self.compress(data)
+        return data
 
     @property
     def hurs(self):
         if not hasattr(self, "hurs_ds"):
             self.hurs_ds = self.load_forcing_ds("hurs")
-        hurs = self.load_forcing(self.hurs_ds)
+        hurs = self.load_forcing(self.hurs_ds, self.model.current_time)
         assert (hurs > 1).all() and (hurs <= 100).all(), "hurs out of range"
         return hurs
 
@@ -307,7 +310,7 @@ class Grid(BaseVariables):
     def pr(self):
         if not hasattr(self, "pr_ds"):
             self.pr_ds = self.load_forcing_ds("pr")
-        pr = self.load_forcing(self.pr_ds)
+        pr = self.load_forcing(self.pr_ds, self.model.current_time)
         assert (pr >= 0).all(), "Precipitation must be positive or zero"
         return pr
 
@@ -315,7 +318,7 @@ class Grid(BaseVariables):
     def ps(self):
         if not hasattr(self, "ps_ds"):
             self.ps_ds = self.load_forcing_ds("ps")
-        ps = self.load_forcing(self.ps_ds)
+        ps = self.load_forcing(self.ps_ds, self.model.current_time)
         assert (ps > 30_000).all() and (
             ps < 120_000
         ).all(), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
@@ -325,7 +328,7 @@ class Grid(BaseVariables):
     def rlds(self):
         if not hasattr(self, "rlds_ds"):
             self.rlds_ds = self.load_forcing_ds("rlds")
-        rlds = self.load_forcing(self.rlds_ds)
+        rlds = self.load_forcing(self.rlds_ds, self.model.current_time)
         assert (rlds >= 0).all(), "rlds must be positive or zero"
         return rlds
 
@@ -333,7 +336,7 @@ class Grid(BaseVariables):
     def rsds(self):
         if not hasattr(self, "rsds_ds"):
             self.rsds_ds = self.load_forcing_ds("rsds")
-        rsds = self.load_forcing(self.rsds_ds)
+        rsds = self.load_forcing(self.rsds_ds, self.model.current_time)
         assert (rsds >= 0).all(), "rsds must be positive or zero"
         return rsds
 
@@ -341,7 +344,7 @@ class Grid(BaseVariables):
     def tas(self):
         if not hasattr(self, "tas_ds"):
             self.tas_ds = self.load_forcing_ds("tas")
-        tas = self.load_forcing(self.tas_ds)
+        tas = self.load_forcing(self.tas_ds, self.model.current_time)
         assert (tas > 170).all() and (tas < 370).all(), "tas out of range"
         return tas
 
@@ -349,7 +352,7 @@ class Grid(BaseVariables):
     def tasmin(self):
         if not hasattr(self, "tasmin_ds"):
             self.tasmin_ds = self.load_forcing_ds("tasmin")
-        tasmin = self.load_forcing(self.tasmin_ds)
+        tasmin = self.load_forcing(self.tasmin_ds, self.model.current_time)
         assert (tasmin > 170).all() and (tasmin < 370).all(), "tasmin out of range"
         return tasmin
 
@@ -357,7 +360,7 @@ class Grid(BaseVariables):
     def tasmax(self):
         if not hasattr(self, "tasmax_ds"):
             self.tasmax_ds = self.load_forcing_ds("tasmax")
-        tasmax = self.load_forcing(self.tasmax_ds)
+        tasmax = self.load_forcing(self.tasmax_ds, self.model.current_time)
         assert (tasmax > 170).all() and (tasmax < 370).all(), "tasmax out of range"
         return tasmax
 
@@ -365,7 +368,7 @@ class Grid(BaseVariables):
     def sfcWind(self):
         if not hasattr(self, "sfcWind_ds"):
             self.sfcWind_ds = self.load_forcing_ds("sfcwind")
-        sfcWind = self.load_forcing(self.sfcWind_ds)
+        sfcWind = self.load_forcing(self.sfcWind_ds, self.model.current_time)
         assert (sfcWind >= 0).all() and (
             sfcWind < 150
         ).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
@@ -375,7 +378,7 @@ class Grid(BaseVariables):
     def spei_uncompressed(self):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
-        spei = self.load_forcing(self.spei_ds, compress=False)
+        spei = self.load_forcing(self.spei_ds, self.model.current_time, compress=False)
         assert not np.isnan(spei).any()
         return spei
 
@@ -383,7 +386,7 @@ class Grid(BaseVariables):
     def spei(self):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
-        spei = self.load_forcing(self.spei_ds)
+        spei = self.load_forcing(self.spei_ds, self.model.current_time)
         assert not np.isnan(spei).any()
         return spei
 
@@ -847,21 +850,34 @@ class Data:
             ]
         )
 
-    def to_HRU(self, *, data=None, varname=None, fn=None, delete=True):
-        """Function to convert from grid to HRU.
+    def to_HRU(self, *, data=None, fn=None):
+        """Function to convert from grid to HRU (Hydrologic Response Units).
+
+        This method is designed to transform spatial grid data into a format suitable for HRUs, which are used in to represent distinct areas with homogeneous land use, soil type, and management conditions.
 
         Args:
-            data: The grid data to be converted (if set, varname cannot be set).
-            varname: Name of variable to be converted. Must be present in grid class. (if set, data cannot be set).
-            fn: Name of function to apply to data. None if data should be directly inserted into HRUs - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
-            delete: Whether to delete the data from the grid class. Can only be set if varname is given.
+            data (array-like or None): The grid data to be converted. If this parameter is set, `varname` must not be provided. Data should be an array where each element corresponds to grid cell values.
+            fn (str or None): The name of the function to apply to the data before assigning it to HRUs. If `None`, the data is used as is. This is usually the case for variables that are independent of area, like temperature or precipitation fluxes. If 'weightedsplit', the data will be adjusted according to the ratios of land use within each HRU. This is important when dealing with variables that are area-dependent like precipitation or runoff volumes.
 
         Returns:
-            ouput_data: Data converted to HRUs.
+            output_data (array-like): Data converted to HRUs format. The structure and the type of the output depend on the input and the transformation function.
+
+        Example:
+            Suppose we have an instance of a class with a grid property containing temperature data under the attribute name 'temperature'. To convert this grid-based temperature data into HRU format, we would use:
+
+            ```python
+            temperature_HRU = instance.to_HRU(data=temperature, fn=None)
+            ```
+
+            This will fetch the temperature data from `instance.grid.temperature`, assigning the temperature to HRU within a grid cell. In other words, each HRU within a grid cell has the same temperature.
+
+            Another example, where want to plant forest in all HRUs with grassland within an area specified by a boolean mask.
+
+            ```python
+            mask_HRU = instance.to_HRU(data=mask_grid, fn=None)
+            mask_HRU[land_use_type == grass_land_use_type] = False  # set all non-grassland HRUs to False
+            ```
         """
-        assert bool(data is not None) != bool(varname is not None)
-        if varname:
-            data = getattr(self.grid, varname)
         assert not isinstance(data, list)
         if isinstance(
             data, (float, int)
@@ -872,28 +888,19 @@ class Data:
             if self.model.use_gpu:
                 outdata = cp.asarray(outdata)
 
-        if varname:
-            if delete:
-                delattr(self.grid, varname)
-            setattr(self.HRU, varname, outdata)
         return outdata
 
-    def to_grid(self, *, HRU_data=None, varname=None, fn=None, delete=True):
+    def to_grid(self, *, HRU_data=None, fn=None):
         """Function to convert from HRUs to grid.
 
         Args:
             HRU_data: The HRU data to be converted (if set, varname cannot be set).
-            varname: Name of variable to be converted. Must be present in HRU class. (if set, data cannot be set).
             fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
-            delete: Whether to delete the data from the grid class. Can only be set if varname is given.
 
         Returns:
             ouput_data: Data converted to grid units.
         """
-        assert bool(HRU_data is not None) != bool(varname is not None)
         assert fn is not None
-        if varname:
-            HRU_data = getattr(self.HRU, varname)
         assert not isinstance(HRU_data, list)
         if isinstance(
             HRU_data, float
@@ -906,10 +913,6 @@ class Data:
                 HRU_data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn
             )
 
-        if varname:
-            if delete:
-                delattr(self.HRU, varname)
-            setattr(self.var, varname, outdata)
         return outdata
 
     def split_HRU_data(self, a, i, ratio=None):
