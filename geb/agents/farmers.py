@@ -3,6 +3,7 @@ import os
 import math
 from datetime import datetime
 import json
+from pathlib import Path
 import calendar
 from typing import Tuple
 import matplotlib.pyplot as plt
@@ -261,19 +262,7 @@ class Farmers(AgentBaseClass):
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
         if self.model.load_initial_data:
-            for fn in os.listdir(self.model.initial_conditions_folder):
-                if not fn.startswith("farmers."):
-                    continue
-                attribute = fn.split(".")[1]
-                fp = os.path.join(self.model.initial_conditions_folder, fn)
-                values = np.load(fp)["data"]
-                if not hasattr(self, "max_n"):
-                    self.max_n = self.get_max_n(values.shape[0])
-                values = FarmerAgentArray(values, max_n=self.max_n)
-                setattr(self, attribute, values)
-            self.n = self.locations.shape[
-                0
-            ]  # first value where location is not defined (np.nan)
+            self.restore_state()
         else:
             farms = self.model.data.farms
 
@@ -2050,6 +2039,7 @@ class Farmers(AgentBaseClass):
         unique_SPEI_probability = np.empty((0, self.total_spinup_time))
 
         # Create unique groups
+        # TO DO: remove elevation distinction 
         # Calculating the thresholds for the top, middle, and lower thirds
         basin_elevation_thresholds = np.percentile(self.elevation.data, [33.33, 66.67])
         # 0 for upper, 1 for mid, and 2 for lower
@@ -2062,7 +2052,8 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops.data, distribution_array.reshape(-1, 1))
+            (self.crops.data, self.farmer_is_in_command_area.reshape(-1, 1),
+             self.adapted[:,1].reshape(-1,1))
         )
 
         for crop_combination in np.unique(crop_elevation_group, axis=0):
@@ -2553,19 +2544,20 @@ class Farmers(AgentBaseClass):
             "total_profits_adaptation": total_profits_adaptation,
             "profits_no_event": profits_no_event,
             "profits_no_event_adaptation": profits_no_event_adaptation,
+            "total_profits": total_profits,
             "risk_perception": self.risk_perception.data,
             "total_annual_costs": total_annual_costs_m2,
             "adaptation_costs": annual_cost_m2,
             "adapted": adapted,
             "time_adapted": self.time_adapted[:, adaptation_type],
-            "T": self.decision_horizon.data,
+            'T': np.full(self.n, self.model.config['agent_settings']['expected_utility']['adaptation_well']['decision_horizon']),
             "discount_rate": self.discount_rate.data,
             "extra_constraint": extra_constraint.data,
         }
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.SEUT_no_adapt[:]
-        EUT_do_nothing = self.EUT_no_adapt[:]
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
+        # EUT_do_nothing = self.EUT_no_adapt[:]
         SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
 
         # Ensure valid EU values
@@ -2583,21 +2575,21 @@ class Farmers(AgentBaseClass):
         SEUT_adapt_mask[adapted == 0] = SEUT_adaptation_decision
         self.adaptation_mechanism[SEUT_adapt_mask == 1, adaptation_type] = 2
 
-        # Consider the influence of neighbors' decisions on adaptation
-        adapt_due_to_neighbor = self.compare_neighbor_EUT(
-            EUT_do_nothing=EUT_do_nothing,
-            SEUT_adapt=SEUT_adapt,
-            adapted=adapted,
-            expenditure_cap=self.expenditure_cap,
-            total_annual_costs=total_annual_costs_m2,
-            profits_no_event=profits_no_event,
-            extra_constraint=extra_constraint,
-        )
+        # # Consider the influence of neighbors' decisions on adaptation
+        # adapt_due_to_neighbor = self.compare_neighbor_EUT(
+        #     EUT_do_nothing=EUT_do_nothing,
+        #     SEUT_adapt=SEUT_adapt,
+        #     adapted=adapted,
+        #     expenditure_cap=self.expenditure_cap,
+        #     total_annual_costs=total_annual_costs_m2,
+        #     profits_no_event=profits_no_event,
+        #     extra_constraint=extra_constraint,
+        # )
 
-        self.adaptation_mechanism[adapt_due_to_neighbor == 1, adaptation_type] = 3
+        # self.adaptation_mechanism[adaptation_type] = 3
 
         # Get the final decision mask considering individual and neighbor influences
-        adaptation_mask = np.logical_or(adapt_due_to_neighbor, SEUT_adapt_mask)
+        adaptation_mask = SEUT_adapt_mask
 
         # Update the adaptation status
         self.adapted[adaptation_mask, adaptation_type] = 1
@@ -2752,7 +2744,7 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops.data, distribution_array.reshape(-1, 1))
+            (self.crops.data, self.farmer_is_in_command_area.reshape(-1, 1))
         )
 
         # Add a column of zeros to represent farmers who have not adapted yet
@@ -3349,80 +3341,46 @@ class Farmers(AgentBaseClass):
                 "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
             ):
                 # Determine the relation between drought probability and yield
-                # self.calculate_yield_spei_relation()
+                self.calculate_yield_spei_relation()
 
-                # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
+              # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
-
-                decision_params = {
-                    "n_agents": self.n,
-                    "T": self.decision_horizon,
-                    "discount_rate": self.discount_rate,
-                    "sigma": self.risk_aversion,
-                    "risk_perception": self.risk_perception,
-                    "p_droughts": 1 / self.p_droughts[:-1],
-                    "total_profits": total_profits,
-                    "profits_no_event": profits_no_event,
-                }
-
-                self.SEUT_no_adapt = self.decision_module.calcEU_do_nothing(
-                    **decision_params
-                )
-                self.EUT_no_adapt = self.decision_module.calcEU_do_nothing(
-                    **decision_params, subjective=False
-                )
-
-                # Calculate the SEUT with regards to crops and planting decisions
-                index = self.cultivation_costs[0].get(self.model.current_time)
-                cultivation_cost_per_crop = self.cultivation_costs[1][index][
-                    self.region_id
-                ]
-
-                nan_array = np.full_like(self.crops, fill_value=np.nan, dtype=float)
-                mask_crops = self.crops != -1
-                nan_array[mask_crops] = np.take(
-                    cultivation_cost_per_crop, self.crops[mask_crops].astype(int)
-                )
-                cultivation_costs = np.nansum(nan_array, axis=1)
-                total_cultivation_costs = cultivation_costs * (
-                    self.interest_rate
-                    * (1 + self.interest_rate) ** 1
-                    / ((1 + self.interest_rate) ** 1 - 1)
-                )
-
-                total_profits_crops = total_profits - total_cultivation_costs
-                total_profits_crops = np.where(
-                    total_profits_crops <= 0, 0, total_profits_crops
-                )
-                profits_no_event_crops = profits_no_event - total_cultivation_costs
-                profits_no_event_crops = np.where(
-                    profits_no_event_crops <= 0, 0, profits_no_event_crops
-                )
-
-                decision_params_crops = {
-                    "n_agents": self.n,
-                    "T": self.decision_horizon,
-                    "discount_rate": self.discount_rate,
-                    "sigma": self.risk_aversion,
-                    "risk_perception": self.risk_perception,
-                    "p_droughts": 1 / self.p_droughts[:-1],
-                    "total_profits": total_profits_crops,
-                    "profits_no_event": profits_no_event_crops,
-                }
-
-                self.SEUT_no_adapt_crops = self.decision_module.calcEU_do_nothing(
-                    **decision_params_crops
-                )
-                self.EUT_no_adapt_crops = self.decision_module.calcEU_do_nothing(
-                    **decision_params_crops, subjective=False
-                )
+ 
+                # Adjust for input costs
+                total_profits_adjusted = total_profits - (np.sum(self.all_loans_annual_cost[:,:,0], axis = 1) / self.field_size_per_farmer)
+                profits_no_event_adjusted = profits_no_event - (np.sum(self.all_loans_annual_cost[:,:,0], axis = 1) / self.field_size_per_farmer)
+ 
+                decision_params_SEUT = {
+                        'n_agents':  self.n,
+                        'T': self.decision_horizon.data,
+                        'discount_rate': self.discount_rate.data,
+                        'sigma': self.risk_aversion.data,
+                        'risk_perception': self.risk_perception.data,
+                        'p_droughts': 1 / self.p_droughts[:-1],
+                        'total_profits': total_profits_adjusted,
+                        'profits_no_event': profits_no_event_adjusted,
+                    }
+               
+                decision_params_EUT = {
+                        'n_agents':  self.n,
+                        'T': self.decision_horizon.data,
+                        'discount_rate': np.full(self.n, np.mean(self.discount_rate), dtype=np.int32),
+                        'sigma': np.full(self.n, np.mean(self.risk_aversion), dtype=np.int32),
+                        'risk_perception': self.risk_perception.data,
+                        'p_droughts': 1 / self.p_droughts[:-1],
+                        'total_profits': total_profits_adjusted,
+                        'profits_no_event': profits_no_event_adjusted,
+                    }
+               
+                self.SEUT_no_adapt = self.decision_module.calcEU_do_nothing(**decision_params_SEUT)
+                self.EUT_no_adapt = self.decision_module.calcEU_do_nothing(**decision_params_EUT, subjective = False)
 
                 # self.switch_crops()
 
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(self.farmer_yield_probability_relation == 0):
                     pass
-                    # self.adapt_irrigation_well()
+                    self.adapt_irrigation_well()
                     # self.adapt_drip_irrigation()
                 else:
                     pass
@@ -3597,3 +3555,30 @@ class Farmers(AgentBaseClass):
             for name, value in vars(self).items()
             if isinstance(value, FarmerAgentArray)
         }
+
+    @property
+    def save_state_path(self):
+        folder = Path(self.model.initial_conditions_folder, "farmers")
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def save_state(self):
+        with open(self.save_state_path / "state.txt", "w") as f:
+            for attribute, value in self.agent_arrays.items():
+                f.write(f"{attribute}\n")
+                fp = self.save_state_path / f"{attribute}.npz"
+                np.savez_compressed(fp, data=value.data)
+
+    def restore_state(self):
+        with open(self.save_state_path / "state.txt", "r") as f:
+            for line in f:
+                attribute = line.strip()
+                fp = self.save_state_path / f"{attribute}.npz"
+                values = np.load(fp)["data"]
+                if not hasattr(self, "max_n"):
+                    self.max_n = self.get_max_n(values.shape[0])
+                values = FarmerAgentArray(values, max_n=self.max_n)
+
+                setattr(self, attribute, values)
+
+        self.n = self.locations.shape[0]
