@@ -56,7 +56,7 @@ class DecisionModule:
             # Calculate time discounted NPVs
             t_arr = np.arange(1, max_T, dtype=np.float32)
 
-            discounts = 1 / (1 + discount_rate.reshape(-1, 1)) ** t_arr
+            discounts = 1 / (1 + np.reshape(discount_rate, (-1, 1))) ** t_arr
             NPV_tx = np.sum(discounts, axis=1) * NPV_flood_i
 
             # Add NPV at t0 (which is not discounted)
@@ -143,7 +143,7 @@ class DecisionModule:
             profits_no_event,
             max_T,
             n_agents,
-            discount_rate.data,
+            discount_rate,
         )
 
         # Filter out negative NPVs
@@ -186,6 +186,7 @@ class DecisionModule:
         T: np.ndarray,
         discount_rate: float,
         extra_constraint: np.ndarray,
+        total_profits: np.ndarray,
     ) -> np.ndarray:
         """This function calculates the discounted subjective utility for staying and implementing dry flood proofing measures for each agent.
         We take into account the current adaptation status of each agent, so that agents also consider the number of years of remaining loan payment.
