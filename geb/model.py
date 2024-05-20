@@ -237,11 +237,12 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         """Run the model for the entire period, and export water table in case of spinup scenario."""
         for _ in range(self.n_timesteps):
             self.step()
-
+ 
         if self.save_initial_data:
             self.data.save_state()
             self.agents.farmers.save_state()
-
+            self.agents.reservoir_operators.save_state()
+ 
         print("Model run finished")
 
     @property
