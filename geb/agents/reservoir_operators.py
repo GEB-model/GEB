@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from cwatm.hydrological_modules.water_demand.irrigation import waterdemand_irrigation
 from .farmers import Farmers
+from pathlib import Path
 
 
 class ReservoirOperators(AgentBaseClass):
@@ -651,6 +652,7 @@ class ReservoirOperators(AgentBaseClass):
             matrix[condition, 1:] = matrix[condition, 0:-1]  # Shift columns to the right
             matrix[condition, 0] = 0  # Reset the first column to 0    
     
+    @property
     def save_state_path(self):
         folder = Path(self.model.initial_conditions_folder, "reservoir_operators")
         folder.mkdir(parents=True, exist_ok=True)
@@ -661,11 +663,11 @@ class ReservoirOperators(AgentBaseClass):
         attributes_to_save = ["mtifl_20yr", 
                               "irrmean_20yr", 
                               "monthly_infl_20yrs",
-                              "mtifl_month_20yrs"]  # Replace with actual attributes to be saved
+                              "mtifl_month_20yrs"]  
         for attribute in attributes_to_save:
             values = getattr(self, attribute)
             fn = f"reservoir_operators.{attribute}.npz"
-            fp = os.path.join(self.save_state_path, fn)
+            fp = self.save_state_path / fn
             np.savez_compressed(fp, data=values)
 
     def step(self) -> None:
