@@ -25,7 +25,7 @@ dependencies = [
     "rioxarray>=0.15",
     "pybind11",
     "SALib>=1.4.8",
-    "hydromt-sfincs@git+https://github.com/Deltares/hydromt_sfincs",
+    "hydromt-sfincs>=1.0.3",
     "honeybees@git+https://github.com/VU-IVM/honeybees",
 ]
 requires-python = ">=3.10"
