@@ -6,6 +6,7 @@ import json
 import calendar
 from typing import Tuple
 import matplotlib.pyplot as plt
+import rioxarray
 
 from scipy.stats import genextreme
 from scipy.stats import linregress
@@ -1811,7 +1812,7 @@ class Farmers(AgentBaseClass):
         field_is_paddy_irrigated = self.var.crop_map == self.crop_names["Paddy"]
         self.var.land_use_type[
             (self.var.crop_map >= 0) & (field_is_paddy_irrigated == True)
-        ] = 2
+        ] = 3
         self.var.land_use_type[
             (self.var.crop_map >= 0) & (field_is_paddy_irrigated == False)
         ] = 3
@@ -3113,39 +3114,28 @@ class Farmers(AgentBaseClass):
     
         
     def land_use_change(self) -> None:
-        import matplotlib.pyplot as plt
-        import rioxarray
-        to_forest =  rioxarray.open_rasterio("C:/Users/romij/GEB/GEB_models/meuse/models/meuse/base/input/to_forest/forested_grassland_and_agricultural_land.tif", masked = True)
-
-        # Get the transform and dimensions from the existing mask
-        # transform = Affine.from_gdal(*self.model.data.HRU.gt)
-
+        #scenario 100% afforestation
+        if self.model.config["general"]["name"] == "100 infiltration change" or self.model.config["general"]["name"] == "100 no parameter change":
+                # Create a mask for areas with value 1 in the raster, everything else = 0 
+                to_forest =  rioxarray.open_rasterio("C:/Users/romij/GEB/GEB_models/meuse/models/meuse/base/input/to_forest/forested_grassland_and_agricultural_land.tif", masked = True)
+        #scenario restoration opportunities
+        elif self.model.config["general"]["name"] == "restoration opportunities":
+                to_forest =  rioxarray.open_rasterio("C:/Users/romij/GEB/GEB_models/meuse/models/meuse/base/input/to_forest/belgium_mask_grassland_to_forest.tif", masked = True)
         # Create a mask for areas with value 1 in the raster, everything else = 0 
         forest_mask_3d = np.where(to_forest.values == 1,1,0)
         forest_mask_3d_boolean = forest_mask_3d == 1
         forest_mask = forest_mask_3d_boolean[0, :, :]
 
-        HRU_indices = self.var.decompress(
-            np.arange(self.model.data.HRU.land_use_type.size)
-        )
-        HRUs_to_forest = np.unique(HRU_indices[forest_mask])
-        HRUs_to_forest = HRUs_to_forest[HRUs_to_forest != -1]
-        HRUs_to_forest = HRUs_to_forest[
-            self.var.land_use_type[HRUs_to_forest] == 1
-        ]  # only select HRUs that are grassland
-        self.var.land_use_type[HRUs_to_forest] = 0  # 0 is forest
-
         # decompress the land_owners array
         land_owners_map = self.var.decompress(self.var.land_owners)
-        assert land_owners_map.shape == forest_mask.shape
 
-        # select the farmers that are in the areas to be converted to forest
+        # select the farmers that are in the areas to be converted to forest 
         farmers_to_convert = np.unique(land_owners_map[forest_mask])
-        #farmers_to_convert = farmers_to_convert[farmers_to_convert != -1]
+        farmers_to_convert = farmers_to_convert[farmers_to_convert != -1]
         farmers_to_convert = farmers_to_convert[1:-1]
 
         # remove the farmers that are not in the areas to be converted to forest
-        HRUs_to_forest_for_farmers = self.remove_agents(
+        self.remove_agents(
             farmer_indices=farmers_to_convert, land_use_type = 0
         )
 
@@ -3282,8 +3272,11 @@ class Farmers(AgentBaseClass):
         self.plant()
         self.water_abstraction_sum()
 
-        if self.model.scenario == "lulc" and self.model.config["general"]["start_time"].year - self.model.current_time.year == 0 and self.model.config["general"]["start_time"].month == 6 and self.model.current_time.day == 2:
-           self.land_use_change()
+        if self.model.current_timestep == 1 and \
+        (self.model.config["general"]["name"] == "100 infiltration change" or \
+        self.model.config["general"]["name"] == "restoration opportunities" or \
+        self.model.config["general"]["name"] == "100 no parameter change"):
+            self.land_use_change()
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
@@ -3360,13 +3353,14 @@ class Farmers(AgentBaseClass):
             self.n_water_accessible_days[~has_access_to_water_all_year] = 0
             self.n_water_accessible_days[:] = 0  # reset water accessible days
 
-            self.set_yearly_yield_spei()
+            #self.set_yearly_yield_spei()
 
-            if self.model.spinup is False or (
-                "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
+            if self.model.spinup is True or (
+                "ruleset" in self.config and self.config["ruleset"] == "no lulc"
             ):
-            # Alternative scenarios: 'sprinkler'
-            if self.model.scenario not in ["pre_spinup", "spinup", "noadaptation","lulc"]:
+                p = 0
+                
+            else:
                 # Determine the relation between drought probability and yield
                 self.calculate_yield_spei_relation()
 
@@ -3462,9 +3456,9 @@ class Farmers(AgentBaseClass):
 
     def remove_agents(self, farmer_indices: list[int], land_use_type: int) -> np.ndarray:
         farmer_indices = np.array(farmer_indices)
-        HRUs_with_removed_farmers = []
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
+            HRUs_with_removed_farmers = []
             for idx in farmer_indices:
                 HRUs_with_removed_farmers.append(self.remove_agent(idx, land_use_type))
         return np.concatenate(HRUs_with_removed_farmers)
@@ -3487,7 +3481,7 @@ class Farmers(AgentBaseClass):
         self.var.crop_map[HRUs_farmer_to_be_removed] = -1
         self.var.crop_age_days_map[HRUs_farmer_to_be_removed] = -1
         self.var.crop_harvest_age_days[HRUs_farmer_to_be_removed] = -1
-        self.var.land_use_type[HRUs_farmer_to_be_removed] = land_use_type
+        #self.var.land_use_type[HRUs_farmer_to_be_removed] = land_use_type
 
         # reduce number of agents
         self.n -= 1
@@ -3499,6 +3493,7 @@ class Farmers(AgentBaseClass):
                 # reduce the number of agents by 1
                 assert agent_array.n == self.n + 1
                 agent_array.n = self.n
+                
 
             # update the field indices of the last agent
             self.var.land_owners[last_farmer_HRUs] = farmer_idx
@@ -3619,8 +3614,18 @@ class Farmers(AgentBaseClass):
 
     @property
     def agent_arrays(self):
-        return {
+        agent_arrays = {
             name: value
             for name, value in vars(self).items()
             if isinstance(value, FarmerAgentArray)
         }
+        ids = [id(v) for v in agent_arrays.values()]
+        if len(set(ids)) != len(ids):
+            # print all duplicates
+            duplicate_arrays = [
+                name for name, value in agent_arrays.items() if ids.count(id(value)) > 1
+            ]
+            raise AssertionError(
+                f"Duplicate agent array names: {', '.join(duplicate_arrays)}."
+            )
+        return agent_arrays

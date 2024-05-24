@@ -14,11 +14,13 @@ from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules import ChartModule
 from honeybees.visualization.canvas import Canvas
 
+
 from hydromt.config import configread
 import hydromt_geb
 import geb
 from geb.model import GEBModel
 from geb.calibrate import calibrate as geb_calibrate
+from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 
 faulthandler.enable()
 
@@ -241,6 +243,12 @@ def calibrate(config, working_directory):
     config = parse_config(config)
     geb_calibrate(config, working_directory)
 
+
+def sensitivity(config, working_directory):
+    os.chdir(working_directory)
+
+    config = parse_config(config)
+    geb_sensitivity_analysis(config, working_directory)
 
 def click_build_options(build_config="build.yml"):
     def decorator(func):

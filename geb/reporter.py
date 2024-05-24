@@ -35,7 +35,7 @@ class CWatMReporter(ABMReporter):
     def __init__(self, model, folder: str) -> None:
         self.model = model
 
-        self.export_folder = folder
+        self.export_folder = "report/" + folder
 
         self.variables = {}
         self.timesteps = []
@@ -369,8 +369,8 @@ class Reporter:
 
     def __init__(self, model):
         self.model = model
-        self.abm_reporter = ABMReporter(model, subfolder=self.model.run_name)
-        self.cwatmreporter = CWatMReporter(model, subfolder=self.model.run_name)
+        self.abm_reporter = ABMReporter(model, folder=self.model.run_name)
+        self.cwatmreporter = CWatMReporter(model, folder=self.model.run_name)
 
     @property
     def variables(self):
