@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-import numpy as np
-from honeybees.agents import AgentBaseClass
+from . import AgentBaseClass
 
 
-class NGO(AgentBaseClass):
-    """This class is used to simulate NGOs.
+class TownManagers(AgentBaseClass):
+    """This class is used to simulate the government.
 
     Args:
         model: The GEB model.
@@ -15,12 +14,16 @@ class NGO(AgentBaseClass):
         self.model = model
         self.agents = agents
         self.config = (
-            self.model.config["agent_settings"]["ngo"]
-            if "ngo" in self.model.config["agent_settings"]
+            self.model.config["agent_settings"]["town_managers"]
+            if "town_managers" in self.model.config["agent_settings"]
             else {}
         )
+
         AgentBaseClass.__init__(self)
 
-    def step(self):
+    def initiate(self) -> None:
+        return
+
+    def step(self) -> None:
         """This function is run each timestep."""
-        return None
+        pass
