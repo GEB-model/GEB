@@ -186,6 +186,7 @@ class DecisionModule:
         T: np.ndarray,
         discount_rate: float,
         extra_constraint: np.ndarray,
+        total_profits: np.ndarray,
     ) -> np.ndarray:
         """This function calculates the discounted subjective utility for staying and implementing dry flood proofing measures for each agent.
         We take into account the current adaptation status of each agent, so that agents also consider the number of years of remaining loan payment.

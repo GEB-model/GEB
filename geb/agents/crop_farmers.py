@@ -2090,7 +2090,8 @@ class CropFarmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops.data, distribution_array.reshape(-1, 1))
+            (self.crops.data, distribution_array.reshape(-1, 1)),
+            self.adapted[:, 1].reshape(-1, 1),
         )
 
         for crop_combination in np.unique(crop_elevation_group, axis=0):
@@ -2584,14 +2585,18 @@ class CropFarmers(AgentBaseClass):
             "adaptation_costs": annual_cost_m2,
             "adapted": adapted,
             "time_adapted": self.time_adapted[:, adaptation_type],
-            "T": self.decision_horizon.data,
+            "T": np.full(
+                self.n,
+                self.model.config["agent_settings"]["expected_utility"][
+                    "adaptation_well"
+                ]["decision_horizon"],
+            ).data,
             "discount_rate": self.discount_rate.data,
             "extra_constraint": extra_constraint.data,
         }
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.SEUT_no_adapt[:]
-        EUT_do_nothing = self.EUT_no_adapt[:]
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
         SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
 
         # Ensure valid EU values
@@ -2609,21 +2614,8 @@ class CropFarmers(AgentBaseClass):
         SEUT_adapt_mask[adapted == 0] = SEUT_adaptation_decision
         self.adaptation_mechanism[SEUT_adapt_mask == 1, adaptation_type] = 2
 
-        # Consider the influence of neighbors' decisions on adaptation
-        adapt_due_to_neighbor = self.compare_neighbor_EUT(
-            EUT_do_nothing=EUT_do_nothing,
-            SEUT_adapt=SEUT_adapt,
-            adapted=adapted,
-            expenditure_cap=self.expenditure_cap,
-            total_annual_costs=total_annual_costs_m2,
-            profits_no_event=profits_no_event,
-            extra_constraint=extra_constraint,
-        )
-
-        self.adaptation_mechanism[adapt_due_to_neighbor == 1, adaptation_type] = 3
-
         # Get the final decision mask considering individual and neighbor influences
-        adaptation_mask = np.logical_or(adapt_due_to_neighbor, SEUT_adapt_mask)
+        adaptation_mask = SEUT_adapt_mask
 
         # Update the adaptation status
         self.adapted[adaptation_mask, adaptation_type] = 1
@@ -3369,6 +3361,15 @@ class CropFarmers(AgentBaseClass):
                 # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
 
+                total_profits_adjusted = total_profits - (
+                    np.sum(self.all_loans_annual_cost[:, :, 0], axis=1)
+                    / self.field_size_per_farmer
+                )
+                profits_no_event_adjusted = profits_no_event - (
+                    np.sum(self.all_loans_annual_cost[:, :, 0], axis=1)
+                    / self.field_size_per_farmer
+                )
+
                 decision_params = {
                     "n_agents": self.n,
                     "T": self.decision_horizon,
@@ -3376,15 +3377,30 @@ class CropFarmers(AgentBaseClass):
                     "sigma": self.risk_aversion,
                     "risk_perception": self.risk_perception,
                     "p_droughts": 1 / self.p_droughts[:-1],
-                    "total_profits": total_profits,
-                    "profits_no_event": profits_no_event,
+                    "total_profits": total_profits_adjusted,
+                    "profits_no_event": profits_no_event_adjusted,
+                }
+
+                decision_params_EUT = {
+                    "n_agents": self.n,
+                    "T": self.decision_horizon,
+                    "discount_rate": np.full(
+                        self.n, np.mean(self.discount_rate), dtype=np.int32
+                    ),
+                    "sigma": np.full(
+                        self.n, np.mean(self.risk_aversion), dtype=np.int32
+                    ),
+                    "risk_perception": self.risk_perception,
+                    "p_droughts": 1 / self.p_droughts[:-1],
+                    "total_profits": total_profits_adjusted,
+                    "profits_no_event": profits_no_event_adjusted,
                 }
 
                 self.SEUT_no_adapt = self.decision_module.calcEU_do_nothing(
-                    **decision_params
+                    **decision_params_SEUT
                 )
                 self.EUT_no_adapt = self.decision_module.calcEU_do_nothing(
-                    **decision_params, subjective=False
+                    **decision_params_EUT, subjective=False
                 )
 
                 # These adaptations can only be done if there is a yield-probability relation
