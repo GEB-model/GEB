@@ -311,7 +311,7 @@ def abstract_water_numba(
                             if not np.isnan(remaining_irrigation_limit_m3[farmer]):
                                 remaining_irrigation_limit_m3[
                                     farmer
-                                ] -= channel_abstraction_cell_m
+                                ] -= channel_abstraction_cell_m3
 
                             channel_abstraction_m3_by_farmer[
                                 farmer
@@ -348,7 +348,7 @@ def abstract_water_numba(
                                 if not np.isnan(remaining_irrigation_limit_m3[farmer]):
                                     remaining_irrigation_limit_m3[
                                         farmer
-                                    ] -= reservoir_abstraction_m_cell
+                                    ] -= reservoir_abstraction_m_cell_m3
 
                                 reservoir_abstraction_m3_by_farmer[
                                     farmer
@@ -384,7 +384,7 @@ def abstract_water_numba(
                                 if not np.isnan(remaining_irrigation_limit_m3[farmer]):
                                     remaining_irrigation_limit_m3[
                                         farmer
-                                    ] -= groundwater_abstraction_cell_m
+                                    ] -= groundwater_abstraction_cell_m3
 
                                 groundwater_abstraction_m3_by_farmer[
                                     farmer
