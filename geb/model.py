@@ -153,6 +153,10 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         )
         self.initial_relations_folder = self.initial_conditions_folder / "relations"
 
+        self.spinup_start = datetime.datetime.combine(
+            self.config["general"]["spinup_time"], datetime.time(0)
+        )
+
         if self.spinup is True:
             end_time = datetime.datetime.combine(
                 self.config["general"]["start_time"], datetime.time(0)
