@@ -93,23 +93,70 @@ def farmer_command_area(
 
 
 @njit(cache=True)
+def get_deficit_between_dates(cumulative_water_deficit_m3, farmer, start, end):
+    return (
+        cumulative_water_deficit_m3[farmer, end]
+        - cumulative_water_deficit_m3[
+            farmer, start
+        ]  # current day of year is effectively starting "tommorrow" due to Python's 0-indexing
+    )
+
+
+@njit(cache=True)
+def get_future_deficit(
+    farmer: int,
+    day_index: int,
+    cumulative_water_deficit_m3: np.ndarray,
+    crop_calendar: np.ndarray,
+    potential_irrigation_consumption_farmer_m3: float,
+):
+    future_water_deficit = potential_irrigation_consumption_farmer_m3
+    for crop in crop_calendar[farmer]:
+        if crop[0] != -1:
+            start_day = crop[1]
+            growth_length = crop[2]
+            end_day = start_day + growth_length
+
+            if end_day > 365:
+                future_water_deficit += get_deficit_between_dates(
+                    cumulative_water_deficit_m3, farmer, max(start_day, day_index + 1), 365
+                )
+                if end_day - 366 > day_index:
+                    future_water_deficit += get_deficit_between_dates(
+                        cumulative_water_deficit_m3, farmer, day_index + 1, end_day - 366
+                    )
+
+            elif day_index <= end_day:
+                future_water_deficit += get_deficit_between_dates(
+                    cumulative_water_deficit_m3,
+                    farmer,
+                    max(start_day, day_index + 1),
+                    end_day,
+                )
+
+    return future_water_deficit
+
+
+@njit(cache=True)
 def adjust_irrigation_to_limit(
     farmer: int,
-    current_day_of_year: int,
+    day_index: int,
     remaining_irrigation_limit_m3: np.ndarray,
     cumulative_water_deficit_m3: np.ndarray,
+    crop_calendar: np.ndarray,
     irrigation_efficiency_farmer: float,
     totalPotIrrConsumption,
     potential_irrigation_consumption_farmer_m3,
     farmer_fields,
 ):
     # calculate future water deficit, but also include today's irrigation consumption
-    future_water_deficit = (
-        cumulative_water_deficit_m3[farmer, -1]
-        - cumulative_water_deficit_m3[
-            farmer, current_day_of_year
-        ]  # current day of year is effectively starting "tommorrow" due to Python's 0-indexing
-    ) + potential_irrigation_consumption_farmer_m3
+    future_water_deficit = get_future_deficit(
+        farmer=farmer,
+        day_index=day_index,
+        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+        crop_calendar=crop_calendar,
+        potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
+    )
 
     assert future_water_deficit > 0
 
@@ -242,7 +289,7 @@ def withdraw_groundwater(
 
 @njit(cache=True)
 def abstract_water(
-    current_day_of_year: int,
+    day_index: int,
     n: int,
     activation_order: np.ndarray,
     field_indices_by_farmer: np.ndarray,
@@ -263,6 +310,7 @@ def abstract_water(
     well_depth: float,
     remaining_irrigation_limit_m3: np.ndarray,
     cumulative_water_deficit_m3: np.ndarray,
+    crop_calendar: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -361,9 +409,10 @@ def abstract_water(
                 if not np.isnan(remaining_irrigation_limit_m3[farmer]):
                     adjust_irrigation_to_limit(
                         farmer=farmer,
-                        current_day_of_year=current_day_of_year,
+                        day_index=day_index,
                         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                         cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+                        crop_calendar=crop_calendar,
                         irrigation_efficiency_farmer=irrigation_efficiency_farmer,
                         totalPotIrrConsumption=totalPotIrrConsumption,
                         potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
@@ -1286,6 +1335,7 @@ class CropFarmers(AgentBaseClass):
             well_depth=self.well_depth.data,
             remaining_irrigation_limit_m3=self.remaining_irrigation_limit_m3.data,
             cumulative_water_deficit_m3=self.cumulative_water_deficit_m3.data,
+            crop_calendar=self.crop_calendar.data,
         )
 
         # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
@@ -1827,7 +1877,7 @@ class CropFarmers(AgentBaseClass):
     @njit(cache=True)
     def plant_numba(
         n: int,
-        day_of_year: int,
+        day_index: int,
         crop_calendar: np.ndarray,
         crop_map: np.ndarray,
         crop_harvest_age_days: np.ndarray,
@@ -1862,7 +1912,7 @@ class CropFarmers(AgentBaseClass):
         plant = np.full_like(crop_map, -1, dtype=np.int32)
         sell_land = np.zeros(n, dtype=np.bool_)
 
-        planting_farmers_per_season = crop_calendar[:, :, 1] == day_of_year
+        planting_farmers_per_season = crop_calendar[:, :, 1] == day_index
         planting_farmers = planting_farmers_per_season.sum(axis=1)
 
         assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
@@ -1940,7 +1990,7 @@ class CropFarmers(AgentBaseClass):
 
         plant_map, farmers_selling_land = self.plant_numba(
             n=self.n,
-            day_of_year=self.model.current_time.timetuple().tm_yday,
+            day_index=self.model.current_time.timetuple().tm_yday - 1,  # 0-indexed
             crop_calendar=self.crop_calendar.data,
             crop_map=self.var.crop_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
