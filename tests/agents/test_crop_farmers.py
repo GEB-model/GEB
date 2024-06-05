@@ -136,6 +136,36 @@ def test_get_future_deficit():
     )
     assert future_water_deficit == 0.0
 
+    future_water_deficit = get_future_deficit(
+        farmer=0,
+        day_index=200,
+        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+        crop_calendar=np.array(
+            [
+                [
+                    [0, 100, 100],  # crop grows beyond end of year
+                ]
+            ]
+        ),  # crop ID (irrelevant here), planting day, growing days
+        potential_irrigation_consumption_farmer_m3=0,
+    )
+    assert future_water_deficit == 0.0
+
+    future_water_deficit = get_future_deficit(
+        farmer=0,
+        day_index=200,
+        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+        crop_calendar=np.array(
+            [
+                [
+                    [0, 100, 370],  # crop grows beyond end of year
+                ]
+            ]
+        ),  # crop ID (irrelevant here), planting day, growing days
+        potential_irrigation_consumption_farmer_m3=0,
+    )
+    assert future_water_deficit == 1640.0
+
 
 def test_adjust_irrigation_to_limit():
     cumulative_water_deficit_m3 = np.array([[0.0, 15.0, 30.0]])

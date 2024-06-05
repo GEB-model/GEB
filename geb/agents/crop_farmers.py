@@ -124,15 +124,15 @@ def get_future_deficit(
                     max(start_day, day_index + 1),
                     365,
                 )
-                if end_day - 366 > day_index:
+                if growth_length < 366 and end_day - 366 > day_index:
                     future_water_deficit += get_deficit_between_dates(
                         cumulative_water_deficit_m3,
                         farmer,
                         day_index + 1,
-                        end_day - 366,
+                        end_day % 366,
                     )
 
-            elif day_index <= end_day:
+            elif day_index < end_day:
                 future_water_deficit += get_deficit_between_dates(
                     cumulative_water_deficit_m3,
                     farmer,
@@ -140,6 +140,7 @@ def get_future_deficit(
                     end_day,
                 )
 
+    assert future_water_deficit >= 0
     return future_water_deficit
 
 
@@ -1301,7 +1302,7 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
-            has_access_to_irrigation_water,
+            self.has_access_to_irrigation_water,
             groundwater_depth_per_farmer,
         ) = abstract_water(
             self.model.current_day_of_year,
