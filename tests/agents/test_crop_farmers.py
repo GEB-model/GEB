@@ -138,11 +138,15 @@ def test_get_future_deficit():
 
 
 def test_adjust_irrigation_to_limit():
+    cumulative_water_deficit_m3 = np.array([[0.0, 15.0, 30.0]])
+    # use full crop calendar with growing days 2 to match cumulative_water_deficit_m3
+    crop_calendar = np.array([[[0, 0, 2]]])
     potential_irrigation_consumption_farmer_m3 = adjust_irrigation_to_limit(
         farmer=0,
         day_index=0,
         remaining_irrigation_limit_m3=np.array([10]),
-        cumulative_water_deficit_m3=np.array([[0.0, 15.0, 30.0]]),
+        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+        crop_calendar=crop_calendar,
         irrigation_efficiency_farmer=0.5,
         totalPotIrrConsumption=np.array([10.0]),
         potential_irrigation_consumption_farmer_m3=10,
@@ -158,7 +162,8 @@ def test_adjust_irrigation_to_limit():
         farmer=0,
         day_index=1,  # last day of fictitious year
         remaining_irrigation_limit_m3=np.array([5.0]),
-        cumulative_water_deficit_m3=np.array([[0.0, 50.0, 100.0]]),
+        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+        crop_calendar=crop_calendar,
         irrigation_efficiency_farmer=0.5,
         totalPotIrrConsumption=np.array([10.0]),
         potential_irrigation_consumption_farmer_m3=10,
@@ -173,9 +178,10 @@ def test_adjust_irrigation_to_limit():
     # If no allowed irrigation, the farmer should not irrigate
     potential_irrigation_consumption_farmer_m3 = adjust_irrigation_to_limit(
         farmer=0,
-        current_day_of_year=1,  # last day of fictitious year
+        day_index=1,  # last day of fictitious year
         remaining_irrigation_limit_m3=np.array([0]),
-        cumulative_water_deficit_m3=np.array([[0.0, 50.0, 100.0]]),
+        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+        crop_calendar=crop_calendar,
         irrigation_efficiency_farmer=0.5,
         totalPotIrrConsumption=np.array([10.0]),
         potential_irrigation_consumption_farmer_m3=10,
