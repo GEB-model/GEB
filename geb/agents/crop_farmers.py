@@ -119,11 +119,17 @@ def get_future_deficit(
 
             if end_day > 365:
                 future_water_deficit += get_deficit_between_dates(
-                    cumulative_water_deficit_m3, farmer, max(start_day, day_index + 1), 365
+                    cumulative_water_deficit_m3,
+                    farmer,
+                    max(start_day, day_index + 1),
+                    365,
                 )
                 if end_day - 366 > day_index:
                     future_water_deficit += get_deficit_between_dates(
-                        cumulative_water_deficit_m3, farmer, day_index + 1, end_day - 366
+                        cumulative_water_deficit_m3,
+                        farmer,
+                        day_index + 1,
+                        end_day - 366,
                     )
 
             elif day_index <= end_day:
