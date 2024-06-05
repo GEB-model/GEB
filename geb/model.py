@@ -193,42 +193,46 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         self.regions = gpd.read_file(self.model_structure["geoms"]["areamaps/regions"])
         self.data = Data(self)
 
-        HazardDriver.__init__(self)
+        if self.mode == "w":
 
-        ABM.__init__(
-            self,
-            current_time,
-            timestep_length,
-            n_timesteps,
-            coordinate_system,
-        )
+            HazardDriver.__init__(self)
 
-        if self.config["general"]["simulate_hydrology"]:
-            CWatM_Model.__init__(
+            ABM.__init__(
                 self,
-                self.current_time + self.timestep_length,
-                self.n_timesteps,
-                self.config["general"]["CWatM_settings"],
+                current_time,
+                timestep_length,
+                n_timesteps,
+                coordinate_system,
             )
 
-        self.reporter = Reporter(self)
+            if self.config["general"]["simulate_hydrology"]:
+                CWatM_Model.__init__(
+                    self,
+                    self.current_time + self.timestep_length,
+                    self.n_timesteps,
+                    self.config["general"]["CWatM_settings"],
+                )
 
-        np.savez_compressed(
-            Path(self.reporter.abm_reporter.export_folder, "land_owners.npz"),
-            data=self.data.HRU.land_owners,
-        )
-        np.savez_compressed(
-            Path(self.reporter.abm_reporter.export_folder, "unmerged_HRU_indices.npz"),
-            data=self.data.HRU.unmerged_HRU_indices,
-        )
-        np.savez_compressed(
-            Path(self.reporter.abm_reporter.export_folder, "scaling.npz"),
-            data=self.data.HRU.scaling,
-        )
-        np.savez_compressed(
-            Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
-            data=self.agents.crop_farmers.activation_order_by_elevation,
-        )
+            self.reporter = Reporter(self)
+
+            np.savez_compressed(
+                Path(self.reporter.abm_reporter.export_folder, "land_owners.npz"),
+                data=self.data.HRU.land_owners,
+            )
+            np.savez_compressed(
+                Path(
+                    self.reporter.abm_reporter.export_folder, "unmerged_HRU_indices.npz"
+                ),
+                data=self.data.HRU.unmerged_HRU_indices,
+            )
+            np.savez_compressed(
+                Path(self.reporter.abm_reporter.export_folder, "scaling.npz"),
+                data=self.data.HRU.scaling,
+            )
+            np.savez_compressed(
+                Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
+                data=self.agents.crop_farmers.activation_order_by_elevation,
+            )
 
     def step(self, step_size: Union[int, str] = 1) -> None:
         """
@@ -289,19 +293,19 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
 
     def close(self) -> None:
         """Finalizes the model."""
-        if self.config["general"]["simulate_hydrology"]:
+        if self.mode == "w" and self.config["general"]["simulate_hydrology"]:
             CWatM_Model.finalize(self)
 
-        from geb.workflows import all_async_readers
+            from geb.workflows import all_async_readers
 
-        for reader in all_async_readers:
-            reader.close()
+            for reader in all_async_readers:
+                reader.close()
 
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        # Wait for the loop thread to finish
-        if hasattr(self, "loop_thread"):
-            self.loop_thread.join()
-        self.loop.close()
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            # Wait for the loop thread to finish
+            if hasattr(self, "loop_thread"):
+                self.loop_thread.join()
+            self.loop.close()
 
     def __enter__(self):
         return self
