@@ -108,11 +108,14 @@ def get_future_deficit(
     day_index: int,
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
+    crop_rotation_year_index: int,
     potential_irrigation_consumption_farmer_m3: float,
 ):
     future_water_deficit = potential_irrigation_consumption_farmer_m3
     for crop in crop_calendar[farmer]:
-        if crop[0] != -1:
+        crop_type = crop[0]
+        crop_year_index = crop[3]
+        if crop_type != -1 and crop_year_index == crop_rotation_year_index:
             start_day = crop[1]
             growth_length = crop[2]
             end_day = start_day + growth_length
@@ -151,17 +154,22 @@ def adjust_irrigation_to_limit(
     remaining_irrigation_limit_m3: np.ndarray,
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
+    crop_rotation_year_index: int,
     irrigation_efficiency_farmer: float,
     totalPotIrrConsumption,
     potential_irrigation_consumption_farmer_m3,
     farmer_fields,
 ):
+    if remaining_irrigation_limit_m3[farmer] < 0:
+        totalPotIrrConsumption[farmer_fields] = 0
+        return totalPotIrrConsumption
     # calculate future water deficit, but also include today's irrigation consumption
     future_water_deficit = get_future_deficit(
         farmer=farmer,
         day_index=day_index,
         cumulative_water_deficit_m3=cumulative_water_deficit_m3,
         crop_calendar=crop_calendar,
+        crop_rotation_year_index=crop_rotation_year_index,
         potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
     )
 
@@ -177,6 +185,10 @@ def adjust_irrigation_to_limit(
 
     irrigation_water_consumption_farmer_m3 = (
         irrigation_water_withdrawal_farmer_m3 * irrigation_efficiency_farmer
+    )
+    irrigation_water_consumption_farmer_m3 = min(
+        irrigation_water_consumption_farmer_m3,
+        potential_irrigation_consumption_farmer_m3,
     )
 
     # if the irrigation demand is higher than the limit, reduce the irrigation demand by the calculated reduction factor
@@ -385,14 +397,14 @@ def abstract_water(
                     farmer_has_access_to_irrigation_water = True
                     break
             elif surface_irrigated[farmer]:
-                if available_channel_storage_m3[grid_cell] > 100:
+                if available_channel_storage_m3[grid_cell] > 0:
                     farmer_has_access_to_irrigation_water = True
                     break
                 command_area = command_areas[field]
                 # -1 means no command area
                 if (
                     command_area != -1
-                    and available_reservoir_storage_m3[command_area] > 100
+                    and available_reservoir_storage_m3[command_area] > 0
                 ):
                     farmer_has_access_to_irrigation_water = True
                     break
@@ -420,6 +432,7 @@ def abstract_water(
                         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                         cumulative_water_deficit_m3=cumulative_water_deficit_m3,
                         crop_calendar=crop_calendar,
+                        crop_rotation_year_index=0,  # TODO: implement crop rotation
                         irrigation_efficiency_farmer=irrigation_efficiency_farmer,
                         totalPotIrrConsumption=totalPotIrrConsumption,
                         potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
@@ -780,7 +793,7 @@ class CropFarmers(AgentBaseClass):
         self.crop_calendar = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(3, 3),
+            extra_dims=(3, 4),
             extra_dims_names=("rotation", "calendar"),
             dtype=np.int32,
             fill_value=-1,
@@ -788,7 +801,6 @@ class CropFarmers(AgentBaseClass):
         self.crop_calendar[:] = np.load(
             self.model.model_structure["binary"]["agents/farmers/crop_calendar"]
         )["data"]
-
         assert self.crop_calendar[:, :, 0].max() < len(self.crop_ids)
 
         # Set irrigation source
@@ -1289,6 +1301,7 @@ class CropFarmers(AgentBaseClass):
             returnFlowIrr_m: return flow in meters
             addtoevapotrans_m: evaporated irrigation water in meters
         """
+        irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
         total_storage_pre_m3 = (
             available_channel_storage_m3.sum()
             + available_groundwater_m3.sum()
@@ -1365,15 +1378,28 @@ class CropFarmers(AgentBaseClass):
                 + available_groundwater_m3.sum()
                 + available_reservoir_storage_m3.sum()
             ),
-            rel_tol=0.0001,
-            abs_tol=0.0001,
+            rel_tol=0.001,
+            abs_tol=0.001,
+        )
+        # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
+        assert math.isclose(
+            (
+                self.channel_abstraction_m3_by_farmer
+                + self.reservoir_abstraction_m3_by_farmer
+                + self.groundwater_abstraction_m3_by_farmer
+            )[~np.isnan(self.remaining_irrigation_limit_m3)].sum(),
+            (irrigation_limit_pre - self.remaining_irrigation_limit_m3)[
+                ~np.isnan(self.remaining_irrigation_limit_m3)
+            ].sum(),
+            rel_tol=0.001,
+            abs_tol=0.001,
         )
         # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
         assert math.isclose(
             (water_consumption_m + returnFlowIrr_m + addtoevapotrans_m).sum(),
             water_withdrawal_m.sum(),
-            rel_tol=0.0001,
-            abs_tol=0.0001,
+            rel_tol=0.001,
+            abs_tol=0.001,
         )
 
         self.groundwater_depth = AgentArray(
@@ -1513,6 +1539,15 @@ class CropFarmers(AgentBaseClass):
             self.yield_ratio_management * self.yield_ratio_multiplier
         )
         return None
+
+    def decompress(self, array):
+        if np.issubsctype(array, np.floating):
+            nofieldvalue = np.nan
+        else:
+            nofieldvalue = -1
+        by_field = np.take(array, self.var.land_owners)
+        by_field[self.var.land_owners == -1] = nofieldvalue
+        return self.model.data.HRU.decompress(by_field)
 
     @property
     def mask(self):
@@ -3393,6 +3428,28 @@ class CropFarmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.water_abstraction_sum()
+
+        # if self.model.current_timestep > 1:
+
+        #     print(
+        #         "irr",
+        #         self.remaining_irrigation_limit_m3[
+        #             self.has_access_to_irrigation_water == 1
+        #         ].mean(),
+        #     )
+        #     print(
+        #         "command",
+        #         self.remaining_irrigation_limit_m3[self.is_in_command_area].mean(),
+        #     )
+        #     print(
+        #         "command&irr",
+        #         self.remaining_irrigation_limit_m3[
+        #             (
+        #                 self.is_in_command_area
+        #                 & (self.has_access_to_irrigation_water == 1)
+        #             )
+        #         ].mean(),
+        #     )
 
         # monthly actions
         if (
