@@ -156,8 +156,8 @@ class CWatM_Model(CWATModel):
         binding["waterBodyID"] = self.model_structure["grid"][
             "routing/lakesreservoirs/lakesResID"
         ]
-        binding["reservoir_command_areas"] = self.model_structure["grid"][
-            "routing/lakesreservoirs/command_areas"
+        binding["reservoir_command_areas"] = self.model_structure["subgrid"][
+            "routing/lakesreservoirs/subcommand_areas"
         ]
 
         binding["PathGroundwaterModflow"] = "modflow"

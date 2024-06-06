@@ -723,6 +723,31 @@ class HRUs(BaseVariables):
         outarray[self.mask] = nanvalue
         return outarray
 
+    @staticmethod
+    @njit(cache=True)
+    def compress_numba(array, unmerged_HRU_indices, outarray, nodatavalue):
+        array = array.ravel()
+        unmerged_HRU_indices = unmerged_HRU_indices.ravel()
+        for i in range(array.size):
+            value = array[i]
+            if value != nodatavalue:
+                HRU = unmerged_HRU_indices[i]
+                outarray[HRU] = value
+        return outarray
+
+    def compress(self, array: np.ndarray, method="last") -> np.ndarray:
+        assert method == "last", "Only last method is implemented"
+        assert self.mask.shape == array.shape, "Array must have same shape as mask"
+        if np.issubdtype(array.dtype, np.integer):
+            fill_value = -1
+        else:
+            fill_value = np.nan
+        outarray = self.full_compressed(fill_value, array.dtype)
+        outarray = self.compress_numba(
+            array, self.unmerged_HRU_indices, outarray, nodatavalue=fill_value
+        )
+        return outarray
+
     def plot(self, HRU_array: np.ndarray, ax=None, show: bool = True):
         """Function to plot HRU data.
 
