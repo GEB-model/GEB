@@ -206,6 +206,15 @@ def test_agent_array():
     numba_function(a.data)
     assert (a == -99).all()
 
+    # test ~ unary operator
+    a = np.zeros(10, dtype=bool)
+    assert ~a.all()
+
+    # test + and - unary operators
+    a = np.ones(10, dtype=np.int32)
+    assert (+a == 1).all()
+    assert (-a == -1).all()
+
 
 @pytest.fixture
 def array():
