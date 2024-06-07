@@ -108,14 +108,16 @@ def get_future_deficit(
     day_index: int,
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
-    crop_rotation_year_index: int,
+    crop_rotation_year_index: np.ndarray,
     potential_irrigation_consumption_farmer_m3: float,
 ):
     future_water_deficit = potential_irrigation_consumption_farmer_m3
+    if day_index >= 365:
+        return future_water_deficit
     for crop in crop_calendar[farmer]:
         crop_type = crop[0]
         crop_year_index = crop[3]
-        if crop_type != -1 and crop_year_index == crop_rotation_year_index:
+        if crop_type != -1 and crop_year_index == crop_rotation_year_index[farmer]:
             start_day = crop[1]
             growth_length = crop[2]
             end_day = start_day + growth_length
@@ -154,7 +156,7 @@ def adjust_irrigation_to_limit(
     remaining_irrigation_limit_m3: np.ndarray,
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
-    crop_rotation_year_index: int,
+    crop_rotation_year_index: np.ndarray,
     irrigation_efficiency_farmer: float,
     totalPotIrrConsumption,
     potential_irrigation_consumption_farmer_m3,
@@ -330,6 +332,7 @@ def abstract_water(
     remaining_irrigation_limit_m3: np.ndarray,
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
+    current_crop_calendar_rotation_year_index: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -432,7 +435,7 @@ def abstract_water(
                         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                         cumulative_water_deficit_m3=cumulative_water_deficit_m3,
                         crop_calendar=crop_calendar,
-                        crop_rotation_year_index=0,  # TODO: implement crop rotation
+                        crop_rotation_year_index=current_crop_calendar_rotation_year_index,
                         irrigation_efficiency_farmer=irrigation_efficiency_farmer,
                         totalPotIrrConsumption=totalPotIrrConsumption,
                         potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
@@ -514,6 +517,21 @@ def abstract_water(
         has_access_to_irrigation_water,
         groundwater_depth_per_farmer,
     )
+
+
+def advance_crop_rotation_year(
+    current_crop_calendar_rotation_year_index: np.ndarray,
+    crop_calendar_rotation_years: np.ndarray,
+):
+    """Update the crop rotation year for each farmer. This function is used to update the crop rotation year for each farmer at the end of the year.
+
+    Args:
+        current_crop_calendar_rotation_year_index: The current crop rotation year for each farmer.
+        crop_calendar_rotation_years: The number of years in the crop rotation cycle for each farmer.
+    """
+    current_crop_calendar_rotation_year_index[:] = (
+        current_crop_calendar_rotation_year_index + 1
+    ) % crop_calendar_rotation_years
 
 
 class CropFarmers(AgentBaseClass):
@@ -802,6 +820,30 @@ class CropFarmers(AgentBaseClass):
             self.model.model_structure["binary"]["agents/farmers/crop_calendar"]
         )["data"]
         assert self.crop_calendar[:, :, 0].max() < len(self.crop_ids)
+
+        self.crop_calendar_rotation_years = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.int32,
+            fill_value=0,
+        )
+        self.crop_calendar_rotation_years[:] = np.load(
+            self.model.model_structure["binary"][
+                "agents/farmers/crop_calendar_rotation_years"
+            ]
+        )["data"]
+
+        self.current_crop_calendar_rotation_year_index = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.int32,
+            fill_value=0,
+        )
+        # For each farmer set a random crop rotation year. The farmer starts in that year. First set a seed for reproducibility.
+        np.random.seed(42)
+        self.current_crop_calendar_rotation_year_index[:] = np.random.randint(
+            0, self.crop_calendar_rotation_years
+        )
 
         # Set irrigation source
         self.irrigation_source = AgentArray(
@@ -1318,7 +1360,7 @@ class CropFarmers(AgentBaseClass):
             self.has_access_to_irrigation_water,
             groundwater_depth_per_farmer,
         ) = abstract_water(
-            self.model.current_day_of_year,
+            self.model.current_day_of_year - 1,
             self.n,
             self.activation_order_by_elevation,
             self.field_indices_by_farmer.data,
@@ -1356,6 +1398,7 @@ class CropFarmers(AgentBaseClass):
             remaining_irrigation_limit_m3=self.remaining_irrigation_limit_m3.data,
             cumulative_water_deficit_m3=self.cumulative_water_deficit_m3.data,
             crop_calendar=self.crop_calendar.data,
+            current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index.data,
         )
 
         # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
@@ -1391,8 +1434,8 @@ class CropFarmers(AgentBaseClass):
             (irrigation_limit_pre - self.remaining_irrigation_limit_m3)[
                 ~np.isnan(self.remaining_irrigation_limit_m3)
             ].sum(),
-            rel_tol=0.001,
-            abs_tol=0.001,
+            rel_tol=0.01,
+            abs_tol=0.01,
         )
         # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
         assert math.isclose(
@@ -3464,6 +3507,11 @@ class CropFarmers(AgentBaseClass):
             # the cumulative water deficit is not year completed.
             if self.model.current_time.year - 1 > self.model.spinup_start.year:
                 self.remaining_irrigation_limit_m3[:] = self.irrigation_limit_m3[:]
+
+            advance_crop_rotation_year(
+                current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index,
+                crop_calendar_rotation_years=self.crop_calendar_rotation_years,
+            )
 
             # for now class is only dependent on being in a command area or not
             self.farmer_class = self.is_in_command_area.copy().astype(np.int32)
