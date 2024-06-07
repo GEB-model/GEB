@@ -3804,7 +3804,7 @@ class CropFarmers(AgentBaseClass):
                 agent_array[self.n - 1] = values[name]
 
     def restore_state(self, folder):
-        save_state_path = self.get_save_state_path(folder)
+        save_state_path = self.get_save_state_path(folder, mkdir=True)
         with open(save_state_path / "state.txt", "r") as f:
             for line in f:
                 attribute = line.strip()

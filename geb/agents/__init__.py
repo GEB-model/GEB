@@ -22,13 +22,14 @@ class AgentBaseClass(HoneybeesAgentBaseClass):
             )  # max value of uint32, consider replacing with uint64
             return max_n
 
-    def get_save_state_path(self, folder):
+    def get_save_state_path(self, folder, mkdir=False):
         folder = Path(self.model.initial_conditions_folder, folder)
-        folder.mkdir(parents=True, exist_ok=True)
+        if mkdir:
+            folder.mkdir(parents=True, exist_ok=True)
         return folder
 
     def save_state(self, folder: str):
-        save_state_path = self.get_save_state_path(folder)
+        save_state_path = self.get_save_state_path(folder, mkdir=True)
         with open(save_state_path / "state.txt", "w") as f:
             for attribute, value in self.agent_arrays.items():
                 f.write(f"{attribute}\n")
