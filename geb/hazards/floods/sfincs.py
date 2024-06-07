@@ -20,7 +20,6 @@ class SFINCS:
         self.model = model
         self.config = config
         self.n_timesteps = n_timesteps
-        self.data_folder = Path(os.environ.get("GEB_DATA_CATALOG")).parent / "SFINCS"
 
         self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
