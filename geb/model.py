@@ -75,7 +75,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
     """GEB parent class.
 
     Args:
-        config: Filepath of the YAML-configuration file.
+        config: Filepath of the YAML-configuration file (e.g. model.yml).
         CwatM_settings: Path of CWatM settings file.
         name: Name of model.
         xmin: Minimum x coordinate.
@@ -168,6 +168,12 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             self.load_initial_data = False
             self.save_initial_data = self.config["general"]["export_inital_on_spinup"]
         else:
+            # check if spinup has been executed before
+            if not self.initial_conditions_folder.exists():
+                raise FileNotFoundError(
+                    f"The initial conditions folder ({self.initial_conditions_folder.resolve()}) does not exist. Spinup is required before running the model, and will make the 'initial' folder. Please run the spinup first."
+                )
+
             current_time = datetime.datetime.combine(
                 self.config["general"]["start_time"], datetime.time(0)
             )
