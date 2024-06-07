@@ -157,7 +157,7 @@ class BaseVariables:
 
     def load_initial(self, name, default=0.0, gpu=False):
         if self.model.load_initial_data:
-            fp = os.path.join(self.data.save_state_path, f"{name}.npz")
+            fp = os.path.join(self.data.get_save_state_path(), f"{name}.npz")
             if gpu:
                 return cp.load(fp)["data"]
             else:
@@ -1062,7 +1062,7 @@ class Data:
         return folder
 
     def save_state(self):
-        with open(Path(self.save_state_path(mkdir=True), "state.txt"), "w") as f:
+        with open(Path(self.get_save_state_path(mkdir=True), "state.txt"), "w") as f:
             for var in self.initial_conditions:
                 f.write(f"{var}\n")
                 fp = self.get_save_state_path(mkdir=True) / f"{var}.npz"
