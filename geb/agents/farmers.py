@@ -2052,7 +2052,8 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops.data, self.farmer_is_in_command_area.reshape(-1, 1),
+            (self.crops.data, 
+             self.farmer_is_in_command_area.reshape(-1, 1),
              self.adapted[:,1].reshape(-1,1))
         )
 
@@ -2744,7 +2745,9 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops.data, self.farmer_is_in_command_area.reshape(-1, 1))
+            (self.crops.data, 
+             self.farmer_is_in_command_area.reshape(-1, 1)
+             )
         )
 
         # Add a column of zeros to represent farmers who have not adapted yet
