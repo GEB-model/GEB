@@ -1343,6 +1343,10 @@ class CropFarmers(AgentBaseClass):
             returnFlowIrr_m: return flow in meters
             addtoevapotrans_m: evaporated irrigation water in meters
         """
+        assert (available_channel_storage_m3 >= 0).all()
+        assert (available_groundwater_m3 >= 0).all()
+        assert (available_reservoir_storage_m3 >= 0).all()
+
         irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
         total_storage_pre_m3 = (
             available_channel_storage_m3.sum()
