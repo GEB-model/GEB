@@ -534,6 +534,114 @@ def advance_crop_rotation_year(
     ) % crop_calendar_rotation_years
 
 
+@njit(cache=True)
+def plant(
+    n: int,
+    day_index: int,
+    crop_calendar: np.ndarray,
+    current_crop_calendar_rotation_year_index: np.ndarray,
+    crop_map: np.ndarray,
+    crop_harvest_age_days: np.ndarray,
+    cultivation_cost: Union[np.ndarray, int, float],
+    region_ids_per_farmer: np.ndarray,
+    field_indices_by_farmer: np.ndarray,
+    field_indices: np.ndarray,
+    field_size_per_farmer: np.ndarray,
+    all_loans_annual_cost: np.ndarray,
+    loan_tracker: np.ndarray,
+    interest_rate: np.ndarray,
+    farmers_going_out_of_business: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
+
+    Args:
+        n: Number of farmers.
+        start_day_per_month: Starting day of each month of year.
+        current_day: Current day.
+        crop: Crops grown by each farmer.
+        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+        field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
+        field_size_per_farmer: Field size per farmer in m2
+
+    Returns:
+        plant: Subarray map of what crops are planted this day.
+    """
+    assert (
+        farmers_going_out_of_business is False
+    ), "Farmers going out of business not implemented."
+
+    plant = np.full_like(crop_map, -1, dtype=np.int32)
+    sell_land = np.zeros(n, dtype=np.bool_)
+
+    planting_farmers_per_season = (crop_calendar[:, :, 1] == day_index) & (
+        crop_calendar[:, :, 3]
+        == current_crop_calendar_rotation_year_index[:, np.newaxis]
+    )
+    planting_farmers = planting_farmers_per_season.sum(axis=1)
+
+    assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
+
+    planting_farmers_idx = np.where(planting_farmers == 1)[0]
+    if not planting_farmers_idx.size == 0:
+        crop_rotation = np.argmax(
+            planting_farmers_per_season[planting_farmers_idx], axis=1
+        )
+
+        assert planting_farmers_idx.size == crop_rotation.size
+
+        for i in range(planting_farmers_idx.size):
+            farmer_idx = planting_farmers_idx[i]
+            farmer_crop_rotation = crop_rotation[i]
+
+            farmer_fields = get_farmer_HRUs(
+                field_indices, field_indices_by_farmer, farmer_idx
+            )
+            farmer_crop_data = crop_calendar[farmer_idx, farmer_crop_rotation]
+            farmer_crop = farmer_crop_data[0]
+            field_harvest_age = farmer_crop_data[2]
+
+            assert farmer_crop != -1
+
+            if isinstance(cultivation_cost, (int, float)):
+                cultivation_cost_farmer = cultivation_cost
+            else:
+                farmer_region_id = region_ids_per_farmer[farmer_idx]
+                cultivation_cost_farmer = (
+                    cultivation_cost[farmer_region_id, farmer_crop]
+                    * field_size_per_farmer[farmer_idx]
+                )
+            assert not np.isnan(cultivation_cost_farmer)
+
+            interest_rate_farmer = interest_rate[farmer_idx]
+            loan_duration = 2
+            annual_cost_input_loan = cultivation_cost_farmer * (
+                interest_rate_farmer
+                * (1 + interest_rate_farmer) ** loan_duration
+                / ((1 + interest_rate_farmer) ** loan_duration - 1)
+            )
+            for i in range(4):
+                if all_loans_annual_cost[farmer_idx, 0, i] == 0:
+                    all_loans_annual_cost[
+                        farmer_idx, 0, i
+                    ] += annual_cost_input_loan  # Add the amount to the input specific loan
+                    loan_tracker[farmer_idx, 0, i] = loan_duration
+                    break  # Exit the loop after adding to the first zero value
+
+            all_loans_annual_cost[
+                farmer_idx, -1, 0
+            ] += annual_cost_input_loan  # Add the amount to the total loan amount
+
+            for field in farmer_fields:
+                # a crop is still growing here.
+                if crop_harvest_age_days[field] != -1:
+                    continue
+                plant[field] = farmer_crop
+                crop_harvest_age_days[field] = field_harvest_age
+
+    farmers_selling_land = np.where(sell_land)[0]
+    return plant, farmers_selling_land
+
+
 class CropFarmers(AgentBaseClass):
     """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
 
@@ -1962,110 +2070,6 @@ class CropFarmers(AgentBaseClass):
                     loan_tracker[farmer, 1, i] = loan_duration
                     break  # Exit the loop after adding to the first zero value
 
-    @staticmethod
-    @njit(cache=True)
-    def plant_numba(
-        n: int,
-        day_index: int,
-        crop_calendar: np.ndarray,
-        crop_map: np.ndarray,
-        crop_harvest_age_days: np.ndarray,
-        cultivation_cost: Union[np.ndarray, int, float],
-        region_ids_per_farmer: np.ndarray,
-        field_indices_by_farmer: np.ndarray,
-        field_indices: np.ndarray,
-        field_size_per_farmer: np.ndarray,
-        all_loans_annual_cost: np.ndarray,
-        loan_tracker: np.ndarray,
-        interest_rate: np.ndarray,
-        farmers_going_out_of_business: bool,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
-
-        Args:
-            n: Number of farmers.
-            start_day_per_month: Starting day of each month of year.
-            current_day: Current day.
-            crop: Crops grown by each farmer.
-            field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
-            field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
-            field_size_per_farmer: Field size per farmer in m2
-
-        Returns:
-            plant: Subarray map of what crops are planted this day.
-        """
-        assert (
-            farmers_going_out_of_business is False
-        ), "Farmers going out of business not implemented."
-
-        plant = np.full_like(crop_map, -1, dtype=np.int32)
-        sell_land = np.zeros(n, dtype=np.bool_)
-
-        planting_farmers_per_season = crop_calendar[:, :, 1] == day_index
-        planting_farmers = planting_farmers_per_season.sum(axis=1)
-
-        assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
-
-        planting_farmers_idx = np.where(planting_farmers == 1)[0]
-        if not planting_farmers_idx.size == 0:
-            crop_rotation = np.argmax(
-                planting_farmers_per_season[planting_farmers_idx], axis=1
-            )
-
-            assert planting_farmers_idx.size == crop_rotation.size
-
-            for i in range(planting_farmers_idx.size):
-                farmer_idx = planting_farmers_idx[i]
-                farmer_crop_rotation = crop_rotation[i]
-
-                farmer_fields = get_farmer_HRUs(
-                    field_indices, field_indices_by_farmer, farmer_idx
-                )
-                farmer_crop_data = crop_calendar[farmer_idx, farmer_crop_rotation]
-                farmer_crop = farmer_crop_data[0]
-                field_harvest_age = farmer_crop_data[2]
-
-                assert farmer_crop != -1
-
-                if isinstance(cultivation_cost, (int, float)):
-                    cultivation_cost_farmer = cultivation_cost
-                else:
-                    farmer_region_id = region_ids_per_farmer[farmer_idx]
-                    cultivation_cost_farmer = (
-                        cultivation_cost[farmer_region_id, farmer_crop]
-                        * field_size_per_farmer[farmer_idx]
-                    )
-                assert not np.isnan(cultivation_cost_farmer)
-
-                interest_rate_farmer = interest_rate[farmer_idx]
-                loan_duration = 2
-                annual_cost_input_loan = cultivation_cost_farmer * (
-                    interest_rate_farmer
-                    * (1 + interest_rate_farmer) ** loan_duration
-                    / ((1 + interest_rate_farmer) ** loan_duration - 1)
-                )
-                for i in range(4):
-                    if all_loans_annual_cost[farmer_idx, 0, i] == 0:
-                        all_loans_annual_cost[
-                            farmer_idx, 0, i
-                        ] += annual_cost_input_loan  # Add the amount to the input specific loan
-                        loan_tracker[farmer_idx, 0, i] = loan_duration
-                        break  # Exit the loop after adding to the first zero value
-
-                all_loans_annual_cost[
-                    farmer_idx, -1, 0
-                ] += annual_cost_input_loan  # Add the amount to the total loan amount
-
-                for field in farmer_fields:
-                    # a crop is still growing here.
-                    if crop_harvest_age_days[field] != -1:
-                        continue
-                    plant[field] = farmer_crop
-                    crop_harvest_age_days[field] = field_harvest_age
-
-        farmers_selling_land = np.where(sell_land)[0]
-        return plant, farmers_selling_land
-
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU."""
 
@@ -2077,10 +2081,11 @@ class CropFarmers(AgentBaseClass):
             assert cultivation_cost.shape[0] == len(self.model.regions)
             assert cultivation_cost.shape[1] == len(self.crop_ids)
 
-        plant_map, farmers_selling_land = self.plant_numba(
+        plant_map, farmers_selling_land = plant(
             n=self.n,
             day_index=self.model.current_time.timetuple().tm_yday - 1,  # 0-indexed
             crop_calendar=self.crop_calendar.data,
+            current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index.data,
             crop_map=self.var.crop_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
             cultivation_cost=cultivation_cost,
