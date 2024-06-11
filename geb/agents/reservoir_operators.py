@@ -99,7 +99,6 @@ class ReservoirOperators(AgentBaseClass):
         self.Sini_resv = self.S_begin_yr.copy()
         self.alpha = np.full((self.N,), 0.85)                                       # set all reservoirs to a capacity reduction factor of 0.85 (Biemans et al., 2011).
         self.mtifl = np.full((self.N,), self.active_reservoirs["average_discharge"].values)
-        self.irrmean = np.full((self.N,), 0.1 * self.mtifl)                         # start with estimated mean irrigation demand of 0.5 of mtifl.        
 
         ### FUTURE CODE: WHEN RESERVOIR PURPOSE DATA IS AVAILABLE. ###
         # self.res_ppose = self.active_reservoirs["purpose"].values 
@@ -132,14 +131,15 @@ class ReservoirOperators(AgentBaseClass):
             self.monthly_infl_20yrs = np.full((self.N, 12, 20), np.nan, dtype='f8')     # Stores mean inflow for every month for every reservoir for the last 20 years.
 
             # Set starting values for moving averages
-            self.mtifl_20yr[:, 0] = self.mtifl*0.1
-            self.irrmean_20yr[:, 0] = self.irrmean
-            self.mtifl_month_20yrs *= self.mtifl.reshape(-1,1)*0.25                     # Fill mean monthly inflow with 25% average inflow of each reservoir, taken from database.
+            self.mtifl_month_20yrs *= self.mtifl.reshape(-1,1)*0.2                      # Fill mean monthly inflow with 25% average inflow of each reservoir, taken from database.
         
+
         ### Initiate variables for monthly and yearly calculations. ###
         self.new_mtifl = np.zeros((self.N,), dtype='f8')                                # Temporary new mean total annual inflow
         self.new_irrmean = np.zeros((self.N,), dtype='f8')                              # Temporary new mean irrigation demand
-        
+        self.irrmean = np.full((self.N), 1 )                                            # Start with irrmean     
+        self.irrmean = self.mtifl*0.3                                                   # Set initial mean irrigation demand to 30% of mean inflow.                 
+
         self.monthly_infl = np.zeros((self.N,), dtype='f8')                             # Total inflow in that month, used to calculate mean inflow for that month.
         self.n_months_in_new_year = np.zeros((self.N,), dtype='f8')                     # Number of months in new hydrological year for each reservoir.
         
@@ -147,6 +147,7 @@ class ReservoirOperators(AgentBaseClass):
         self.nt_m = 0                                                                   # number of routing timesteps in a month
         
         self.total_irr_demand_area_yesterday = np.zeros((self.N,), dtype='f8')          # Total irrigation demand from yesterday.
+        self.irr_demand = np.zeros((self.N,), dtype='f8')
 
         # Set variables for abstraction
         self.release_for_abstraction = np.zeros((self.N,), dtype='f8')
@@ -203,8 +204,11 @@ class ReservoirOperators(AgentBaseClass):
         self.monthly_infl_20yrs[:, month_nr_idx, 0] = self.monthly_infl
         self.mtifl_month_20yrs[:, month_nr_idx] = np.nanmean(self.monthly_infl_20yrs[:, month_nr_idx, :], axis=1)
         
-        print("Average total irrigation demand this year: ", np.sum(self.new_irrmean/self.nt_y))
+        # PRINT important variables.
         print("Long-term mean total inflow in this month is: ", self.mtifl_month_20yrs[:, month_nr_idx])
+        print("Current mean monthly inflow is:", self.monthly_infl)
+        print("Average total irrigation demand this year: ", np.sum(self.new_irrmean/self.nt_y))
+
         # Then check if this leads to a new operational year. If so, calculate yearly averages and
         # storage at begining of the year. Only check for new operational year if more than 8 months have passed. If 14th month has passed it is always a new year.
         self.new_yr_condition = ((self.mtifl_month_20yrs[:, month_nr_idx] < self.mtifl) 
@@ -214,7 +218,6 @@ class ReservoirOperators(AgentBaseClass):
         if np.any(self.new_yr_condition):
             self.yearly_reservoir_calculations()
 
-        print("Current mean monthly inflow is:", self.monthly_infl)
         # Reset the monthly mean inflow to zero for the next month.
         self.monthly_infl = np.zeros((self.N,), dtype='f8')
         self.nt_m = 0
@@ -223,7 +226,7 @@ class ReservoirOperators(AgentBaseClass):
 
         return
     
-    def new_reservoir_management(self, inflow, NoRoutingExecuted, get_irr_demand = False, pot_irrConsumption_m_per_cell=None):
+    def new_reservoir_management(self, inflow, NoRoutingExecuted, reservoirStorageM3C, pot_irrConsumption_m_per_cell):
         """
         Management module, that manages reservoir outflow per day, based on Hanasaki protocol (Hanasaki et al., 2006).
 
@@ -239,6 +242,8 @@ class ReservoirOperators(AgentBaseClass):
         self.inflow = inflow / 3600 #* self.model.InvDtSec    # convert inflow from m3/hr to m3/s
         Rres = self.inflow.copy()       # if there are no reservoirs, inflow equals outflow.
         Qin_resv = self.inflow.copy()   # make local copy of inflow, to calculate reservoir release.
+        mtifl_month = self.mtifl_month_20yrs[:, self.date.month-1]
+        Sini_resv = reservoirStorageM3C
 
         # Call total irrigation demand per command area module, and make this into a demand ratio.
         # self.total_irr_demand_area = self.get_irrigation_per_command_area(pot_irrConsumption_m_per_cell)
@@ -246,18 +251,8 @@ class ReservoirOperators(AgentBaseClass):
         # self.total_irr_demand_area_yesterday = self.total_irr_demand_area
 
         # Set irrigation demand as the abstraction from today. Abstraction is in m3/day, convert to m3/s.
-        # If the model is starting up, set abstraction to zero, as there is no abstraction possible yet.
-        if (self.date.date() == (self.model.config["general"]["start_time"]+ timedelta(days=1)) 
-            or (self.date.date() == (self.model.config["general"]["spinup_time"]+ timedelta(days=1)))
-            and NoRoutingExecuted == 1):
-            self.irr_demand = np.zeros((self.N,), dtype='f8')
-        else:
-            # Convert irrigation demand from m3/day to m3/s.
-            self.irr_demand = self.model.data.HRU.reservoir_abstraction_m3.copy() * self.model.InvDtSec
-            # Make sure that the abstraction is not larger than the available water for abstraction.
-            # if get_irr_demand == False:
-            #     assert np.all(self.available_water_for_abstraction >= self.model.data.HRU.reservoir_abstraction_m3), "Abstracted water was more than available water."
-
+        self.irr_demand = self.model.data.HRU.reservoir_abstraction_m3.copy() * self.model.InvDtSec
+        
         # Make sure all variables are in same size and shape:
         assert self.inflow.size == self.irr_demand.size == self.cpa.size, "Variables for reservoir management module are not same size"
         assert self.inflow.shape == self.irr_demand.shape == self.cpa.shape , "Variables for reservoir management module are not same shape"
@@ -269,7 +264,7 @@ class ReservoirOperators(AgentBaseClass):
                                                     Qin_resv,
                                                     self.S_begin_yr,
                                                     self.mtifl,
-                                                    self.mtifl_month_20yrs[:, self.date.month-1],
+                                                    mtifl_month,
                                                     self.irr_demand,
                                                     self.irrmean,
                                                     self.alpha)
@@ -283,23 +278,19 @@ class ReservoirOperators(AgentBaseClass):
                                                         self.alpha)
 
         # Ensure environmental flow requirements, no reservoir overflow and no negative storage.
-        Sending = self.Sini_resv.copy() # create temporary final storage variable. If nothing changes, initial storage will be final storage.
+        Sending = Sini_resv.copy() # create temporary final storage variable. If nothing changes, initial storage will be final storage.
         
         Qout_resv, Sending = self.reservoir_water_balance(Qin_resv,
                                                             Rres,
-                                                            self.Sini_resv,
+                                                            Sini_resv,
                                                             self.cpa,
-                                                            self.mtifl_month_20yrs[:,self.date.month-1],
+                                                            mtifl_month,
                                                             self.alpha,
-                                                            self.cond_all,
-                                                            NoRoutingExecuted)
+                                                            self.cond_all)
         
-        # If the function is used to calculate the irrigation demand, 
-        # return the provisional final release and irrigation demand and break out.
-        # if get_irr_demand == True:
-        #     return Qout_resv, self.irr_demand
+
         
-                ###### ABSTRACTION calculation + release from remaining abstraction previous day ########
+        ###### ABSTRACTION calculation + release from remaining abstraction previous day ########
         # Get release from previous day that is not abstracted and add it to release today.
         if NoRoutingExecuted == 0:
             """
@@ -315,36 +306,17 @@ class ReservoirOperators(AgentBaseClass):
             self.abstraction_prev_day_dt = abstraction_prev_day * self.model.InvDtSec
             self.release_for_abstraction.fill(0)
         
-        mean_inflow_month = self.mtifl_month_20yrs[:, self.date.month-1]
-        mean_inflow_month_min = mean_inflow_month * 0.1
+        
         # Get water available for abstraction for the next day. 
-        self.release_for_abstraction += Qout_resv - self.mtifl_month_20yrs[:,self.date.month-1]*0.1
-        # Subtract the abstraction from the previous day from today's final release.
+        mtifl_month_min = mtifl_month * 0.1
+        self.release_for_abstraction += Qout_resv - mtifl_month_min
         
         # Subtract abstraction previous day from outflow today (to prevent double counting in storage subtraction)
         Qout_resv -= self.abstraction_prev_day_dt
 
-        if np.any(Qout_resv < mean_inflow_month_min):
-            #Qout_original = Qout_
-            Qout_resv[Qout_resv < mean_inflow_month_min] = mean_inflow_month_min[Qout_resv < mean_inflow_month_min]
-            # Qout_deficit = abs(Qout_original - Qout_)
-            # Qout_ = Qout_ + Qout_deficit
-
-        # # Make reservoir release available once final release is calculated.
-        # # Water available for abstraction must always be positive or zero.
-        # self.release_for_abstraction[self.condI] += np.maximum(0, 
-        #                                                        (Qout_resv[self.condI] - self.mtifl_month_20yrs[self.condI, date.month-1] * 0.2))
-
-        # """
-        # If the abstraction from previous day is larger than the release for today, the release is set to 10% of 
-        # monthly mtifl. The unreleased abstraction is added to the remaining abstraction for the next day.
-        # """
-        # if Qout_resv[self.condI] < self.abstraction_prev_day_dt:
-        #     Qout_resv = 0
-        #     self.remaining_abstraction += self.abstraction_prev_day_dt[self.condI] - Qout_resv[self.condI]
-        # else:
-        #     Qout_resv[self.condI] -= self.abstraction_prev_day_dt[self.condI]
-
+        # If the outflow is below minimum required outflow, due to too large abstraction, set it to minimum required outflow. This will create more abstraction from reservoir than planned, but as 10% of storage is always maintained, it should not be a problem.
+        if np.any(Qout_resv < mtifl_month_min):
+            Qout_resv[Qout_resv < mtifl_month_min] = mtifl_month_min[Qout_resv < mtifl_month_min]
 
         ##### AVERAGES CALCULATIONS #####
         # Add results of calculations to instances, to calculate yearly averages at end of year.
@@ -356,11 +328,13 @@ class ReservoirOperators(AgentBaseClass):
 
         # Set new reservoir storage for next timestep.
         self.Sini_resv = Sending.copy()
-        #self.irr_demand = np.zeros((self.N,), dtype='f8')
 
         # if it is the last day of the month, check if it also means the start of a new operational year.
         if self.date.day == 1 and NoRoutingExecuted == 0:
             self.check_for_new_operational_year(self.date.month)
+            print("Water available for abstraction today is", self.available_water_for_abstraction/24)
+            print("Demand today is:", self.irr_demand)
+            print("Outflow today is:", Qout_resv)
 
         return Qout_resv, self.irr_demand
 
@@ -385,6 +359,7 @@ class ReservoirOperators(AgentBaseClass):
         Nx = len(cond_ppose)
         Rprovisional = np.zeros([Nx, ])  # Provisional Release
         Rirrg_final = np.zeros([Nx, ])  # Final Release
+        self.date = self.model.current_time
 
         # water management
         current_demand = irr_demand[cond_ppose]  # downstream  demand: m^3/s
@@ -478,7 +453,7 @@ class ReservoirOperators(AgentBaseClass):
 
         return Rflood_final
     
-    def reservoir_water_balance(self, Qin, Qout, Sin, cpa, mtifl, alpha, cond_all, NoRoutingExecuted):
+    def reservoir_water_balance(self, Qin, Qout, Sin, cpa, mtifl, alpha, cond_all):
 
         """Re-adjusts release to ensure minimal environmental flow, and prevent overflow and negative storage;
         and computes the storage level after release for all reservoir types.
@@ -546,15 +521,8 @@ class ReservoirOperators(AgentBaseClass):
     def get_available_water_reservoir_command_areas(self, reservoir_storage_m3):
         self.date = self.model.current_time
         if "ruleset" in self.config and self.config["ruleset"] == "new_module":
-            # Get the the minimum possible outflow for today. Equation 3a. This is the water available for abstraction.
-            # self.minimum_outflow_today, _ = self.new_reservoir_management(inflow = np.zeros(self.N), 
-            #                                                          NoRoutingExecuted=1,
-            #                                                          get_irr_demand = True)
-            # # Subtract 10% and 5% mean inflow from the available water for abstraction. 
-            # # Second reservoir has lower minimum required mean inflow as this is a pickup reservoir.
-            # self.available_water_for_abstraction = np.maximum(0,((self.minimum_outflow_today - self.mtifl_month_20yrs[:,self.date.month-1]*[0.1, 0.05]) * 3600*24))
-            
             self.available_water_for_abstraction = self.release_for_abstraction.copy()
+
         else: # Use the old module
             self.available_water_for_abstraction = self.reservoir_release_factors * reservoir_storage_m3
 
@@ -567,12 +535,8 @@ class ReservoirOperators(AgentBaseClass):
         if "ruleset" in self.config and self.config["ruleset"] == "new_module":
             outflow, irr_demand = self.new_reservoir_management(inflow, 
                                                                 NoRoutingExecuted,
-                                                                get_irr_demand=False,
-                                                                pot_irrConsumption_m_per_cell = pot_irrConsumption_m_per_cell)
+                                                                pot_irrConsumption_m_per_cell)
             
-            if self.date == 1 and NoRoutingExecuted == 0:
-                outflow2 = self.regulate_reservoir_outflow(reservoirStorageM3C, inflow, waterBodyIDs)
-
             return outflow, irr_demand
         
         # Check if to use natural state, where inflow is outflow.
@@ -586,7 +550,24 @@ class ReservoirOperators(AgentBaseClass):
             return outflow, None
         
 
-########################OLD CODE########################
+
+
+
+
+
+
+
+
+
+
+#######################################################################################################################
+###################################################     OLD CODE    ###################################################
+###################################################     OLD CODE    ###################################################
+###################################################     OLD CODE    ###################################################
+###################################################     OLD CODE    ###################################################
+#######################################################################################################################
+
+
     def get_irrigation_per_reservoir_command_area_original(
             self, reservoir_storage_m3, potential_irrigation_consumption_m):
         """
