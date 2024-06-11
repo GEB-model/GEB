@@ -157,7 +157,7 @@ class BaseVariables:
 
     def load_initial(self, name, default=0.0, gpu=False):
         if self.model.load_initial_data:
-            fp = os.path.join(self.data.save_state_path, f"{name}.npz")
+            fp = os.path.join(self.data.get_save_state_path(), f"{name}.npz")
             if gpu:
                 return cp.load(fp)["data"]
             else:
@@ -447,22 +447,24 @@ class HRUs(BaseVariables):
         self.cell_size = self.data.grid.cell_size / self.scaling
         if self.model.load_initial_data:
             self.land_use_type = np.load(
-                os.path.join(self.data.save_state_path, "HRU.land_use_type.npz")
+                os.path.join(self.data.get_save_state_path(), "HRU.land_use_type.npz")
             )["data"]
             self.land_use_ratio = np.load(
-                os.path.join(self.data.save_state_path, "HRU.land_use_ratio.npz")
+                os.path.join(self.data.get_save_state_path(), "HRU.land_use_ratio.npz")
             )["data"]
             self.land_owners = np.load(
-                os.path.join(self.data.save_state_path, "HRU.land_owners.npz")
+                os.path.join(self.data.get_save_state_path(), "HRU.land_owners.npz")
             )["data"]
             self.HRU_to_grid = np.load(
-                os.path.join(self.data.save_state_path, "HRU.HRU_to_grid.npz")
+                os.path.join(self.data.get_save_state_path(), "HRU.HRU_to_grid.npz")
             )["data"]
             self.grid_to_HRU = np.load(
-                os.path.join(self.data.save_state_path, "HRU.grid_to_HRU.npz")
+                os.path.join(self.data.get_save_state_path(), "HRU.grid_to_HRU.npz")
             )["data"]
             self.unmerged_HRU_indices = np.load(
-                os.path.join(self.data.save_state_path, "HRU.unmerged_HRU_indices.npz")
+                os.path.join(
+                    self.data.get_save_state_path(), "HRU.unmerged_HRU_indices.npz"
+                )
             )["data"]
         else:
             (
@@ -721,6 +723,31 @@ class HRUs(BaseVariables):
             nanvalue = np.nan
         outarray = HRU_array[self.unmerged_HRU_indices]
         outarray[self.mask] = nanvalue
+        return outarray
+
+    @staticmethod
+    @njit(cache=True)
+    def compress_numba(array, unmerged_HRU_indices, outarray, nodatavalue):
+        array = array.ravel()
+        unmerged_HRU_indices = unmerged_HRU_indices.ravel()
+        for i in range(array.size):
+            value = array[i]
+            if value != nodatavalue:
+                HRU = unmerged_HRU_indices[i]
+                outarray[HRU] = value
+        return outarray
+
+    def compress(self, array: np.ndarray, method="last") -> np.ndarray:
+        assert method == "last", "Only last method is implemented"
+        assert self.mask.shape == array.shape, "Array must have same shape as mask"
+        if np.issubdtype(array.dtype, np.integer):
+            fill_value = -1
+        else:
+            fill_value = np.nan
+        outarray = self.full_compressed(fill_value, array.dtype)
+        outarray = self.compress_numba(
+            array, self.unmerged_HRU_indices, outarray, nodatavalue=fill_value
+        )
         return outarray
 
     def plot(self, HRU_array: np.ndarray, ax=None, show: bool = True):
@@ -1028,17 +1055,17 @@ class Data:
     def step(self):
         pass
 
-    @property
-    def save_state_path(self):
+    def get_save_state_path(self, mkdir=False):
         folder = Path(self.model.initial_conditions_folder, "grid")
-        folder.mkdir(parents=True, exist_ok=True)
+        if mkdir:
+            folder.mkdir(parents=True, exist_ok=True)
         return folder
 
     def save_state(self):
-        with open(Path(self.save_state_path, "state.txt"), "w") as f:
+        with open(Path(self.get_save_state_path(mkdir=True), "state.txt"), "w") as f:
             for var in self.initial_conditions:
                 f.write(f"{var}\n")
-                fp = self.save_state_path / f"{var}.npz"
+                fp = self.get_save_state_path(mkdir=True) / f"{var}.npz"
                 values = attrgetter(var)(self)
                 np.savez_compressed(fp, data=values)
         return True

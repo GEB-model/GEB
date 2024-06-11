@@ -30,7 +30,9 @@ class Artists(honeybeesArtists):
         self.custom_plot = self.get_custom_plot()
         self.set_variables()
 
-    def draw_farmers(self, model, agents, idx: int, color: str = "#ff0000") -> dict:
+    def draw_crop_farmers(
+        self, model, agents, idx: int, color: str = "#ff0000"
+    ) -> dict:
         """This function is used to draw farmers. First it is determined what crop is grown by the farmer, then the we get the color used to display that crop from the model configuration.
 
         Args:

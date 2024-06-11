@@ -172,15 +172,15 @@ class AgentArray:
     def __sizeof__(self):
         return self.data.__sizeof__()
 
-    def __add__(self, other):
-        if isinstance(other, AgentArray):
-            other = other._data[: other._n]
-        return self.__class__(self.data.__add__(other), max_n=self._data.shape[0])
-
     def _perform_operation(self, other, operation: str, inplace: bool = False):
         if isinstance(other, AgentArray):
             other = other._data[: other._n]
-        result = getattr(self.data, operation)(other)
+        fn = getattr(self.data, operation)
+        if other is None:
+            args = ()
+        else:
+            args = (other,)
+        result = fn(*args)
         if inplace:
             self.data = result
             return self
@@ -280,6 +280,15 @@ class AgentArray:
 
     def __or__(self, other):
         return self._perform_operation(other, "__or__")
+
+    def __neg__(self):
+        return self._perform_operation(None, "__neg__")
+
+    def __pos__(self):
+        return self._perform_operation(None, "__pos__")
+
+    def __invert__(self):
+        return self._perform_operation(None, "__invert__")
 
 
 @njit(cache=True)

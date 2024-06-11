@@ -7,6 +7,8 @@ name = "geb"
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
     {name = "Maurice Kalthof", email = "w.m.l.kalthof@vu.nl"},
+    {name = "Veerle Bril", email = "v.c.bril@vu.nl"},
+    {name = "Tim Busker", email = "tim.busker@vu.nl"},
 ]
 dependencies = [
     "rasterio",

@@ -92,6 +92,556 @@ def farmer_command_area(
     return output
 
 
+@njit(cache=True)
+def get_deficit_between_dates(cumulative_water_deficit_m3, farmer, start, end):
+    return (
+        cumulative_water_deficit_m3[farmer, end]
+        - cumulative_water_deficit_m3[
+            farmer, start
+        ]  # current day of year is effectively starting "tommorrow" due to Python's 0-indexing
+    )
+
+
+@njit(cache=True)
+def get_future_deficit(
+    farmer: int,
+    day_index: int,
+    cumulative_water_deficit_m3: np.ndarray,
+    crop_calendar: np.ndarray,
+    crop_rotation_year_index: np.ndarray,
+    potential_irrigation_consumption_farmer_m3: float,
+):
+    future_water_deficit = potential_irrigation_consumption_farmer_m3
+    if day_index >= 365:
+        return future_water_deficit
+    for crop in crop_calendar[farmer]:
+        crop_type = crop[0]
+        crop_year_index = crop[3]
+        if crop_type != -1 and crop_year_index == crop_rotation_year_index[farmer]:
+            start_day = crop[1]
+            growth_length = crop[2]
+            end_day = start_day + growth_length
+
+            if end_day > 365:
+                future_water_deficit += get_deficit_between_dates(
+                    cumulative_water_deficit_m3,
+                    farmer,
+                    max(start_day, day_index + 1),
+                    365,
+                )
+                if growth_length < 366 and end_day - 366 > day_index:
+                    future_water_deficit += get_deficit_between_dates(
+                        cumulative_water_deficit_m3,
+                        farmer,
+                        day_index + 1,
+                        end_day % 366,
+                    )
+
+            elif day_index < end_day:
+                future_water_deficit += get_deficit_between_dates(
+                    cumulative_water_deficit_m3,
+                    farmer,
+                    max(start_day, day_index + 1),
+                    end_day,
+                )
+
+    assert future_water_deficit >= 0
+    return future_water_deficit
+
+
+@njit(cache=True)
+def adjust_irrigation_to_limit(
+    farmer: int,
+    day_index: int,
+    remaining_irrigation_limit_m3: np.ndarray,
+    cumulative_water_deficit_m3: np.ndarray,
+    crop_calendar: np.ndarray,
+    crop_rotation_year_index: np.ndarray,
+    irrigation_efficiency_farmer: float,
+    totalPotIrrConsumption,
+    potential_irrigation_consumption_farmer_m3,
+    farmer_fields,
+):
+    if remaining_irrigation_limit_m3[farmer] < 0:
+        totalPotIrrConsumption[farmer_fields] = 0
+        return totalPotIrrConsumption
+    # calculate future water deficit, but also include today's irrigation consumption
+    future_water_deficit = get_future_deficit(
+        farmer=farmer,
+        day_index=day_index,
+        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+        crop_calendar=crop_calendar,
+        crop_rotation_year_index=crop_rotation_year_index,
+        potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
+    )
+
+    assert future_water_deficit > 0
+
+    # first find the total irrigation demand for the farmer in m3
+    irrigation_water_withdrawal_farmer_m3 = (
+        potential_irrigation_consumption_farmer_m3
+        * remaining_irrigation_limit_m3[farmer]
+        / future_water_deficit
+    )
+    assert not np.isnan(irrigation_water_withdrawal_farmer_m3)
+
+    irrigation_water_consumption_farmer_m3 = (
+        irrigation_water_withdrawal_farmer_m3 * irrigation_efficiency_farmer
+    )
+    irrigation_water_consumption_farmer_m3 = min(
+        irrigation_water_consumption_farmer_m3,
+        potential_irrigation_consumption_farmer_m3,
+    )
+
+    # if the irrigation demand is higher than the limit, reduce the irrigation demand by the calculated reduction factor
+    reduction_factor = (
+        irrigation_water_consumption_farmer_m3
+        / potential_irrigation_consumption_farmer_m3
+    )
+    assert not np.isnan(reduction_factor)
+
+    totalPotIrrConsumption[farmer_fields] = (
+        totalPotIrrConsumption[farmer_fields] * reduction_factor
+    )
+    return totalPotIrrConsumption
+
+
+@njit(cache=True)
+def withdraw_channel(
+    available_channel_storage_m3: np.ndarray,
+    grid_cell: int,
+    cell_area: np.ndarray,
+    field: int,
+    farmer: int,
+    irrigation_water_demand_field: float,
+    water_withdrawal_m: np.ndarray,
+    remaining_irrigation_limit_m3: np.ndarray,
+    channel_abstraction_m3_by_farmer: np.ndarray,
+):
+    # channel abstraction
+    available_channel_storage_cell_m = (
+        available_channel_storage_m3[grid_cell] / cell_area[field]
+    )
+    channel_abstraction_cell_m = min(
+        available_channel_storage_cell_m,
+        irrigation_water_demand_field,
+    )
+    channel_abstraction_cell_m3 = channel_abstraction_cell_m * cell_area[field]
+    available_channel_storage_m3[grid_cell] -= channel_abstraction_cell_m3
+    water_withdrawal_m[field] += channel_abstraction_cell_m
+
+    if not np.isnan(remaining_irrigation_limit_m3[farmer]):
+        remaining_irrigation_limit_m3[farmer] -= channel_abstraction_cell_m3
+
+    channel_abstraction_m3_by_farmer[farmer] += channel_abstraction_cell_m3
+
+    irrigation_water_demand_field -= channel_abstraction_cell_m
+    return irrigation_water_demand_field
+
+
+@njit(cache=True)
+def withdraw_reservoir(
+    command_area: int,
+    field: int,
+    farmer: int,
+    available_reservoir_storage_m3: np.ndarray,
+    irrigation_water_demand_field: float,
+    water_withdrawal_m: np.ndarray,
+    remaining_irrigation_limit_m3: np.ndarray,
+    reservoir_abstraction_m3_by_farmer: np.ndarray,
+    cell_area: np.ndarray,
+):
+    water_demand_cell_M3 = irrigation_water_demand_field * cell_area[field]
+    reservoir_abstraction_m_cell_m3 = min(
+        available_reservoir_storage_m3[command_area],
+        water_demand_cell_M3,
+    )
+    available_reservoir_storage_m3[command_area] -= reservoir_abstraction_m_cell_m3
+
+    reservoir_abstraction_m_cell = reservoir_abstraction_m_cell_m3 / cell_area[field]
+    water_withdrawal_m[field] += reservoir_abstraction_m_cell
+
+    if not np.isnan(remaining_irrigation_limit_m3[farmer]):
+        remaining_irrigation_limit_m3[farmer] -= reservoir_abstraction_m_cell_m3
+
+    reservoir_abstraction_m3_by_farmer[farmer] += reservoir_abstraction_m_cell_m3
+
+    irrigation_water_demand_field -= reservoir_abstraction_m_cell
+    return irrigation_water_demand_field
+
+
+@njit(cache=True)
+def withdraw_groundwater(
+    farmer: int,
+    grid_cell: int,
+    field: int,
+    available_groundwater_m3: np.ndarray,
+    cell_area: np.ndarray,
+    groundwater_depth: np.ndarray,
+    well_depth: np.ndarray,
+    irrigation_water_demand_field: float,
+    water_withdrawal_m: np.ndarray,
+    remaining_irrigation_limit_m3: np.ndarray,
+    groundwater_abstraction_m3_by_farmer: np.ndarray,
+):
+    # groundwater irrigation
+    if groundwater_depth[grid_cell] < well_depth[farmer]:
+        available_groundwater_cell_m = (
+            available_groundwater_m3[grid_cell] / cell_area[field]
+        )
+        groundwater_abstraction_cell_m = min(
+            available_groundwater_cell_m,
+            irrigation_water_demand_field,
+        )
+        groundwater_abstraction_cell_m3 = (
+            groundwater_abstraction_cell_m * cell_area[field]
+        )
+        available_groundwater_m3[grid_cell] -= groundwater_abstraction_cell_m3
+        water_withdrawal_m[field] += groundwater_abstraction_cell_m
+
+        if not np.isnan(remaining_irrigation_limit_m3[farmer]):
+            remaining_irrigation_limit_m3[farmer] -= groundwater_abstraction_cell_m3
+
+        groundwater_abstraction_m3_by_farmer[farmer] += groundwater_abstraction_cell_m3
+
+        irrigation_water_demand_field -= groundwater_abstraction_cell_m
+    return irrigation_water_demand_field
+
+
+@njit(cache=True)
+def abstract_water(
+    day_index: int,
+    n: int,
+    activation_order: np.ndarray,
+    field_indices_by_farmer: np.ndarray,
+    field_indices: np.ndarray,
+    irrigation_efficiency: np.ndarray,
+    surface_irrigated: np.ndarray,
+    well_irrigated: np.ndarray,
+    cell_area: np.ndarray,
+    HRU_to_grid: np.ndarray,
+    crop_map: np.ndarray,
+    totalPotIrrConsumption: np.ndarray,
+    available_channel_storage_m3: np.ndarray,
+    available_groundwater_m3: np.ndarray,
+    groundwater_depth: np.ndarray,
+    available_reservoir_storage_m3: np.ndarray,
+    command_areas: np.ndarray,
+    return_fraction: float,
+    well_depth: float,
+    remaining_irrigation_limit_m3: np.ndarray,
+    cumulative_water_deficit_m3: np.ndarray,
+    crop_calendar: np.ndarray,
+    current_crop_calendar_rotation_year_index: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
+
+    Args:
+        activation_order: Order in which the agents are activated. Agents that are activated first get a first go at extracting water, leaving less water for other farmers.
+        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+        field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
+        irrigation_efficiency: Boolean array that specifies whether the specific farmer is efficient with water use.
+        irrigated: Array that specifies whether a farm is irrigated.
+        well_irrigated: Array that specifies whether a farm is groundwater irrigated.
+        cell_area: The area of each subcell in m2.
+        HRU_to_grid: Array to map the index of each subcell to the corresponding cell.
+        crop_map: Map of the currently growing crops.
+        totalPotIrrConsumption: Potential irrigation consumption.
+        available_channel_storage_m3: Water available for irrigation from channels.
+        groundwater_head: Groundwater head.
+        available_groundwater_m3: Water available for irrigation from groundwater.
+        available_reservoir_storage_m3: Water available for irrigation from reservoirs.
+        command_areas: Command areas associated with reservoirs (i.e., which areas can access water from which reservoir.)
+
+    Returns:
+        channel_abstraction_m3_by_farmer: Channel abstraction by farmer in m3.
+        reservoir_abstraction_m3_by_farmer: Revervoir abstraction by farmer in m3.
+        groundwater_abstraction_m3_by_farmer: Groundwater abstraction by farmer in m3.
+        water_withdrawal_m: Water withdrawal in meters.
+        water_consumption_m: Water consumption in meters.
+        returnFlowIrr_m: Return flow in meters.
+        addtoevapotrans_m: Evaporated irrigation water in meters.
+    """
+    assert n == activation_order.size
+
+    n_hydrological_response_units = cell_area.size
+    water_withdrawal_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
+    water_consumption_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
+
+    returnFlowIrr_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
+    addtoevapotrans_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
+
+    channel_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
+    reservoir_abstraction_m3_by_farmer = np.zeros(
+        activation_order.size, dtype=np.float32
+    )
+    groundwater_abstraction_m3_by_farmer = np.zeros(
+        activation_order.size, dtype=np.float32
+    )
+    groundwater_depth_per_farmer = np.zeros(activation_order.size, dtype=np.float32)
+
+    has_access_to_irrigation_water = np.zeros(activation_order.size, dtype=np.bool_)
+    for activated_farmer_index in range(activation_order.size):
+        farmer = activation_order[activated_farmer_index]
+        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
+        irrigation_efficiency_farmer = irrigation_efficiency[farmer]
+
+        # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
+        farmer_has_access_to_irrigation_water = False
+        for field in farmer_fields:
+            grid_cell = HRU_to_grid[field]
+
+            # Convert the groundwater depth to groundwater depth per farmer
+            groundwater_depth_per_farmer[farmer] = groundwater_depth[grid_cell]
+
+            if well_irrigated[farmer]:
+                if groundwater_depth[grid_cell] < well_depth[farmer]:
+                    farmer_has_access_to_irrigation_water = True
+                    break
+            elif surface_irrigated[farmer]:
+                if available_channel_storage_m3[grid_cell] > 0:
+                    farmer_has_access_to_irrigation_water = True
+                    break
+                command_area = command_areas[field]
+                # -1 means no command area
+                if (
+                    command_area != -1
+                    and available_reservoir_storage_m3[command_area] > 0
+                ):
+                    farmer_has_access_to_irrigation_water = True
+                    break
+
+        has_access_to_irrigation_water[activated_farmer_index] = (
+            farmer_has_access_to_irrigation_water
+        )
+
+        # Actual irrigation from surface, reservoir and groundwater
+        # If farmer doesn't have access to irrigation water, skip the irrigation abstraction
+        if farmer_has_access_to_irrigation_water:
+            # Calculate the potential irrigation consumption for the farmer
+            potential_irrigation_consumption_farmer_m3 = (
+                totalPotIrrConsumption[farmer_fields] * cell_area[farmer_fields]
+            ).sum()
+
+            # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
+            if potential_irrigation_consumption_farmer_m3 > 0.0:
+
+                # if irrigation limit is active, reduce the irrigation demand
+                if not np.isnan(remaining_irrigation_limit_m3[farmer]):
+                    adjust_irrigation_to_limit(
+                        farmer=farmer,
+                        day_index=day_index,
+                        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+                        crop_calendar=crop_calendar,
+                        crop_rotation_year_index=current_crop_calendar_rotation_year_index,
+                        irrigation_efficiency_farmer=irrigation_efficiency_farmer,
+                        totalPotIrrConsumption=totalPotIrrConsumption,
+                        potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
+                        farmer_fields=farmer_fields,
+                    )
+
+                # loop through all farmers fields and apply irrigation
+                for field in farmer_fields:
+                    grid_cell = HRU_to_grid[field]
+                    if crop_map[field] != -1:
+                        irrigation_water_demand_field = (
+                            totalPotIrrConsumption[field] / irrigation_efficiency_farmer
+                        )
+
+                        if surface_irrigated[farmer]:
+                            irrigation_water_demand_field = withdraw_channel(
+                                available_channel_storage_m3=available_channel_storage_m3,
+                                grid_cell=grid_cell,
+                                cell_area=cell_area,
+                                field=field,
+                                farmer=farmer,
+                                water_withdrawal_m=water_withdrawal_m,
+                                irrigation_water_demand_field=irrigation_water_demand_field,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                            )
+
+                            # command areas
+                            command_area = command_areas[field]
+                            if command_area >= 0:  # -1 means no command area
+                                irrigation_water_demand_field = withdraw_reservoir(
+                                    command_area=command_area,
+                                    field=field,
+                                    farmer=farmer,
+                                    available_reservoir_storage_m3=available_reservoir_storage_m3,
+                                    irrigation_water_demand_field=irrigation_water_demand_field,
+                                    water_withdrawal_m=water_withdrawal_m,
+                                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                    reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+                                    cell_area=cell_area,
+                                )
+
+                        if well_irrigated[farmer]:
+                            irrigation_water_demand_field = withdraw_groundwater(
+                                farmer=farmer,
+                                field=field,
+                                grid_cell=grid_cell,
+                                available_groundwater_m3=available_groundwater_m3,
+                                cell_area=cell_area,
+                                groundwater_depth=groundwater_depth,
+                                well_depth=well_depth,
+                                irrigation_water_demand_field=irrigation_water_demand_field,
+                                water_withdrawal_m=water_withdrawal_m,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+                            )
+
+                        assert (
+                            irrigation_water_demand_field >= -1e15
+                        )  # Make sure irrigation water demand is zero, or positive. Allow very small error.
+
+                    water_consumption_m[field] = (
+                        water_withdrawal_m[field] * irrigation_efficiency_farmer
+                    )
+                    irrigation_loss_m = (
+                        water_withdrawal_m[field] - water_consumption_m[field]
+                    )
+                    returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
+                    addtoevapotrans_m[field] = irrigation_loss_m * (1 - return_fraction)
+
+    return (
+        channel_abstraction_m3_by_farmer,
+        reservoir_abstraction_m3_by_farmer,
+        groundwater_abstraction_m3_by_farmer,
+        water_withdrawal_m,
+        water_consumption_m,
+        returnFlowIrr_m,
+        addtoevapotrans_m,
+        has_access_to_irrigation_water,
+        groundwater_depth_per_farmer,
+    )
+
+
+def advance_crop_rotation_year(
+    current_crop_calendar_rotation_year_index: np.ndarray,
+    crop_calendar_rotation_years: np.ndarray,
+):
+    """Update the crop rotation year for each farmer. This function is used to update the crop rotation year for each farmer at the end of the year.
+
+    Args:
+        current_crop_calendar_rotation_year_index: The current crop rotation year for each farmer.
+        crop_calendar_rotation_years: The number of years in the crop rotation cycle for each farmer.
+    """
+    current_crop_calendar_rotation_year_index[:] = (
+        current_crop_calendar_rotation_year_index + 1
+    ) % crop_calendar_rotation_years
+
+
+@njit(cache=True)
+def plant(
+    n: int,
+    day_index: int,
+    crop_calendar: np.ndarray,
+    current_crop_calendar_rotation_year_index: np.ndarray,
+    crop_map: np.ndarray,
+    crop_harvest_age_days: np.ndarray,
+    cultivation_cost: Union[np.ndarray, int, float],
+    region_ids_per_farmer: np.ndarray,
+    field_indices_by_farmer: np.ndarray,
+    field_indices: np.ndarray,
+    field_size_per_farmer: np.ndarray,
+    all_loans_annual_cost: np.ndarray,
+    loan_tracker: np.ndarray,
+    interest_rate: np.ndarray,
+    farmers_going_out_of_business: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
+
+    Args:
+        n: Number of farmers.
+        start_day_per_month: Starting day of each month of year.
+        current_day: Current day.
+        crop: Crops grown by each farmer.
+        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+        field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
+        field_size_per_farmer: Field size per farmer in m2
+
+    Returns:
+        plant: Subarray map of what crops are planted this day.
+    """
+    assert (
+        farmers_going_out_of_business is False
+    ), "Farmers going out of business not implemented."
+
+    plant = np.full_like(crop_map, -1, dtype=np.int32)
+    sell_land = np.zeros(n, dtype=np.bool_)
+
+    planting_farmers_per_season = (crop_calendar[:, :, 1] == day_index) & (
+        crop_calendar[:, :, 3]
+        == current_crop_calendar_rotation_year_index[:, np.newaxis]
+    )
+    planting_farmers = planting_farmers_per_season.sum(axis=1)
+
+    assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
+
+    planting_farmers_idx = np.where(planting_farmers == 1)[0]
+    if not planting_farmers_idx.size == 0:
+        crop_rotation = np.argmax(
+            planting_farmers_per_season[planting_farmers_idx], axis=1
+        )
+
+        assert planting_farmers_idx.size == crop_rotation.size
+
+        for i in range(planting_farmers_idx.size):
+            farmer_idx = planting_farmers_idx[i]
+            farmer_crop_rotation = crop_rotation[i]
+
+            farmer_fields = get_farmer_HRUs(
+                field_indices, field_indices_by_farmer, farmer_idx
+            )
+            farmer_crop_data = crop_calendar[farmer_idx, farmer_crop_rotation]
+            farmer_crop = farmer_crop_data[0]
+            field_harvest_age = farmer_crop_data[2]
+
+            assert farmer_crop != -1
+
+            if isinstance(cultivation_cost, (int, float)):
+                cultivation_cost_farmer = cultivation_cost
+            else:
+                farmer_region_id = region_ids_per_farmer[farmer_idx]
+                cultivation_cost_farmer = (
+                    cultivation_cost[farmer_region_id, farmer_crop]
+                    * field_size_per_farmer[farmer_idx]
+                )
+            assert not np.isnan(cultivation_cost_farmer)
+
+            interest_rate_farmer = interest_rate[farmer_idx]
+            loan_duration = 2
+            annual_cost_input_loan = cultivation_cost_farmer * (
+                interest_rate_farmer
+                * (1 + interest_rate_farmer) ** loan_duration
+                / ((1 + interest_rate_farmer) ** loan_duration - 1)
+            )
+            for i in range(4):
+                if all_loans_annual_cost[farmer_idx, 0, i] == 0:
+                    all_loans_annual_cost[
+                        farmer_idx, 0, i
+                    ] += annual_cost_input_loan  # Add the amount to the input specific loan
+                    loan_tracker[farmer_idx, 0, i] = loan_duration
+                    break  # Exit the loop after adding to the first zero value
+
+            all_loans_annual_cost[
+                farmer_idx, -1, 0
+            ] += annual_cost_input_loan  # Add the amount to the total loan amount
+
+            for field in farmer_fields:
+                # a crop is still growing here.
+                if crop_harvest_age_days[field] != -1:
+                    continue
+                plant[field] = farmer_crop
+                crop_harvest_age_days[field] = field_harvest_age
+
+    farmers_selling_land = np.where(sell_land)[0]
+    return plant, farmers_selling_land
+
+
 class CropFarmers(AgentBaseClass):
     """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
 
@@ -369,7 +919,7 @@ class CropFarmers(AgentBaseClass):
         self.crop_calendar = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(3, 3),
+            extra_dims=(3, 4),
             extra_dims_names=("rotation", "calendar"),
             dtype=np.int32,
             fill_value=-1,
@@ -377,8 +927,31 @@ class CropFarmers(AgentBaseClass):
         self.crop_calendar[:] = np.load(
             self.model.model_structure["binary"]["agents/farmers/crop_calendar"]
         )["data"]
-
         assert self.crop_calendar[:, :, 0].max() < len(self.crop_ids)
+
+        self.crop_calendar_rotation_years = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.int32,
+            fill_value=0,
+        )
+        self.crop_calendar_rotation_years[:] = np.load(
+            self.model.model_structure["binary"][
+                "agents/farmers/crop_calendar_rotation_years"
+            ]
+        )["data"]
+
+        self.current_crop_calendar_rotation_year_index = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.int32,
+            fill_value=0,
+        )
+        # For each farmer set a random crop rotation year. The farmer starts in that year. First set a seed for reproducibility.
+        np.random.seed(42)
+        self.current_crop_calendar_rotation_year_index[:] = np.random.randint(
+            0, self.crop_calendar_rotation_years
+        )
 
         # Set irrigation source
         self.irrigation_source = AgentArray(
@@ -486,6 +1059,10 @@ class CropFarmers(AgentBaseClass):
         # set no irrigation limit for farmers by default
         self.irrigation_limit_m3 = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan  # m3
+        )
+        # set the remaining irrigation limit to the irrigation limit
+        self.remaining_irrigation_limit_m3 = AgentArray(
+            n=self.n, max_n=self.max_n, fill_value=np.nan, dtype=np.float32
         )
 
         self.yield_ratios_drought_event = AgentArray(
@@ -718,6 +1295,15 @@ class CropFarmers(AgentBaseClass):
             ]["decision_horizon"],
         )
 
+        self.cumulative_water_deficit_m3 = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            extra_dims=(366,),
+            extra_dims_names=("day",),
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+
         self.field_indices_by_farmer = AgentArray(
             n=self.n,
             max_n=self.max_n,
@@ -834,273 +1420,6 @@ class CropFarmers(AgentBaseClass):
     def is_in_command_area(self):
         return self.farmer_command_area != -1
 
-    @staticmethod
-    @njit(cache=True)
-    def abstract_water_numba(
-        n: int,
-        activation_order: np.ndarray,
-        field_indices_by_farmer: np.ndarray,
-        field_indices: np.ndarray,
-        irrigation_efficiency: np.ndarray,
-        surface_irrigated: np.ndarray,
-        well_irrigated: np.ndarray,
-        cell_area: np.ndarray,
-        HRU_to_grid: np.ndarray,
-        crop_map: np.ndarray,
-        totalPotIrrConsumption: np.ndarray,
-        available_channel_storage_m3: np.ndarray,
-        available_groundwater_m3: np.ndarray,
-        groundwater_depth: np.ndarray,
-        available_reservoir_storage_m3: np.ndarray,
-        command_areas: np.ndarray,
-        return_fraction: float,
-        well_depth: float,
-        irrigation_limit_m3: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
-
-        Args:
-            activation_order: Order in which the agents are activated. Agents that are activated first get a first go at extracting water, leaving less water for other farmers.
-            field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
-            field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
-            irrigation_efficiency: Boolean array that specifies whether the specific farmer is efficient with water use.
-            irrigated: Array that specifies whether a farm is irrigated.
-            well_irrigated: Array that specifies whether a farm is groundwater irrigated.
-            cell_area: The area of each subcell in m2.
-            HRU_to_grid: Array to map the index of each subcell to the corresponding cell.
-            crop_map: Map of the currently growing crops.
-            totalPotIrrConsumption: Potential irrigation consumption.
-            available_channel_storage_m3: Water available for irrigation from channels.
-            groundwater_head: Groundwater head.
-            available_groundwater_m3: Water available for irrigation from groundwater.
-            available_reservoir_storage_m3: Water available for irrigation from reservoirs.
-            command_areas: Command areas associated with reservoirs (i.e., which areas can access water from which reservoir.)
-
-        Returns:
-            channel_abstraction_m3_by_farmer: Channel abstraction by farmer in m3.
-            reservoir_abstraction_m3_by_farmer: Revervoir abstraction by farmer in m3.
-            groundwater_abstraction_m3_by_farmer: Groundwater abstraction by farmer in m3.
-            water_withdrawal_m: Water withdrawal in meters.
-            water_consumption_m: Water consumption in meters.
-            returnFlowIrr_m: Return flow in meters.
-            addtoevapotrans_m: Evaporated irrigation water in meters.
-        """
-        assert n == activation_order.size
-
-        land_unit_array_size = cell_area.size
-        water_withdrawal_m = np.zeros(land_unit_array_size, dtype=np.float32)
-        water_consumption_m = np.zeros(land_unit_array_size, dtype=np.float32)
-
-        returnFlowIrr_m = np.zeros(land_unit_array_size, dtype=np.float32)
-        addtoevapotrans_m = np.zeros(land_unit_array_size, dtype=np.float32)
-
-        groundwater_abstraction_m3 = np.zeros(
-            available_groundwater_m3.size, dtype=np.float32
-        )
-        channel_abstraction_m3 = np.zeros(
-            available_channel_storage_m3.size, dtype=np.float32
-        )
-
-        reservoir_abstraction_m_per_basin_m3 = np.zeros(
-            available_reservoir_storage_m3.size, dtype=np.float32
-        )
-        reservoir_abstraction_m = np.zeros(land_unit_array_size, dtype=np.float32)
-
-        channel_abstraction_m3_by_farmer = np.zeros(
-            activation_order.size, dtype=np.float32
-        )
-        reservoir_abstraction_m3_by_farmer = np.zeros(
-            activation_order.size, dtype=np.float32
-        )
-        groundwater_abstraction_m3_by_farmer = np.zeros(
-            activation_order.size, dtype=np.float32
-        )
-        groundwater_depth_per_farmer = np.zeros(activation_order.size, dtype=np.float32)
-
-        has_access_to_irrigation_water = np.zeros(activation_order.size, dtype=np.bool_)
-        for activated_farmer_index in range(activation_order.size):
-            farmer = activation_order[activated_farmer_index]
-            farmer_fields = get_farmer_HRUs(
-                field_indices, field_indices_by_farmer, farmer
-            )
-            irrigation_efficiency_farmer = irrigation_efficiency[farmer]
-
-            # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
-            farmer_has_access_to_irrigation_water = False
-            for field in farmer_fields:
-                f_var = HRU_to_grid[field]
-
-                # Convert the groundwater depth to groundwater depth per farmer
-                groundwater_depth_per_farmer[farmer] = groundwater_depth[f_var]
-
-                if well_irrigated[farmer]:
-                    if groundwater_depth[f_var] < well_depth[farmer]:
-                        farmer_has_access_to_irrigation_water = True
-                        break
-                elif surface_irrigated[farmer]:
-                    if available_channel_storage_m3[f_var] > 100:
-                        farmer_has_access_to_irrigation_water = True
-                        break
-                    command_area = command_areas[field]
-                    # -1 means no command area
-                    if (
-                        command_area != -1
-                        and available_reservoir_storage_m3[command_area] > 100
-                    ):
-                        farmer_has_access_to_irrigation_water = True
-                        break
-            has_access_to_irrigation_water[activated_farmer_index] = (
-                farmer_has_access_to_irrigation_water
-            )
-
-            # Actual irrigation from surface, reservoir and groundwater
-            if surface_irrigated[farmer] == 1 or well_irrigated[farmer] == 1:
-                # if irrigation limit is active, reduce the irrigation demand
-                if not np.isnan(irrigation_limit_m3[farmer]):
-                    daily_irrigation_limit_m3 = irrigation_limit_m3[farmer] / 365
-                    # first find the total irrigation demand for the farmer in m3
-                    irrigation_water_demand_farmer_m3 = (
-                        totalPotIrrConsumption[farmer_fields]
-                        * cell_area[farmer_fields]
-                        / irrigation_efficiency_farmer
-                    )
-                    irrigation_water_demand_farmer_m3_sum = (
-                        irrigation_water_demand_farmer_m3.sum()
-                    )
-                    # if the irrigation demand is higher than the limit, reduce the irrigation demand by the calculated reduction factor
-                    if (
-                        irrigation_water_demand_farmer_m3_sum
-                        > daily_irrigation_limit_m3
-                    ):
-                        reduction_factor = (
-                            daily_irrigation_limit_m3
-                            / irrigation_water_demand_farmer_m3_sum
-                        )
-                        totalPotIrrConsumption[farmer_fields] = (
-                            totalPotIrrConsumption[farmer_fields] * reduction_factor
-                        )
-                for field in farmer_fields:
-                    f_var = HRU_to_grid[field]
-                    if crop_map[field] != -1:
-                        irrigation_water_demand_field = (
-                            totalPotIrrConsumption[field] / irrigation_efficiency_farmer
-                        )
-
-                        if surface_irrigated[farmer]:
-                            # channel abstraction
-                            available_channel_storage_cell_m = (
-                                available_channel_storage_m3[f_var] / cell_area[field]
-                            )
-                            channel_abstraction_cell_m = min(
-                                available_channel_storage_cell_m,
-                                irrigation_water_demand_field,
-                            )
-                            channel_abstraction_cell_m3 = (
-                                channel_abstraction_cell_m * cell_area[field]
-                            )
-                            available_channel_storage_m3[
-                                f_var
-                            ] -= channel_abstraction_cell_m3
-                            water_withdrawal_m[field] += channel_abstraction_cell_m
-                            channel_abstraction_m3[f_var] = channel_abstraction_cell_m3
-
-                            channel_abstraction_m3_by_farmer[
-                                farmer
-                            ] += channel_abstraction_cell_m3
-
-                            irrigation_water_demand_field -= channel_abstraction_cell_m
-
-                            # command areas
-                            command_area = command_areas[field]
-                            if command_area >= 0:  # -1 means no command area
-                                water_demand_cell_M3 = (
-                                    irrigation_water_demand_field * cell_area[field]
-                                )
-                                reservoir_abstraction_m_cell_m3 = min(
-                                    available_reservoir_storage_m3[command_area],
-                                    water_demand_cell_M3,
-                                )
-                                available_reservoir_storage_m3[
-                                    command_area
-                                ] -= reservoir_abstraction_m_cell_m3
-                                reservoir_abstraction_m_per_basin_m3[
-                                    command_area
-                                ] += reservoir_abstraction_m_cell_m3
-                                reservoir_abstraction_m_cell = (
-                                    reservoir_abstraction_m_cell_m3 / cell_area[field]
-                                )
-                                reservoir_abstraction_m[
-                                    field
-                                ] += reservoir_abstraction_m_cell
-                                water_withdrawal_m[
-                                    field
-                                ] += reservoir_abstraction_m_cell
-
-                                reservoir_abstraction_m3_by_farmer[
-                                    farmer
-                                ] += reservoir_abstraction_m_cell_m3
-
-                                irrigation_water_demand_field -= (
-                                    reservoir_abstraction_m_cell
-                                )
-
-                        if well_irrigated[farmer]:
-                            # groundwater irrigation
-                            if groundwater_depth[f_var] < well_depth[farmer]:
-                                available_groundwater_cell_m = (
-                                    available_groundwater_m3[f_var] / cell_area[field]
-                                )
-                                groundwater_abstraction_cell_m = min(
-                                    available_groundwater_cell_m,
-                                    irrigation_water_demand_field,
-                                )
-                                groundwater_abstraction_cell_m3 = (
-                                    groundwater_abstraction_cell_m * cell_area[field]
-                                )
-                                groundwater_abstraction_m3[f_var] = (
-                                    groundwater_abstraction_cell_m3
-                                )
-                                available_groundwater_m3[
-                                    f_var
-                                ] -= groundwater_abstraction_cell_m3
-                                water_withdrawal_m[
-                                    field
-                                ] += groundwater_abstraction_cell_m
-
-                                groundwater_abstraction_m3_by_farmer[
-                                    farmer
-                                ] += groundwater_abstraction_cell_m3
-
-                                irrigation_water_demand_field -= (
-                                    groundwater_abstraction_cell_m
-                                )
-
-                        assert (
-                            irrigation_water_demand_field >= -1e15
-                        )  # Make sure irrigation water demand is zero, or positive. Allow very small error.
-
-                    water_consumption_m[field] = (
-                        water_withdrawal_m[field] * irrigation_efficiency_farmer
-                    )
-                    irrigation_loss_m = (
-                        water_withdrawal_m[field] - water_consumption_m[field]
-                    )
-                    returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
-                    addtoevapotrans_m[field] = irrigation_loss_m * (1 - return_fraction)
-
-        return (
-            channel_abstraction_m3_by_farmer,
-            reservoir_abstraction_m3_by_farmer,
-            groundwater_abstraction_m3_by_farmer,
-            water_withdrawal_m,
-            water_consumption_m,
-            returnFlowIrr_m,
-            addtoevapotrans_m,
-            has_access_to_irrigation_water,
-            groundwater_depth_per_farmer,
-        )
-
     def abstract_water(
         self,
         cell_area: np.ndarray,
@@ -1132,6 +1451,16 @@ class CropFarmers(AgentBaseClass):
             returnFlowIrr_m: return flow in meters
             addtoevapotrans_m: evaporated irrigation water in meters
         """
+        assert (available_channel_storage_m3 >= 0).all()
+        assert (available_groundwater_m3 >= 0).all()
+        assert (available_reservoir_storage_m3 >= 0).all()
+
+        irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
+        total_storage_pre_m3 = (
+            available_channel_storage_m3.sum()
+            + available_groundwater_m3.sum()
+            + available_reservoir_storage_m3.sum()
+        )
         (
             self.channel_abstraction_m3_by_farmer[:],
             self.reservoir_abstraction_m3_by_farmer[:],
@@ -1140,9 +1469,10 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
-            has_access_to_irrigation_water,
+            self.has_access_to_irrigation_water,
             groundwater_depth_per_farmer,
-        ) = self.abstract_water_numba(
+        ) = abstract_water(
+            self.model.current_day_of_year - 1,
             self.n,
             self.activation_order_by_elevation,
             self.field_indices_by_farmer.data,
@@ -1170,15 +1500,63 @@ class CropFarmers(AgentBaseClass):
             totalPotIrrConsumption=totalPotIrrConsumption,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
-            groundwater_depth=groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
+            groundwater_depth=groundwater_depth,
             command_areas=command_areas,
             return_fraction=self.model.config["agent_settings"]["farmers"][
                 "return_fraction"
             ],
             well_depth=self.well_depth.data,
-            irrigation_limit_m3=self.irrigation_limit_m3.data,
+            remaining_irrigation_limit_m3=self.remaining_irrigation_limit_m3.data,
+            cumulative_water_deficit_m3=self.cumulative_water_deficit_m3.data,
+            crop_calendar=self.crop_calendar.data,
+            current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index.data,
         )
+
+        # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
+        assert math.isclose(
+            self.channel_abstraction_m3_by_farmer.sum()
+            + self.reservoir_abstraction_m3_by_farmer.sum()
+            + self.groundwater_abstraction_m3_by_farmer.sum(),
+            (water_withdrawal_m * cell_area).sum(),
+            rel_tol=0.0001,
+            abs_tol=0.0001,
+        )
+        # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
+        assert math.isclose(
+            self.channel_abstraction_m3_by_farmer.sum()
+            + self.reservoir_abstraction_m3_by_farmer.sum()
+            + self.groundwater_abstraction_m3_by_farmer.sum(),
+            total_storage_pre_m3
+            - (
+                available_channel_storage_m3.sum()
+                + available_groundwater_m3.sum()
+                + available_reservoir_storage_m3.sum()
+            ),
+            rel_tol=0.001,
+            abs_tol=0.001,
+        )
+        # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
+        assert math.isclose(
+            (
+                self.channel_abstraction_m3_by_farmer
+                + self.reservoir_abstraction_m3_by_farmer
+                + self.groundwater_abstraction_m3_by_farmer
+            )[~np.isnan(self.remaining_irrigation_limit_m3)].sum(),
+            (irrigation_limit_pre - self.remaining_irrigation_limit_m3)[
+                ~np.isnan(self.remaining_irrigation_limit_m3)
+            ].sum(),
+            rel_tol=0.01,
+            abs_tol=0.01,
+        )
+        # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
+        assert math.isclose(
+            (water_consumption_m + returnFlowIrr_m + addtoevapotrans_m).sum(),
+            water_withdrawal_m.sum(),
+            rel_tol=0.001,
+            abs_tol=0.001,
+        )
+
         self.groundwater_depth = AgentArray(
             groundwater_depth_per_farmer, max_n=self.max_n
         )
@@ -1316,6 +1694,15 @@ class CropFarmers(AgentBaseClass):
             self.yield_ratio_management * self.yield_ratio_multiplier
         )
         return None
+
+    def decompress(self, array):
+        if np.issubsctype(array, np.floating):
+            nofieldvalue = np.nan
+        else:
+            nofieldvalue = -1
+        by_field = np.take(array, self.var.land_owners)
+        by_field[self.var.land_owners == -1] = nofieldvalue
+        return self.model.data.HRU.decompress(by_field)
 
     @property
     def mask(self):
@@ -1683,110 +2070,6 @@ class CropFarmers(AgentBaseClass):
                     loan_tracker[farmer, 1, i] = loan_duration
                     break  # Exit the loop after adding to the first zero value
 
-    @staticmethod
-    @njit(cache=True)
-    def plant_numba(
-        n: int,
-        day_of_year: int,
-        crop_calendar: np.ndarray,
-        crop_map: np.ndarray,
-        crop_harvest_age_days: np.ndarray,
-        cultivation_cost: Union[np.ndarray, int, float],
-        region_ids_per_farmer: np.ndarray,
-        field_indices_by_farmer: np.ndarray,
-        field_indices: np.ndarray,
-        field_size_per_farmer: np.ndarray,
-        all_loans_annual_cost: np.ndarray,
-        loan_tracker: np.ndarray,
-        interest_rate: np.ndarray,
-        farmers_going_out_of_business: bool,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
-
-        Args:
-            n: Number of farmers.
-            start_day_per_month: Starting day of each month of year.
-            current_day: Current day.
-            crop: Crops grown by each farmer.
-            field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
-            field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
-            field_size_per_farmer: Field size per farmer in m2
-
-        Returns:
-            plant: Subarray map of what crops are planted this day.
-        """
-        assert (
-            farmers_going_out_of_business is False
-        ), "Farmers going out of business not implemented."
-
-        plant = np.full_like(crop_map, -1, dtype=np.int32)
-        sell_land = np.zeros(n, dtype=np.bool_)
-
-        planting_farmers_per_season = crop_calendar[:, :, 1] == day_of_year
-        planting_farmers = planting_farmers_per_season.sum(axis=1)
-
-        assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
-
-        planting_farmers_idx = np.where(planting_farmers == 1)[0]
-        if not planting_farmers_idx.size == 0:
-            crop_rotation = np.argmax(
-                planting_farmers_per_season[planting_farmers_idx], axis=1
-            )
-
-            assert planting_farmers_idx.size == crop_rotation.size
-
-            for i in range(planting_farmers_idx.size):
-                farmer_idx = planting_farmers_idx[i]
-                farmer_crop_rotation = crop_rotation[i]
-
-                farmer_fields = get_farmer_HRUs(
-                    field_indices, field_indices_by_farmer, farmer_idx
-                )
-                farmer_crop_data = crop_calendar[farmer_idx, farmer_crop_rotation]
-                farmer_crop = farmer_crop_data[0]
-                field_harvest_age = farmer_crop_data[2]
-
-                assert farmer_crop != -1
-
-                if isinstance(cultivation_cost, (int, float)):
-                    cultivation_cost_farmer = cultivation_cost
-                else:
-                    farmer_region_id = region_ids_per_farmer[farmer_idx]
-                    cultivation_cost_farmer = (
-                        cultivation_cost[farmer_region_id, farmer_crop]
-                        * field_size_per_farmer[farmer_idx]
-                    )
-                assert not np.isnan(cultivation_cost_farmer)
-
-                interest_rate_farmer = interest_rate[farmer_idx]
-                loan_duration = 2
-                annual_cost_input_loan = cultivation_cost_farmer * (
-                    interest_rate_farmer
-                    * (1 + interest_rate_farmer) ** loan_duration
-                    / ((1 + interest_rate_farmer) ** loan_duration - 1)
-                )
-                for i in range(4):
-                    if all_loans_annual_cost[farmer_idx, 0, i] == 0:
-                        all_loans_annual_cost[
-                            farmer_idx, 0, i
-                        ] += annual_cost_input_loan  # Add the amount to the input specific loan
-                        loan_tracker[farmer_idx, 0, i] = loan_duration
-                        break  # Exit the loop after adding to the first zero value
-
-                all_loans_annual_cost[
-                    farmer_idx, -1, 0
-                ] += annual_cost_input_loan  # Add the amount to the total loan amount
-
-                for field in farmer_fields:
-                    # a crop is still growing here.
-                    if crop_harvest_age_days[field] != -1:
-                        continue
-                    plant[field] = farmer_crop
-                    crop_harvest_age_days[field] = field_harvest_age
-
-        farmers_selling_land = np.where(sell_land)[0]
-        return plant, farmers_selling_land
-
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU."""
 
@@ -1798,10 +2081,11 @@ class CropFarmers(AgentBaseClass):
             assert cultivation_cost.shape[0] == len(self.model.regions)
             assert cultivation_cost.shape[1] == len(self.crop_ids)
 
-        plant_map, farmers_selling_land = self.plant_numba(
+        plant_map, farmers_selling_land = plant(
             n=self.n,
-            day_of_year=self.model.current_time.timetuple().tm_yday,
+            day_index=self.model.current_time.timetuple().tm_yday - 1,  # 0-indexed
             crop_calendar=self.crop_calendar.data,
+            current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index.data,
             crop_map=self.var.crop_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
             cultivation_cost=cultivation_cost,
@@ -3197,6 +3481,28 @@ class CropFarmers(AgentBaseClass):
         self.plant()
         self.water_abstraction_sum()
 
+        # if self.model.current_timestep > 1:
+
+        #     print(
+        #         "irr",
+        #         self.remaining_irrigation_limit_m3[
+        #             self.has_access_to_irrigation_water == 1
+        #         ].mean(),
+        #     )
+        #     print(
+        #         "command",
+        #         self.remaining_irrigation_limit_m3[self.is_in_command_area].mean(),
+        #     )
+        #     print(
+        #         "command&irr",
+        #         self.remaining_irrigation_limit_m3[
+        #             (
+        #                 self.is_in_command_area
+        #                 & (self.has_access_to_irrigation_water == 1)
+        #             )
+        #         ].mean(),
+        #     )
+
         # monthly actions
         if (
             self.model.current_time.day == 1
@@ -3206,6 +3512,16 @@ class CropFarmers(AgentBaseClass):
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+            # reset the irrigation limit, but only if a full year has passed already. Otherwise
+            # the cumulative water deficit is not year completed.
+            if self.model.current_time.year - 1 > self.model.spinup_start.year:
+                self.remaining_irrigation_limit_m3[:] = self.irrigation_limit_m3[:]
+
+            advance_crop_rotation_year(
+                current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index,
+                crop_calendar_rotation_years=self.crop_calendar_rotation_years,
+            )
+
             # for now class is only dependent on being in a command area or not
             self.farmer_class = self.is_in_command_area.copy().astype(np.int32)
 
@@ -3497,7 +3813,7 @@ class CropFarmers(AgentBaseClass):
                 agent_array[self.n - 1] = values[name]
 
     def restore_state(self, folder):
-        save_state_path = self.get_save_state_path(folder)
+        save_state_path = self.get_save_state_path(folder, mkdir=True)
         with open(save_state_path / "state.txt", "r") as f:
             for line in f:
                 attribute = line.strip()
