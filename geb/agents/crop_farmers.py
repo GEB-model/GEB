@@ -2,6 +2,7 @@
 import math
 from datetime import datetime
 import json
+import calendar
 from typing import Tuple, Union
 import matplotlib.pyplot as plt
 from honeybees.library.raster import sample_from_map
@@ -1419,6 +1420,40 @@ class CropFarmers(AgentBaseClass):
     @property
     def is_in_command_area(self):
         return self.farmer_command_area != -1
+
+    def save_water_deficit(self):
+        water_deficit_day_m3 = (
+            self.model.data.HRU.ETRef - self.model.data.HRU.pr
+        ) * self.model.data.HRU.cellArea
+        water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
+
+        water_deficit_day_m3_per_farmer = np.bincount(
+            self.var.land_owners[self.var.land_owners != -1],
+            weights=water_deficit_day_m3[self.var.land_owners != -1],
+        )
+
+        if self.model.current_day_of_year == 1:
+            self.cumulative_water_deficit_m3[
+                :, self.model.current_day_of_year - 1
+            ] = water_deficit_day_m3_per_farmer
+        else:
+            self.cumulative_water_deficit_m3[
+                :, self.model.current_day_of_year - 1
+            ] = (
+                self.cumulative_water_deficit_m3[
+                    :, self.model.current_day_of_year - 2
+                ]
+                + water_deficit_day_m3_per_farmer
+            )
+            # if this is the last day of the year, but not a leap year, the virtual
+            # 366th day of the year is the same as the 365th day of the year
+            # this avoids complications with the leap year
+            if self.model.current_day_of_year == 365 and not calendar.isleap(
+                self.model.current_time.year
+            ):
+                self.cumulative_water_deficit_m3[:, 365] = (
+                    self.cumulative_water_deficit_m3[:, 364]
+                )
 
     def abstract_water(
         self,
