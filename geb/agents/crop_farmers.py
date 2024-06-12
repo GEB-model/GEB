@@ -1433,16 +1433,12 @@ class CropFarmers(AgentBaseClass):
         )
 
         if self.model.current_day_of_year == 1:
-            self.cumulative_water_deficit_m3[
-                :, self.model.current_day_of_year - 1
-            ] = water_deficit_day_m3_per_farmer
+            self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 1] = (
+                water_deficit_day_m3_per_farmer
+            )
         else:
-            self.cumulative_water_deficit_m3[
-                :, self.model.current_day_of_year - 1
-            ] = (
-                self.cumulative_water_deficit_m3[
-                    :, self.model.current_day_of_year - 2
-                ]
+            self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 1] = (
+                self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 2]
                 + water_deficit_day_m3_per_farmer
             )
             # if this is the last day of the year, but not a leap year, the virtual
