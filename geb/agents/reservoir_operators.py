@@ -276,6 +276,7 @@ class ReservoirOperators(AgentBaseClass):
                                                         self.mtifl,
                                                         self.alpha)
 
+        Qout_resv = Rres.copy()
         # Ensure environmental flow requirements, no reservoir overflow and no negative storage.
         S_ending = Sini_resv.copy() # create temporary final storage variable. If nothing changes, initial storage will be final storage.
         
@@ -285,7 +286,8 @@ class ReservoirOperators(AgentBaseClass):
                                                             self.cpa,
                                                             mtifl_month,
                                                             self.alpha,
-                                                            self.cond_all)
+                                                            self.cond_all,
+                                                            NoRoutingExecuted)
         
 
         ##### AVERAGES CALCULATIONS #####
@@ -309,37 +311,7 @@ class ReservoirOperators(AgentBaseClass):
             print("Outflow today is:", Qout_resv)
             print(f"Reservoir fill is {((S_ending/self.cpa)*100).round(2)}%")
 
-        ###### ABSTRACTION calculation + release from remaining abstraction previous day ########
-        # Get release from previous day that is not abstracted and add it to release today.
-        if NoRoutingExecuted == 0:
-            # 1. Get the abstracted release and the remaining release from previous day.
-            # 2. Convert the abstraction from the previous day from m3/day to m3/s
-            # 3. Set the release for abstraction to zero, so it can be filled up in the new day.
-            abstraction_prev_day = self.model.data.HRU.reservoir_abstraction_m3.copy() ####
-            self.abstraction_prev_day_dt = abstraction_prev_day * self.model.InvDtSec
-            self.release_for_abstraction.fill(0)
-        
-        
-        # Get water available for abstraction for the next day. 
 
-        if np.any(Qout_resv < mtifl_month*0.15): # make nothing available for abstraction.
-            if NoRoutingExecuted == 0:
-                print("Outflow is below 15% monthly mtifl, release for abstraction is set to 0")
-                print(f"Outflow is {((Qout_resv/mtifl_month)*100).round(2)}% of mean monthly inflow.")
-        else: # make outflow minus 15% of monthly mean inflow available for abstraction.
-            self.release_for_abstraction += Qout_resv - mtifl_month*0.15
-            
-        
-        # Subtract abstraction previous day from outflow today (to prevent double counting in storage subtraction)
-        Qout_resv -= self.abstraction_prev_day_dt
-
-        # If the outflow is below minimum required outflow, due to too large abstraction, set it to minimum required outflow. This will create more abstraction from reservoir than planned, but as 10% of storage is always maintained, it should not be a problem.
-        mtifl_month_min = mtifl_month * 0.1
-        if np.any(Qout_resv < mtifl_month_min):
-            
-            Qout_resv[Qout_resv < mtifl_month_min] = mtifl_month_min[Qout_resv < mtifl_month_min]
-            if NoRoutingExecuted == 0:
-                print("Outflow is below minimum required outflow, due to abstraction previous day.")
         
         return Qout_resv, self.irr_demand
 
@@ -458,7 +430,7 @@ class ReservoirOperators(AgentBaseClass):
 
         return Rflood_final
     
-    def reservoir_water_balance(self, Qin, Qout, Sin, cpa, mtifl, alpha, cond_all):
+    def reservoir_water_balance(self, Qin, Qout, Sin, cpa, mtifl, alpha, cond_all, NoRoutingExecuted):
 
         """Re-adjusts release to ensure minimal environmental flow, and prevent overflow and negative storage;
         and computes the storage level after release for all reservoir types.
@@ -509,7 +481,7 @@ class ReservoirOperators(AgentBaseClass):
         if Sb.any():
             Sfinal[Sb] = 0.1 * self.cpa[Sb] * alpha[Sb] # Final storage is then 10% of effective capacity.
             Rfinal[Sb] = ((Stemp[Sb] - Sfinal[Sb])/dt) + Qin_[Sb] # Add negative storage to inflow, to lower final outflow and prevent negative storage.
-            print("Storage before water balance correction:", Stemp)
+            print("Storage before water balance correction:", Stemp[Sb])
             print("Storage after water balance correction:", Sfinal[Sb])
 
 
@@ -520,6 +492,37 @@ class ReservoirOperators(AgentBaseClass):
             Sfinal[Sc] = Stemp[Sc]
             Rfinal[Sc] = Qout_[Sc]
 
+        ###### ABSTRACTION calculation + release from remaining abstraction previous day ########
+        # Get release from previous day that is not abstracted and add it to release today.
+        if NoRoutingExecuted == 0:
+            # 1. Get the abstracted release and the remaining release from previous day.
+            # 2. Convert the abstraction from the previous day from m3/day to m3/s
+            # 3. Set the release for abstraction to zero, so it can be filled up in the new day.
+            abstraction_prev_day = self.model.data.HRU.reservoir_abstraction_m3.copy() ####
+            self.abstraction_prev_day_dt = abstraction_prev_day * self.model.InvDtSec
+            self.release_for_abstraction.fill(0)
+        
+        
+        # Get water available for abstraction for the next day.
+        # Only make water available if outflow is more than 15% of mtifl and reservoir was not below 10% capacity.
+        abstraction_condition = (Rfinal > mtifl_month * 0.15) & (~Sb)
+        self.release_for_abstraction[abstraction_condition] += (Rfinal[abstraction_condition] - mtifl_month[abstraction_condition]*0.15)
+
+        # Subtract abstraction previous day from outflow today (to prevent double counting in storage subtraction)
+        Rfinal -= self.abstraction_prev_day_dt
+
+        # Print cases where outflow was below 15% of mtifl.
+        if np.any(Rfinal < mtifl_month * 0.15):
+            if NoRoutingExecuted == 0:
+                print("Outflow is below 15% monthly mtifl, release for abstraction is set to 0")
+                print(f"Outflow is {((Rfinal/mtifl_month)*100).round(2)}% of mean monthly inflow.")          
+
+        mtifl_month_min = mtifl_month * 0.1
+        if np.any(Rfinal < mtifl_month_min):
+            # If the outflow is below minimum required outflow, due to too large abstraction, set it to minimum required outflow. This will create more abstraction from reservoir than planned, but as 10% of storage is always maintained, it should not be a problem.
+            Rfinal[Rfinal < mtifl_month_min] = mtifl_month_min[Rfinal < mtifl_month_min]
+            if NoRoutingExecuted == 0:
+                print("Outflow is below minimum required outflow, due to abstraction previous day.")
 
         return Rfinal, Sfinal     
 
