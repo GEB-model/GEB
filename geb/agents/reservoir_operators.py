@@ -245,7 +245,7 @@ class ReservoirOperators(AgentBaseClass):
         Sini_resv = reservoirStorageM3C
 
         # Call total irrigation demand per command area module, and make this into a demand ratio.
-        # self.total_irr_demand_area = self.get_irrigation_per_command_area(pot_irrConsumption_m_per_cell)
+        self.total_irr_demand_area = self.get_irrigation_per_command_area(pot_irrConsumption_m_per_cell)
         # self.irr_demand_ratio = self.total_irr_demand_area / self.total_irr_demand_area_yesterday
         # self.total_irr_demand_area_yesterday = self.total_irr_demand_area
 
@@ -508,14 +508,14 @@ class ReservoirOperators(AgentBaseClass):
         abstraction_condition = (Rfinal > mtifl_month * 0.15) & (~Sb)
         self.release_for_abstraction[abstraction_condition] += (Rfinal[abstraction_condition] - mtifl_month[abstraction_condition]*0.15)
 
-        # Subtract abstraction previous day from outflow today (to prevent double counting in storage subtraction)
-        Rfinal -= self.abstraction_prev_day_dt
-
         # Print cases where outflow was below 15% of mtifl.
         if np.any(Rfinal < mtifl_month * 0.15):
             if NoRoutingExecuted == 0:
                 print("Outflow is below 15% monthly mtifl, release for abstraction is set to 0")
-                print(f"Outflow is {((Rfinal/mtifl_month)*100).round(2)}% of mean monthly inflow.")          
+                print(f"Outflow is {((Rfinal/mtifl_month)*100).round(2)}% of mean monthly inflow.")  
+
+        # Subtract abstraction previous day from outflow today (to prevent double counting in storage subtraction)
+        Rfinal -= self.abstraction_prev_day_dt
 
         mtifl_month_min = mtifl_month * 0.1
         if np.any(Rfinal < mtifl_month_min):
