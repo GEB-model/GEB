@@ -2478,7 +2478,7 @@ class Farmers(AgentBaseClass):
 
         # Ensure no zeros
         groundwater_depth_safe = np.where(
-            self.groundwater_depth == 0, 1, self.groundwater_depth
+            self.groundwater_depth.data == 0, 1, self.groundwater_depth.data
         )
         # Calculate the irrigation maintenance costs
         flow_rate = 79.93 * groundwater_depth_safe**-0.728
