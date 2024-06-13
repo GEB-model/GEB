@@ -2058,7 +2058,7 @@ class Farmers(AgentBaseClass):
         crop_elevation_group = np.hstack(
             (
                 self.crops.data,
-                self.farmer_is_in_command_area.reshape(-1, 1),
+                distribution_array.reshape(-1, 1),
                 self.adapted[:, 1].reshape(-1, 1),
             )
         )
@@ -2476,8 +2476,12 @@ class Farmers(AgentBaseClass):
         )
         pump_cost = pump_cost * self.pump_horse_power
 
+        # Ensure no zeros
+        groundwater_depth_safe = np.where(
+            self.groundwater_depth == 0, 1, self.groundwater_depth
+        )
         # Calculate the irrigation maintenance costs
-        flow_rate = 79.93 * self.groundwater_depth**-0.728
+        flow_rate = 79.93 * groundwater_depth_safe**-0.728
         expected_water_availability = flow_rate * total_pumping_hours_yearly
         irrigation_maintenance_costs = (
             irrigation_maintenance * expected_water_availability**0.16
@@ -2756,7 +2760,11 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops.data, self.farmer_is_in_command_area.reshape(-1, 1))
+            (
+                self.crops.data,
+                distribution_array.reshape(-1, 1),
+                self.farmer_is_in_command_area.reshape(-1, 1),
+            )
         )
 
         # Add a column of zeros to represent farmers who have not adapted yet
@@ -3217,8 +3225,8 @@ class Farmers(AgentBaseClass):
                 ids,
                 self.crops.data,
                 neighbors,
-                self.SEUT_no_adapt_crops,
-                self.EUT_no_adapt_crops,
+                self.SEUT_no_adapt,
+                self.EUT_no_adapt,
                 self.yearly_yield_ratio.data,
                 self.yearly_SPEI_probability.data,
             )
@@ -3401,8 +3409,6 @@ class Farmers(AgentBaseClass):
                     **decision_params_EUT, subjective=False
                 )
 
-                self.switch_crops()
-
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(self.farmer_yield_probability_relation == 0):
                     pass
@@ -3413,6 +3419,8 @@ class Farmers(AgentBaseClass):
                     # raise AssertionError(
                     #     "Cannot adapt without yield - probability relation"
                     # )
+
+                self.switch_crops()
 
             # Update management yield ratio score
             self.update_yield_ratio_management()
