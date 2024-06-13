@@ -245,13 +245,14 @@ class ReservoirOperators(AgentBaseClass):
         Sini_resv = reservoirStorageM3C
 
         # Call total irrigation demand per command area module, and make this into a demand ratio.
-        self.total_irr_demand_area = self.get_irrigation_per_command_area(pot_irrConsumption_m_per_cell)
+        #self.total_irr_demand_area = self.get_irrigation_per_command_area(pot_irrConsumption_m_per_cell)
         # self.irr_demand_ratio = self.total_irr_demand_area / self.total_irr_demand_area_yesterday
         # self.total_irr_demand_area_yesterday = self.total_irr_demand_area
 
         # Set irrigation demand as the abstraction from today. Abstraction is in m3/day, convert to m3/s.
-        self.irr_demand = self.model.data.HRU.reservoir_abstraction_m3.copy() * self.model.InvDtSec
-        
+        #self.irr_demand = self.model.data.HRU.reservoir_abstraction_m3.copy() * self.model.InvDtSec
+        self.irr_demand = self.get_irrigation_per_command_area(pot_irrConsumption_m_per_cell)
+
         # Make sure all variables are in same size and shape:
         assert self.inflow.size == self.irr_demand.size == self.cpa.size, "Variables for reservoir management module are not same size"
         assert self.inflow.shape == self.irr_demand.shape == self.cpa.shape , "Variables for reservoir management module are not same shape"
@@ -481,8 +482,9 @@ class ReservoirOperators(AgentBaseClass):
         if Sb.any():
             Sfinal[Sb] = 0.1 * self.cpa[Sb] * alpha[Sb] # Final storage is then 10% of effective capacity.
             Rfinal[Sb] = ((Stemp[Sb] - Sfinal[Sb])/dt) + Qin_[Sb] # Add negative storage to inflow, to lower final outflow and prevent negative storage.
-            print("Storage before water balance correction:", Stemp[Sb])
-            print("Storage after water balance correction:", Sfinal[Sb])
+            if NoRoutingExecuted == 0:
+                print("Storage before water balance correction:", Stemp[Sb])
+                print("Storage after water balance correction:", Sfinal[Sb])
 
 
         # 4. condition c : Storage > 0 & Storage < total capacity | the reverse of condition a and b.
