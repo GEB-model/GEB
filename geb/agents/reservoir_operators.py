@@ -372,20 +372,6 @@ class ReservoirOperators(AgentBaseClass):
                 - actual_abstraction_abm
             ) * self.model.InvDtSec
 
-            if (self.unused_release < 0).any():
-                pass
-                # print(
-                #     "abstraction larger than potential. Total difference %:",
-                #     (
-                #         (
-                #             self.potential_abstraction_for_release_yesterday
-                #             - actual_abstraction_abm
-                #         )
-                #         / self.cpa
-                #     )
-                #     * 100,
-                # )
-
             self.unused_release = np.maximum(self.unused_release, 0)
 
             self.potential_abstraction_for_release_yesterday = 0
@@ -398,7 +384,7 @@ class ReservoirOperators(AgentBaseClass):
         # Sum to determine the total made available for release
         self.potential_abstraction_for_release_yesterday += self.release_for_abstraction
 
-        # Determine outflow as the base flow plus what has not abstracted
+        # Determine outflow as the base flow plus what has not been abstracted
         Qout_resv_river = mtifl_month * 0.15 + (self.unused_release)
 
         # Ensure that this cannot be negative
