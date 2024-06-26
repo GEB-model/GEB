@@ -360,7 +360,11 @@ def build(
         config["general"]["region"]["pour_point"] = config["general"]["pour_point"]
 
     region = config["general"]["region"]
-    if "pour_point" in region:
+    if "basin" in region:
+        region_config = {
+            "basin": region["basin"],
+        }
+    elif "pour_point" in region:
         pour_point = region["pour_point"]
         region_config = {
             "subbasin": [[pour_point[0]], [pour_point[1]]],
@@ -369,6 +373,8 @@ def build(
         region_config = {
             "geom": region["geometry"],
         }
+    else:
+        raise ValueError("No region specified in config file.")
 
     geb_model.build(
         opt=configread(build_config),
