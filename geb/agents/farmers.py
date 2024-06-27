@@ -213,9 +213,12 @@ class Farmers(AgentBaseClass):
             self.model, "crops/cultivation_costs"
         )
 
-        self.total_spinup_time = (
-            self.model.config["general"]["start_time"].year
-            - self.model.config["general"]["spinup_time"].year
+        self.total_spinup_time = max(
+            (
+                self.model.config["general"]["start_time"].year
+                - self.model.config["general"]["spinup_time"].year
+            ),
+            10,
         )
 
         self.yield_ratio_multiplier_value = self.model.config["agent_settings"][
@@ -238,9 +241,10 @@ class Farmers(AgentBaseClass):
                     break
         return farmer_is_in_command_area
 
-
     @staticmethod
-    def which_farmer_command_area(n, command_areas, field_indices, field_indices_by_farmer):
+    def which_farmer_command_area(
+        n, command_areas, field_indices, field_indices_by_farmer
+    ):
         farmer_command_area = np.full(n, -1, dtype=np.int32)
         for farmer_i in range(n):
             farmer_fields = get_farmer_HRUs(
@@ -1059,6 +1063,8 @@ class Farmers(AgentBaseClass):
                                 available_reservoir_storage_m3[command_area],
                                 water_demand_cell_M3,
                             )
+                            assert reservoir_abstraction_m_cell_m3 >= 0
+
                             available_reservoir_storage_m3[
                                 command_area
                             ] -= reservoir_abstraction_m_cell_m3
@@ -1071,9 +1077,7 @@ class Farmers(AgentBaseClass):
                             reservoir_abstraction_m[
                                 field
                             ] += reservoir_abstraction_m_cell
-                            water_withdrawal_m[
-                                field
-                            ] += reservoir_abstraction_m_cell
+                            water_withdrawal_m[field] += reservoir_abstraction_m_cell
 
                             reservoir_abstraction_m3_by_farmer[
                                 farmer
@@ -2039,7 +2043,7 @@ class Farmers(AgentBaseClass):
         unique_SPEI_probability = np.empty((0, self.total_spinup_time))
 
         # Create unique groups
-        # TO DO: remove elevation distinction 
+        # TO DO: remove elevation distinction
         # Calculating the thresholds for the top, middle, and lower thirds
         basin_elevation_thresholds = np.percentile(self.elevation.data, [33.33, 66.67])
         # 0 for upper, 1 for mid, and 2 for lower
@@ -2052,9 +2056,11 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops.data, 
-             self.farmer_is_in_command_area.reshape(-1, 1),
-             self.adapted[:,1].reshape(-1,1))
+            (
+                self.crops.data,
+                distribution_array.reshape(-1, 1),
+                self.adapted[:, 1].reshape(-1, 1),
+            )
         )
 
         for crop_combination in np.unique(crop_elevation_group, axis=0):
@@ -2470,8 +2476,12 @@ class Farmers(AgentBaseClass):
         )
         pump_cost = pump_cost * self.pump_horse_power
 
+        # Ensure no zeros
+        groundwater_depth_safe = np.where(
+            self.groundwater_depth.data == 0, 1, self.groundwater_depth.data
+        )
         # Calculate the irrigation maintenance costs
-        flow_rate = 79.93 * self.groundwater_depth**-0.728
+        flow_rate = 79.93 * groundwater_depth_safe**-0.728
         expected_water_availability = flow_rate * total_pumping_hours_yearly
         irrigation_maintenance_costs = (
             irrigation_maintenance * expected_water_availability**0.16
@@ -2551,7 +2561,12 @@ class Farmers(AgentBaseClass):
             "adaptation_costs": annual_cost_m2,
             "adapted": adapted,
             "time_adapted": self.time_adapted[:, adaptation_type],
-            'T': np.full(self.n, self.model.config['agent_settings']['expected_utility']['adaptation_well']['decision_horizon']),
+            "T": np.full(
+                self.n,
+                self.model.config["agent_settings"]["expected_utility"][
+                    "adaptation_well"
+                ]["decision_horizon"],
+            ),
             "discount_rate": self.discount_rate.data,
             "extra_constraint": extra_constraint.data,
         }
@@ -2745,9 +2760,11 @@ class Farmers(AgentBaseClass):
         distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
 
         crop_elevation_group = np.hstack(
-            (self.crops.data, 
-             self.farmer_is_in_command_area.reshape(-1, 1)
-             )
+            (
+                self.crops.data,
+                distribution_array.reshape(-1, 1),
+                self.farmer_is_in_command_area.reshape(-1, 1),
+            )
         )
 
         # Add a column of zeros to represent farmers who have not adapted yet
@@ -3208,8 +3225,8 @@ class Farmers(AgentBaseClass):
                 ids,
                 self.crops.data,
                 neighbors,
-                self.SEUT_no_adapt_crops,
-                self.EUT_no_adapt_crops,
+                self.SEUT_no_adapt,
+                self.EUT_no_adapt,
                 self.yearly_yield_ratio.data,
                 self.yearly_SPEI_probability.data,
             )
@@ -3346,39 +3363,51 @@ class Farmers(AgentBaseClass):
                 # Determine the relation between drought probability and yield
                 self.calculate_yield_spei_relation()
 
-              # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
+                # Calculate the current SEUT and EUT of all agents. Used as base for all other adaptation calculations
                 total_profits, profits_no_event = self.profits_SEUT(0)
- 
-                # Adjust for input costs
-                total_profits_adjusted = total_profits - (np.sum(self.all_loans_annual_cost[:,:,0], axis = 1) / self.field_size_per_farmer)
-                profits_no_event_adjusted = profits_no_event - (np.sum(self.all_loans_annual_cost[:,:,0], axis = 1) / self.field_size_per_farmer)
- 
-                decision_params_SEUT = {
-                        'n_agents':  self.n,
-                        'T': self.decision_horizon.data,
-                        'discount_rate': self.discount_rate.data,
-                        'sigma': self.risk_aversion.data,
-                        'risk_perception': self.risk_perception.data,
-                        'p_droughts': 1 / self.p_droughts[:-1],
-                        'total_profits': total_profits_adjusted,
-                        'profits_no_event': profits_no_event_adjusted,
-                    }
-               
-                decision_params_EUT = {
-                        'n_agents':  self.n,
-                        'T': self.decision_horizon.data,
-                        'discount_rate': np.full(self.n, np.mean(self.discount_rate), dtype=np.int32),
-                        'sigma': np.full(self.n, np.mean(self.risk_aversion), dtype=np.int32),
-                        'risk_perception': self.risk_perception.data,
-                        'p_droughts': 1 / self.p_droughts[:-1],
-                        'total_profits': total_profits_adjusted,
-                        'profits_no_event': profits_no_event_adjusted,
-                    }
-               
-                self.SEUT_no_adapt = self.decision_module.calcEU_do_nothing(**decision_params_SEUT)
-                self.EUT_no_adapt = self.decision_module.calcEU_do_nothing(**decision_params_EUT, subjective = False)
 
-                # self.switch_crops()
+                # Adjust for input costs
+                total_profits_adjusted = total_profits - (
+                    np.sum(self.all_loans_annual_cost[:, :, 0], axis=1)
+                    / self.field_size_per_farmer
+                )
+                profits_no_event_adjusted = profits_no_event - (
+                    np.sum(self.all_loans_annual_cost[:, :, 0], axis=1)
+                    / self.field_size_per_farmer
+                )
+
+                decision_params_SEUT = {
+                    "n_agents": self.n,
+                    "T": self.decision_horizon.data,
+                    "discount_rate": self.discount_rate.data,
+                    "sigma": self.risk_aversion.data,
+                    "risk_perception": self.risk_perception.data,
+                    "p_droughts": 1 / self.p_droughts[:-1],
+                    "total_profits": total_profits_adjusted,
+                    "profits_no_event": profits_no_event_adjusted,
+                }
+
+                decision_params_EUT = {
+                    "n_agents": self.n,
+                    "T": self.decision_horizon.data,
+                    "discount_rate": np.full(
+                        self.n, np.mean(self.discount_rate), dtype=np.int32
+                    ),
+                    "sigma": np.full(
+                        self.n, np.mean(self.risk_aversion), dtype=np.int32
+                    ),
+                    "risk_perception": self.risk_perception.data,
+                    "p_droughts": 1 / self.p_droughts[:-1],
+                    "total_profits": total_profits_adjusted,
+                    "profits_no_event": profits_no_event_adjusted,
+                }
+
+                self.SEUT_no_adapt = self.decision_module.calcEU_do_nothing(
+                    **decision_params_SEUT
+                )
+                self.EUT_no_adapt = self.decision_module.calcEU_do_nothing(
+                    **decision_params_EUT, subjective=False
+                )
 
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(self.farmer_yield_probability_relation == 0):
@@ -3390,6 +3419,8 @@ class Farmers(AgentBaseClass):
                     # raise AssertionError(
                     #     "Cannot adapt without yield - probability relation"
                     # )
+
+                self.switch_crops()
 
             # Update management yield ratio score
             self.update_yield_ratio_management()
