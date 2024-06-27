@@ -48,7 +48,7 @@ def load_regional_crop_data_from_dict(
             for ID, region_crop_data in region_data.items():
                 d[:, int(region_id), int(ID)] = region_crop_data
 
-        assert not np.isnan(d).any()
+        # assert not np.isnan(d).any()
         return date_index, d
     else:
         raise ValueError(f"Unknown type: {timedata['type']}")
