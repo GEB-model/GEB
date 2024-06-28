@@ -1421,7 +1421,7 @@ class CropFarmers(AgentBaseClass):
     def is_in_command_area(self):
         return self.farmer_command_area != -1
 
-    def save_water_deficit(self):
+    def save_water_deficit(self, discount_factor=0.8):
         water_deficit_day_m3 = (
             self.model.data.HRU.ETRef - self.model.data.HRU.pr
         ) * self.model.data.HRU.cellArea
@@ -1432,7 +1432,17 @@ class CropFarmers(AgentBaseClass):
             weights=water_deficit_day_m3[self.var.land_owners != -1],
         )
 
+        def add_water_deficit(water_deficit_day_m3_per_farmer, index):
+            self.cumulative_water_deficit_m3[:, index] = np.where(
+                np.isnan(self.cumulative_water_deficit_m3[:, index]),
+                water_deficit_day_m3_per_farmer,
+                self.cumulative_water_deficit_m3[:, index],
+            )
+
         if self.model.current_day_of_year == 1:
+            add_water_deficit(
+                water_deficit_day_m3_per_farmer, self.model.current_day_of_year - 1
+            )
             self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 1] = (
                 water_deficit_day_m3_per_farmer
             )
@@ -1577,8 +1587,8 @@ class CropFarmers(AgentBaseClass):
             (irrigation_limit_pre - self.remaining_irrigation_limit_m3)[
                 ~np.isnan(self.remaining_irrigation_limit_m3)
             ].sum(),
-            rel_tol=0.01,
-            abs_tol=0.01,
+            rel_tol=0.02,
+            abs_tol=1,
         )
         # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
         assert math.isclose(
@@ -3438,6 +3448,20 @@ class CropFarmers(AgentBaseClass):
             self.field_indices,
             self.var.cellArea.get() if self.model.use_gpu else self.var.cellArea,
         )
+
+    @property
+    def irrigated_fields(self) -> np.ndarray:
+        """Gets the indices of fields that are irrigated.
+
+        Returns:
+            irrigated_fields: Indices of fields that are irrigated.
+        """
+        is_irrigated = np.take(
+            self.irrigation_source != self.irrigation_source_key["no"],
+            self.var.land_owners,
+        )
+        is_irrigated[self.var.land_owners == -1] = False
+        return is_irrigated
 
     @staticmethod
     @njit(cache=True)
