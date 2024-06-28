@@ -2,7 +2,6 @@
 import numpy as np
 import os
 import datetime
-from pathlib import Path
 
 from cwatm.cwatm_model import CWATModel
 from cwatm.management_modules.dynamicModel import ModelFrame
@@ -183,14 +182,12 @@ class CWatM_Model(CWATModel):
         binding["irrPaddy_maxtopwater"] = 0.05
         binding["initial_water_table_depth"] = 2
         binding["depth_underlakes"] = 1.5
-        binding["nlay"] = 1.0
+        binding["nlay"] = 1
         binding["thickness"] = 100.0
         binding["use_soildepth_as_GWtop"] = True
         binding["correct_soildepth_underlakes"] = True
         binding["leakageriver_permea"] = 0.001
         binding["leakagelake_permea"] = 0.001
-        binding["permeability"] = 1e-5
-        binding["poro"] = 0.1
         binding["forest_arnoBeta"] = 0.2
         binding["grassland_arnoBeta"] = 0.0
         binding["irrPaddy_arnoBeta"] = 0.2
