@@ -6,8 +6,7 @@ from pathlib import Path
 
 from cwatm.cwatm_model import CWATModel
 from cwatm.management_modules.dynamicModel import ModelFrame
-from cwatm.management_modules.configuration import parse_configuration
-from cwatm.management_modules.globals import settingsfile, binding, outDir, Flags
+from cwatm.management_modules.globals import binding, outDir, Flags, option
 from cwatm.run_cwatm import headerinfo
 
 
@@ -28,9 +27,6 @@ class CWatM_Model(CWATModel):
         self.init_water_table_file = os.path.join(
             self.config["general"]["init_water_table"]
         )
-
-        settingsfile.append(settings)
-        parse_configuration(settings)
 
         outDir["OUTPUT"] = self.report_folder
         Flags["quiet"] = True
@@ -161,6 +157,50 @@ class CWatM_Model(CWATModel):
         ]
 
         binding["PathGroundwaterModflow"] = "modflow"
+        binding["crop_factor_calibration_factor"] = 1
+
+        option["inflow"] = False
+        option["calcWaterBalance"] = True
+        binding["DynamicResAndLakes"] = False
+        binding["useSmallLakes"] = False
+        binding["chanBeta"] = 0.6
+        binding["chanGradMin"] = 0.0001
+        binding["SnowWaterEquivalent"] = 0.45
+        binding["Afrost"] = 0.97
+        binding["Kfrost"] = 0.57
+        binding["FrostIndexThreshold"] = 56.0
+        binding["AlbedoSoil"] = 0.15
+        binding["AlbedoWater"] = 0.05
+        binding["AlbedoCanopy"] = 0.23
+        binding["NumberSnowLayers"] = 1.0
+        binding["GlacierTransportZone"] = 1.0
+        binding["TemperatureLapseRate"] = 0.0065
+        binding["SnowFactor"] = 1.0
+        binding["SnowSeasonAdj"] = 0.001
+        binding["TempMelt"] = 1.0
+        binding["TempSnow"] = 1.0
+        binding["IceMeltCoef"] = 0.007
+        binding["irrPaddy_maxtopwater"] = 0.05
+        binding["initial_water_table_depth"] = 2
+        binding["depth_underlakes"] = 1.5
+        binding["nlay"] = 1.0
+        binding["thickness"] = 100.0
+        binding["use_soildepth_as_GWtop"] = True
+        binding["correct_soildepth_underlakes"] = True
+        binding["leakageriver_permea"] = 0.001
+        binding["leakagelake_permea"] = 0.001
+        binding["permeability"] = 1e-5
+        binding["poro"] = 0.1
+        binding["forest_arnoBeta"] = 0.2
+        binding["grassland_arnoBeta"] = 0.0
+        binding["irrPaddy_arnoBeta"] = 0.2
+        binding["irrNonPaddy_arnoBeta"] = 0.2
+        binding["grassland_minInterceptCap"] = 0.001
+        binding["forest_minInterceptCap"] = 0.001
+        binding["irrPaddy_minInterceptCap"] = 0.001
+        binding["irrNonPaddy_minInterceptCap"] = 0.001
+        binding["sealed_minInterceptCap"] = 0.001
+        binding["water_minInterceptCap"] = 0.0
 
         headerinfo()
 
