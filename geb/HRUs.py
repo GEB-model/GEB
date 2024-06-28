@@ -1035,7 +1035,6 @@ class Data:
         self.HRU.wfc3 = self.split_HRU_data(self.HRU.wfc3, HRU)
         self.HRU.kunSatFC12 = self.split_HRU_data(self.HRU.kunSatFC12, HRU)
         self.HRU.kunSatFC23 = self.split_HRU_data(self.HRU.kunSatFC23, HRU)
-        self.HRU.adjRoot = self.split_HRU_data(self.HRU.adjRoot, HRU)
         self.HRU.arnoBeta = self.split_HRU_data(self.HRU.arnoBeta, HRU)
         self.HRU.w1 = self.split_HRU_data(self.HRU.w1, HRU)
         self.HRU.w2 = self.split_HRU_data(self.HRU.w2, HRU)
