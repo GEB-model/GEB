@@ -181,7 +181,6 @@ class CWatM_Model(CWATModel):
         binding["IceMeltCoef"] = 0.007
         binding["initial_water_table_depth"] = 2
         binding["depth_underlakes"] = 1.5
-        binding["nlay"] = 1
         binding["thickness"] = 100.0
         binding["use_soildepth_as_GWtop"] = True
         binding["correct_soildepth_underlakes"] = True
