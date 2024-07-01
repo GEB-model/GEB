@@ -179,7 +179,6 @@ class CWatM_Model(CWATModel):
         binding["TempMelt"] = 1.0
         binding["TempSnow"] = 1.0
         binding["IceMeltCoef"] = 0.007
-        binding["irrPaddy_maxtopwater"] = 0.05
         binding["initial_water_table_depth"] = 2
         binding["depth_underlakes"] = 1.5
         binding["nlay"] = 1

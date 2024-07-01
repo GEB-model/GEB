@@ -239,9 +239,8 @@ def test_adjust_irrigation_to_limit():
         crop_calendar=crop_calendar,
         crop_rotation_year_index=np.array([0]),
         irrigation_efficiency_farmer=0.5,
-        totalPotIrrConsumption=np.array([10.0]),
+        potential_irrigation_consumption_m=np.array([10.0]),
         potential_irrigation_consumption_farmer_m3=10,
-        farmer_fields=np.array([0]),
     )
     # In the future, still 15 + 10 irrigation is needed
     # irrigation limit remaining is 10, and 10 requested today, so only 10/25*10 = 4. irrigation is possible
@@ -257,9 +256,8 @@ def test_adjust_irrigation_to_limit():
         crop_calendar=crop_calendar,
         crop_rotation_year_index=np.array([0]),
         irrigation_efficiency_farmer=0.5,
-        totalPotIrrConsumption=np.array([10.0]),
+        potential_irrigation_consumption_m=np.array([10.0]),
         potential_irrigation_consumption_farmer_m3=10,
-        farmer_fields=np.array([0]),
     )
     # In the future, still 10 irrigation is needed
     # irrigation limit remaining is 5, and 10 requested today, so only 10/10*5 = 5. irrigation is possible
@@ -276,9 +274,8 @@ def test_adjust_irrigation_to_limit():
         crop_calendar=crop_calendar,
         crop_rotation_year_index=np.array([0]),
         irrigation_efficiency_farmer=0.5,
-        totalPotIrrConsumption=np.array([10.0]),
+        potential_irrigation_consumption_m=np.array([10.0]),
         potential_irrigation_consumption_farmer_m3=10,
-        farmer_fields=np.array([0]),
     )
     # As irrigation limit is 0, no irrigation is possible
     assert np.array_equal(potential_irrigation_consumption_farmer_m3, np.array([0.0]))

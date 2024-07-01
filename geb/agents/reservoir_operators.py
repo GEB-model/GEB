@@ -142,20 +142,7 @@ class ReservoirOperators(AgentBaseClass):
 
         return reservoir_outflow
 
-    def get_available_water_reservoir_command_areas(
-        self, reservoir_storage_m3, potential_irrigation_consumption_m
-    ):
-        potential_irrigation_consumption_m3 = (
-            potential_irrigation_consumption_m * self.model.data.HRU.cellArea
-        )
-        potential_irrigation_consumption_m3[self.model.data.HRU.land_owners != -1]
-        potential_irrigation_consumption_m3_per_farmer = np.bincount(
-            self.model.data.HRU.land_owners[self.model.data.HRU.land_owners != -1],
-            weights=potential_irrigation_consumption_m3[
-                self.model.data.HRU.land_owners != -1
-            ],
-            minlength=self.model.agents.crop_farmers.n,
-        )
+    def get_available_water_reservoir_command_areas(self, reservoir_storage_m3):
         return self.reservoir_release_factors * reservoir_storage_m3
 
     def step(self) -> None:
