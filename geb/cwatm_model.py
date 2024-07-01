@@ -75,8 +75,6 @@ class CWatM_Model(CWATModel):
         binding["percolationImp"] = self.model_structure["grid"][
             "soil/percolation_impeded"
         ]
-        binding["StorDepth1"] = self.model_structure["grid"]["soil/storage_depth1"]
-        binding["StorDepth2"] = self.model_structure["grid"]["soil/storage_depth2"]
 
         binding["forest_KSat1"] = self.model_structure["grid"]["soil/ksat1"]
         binding["forest_KSat2"] = self.model_structure["grid"]["soil/ksat2"]
@@ -93,43 +91,6 @@ class CWatM_Model(CWATModel):
         binding["forest_thetar1"] = self.model_structure["grid"]["soil/thetar1"]
         binding["forest_thetar2"] = self.model_structure["grid"]["soil/thetar2"]
         binding["forest_thetar3"] = self.model_structure["grid"]["soil/thetar3"]
-
-        binding["forest_rootFraction1"] = self.model_structure["grid"][
-            "landcover/forest/rootFraction1_forest"
-        ]
-        binding["forest_maxRootDepth"] = self.model_structure["grid"][
-            "landcover/forest/maxRootDepth_forest"
-        ]
-
-        binding["grassland_rootFraction1"] = self.model_structure["grid"][
-            "landcover/grassland/rootFraction1_grassland"
-        ]
-        binding["grassland_maxRootDepth"] = self.model_structure["grid"][
-            "landcover/grassland/maxRootDepth_grassland"
-        ]
-        binding["grassland_cropCoefficientNC"] = self.model_structure["forcing"][
-            "landcover/grassland/cropCoefficientGrassland_10days"
-        ]
-
-        binding["irrPaddy_rootFraction1"] = self.model_structure["grid"][
-            "landcover/irrPaddy/rootFraction1_irrPaddy"
-        ]
-        binding["irrPaddy_maxRootDepth"] = self.model_structure["grid"][
-            "landcover/irrPaddy/maxRootDepth_irrPaddy"
-        ]
-        binding["irrPaddy_cropCoefficientNC"] = self.model_structure["forcing"][
-            "landcover/irrPaddy/cropCoefficientirrPaddy_10days"
-        ]
-
-        binding["irrNonPaddy_rootFraction1"] = self.model_structure["grid"][
-            "landcover/irrNonPaddy/rootFraction1_irrNonPaddy"
-        ]
-        binding["irrNonPaddy_maxRootDepth"] = self.model_structure["grid"][
-            "landcover/irrNonPaddy/maxRootDepth_irrNonPaddy"
-        ]
-        binding["irrNonPaddy_cropCoefficientNC"] = self.model_structure["forcing"][
-            "landcover/irrNonPaddy/cropCoefficientirrNonPaddy_10days"
-        ]
 
         binding["chanMan"] = self.model_structure["grid"]["routing/kinematic/mannings"]
         binding["chanLength"] = self.model_structure["grid"][
