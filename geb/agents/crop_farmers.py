@@ -447,7 +447,9 @@ def abstract_water(
                 # make sure all fields are paddy irrigateds
                 assert (field_is_paddy_irrigated[farmer_fields] == True).all()
                 # always irrigate to 0.05 m for paddy fields
-                potential_irrigation_consumption_m = max_paddy_water_level - paddy_level[farmer_fields]
+                potential_irrigation_consumption_m = (
+                    max_paddy_water_level - paddy_level[farmer_fields]
+                )
                 # make sure the potential irrigation consumption is not negative
                 potential_irrigation_consumption_m[
                     potential_irrigation_consumption_m < 0
