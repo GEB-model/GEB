@@ -48,7 +48,6 @@ class CWatM_Model(CWATModel):
         binding["StepStart"] = start_time.strftime("%d/%m/%Y")
         binding["SpinUp"] = "0"
         binding["StepEnd"] = str(n_steps)
-        binding["Modflow_resolution"] = 1000
 
         # setting file paths for CWatM
         binding["Ldd"] = self.model_structure["grid"]["routing/kinematic/ldd"]
@@ -116,7 +115,6 @@ class CWatM_Model(CWATModel):
             "routing/lakesreservoirs/subcommand_areas"
         ]
 
-        binding["PathGroundwaterModflow"] = "modflow"
         binding["crop_factor_calibration_factor"] = 1
 
         option["inflow"] = False
