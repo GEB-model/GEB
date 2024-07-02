@@ -28,7 +28,6 @@ dependencies = [
     "pybind11",
     "SALib>=1.4.8",
     "hydromt-sfincs==1.0.3",
-    #"honeybees@git+https://github.com/VU-IVM/honeybees",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -61,6 +60,7 @@ gpu = [
 full = [
     "abcwatm@git+https://github.com/GEB-model/ABCWatM",
     "hydromt_geb@git+https://github.com/GEB-model/hydromt_geb",
+    "honeybees@git+https://github.com/VU-IVM/honeybees",
 ]
 
 [project.scripts]
