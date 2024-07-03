@@ -28,7 +28,7 @@ dependencies = [
     "pybind11",
     "SALib>=1.4.8",
     "hydromt-sfincs==1.0.3",
-    "honeybees@git+https://github.com/VU-IVM/honeybees",
+    #"honeybees@git+https://github.com/VU-IVM/honeybees",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
