@@ -781,87 +781,88 @@ class CropFarmers(AgentBaseClass):
             "proportion_irrigation_water_available"
         ]
 
-        # # New global well variables
-        # self.pump_hours = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["pump_hours"]
-        # self.depletion_limit = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["depletion_limit"]
-        # self.ponded_depth = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["ponded_depth"]
-        # self.specific_weight_water = self.model.config["agent_settings"][
-        #     "expected_utility"
-        # ]["adaptation_well_global"]["specific_weight_water"]
-        # self.static_head = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["static_head"]
-        # self.max_initial_sat_thickness = self.model.config["agent_settings"][
-        #     "expected_utility"
-        # ]["adaptation_well_global"]["max_initial_sat_thickness"]
-        # self.lifespan = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["lifespan"]
-        # self.well_diameter = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["well_diameter"]
-        # self.well_yield = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["well_yield"]
-        # self.pump_efficiency = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["pump_efficiency"]
-        # self.maintenance_factor = self.model.config["agent_settings"][
-        #     "expected_utility"
-        # ]["adaptation_well_global"]["maintenance_factor"]
-        # self.WHY_10 = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["WHY_10"]
-        # self.WHY_20 = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["WHY_20"]
-        # self.WHY_30 = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["WHY_30"]
+        # New global well variables
+        self.pump_hours = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["pump_hours"]
+        self.depletion_limit = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["depletion_limit"]
+        self.ponded_depth = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["ponded_depth"]
+        self.specific_weight_water = self.model.config["agent_settings"][
+            "expected_utility"
+        ]["adaptation_well_global"]["specific_weight_water"]
+        self.static_head = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["static_head"]
+        self.max_initial_sat_thickness = self.model.config["agent_settings"][
+            "expected_utility"
+        ]["adaptation_well_global"]["max_initial_sat_thickness"]
+        self.lifespan = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["lifespan"]
+        self.well_diameter = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["well_diameter"]
+        self.well_yield = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["well_yield"]
+        self.pump_efficiency = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["pump_efficiency"]
+        self.maintenance_factor = self.model.config["agent_settings"][
+            "expected_utility"
+        ]["adaptation_well_global"]["maintenance_factor"]
 
-        # # Placeholder values that will be changed by location specific values
-        # self.energy_cost_rate = self.model.config["agent_settings"]["expected_utility"][
-        #     "adaptation_well_global"
-        # ]["energy_cost_rate"]
-        # self.aquifer_total_thickness = 1000  # Total acquifer thickness
-        # self.aquifer_porosity = 0.10
-        # self.aquifer_permeability = -13
+        self.why_10 = load_economic_data(
+            self.model.model_structure["dict"]["economics/why_10"]
+        )
+        self.why_20 = load_economic_data(
+            self.model.model_structure["dict"]["economics/why_20"]
+        )
+        self.why_30 = load_economic_data(
+            self.model.model_structure["dict"]["economics/why_30"]
+        )
 
-        # self.initial_groundwater_depth = 20
+        # Placeholder values that will be changed by location specific values
+        self.energy_cost_rate = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["energy_cost_rate"]
+        self.aquifer_total_thickness = 1000  # Total acquifer thickness
+        self.aquifer_porosity = 0.10
+        self.aquifer_permeability = -13
 
-        # Q_array_gpm = [
-        #     10,
-        #     20,
-        #     30,
-        #     40,
-        #     50,
-        #     100,
-        #     150,
-        #     200,
-        #     250,
-        #     300,
-        #     350,
-        #     400,
-        #     500,
-        #     600,
-        #     700,
-        #     800,
-        #     900,
-        #     1000,
-        #     1200,
-        #     1300,
-        #     1400,
-        #     1500,
-        # ]
+        self.initial_groundwater_depth = 20
 
-        # # Convert candidate pumping rates to m^3/s
-        # self.Q_array = np.array(Q_array_gpm) / (60 * 264.17)
+        Q_array_gpm = [
+            10,
+            20,
+            30,
+            40,
+            50,
+            100,
+            150,
+            200,
+            250,
+            300,
+            350,
+            400,
+            500,
+            600,
+            700,
+            800,
+            900,
+            1000,
+            1200,
+            1300,
+            1400,
+            1500,
+        ]
+
+        # Convert candidate pumping rates to m^3/s
+        self.Q_array = np.array(Q_array_gpm) / (60 * 264.17)
 
         self.p_droughts = np.array([50, 25, 10, 5, 2, 1])
 
@@ -2783,6 +2784,36 @@ class CropFarmers(AgentBaseClass):
         self,
     ) -> Tuple[np.ndarray, np.ndarray]:
 
+        # Initialize costs arrays with region-specific values
+        why_10 = np.full(
+            self.n,
+            self.get_value_per_farmer_from_region_id(
+                self.why_10, self.model.current_time
+            ),
+            dtype=np.float32,
+        )
+        why_20 = np.full(
+            self.n,
+            self.get_value_per_farmer_from_region_id(
+                self.why_20, self.model.current_time
+            ),
+            dtype=np.float32,
+        )
+        why_30 = np.full(
+            self.n,
+            self.get_value_per_farmer_from_region_id(
+                self.why_30, self.model.current_time
+            ),
+            dtype=np.float32,
+        )
+        electricity_costs = np.full(
+            self.n,
+            self.get_value_per_farmer_from_region_id(
+                self.electricity_cost, self.model.current_time
+            ),
+            dtype=np.float32,
+        )
+
         # Replace by actual data derived initial groundwater depth
         initial_sat_thickness = (
             self.aquifer_total_thickness - self.initial_groundwater_depth
@@ -3778,7 +3809,7 @@ class CropFarmers(AgentBaseClass):
             # Reset the yearly abstraction
             self.yearly_abstraction_m3_by_farmer[:, :] = 0
 
-            # well_costs = self.calculate_well_costs_global()
+            well_costs = self.calculate_well_costs_global()
 
             if not self.model.spinup and not (
                 "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
