@@ -155,7 +155,7 @@ def get_KGE_discharge(run_directory, individual, config, gauges, observed_stream
 		# Check if the simulated streamflow file exists
 		if not os.path.isfile(Qsim_tss):
 			print("run_id: " + str(individual.label)+" File: "+ Qsim_tss)
-			raise Exception("No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!")
+			
 		
 		# Read the simulated streamflow data from the file
 		simulated_streamflow = pd.read_csv(Qsim_tss, sep=",", parse_dates=True, index_col=0)

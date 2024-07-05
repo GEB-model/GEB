@@ -225,10 +225,10 @@ class CropFarmers(AgentBaseClass):
             self.model, "crops/cultivation_costs"
         )
 
-        self.total_spinup_time = (
+        self.total_spinup_time = max(10, (
             self.model.config["general"]["start_time"].year
             - self.model.config["general"]["spinup_time"].year
-        )
+        ))
 
         self.yield_ratio_multiplier_value = self.model.config["agent_settings"][
             "expected_utility"
@@ -605,7 +605,7 @@ class CropFarmers(AgentBaseClass):
         )
         self.base_management_yield_ratio = np.full(
             self.n,
-            self.model.config["agent_settings"]["farmers"][
+            self.model.config["agent_settings"]["crop_farmers"][
                 "base_management_yield_ratio"
             ],
             dtype=np.float32,
@@ -1173,7 +1173,7 @@ class CropFarmers(AgentBaseClass):
             groundwater_depth=groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             command_areas=command_areas,
-            return_fraction=self.model.config["agent_settings"]["farmers"][
+            return_fraction=self.model.config["agent_settings"]["crop_farmers"][
                 "return_fraction"
             ],
             well_depth=self.well_depth.data,

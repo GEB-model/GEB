@@ -29,13 +29,15 @@ class SFINCS:
         return folder
 
     def sfincs_simulation_root(self, basin_id):
-        folder = (
+        self.folder = (
             self.sfincs_model_root(basin_id)
             / "simulations"
             / f"{self.model.current_time.strftime('%Y%m%dT%H%M%S')}"
         )
-        folder.mkdir(parents=True, exist_ok=True)
-        return folder
+        self.folder.mkdir(parents=True, exist_ok=True)
+        #print("SFINCS simulation root folder is:")
+        #print(self.folder)
+        return self.folder
 
     def get_event_name(self, event):
         if "basin_id" in event:
@@ -216,10 +218,10 @@ class SFINCS:
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
         )  # xc, yc is for x and y in rotated grid
-        self.flood(flood_map)
+        self.flood(flood_map, folder=self.folder)
 
-    def flood(self, flood_map):
-        self.model.agents.households.flood(flood_map)
+    def flood(self, flood_map, folder):
+        self.model.agents.households.flood(flood_map, folder)
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
