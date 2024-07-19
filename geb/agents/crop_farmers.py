@@ -1017,13 +1017,6 @@ class CropFarmers(AgentBaseClass):
             input_array=self.elevation_subgrid.sample_coords(self.locations.data),
             max_n=self.max_n,
         )
-        # Temporary well_unit_cost factor: change to values samples from map
-        self.well_unit_cost = AgentArray(
-            n=self.n,
-            max_n=self.max_n,
-            fill_value=self.WHY_10,
-            dtype=np.float32,
-        )
 
         # Initiate adaptation status. 0 = not adapted, 1 adapted. Column 0 = no cost adaptation, 1 = well, 2 = sprinkler
         self.adapted = AgentArray(
@@ -1384,6 +1377,33 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=0,
         )
+
+        # Load the why class of agent's aquifer
+        self.why_class = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.int32,
+            fill_value=0,
+        )
+
+        import rioxarray
+        import xarray as xr
+
+        # Load the data
+        data = rioxarray.open_rasterio(
+            "/scistor/ivm/GEB/data_catalog/groundwater/why_map.tif"
+        )
+
+        # self.why_class = sample_from_map(
+        #             data, self.locations.data, self.model.data.grid.gt
+        #         )
+
+        # if self.model.config["general"]["simulate_hydrology"]:
+        #     why_map = getattr(self.model.data.grid, "why_map")
+
+        #     self.why_class = sample_from_map(
+        #         why_map, self.locations.data, self.model.data.grid.gt
+        #     )
 
         ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
         self.GEV_parameters = AgentArray(
