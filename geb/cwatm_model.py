@@ -114,6 +114,7 @@ class CWatM_Model(CWATModel):
         binding["reservoir_command_areas"] = self.model_structure["subgrid"][
             "routing/lakesreservoirs/subcommand_areas"
         ]
+        binding["why_map"] = self.model_structure["grid"]["groundwater/why_map"]
 
         binding["crop_factor_calibration_factor"] = 1
 

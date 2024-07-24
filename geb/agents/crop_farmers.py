@@ -4,7 +4,6 @@ from datetime import datetime
 import json
 import calendar
 from typing import Tuple, Union
-import matplotlib.pyplot as plt
 from honeybees.library.raster import sample_from_map
 
 from scipy.stats import genextreme
@@ -830,9 +829,7 @@ class CropFarmers(AgentBaseClass):
         self.energy_cost_rate = self.model.config["agent_settings"]["expected_utility"][
             "adaptation_well_global"
         ]["energy_cost_rate"]
-        self.aquifer_total_thickness = 1000  # Total acquifer thickness
-        self.aquifer_porosity = 0.10
-        self.aquifer_permeability = -13
+        self.aquifer_total_thickness = 100  # Total acquifer thickness
 
         self.initial_groundwater_depth = 20
 
@@ -1170,27 +1167,6 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
-        self.cumulative_yield_ratio = AgentArray(
-            n=self.n,
-            max_n=self.max_n,
-            dtype=np.float32,
-            fill_value=0,
-        )
-        self.cumulative_yield_ratio_count = AgentArray(
-            n=self.n,
-            max_n=self.max_n,
-            dtype=np.int32,
-            fill_value=0,
-        )
-
-        ## Base initial wealth on x days of daily expenses, sort of placeholder
-        self.household_size = AgentArray(
-            np.load(
-                self.model.model_structure["binary"]["agents/farmers/household_size"]
-            )["data"],
-            max_n=self.max_n,
-        )
-
         # set no irrigation limit for farmers by default
         self.irrigation_limit_m3 = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan  # m3
@@ -1281,13 +1257,6 @@ class CropFarmers(AgentBaseClass):
             assert (
                 getattr(self, attribute).shape[0] == self.n
             ), "attribute does not exist or is of wrong size"
-
-        self.household_size = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1
-        )
-        self.household_size[:] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/household_size"]
-        )["data"]
 
         self.yield_ratios_drought_event = AgentArray(
             n=self.n,
@@ -1386,24 +1355,18 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
+        # Temporary workaround for not being able to access it through getattr()
         import rioxarray
-        import xarray as xr
+        import os
 
         # Load the data
-        data = rioxarray.open_rasterio(
-            "/scistor/ivm/GEB/data_catalog/groundwater/why_map.tif"
-        )
+        input_dir = os.path.join("input", "groundwater")
+        input_fn = "why_map.tif"
+        why_data = rioxarray.open_rasterio(os.path.join(input_dir, input_fn))
 
-        # self.why_class = sample_from_map(
-        #             data, self.locations.data, self.model.data.grid.gt
-        #         )
-
-        # if self.model.config["general"]["simulate_hydrology"]:
-        #     why_map = getattr(self.model.data.grid, "why_map")
-
-        #     self.why_class = sample_from_map(
-        #         why_map, self.locations.data, self.model.data.grid.gt
-        #     )
+        self.why_class[:] = sample_from_map(
+            self.model.data.grid, self.locations.data, self.model.data.grid.gt
+        )[:, 0]
 
         ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
         self.GEV_parameters = AgentArray(
@@ -1770,6 +1733,35 @@ class CropFarmers(AgentBaseClass):
         self.groundwater_depth = AgentArray(
             groundwater_depth_per_farmer, max_n=self.max_n
         )
+        # print(
+        #     "GW abstraction",
+        #     np.mean(self.groundwater_abstraction_m3_by_farmer[np.isin(
+        #         self.irrigation_source,
+        #         np.array(
+        #             [
+        #                 self.irrigation_source_key["well"],
+        #             ]
+        #         ),
+        #     )]),
+        #     "Channel",
+        #     np.mean(self.channel_abstraction_m3_by_farmer[np.isin(
+        #         self.irrigation_source,
+        #         np.array(
+        #             [
+        #                 self.irrigation_source_key["canal"],
+        #             ]
+        #         ),
+        #     )]),
+        #     "Res",
+        #     np.mean(self.reservoir_abstraction_m3_by_farmer[np.isin(
+        #         self.irrigation_source,
+        #         np.array(
+        #             [
+        #                 self.irrigation_source_key["canal"],
+        #             ]
+        #         ),
+        #     )]),
+        # )
         return (
             water_withdrawal_m,
             water_consumption_m,
@@ -2060,7 +2052,20 @@ class CropFarmers(AgentBaseClass):
             yield_ratio_per_farmer = np.bincount(
                 harvesting_farmer_fields, weights=yield_ratio_total, minlength=self.n
             ) / np.bincount(harvesting_farmer_fields, minlength=self.n)
-
+            print(
+                "well",
+                np.mean(
+                    yield_ratio_per_farmer[harvesting_farmers][
+                        self.adapted[harvesting_farmers, 1] == 1
+                    ]
+                ),
+                "no well",
+                np.mean(
+                    yield_ratio_per_farmer[harvesting_farmers][
+                        self.adapted[harvesting_farmers, 1] == 0
+                    ]
+                ),
+            )
             ## Get the current crop age
             crop_age = self.var.crop_age_days_map[harvest]
             total_crop_age = np.bincount(
@@ -2073,14 +2078,6 @@ class CropFarmers(AgentBaseClass):
 
             harvesting_farmers_mask = np.zeros(self.n, dtype=bool)
             harvesting_farmers_mask[harvesting_farmers] = True
-
-            # Update the cumulative yield ratio and count
-            cumulative_mean(
-                mean=self.cumulative_yield_ratio,
-                counter=self.cumulative_yield_ratio_count,
-                update=yield_ratio_per_farmer,
-                mask=harvesting_farmers_mask,
-            )
 
             self.save_yearly_profits(
                 harvesting_farmers, profit_farmer, potential_profit_farmer
@@ -2294,7 +2291,7 @@ class CropFarmers(AgentBaseClass):
             self.remove_agents(farmers_selling_land)
 
         self.var.crop_map = np.where(plant_map >= 0, plant_map, self.var.crop_map)
-        self.var.crop_age_days_map[plant_map >= 0] = 0
+        self.var.crop_age_days_map[plant_map >= 0] = 1
 
         assert (self.var.crop_age_days_map[self.var.crop_map > 0] >= 0).all()
 
@@ -2370,13 +2367,10 @@ class CropFarmers(AgentBaseClass):
             )
 
             shift_and_update(self.yearly_SPEI_probability, SPEI_probability)
-            shift_and_update(self.yearly_yield_ratio, self.cumulative_yield_ratio)
 
             # Reset the cumulative SPEI array at the beginning of the year
             self.cumulative_SPEI_during_growing_season.fill(0)
             self.cumulative_SPEI_count_during_growing_season.fill(0)
-            self.cumulative_yield_ratio.fill(0)
-            self.cumulative_yield_ratio_count.fill(0)
 
         fields_with_growing_crops = self.var.crop_map[self.var.land_owners != -1] != -1
         farmers_with_growing_crops = (
@@ -2805,27 +2799,24 @@ class CropFarmers(AgentBaseClass):
     ) -> Tuple[np.ndarray, np.ndarray]:
 
         # Initialize costs arrays with region-specific values
-        why_10 = np.full(
-            self.n,
-            self.get_value_per_farmer_from_region_id(
-                self.why_10, self.model.current_time
-            ),
-            dtype=np.float32,
+        why_10 = self.get_value_per_farmer_from_region_id(
+            self.why_10, self.model.current_time
         )
-        why_20 = np.full(
-            self.n,
-            self.get_value_per_farmer_from_region_id(
-                self.why_20, self.model.current_time
-            ),
-            dtype=np.float32,
+        why_20 = self.get_value_per_farmer_from_region_id(
+            self.why_20, self.model.current_time
         )
-        why_30 = np.full(
-            self.n,
-            self.get_value_per_farmer_from_region_id(
-                self.why_30, self.model.current_time
-            ),
-            dtype=np.float32,
+        why_30 = self.get_value_per_farmer_from_region_id(
+            self.why_30, self.model.current_time
         )
+
+        # Initialize the result array with the correct type
+        well_unit_cost = np.zeros_like(self.why_class, dtype=np.float32)
+
+        # Assign values using boolean indexing
+        well_unit_cost[self.why_class == 1] = why_10[self.why_class == 1]
+        well_unit_cost[self.why_class == 2] = why_20[self.why_class == 2]
+        well_unit_cost[self.why_class == 3] = why_30[self.why_class == 3]
+
         electricity_costs = np.full(
             self.n,
             self.get_value_per_farmer_from_region_id(
@@ -2847,7 +2838,7 @@ class CropFarmers(AgentBaseClass):
 
         # Set the well length depending on the current acquifer thickness
         well_length_mask = current_sat_thickness > self.max_initial_sat_thickness
-        potential_well_length[well_length_mask] = self.aquifer_total_thickness
+        # potential_well_length[well_length_mask] = self.aquifer_total_thickness
 
         depleted_volume_fraction = current_sat_thickness / initial_sat_thickness
 
@@ -2857,7 +2848,7 @@ class CropFarmers(AgentBaseClass):
         ) < self.depletion_limit
 
         ## Determine costs
-        install_cost = self.well_unit_cost * potential_well_length
+        install_cost = well_unit_cost * potential_well_length
 
         maintenance_cost = self.maintenance_factor * install_cost
 
@@ -3774,6 +3765,18 @@ class CropFarmers(AgentBaseClass):
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+            # Set yearly yield ratio based on the difference between saved actual and potential profit
+            self.yearly_yield_ratio = (
+                self.yearly_profits / self.yearly_potential_profits
+            )
+
+            print(
+                "well",
+                np.mean(self.yearly_yield_ratio[self.adapted[:, 1] == 1, 0]),
+                "no well",
+                np.mean(self.yearly_yield_ratio[self.adapted[:, 1] == 0, 0]),
+            )
+
             # Shift the potential and yearly profits forward
             shift_and_reset_matrix(self.yearly_profits)
             shift_and_reset_matrix(self.yearly_potential_profits)
