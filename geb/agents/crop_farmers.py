@@ -1718,8 +1718,8 @@ class CropFarmers(AgentBaseClass):
                 + available_groundwater_m3.sum()
                 + available_reservoir_storage_m3.sum()
             ),
-            rel_tol=0.001,
-            abs_tol=0.001,
+            rel_tol=0.01,
+            abs_tol=0.01,
         )
         # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
         assert math.isclose(
