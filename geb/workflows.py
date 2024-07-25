@@ -37,10 +37,10 @@ class TimingModule:
 
 
 class AsyncXarrayReader:
-    shared_loop = asyncio.new_event_loop()  # Shared event loop
-    if not shared_loop.is_running():
-        loop_thread = threading.Thread(target=shared_loop.run_forever)
-        loop_thread.start()
+    shared_loop = (
+        asyncio.new_event_loop()
+    )  # Shared event loop, note running in a separate thread is slower
+    asyncio.set_event_loop(shared_loop)
 
     def __init__(self, filepath, variable_name):
         self.filepath = filepath
@@ -122,8 +122,7 @@ class AsyncXarrayReader:
     def read_timestep(self, date):
         index = self.get_index(date)
         fn = self.read_timestep_async(index)
-        future = asyncio.run_coroutine_threadsafe(fn, self.loop)
-        data = future.result()
+        data = self.loop.run_until_complete(fn)
         return data
 
     def read_timestep_not_async(self, date):
