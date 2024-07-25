@@ -1355,18 +1355,9 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
-        # Temporary workaround for not being able to access it through getattr()
-        import rioxarray
-        import os
-
-        # Load the data
-        input_dir = os.path.join("input", "groundwater")
-        input_fn = "why_map.tif"
-        why_data = rioxarray.open_rasterio(os.path.join(input_dir, input_fn))
-
         self.why_class[:] = sample_from_map(
-            self.model.data.grid, self.locations.data, self.model.data.grid.gt
-        )[:, 0]
+            self.model.data.grid.why_class, self.locations.data, self.model.data.grid.gt
+        )
 
         ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
         self.GEV_parameters = AgentArray(
