@@ -2,6 +2,7 @@
 .vscode
 .DS_Store
 workspaces/
+tests/output/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

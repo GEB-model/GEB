@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from geb.agents.reservoir_operators import regulate_reservoir_outflow
+from tests.setup import output_folder
 
 
 def test_regulate_reservoir_outflow():
@@ -12,7 +13,7 @@ def test_regulate_reservoir_outflow():
     normQ = np.full_like(current_storage, 10)
     nondmgQ = np.full_like(current_storage, 20)
     conservative_limit_ratio = 0.1
-    normal_limit_ratio = 0.9
+    normal_limit_ratio = np.full_like(current_storage, 0.9)
     flood_limit_ratio = 1
 
     outflow = regulate_reservoir_outflow(
@@ -48,4 +49,9 @@ def test_regulate_reservoir_outflow():
     ax1.plot(current_storage, outflow, label="outflow")
     ax1.plot(current_storage, inflow, label="inflow")
 
-    plt.savefig("test_regulate_reservoir_outflow.png")
+    for ax in [ax0, ax1]:
+        ax.legend()
+        ax.set_xlabel("storage (%) of 100 m3 reservoir")
+        ax.set_ylabel("in-/outflow (m3/s)")
+
+    plt.savefig(output_folder / "test_regulate_reservoir_outflow.png")
