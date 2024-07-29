@@ -16,13 +16,10 @@ class CWatM_Model(CWATModel):
     Args:
         start_time: Start date of the model.
         n_steps: Number of steps that the model will run for.
-        settings: Filepath of the CWatM settingsfile. For full configuration options please refer to the `CWatM documentation <https://cwatm.iiasa.ac.at/>`.
         use_gpu: Whether the model can use a GPU.
     """
 
-    def __init__(
-        self, start_time: datetime.datetime, n_steps: int, settings: str
-    ) -> None:
+    def __init__(self, start_time: datetime.datetime, n_steps: int) -> None:
         self.init_water_table_file = os.path.join(
             self.config["general"]["init_water_table"]
         )
