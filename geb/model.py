@@ -205,7 +205,6 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
                     self,
                     self.current_time + self.timestep_length,
                     self.n_timesteps,
-                    self.config["general"]["CWatM_settings"],
                 )
 
             self.reporter = Reporter(self)
