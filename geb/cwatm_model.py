@@ -4,9 +4,35 @@ import os
 import datetime
 
 from cwatm.cwatm_model import CWATModel
-from cwatm.management_modules.dynamicModel import ModelFrame
 from cwatm.management_modules.globals import binding, outDir, Flags, option
 from cwatm.run_cwatm import headerinfo
+
+
+class ModelFrame:
+    """
+    Frame of the dynamic hydrological model
+
+    lastTimeStep:  Last time step to run
+    firstTimestep: Starting time step of the model
+    """
+
+    def __init__(self, model):
+        self.model = model
+
+    def step(self):
+        self.model.dynamic()
+
+    def finalize(self):
+        """
+        Finalize the model
+        """
+        # finalize modflow model
+        self.model.groundwater_modflow_module.modflow.finalize()
+
+        if self.model.config["general"]["simulate_forest"]:
+            for plantFATE_model in self.model.plantFATE:
+                if plantFATE_model is not None:
+                    plantFATE_model.finalize()
 
 
 class CWatM_Model(CWATModel):
