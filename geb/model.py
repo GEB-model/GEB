@@ -20,7 +20,7 @@ from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
 from geb.HRUs import Data
-from geb.cwatm_model import CWatM_Model
+from cwatm.model import CWatM
 from geb.hazards.driver import HazardDriver
 
 
@@ -68,12 +68,11 @@ class ABM(ABM_Model):
         timeprint("Finished setup")
 
 
-class GEBModel(HazardDriver, ABM, CWatM_Model):
+class GEBModel(HazardDriver, ABM, CWatM):
     """GEB parent class.
 
     Args:
         config: Filepath of the YAML-configuration file (e.g. model.yml).
-        CwatM_settings: Path of CWatM settings file.
         name: Name of model.
         xmin: Minimum x coordinate.
         xmax: Maximum x coordinate.
@@ -199,7 +198,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             )
 
             if self.config["general"]["simulate_hydrology"]:
-                CWatM_Model.__init__(
+                CWatM.__init__(
                     self,
                 )
 
@@ -241,7 +240,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
             if self.config["general"]["simulate_hydrology"]:
-                CWatM_Model.step(self)
+                CWatM.step(self)
 
             self.reporter.step()
             t1 = time()
@@ -284,7 +283,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
     def close(self) -> None:
         """Finalizes the model."""
         if self.mode == "w" and self.config["general"]["simulate_hydrology"]:
-            CWatM_Model.finalize(self)
+            CWatM.finalize(self)
 
             from geb.workflows import all_async_readers
 
