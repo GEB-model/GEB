@@ -1,6 +1,6 @@
 import math
 
-from cwatm.hydrological_modules.plantFATE import Model
+from .modules.plantFATE import Model
 
 
 def test_soil_water_potential():

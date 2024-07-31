@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import datetime
 from pathlib import Path
 import geopandas as gpd
@@ -7,7 +6,6 @@ from time import time
 import copy
 import numpy as np
 import warnings
-
 
 try:
     import cupy as cp
@@ -203,8 +201,6 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             if self.config["general"]["simulate_hydrology"]:
                 CWatM_Model.__init__(
                     self,
-                    self.current_time + self.timestep_length,
-                    self.n_timesteps,
                 )
 
             self.reporter = Reporter(self)
@@ -245,7 +241,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
             if self.config["general"]["simulate_hydrology"]:
-                CWatM_Model.step(self, 1)
+                CWatM_Model.step(self)
 
             self.reporter.step()
             t1 = time()

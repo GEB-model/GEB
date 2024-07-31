@@ -1,6 +1,6 @@
 import numpy as np
 
-from cwatm.hydrological_modules.soil import (
+from .modules.soil import (
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
     get_transpiration_reduction_factor,
