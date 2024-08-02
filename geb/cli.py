@@ -454,5 +454,32 @@ def update(
     geb_model.update(opt=configread(build_config))
 
 
+@click.option(
+    "--working-directory",
+    "-wd",
+    default=".",
+    help="Working directory for model.",
+)
+@main.command()
+def share(working_directory):
+    """Share model."""
+
+    os.chdir(working_directory)
+
+    # create a zip file called model.zip with the folders input, and model files
+    # in the working directory
+    import zipfile
+
+    folders = ["input"]
+    files = ["model.yml", "build.yml", "sfincs.yml"]
+    with zipfile.ZipFile("model.zip", "w") as zipf:
+        for folder in folders:
+            for root, _, filenames in os.walk(folder):
+                for filename in filenames:
+                    zipf.write(os.path.join(root, filename))
+        for file in files:
+            zipf.write(file)
+
+
 if __name__ == "__main__":
     main()
