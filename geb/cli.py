@@ -198,6 +198,13 @@ def run_model(
                 model.run()
             report = model.report()
     else:
+        # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
+        # the event loop started for reading data, unless we use nest_asyncio.
+        # so that's what we do here.
+        import nest_asyncio
+
+        nest_asyncio.apply()
+
         if profiling:
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
