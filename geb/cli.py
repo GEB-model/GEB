@@ -1,5 +1,6 @@
 import click
 import os
+import sys
 import cProfile
 from pstats import Stats
 from operator import attrgetter
@@ -134,6 +135,11 @@ def click_run_options():
             is_flag=True,
             help="Run GEB with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
         )
+        @click.option(
+            "--optimize",
+            is_flag=True,
+            help="Run GEB in optimized mode, skipping asserts and water balance checks.",
+        )
         @click.option("--timing", is_flag=True, help="Run GEB with timing.")
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -155,8 +161,12 @@ def run_model(
     no_browser,
     port,
     timing,
+    optimize,
 ):
     """Run model."""
+
+    if optimize and sys.flags.optimize == 0:
+        os.execv(sys.executable, ["python", "-O"] + sys.argv)
 
     # set the working directory
     os.chdir(working_directory)
