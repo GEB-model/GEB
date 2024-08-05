@@ -3,6 +3,7 @@
 .DS_Store
 workspaces/
 tests/output/
+tests/tmp/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
