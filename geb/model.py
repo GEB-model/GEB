@@ -276,7 +276,7 @@ class GEBModel(HazardDriver, ABM, CWatM):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path("simulation_root")
+        folder = Path("simulation_root") / self.run_name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
