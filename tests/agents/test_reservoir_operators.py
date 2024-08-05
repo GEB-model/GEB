@@ -12,9 +12,9 @@ def test_regulate_reservoir_outflow():
     minQ = np.full_like(current_storage, 1)
     normQ = np.full_like(current_storage, 10)
     nondmgQ = np.full_like(current_storage, 20)
-    conservative_limit_ratio = 0.1
+    conservative_limit_ratio = np.full_like(current_storage, 0.1)
     normal_limit_ratio = np.full_like(current_storage, 0.9)
-    flood_limit_ratio = 1
+    flood_limit_ratio = np.full_like(current_storage, 1.0)
 
     outflow = regulate_reservoir_outflow(
         current_storage,

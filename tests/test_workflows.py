@@ -8,12 +8,13 @@ from geb.workflows import (
     AsyncXarrayReader,
 )
 
+from .setup import tmp_folder
 
-@pytest.fixture
-def netcdf_file(tmp_path):
-    size = 10_000
+
+def netcdf_file(varname):
+    size = 2_000
     # Create a temporary NetCDF file for testing
-    filename = tmp_path / "test_data.nc"
+    filename = tmp_folder / f"{varname}.nc"
 
     periods = 5
 
@@ -23,9 +24,7 @@ def netcdf_file(tmp_path):
         data[i][:] = i
     ds = xr.Dataset(
         {
-            "temperature": (("time", "x", "y"), data),
-            "precipitation": (("time", "x", "y"), data),
-            "pressure": (("time", "x", "y"), data),
+            varname: (("time", "x", "y"), data),
         },
         coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)},
     )
@@ -34,10 +33,13 @@ def netcdf_file(tmp_path):
     return filename
 
 
-def test_read_timestep(netcdf_file):
-    reader1 = AsyncXarrayReader(netcdf_file, variable_name="temperature")
-    reader2 = AsyncXarrayReader(netcdf_file, variable_name="precipitation")
-    reader3 = AsyncXarrayReader(netcdf_file, variable_name="pressure")
+def test_read_timestep():
+    temperature_file = netcdf_file("temperature")
+    precipitation_file = netcdf_file("precipitation")
+    pressure_file = netcdf_file("pressure")
+    reader1 = AsyncXarrayReader(temperature_file, variable_name="temperature")
+    reader2 = AsyncXarrayReader(precipitation_file, variable_name="precipitation")
+    reader3 = AsyncXarrayReader(pressure_file, variable_name="pressure")
 
     data0 = reader1.read_timestep(date(2000, 1, 1))
 
@@ -96,5 +98,8 @@ def test_read_timestep(netcdf_file):
 
     reader1.close()
     reader2.close()
+    reader3.close()
 
-    netcdf_file.unlink()
+    temperature_file.unlink()
+    precipitation_file.unlink()
+    pressure_file.unlink()

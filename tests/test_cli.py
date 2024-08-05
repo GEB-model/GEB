@@ -20,6 +20,7 @@ def test_cli():
         "calibrate",
         "sensitivity",
         "multirun",
+        "share",
     ):
         result = subprocess.run(["geb", cmd, "--help"], capture_output=True, text=True)
 
