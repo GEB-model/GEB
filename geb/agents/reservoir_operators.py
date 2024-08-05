@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
 from . import AgentBaseClass
 import numpy as np
-import pandas as pd
 from .general import AgentArray
 
 from numba import njit
@@ -23,21 +21,21 @@ def regulate_reservoir_outflow(
     outflow = np.zeros_like(current_storage)
     for i in range(current_storage.size):
         fill = current_storage[i] / volume[i]
-        if fill <= conservative_limit_ratio * 2:
+        if fill <= conservative_limit_ratio[i] * 2:
             outflow[i] = min(minQ[i], current_storage[i] * day_to_sec)
         elif fill <= normal_limit_ratio[i]:
             outflow[i] = minQ[i] + (normQ[i] - minQ[i]) * (
-                fill - 2 * conservative_limit_ratio
-            ) / (normal_limit_ratio[i] - 2 * conservative_limit_ratio)
-        elif fill <= flood_limit_ratio:
+                fill - 2 * conservative_limit_ratio[i]
+            ) / (normal_limit_ratio[i] - 2 * conservative_limit_ratio[i])
+        elif fill <= flood_limit_ratio[i]:
             outflow[i] = normQ[i] + (
                 (fill - normal_limit_ratio[i])
-                / (flood_limit_ratio - normal_limit_ratio[i])
+                / (flood_limit_ratio[i] - normal_limit_ratio[i])
             ) * (nondmgQ[i] - normQ[i])
         else:
             outflow[i] = max(
                 max(
-                    (fill - flood_limit_ratio - 0.01) * volume[i] * day_to_sec,
+                    (fill - flood_limit_ratio[i] - 0.01) * volume[i] * day_to_sec,
                     min(nondmgQ[i], np.maximum(inflow[i], normQ[i])),
                 ),
                 inflow[i],
@@ -62,27 +60,13 @@ class ReservoirOperators(AgentBaseClass):
             else {}
         )
         AgentBaseClass.__init__(self)
-        df = pd.read_csv(
-            self.model.model_structure["table"][
-                "routing/lakesreservoirs/basin_lakes_data"
-            ],
-            dtype={
-                "waterbody_type": int,
-                "volume_total": float,
-                "average_discharge": float,  # m3/s
-                "average_area": float,
-                "volume_flood": float,
-                "relative_area_in_region": float,
-            },
-        ).set_index("waterbody_id")
-
-        self.reservoirs = df[df["waterbody_type"] == 2].copy()
-        self.cons_limit_ratio = 0.02
-        self.flood_limit_ratio = 1
-
         super().__init__()
 
     def initiate(self):
+        pass
+
+    def set_reservoir_data(self, water_body_data):
+        self.reservoirs = water_body_data[water_body_data["waterbody_type"] == 2].copy()
         assert (self.reservoirs["volume_total"] > 0).all()
         self.active_reservoirs = self.reservoirs[self.reservoirs["waterbody_type"] == 2]
 
@@ -105,8 +89,13 @@ class ReservoirOperators(AgentBaseClass):
         )
         self.flood_volume = AgentArray(self.active_reservoirs["volume_flood"].values)
         self.dis_avg = AgentArray(self.active_reservoirs["average_discharge"].values)
-
         self.norm_limit_ratio = AgentArray(self.flood_volume / self.reservoir_volume)
+        self.cons_limit_ratio = AgentArray(
+            np.full(len(self.active_reservoirs), 0.02, dtype=np.float32)
+        )
+        self.flood_limit_ratio = AgentArray(
+            np.full(len(self.active_reservoirs), 1.0, dtype=np.float32)
+        )
 
         self.minQC = AgentArray(
             self.model.config["agent_settings"]["reservoir_operators"]["MinOutflowQ"]
@@ -137,6 +126,8 @@ class ReservoirOperators(AgentBaseClass):
 
         """
         assert reservoirStorageM3.size == inflow.size == waterBodyIDs.size
+        # assert that the reservoir IDs match the active reservoirs
+        assert np.array_equal(waterBodyIDs, self.active_reservoirs.index.to_numpy())
 
         # make outflow same as inflow for a setting without a reservoir
         if "ruleset" in self.config and self.config["ruleset"] == "no-human-influence":
@@ -149,9 +140,9 @@ class ReservoirOperators(AgentBaseClass):
             self.minQC.data,
             self.normQC.data,
             self.nondmgQC.data,
-            self.cons_limit_ratio,
+            self.cons_limit_ratio.data,
             self.norm_limit_ratio.data,
-            self.flood_limit_ratio,
+            self.flood_limit_ratio.data,
         )
 
         return reservoir_outflow
