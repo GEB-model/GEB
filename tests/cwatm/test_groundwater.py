@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import matplotlib.pyplot as plt
-from cwatm.modules.groundwater_modflow.modflow_model import ModFlowSimulation
+from cwatm.modules.groundwater.model import ModFlowSimulation
 
 from ..setup import output_folder, tmp_folder
 
@@ -27,8 +27,10 @@ basin_mask[-3:-1, 0:3] = True
 
 # Create a topography 2D map
 x_vertices, y_vertices = np.meshgrid(
-    np.linspace(0, XSIZE * 10, XSIZE + 1), np.linspace(0, YSIZE * 10, YSIZE + 1)
+    np.linspace(0, XSIZE * 10, XSIZE + 1), np.linspace(YSIZE * 10, 0, YSIZE + 1)
 )
+
+gt = (4.864242872511027, 0.0001, 0, 52.33412139354429, 0, -0.0001)
 
 
 def compress(array, mask):
@@ -44,13 +46,10 @@ def decompress(array, mask):
 default_params = {
     "model": DummyModel(),
     "name": "test_model",
+    "gt": gt,
     "ndays": 20,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.4), basin_mask),
-    "nrow": YSIZE,
-    "ncol": XSIZE,
-    "x_coordinates_vertices": x_vertices,
-    "y_coordinates_vertices": y_vertices,
     "topography": compress(topography, basin_mask),
     "bottom_soil": compress(topography - 2, basin_mask),
     "bottom": compress(topography - np.full((NLAY, YSIZE, XSIZE), 10), basin_mask),
@@ -64,10 +63,9 @@ default_params = {
 def test_modflow_simulation_initialization():
     sim = ModFlowSimulation(**default_params)
     assert sim.name == "TEST_MODEL"
-    assert sim.nrow == YSIZE
-    assert sim.ncol == XSIZE
     assert sim.n_active_cells == (~basin_mask).sum()
-    assert (sim.area == 100.0).all()
+    # In the Netherlands, the average area of a cell with this gt is ~75.8 m2
+    assert np.allclose(sim.area, 75.8, atol=0.1)
 
 
 def test_recharge():

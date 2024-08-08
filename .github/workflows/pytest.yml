@@ -14,7 +14,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
-        python-version: 3.11
+        python-version: 3.12
     - name: Install dependencies
       run: |
         sudo apt-add-repository ppa:ubuntugis/ubuntugis-unstable
@@ -24,5 +24,8 @@ jobs:
         git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
         python -m pip install --upgrade pip
         pip install .[tests,full]
+    - name: Install cwam package
+      if: ${BRANCH_NAME} != 'main'
+      run: pip install git+https://github.com/GEB-model/ABCWatM.git@${BRANCH_NAME}
     - name: Run tests
       run: pytest
