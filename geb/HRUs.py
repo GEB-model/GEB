@@ -230,7 +230,7 @@ class Grid(BaseVariables):
         Returns:
             array: Compressed array.
         """
-        return array.ravel()[self.mask_flat == False]
+        return array[..., ~self.mask]
 
     def decompress(
         self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
@@ -280,7 +280,7 @@ class Grid(BaseVariables):
         """
         self.plot(self.decompress(array, fillvalue=fillvalue))
 
-    def load(self, filepath, compress=True):
+    def load(self, filepath, compress=True, layer=1):
         """Load array from disk.
 
         Args:
@@ -291,7 +291,7 @@ class Grid(BaseVariables):
             array: Loaded array.
         """
         with rasterio.open(filepath) as src:
-            data = src.read(1)
+            data = src.read(layer)
         if compress:
             data = self.data.grid.compress(data)
         return data
