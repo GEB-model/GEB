@@ -24,8 +24,11 @@ jobs:
         git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
         python -m pip install --upgrade pip
         pip install .[tests,full]
-    - name: Install cwam package
-      if: ${BRANCH_NAME} != 'main'
-      run: pip install git+https://github.com/GEB-model/ABCWatM.git@${BRANCH_NAME}
+    - name: Install cwam package if not main branch
+      run: |
+        BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
+        if [ "$BRANCH_NAME" != "main" ]; then
+          pip install git+https://github.com/GEB-model/ABCWatM.git@"$BRANCH_NAME"
+        fi
     - name: Run tests
       run: pytest
