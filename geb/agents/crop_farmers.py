@@ -521,7 +521,7 @@ def abstract_water(
 
                             # command areas
                             command_area = command_areas[field]
-                            if command_area >= 0:  # -1 means no command area
+                            if command_area != -1:  # -1 means no command area
                                 irrigation_water_demand_field = withdraw_reservoir(
                                     command_area=command_area,
                                     field=field,
@@ -1718,8 +1718,8 @@ class CropFarmers(AgentBaseClass):
                 + available_groundwater_m3.sum()
                 + available_reservoir_storage_m3.sum()
             ),
-            rel_tol=0.01,
-            abs_tol=0.01,
+            rel_tol=1e-5,
+            abs_tol=10,
         )
         # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
         assert math.isclose(
@@ -1731,15 +1731,14 @@ class CropFarmers(AgentBaseClass):
             (irrigation_limit_pre - self.remaining_irrigation_limit_m3)[
                 ~np.isnan(self.remaining_irrigation_limit_m3)
             ].sum(),
-            rel_tol=0.02,
-            abs_tol=1,
+            rel_tol=1e-5,
+            abs_tol=10,
         )
         # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
         assert math.isclose(
             (water_consumption_m + returnFlowIrr_m + addtoevapotrans_m).sum(),
             water_withdrawal_m.sum(),
-            rel_tol=0.001,
-            abs_tol=0.001,
+            rel_tol=1e-5,
         )
 
         self.groundwater_depth = AgentArray(
