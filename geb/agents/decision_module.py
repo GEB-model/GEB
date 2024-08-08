@@ -225,18 +225,26 @@ class DecisionModule:
         total_profits_adaptation = total_profits_adaptation[indices]
         p_droughts = np.sort(p_droughts)
 
-        # Identify agents able to afford the adaptation and that have not yet adapted
-        unconstrained = np.where(
-            (profits_no_event * expenditure_cap > total_annual_costs)
-            & (adapted == 0)
-            & extra_constraint
-        )
-        # Create a mask to mask all constrained agents
-        unconstrained_mask = (
-            (profits_no_event * expenditure_cap > total_annual_costs)
-            & (adapted == 0)
-            & extra_constraint
-        )
+        if adapted is not None:
+            # Identify agents able to afford the adaptation and that have not yet adapted
+            unconstrained = np.where(
+                (profits_no_event * expenditure_cap > total_annual_costs)
+                & (adapted == 0)
+                & extra_constraint
+            )
+            # Create a mask to mask all constrained agents
+            unconstrained_mask = (
+                (profits_no_event * expenditure_cap > total_annual_costs)
+                & (adapted == 0)
+                & extra_constraint
+            )
+        else:  # For now, state that are no monetary constraints for switching crops
+            unconstrained = np.where(
+                # (profits_no_event * expenditure_cap > total_annual_costs)
+                extra_constraint
+            )
+            # Create a mask to mask all constrained agents
+            unconstrained_mask = extra_constraint
 
         # Those who cannot affort it cannot adapt
         EU_adapt[~unconstrained_mask] = -np.inf

@@ -2365,7 +2365,7 @@ class CropFarmers(AgentBaseClass):
             abs_spei_values = np.abs(self.cumulative_SPEI_during_growing_season)
             SPEI_probability_norm = stats.norm.cdf(abs_spei_values)
 
-            shift_and_update(self.yearly_SPEI_probability, SPEI_probability_norm)
+            shift_and_update(self.yearly_SPEI_probability, SPEI_probability)
 
             # Reset the cumulative SPEI array at the beginning of the year
             self.cumulative_SPEI_during_growing_season.fill(0)
@@ -2775,26 +2775,22 @@ class CropFarmers(AgentBaseClass):
         # Constants
         adaptation_type = 1
 
-        # Compute total adaptation cost for each farmer
-        fixed_investment_cost, yearly_costs, well_depth = (
-            self.calculate_well_costs_india()
-        )
+        annual_cost, well_depth = self.calculate_well_costs_global()
 
-        # Fetch loan configuration
+        # Compute the total annual per square meter costs if farmers adapt during this cycle
+        # This cost is the cost if the farmer would adapt, plus its current costs of previous
+        # adaptations
+
+        total_annual_costs_m2 = (
+            annual_cost + self.all_loans_annual_cost[:, -1, 0]
+        ) / self.field_size_per_farmer
+
+        # Solely the annual cost of the adaptation
+        annual_cost_m2 = annual_cost / self.field_size_per_farmer
+
         loan_duration = self.model.config["agent_settings"]["expected_utility"][
             "adaptation_well"
         ]["loan_duration"]
-
-        # Calculate annual cost based on the interest rate and loan duration
-        annual_cost = (
-            fixed_investment_cost
-            * (
-                self.interest_rate
-                * (1 + self.interest_rate) ** loan_duration
-                / ((1 + self.interest_rate) ** loan_duration - 1)
-            )
-            + yearly_costs
-        )
 
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # and who's wells are much shallower than the groundwater depth
@@ -2820,17 +2816,6 @@ class CropFarmers(AgentBaseClass):
             profits_no_event_adaptation,
         ) = self.profits_SEUT(adaptation_type, adapted)
 
-        # Compute the total annual per square meter costs if farmers adapt during this cycle
-        # This cost is the cost if the farmer would adapt, plus its current costs of previous
-        # adaptations
-
-        total_annual_costs_m2 = (
-            annual_cost + self.all_loans_annual_cost[:, -1, 0]
-        ) / self.field_size_per_farmer
-
-        # Solely the annual cost of the adaptation
-        annual_cost_m2 = annual_cost / self.field_size_per_farmer
-
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params = {
             "loan_duration": loan_duration,
@@ -2846,7 +2831,7 @@ class CropFarmers(AgentBaseClass):
             "total_annual_costs": total_annual_costs_m2,
             "adaptation_costs": annual_cost_m2,
             "adapted": adapted,
-            "time_adapted": self.time_adapted[:, adaptation_type],
+            "time_adapted": self.time_adapted[:, adaptation_type].data,
             "T": np.full(
                 self.n,
                 self.model.config["agent_settings"]["expected_utility"][
@@ -2854,7 +2839,7 @@ class CropFarmers(AgentBaseClass):
                 ]["decision_horizon"],
             ),
             "discount_rate": self.discount_rate.data,
-            "extra_constraint": extra_constraint,
+            "extra_constraint": extra_constraint.data,
         }
 
         # Calculate the EU of not adapting and adapting respectively
@@ -2918,15 +2903,27 @@ class CropFarmers(AgentBaseClass):
         self,
     ) -> Tuple[np.ndarray, np.ndarray]:
 
+        cost_reduction_factor = self.model.config["agent_settings"]["expected_utility"][
+            "adaptation_well_global"
+        ]["cost_reduction_factor"]
         # Initialize costs arrays with region-specific values
-        why_10 = self.get_value_per_farmer_from_region_id(
-            self.why_10, self.model.current_time
+        why_10 = (
+            self.get_value_per_farmer_from_region_id(
+                self.why_10, self.model.current_time
+            )
+            * cost_reduction_factor
         )
-        why_20 = self.get_value_per_farmer_from_region_id(
-            self.why_20, self.model.current_time
+        why_20 = (
+            self.get_value_per_farmer_from_region_id(
+                self.why_20, self.model.current_time
+            )
+            * cost_reduction_factor
         )
-        why_30 = self.get_value_per_farmer_from_region_id(
-            self.why_30, self.model.current_time
+        why_30 = (
+            self.get_value_per_farmer_from_region_id(
+                self.why_30, self.model.current_time
+            )
+            * cost_reduction_factor
         )
 
         # Initialize the result array with the correct type
@@ -3011,7 +3008,6 @@ class CropFarmers(AgentBaseClass):
         return (
             annual_cost,
             potential_well_length,
-            above_depletion_limit_mask,
         )
 
     def calculate_well_costs_india(
