@@ -28,7 +28,7 @@ jobs:
       run: |
         BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
         if [ "$BRANCH_NAME" != "main" ]; then
-          pip install git+https://github.com/GEB-model/ABCWatM.git@"$BRANCH_NAME --upgrade"
+          pip install git+https://github.com/GEB-model/ABCWatM.git@"$BRANCH_NAME" --upgrade
         fi
     - name: Run tests
       run: pytest
