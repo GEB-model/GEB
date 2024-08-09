@@ -86,10 +86,10 @@ def test_estimate_initial_lake_storage_and_outflow_height():
 
     dt = 3600
 
-    inflow = np.full(800, 0, dtype=np.float32)
+    inflow = np.full(1_000, 0, dtype=np.float32)
     inflow[:200] = np.linspace(0, 10, 200)
     inflow[200:400] = avg_outflow[0]
-    inflow[400:] = np.linspace(avg_outflow[0], 0, 400)
+    inflow[400:] = np.linspace(avg_outflow[0], 0, 600)
 
     evaporation = avg_outflow[0] * 3600 * 0.5
 
