@@ -140,3 +140,74 @@ class AsyncXarrayReader:
         AsyncXarrayReader.shared_loop.call_soon_threadsafe(
             AsyncXarrayReader.shared_loop.stop
         )
+
+
+def balance_check(
+    name,
+    how="cellwise",
+    influxes=[],
+    outfluxes=[],
+    prestorages=[],
+    poststorages=[],
+    tollerance=1e-10,
+):
+    income = 0
+    out = 0
+    store = 0
+
+    if not isinstance(influxes, (list, tuple)):
+        influxes = [influxes]
+    if not isinstance(outfluxes, (list, tuple)):
+        outfluxes = [outfluxes]
+    if not isinstance(prestorages, (list, tuple)):
+        prestorages = [prestorages]
+    if not isinstance(poststorages, (list, tuple)):
+        poststorages = [poststorages]
+
+    if how == "cellwise":
+        for fluxIn in influxes:
+            income += fluxIn
+        for fluxOut in outfluxes:
+            out += fluxOut
+        for preStorage in prestorages:
+            store += preStorage
+        for endStorage in poststorages:
+            store -= endStorage
+        balance = income + store - out
+
+        if balance.size == 0:
+            return True
+        elif np.abs(balance).max() > tollerance:
+            text = f"{balance[np.abs(balance).argmax()]} is larger than tollerance {tollerance}"
+            if name:
+                print(name, text)
+            else:
+                print(text)
+            # raise AssertionError(text)
+            return False
+        else:
+            return True
+
+    elif how == "sum":
+        for fluxIn in influxes:
+            income += fluxIn.sum()
+        for fluxOut in outfluxes:
+            out += fluxOut.sum()
+        for preStorage in prestorages:
+            store += preStorage.sum()
+        for endStorage in poststorages:
+            store -= endStorage.sum()
+
+        balance = income + store - out
+        if balance > tollerance:
+            text = f"{np.abs(balance).max()} is larger than tollerance {tollerance}"
+            if name:
+                print(name, text)
+            else:
+                print(text)
+            # raise AssertionError(text)
+            return False
+        else:
+            return True
+    else:
+        raise ValueError(f"Method {how} not recognized.")
