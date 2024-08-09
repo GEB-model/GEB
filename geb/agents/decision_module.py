@@ -149,9 +149,6 @@ class DecisionModule:
         # Filter out negative NPVs
         NPV_summed = np.maximum(1, NPV_summed)
 
-        if (NPV_summed == 1).any():
-            print(f"Warning, {np.sum(NPV_summed == 1)} negative NPVs encountered")
-
         # Calculate expected utility
         ## NPV_Summed here is the wealth and income minus the expected damages of a certain probabilty event
         EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)

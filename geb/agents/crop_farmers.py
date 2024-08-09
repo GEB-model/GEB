@@ -2048,20 +2048,20 @@ class CropFarmers(AgentBaseClass):
             yield_ratio_per_farmer = np.bincount(
                 harvesting_farmer_fields, weights=yield_ratio_total, minlength=self.n
             ) / np.bincount(harvesting_farmer_fields, minlength=self.n)
-            print(
-                "well",
-                np.mean(
-                    yield_ratio_per_farmer[harvesting_farmers][
-                        self.adapted[harvesting_farmers, 1] == 1
-                    ]
-                ),
-                "no well",
-                np.mean(
-                    yield_ratio_per_farmer[harvesting_farmers][
-                        self.adapted[harvesting_farmers, 1] == 0
-                    ]
-                ),
-            )
+            # print(
+            #     "well",
+            #     np.mean(
+            #         yield_ratio_per_farmer[harvesting_farmers][
+            #             self.adapted[harvesting_farmers, 1] == 1
+            #         ]
+            #     ),
+            #     "no well",
+            #     np.mean(
+            #         yield_ratio_per_farmer[harvesting_farmers][
+            #             self.adapted[harvesting_farmers, 1] == 0
+            #         ]
+            #     ),
+            # )
             ## Get the current crop age
             crop_age = self.var.crop_age_days_map[harvest]
             total_crop_age = np.bincount(
@@ -2165,7 +2165,7 @@ class CropFarmers(AgentBaseClass):
             + self.risk_perc_min
         )
 
-        print("Risk perception mean = ", np.mean(self.risk_perception))
+        # print("Risk perception mean = ", np.mean(self.risk_perception))
 
         # Determine which farmers need emergency microcredit to keep farming
         loaning_farmers = drought_loss_current >= self.moving_average_threshold
@@ -2176,7 +2176,7 @@ class CropFarmers(AgentBaseClass):
             and "ruleset" in self.config
             and not self.config["ruleset"] == "no-adaptation"
         ):
-            print(np.count_nonzero(loaning_farmers), "farmers are getting microcredit")
+            # print(np.count_nonzero(loaning_farmers), "farmers are getting microcredit")
             self.microcredit(loaning_farmers, drought_loss_current, total_crop_age)
 
     def microcredit(
@@ -2657,22 +2657,22 @@ class CropFarmers(AgentBaseClass):
         decision_params_1 = copy.deepcopy(decision_params)
         decision_params_1.update(
             {
-                "total_profits_adaptation": total_profits_adaptation_option_1,
-                "profits_no_event_adaptation": profits_no_event_adaptation_option_1,
+                "total_profits": total_profits_adaptation_option_1,
+                "profits_no_event": profits_no_event_adaptation_option_1,
             }
         )
 
         decision_params_2 = copy.deepcopy(decision_params)
         decision_params_2.update(
             {
-                "total_profits_adaptation": total_profits_adaptation_option_2,
-                "profits_no_event_adaptation": profits_no_event_adaptation_option_2,
+                "total_profits": total_profits_adaptation_option_2,
+                "profits_no_event": profits_no_event_adaptation_option_2,
             }
         )
         # Calculate the EU of not adapting and adapting respectively
         SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
-        SEUT_adapt_option_1 = self.decision_module.calcEU_adapt(**decision_params_1)
-        SEUT_adapt_option_2 = self.decision_module.calcEU_adapt(**decision_params_2)
+        SEUT_adapt_option_1 = self.decision_module.calcEU_do_nothing(**decision_params_1)
+        SEUT_adapt_option_2 = self.decision_module.calcEU_do_nothing(**decision_params_2)
 
         assert (
             (SEUT_do_nothing != -1).any
@@ -2686,6 +2686,7 @@ class CropFarmers(AgentBaseClass):
 
         # Determine for which agents it is beneficial to switch crops
         SEUT_adaptation_decision = best_option_SEUT > SEUT_do_nothing
+
         print("crop switching agents", np.count_nonzero(SEUT_adaptation_decision))
         final_chosen_option = chosen_option[SEUT_adaptation_decision]
 
@@ -2702,9 +2703,28 @@ class CropFarmers(AgentBaseClass):
 
         assert not np.any(selected_new_crop_nr == -1)
 
+        # Assuming self.crop_calendar and extra_constraint are defined
+        unique_values_old, counts_old = np.unique(self.crop_calendar[extra_constraint, 0, 0], return_counts=True)
+
+        # Create a formatted string for the old distribution
+        old_distribution = ', '.join(f"{val}: {cnt}" for val, cnt in zip(unique_values_old, counts_old))
+
+        # Print the old distribution
+        print('old distribution', '\n', old_distribution)
+
         # Switch their crops and update their yield-SPEI relation
         self.crop_calendar[SEUT_adaptation_decision, 0, 0] = selected_new_crop_nr
 
+        unique_values, counts = np.unique(self.crop_calendar[extra_constraint, 0, 0], return_counts=True)
+
+        # Calculate the difference in counts
+        difference_counts = counts - counts_old
+
+        # Create a formatted string for the difference
+        difference_distribution = ', '.join(f"{val}: {cnt}" for val, cnt in zip(unique_values_old, difference_counts))
+
+        # Print the difference
+        print('difference', '\n', difference_distribution)
         # Update yield-SPEI relation
         self.yearly_yield_ratio[SEUT_adaptation_decision, :] = self.yearly_yield_ratio[
             selected_farmer_id, :
@@ -3155,18 +3175,11 @@ class CropFarmers(AgentBaseClass):
                     yield_ratios
                 )  # gain crops
                 yield_ratios_adaptation_option_1 = (
-                    yield_ratios * gains_adaptation_option_1
-                )
+                    yield_ratios + gains_adaptation_option_1
+                ).clip(0, 1)
                 yield_ratios_adaptation_option_2 = (
-                    yield_ratios * gains_adaptation_option_2
-                )
-                # Ensure yield ratios do not exceed 1
-                yield_ratios_adaptation_option_1[
-                    yield_ratios_adaptation_option_1 > 1
-                ] = 1
-                yield_ratios_adaptation_option_2[
-                    yield_ratios_adaptation_option_2 > 1
-                ] = 1
+                    yield_ratios + gains_adaptation_option_2
+                ).clip(0, 1)
                 # Initialize profit matrices for adaptation
                 total_profits_adaptation_option_1 = np.zeros(
                     (self.n, len(self.p_droughts))
@@ -3348,10 +3361,10 @@ class CropFarmers(AgentBaseClass):
         unique_crop_groups = np.unique(crop_elevation_group, axis=0)
         # Initialize array to store relative yield ratio improvement for unique groups
         unique_yield_ratio_gain_option_1 = np.full(
-            (len(unique_crop_groups), 6), 1, dtype=np.float32
+            (len(unique_crop_groups), 6), 0, dtype=np.float32
         )
         unique_yield_ratio_gain_option_2 = np.full(
-            (len(unique_crop_groups), 6), 1, dtype=np.float32
+            (len(unique_crop_groups), 6), 0, dtype=np.float32
         )
         id_to_switch_to = np.full((len(unique_crop_groups), 2), -1)
         crop_to_switch_to = np.full((len(unique_crop_groups), 2), -1)
@@ -3437,9 +3450,7 @@ class CropFarmers(AgentBaseClass):
                     yield_ratios, current_yield_ratio, groups
                 ):
                     yield_ratio = np.mean(yield_ratios[groups, :], axis=0)
-                    yield_ratio_gain = yield_ratio / (
-                        current_yield_ratio + 0.00001
-                    )  # prevent division by 0
+                    yield_ratio_gain = yield_ratio - current_yield_ratio
                     return yield_ratio_gain
 
                 def process_option(
@@ -3458,58 +3469,58 @@ class CropFarmers(AgentBaseClass):
                     crop_to_switch_to[idx, option_nr] = unique_combination_option[0]
 
                     if np.isnan(yield_ratio_gain).all():
-                        yield_ratio_gain = np.ones_like(yield_ratio_gain)
+                        yield_ratio_gain = np.zeros_like(yield_ratio_gain)
                     else:
                         id_to_switch_to[idx, option_nr] = find_most_similar_index(
                             yield_ratio_gain, yield_ratios, groups
                         )
                     return yield_ratio_gain
 
-                if np.count_nonzero(unique_farmer_groups) != 0 and (
-                    np.count_nonzero(unique_farmer_groups_option_1) != 0
-                    or np.count_nonzero(unique_farmer_groups_option_2) != 0
-                ):
-                    # Calculate mean yield ratio over past years for the unadapted group
-                    current_yield_ratio = np.mean(
-                        yield_ratios[unique_farmer_groups, :], axis=0
-                    )
 
-                    # Process option 1
-                    yield_ratio_gain_relative_option_1 = process_option(
-                        yield_ratios,
-                        unique_combination_option_1,
-                        unique_farmer_groups_option_1,
-                        current_yield_ratio,
-                        crop_to_switch_to,
-                        id_to_switch_to,
-                        0,
-                        idx,
-                    )
+                # Calculate mean yield ratio over past years for the unadapted group
+                current_yield_ratio = np.mean(
+                    yield_ratios[unique_farmer_groups, :], axis=0
+                )
 
-                    # Process option 2
-                    yield_ratio_gain_relative_option_2 = process_option(
-                        yield_ratios,
-                        unique_combination_option_2,
-                        unique_farmer_groups_option_2,
-                        current_yield_ratio,
-                        crop_to_switch_to,
-                        id_to_switch_to,
-                        1,
-                        idx,
-                    )
+                if np.isnan(current_yield_ratio).all():
+                        current_yield_ratio = np.zeros_like(current_yield_ratio)
 
-                    unique_yield_ratio_gain_option_1[idx, :] = (
-                        yield_ratio_gain_relative_option_1
-                    )
-                    unique_yield_ratio_gain_option_2[idx, :] = (
-                        yield_ratio_gain_relative_option_2
-                    )
+                # Process option 1
+                yield_ratio_gain_relative_option_1 = process_option(
+                    yield_ratios,
+                    unique_combination_option_1,
+                    unique_farmer_groups_option_1,
+                    current_yield_ratio,
+                    crop_to_switch_to,
+                    id_to_switch_to,
+                    0,
+                    idx,
+                )
 
-                    assert (
-                        not np.isinf(yield_ratio_gain_relative_option_1).any()
-                        and not np.isinf(yield_ratio_gain_relative_option_2).any(),
-                        "gains adaptation value is inf",
-                    )
+                # Process option 2
+                yield_ratio_gain_relative_option_2 = process_option(
+                    yield_ratios,
+                    unique_combination_option_2,
+                    unique_farmer_groups_option_2,
+                    current_yield_ratio,
+                    crop_to_switch_to,
+                    id_to_switch_to,
+                    1,
+                    idx,
+                )
+
+                unique_yield_ratio_gain_option_1[idx, :] = (
+                    yield_ratio_gain_relative_option_1
+                )
+                unique_yield_ratio_gain_option_2[idx, :] = (
+                    yield_ratio_gain_relative_option_2
+                )
+
+                assert (
+                    not np.isinf(yield_ratio_gain_relative_option_1).any()
+                    and not np.isinf(yield_ratio_gain_relative_option_2).any(),
+                    "gains adaptation value is inf",
+                )
 
             else:
                 pass
@@ -4140,8 +4151,8 @@ class CropFarmers(AgentBaseClass):
 
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(self.farmer_yield_probability_relation == 0):
-                    self.adapt_irrigation_well()
-                    # self.adapt_crops()
+                    # self.adapt_irrigation_well()
+                    self.adapt_crops()
                     # self.adapt_drip_irrigation()
                     # self.switch_crops_neighbors()
                 else:
