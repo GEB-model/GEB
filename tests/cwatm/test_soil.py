@@ -5,6 +5,8 @@ from cwatm.modules.soil import (
     get_fraction_easily_available_soil_water,
     get_transpiration_reduction_factor,
     get_total_transpiration_reduction_factor,
+    get_aeration_stress_threshold,
+    get_aeration_stress_reduction_factor,
 )
 
 
@@ -134,4 +136,82 @@ def test_get_total_transpiration_reduction_factor():
     np.testing.assert_almost_equal(
         total_transpiration_reduction_factor,
         np.array([0.2639344262295082, 0.24634146, 0.19090909, 0.1, 0.1]),
+    )
+
+
+def test_get_aeration_stress_threshold():
+    soil_layer_height = 0.10
+    ws = 0.05
+    aeration_stress_threshold = get_aeration_stress_threshold(
+        ws=ws,
+        soil_layer_height=soil_layer_height,
+        crop_aeration_stress_threshold=0,
+    )
+    # if crop_aeration_stress_threshold is 0, then it should be equal to ws
+    assert aeration_stress_threshold == ws
+
+    aeration_stress_threshold = get_aeration_stress_threshold(
+        ws=0.1,
+        soil_layer_height=soil_layer_height,
+        crop_aeration_stress_threshold=100,
+    )
+
+    # if crop_aeration_stress_threshold is 100, the crop is always in aeration stress
+    assert aeration_stress_threshold == 0.0
+
+    aeration_stress_threshold = get_aeration_stress_threshold(
+        ws=0.1,
+        soil_layer_height=soil_layer_height,
+        crop_aeration_stress_threshold=50,
+    )
+
+    # if crop_aeration_stress_threshold is 50, the crop is in aeration stress at half of the ws
+    assert aeration_stress_threshold == soil_layer_height / 2
+
+
+def test_get_aeration_stress_reduction_factor():
+    # default settings
+    aeration_days_counter = 0
+    crop_lag_aeration_days = 3
+    ws = 0.1
+    w = 0.09
+    aeration_stress_threshold = 0.08
+
+    aeration_stress_reduction_factor = get_aeration_stress_reduction_factor(
+        aeration_days_counter=aeration_days_counter,
+        crop_lag_aeration_days=crop_lag_aeration_days,
+        ws=ws,
+        w=w,
+        aeration_stress_threshold=aeration_stress_threshold,
+    )
+
+    # at zero aeration_days_counter, the reduction factor should be 1 (no reduction)
+    assert aeration_stress_reduction_factor == 1
+
+    aeration_stress_reduction_factor = get_aeration_stress_reduction_factor(
+        aeration_days_counter=1,
+        crop_lag_aeration_days=crop_lag_aeration_days,
+        ws=ws,
+        w=w,
+        aeration_stress_threshold=aeration_stress_threshold,
+    )
+
+    print(aeration_stress_reduction_factor)
+
+    aeration_stress_reduction_factor = get_aeration_stress_reduction_factor(
+        aeration_days_counter=4,
+        crop_lag_aeration_days=crop_lag_aeration_days,
+        ws=ws,
+        w=w,
+        aeration_stress_threshold=aeration_stress_threshold,
+    )
+
+    print(aeration_stress_reduction_factor)
+
+    aeration_stress_reduction_factor = get_aeration_stress_reduction_factor(
+        aeration_days_counter=aeration_days_counter,
+        crop_lag_aeration_days=crop_lag_aeration_days,
+        ws=ws,
+        w=w,
+        aeration_stress_threshold=aeration_stress_threshold,
     )
