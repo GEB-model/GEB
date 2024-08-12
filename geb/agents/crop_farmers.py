@@ -14,9 +14,11 @@ from scipy.optimize import curve_fit
 import numpy as np
 from numba import njit
 
+from ..workflows import balance_check
+
 from honeybees.library.mapIO import MapReader
 from . import AgentBaseClass
-from honeybees.library.raster import pixels_to_coords
+from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
 from ..data import (
@@ -522,7 +524,7 @@ def abstract_water(
 
                             # command areas
                             command_area = command_areas[field]
-                            if command_area >= 0:  # -1 means no command area
+                            if command_area != -1:  # -1 means no command area
                                 irrigation_water_demand_field = withdraw_reservoir(
                                     command_area=command_area,
                                     field=field,
@@ -1616,12 +1618,11 @@ class CropFarmers(AgentBaseClass):
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
 
-        irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
-        total_storage_pre_m3 = (
-            available_channel_storage_m3.sum()
-            + available_groundwater_m3.sum()
-            + available_reservoir_storage_m3.sum()
-        )
+        if __debug__:
+            irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
+            available_channel_storage_m3_pre = available_channel_storage_m3.copy()
+            available_groundwater_m3_pre = available_groundwater_m3.copy()
+            available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         (
             self.channel_abstraction_m3_by_farmer[:],
             self.reservoir_abstraction_m3_by_farmer[:],
@@ -1680,49 +1681,83 @@ class CropFarmers(AgentBaseClass):
             max_paddy_water_level=self.max_paddy_water_level,
         )
 
-        # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
-        assert math.isclose(
-            self.channel_abstraction_m3_by_farmer.sum()
-            + self.reservoir_abstraction_m3_by_farmer.sum()
-            + self.groundwater_abstraction_m3_by_farmer.sum(),
-            (water_withdrawal_m * cell_area).sum(),
-            rel_tol=0.0001,
-            abs_tol=0.0001,
-        )
-        # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
-        assert math.isclose(
-            self.channel_abstraction_m3_by_farmer.sum()
-            + self.reservoir_abstraction_m3_by_farmer.sum()
-            + self.groundwater_abstraction_m3_by_farmer.sum(),
-            total_storage_pre_m3
-            - (
-                available_channel_storage_m3.sum()
-                + available_groundwater_m3.sum()
-                + available_reservoir_storage_m3.sum()
-            ),
-            rel_tol=0.01,
-            abs_tol=0.01,
-        )
-        # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
-        assert math.isclose(
-            (
-                self.channel_abstraction_m3_by_farmer
-                + self.reservoir_abstraction_m3_by_farmer
-                + self.groundwater_abstraction_m3_by_farmer
-            )[~np.isnan(self.remaining_irrigation_limit_m3)].sum(),
-            (irrigation_limit_pre - self.remaining_irrigation_limit_m3)[
-                ~np.isnan(self.remaining_irrigation_limit_m3)
-            ].sum(),
-            rel_tol=0.02,
-            abs_tol=1,
-        )
-        # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
-        assert math.isclose(
-            (water_consumption_m + returnFlowIrr_m + addtoevapotrans_m).sum(),
-            water_withdrawal_m.sum(),
-            rel_tol=0.001,
-            abs_tol=0.001,
-        )
+        if __debug__:
+            # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
+            balance_check(
+                name="water withdrawal_1",
+                how="sum",
+                influxes=(
+                    self.channel_abstraction_m3_by_farmer,
+                    self.reservoir_abstraction_m3_by_farmer,
+                    self.groundwater_abstraction_m3_by_farmer,
+                ),
+                outfluxes=[(water_withdrawal_m * cell_area)],
+                tollerance=1,
+            )
+
+            # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
+            balance_check(
+                name="water withdrawal channel",
+                how="sum",
+                outfluxes=self.channel_abstraction_m3_by_farmer,
+                prestorages=available_channel_storage_m3_pre,
+                poststorages=available_channel_storage_m3,
+                tollerance=10,
+            )
+
+            balance_check(
+                name="water withdrawal reservoir",
+                how="sum",
+                outfluxes=self.reservoir_abstraction_m3_by_farmer,
+                prestorages=available_reservoir_storage_m3_pre,
+                poststorages=available_reservoir_storage_m3,
+                tollerance=10,
+            )
+
+            balance_check(
+                name="water withdrawal groundwater",
+                how="sum",
+                outfluxes=self.groundwater_abstraction_m3_by_farmer,
+                prestorages=available_groundwater_m3_pre,
+                poststorages=available_groundwater_m3,
+                tollerance=10,
+            )
+
+            # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
+            balance_check(
+                name="water withdrawal_2",
+                how="sum",
+                influxes=(
+                    self.channel_abstraction_m3_by_farmer[
+                        ~np.isnan(self.remaining_irrigation_limit_m3)
+                    ],
+                    self.reservoir_abstraction_m3_by_farmer[
+                        ~np.isnan(self.remaining_irrigation_limit_m3)
+                    ],
+                    self.groundwater_abstraction_m3_by_farmer[
+                        ~np.isnan(self.remaining_irrigation_limit_m3)
+                    ],
+                ),
+                prestorages=irrigation_limit_pre[
+                    ~np.isnan(self.remaining_irrigation_limit_m3)
+                ],
+                poststorages=self.remaining_irrigation_limit_m3[
+                    ~np.isnan(self.remaining_irrigation_limit_m3)
+                ],
+            )
+
+            # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
+            balance_check(
+                name="water consumption",
+                how="sum",
+                influxes=(
+                    water_consumption_m,
+                    returnFlowIrr_m,
+                    addtoevapotrans_m,
+                ),
+                outfluxes=water_withdrawal_m,
+                tollerance=0.0001,
+            )
 
         self.groundwater_depth = AgentArray(
             groundwater_depth_per_farmer, max_n=self.max_n

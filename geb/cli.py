@@ -1,5 +1,6 @@
 import click
 import os
+import sys
 import cProfile
 from pstats import Stats
 from operator import attrgetter
@@ -134,6 +135,11 @@ def click_run_options():
             is_flag=True,
             help="Run GEB with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
         )
+        @click.option(
+            "--optimize",
+            is_flag=True,
+            help="Run GEB in optimized mode, skipping asserts and water balance checks.",
+        )
         @click.option("--timing", is_flag=True, help="Run GEB with timing.")
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -155,8 +161,12 @@ def run_model(
     no_browser,
     port,
     timing,
+    optimize,
 ):
     """Run model."""
+
+    if optimize and sys.flags.optimize == 0:
+        os.execv(sys.executable, ["python", "-O"] + sys.argv)
 
     # set the working directory
     os.chdir(working_directory)
@@ -198,6 +208,13 @@ def run_model(
                 model.run()
             report = model.report()
     else:
+        # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
+        # the event loop started for reading data, unless we use nest_asyncio.
+        # so that's what we do here.
+        import nest_asyncio
+
+        nest_asyncio.apply()
+
         if profiling:
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
@@ -445,6 +462,33 @@ def update(
     geb_model = get_model(custom_model)(**arguments)
     geb_model.read()
     geb_model.update(opt=configread(build_config))
+
+
+@click.option(
+    "--working-directory",
+    "-wd",
+    default=".",
+    help="Working directory for model.",
+)
+@main.command()
+def share(working_directory):
+    """Share model."""
+
+    os.chdir(working_directory)
+
+    # create a zip file called model.zip with the folders input, and model files
+    # in the working directory
+    import zipfile
+
+    folders = ["input"]
+    files = ["model.yml", "build.yml", "sfincs.yml"]
+    with zipfile.ZipFile("model.zip", "w") as zipf:
+        for folder in folders:
+            for root, _, filenames in os.walk(folder):
+                for filename in filenames:
+                    zipf.write(os.path.join(root, filename))
+        for file in files:
+            zipf.write(file)
 
 
 if __name__ == "__main__":

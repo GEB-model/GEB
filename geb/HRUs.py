@@ -230,7 +230,7 @@ class Grid(BaseVariables):
         Returns:
             array: Compressed array.
         """
-        return array.ravel()[self.mask_flat == False]
+        return array[..., ~self.mask]
 
     def decompress(
         self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
@@ -280,6 +280,22 @@ class Grid(BaseVariables):
         """
         self.plot(self.decompress(array, fillvalue=fillvalue))
 
+    def load(self, filepath, compress=True, layer=1):
+        """Load array from disk.
+
+        Args:
+            filepath: Filepath of map.
+            compress: Whether to compress array.
+
+        Returns:
+            array: Loaded array.
+        """
+        with rasterio.open(filepath) as src:
+            data = src.read(layer)
+        if compress:
+            data = self.data.grid.compress(data)
+        return data
+
     def load_initial(self, name, default=0.0):
         return super().load_initial("grid." + name, default=default)
 
@@ -287,9 +303,8 @@ class Grid(BaseVariables):
         reader = AsyncXarrayReader(
             self.model.model_structure["forcing"][f"climate/{name}"],
             name,
-            self.model.loop,
         )
-        assert reader.ds.y[0] > reader.ds.y[-1]
+        assert reader.ds.variables["y"][0] > reader.ds.variables["y"][-1]
         return reader
 
     def load_forcing(self, reader, time, compress=True):

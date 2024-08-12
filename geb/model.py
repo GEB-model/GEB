@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import datetime
 from pathlib import Path
 import geopandas as gpd
@@ -7,8 +6,6 @@ from time import time
 import copy
 import numpy as np
 import warnings
-import asyncio
-import threading
 
 try:
     import cupy as cp
@@ -23,7 +20,7 @@ from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
 from geb.HRUs import Data
-from geb.cwatm_model import CWatM_Model
+from cwatm.model import CWatM
 from geb.hazards.driver import HazardDriver
 
 
@@ -71,12 +68,11 @@ class ABM(ABM_Model):
         timeprint("Finished setup")
 
 
-class GEBModel(HazardDriver, ABM, CWatM_Model):
+class GEBModel(HazardDriver, ABM, CWatM):
     """GEB parent class.
 
     Args:
         config: Filepath of the YAML-configuration file (e.g. model.yml).
-        CwatM_settings: Path of CWatM settings file.
         name: Name of model.
         xmin: Minimum x coordinate.
         xmax: Maximum x coordinate.
@@ -102,15 +98,6 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         self.timing = timing
         assert mode in ("w", "r")
         self.mode = mode
-
-        try:
-            self.loop = asyncio.get_running_loop()
-        except RuntimeError:
-            self.loop = asyncio.new_event_loop()
-
-        if not self.loop.is_running():
-            self.loop_thread = threading.Thread(target=self.loop.run_forever)
-            self.loop_thread.start()
 
         self.spinup = spinup
         self.use_gpu = use_gpu
@@ -190,6 +177,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         assert isinstance(current_time, datetime.datetime)
 
         timestep_length = datetime.timedelta(days=1)
+        self.seconds_per_timestep = timestep_length.total_seconds()
         n_timesteps = (end_time - current_time) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
@@ -211,11 +199,8 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             )
 
             if self.config["general"]["simulate_hydrology"]:
-                CWatM_Model.__init__(
+                CWatM.__init__(
                     self,
-                    self.current_time + self.timestep_length,
-                    self.n_timesteps,
-                    self.config["general"]["CWatM_settings"],
                 )
 
             self.reporter = Reporter(self)
@@ -256,7 +241,7 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
             HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
             if self.config["general"]["simulate_hydrology"]:
-                CWatM_Model.step(self, 1)
+                CWatM.step(self)
 
             self.reporter.step()
             t1 = time()
@@ -292,25 +277,19 @@ class GEBModel(HazardDriver, ABM, CWatM_Model):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path("simulation_root")
+        folder = Path("simulation_root") / self.run_name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
     def close(self) -> None:
         """Finalizes the model."""
         if self.mode == "w" and self.config["general"]["simulate_hydrology"]:
-            CWatM_Model.finalize(self)
+            CWatM.finalize(self)
 
             from geb.workflows import all_async_readers
 
             for reader in all_async_readers:
                 reader.close()
-
-            self.loop.call_soon_threadsafe(self.loop.stop)
-            # Wait for the loop thread to finish
-            if hasattr(self, "loop_thread"):
-                self.loop_thread.join()
-            self.loop.close()
 
     def __enter__(self):
         return self

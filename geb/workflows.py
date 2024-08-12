@@ -1,8 +1,9 @@
 from time import time
-import xarray as xr
 import numpy as np
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import threading
+import netCDF4
 
 all_async_readers = []
 
@@ -22,12 +23,12 @@ class TimingModule:
         for i in range(1, len(self.times)):
             time_difference = self.times[i] - self.times[i - 1]
             messages.append(
-                "{}: {:.3f}s".format(self.split_names[i - 1], time_difference)
+                "{}: {:.4f}s".format(self.split_names[i - 1], time_difference)
             )
 
         # Calculate total time
         total_time = self.times[-1] - self.times[0]
-        messages.append("Total: {:.3f}s".format(total_time))
+        messages.append("Total: {:.4f}s".format(total_time))
 
         to_print = ", ".join(messages)
         to_print = "{} - {}".format(self.name, to_print)
@@ -36,33 +37,59 @@ class TimingModule:
 
 
 class AsyncXarrayReader:
-    def __init__(self, filepath, variable_name, loop):
+    shared_loop = (
+        asyncio.new_event_loop()
+    )  # Shared event loop, note running in a separate thread is slower
+    asyncio.set_event_loop(shared_loop)
+
+    def __init__(self, filepath, variable_name):
         self.filepath = filepath
-        self.ds = xr.open_dataset(filepath)[
-            variable_name
-        ]  # Adjust chunk size based on your data
-        self.executor = ThreadPoolExecutor(max_workers=1)
+
+        # netCDF4 is faster than xarray for reading data
+        self.ds = netCDF4.Dataset(filepath)
+        self.var = self.ds.variables[variable_name]
+        self.time_index = self.ds.variables["time"][:]
+
+        self.time_index = self.convert_times_to_numpy_datetime(
+            self.ds.variables["time"][:], self.ds.variables["time"].units
+        )
+
+        self.time_size = self.time_index.size
+        self.var.set_auto_maskandscale(False)
+
         all_async_readers.append(self)
         self.preloaded_data_future = None
         self.current_index = -1  # Initialize to -1 to indicate no data loaded yet
-        self.time_index = self.ds.time.values
-        self.loop = loop
-        return None
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.loop = AsyncXarrayReader.shared_loop
 
-    def load(self, index):
-        return self.ds.isel(time=index).values
+        self.lock = threading.Lock()
 
-    def preload_next(self, index):
+    def convert_times_to_numpy_datetime(self, times, units):
+        # Convert NetCDF times to datetime objects
+        datetimes = netCDF4.num2date(times, units)
+        # Convert datetime objects to numpy.datetime64
+        numpy_datetimes = np.array(datetimes, dtype="datetime64[ns]")
+        return numpy_datetimes
+
+    def load_with_lock(self, index):
+        with self.lock:
+            return self.var[index]
+
+    async def load(self, index):
+        # return await asyncio.sleep(1)
+        return await self.loop.run_in_executor(
+            self.executor, lambda: self.load_with_lock(index)
+        )
+
+    async def preload_next(self, index):
         # Preload the next timestep asynchronously
-        if index + 1 < self.ds.time.size:
-            future = self.loop.run_in_executor(
-                self.executor, lambda: self.load(index + 1)
-            )
-            return future
+        if index + 1 < self.time_size:
+            return await self.load(index + 1)
         return None
 
     async def read_timestep_async(self, index):
-        assert index < self.ds.time.size, "Index out of bounds."
+        assert index < self.time_size, "Index out of bounds."
         assert index >= 0, "Index out of bounds."
         # Check if the requested data is already preloaded, if so, just return that data
         if index == self.current_index:
@@ -72,12 +99,10 @@ class AsyncXarrayReader:
             data = await self.preloaded_data_future
         # Load the requested data if not preloaded
         else:
-            data = await self.loop.run_in_executor(
-                self.executor, lambda: self.load(index)
-            )
+            data = await self.load(index)
 
         # Initiate preloading the next timestep, do not await here, this returns a future
-        self.preloaded_data_future = self.preload_next(index)
+        self.preloaded_data_future = asyncio.create_task(self.preload_next(index))
         self.current_index = index
         self.current_data = data
         return data
@@ -96,10 +121,8 @@ class AsyncXarrayReader:
 
     def read_timestep(self, date):
         index = self.get_index(date)
-        future = asyncio.run_coroutine_threadsafe(
-            self.read_timestep_async(index), self.loop
-        )
-        data = future.result()
+        fn = self.read_timestep_async(index)
+        data = self.loop.run_until_complete(fn)
         return data
 
     def read_timestep_not_async(self, date):
@@ -113,3 +136,78 @@ class AsyncXarrayReader:
         # close the dataset and the executor
         self.ds.close()
         self.executor.shutdown(wait=False)
+
+        AsyncXarrayReader.shared_loop.call_soon_threadsafe(
+            AsyncXarrayReader.shared_loop.stop
+        )
+
+
+def balance_check(
+    name,
+    how="cellwise",
+    influxes=[],
+    outfluxes=[],
+    prestorages=[],
+    poststorages=[],
+    tollerance=1e-10,
+):
+    income = 0
+    out = 0
+    store = 0
+
+    if not isinstance(influxes, (list, tuple)):
+        influxes = [influxes]
+    if not isinstance(outfluxes, (list, tuple)):
+        outfluxes = [outfluxes]
+    if not isinstance(prestorages, (list, tuple)):
+        prestorages = [prestorages]
+    if not isinstance(poststorages, (list, tuple)):
+        poststorages = [poststorages]
+
+    if how == "cellwise":
+        for fluxIn in influxes:
+            income += fluxIn
+        for fluxOut in outfluxes:
+            out += fluxOut
+        for preStorage in prestorages:
+            store += preStorage
+        for endStorage in poststorages:
+            store -= endStorage
+        balance = income + store - out
+
+        if balance.size == 0:
+            return True
+        elif np.abs(balance).max() > tollerance:
+            text = f"{balance[np.abs(balance).argmax()]} is larger than tollerance {tollerance}"
+            if name:
+                print(name, text)
+            else:
+                print(text)
+            # raise AssertionError(text)
+            return False
+        else:
+            return True
+
+    elif how == "sum":
+        for fluxIn in influxes:
+            income += fluxIn.sum()
+        for fluxOut in outfluxes:
+            out += fluxOut.sum()
+        for preStorage in prestorages:
+            store += preStorage.sum()
+        for endStorage in poststorages:
+            store -= endStorage.sum()
+
+        balance = income + store - out
+        if balance > tollerance:
+            text = f"{np.abs(balance).max()} is larger than tollerance {tollerance}"
+            if name:
+                print(name, text)
+            else:
+                print(text)
+            # raise AssertionError(text)
+            return False
+        else:
+            return True
+    else:
+        raise ValueError(f"Method {how} not recognized.")

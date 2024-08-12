@@ -8,6 +8,9 @@ Obtaining the data
 ------------------
 Most of the data that the HydroMT plugin uses to create the input data for GEB is downloaded by the tool itself when it is run. However, some data needs to be aquired seperately. To obtain this data, please send an email to Jens de Bruijn (jens.de.bruijn@vu.nl).
 
+.. A basin id from the MERIT Hydro IHU dataset (https://zenodo.org/records/7936280), please refer to the file 30sec_basids.tif or 30sec_basins.gpkg.
+.. An outflow point (longitude, latitude) of the river network from which the upstream subbasin can be derived automatically. Here, it is important that this point is located in the main river, which can be checked on the same MERIT Hydro IHU page, in the 30sec_uparea.tif file.
+
 Building to model
 -------------------
 To set up the model you need two files, a `model.yml`-file and a `build.yml`-file. The `model.yml`-file specifies the configuration of the model, including start and end time of model runs, agent-paramters etc. The `build.yml`-file specifies the configuration of the preprocessing. An example of the `model.yml`-file and `build.yml`-file are provided in the repository.
