@@ -1634,7 +1634,7 @@ class CropFarmers(AgentBaseClass):
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
 
-        if self.model.CHECK_WATER_BALANCE:
+        if __debug__:
             irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
             available_groundwater_m3_pre = available_groundwater_m3.copy()
@@ -1697,7 +1697,7 @@ class CropFarmers(AgentBaseClass):
             max_paddy_water_level=self.max_paddy_water_level,
         )
 
-        if self.model.CHECK_WATER_BALANCE:
+        if __debug__:
             # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
             balance_check(
                 name="water withdrawal_1",

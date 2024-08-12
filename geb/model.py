@@ -177,6 +177,7 @@ class GEBModel(HazardDriver, ABM, CWatM):
         assert isinstance(current_time, datetime.datetime)
 
         timestep_length = datetime.timedelta(days=1)
+        self.seconds_per_timestep = timestep_length.total_seconds()
         n_timesteps = (end_time - current_time) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
