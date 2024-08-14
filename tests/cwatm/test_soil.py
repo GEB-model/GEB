@@ -3,7 +3,7 @@ import numpy as np
 from cwatm.modules.soil import (
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
-    get_transpiration_reduction_factor,
+    get_transpiration_reduction_factor_single,
     get_total_transpiration_reduction_factor,
     get_aeration_stress_threshold,
     get_aeration_stress_reduction_factor,
@@ -75,9 +75,11 @@ def test_get_transpiration_reduction_factor():
     wwp = np.array([0.15, 0.15, 0.15, 0.15, 0.15, 0.15])  # wilting point
     w = np.array([0.3, 0.2, 0.175, 0.15, 0.1, 0.0])
 
-    transpiration_reduction_factor = get_transpiration_reduction_factor(
-        w, wwp, critical_soil_moisture_content
-    )
+    transpiration_reduction_factor = np.zeros_like(w)
+    for i in range(len(w)):
+        transpiration_reduction_factor[i] = get_transpiration_reduction_factor_single(
+            w[i], wwp[i], critical_soil_moisture_content[i]
+        )
 
     np.testing.assert_almost_equal(
         transpiration_reduction_factor,
