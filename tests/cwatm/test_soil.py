@@ -1,4 +1,7 @@
 import numpy as np
+import matplotlib.pyplot as plt
+
+from ..setup import output_folder
 
 from cwatm.modules.soil import (
     get_critical_soil_moisture_content,
@@ -7,6 +10,7 @@ from cwatm.modules.soil import (
     get_total_transpiration_reduction_factor,
     get_aeration_stress_threshold,
     get_aeration_stress_reduction_factor,
+    get_unsaturated_hydraulic_conductivity,
 )
 
 
@@ -217,3 +221,54 @@ def test_get_aeration_stress_reduction_factor():
         w=w,
         aeration_stress_threshold=aeration_stress_threshold,
     )
+
+
+def test_get_unsaturated_hydraulic_conductivity():
+    wres = np.full(1000, 0.1)
+    ws = np.full_like(wres, 0.4)
+
+    w = np.linspace(0, ws[-1], wres.size)
+
+    lambdas_ = np.arange(0.1, 0.6, 0.1)
+    # we take 1 so that we the outcome is the relative hydraulic conductivity
+    saturated_hydraulic_conductivity = np.full_like(wres, 1.0)
+
+    fig, ax = plt.subplots()
+
+    for lambda_ in lambdas_:
+        unsaturated_hydraulic_conductivity = np.zeros_like(w)
+        for i in range(w.size):
+            unsaturated_hydraulic_conductivity[i] = (
+                get_unsaturated_hydraulic_conductivity(
+                    w=w[i],
+                    wres=wres[i],
+                    ws=ws[i],
+                    lambda_=lambda_,
+                    saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
+                        i
+                    ],
+                )
+            )
+
+        relative_water_content = w / ws
+        log_unsaturated_hydraulic_conductivity = np.full_like(
+            unsaturated_hydraulic_conductivity, np.nan
+        )
+        ax.plot(
+            relative_water_content,
+            np.log10(
+                unsaturated_hydraulic_conductivity,
+                out=log_unsaturated_hydraulic_conductivity,
+                where=unsaturated_hydraulic_conductivity > 0,
+            ),
+            label=round(lambda_, 1),
+        )
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-15, 0)
+    ax.set_xlabel("Soil moisture content")
+    ax.set_ylabel("Unsaturated hydraulic conductivity")
+
+    ax.legend()
+
+    plt.savefig(output_folder / "unsaturated_hydraulic_conductivity.png")
