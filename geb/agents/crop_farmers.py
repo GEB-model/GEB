@@ -1218,6 +1218,20 @@ class CropFarmers(AgentBaseClass):
             fill_value=1,
         )
 
+        self.yield_total_per_farmer = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+
+        self.harvested_crop = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.int32,
+            fill_value=-1,
+        )
+
         ## Risk perception variables
         self.risk_perception = AgentArray(
             n=self.n,
@@ -1995,6 +2009,8 @@ class CropFarmers(AgentBaseClass):
             crop_harvest_age_days=self.var.crop_harvest_age_days,
         )
 
+        self.yield_total_per_farmer.fill(np.nan)
+        self.harvested_crop.fill(-1)
         # If there are fields to be harvested, compute yield ratio and various related metrics
         if np.count_nonzero(harvest):
             # Get yield ratio for the harvested crops
@@ -2042,14 +2058,29 @@ class CropFarmers(AgentBaseClass):
                 self.yield_ratio_management[harvesting_farmer_fields] * yield_ratio
             )
 
+            yield_total_per_field = (
+                yield_ratio_total * max_yield_per_crop * harvested_area
+            )
+            self.yield_total_per_farmer[:] = np.bincount(
+                harvesting_farmer_fields,
+                weights=yield_total_per_field,
+                minlength=self.n,
+            )
+
+            # get the harvested crop per farmer. This assumes each farmer only harvests one crop
+            # on the same day
+            self.harvested_crop[harvesting_farmers] = harvested_crops[
+                np.unique(self.var.land_owners[harvest], return_index=True)[1]
+            ]
+
             # Determine the potential crop yield
-            potential_crop_yield_field = (
+            potential_profit_field = (
                 harvested_area * max_yield_per_crop * crop_price_per_field
             )
-            assert (potential_crop_yield_field >= 0).all()
+            assert (potential_profit_field >= 0).all()
 
             # Determine the profit based on the crop yield in kilos and the price per kilo
-            profit = potential_crop_yield_field * yield_ratio_total
+            profit = potential_profit_field * yield_ratio_total
             assert (profit >= 0).all()
 
             # Convert from the profit and potential profit per field to the profit per farmer
@@ -2058,7 +2089,7 @@ class CropFarmers(AgentBaseClass):
             )
             potential_profit_farmer = np.bincount(
                 harvesting_farmer_fields,
-                weights=potential_crop_yield_field,
+                weights=potential_profit_field,
                 minlength=self.n,
             )
 

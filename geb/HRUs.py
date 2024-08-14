@@ -69,7 +69,7 @@ def to_grid(data, grid_to_HRU, land_use_ratio, fn="weightedmean"):
 
 
 @njit(cache=True)
-def to_HRU(data, grid_to_HRU, land_use_ratio, fn=None):
+def to_HRU(data, grid_to_HRU, land_use_ratio, output_data, fn=None):
     """Numba helper function to convert from grid to HRU.
 
     Args:
@@ -84,7 +84,6 @@ def to_HRU(data, grid_to_HRU, land_use_ratio, fn=None):
     assert grid_to_HRU[0] != 0
     assert grid_to_HRU[-1] == land_use_ratio.size
     assert data.shape == grid_to_HRU.shape
-    output_data = np.zeros(land_use_ratio.size, dtype=data.dtype)
     prev_index = 0
 
     if fn is None:
@@ -921,16 +920,34 @@ class Data:
             ```
         """
         assert not isinstance(data, list)
-        if isinstance(
-            data, (float, int)
-        ):  # check if data is simple float. Otherwise should be numpy array.
-            outdata = data
-        else:
-            outdata = to_HRU(data, self.HRU.grid_to_HRU, self.HRU.land_use_ratio, fn=fn)
-            if self.model.use_gpu:
-                outdata = cp.asarray(outdata)
+        # make data same size as grid, but with last dimension being size of HRU
+        output_data = np.zeros(
+            (*data.shape[:-1], self.HRU.land_use_ratio.size), dtype=data.dtype
+        )
 
-        return outdata
+        if data.ndim == 1:
+            to_HRU(
+                data,
+                self.HRU.grid_to_HRU,
+                self.HRU.land_use_ratio,
+                output_data=output_data,
+                fn=fn,
+            )
+        elif data.ndim == 2:
+            for i in range(data.shape[0]):
+                to_HRU(
+                    data[i],
+                    self.HRU.grid_to_HRU,
+                    self.HRU.land_use_ratio,
+                    output_data=output_data[i],
+                    fn=fn,
+                )
+        else:
+            raise NotImplementedError
+        if self.model.use_gpu:
+            output_data = cp.asarray(output_data)
+
+        return output_data
 
     def to_grid(self, *, HRU_data=None, fn=None):
         """Function to convert from HRUs to grid.
