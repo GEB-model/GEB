@@ -89,15 +89,24 @@ def test_to_grid(common_data):
 def test_to_HRU(common_data):
     grid_data, HRU_data, HRU_data_with_nan, grid_to_HRU, land_use_ratio = common_data
 
+    data = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
+
+    out = np.zeros((*data.shape[:-1], land_use_ratio.size), dtype=data.dtype)
     np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio),
-        np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32),
+        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out),
+        data,
     )
+    np.testing.assert_almost_equal(out, data)
+
+    data = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
     np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio, fn=None),
-        np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32),
+        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out, fn=None), data
     )
+    np.testing.assert_almost_equal(out, data)
+
+    data = np.array([1.0, 0.4, 0.8, 0.8, 0.6, 0.6, 0.6, 0.6, 0.6], dtype=np.float32)
     np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio, fn="weightedsplit"),
-        np.array([1.0, 0.4, 0.8, 0.8, 0.6, 0.6, 0.6, 0.6, 0.6], dtype=np.float32),
+        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out, fn="weightedsplit"),
+        data,
     )
+    np.testing.assert_almost_equal(out, data)
