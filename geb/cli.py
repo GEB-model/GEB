@@ -464,6 +464,12 @@ def update(
     geb_model.update(opt=configread(build_config))
 
 
+@main.command()
+def evaluate():
+    """Evaluate model."""
+    raise NotImplementedError
+
+
 @click.option(
     "--working-directory",
     "-wd",
@@ -481,7 +487,7 @@ def share(working_directory):
     import zipfile
 
     folders = ["input"]
-    files = ["model.yml", "build.yml", "sfincs.yml"]
+    files = ["model.yml", "build.yml"]
     with zipfile.ZipFile("model.zip", "w") as zipf:
         for folder in folders:
             for root, _, filenames in os.walk(folder):
