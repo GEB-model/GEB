@@ -11,7 +11,37 @@ from cwatm.modules.soil import (
     get_aeration_stress_threshold,
     get_aeration_stress_reduction_factor,
     get_unsaturated_hydraulic_conductivity,
+    get_soil_moisture_at_pressure,
 )
+
+
+def test_get_soil_moisture_at_pressure():
+    capillary_suction = np.linspace(-1, -20000, 10000)
+
+    soils = ["sand", "silt", "clay"]
+    bubbling_pressure_cms = np.array([20, 40, 150], dtype=float)
+    thetass = np.array([0.4, 0.45, 0.50])
+    thetars = np.array([0.075, 0.15, 0.25])
+    lambda_s = np.array([2.5, 1.45, 1.2])
+
+    fig, ax = plt.subplots()
+    for i in range(len(soils)):
+        bubbling_pressure_cm = bubbling_pressure_cms[i]
+        thetas = thetass[i]
+        thetar = thetars[i]
+        lambda_ = lambda_s[i]
+
+        soil_moisture_at_pressure = get_soil_moisture_at_pressure(
+            capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
+        )
+        ax.plot(-capillary_suction, soil_moisture_at_pressure, label=soils[i])
+
+    ax.set_xlabel("|Capillary suction (cm)|")
+    ax.set_ylabel("Soil moisture content")
+    ax.set_xscale("log")
+    ax.legend()
+
+    plt.savefig(output_folder / "soil_moisture_at_pressure.png")
 
 
 def test_get_fraction_easily_available_soil_water():
