@@ -291,6 +291,7 @@ class Grid(BaseVariables):
         """
         with rasterio.open(filepath) as src:
             data = src.read(layer)
+        data = data.astype(np.float32) if data.dtype == np.float64 else data
         if compress:
             data = self.data.grid.compress(data)
         return data
