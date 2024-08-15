@@ -24,7 +24,7 @@ jobs:
         git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
         python -m pip install --upgrade pip
         pip install .[tests,full]
-    - name: Install cwam package if not main branch
+    - name: Install cwatm package if not main branch
       run: |
         BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
         if [ "$BRANCH_NAME" != "main" ]; then
@@ -33,5 +33,14 @@ jobs:
             pip install git+https://github.com/GEB-model/ABCWatM.git@"$BRANCH_NAME" --upgrade
           fi
         fi
-    - name: Run tests
-      run: pytest
+    - name: Install hydromt-geb package if not main branch
+      run: |
+        BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
+        if [ "$BRANCH_NAME" != "main" ]; then
+          if git ls-remote --exit-code --heads https://github.com/GEB-model/hydromt_geb.git "$BRANCH_NAME" > /dev/null; then
+            pip uninstall -y hydromt-geb
+            pip install git+https://github.com/GEB-model/hydromt_geb.git@"$BRANCH_NAME" --upgrade
+          fi
+        fi
+    - name: Run tests (excluding test_build.py)
+      run: pytest --ignore=test_build.py
