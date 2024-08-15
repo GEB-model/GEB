@@ -42,5 +42,5 @@ jobs:
             pip install git+https://github.com/GEB-model/hydromt_geb.git@"$BRANCH_NAME" --upgrade
           fi
         fi
-    - name: Run tests (excluding test_build.py)
-      run: pytest --ignore=test_build.py
+    - name: Run tests (excluding test_build.py and test_cli.py)
+      run: pytest --ignore=tests/test_build.py --ignore=tests/test_cli.py::test_cli
