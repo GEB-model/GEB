@@ -23,6 +23,6 @@ jobs:
       - name: Publish package distributions to Test PyPI
         env:
           TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.TESTPYPI }}
+          TWINE_PASSWORD: ${{ secrets.PYPI }}
         run: |
-          python -m twine upload --repository-url https://test.pypi.org/legacy/ dist/*
+          python -m twine upload --repository-url https://upload.pypi.org/legacy/ dist/*
