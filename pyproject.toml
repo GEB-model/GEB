@@ -3,7 +3,8 @@ requires = ["flit_core >=3.4.0,<4"]
 build-backend = "flit_core.buildapi"
 
 [project]
-name = "geb-model"
+name = "geb"
+dist-name = "geb-model"
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
     {name = "Maurice Kalthof", email = "w.m.l.kalthof@vu.nl"},
