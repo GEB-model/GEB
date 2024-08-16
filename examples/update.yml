@@ -1,0 +1,10 @@
+setup_forcing:
+  data_source: era5
+  starttime: 1980-01-01
+  endtime: 2023-12-31
+
+setup_SPEI:
+  calibration_period_start: 1980-01-01
+  calibration_period_end: 2010-12-31
+
+setup_GEV:
