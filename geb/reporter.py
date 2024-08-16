@@ -25,7 +25,7 @@ from honeybees.reporter import Reporter as ABMReporter
 import time
 
 
-class CWatMReporter(ABMReporter):
+class hydrology_reporter(ABMReporter):
     """This class is used to report CWatM data to disk. On initialization the export folder is created if it does not yet exist. Then all variables to report are on read from the configuration folder, and the datastructures to save the data are created.
 
     Args:
@@ -42,10 +42,10 @@ class CWatMReporter(ABMReporter):
 
         if self.model.mode == "w":
             if (
-                "report_cwatm" in self.model.config
-                and self.model.config["report_cwatm"]
+                "report_hydrology" in self.model.config
+                and self.model.config["report_hydrology"]
             ):
-                for name, config in self.model.config["report_cwatm"].items():
+                for name, config in self.model.config["report_hydrology"].items():
                     if config["format"] == "netcdf":
                         assert (
                             "single_file" in config and config["single_file"] is True
@@ -245,7 +245,9 @@ class CWatMReporter(ABMReporter):
                 for retry in range(max_retries):
                     try:
                         with netCDF4.Dataset(
-                            self.model.config["report_cwatm"][name]["absolute_path"],
+                            self.model.config["report_hydrology"][name][
+                                "absolute_path"
+                            ],
                             "a",
                         ) as nc:
                             var = nc.variables[name]
@@ -272,8 +274,11 @@ class CWatMReporter(ABMReporter):
     def step(self) -> None:
         """This method is called after every timestep, to collect data for reporting from the model."""
         self.timesteps.append(self.model.current_time)
-        if "report_cwatm" in self.model.config and self.model.config["report_cwatm"]:
-            for name, conf in self.model.config["report_cwatm"].items():
+        if (
+            "report_hydrology" in self.model.config
+            and self.model.config["report_hydrology"]
+        ):
+            for name, conf in self.model.config["report_hydrology"].items():
                 array = self.get_array(conf["varname"])
                 if array is None:
                     print(
@@ -344,7 +349,7 @@ class CWatMReporter(ABMReporter):
                 else:
                     df = pd.DataFrame(values, index=self.timesteps, columns=[name])
                 df.index.name = "time"
-                export_format = self.model.config["report_cwatm"][name]["format"]
+                export_format = self.model.config["report_hydrology"][name]["format"]
                 if export_format == "csv":
                     df.to_csv(
                         os.path.join(self.export_folder, name + "." + export_format)
@@ -358,7 +363,7 @@ class CWatMReporter(ABMReporter):
 
 
 class Reporter:
-    """This is the main reporter class for the GEB model. On initialization the ABMReporter and CWatMReporter classes are initalized.
+    """This is the main reporter class for the GEB model. On initialization the ABMReporter and hydrology_reporter classes are initalized.
 
     Args:
         model: The GEB model.
@@ -367,11 +372,13 @@ class Reporter:
     def __init__(self, model):
         self.model = model
         self.abm_reporter = ABMReporter(model, folder=self.model.report_folder)
-        self.cwatmreporter = CWatMReporter(model, folder=self.model.report_folder)
+        self.hydrology_reporter = hydrology_reporter(
+            model, folder=self.model.report_folder
+        )
 
     @property
     def variables(self):
-        return {**self.abm_reporter.variables, **self.cwatmreporter.variables}
+        return {**self.abm_reporter.variables, **self.hydrology_reporter.variables}
 
     @property
     def timesteps(self):
@@ -380,10 +387,10 @@ class Reporter:
     def step(self) -> None:
         """This function is called at the end of every timestep. This function only forwards the step function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.step()
-        self.cwatmreporter.step()
+        self.hydrology_reporter.step()
 
     def report(self):
         """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.report()
-        self.cwatmreporter.report()
+        self.hydrology_reporter.report()
         print(f"Reported data")

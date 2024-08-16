@@ -28,7 +28,7 @@ GEB has a prebuilt calibration function. It can be used for both one- and multi-
    
    If this folder does not yet exist, create the folder manually and (if needed) change the path in the model.yml file.
 
-4. Next, add this location under `gauges` in the `model.yml` file and under `target_variables` and `report_cwatm`. See the example of the `model.yml` file below.
+4. Next, add this location under `gauges` in the `model.yml` file and under `target_variables` and `report_hydrology`. See the example of the `model.yml` file below.
 
 5. For multiple observed locations of observed data the process is similar, just repeat step 2 to 4.
 
@@ -119,7 +119,7 @@ GEB has a prebuilt calibration function. It can be used for both one- and multi-
            select_best: 10
          target_variables:
            # Variables required to calculate calibration score from cwatm, e.g. discharge at a certain gauge 
-           report_cwatm:
+           report_hydrology:
                75.8477777 17.41305556:
                    varname: data.grid.discharge
                    function: sample_coord,75.8477777,17.41305556

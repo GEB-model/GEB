@@ -130,7 +130,7 @@ def run_model(args):
             template["general"]["end_time"] = config["sensitivity"]["end_time"]
 
             template["report"] = {}
-            template["report_cwatm"] = {}
+            template["report_hydrology"] = {}
 
             template.update(config["sensitivity"]["output_variables"])
 

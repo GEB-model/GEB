@@ -486,7 +486,7 @@ def run_model(individual, config, gauges, observed_streamflow):
             template["general"]["end_time"] = config["calibration"]["end_time"]
 
             template["report"] = {}
-            template["report_cwatm"] = {}
+            template["report_hydrology"] = {}
 
             template.update(config["calibration"]["target_variables"])
 

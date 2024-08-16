@@ -126,7 +126,7 @@ calibration:
     lambda_: 12
     select_best: 10
   target_variables:
-    report_cwatm:
+    report_hydrology:
       discharge:
         varname: data.grid.discharge
         function: sample,25,54
@@ -362,7 +362,7 @@ report:
       every: month
       day: 1
 
-report_cwatm:
+report_hydrology:
   groundwater_depth:
     varname: groundwater.groundwater_depth
     function: mean

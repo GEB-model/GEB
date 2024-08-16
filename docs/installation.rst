@@ -37,9 +37,6 @@ If you want to contribute to GEB, you can install it in development mode. This w
 
 .. code-block:: bash
 
-    git clone https://github.com/GEB-model/ABCWatM
-    pip install -e ABCWatM
-
     git clone https://github.com/GEB-model/hydromt_geb
     pip install -e hydromt_geb
 
