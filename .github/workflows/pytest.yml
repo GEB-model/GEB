@@ -34,4 +34,4 @@ jobs:
           fi
         fi
     - name: Run tests (excluding test_build.py and test_cli.py)
-      run: pytest --ignore=tests/test_build.py --ignore=tests/test_cli.py::test_cli
+      run: pytest --ignore=tests/test_build.py
