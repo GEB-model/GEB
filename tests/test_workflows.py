@@ -1,4 +1,3 @@
-import pytest
 import numpy as np
 import pandas as pd
 from datetime import date
@@ -12,7 +11,7 @@ from .setup import tmp_folder
 
 
 def netcdf_file(varname):
-    size = 2_000
+    size = 100
     # Create a temporary NetCDF file for testing
     filename = tmp_folder / f"{varname}.nc"
 
