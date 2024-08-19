@@ -1,5 +1,6 @@
 import click
 import os
+import tempfile
 import sys
 import cProfile
 from pstats import Stats
@@ -343,6 +344,30 @@ def get_model(custom_model):
         return attrgetter(custom_model)(hydromt_geb.custom_models)
 
 
+def customize_data_catalog(data_catalogs):
+    """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
+    This enables reading the data catalog from a different location than the location of the yml-file
+    without the need to specify root in the meta of the data catalog."""
+    geb_data_root = os.environ.get("GEB_DATA_ROOT", None)
+
+    if geb_data_root:
+        customized_data_catalogs = []
+        for data_catalog in data_catalogs:
+            with open(data_catalog, "r") as stream:
+                data_catalog_yml = yaml.load(stream, Loader=yaml.FullLoader)
+
+                if "meta" not in data_catalog_yml:
+                    data_catalog_yml["meta"] = {}
+                data_catalog_yml["meta"]["root"] = geb_data_root
+
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
+                yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
+                customized_data_catalogs.append(tmp.name)
+        return customized_data_catalogs
+    else:
+        return data_catalogs
+
+
 @main.command()
 @click_build_options()
 def build(
@@ -359,7 +384,7 @@ def build(
     arguments = {
         "root": input_folder,
         "mode": "w+",
-        "data_libs": data_catalog,
+        "data_libs": customize_data_catalog(data_catalog),
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -422,7 +447,7 @@ def alter(
     arguments = {
         "root": reference_model_folder,
         "mode": "r+",
-        "data_libs": data_catalog,
+        "data_libs": customize_data_catalog(data_catalog),
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -454,7 +479,7 @@ def update(
     arguments = {
         "root": input_folder,
         "mode": "r+",
-        "data_libs": data_catalog,
+        "data_libs": customize_data_catalog(data_catalog),
         "logger": create_logger("build_update.log"),
         "data_provider": data_provider,
     }
