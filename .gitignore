@@ -9,6 +9,7 @@ examples/*
 !examples/build.yml
 !examples/model.yml
 !examples/update.yml
+!examples/data_catalog.yml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
