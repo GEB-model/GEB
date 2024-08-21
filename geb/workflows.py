@@ -56,18 +56,16 @@ class AsyncXarrayReader:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.loop = AsyncXarrayReader.shared_loop
 
-    def load_with_lock(self, index):
+    def load(self, index):
         return self.var.isel(time=index).values
 
-    async def load(self, index):
-        return await self.loop.run_in_executor(
-            self.executor, lambda: self.load_with_lock(index)
-        )
+    async def load_await(self, index):
+        return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
 
     async def preload_next(self, index):
         # Preload the next timestep asynchronously
         if index + 1 < self.time_size:
-            return await self.load(index + 1)
+            return await self.load_await(index + 1)
         return None
 
     async def read_timestep_async(self, index):
@@ -81,7 +79,7 @@ class AsyncXarrayReader:
             data = await self.preloaded_data_future
         # Load the requested data if not preloaded
         else:
-            data = await self.load(index)
+            data = await self.load_await(index)
 
         # Initiate preloading the next timestep, do not await here, this returns a future
         self.preloaded_data_future = asyncio.create_task(self.preload_next(index))
@@ -109,7 +107,7 @@ class AsyncXarrayReader:
 
     def read_timestep_not_async(self, date):
         index = self.get_index(date)
-        return self.load_with_lock(index)
+        return self.load(index)
 
     def close(self):
         # cancel the preloading of the next timestep
