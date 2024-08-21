@@ -3,7 +3,6 @@ import xarray as xr
 import numpy as np
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-import threading
 
 all_async_readers = []
 
