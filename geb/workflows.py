@@ -1,9 +1,9 @@
 from time import time
+import xarray as xr
 import numpy as np
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import threading
-import netCDF4
 
 all_async_readers = []
 
@@ -45,17 +45,11 @@ class AsyncXarrayReader:
     def __init__(self, filepath, variable_name):
         self.filepath = filepath
 
-        # netCDF4 is faster than xarray for reading data
-        self.ds = netCDF4.Dataset(filepath)
-        self.var = self.ds.variables[variable_name]
-        self.time_index = self.ds.variables["time"][:]
-
-        self.time_index = self.convert_times_to_numpy_datetime(
-            self.ds.variables["time"][:], self.ds.variables["time"].units
-        )
+        self.ds = xr.open_dataset(self.filepath, chunks={}, engine="zarr")
+        self.var = self.ds[variable_name]
+        self.time_index = self.ds.time.values
 
         self.time_size = self.time_index.size
-        self.var.set_auto_maskandscale(False)
 
         all_async_readers.append(self)
         self.preloaded_data_future = None
@@ -63,21 +57,10 @@ class AsyncXarrayReader:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.loop = AsyncXarrayReader.shared_loop
 
-        self.lock = threading.Lock()
-
-    def convert_times_to_numpy_datetime(self, times, units):
-        # Convert NetCDF times to datetime objects
-        datetimes = netCDF4.num2date(times, units)
-        # Convert datetime objects to numpy.datetime64
-        numpy_datetimes = np.array(datetimes, dtype="datetime64[ns]")
-        return numpy_datetimes
-
     def load_with_lock(self, index):
-        with self.lock:
-            return self.var[index]
+        return self.var.isel(time=index).values
 
     async def load(self, index):
-        # return await asyncio.sleep(1)
         return await self.loop.run_in_executor(
             self.executor, lambda: self.load_with_lock(index)
         )
@@ -127,7 +110,7 @@ class AsyncXarrayReader:
 
     def read_timestep_not_async(self, date):
         index = self.get_index(date)
-        return self.load(index)
+        return self.load_with_lock(index)
 
     def close(self):
         # cancel the preloading of the next timestep

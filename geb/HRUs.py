@@ -178,21 +178,19 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        with rasterio.open(
-            self.model.model_structure["grid"]["areamaps/grid_mask"]
-        ) as mask_src:
+        with rasterio.open(self.model.files["grid"]["areamaps/grid_mask"]) as mask_src:
             self.mask = mask_src.read(1).astype(bool)
             self.gt = mask_src.transform.to_gdal()
             self.bounds = tuple(mask_src.bounds)
             self.cell_size = mask_src.transform.a
         with rxr.open_rasterio(
-            self.model.model_structure["grid"]["areamaps/grid_mask"]
+            self.model.files["grid"]["areamaps/grid_mask"]
         ) as mask_src:
             self.crs = mask_src.rio.crs
             self.lon = mask_src.x.values
             self.lat = mask_src.y.values
         with rasterio.open(
-            self.model.model_structure["grid"]["areamaps/cell_area"]
+            self.model.files["grid"]["areamaps/cell_area"]
         ) as cell_area_src:
             self.cell_area_uncompressed = cell_area_src.read(1)
 
@@ -254,7 +252,7 @@ class Grid(BaseVariables):
             assert array.shape[1] == self.mask_flat.size - self.mask_flat.sum()
             outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
             output_shape = (array.shape[0], *output_shape)
-        outmap[..., self.mask_flat == False] = array
+        outmap[..., ~self.mask_flat] = array
         return outmap.reshape(output_shape)
 
     def plot(self, array: np.ndarray) -> None:
@@ -301,7 +299,7 @@ class Grid(BaseVariables):
 
     def load_forcing_ds(self, name):
         reader = AsyncXarrayReader(
-            self.model.model_structure["forcing"][f"climate/{name}"],
+            self.model.files["forcing"][f"climate/{name}"],
             name,
         )
         assert reader.ds.variables["y"][0] > reader.ds.variables["y"][-1]
@@ -334,9 +332,9 @@ class Grid(BaseVariables):
         if not hasattr(self, "ps_ds"):
             self.ps_ds = self.load_forcing_ds("ps")
         ps = self.load_forcing(self.ps_ds, self.model.current_time)
-        assert (ps > 30_000).all() and (
-            ps < 120_000
-        ).all(), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
+        assert (
+            (ps > 30_000).all() and (ps < 120_000).all()
+        ), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
         return ps
 
     @property
@@ -384,9 +382,9 @@ class Grid(BaseVariables):
         if not hasattr(self, "sfcWind_ds"):
             self.sfcWind_ds = self.load_forcing_ds("sfcwind")
         sfcWind = self.load_forcing(self.sfcWind_ds, self.model.current_time)
-        assert (sfcWind >= 0).all() and (
-            sfcWind < 150
-        ).all(), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
+        assert (
+            (sfcWind >= 0).all() and (sfcWind < 150).all()
+        ), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
         return sfcWind
 
     @property
@@ -407,22 +405,18 @@ class Grid(BaseVariables):
 
     @property
     def gev_c(self):
-        with rasterio.open(
-            self.model.model_structure["grid"]["climate/gev_c"]
-        ) as gev_c_src:
+        with rasterio.open(self.model.files["grid"]["climate/gev_c"]) as gev_c_src:
             return gev_c_src.read(1)
 
     @property
     def gev_loc(self):
-        with rasterio.open(
-            self.model.model_structure["grid"]["climate/gev_loc"]
-        ) as gev_loc_src:
+        with rasterio.open(self.model.files["grid"]["climate/gev_loc"]) as gev_loc_src:
             return gev_loc_src.read(1)
 
     @property
     def gev_scale(self):
         with rasterio.open(
-            self.model.model_structure["grid"]["climate/gev_scale"]
+            self.model.files["grid"]["climate/gev_scale"]
         ) as gev_scale_src:
             return gev_scale_src.read(1)
 
@@ -441,7 +435,7 @@ class HRUs(BaseVariables):
         self.data = data
         self.model = model
         with rasterio.open(
-            self.model.model_structure["subgrid"]["areamaps/sub_grid_mask"]
+            self.model.files["subgrid"]["areamaps/sub_grid_mask"]
         ) as mask_src:
             submask_height = mask_src.profile["height"]
             submask_width = mask_src.profile["width"]
@@ -511,7 +505,9 @@ class HRUs(BaseVariables):
 
     @staticmethod
     @njit(cache=True)
-    def create_HRUs_numba(farms, land_use_classes, mask, scaling) -> tuple[
+    def create_HRUs_numba(
+        farms, land_use_classes, mask, scaling
+    ) -> tuple[
         np.ndarray,
         np.ndarray,
         np.ndarray,
@@ -552,7 +548,6 @@ class HRUs(BaseVariables):
 
         HRU = 0
         var_cell_count_compressed = 0
-        l = 0
         var_cell_count_uncompressed = 0
 
         for y in range(0, ysize):
@@ -600,10 +595,7 @@ class HRUs(BaseVariables):
                         unmerged_HRU_indices[
                             y * scaling + sort_idx[i] // scaling,
                             x * scaling + sort_idx[i] % scaling,
-                        ] = (
-                            HRU - 1
-                        )
-                        l += 1
+                        ] = HRU - 1
 
                     sort_idx = np.argsort(cell_land_use_classes)
                     cell_farms_sorted = cell_farms[sort_idx]
@@ -632,14 +624,10 @@ class HRUs(BaseVariables):
                         unmerged_HRU_indices[
                             y * scaling + sort_idx[i] // scaling,
                             x * scaling + sort_idx[i] % scaling,
-                        ] = (
-                            HRU - 1
-                        )
-                        l += 1
+                        ] = HRU - 1
 
                     grid_to_HRU[var_cell_count_compressed] = HRU
                     var_cell_count_compressed += 1
-                # var_to_HRU_uncompressed[var_cell_count_uncompressed] = HRU
                 var_cell_count_uncompressed += 1
 
         land_use_size = land_use_size[:HRU]
@@ -680,7 +668,7 @@ class HRUs(BaseVariables):
             unmerged_HRU_indices: The index of the HRU to the subcell.
         """
         with rasterio.open(
-            self.model.model_structure["subgrid"]["landsurface/land_use_classes"], "r"
+            self.model.files["subgrid"]["landsurface/land_use_classes"], "r"
         ) as src:
             land_use_classes = src.read()[0]
         return self.create_HRUs_numba(
@@ -855,7 +843,7 @@ class Data:
         self.model = model
 
         with rasterio.open(
-            self.model.model_structure["subgrid"]["agents/farmers/farms"], "r"
+            self.model.files["subgrid"]["agents/farmers/farms"], "r"
         ) as farms_src:
             self.farms = farms_src.read()[0]
 
@@ -871,25 +859,19 @@ class Data:
 
     def load_water_demand(self):
         self.model.domestic_water_consumption_ds = xr.open_dataset(
-            self.model.model_structure["forcing"][
-                "water_demand/domestic_water_consumption"
-            ]
+            self.model.files["forcing"]["water_demand/domestic_water_consumption"]
         )
         self.model.domestic_water_demand_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["water_demand/domestic_water_demand"]
+            self.model.files["forcing"]["water_demand/domestic_water_demand"]
         )
         self.model.industry_water_consumption_ds = xr.open_dataset(
-            self.model.model_structure["forcing"][
-                "water_demand/industry_water_consumption"
-            ]
+            self.model.files["forcing"]["water_demand/industry_water_consumption"]
         )
         self.model.industry_water_demand_ds = xr.open_dataset(
-            self.model.model_structure["forcing"]["water_demand/industry_water_demand"]
+            self.model.files["forcing"]["water_demand/industry_water_demand"]
         )
         self.model.livestock_water_consumption_ds = xr.open_dataset(
-            self.model.model_structure["forcing"][
-                "water_demand/livestock_water_consumption"
-            ]
+            self.model.files["forcing"]["water_demand/livestock_water_consumption"]
         )
 
     def to_HRU(self, *, data=None, fn=None):

@@ -1,3 +1,5 @@
+setup_elevation:
+
 setup_forcing:
   data_source: era5
   starttime: 1980-01-01

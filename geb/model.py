@@ -87,7 +87,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
     def __init__(
         self,
         config: dict,
-        model_structure: dict,
+        files: dict,
         spinup: bool = False,
         use_gpu: bool = False,
         gpu_device=0,
@@ -117,8 +117,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             self.config["report"] = {}
 
         # make a deep copy to avoid issues when the model is initialized multiple times
-        self.model_structure = copy.deepcopy(model_structure)
-        for data in self.model_structure.values():
+        self.files = copy.deepcopy(files)
+        for data in self.files.values():
             for key, value in data.items():
                 data[key] = Path(config["general"]["input_folder"]) / value
 
@@ -183,11 +183,10 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         n_timesteps = int(n_timesteps)
         assert n_timesteps > 0, "End time is before or identical to start time"
 
-        self.regions = gpd.read_file(self.model_structure["geoms"]["areamaps/regions"])
+        self.regions = gpd.read_file(self.files["geoms"]["areamaps/regions"])
         self.data = Data(self)
 
         if self.mode == "w":
-
             HazardDriver.__init__(self)
 
             ABM.__init__(

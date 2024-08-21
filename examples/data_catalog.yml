@@ -601,6 +601,21 @@ water_table_depth_globgm:
     source_license: CC BY 4.0
     source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
     unit: m
+head_{layer}_globgm:
+  crs: 4326
+  data_type: RasterDataset
+  driver: raster
+  path: groundwater/globgm-heads-{layer}-layer-ss.tif
+  meta:
+    category: groundwater
+    history: Obtained from GLOBGM
+    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
+    paper_ref: Verkaik et al. (2024)
+    source_license: CC BY 4.0
+    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
+    unit: m
+  placeholders:
+    layer: ['lower', 'upper']
 recession_coefficient_globgm:
   crs: 4326
   data_type: RasterDataset
@@ -614,7 +629,7 @@ recession_coefficient_globgm:
     source_license: CC BY 4.0
     source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
     unit: dimensionless
-thickness_confined_layer_globgm:
+thickness_confining_layer_globgm:
   crs: 4326
   data_type: RasterDataset
   driver: netcdf

@@ -14,7 +14,7 @@ import importlib
 import warnings
 
 from honeybees.visualization.ModularVisualization import ModularServer
-from honeybees.visualization.modules import ChartModule
+from honeybees.visualization.modules.ChartVisualization import ChartModule
 from honeybees.visualization.canvas import Canvas
 
 from hydromt.config import configread
@@ -173,20 +173,20 @@ def run_model(
     os.chdir(working_directory)
 
     if use_gpu:
-        import cupy
+        pass
 
     MODEL_NAME = "GEB"
     config = parse_config(config)
 
-    model_structure = parse_config(
-        "input/model_structure.json"
-        if not "model_stucture" in config["general"]
-        else config["general"]["model_stucture"]
+    files = parse_config(
+        "input/files.json"
+        if "files" not in config["general"]
+        else config["general"]["files"]
     )
 
     model_params = {
         "config": config,
-        "model_structure": model_structure,
+        "files": files,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
         "spinup": spinup,
@@ -207,7 +207,7 @@ def run_model(
                 pr.dump_stats("profile.prof")
             else:
                 model.run()
-            report = model.report()
+            model.report()
     else:
         # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
         # the event loop started for reading data, unless we use nest_asyncio.

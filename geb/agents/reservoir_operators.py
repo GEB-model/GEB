@@ -1,6 +1,5 @@
-from . import AgentBaseClass
 import numpy as np
-from .general import AgentArray
+from .general import AgentArray, AgentBaseClass
 
 from numba import njit
 

@@ -28,7 +28,6 @@ from numba import njit, prange
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
-
     alpha = bubbling_pressure_cm**-1
     n = lambda_ + 1
     m = 1 - 1 / n
@@ -526,8 +525,8 @@ def update_soil_water_storage(
         elif saturated_area_fraction < np.float32(0):
             saturated_area_fraction = np.float32(0)
 
-        store = soil_water_storage_max / (
-            arno_beta[i] + np.float32(1)
+        store = (
+            soil_water_storage_max / (arno_beta[i] + np.float32(1))
         )  # it is unclear what "store" means exactly, refer to source material to improve variable name
         pot_beta = (arno_beta[i] + np.float32(1)) / arno_beta[i]  # idem
         potential_infiltration = store - store * (
@@ -679,7 +678,7 @@ class Soil(object):
         self.model = model
 
         self.soil_layer_height = self.model.data.grid.load(
-            self.model.model_structure["grid"]["soil/soil_layer_height"],
+            self.model.files["grid"]["soil/soil_layer_height"],
             layer=None,
         )
         self.soil_layer_height = self.model.data.to_HRU(
@@ -696,23 +695,23 @@ class Soil(object):
 
         # θ saturation, field capacity, wilting point and residual moisture content
         thetas = self.model.data.grid.load(
-            self.model.model_structure["grid"]["soil/thetas"], layer=None
+            self.model.files["grid"]["soil/thetas"], layer=None
         )
         thetas = self.model.data.to_HRU(data=thetas, fn=None)
         thetar = self.model.data.grid.load(
-            self.model.model_structure["grid"]["soil/thetar"], layer=None
+            self.model.files["grid"]["soil/thetar"], layer=None
         )
         thetar = self.model.data.to_HRU(data=thetar, fn=None)
 
         bubbling_pressure_cm = self.model.data.grid.load(
-            self.model.model_structure["grid"]["soil/bubbling_pressure_cm"], layer=None
+            self.model.files["grid"]["soil/bubbling_pressure_cm"], layer=None
         )
         bubbling_pressure_cm = self.model.data.to_HRU(
             data=bubbling_pressure_cm, fn=None
         )
 
         lambda_pore_size_distribution = self.model.data.grid.load(
-            self.model.model_structure["grid"]["soil/lambda"], layer=None
+            self.model.files["grid"]["soil/lambda"], layer=None
         )
         lambda_pore_size_distribution = self.model.data.to_HRU(
             data=lambda_pore_size_distribution, fn=None
@@ -750,20 +749,20 @@ class Soil(object):
         )
 
         lambda_pore_size_distribution = self.model.data.grid.load(
-            self.model.model_structure["grid"]["soil/lambda"], layer=None
+            self.model.files["grid"]["soil/lambda"], layer=None
         )
         self.lambda_pore_size_distribution = self.model.data.to_HRU(
             data=lambda_pore_size_distribution, fn=None
         )
         ksat = self.model.data.grid.load(
-            self.model.model_structure["grid"]["soil/ksat"], layer=None
+            self.model.files["grid"]["soil/ksat"], layer=None
         )
         self.ksat = self.model.data.to_HRU(data=ksat, fn=None)
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
         self.natural_crop_groups = self.model.data.grid.load(
-            self.model.model_structure["grid"]["soil/cropgrp"]
+            self.model.files["grid"]["soil/cropgrp"]
         )
         self.natural_crop_groups = self.model.data.to_HRU(data=self.natural_crop_groups)
 
@@ -818,7 +817,7 @@ class Soil(object):
         def create_ini(yaml, idx, plantFATE_cluster, biodiversity_scenario):
             out_dir = self.model.simulation_root / "plantFATE" / f"cell_{idx}"
             out_dir.mkdir(parents=True, exist_ok=True)
-            ini_file = out_dir / f"p_daily.ini"
+            ini_file = out_dir / "p_daily.ini"
 
             yaml["> STRINGS"]["outDir"] = out_dir
             if self.model.spinup is True:

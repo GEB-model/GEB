@@ -21,7 +21,7 @@
 
 import numpy as np
 from .model import ModFlowSimulation
-from geb.workflows import balance_check
+# from geb.workflows import balance_check
 
 
 class GroundWater:
@@ -31,58 +31,44 @@ class GroundWater:
 
         # load hydraulic conductivity (md-1)
         hydraulic_conductivity = self.model.data.grid.load(
-            self.model.model_structure["grid"]["groundwater/hydraulic_conductivity"],
+            self.model.files["grid"]["groundwater/hydraulic_conductivity"],
             layer=None,
         )
 
         specific_yield = self.model.data.grid.load(
-            self.model.model_structure["grid"]["groundwater/specific_yield"],
+            self.model.files["grid"]["groundwater/specific_yield"],
             layer=None,
         )
 
-        total_thickness = self.model.data.grid.load(
-            self.model.model_structure["grid"]["groundwater/total_thickness"],
+        layer_boundary_elevation = self.model.data.grid.load(
+            self.model.files["grid"]["groundwater/layer_boundary_elevation"],
+            layer=None,
         )
 
-        confined_layer_thickness = self.model.data.grid.load(
-            self.model.model_structure["grid"]["groundwater/confined_layer_thickness"],
-        )
-
-        recession_coefficient = self.model.data.grid.load(
-            self.model.model_structure["grid"]["groundwater/recession_coefficient"],
-        )
+        # recession_coefficient = self.model.data.grid.load(
+        #     self.model.files["grid"]["groundwater/recession_coefficient"],
+        # )
 
         elevation = self.model.data.grid.load(
-            self.model.model_structure["grid"]["landsurface/topo/elevation"]
-        )
-
-        initial_water_table_depth = self.model.data.grid.load(
-            self.model.model_structure["grid"]["groundwater/initial_water_table_depth"]
+            self.model.files["grid"]["landsurface/topo/elevation"]
         )
 
         assert hydraulic_conductivity.shape == specific_yield.shape
 
         self.var.channel_ratio = self.var.load(
-            self.model.model_structure["grid"]["routing/kinematic/channel_ratio"]
+            self.model.files["grid"]["routing/kinematic/channel_ratio"]
         )
 
         self.var.leakageriver_factor = 0.001  # in m/day
         self.var.leakagelake_factor = 0.001  # in m/day
 
-        soil_depth = self.model.data.to_grid(
-            HRU_data=self.model.soil.soil_layer_height.sum(axis=0),
-            fn="weightedmean",
-        )
-        bottom_soil = elevation - soil_depth
-
         self.initial_water_table_depth = 2
-        self.var.head = self.model.data.grid.load_initial(
-            "head",
-            default=bottom_soil - self.initial_water_table_depth,
+        self.var.heads = self.model.data.grid.load_initial(
+            "heads",
+            default=self.model.data.grid.load(
+                self.model.files["grid"]["groundwater/heads"], layer=None
+            ),
         )
-
-        assert hydraulic_conductivity.shape[0] == 1, "currently only 1 layer supported"
-        bottom = np.expand_dims(elevation - 100, 0)
 
         self.modflow = ModFlowSimulation(
             self.model,
@@ -92,12 +78,11 @@ class GroundWater:
             ndays=self.model.n_timesteps,
             specific_storage=np.zeros_like(specific_yield),
             specific_yield=specific_yield,
-            bottom_soil=bottom_soil,
-            bottom=bottom,
+            layer_boundary_elevation=layer_boundary_elevation,
             basin_mask=self.model.data.grid.mask,
-            head=self.var.head,
+            heads=self.var.heads,
             hydraulic_conductivity=hydraulic_conductivity,
-            complexity="MODERATE",
+            complexity="SIMPLE",
             verbose=False,
         )
 
@@ -110,16 +95,16 @@ class GroundWater:
         groundwater_abstraction[groundwater_abstraction < 0] = 0
         assert (groundwater_recharge >= 0).all()
 
-        groundwater_storage_pre = self.modflow.groundwater_content_m3
+        # groundwater_storage_pre = self.modflow.groundwater_content_m3
 
         self.modflow.set_recharge_m(groundwater_recharge)
         self.modflow.set_groundwater_abstraction_m(groundwater_abstraction)
         self.modflow.step()
 
-        drainage_m3 = self.modflow.drainage_m3
-        groundwater_abstraction_m3 = groundwater_abstraction * self.modflow.area
-        recharge_m3 = groundwater_recharge * self.modflow.area
-        groundwater_storage_post = self.modflow.groundwater_content_m3
+        # drainage_m3 = self.modflow.drainage_m3
+        # groundwater_abstraction_m3 = groundwater_abstraction * self.modflow.area
+        # recharge_m3 = groundwater_recharge * self.modflow.area
+        # groundwater_storage_post = self.modflow.groundwater_content_m3
 
         # balance_check(
         #     name="groundwater",
@@ -138,7 +123,6 @@ class GroundWater:
 
         self.var.capillar = groundwater_drainage * (1 - self.var.channel_ratio)
         self.var.baseflow = groundwater_drainage * self.var.channel_ratio
-        self.var.head = self.modflow.head
 
         # capriseindex is 1 where capilary rise occurs
         self.model.data.HRU.capriseindex = self.model.data.to_HRU(

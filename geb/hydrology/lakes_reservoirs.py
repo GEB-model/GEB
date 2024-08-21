@@ -224,7 +224,6 @@ def get_lake_outflow_and_storage(
     new_storage_above_outflow = np.zeros_like(SI)
 
     if positive_SI.sum() > 0:
-
         new_storage_above_outflow_positive_SI = solve_puls_equation(
             storage_above_outflow[positive_SI],
             SI[positive_SI],
@@ -271,7 +270,7 @@ class LakesReservoirs(object):
 
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID = self.var.load(
-            self.model.model_structure["grid"]["routing/lakesreservoirs/lakesResID"]
+            self.model.files["grid"]["routing/lakesreservoirs/lakesResID"]
         )
         waterBodyID[waterBodyID == OFF] = -1
 
@@ -389,9 +388,7 @@ class LakesReservoirs(object):
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
         water_body_data = pd.read_csv(
-            self.model.model_structure["table"][
-                "routing/lakesreservoirs/basin_lakes_data"
-            ],
+            self.model.files["table"]["routing/lakesreservoirs/basin_lakes_data"],
             dtype={
                 "waterbody_type": np.int32,
                 "volume_total": np.float64,
@@ -478,7 +475,7 @@ class LakesReservoirs(object):
         self.var.lake_outflow = np.zeros_like(inflowC)
 
         # check if there are any lakes in the model
-        if (lakes == True).any():
+        if lakes.any():
             (
                 self.var.lake_outflow[lakes],
                 self.var.storage[lakes],

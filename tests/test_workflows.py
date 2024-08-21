@@ -82,16 +82,16 @@ def test_read_timestep():
     print("Load previous timestep (slow): {:.3f}s".format(t1 - t0))
     assert (data0 == 0).all()
 
-    data0_2 = reader2.read_timestep(date(2000, 1, 1))
-    data0_3 = reader3.read_timestep(date(2000, 1, 1))
+    reader2.read_timestep(date(2000, 1, 1))
+    reader3.read_timestep(date(2000, 1, 1))
 
     sleep(3)  # Simulate some processing time
     print("-----------------")
 
     t0 = time()
     data1 = reader1.read_timestep(date(2000, 1, 2))
-    data1_2 = reader2.read_timestep(date(2000, 1, 2))
-    data1_3 = reader3.read_timestep(date(2000, 1, 2))
+    reader2.read_timestep(date(2000, 1, 2))
+    reader3.read_timestep(date(2000, 1, 2))
     t1 = time()
     print("Load data from three readers (quick): {:.3f}s".format(t1 - t0))
 

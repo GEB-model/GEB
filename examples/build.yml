@@ -20,7 +20,7 @@ setup_channel_depth:
 
 setup_channel_ratio:
 
-setup_elevation_STD:
+setup_elevation:
 
 setup_soil_parameters:
 
@@ -35,7 +35,7 @@ setup_water_demand:
   endtime: 2060-12-31
   ssp: ssp2
 
-setup_modflow:
+setup_groundwater:
 
 setup_economic_data:
 

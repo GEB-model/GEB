@@ -25,6 +25,12 @@ from .subroutines import (
     kinematic,
 )
 import numpy as np
+
+try:
+    import cupy as cp
+except (ModuleNotFoundError, ImportError):
+    pass
+
 from geb.workflows import balance_check
 
 
@@ -117,7 +123,7 @@ class Routing(object):
         self.model = model
 
         ldd = self.var.load(
-            self.model.model_structure["grid"]["routing/kinematic/ldd"],
+            self.model.files["grid"]["routing/kinematic/ldd"],
             compress=False,
         )
 
@@ -150,31 +156,27 @@ class Routing(object):
         self.var.beta = 0.6  # TODO: Make this a parameter
         # Channel Manning's n
         self.var.chanMan = (
-            self.var.load(
-                self.model.model_structure["grid"]["routing/kinematic/mannings"]
-            )
+            self.var.load(self.model.files["grid"]["routing/kinematic/mannings"])
             * self.model.config["parameters"]["manningsN"]
         )
         # Channel gradient (fraction, dy/dx)
         minimum_channel_gradient = 0.0001
         self.var.chanGrad = np.maximum(
-            self.var.load(
-                self.model.model_structure["grid"]["routing/kinematic/channel_slope"]
-            ),
+            self.var.load(self.model.files["grid"]["routing/kinematic/channel_slope"]),
             minimum_channel_gradient,
         )
         # Channel length [meters]
         self.var.chanLength = self.var.load(
-            self.model.model_structure["grid"]["routing/kinematic/channel_length"]
+            self.model.files["grid"]["routing/kinematic/channel_length"]
         )
         # Channel bottom width [meters]
         self.var.chanWidth = self.var.load(
-            self.model.model_structure["grid"]["routing/kinematic/channel_width"]
+            self.model.files["grid"]["routing/kinematic/channel_width"]
         )
 
         # Bankfull channel depth [meters]
         self.var.chanDepth = self.var.load(
-            self.model.model_structure["grid"]["routing/kinematic/channel_depth"]
+            self.model.files["grid"]["routing/kinematic/channel_depth"]
         )
 
         # -----------------------------------------------

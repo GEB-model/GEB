@@ -19,6 +19,6 @@ class HazardDriver:
                 self.sfincs.save_discharge()
 
             for event in self.config["general"]["flood_events"]:
-                assert type(self.current_time.date()) == type(event["end_time"])
+                assert type(self.current_time.date()) is type(event["end_time"])
                 if self.current_time.date() == event["end_time"]:
                     self.sfincs.run(event)

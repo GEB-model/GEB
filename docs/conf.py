@@ -13,7 +13,6 @@
 #
 import os
 import sys
-from geb import __version__ as release
 
 sys.path.insert(0, os.path.abspath(".."))
 

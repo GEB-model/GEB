@@ -23,6 +23,7 @@ from time import time
 from contextlib import contextmanager
 import os
 import numpy as np
+from numba import njit
 from xmipy import XmiWrapper
 import flopy
 import json
@@ -41,6 +42,61 @@ def cd(newdir):
         os.chdir(prevdir)
 
 
+@njit
+def get_water_table_depth(layer_boundary_elevation, head, elevation):
+    water_table_depth = np.zeros(head.shape[1])
+    for cell_ix in range(head.shape[1]):
+        for layer_ix in range(head.shape[0]):
+            layer_head = head[layer_ix, cell_ix]
+
+            # if there is no head in the current layer, continue to the next layer
+            if np.isnan(layer_head):
+                continue
+
+            # if the head is larger than the top of the layer, the water table is equal to the top of the layer
+            if layer_head > layer_boundary_elevation[layer_ix, cell_ix]:
+                water_table_depth[cell_ix] = (
+                    elevation[cell_ix] - layer_boundary_elevation[layer_ix, cell_ix]
+                )
+                break
+
+            # if the head is larger than the bottom of the layer, the water table elevation is equal to the head
+            if layer_head > layer_boundary_elevation[layer_ix + 1, cell_ix]:
+                water_table_depth[cell_ix] = elevation[cell_ix] - layer_head
+                break
+
+            # else proceed to the next layer
+
+        else:  # if the water table is in none of the layers, the water table is at the bottom of the bottom layer
+            water_table_depth[cell_ix] = (
+                elevation[cell_ix] - layer_boundary_elevation[-1, cell_ix]
+            )
+    return water_table_depth
+
+
+@njit
+def get_groundwater_storage_m(layer_boundary_elevation, head, specific_yield):
+    storage = np.zeros(head.shape[1])
+    for cell_ix in range(head.shape[1]):
+        for layer_ix in range(head.shape[0]):
+            layer_head = head[layer_ix, cell_ix]
+            layer_top = layer_boundary_elevation[layer_ix, cell_ix]
+            layer_bottom = layer_boundary_elevation[layer_ix + 1, cell_ix]
+            layer_specific_yield = specific_yield[layer_ix, cell_ix]
+
+            # if there is no head in the current layer, continue to the next layer
+            if np.isnan(layer_head):
+                continue
+
+            groundwater_layer_top = min(layer_head, layer_top)
+            if groundwater_layer_top > layer_bottom:
+                storage[cell_ix] += (
+                    groundwater_layer_top - layer_bottom
+                ) * layer_specific_yield
+
+    return storage
+
+
 class ModFlowSimulation:
     def __init__(
         self,
@@ -51,16 +107,17 @@ class ModFlowSimulation:
         ndays,
         specific_storage,
         specific_yield,
-        bottom_soil,
-        bottom,
+        layer_boundary_elevation,
         basin_mask,
-        head,
+        heads,
         hydraulic_conductivity,
         complexity="COMPLEX",
         verbose=False,
     ):
+        self.model = model
         self.name = name.upper()  # MODFLOW requires the name to be uppercase
         self.basin_mask = basin_mask
+        self.nlay = hydraulic_conductivity.shape[0]
         assert self.basin_mask.dtype == bool
         self.n_active_cells = self.basin_mask.size - self.basin_mask.sum()
         self.working_directory = model.simulation_root / "modflow_model"
@@ -68,10 +125,8 @@ class ModFlowSimulation:
         self.verbose = verbose
 
         self.topography = topography
-        self.bottom = bottom
-        self.bottom_soil = bottom_soil
+        self.layer_boundary_elevation = layer_boundary_elevation
         self.specific_yield = specific_yield
-        assert self.specific_yield.shape == self.bottom.shape
 
         arguments = dict(locals())
         arguments.pop("self")
@@ -90,11 +145,10 @@ class ModFlowSimulation:
                     gt,
                     complexity,
                     save_flows,
-                    head,
+                    heads,
                     hydraulic_conductivity,
                     specific_storage,
                     specific_yield,
-                    bottom_soil,
                 )
 
                 sim.write_simulation()
@@ -149,11 +203,10 @@ class ModFlowSimulation:
         gt,
         complexity,
         save_flows,
-        head,
+        heads,
         hydraulic_conductivity,
         specific_storage,
         specific_yield,
-        bottom_soil,
     ):
         sim = flopy.mf6.MFSimulation(
             sim_name=self.name,
@@ -161,12 +214,10 @@ class ModFlowSimulation:
             exe_name=os.path.join("modflow", "mf6"),
             sim_ws=os.path.realpath(self.working_directory),
         )
-        time_discretization = flopy.mf6.ModflowTdis(
-            sim, nper=ndays, perioddata=[(1.0, 1, 1)] * ndays
-        )
+        flopy.mf6.ModflowTdis(sim, nper=ndays, perioddata=[(1.0, 1, 1)] * ndays)
 
         # create iterative model solution
-        iterative_model_solution = flopy.mf6.ModflowIms(
+        flopy.mf6.ModflowIms(
             sim,
             print_option=None,
             complexity=complexity,
@@ -252,52 +303,55 @@ class ModFlowSimulation:
         # Create icelltype array (assuming convertible cells i.e., that can be converted between confined and unconfined)
         icelltype = np.ones(nrow * ncol, dtype=int)
 
-        bottom = np.zeros_like(self.basin_mask, dtype=float)
-        bottom[~self.basin_mask] = self.bottom[-1]
-
-        top = np.zeros_like(self.basin_mask, dtype=float)
-        top[~self.basin_mask] = self.topography
+        domain = np.stack([~self.basin_mask] * hydraulic_conductivity.shape[0])
 
         # Discretization for flexible grid
-        discretization = flopy.mf6.ModflowGwfdisv(
+        flopy.mf6.ModflowGwfdisv(
             groundwater_flow,
-            nlay=hydraulic_conductivity.shape[0],
+            nlay=self.nlay,
             ncpl=nrow * ncol,
             nvert=len(vertices),
             vertices=vertices,
             cell2d=cell2d,
-            top=top.tolist(),
-            botm=bottom.tolist(),
-            idomain=~self.basin_mask,
+            top=self.model.data.grid.decompress(
+                self.layer_boundary_elevation[0]
+            ).tolist(),
+            botm=self.model.data.grid.decompress(
+                self.layer_boundary_elevation[1:]
+            ).tolist(),
+            idomain=domain.tolist(),
         )
-
-        head2d = np.zeros_like(self.basin_mask, dtype=float)
-        head2d[~self.basin_mask] = head
 
         # Initial conditions
-        initial_conditions = flopy.mf6.ModflowGwfic(groundwater_flow, strt=head2d)
 
-        k = np.zeros(
-            (hydraulic_conductivity.shape[0], *self.basin_mask.shape), dtype=float
-        )
-        k[:, ~self.basin_mask] = hydraulic_conductivity
+        # If the head in a layer is nan, there is no water in that layer
+        # so we set the head to the bottom of the layer, indicating that the layer is dry
+        for layer in range(self.nlay):
+            heads[layer] = np.where(
+                np.isnan(heads[layer]),
+                self.layer_boundary_elevation[layer + 1],  # layer below
+                heads[layer],
+            )
+
+        heads = self.model.data.grid.decompress(heads)
+        heads += 1
+        flopy.mf6.ModflowGwfic(groundwater_flow, strt=heads)
 
         # Node property flow
-        node_property_flow = flopy.mf6.ModflowGwfnpf(
+        k = self.model.data.grid.decompress(hydraulic_conductivity)
+        icelltype = np.ones_like(domain, dtype=np.int32)
+        flopy.mf6.ModflowGwfnpf(
             groundwater_flow,
             save_flows=save_flows,
             icelltype=icelltype,
             k=k,
         )
 
-        sy = np.zeros((specific_yield.shape[0], *self.basin_mask.shape), dtype=float)
-        sy[:, ~self.basin_mask] = specific_yield
-
-        ss = np.zeros((specific_storage.shape[0], *self.basin_mask.shape), dtype=float)
-        ss[:, ~self.basin_mask] = specific_storage
+        sy = self.model.data.grid.decompress(specific_yield)
+        ss = self.model.data.grid.decompress(specific_storage)
 
         # Storage
-        storage = flopy.mf6.ModflowGwfsto(
+        flopy.mf6.ModflowGwfsto(
             groundwater_flow,
             save_flows=save_flows,
             iconvert=1,
@@ -338,7 +392,16 @@ class ModFlowSimulation:
         # Drainage
         drainage = []
         for idx, cell in enumerate(active_cells):
-            drainage.append((0, cell, bottom_soil[idx], hydraulic_conductivity[0, idx]))
+            drainage.append(
+                (
+                    0,  # top layer
+                    cell,
+                    self.layer_boundary_elevation[0, idx],  # at elevation of top layer
+                    hydraulic_conductivity[
+                        0, idx
+                    ],  # using the hydraulic conductivity of the top layer
+                )
+            )
 
         drainage = flopy.mf6.ModflowGwfdrn(
             groundwater_flow,
@@ -375,10 +438,7 @@ class ModFlowSimulation:
             with open(self.hash_file, "rb") as f:
                 prev_hash = f.read().strip()
         if prev_hash == self.hash:
-            if os.path.exists(os.path.join(self.working_directory, "mfsim.nam")):
-                return True
-            else:
-                return False
+            return True
         else:
             return False
 
@@ -438,32 +498,40 @@ class ModFlowSimulation:
 
         self.end_time = self.mf6.get_end_time()
         area_tag = self.mf6.get_var_address("AREA", self.name, "DIS")
-        self.area = self.mf6.get_value_ptr(area_tag)
+        area = self.mf6.get_value_ptr(area_tag).reshape(self.nlay, self.n_active_cells)
+
+        # ensure that the areas of all vertical cells are equal
+        assert (np.diff(area, axis=0) == 0).all()
+
+        # so we can use the area of the top layer
+        self.area = area[0]
 
         self.prepare_time_step()
 
     @property
-    def head(self):
+    def heads(self):
         head_tag = self.mf6.get_var_address("X", self.name)
-        return self.mf6.get_value_ptr(head_tag)
+        return self.mf6.get_value_ptr(head_tag).reshape(self.nlay, self.n_active_cells)
 
-    @head.setter
-    def head(self, value):
+    @heads.setter
+    def heads(self, value):
         head_tag = self.mf6.get_var_address("X", self.name)
         self.mf6.get_value_ptr(head_tag)[:] = value
 
     @property
     def groundwater_depth(self):
-        return self.topography - self.head
+        return get_water_table_depth(
+            self.layer_boundary_elevation,
+            self.heads,
+            self.topography,
+        )
 
     @property
     def groundwater_content_m(self):
-        # use the bottom of the bottom layer
-        assert self.specific_yield.shape[0] == 1, "Only 1 layer is supported"
-        groundwater_content_m = (self.head - self.bottom[-1]) * self.specific_yield[0]
-        # allow for small negative values as a result of numerical errors
-        assert (groundwater_content_m > -1e-2).all()
-        groundwater_content_m[groundwater_content_m < 0] = 0
+        groundwater_content_m = get_groundwater_storage_m(
+            self.layer_boundary_elevation, self.heads, self.specific_yield
+        )
+        assert (groundwater_content_m >= 0).all()
         return groundwater_content_m
 
     @property
@@ -534,7 +602,6 @@ class ModFlowSimulation:
         # loop over subcomponents
         n_solutions = self.mf6.get_subcomponent_count()
         for solution_id in range(1, n_solutions + 1):
-
             # convergence loop
             kiter = 0
             self.mf6.prepare_solve(solution_id)

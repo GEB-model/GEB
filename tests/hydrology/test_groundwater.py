@@ -1,19 +1,27 @@
 import math
 import numpy as np
 import matplotlib.pyplot as plt
-from geb.hydrology.groundwater.model import ModFlowSimulation
+from geb.hydrology.groundwater.model import (
+    ModFlowSimulation,
+    get_water_table_depth,
+    get_groundwater_storage_m,
+)
 
 from ..setup import output_folder, tmp_folder
 
 
-class DummyModel:
-    def __init__(self):
-        self.simulation_root = tmp_folder / "modflow"
+def decompress(array, mask):
+    if array.ndim == 1:
+        out = np.full(mask.shape, np.nan)
+    elif array.ndim == 2:
+        out = np.full((array.shape[0], *mask.shape), np.nan)
+    out[..., ~mask] = array
+    return out
 
 
 XSIZE = 12
 YSIZE = 10
-NLAY = 1
+NLAY = 2
 
 # Create a topography 2D map
 x = np.linspace(-5, 5, XSIZE)
@@ -37,10 +45,35 @@ def compress(array, mask):
     return array[..., ~mask]
 
 
-def decompress(array, mask):
-    out = np.full(mask.shape, np.nan)
-    out[~mask] = array
-    return out
+layer_boundary_elevation = np.full((NLAY + 1, YSIZE, XSIZE), np.nan, dtype=np.float32)
+layer_boundary_elevation[0] = topography
+for layer in range(1, NLAY + 1):
+    layer_boundary_elevation[layer] = (
+        layer_boundary_elevation[layer - 1] - 5
+    )  # each layer is 5 m thick
+
+heads = np.full((NLAY, YSIZE, XSIZE), 0, dtype=np.float32)
+for layer in range(NLAY):
+    heads[layer] = topography - 2
+
+
+class DummyGrid:
+    def __init__(self):
+        pass
+
+    def decompress(self, array):
+        return decompress(array, basin_mask)
+
+
+class DummyData:
+    def __init__(self):
+        self.grid = DummyGrid()
+
+
+class DummyModel:
+    def __init__(self):
+        self.simulation_root = tmp_folder / "modflow"
+        self.data = DummyData()
 
 
 default_params = {
@@ -51,10 +84,9 @@ default_params = {
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.4), basin_mask),
     "topography": compress(topography, basin_mask),
-    "bottom_soil": compress(topography - 2, basin_mask),
-    "bottom": compress(topography - np.full((NLAY, YSIZE, XSIZE), 10), basin_mask),
+    "layer_boundary_elevation": compress(layer_boundary_elevation, basin_mask),
     "basin_mask": basin_mask,
-    "head": compress(topography - 2, basin_mask),
+    "heads": compress(heads, basin_mask),
     "hydraulic_conductivity": compress(np.full((NLAY, YSIZE, XSIZE), 1), basin_mask),
     "verbose": True,
 }
@@ -70,9 +102,7 @@ def test_modflow_simulation_initialization():
 
 def test_recharge():
     parameters = default_params.copy()
-    parameters["head"] = compress(
-        topography - 5, basin_mask
-    )  # set head lower than drainage
+    parameters["heads"] = parameters["heads"] - 3  # set head lower than drainage
 
     sim = ModFlowSimulation(**parameters)
 
@@ -99,13 +129,16 @@ def test_recharge():
 
 def test_drainage():
     parameters = default_params.copy()
+    layer_boundary_elevation = parameters["layer_boundary_elevation"]
     topography = np.full((YSIZE, XSIZE), 0)
+
     parameters["topography"] = compress(topography, basin_mask)
-    parameters["bottom_soil"] = compress(topography - 2, basin_mask)
-    parameters["bottom"] = compress(
-        topography - np.full((NLAY, YSIZE, XSIZE), 10), basin_mask
-    )
-    parameters["head"] = compress(topography, basin_mask)
+    parameters["heads"][0] = compress(topography, basin_mask)
+    parameters["heads"][1] = compress(topography, basin_mask)
+
+    layer_boundary_elevation[0] = compress(topography - 2, basin_mask)
+    layer_boundary_elevation[1] = compress(topography - 10, basin_mask)
+    layer_boundary_elevation[2] = compress(topography - 20, basin_mask)
 
     sim = ModFlowSimulation(**parameters)
 
@@ -127,7 +160,8 @@ def test_drainage():
 
     sim.finalize()
 
-    parameters["head"] = parameters["bottom_soil"] - 1
+    parameters["heads"][0] = layer_boundary_elevation[0] - 1
+    parameters["heads"][1] = layer_boundary_elevation[0] - 1
 
     sim = ModFlowSimulation(**parameters)
 
@@ -141,7 +175,10 @@ def test_drainage():
 
 def test_wells():
     parameters = default_params.copy()
-    parameters["head"] = compress(
+    parameters["heads"][0] = compress(
+        topography - 5, basin_mask
+    )  # set head lower than drainage
+    parameters["heads"][1] = compress(
         topography - 5, basin_mask
     )  # set head lower than drainage
 
@@ -174,7 +211,7 @@ def test_wells():
 
 
 def visualize_modflow_results(sim, axes):
-    (ax1, ax2, ax3, ax4) = axes
+    (ax1, ax2, ax3, ax4, ax5) = axes
 
     # Plot topography
     im1 = ax1.imshow(
@@ -188,25 +225,29 @@ def visualize_modflow_results(sim, axes):
     plt.colorbar(im1, ax=ax1, label="Elevation (m)")
 
     # Plot groundwater head
-    im2 = ax2.imshow(decompress(sim.head, sim.basin_mask), cmap="viridis")
-    ax2.set_title("Groundwater Head")
+    im2 = ax2.imshow(decompress(sim.heads[0], sim.basin_mask), cmap="viridis")
+    ax2.set_title("Groundwater Head Top layer")
     plt.colorbar(im2, ax=ax2, label="Head (m)")
 
+    im3 = ax3.imshow(decompress(sim.heads[1], sim.basin_mask), cmap="viridis")
+    ax3.set_title("Groundwater Head Bottom layer")
+    plt.colorbar(im3, ax=ax3, label="Head (m)")
+
     # Plot groundwater depth
-    im3 = ax3.imshow(decompress(sim.groundwater_depth, sim.basin_mask), cmap="RdYlBu")
-    ax3.set_title("Groundwater Depth")
-    plt.colorbar(im3, ax=ax3, label="Depth (m)")
+    im4 = ax4.imshow(decompress(sim.groundwater_depth, sim.basin_mask), cmap="RdYlBu")
+    ax4.set_title("Groundwater Depth")
+    plt.colorbar(im4, ax=ax4, label="Depth (m)")
 
     # Plot drainage
-    im4 = ax4.imshow(decompress(sim.drainage_m, sim.basin_mask), cmap="Blues")
-    ax4.set_title("Drainage")
-    plt.colorbar(im4, ax=ax4, label="Drainage (m/day)")
+    im5 = ax5.imshow(decompress(sim.drainage_m, sim.basin_mask), cmap="Blues")
+    ax5.set_title("Drainage")
+    plt.colorbar(im5, ax=ax5, label="Drainage (m/day)")
 
 
 def test_modflow_simulation_with_visualization():
     sim = ModFlowSimulation(**default_params)
 
-    fig, axes = plt.subplots(5, 4, figsize=(15, 10))
+    fig, axes = plt.subplots(5, 5, figsize=(15, 10))
     plt.tight_layout()
 
     # Run the simulation for a few steps
@@ -228,3 +269,46 @@ def test_modflow_simulation_with_visualization():
 
     sim.finalize()
     plt.savefig(output_folder / "modflow_simulation.png")
+
+
+def test_get_water_table_depth():
+    layer_boundary_elevation = np.array(
+        [
+            [100, 100, 100, 100, 100],
+            [50, 50, 50, 50, 50],
+            [0, 0, 0, 0, 0],
+        ]
+    )
+    head = np.array(
+        [
+            [110, 90, np.nan, np.nan, np.nan],
+            [115, 60, 60, 40, -1],
+        ]
+    )
+    elevation = np.array([103, 103, 103, 103, 103])
+    water_table_depth = get_water_table_depth(layer_boundary_elevation, head, elevation)
+    np.testing.assert_allclose(water_table_depth, np.array([3, 13, 53, 63, 103]))
+
+
+def test_get_groundwater_storage_m():
+    layer_boundary_elevation = np.array(
+        [
+            [100, 100, 100, 100, 100],
+            [50, 50, 50, 50, 50],
+            [0, 0, 0, 0, 0],
+        ]
+    )
+    head = np.array(
+        [
+            [110, 90, np.nan, np.nan, np.nan],
+            [115, 60, 60, 40, -1],
+        ]
+    )
+    specific_yield = np.array(
+        [
+            [0.5, 0.5, 0.5, 0.5, 0.5],
+            [0.25, 0.25, 0.25, 0.25, 0.25],
+        ]
+    )
+    storage = get_groundwater_storage_m(layer_boundary_elevation, head, specific_yield)
+    np.testing.assert_allclose(storage, np.array([37.5, 32.5, 12.5, 10, 0]))

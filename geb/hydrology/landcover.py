@@ -41,7 +41,6 @@ def get_crop_kc_and_root_depths(
     rooth_depths,
     init_root_depth=0.01,
 ):
-
     kc = np.full_like(crop_map, np.nan, dtype=np.float32)
     root_depth = np.full_like(crop_map, np.nan, dtype=np.float32)
     irrigated_fields = irrigated_fields.astype(
@@ -111,9 +110,7 @@ class LandCover(object):
         self.var.actTransTotal = self.var.full_compressed(0, dtype=np.float32)
 
         self.forest_kc_per_10_days = xr.open_dataset(
-            self.model.model_structure["forcing"][
-                "landcover/forest/cropCoefficientForest_10days"
-            ]
+            self.model.files["forcing"]["landcover/forest/cropCoefficientForest_10days"]
         )["cropCoefficientForest_10days"].values
 
     def water_body_exchange(self, groundwater_recharge):
@@ -163,7 +160,6 @@ class LandCover(object):
                     temp_map
                 )  # Index of the cell where the lake outlet is stored
                 if self.model.data.grid.waterBodyTypTemp[discharge_point] != 0:
-
                     if (
                         self.model.data.grid.waterBodyTypTemp[discharge_point] == 1
                     ):  # this is a lake
@@ -403,19 +399,19 @@ class LandCover(object):
         timer.new_split("Sealed")
 
         if self.model.use_gpu:
-            self.var.actual_transpiration_crop[
-                self.var.crop_map != -1
-            ] += self.var.actTransTotal.get()[self.var.crop_map != -1]
-            self.var.potential_transpiration_crop[
-                self.var.crop_map != -1
-            ] += self.var.potTranspiration.get()[self.var.crop_map != -1]
+            self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
+                self.var.actTransTotal.get()[self.var.crop_map != -1]
+            )
+            self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
+                self.var.potTranspiration.get()[self.var.crop_map != -1]
+            )
         else:
-            self.var.actual_transpiration_crop[
-                self.var.crop_map != -1
-            ] += self.var.actTransTotal[self.var.crop_map != -1]
-            self.var.potential_transpiration_crop[
-                self.var.crop_map != -1
-            ] += self.var.potTranspiration[self.var.crop_map != -1]
+            self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
+                self.var.actTransTotal[self.var.crop_map != -1]
+            )
+            self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
+                self.var.potTranspiration[self.var.crop_map != -1]
+            )
 
         assert not np.isnan(interflow).any()
         assert not np.isnan(groundwater_recharge).any()

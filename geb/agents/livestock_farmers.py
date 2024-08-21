@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-from . import AgentBaseClass
 import calendar
 import numpy as np
-from .general import downscale_volume
+from .general import downscale_volume, AgentBaseClass
+
+try:
+    import cupy as cp
+except (ModuleNotFoundError, ImportError):
+    pass
 
 
 class LiveStockFarmers(AgentBaseClass):

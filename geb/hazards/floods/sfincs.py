@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from collections import deque
 from datetime import datetime
@@ -93,9 +92,7 @@ class SFINCS:
                 "config_fn": str(config_fn),
                 "model_root": self.sfincs_model_root(event_name),
                 "data_catalogs": self.data_catalogs,
-                "mask": gpd.read_file(
-                    self.model.model_structure["geoms"]["areamaps/region"]
-                ),
+                "mask": gpd.read_file(self.model.files["geoms"]["areamaps/region"]),
                 "method": "precipitation",
             }
         )
@@ -176,9 +173,9 @@ class SFINCS:
         )
         discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
         sfincs_precipitation = (
-            xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/pr_hourly"]
-            ).rename(pr_hourly="precip")["precip"]
+            xr.open_dataset(self.model.files["forcing"]["climate/pr_hourly"]).rename(
+                pr_hourly="precip"
+            )["precip"]
             * 3600
         )  # convert from kg/m2/s to mm/h for
         sfincs_precipitation.raster.set_crs(
@@ -199,7 +196,7 @@ class SFINCS:
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
-                self.model.model_structure["grid"]["routing/kinematic/upstream_area"]
+                self.model.files["grid"]["routing/kinematic/upstream_area"]
             ).isel(band=0),
         )
         return None

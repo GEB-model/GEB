@@ -13,6 +13,7 @@ The calibration tool was created by Hylke Beck 2014 (JRC, Princeton) hylkeb@prin
 Thanks Hylke for making it available for use and modification
 Modified by Peter Burek and Jens de Bruijn
 """
+
 import os
 import shutil
 import array
@@ -22,19 +23,15 @@ import numpy as np
 from copy import deepcopy
 import signal
 import pandas as pd
-from datetime import timedelta
 import yaml
 import geopandas as gpd
 from deap import creator, base, tools, algorithms
 from functools import wraps, partial
-import json
 
 import multiprocessing
 from subprocess import Popen, PIPE
 
 import pickle
-from honeybees.library.raster import coord_to_pixel, sample_from_map
-import rasterio
 
 SCENARIO = "adaptation"
 
@@ -89,9 +86,6 @@ def get_observed_well_ratio(config):
         / observed_irrigation_sources.area.values
     ).values
 
-    ANALYSIS_THRESHOLD = 0.5
-
-    # observed_irrigation_sources = observed_irrigation_sources[observed_irrigation_sources['area_in_region_mask'] > ANALYSIS_THRESHOLD]
     observed_irrigation_sources = observed_irrigation_sources.join(
         simulated_subdistricts["region_id"]
     )
@@ -126,92 +120,94 @@ def multi_set(dict_obj, value, *attrs):
     d = dict_obj
     for attr in attrs[:-1]:
         d = d[attr]
-    if not attrs[-1] in d:
+    if attrs[-1] not in d:
         raise KeyError(f"Key {attrs} does not exist in config file.")
     d[attrs[-1]] = value
 
 
 def get_irrigation_wells_score(run_directory, individual, config):
-    regions = np.load(
-        os.path.join(
-            run_directory,
-            config["calibration"]["scenario"],
-            "region_id",
-            "20110101T000000.npz",
-        )
-    )["data"]
-    field_size = np.load(
-        os.path.join(
-            run_directory,
-            config["calibration"]["scenario"],
-            "field_size",
-            "20110101T000000.npz",
-        )
-    )["data"]
-    irrigation_source = np.load(
-        os.path.join(
-            run_directory,
-            config["calibration"]["scenario"],
-            "irrigation_source",
-            "20110101T000000.npz",
-        )
-    )["data"]
+    # TODO: Fix this function
+    pass
+    # regions = np.load(
+    #     os.path.join(
+    #         run_directory,
+    #         config["calibration"]["scenario"],
+    #         "region_id",
+    #         "20110101T000000.npz",
+    #     )
+    # )["data"]
+    # field_size = np.load(
+    #     os.path.join(
+    #         run_directory,
+    #         config["calibration"]["scenario"],
+    #         "field_size",
+    #         "20110101T000000.npz",
+    #     )
+    # )["data"]
+    # irrigation_source = np.load(
+    #     os.path.join(
+    #         run_directory,
+    #         config["calibration"]["scenario"],
+    #         "irrigation_source",
+    #         "20110101T000000.npz",
+    #     )
+    # )["data"]
 
-    well_irrigated = np.isin(
-        irrigation_source,
-        [irrigation_source_key["well"], irrigation_source_key["tubewell"]],
-    )
-    # Calculate the ratio of farmers with a well per tehsil
-    farmers_per_region = np.bincount(regions)
-    well_irrigated_per_tehsil = np.bincount(regions, weights=well_irrigated)
-    minimum_farmer_mask = np.where(farmers_per_region > 100)
-    ratio_well_irrigated = (
-        well_irrigated_per_tehsil[minimum_farmer_mask]
-        / farmers_per_region[minimum_farmer_mask]
-    )
+    # well_irrigated = np.isin(
+    #     irrigation_source,
+    #     [irrigation_source_key["well"], irrigation_source_key["tubewell"]],
+    # )
+    # # Calculate the ratio of farmers with a well per tehsil
+    # farmers_per_region = np.bincount(regions)
+    # well_irrigated_per_tehsil = np.bincount(regions, weights=well_irrigated)
+    # minimum_farmer_mask = np.where(farmers_per_region > 100)
+    # ratio_well_irrigated = (
+    #     well_irrigated_per_tehsil[minimum_farmer_mask]
+    #     / farmers_per_region[minimum_farmer_mask]
+    # )
 
-    well_irrigated = np.isin(
-        irrigation_source,
-        [irrigation_source_key["well"], irrigation_source_key["tubewell"]],
-    )
-    # Calculate the ratio of farmers with a well per tehsil
-    farmers_per_region = np.bincount(regions)
-    well_irrigated_per_tehsil = np.bincount(regions, weights=well_irrigated)
-    ratio_well_irrigated = well_irrigated_per_tehsil / farmers_per_region
+    # well_irrigated = np.isin(
+    #     irrigation_source,
+    #     [irrigation_source_key["well"], irrigation_source_key["tubewell"]],
+    # )
+    # # Calculate the ratio of farmers with a well per tehsil
+    # farmers_per_region = np.bincount(regions)
+    # well_irrigated_per_tehsil = np.bincount(regions, weights=well_irrigated)
+    # ratio_well_irrigated = well_irrigated_per_tehsil / farmers_per_region
 
-    ratio_holdings_with_well_observed = ratio_holdings_with_well_observed[
-        minimum_farmer_mask[0]
-    ].values
-    ratio_holdings_with_well_simulated = ratio_well_irrigated
+    # ratio_holdings_with_well_observed = ratio_holdings_with_well_observed[
+    #     minimum_farmer_mask[0]
+    # ].values
+    # ratio_holdings_with_well_simulated = ratio_well_irrigated
 
-    minimum_well_mask = np.where(ratio_holdings_with_well_observed > 0.01)
+    # minimum_well_mask = np.where(ratio_holdings_with_well_observed > 0.01)
 
-    irrigation_well_score = 1 - abs(
-        (
-            (ratio_holdings_with_well_simulated - ratio_holdings_with_well_observed)
-            / ratio_holdings_with_well_observed
-        )
-    )
+    # irrigation_well_score = 1 - abs(
+    #     (
+    #         (ratio_holdings_with_well_simulated - ratio_holdings_with_well_observed)
+    #         / ratio_holdings_with_well_observed
+    #     )
+    # )
 
-    total_farmers = farmers_per_region.sum()
-    farmers_fraction = farmers_per_region[minimum_farmer_mask] / total_farmers
+    # total_farmers = farmers_per_region.sum()
+    # farmers_fraction = farmers_per_region[minimum_farmer_mask] / total_farmers
 
-    irrigation_well_score = float(
-        np.sum(
-            irrigation_well_score[minimum_well_mask]
-            * farmers_fraction[minimum_well_mask]
-        )
-    )
-    print(
-        "run_id: "
-        + str(individual.label)
-        + ", IWS: "
-        + "{0:.3f}".format(irrigation_well_score)
-    )
-    with open(
-        os.path.join(config["calibration"]["path"], "IWS_log.csv"), "a"
-    ) as myfile:
-        myfile.write(str(individual.label) + "," + str(irrigation_well_score) + "\n")
+    # irrigation_well_score = float(
+    #     np.sum(
+    #         irrigation_well_score[minimum_well_mask]
+    #         * farmers_fraction[minimum_well_mask]
+    #     )
+    # )
+    # print(
+    #     "run_id: "
+    #     + str(individual.label)
+    #     + ", IWS: "
+    #     + "{0:.3f}".format(irrigation_well_score)
+    # )
+    # with open(
+    #     os.path.join(config["calibration"]["path"], "IWS_log.csv"), "a"
+    # ) as myfile:
+    #     myfile.write(str(individual.label) + "," + str(irrigation_well_score) + "\n")
 
 
 def get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow):
@@ -415,6 +411,10 @@ def run_model(individual, config, gauges, observed_streamflow):
         # If the directory does not exist, set runmodel to True
         runmodel = True
 
+    if runmodel:
+        # TODO: Template is not correctly loaded
+        template = None
+
         # set the map from which to get the yield ratio - SPEI relations as the map of the generation's first run
         template["general"]["load_pre_spinup"] = config["calibration"][
             "load_pre_spinup"
@@ -436,6 +436,10 @@ def run_model(individual, config, gauges, observed_streamflow):
         template["general"]["report_folder"] = run_directory
         template["general"]["initial_conditions_folder"] = os.path.join(
             run_directory, "initial"
+        )
+
+        individual_parameter_ratio = (
+            None  # TODO: this parameter is not well loaded below and should be fixed
         )
 
         # Create a dictionary of the individual's parameters
@@ -465,9 +469,9 @@ def run_model(individual, config, gauges, observed_streamflow):
                 initial_conditions_path = os.path.join(
                     run_directory, "..", initial_run_label, "initial_conditions"
                 )
-                template["general"][
-                    "initial_relations_folder"
-                ] = initial_conditions_path
+                template["general"]["initial_relations_folder"] = (
+                    initial_conditions_path
+                )
             else:
                 template["general"]["initial_relations_folder"] = os.path.join(
                     run_directory, "initial_conditions"

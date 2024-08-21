@@ -4,6 +4,7 @@
 """
 Sensitivity analysis for the GEB model
 """
+
 import os
 import shutil
 import random
@@ -67,7 +68,7 @@ def multi_set(dict_obj, value, *attrs):
     d = dict_obj
     for attr in attrs[:-1]:
         d = d[attr]
-    if not attrs[-1] in d:
+    if attrs[-1] not in d:
         raise KeyError(f"Key {attrs} does not exist in config file.")
 
     # Check if the value is a numpy scalar and convert it if necessary

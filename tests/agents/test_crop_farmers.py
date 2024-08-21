@@ -18,8 +18,9 @@ def test_cumulative_mean():
     assert mean == 4.5
 
     # test normal operation
-    cumulative_mean_, cumulative_count = np.array([0], dtype=np.float32), np.array(
-        [0], dtype=np.float32
+    cumulative_mean_, cumulative_count = (
+        np.array([0], dtype=np.float32),
+        np.array([0], dtype=np.float32),
     )
     for item in a:
         cumulative_mean(cumulative_mean_, cumulative_count, item)

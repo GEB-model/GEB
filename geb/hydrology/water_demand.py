@@ -54,9 +54,7 @@ class WaterDemand:
         self.reservoir_operators = model.agents.reservoir_operators
 
         with rasterio.open(
-            self.model.model_structure["subgrid"][
-                "routing/lakesreservoirs/subcommand_areas"
-            ],
+            self.model.files["subgrid"]["routing/lakesreservoirs/subcommand_areas"],
             "r",
         ) as src:
             reservoir_command_areas = self.var.compress(src.read(1), method="last")
@@ -188,7 +186,6 @@ class WaterDemand:
             self.model.data.grid.channelStorageM3.copy(),
             available_reservoir_storage_m3,
             self.model.groundwater.groundwater_content_m3,
-            self.model.groundwater.modflow.head,
         )
 
     def withdraw(self, source, demand):
@@ -226,7 +223,6 @@ class WaterDemand:
             available_channel_storage_m3,
             available_reservoir_storage_m3,
             available_groundwater_m,
-            groundwater_head,
         ) = self.get_available_water()
 
         available_groundwater_m3 = self.model.data.grid.MtoM3(available_groundwater_m)
@@ -303,8 +299,7 @@ class WaterDemand:
             potential_infiltration_capacity=potential_infiltration_capacity,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
-            groundwater_head=groundwater_head,
-            groundwater_depth=self.model.groundwater.groundwater_depth,
+            groundwater_depth=self.model.groundwater.modflow.groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             command_areas=(
                 self.var.reservoir_command_areas.get()

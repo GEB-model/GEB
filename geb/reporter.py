@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `model.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`). 
-
-"""
+"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `model.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`)."""
 
 import os
 import pandas as pd
@@ -9,9 +7,7 @@ from collections.abc import Iterable
 import numpy as np
 import re
 import xarray as xr
-import rioxarray as rxr
-import rasterio
-from honeybees.library.raster import coord_to_pixel, sample_from_map
+from honeybees.library.raster import coord_to_pixel
 from pathlib import Path
 import netCDF4
 
@@ -54,7 +50,7 @@ class hydrology_reporter(ABMReporter):
                         config["absolute_path"] = str(netcdf_path)
                         if netcdf_path.exists():
                             netcdf_path.unlink()
-                        if not "time_ranges" in config:
+                        if "time_ranges" not in config:
                             if "substeps" in config:
                                 time = pd.date_range(
                                     start=self.model.current_time,
@@ -292,7 +288,7 @@ class hydrology_reporter(ABMReporter):
                     if array.size == 0:
                         value = None
                     else:
-                        if conf["function"] == None:
+                        if conf["function"] is None:
                             value = self.decompress(conf["varname"], array)
                         else:
                             function, *args = conf["function"].split(",")
@@ -393,4 +389,4 @@ class Reporter:
         """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.report()
         self.hydrology_reporter.report()
-        print(f"Reported data")
+        print("Reported data")

@@ -84,7 +84,7 @@ class Interception(object):
         self.interception = {}
         for coverType in ("forest", "grassland"):
             ds = xr.open_dataset(
-                self.model.model_structure["forcing"][
+                self.model.files["forcing"][
                     f"landcover/{coverType}/interceptCap{coverType.title()}_10days"
                 ]
             )

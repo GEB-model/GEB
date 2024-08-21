@@ -54,7 +54,7 @@ class Hydrology:
         self.crop_factor_calibration_factor = 1
 
         elevation_std = self.data.grid.load(
-            self.model_structure["grid"]["landsurface/topo/elevation_STD"]
+            self.files["grid"]["landsurface/topo/elevation_STD"]
         )
         elevation_std = self.data.to_HRU(data=elevation_std, fn=None)
 

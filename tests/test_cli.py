@@ -4,16 +4,6 @@ from click.testing import CliRunner
 from .setup import IN_GITHUB_ACTIONS
 from geb.cli import (
     multi_level_merge,
-    spinup,
-    run,
-    build,
-    alter,
-    update,
-    calibrate,
-    sensitivity,
-    multirun,
-    share,
-    evaluate,
 )
 
 

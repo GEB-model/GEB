@@ -160,15 +160,9 @@ class Model:
             temperature,
         )
 
-        soil_specific_depletion_1 = (
-            np.nan
-        )  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
-        soil_specific_depletion_2 = (
-            np.nan
-        )  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
-        soil_specific_depletion_3 = (
-            np.nan
-        )  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
+        soil_specific_depletion_1 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
+        soil_specific_depletion_2 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
+        soil_specific_depletion_3 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
 
         evapotranspiration = evapotranspiration / 1000  # kg H2O/m2/day to m/day
 

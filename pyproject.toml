@@ -33,6 +33,7 @@ dependencies = [
     "tbb",
     "xmipy",
     "xarray",
+    "zarr",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -51,8 +52,9 @@ dynamic = ['version', 'description']
 name = "geb"
 
 [project.optional-dependencies]
-tests = [
-    "pytest"
+dev = [
+    "pytest",
+    "ruff",
 ]
 docs = [
     "sphinx",
