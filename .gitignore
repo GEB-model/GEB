@@ -1,5 +1,6 @@
 # Custom
 .vscode
+.ruff_cache
 .nfs*
 .DS_Store
 workspaces/
