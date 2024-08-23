@@ -1,3 +1,4 @@
+import shutil
 import numpy as np
 import pandas as pd
 from datetime import date
@@ -10,10 +11,11 @@ from geb.workflows import (
 from .setup import tmp_folder
 
 
-def netcdf_file(varname):
+def zarr_file(varname):
     size = 100
-    # Create a temporary NetCDF file for testing
-    filename = tmp_folder / f"{varname}.nc"
+    # Create a temporary zarr file for testing
+    zarr = tmp_folder / f"{varname}.zarr"
+    shutil.rmtree(zarr, ignore_errors=True)
 
     periods = 5
 
@@ -28,14 +30,14 @@ def netcdf_file(varname):
         coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)},
     )
 
-    ds.to_netcdf(filename)
-    return filename
+    ds.to_zarr(zarr)
+    return zarr
 
 
 def test_read_timestep():
-    temperature_file = netcdf_file("temperature")
-    precipitation_file = netcdf_file("precipitation")
-    pressure_file = netcdf_file("pressure")
+    temperature_file = zarr_file("temperature")
+    precipitation_file = zarr_file("precipitation")
+    pressure_file = zarr_file("pressure")
     reader1 = AsyncXarrayReader(temperature_file, variable_name="temperature")
     reader2 = AsyncXarrayReader(precipitation_file, variable_name="precipitation")
     reader3 = AsyncXarrayReader(pressure_file, variable_name="pressure")
@@ -99,6 +101,6 @@ def test_read_timestep():
     reader2.close()
     reader3.close()
 
-    temperature_file.unlink()
-    precipitation_file.unlink()
-    pressure_file.unlink()
+    shutil.rmtree(temperature_file)
+    shutil.rmtree(precipitation_file)
+    shutil.rmtree(pressure_file)
