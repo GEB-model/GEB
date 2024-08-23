@@ -85,6 +85,7 @@ default_params = {
     "heads": compress(heads, basin_mask),
     "hydraulic_conductivity": compress(np.full((NLAY, YSIZE, XSIZE), 1), basin_mask),
     "verbose": True,
+    "never_load_from_disk": True,
 }
 
 
@@ -135,7 +136,7 @@ def test_recharge():
 
     groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
 
-    recharge = np.full((YSIZE, XSIZE), 0.01)
+    recharge = np.full((YSIZE, XSIZE), 0.1)
     sim.set_recharge_m(compress(recharge, sim.basin_mask))
     sim.step()
 
@@ -149,10 +150,30 @@ def test_recharge():
     balance_pre = groundwater_content_prev + recharge_m3 - drainage_m3
     balance_post = groundwater_content
 
-    print("drainge", drainage_m3)
-    print("recharge", recharge_m3)
-    print("groundwater_content", groundwater_content)
-    print("groundwater_content_prev", groundwater_content_prev)
+    assert math.isclose(balance_pre, balance_post, abs_tol=1, rel_tol=1e-5)
+
+    sim.finalize()
+
+    parameters = deepcopy(default_params)
+    parameters["heads"] = parameters["heads"] - 8.1  # set head below topography
+
+    sim = ModFlowSimulation(**parameters)
+
+    groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
+
+    recharge = np.full((YSIZE, XSIZE), 0.1)
+    sim.set_recharge_m(compress(recharge, sim.basin_mask))
+    sim.step()
+
+    drainage_m3 = np.nansum(sim.drainage_m3)
+    assert np.nansum(drainage_m3) == 0
+    groundwater_content = np.nansum(sim.groundwater_content_m3)
+
+    assert np.nansum(sim.recharge_m) == np.nansum(sim.recharge_m3 / sim.area)
+
+    recharge_m3 = np.nansum(sim.recharge_m3)
+    balance_pre = groundwater_content_prev + recharge_m3 - drainage_m3
+    balance_post = groundwater_content
 
     assert math.isclose(balance_pre, balance_post, abs_tol=1, rel_tol=1e-5)
 

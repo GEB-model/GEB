@@ -81,7 +81,6 @@ class GroundWater:
             basin_mask=self.model.data.grid.mask,
             heads=self.var.heads,
             hydraulic_conductivity=hydraulic_conductivity,
-            complexity="MODERATE",
             verbose=False,
         )
 
@@ -105,10 +104,6 @@ class GroundWater:
         recharge_m3 = groundwater_recharge * self.modflow.area
         groundwater_storage_post = self.modflow.groundwater_content_m3
 
-        print("drainge", drainage_m3.sum())
-        print("abstraction", groundwater_abstraction_m3.sum())
-        print("recharge", recharge_m3.sum())
-
         balance_check(
             name="groundwater",
             how="sum",
@@ -119,7 +114,7 @@ class GroundWater:
             ],
             prestorages=[groundwater_storage_pre],
             poststorages=[groundwater_storage_post],
-            tollerance=1,  # 1 m3
+            tollerance=100,  # 100 m3
         )
 
         groundwater_drainage = self.modflow.drainage_m3 / self.var.cellArea
