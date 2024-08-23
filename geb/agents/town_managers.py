@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from . import AgentBaseClass
+from .general import AgentBaseClass
 
 
 class TownManagers(AgentBaseClass):

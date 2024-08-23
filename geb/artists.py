@@ -218,7 +218,7 @@ class Artists(honeybeesArtists):
 
             mask = self.model.data.HRU.mask
         else:
-            compressed_array, array = self.model.reporter.cwatmreporter.get_array(
+            compressed_array, array = self.model.reporter.hydrology_reporter.get_array(
                 self.background_variable, decompress=True
             )
             mask = attrgetter(".".join(self.background_variable.split(".")[:-1]))(

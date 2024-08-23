@@ -1,8 +1,5 @@
 from numba.core.decorators import njit
 import numpy as np
-from scipy import interpolate
-import matplotlib.pyplot as plt
-from typing import Optional
 
 
 class DecisionModule:
@@ -114,7 +111,7 @@ class DecisionModule:
         perc_risk = p_droughts.repeat(n_agents).reshape(p_droughts.size, n_agents)
 
         # If
-        if subjective == True:
+        if subjective:
             perc_risk *= risk_perception
 
         p_all_events[1:-2, :] = perc_risk

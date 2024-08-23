@@ -20,7 +20,7 @@ from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
 from geb.HRUs import Data
-from cwatm.model import CWatM
+from .hydrology import Hydrology
 from geb.hazards.driver import HazardDriver
 
 
@@ -68,7 +68,7 @@ class ABM(ABM_Model):
         timeprint("Finished setup")
 
 
-class GEBModel(HazardDriver, ABM, CWatM):
+class GEBModel(HazardDriver, ABM, Hydrology):
     """GEB parent class.
 
     Args:
@@ -87,7 +87,7 @@ class GEBModel(HazardDriver, ABM, CWatM):
     def __init__(
         self,
         config: dict,
-        model_structure: dict,
+        files: dict,
         spinup: bool = False,
         use_gpu: bool = False,
         gpu_device=0,
@@ -117,8 +117,8 @@ class GEBModel(HazardDriver, ABM, CWatM):
             self.config["report"] = {}
 
         # make a deep copy to avoid issues when the model is initialized multiple times
-        self.model_structure = copy.deepcopy(model_structure)
-        for data in self.model_structure.values():
+        self.files = copy.deepcopy(files)
+        for data in self.files.values():
             for key, value in data.items():
                 data[key] = Path(config["general"]["input_folder"]) / value
 
@@ -177,16 +177,16 @@ class GEBModel(HazardDriver, ABM, CWatM):
         assert isinstance(current_time, datetime.datetime)
 
         timestep_length = datetime.timedelta(days=1)
+        self.seconds_per_timestep = timestep_length.total_seconds()
         n_timesteps = (end_time - current_time) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
         assert n_timesteps > 0, "End time is before or identical to start time"
 
-        self.regions = gpd.read_file(self.model_structure["geoms"]["areamaps/regions"])
+        self.regions = gpd.read_file(self.files["geoms"]["areamaps/regions"])
         self.data = Data(self)
 
         if self.mode == "w":
-
             HazardDriver.__init__(self)
 
             ABM.__init__(
@@ -198,7 +198,7 @@ class GEBModel(HazardDriver, ABM, CWatM):
             )
 
             if self.config["general"]["simulate_hydrology"]:
-                CWatM.__init__(
+                Hydrology.__init__(
                     self,
                 )
 
@@ -240,7 +240,7 @@ class GEBModel(HazardDriver, ABM, CWatM):
             HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
             if self.config["general"]["simulate_hydrology"]:
-                CWatM.step(self)
+                Hydrology.step(self)
 
             self.reporter.step()
             t1 = time()
@@ -283,7 +283,7 @@ class GEBModel(HazardDriver, ABM, CWatM):
     def close(self) -> None:
         """Finalizes the model."""
         if self.mode == "w" and self.config["general"]["simulate_hydrology"]:
-            CWatM.finalize(self)
+            Hydrology.finalize(self)
 
             from geb.workflows import all_async_readers
 

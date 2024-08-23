@@ -1,0 +1,97 @@
+setup_grid:
+  hydrography_fn: merit_hydro_30sec
+  basin_index_fn: merit_hydro_index
+  sub_grid_factor: 20
+
+setup_cell_area_map:
+
+setup_regions_and_land_use:
+  region_database: gadm_level1
+  ISO3_column: GID_0
+  unique_region_id: UID
+  river_threshold: 100
+
+setup_mannings:
+
+setup_channel_width:
+  minimum_width: 3
+
+setup_channel_depth:
+
+setup_channel_ratio:
+
+setup_elevation:
+
+setup_soil_parameters:
+
+setup_land_use_parameters:
+
+setup_waterbodies:
+  command_areas: null
+  custom_reservoir_capacity: null
+
+setup_water_demand:
+  starttime: 1961-01-01
+  endtime: 2060-12-31
+  ssp: ssp2
+
+setup_groundwater:
+
+setup_economic_data:
+
+setup_well_prices_by_reference_year:
+  borewell_cost_1: 486.33
+  borewell_cost_2: 0.00824
+  pump_cost: 3570
+  irrigation_maintenance: 6598
+  electricity_cost: 4
+  reference_year: 2018
+  start_year: 1960
+  end_year: 2020
+
+setup_drip_irrigation_prices_by_reference_year:
+  drip_irrigation_price: 40000
+  upkeep_price_per_m2: 0
+  reference_year: 2021
+  start_year: 1960
+  end_year: 2020
+
+setup_irrigation_sources:
+  irrigation_sources:
+    "no": -1
+    canal: 0
+    well: 1
+
+setup_create_farms_simple:
+
+setup_crops_from_source:
+  source: MIRCA2000
+
+setup_farmer_characteristics_simple:
+  risk_aversion_mean: 2
+  risk_aversion_standard_deviation: 1
+  discount_rate: 0.05
+  interest_rate: 0.05
+  irrigation_choice:
+    canal: 80
+    well: 20
+
+setup_cultivation_costs:
+  cultivation_costs: 100
+
+setup_crop_prices:
+  crop_prices: 200
+
+setup_population:
+
+setup_assets:
+  feature_types: buildings
+
+# setup_forcing:
+#   data_source: era5
+#   starttime: 2000-01-01
+#   endtime: 2023-12-31
+
+# setup_SPEI:
+#   calibration_period_start: 2000-01-01
+#   calibration_period_end: 2020-12-31

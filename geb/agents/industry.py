@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-from . import AgentBaseClass
 import calendar
 import numpy as np
 
-from .general import downscale_volume
+try:
+    import cupy as cp
+except (ModuleNotFoundError, ImportError):
+    pass
+from .general import downscale_volume, AgentBaseClass
 
 
 class Industry(AgentBaseClass):

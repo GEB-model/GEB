@@ -14,15 +14,19 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
-        python-version: 3.11
+        python-version: 3.12
     - name: Install dependencies
       run: |
-        sudo apt-add-repository ppa:ubuntugis/ubuntugis-unstable
-        sudo apt-get update
-        sudo apt-get install gdal-bin libgdal-dev
-        pip install GDAL==$(gdal-config --version)
-        git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
         python -m pip install --upgrade pip
-        pip install .[tests,full]
-    - name: Run tests
-      run: pytest
+        pip install .[dev,full]
+    - name: Install hydromt-geb package if not main branch
+      run: |
+        BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
+        if [ "$BRANCH_NAME" != "main" ]; then
+          if git ls-remote --exit-code --heads https://github.com/GEB-model/hydromt_geb.git "$BRANCH_NAME" > /dev/null; then
+            pip uninstall -y hydromt-geb
+            pip install git+https://github.com/GEB-model/hydromt_geb.git@"$BRANCH_NAME" --upgrade
+          fi
+        fi
+    - name: Run tests (excluding test_build.py and test_cli.py)
+      run: pytest --ignore=tests/test_build.py

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from . import AgentBaseClass
+from .general import AgentBaseClass
 
 
 class Government(AgentBaseClass):
@@ -26,7 +26,7 @@ class Government(AgentBaseClass):
         pass
 
     def provide_subsidies(self) -> None:
-        if not "subsidies" in self.config:
+        if "subsidies" not in self.config:
             return None
         if self.model.current_timestep == 1:
             for region in self.agents.crop_farmers.borewell_cost_1[1].keys():
@@ -43,7 +43,7 @@ class Government(AgentBaseClass):
         pass
 
     def set_irrigation_limit(self) -> None:
-        if not "irrigation_limit" in self.config:
+        if "irrigation_limit" not in self.config:
             return None
         irrigation_limit = self.config["irrigation_limit"]
         if irrigation_limit["per"] == "capita":

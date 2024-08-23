@@ -4,8 +4,6 @@ from datetime import datetime
 import json
 import calendar
 from typing import Tuple, Union
-import matplotlib.pyplot as plt
-from honeybees.library.raster import sample_from_map
 
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
@@ -13,9 +11,10 @@ from scipy.optimize import curve_fit
 import numpy as np
 from numba import njit
 
+from ..workflows import balance_check
+
 from honeybees.library.mapIO import MapReader
-from . import AgentBaseClass
-from honeybees.library.raster import pixels_to_coords
+from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 
 from ..data import (
@@ -24,7 +23,7 @@ from ..data import (
     load_economic_data,
 )
 from .decision_module import DecisionModule
-from .general import AgentArray
+from .general import AgentArray, AgentBaseClass
 
 
 def cumulative_mean(mean, counter, update, mask=None):
@@ -443,9 +442,9 @@ def abstract_water(
             irrigation_efficiency_farmer = irrigation_efficiency[farmer]
 
             # Calculate the potential irrigation consumption for the farmer
-            if field_is_paddy_irrigated[farmer_fields][0] == True:
+            if field_is_paddy_irrigated[farmer_fields][0]:
                 # make sure all fields are paddy irrigateds
-                assert (field_is_paddy_irrigated[farmer_fields] == True).all()
+                assert (field_is_paddy_irrigated[farmer_fields]).all()
                 # always irrigate to 0.05 m for paddy fields
                 potential_irrigation_consumption_m = (
                     max_paddy_water_level - paddy_level[farmer_fields]
@@ -456,7 +455,7 @@ def abstract_water(
                 ] = 0
             else:
                 # assert none of the fiels are paddy irrigated
-                assert (field_is_paddy_irrigated[farmer_fields] == False).all()
+                assert (~field_is_paddy_irrigated[farmer_fields]).all()
                 # if soil moisture content falls below critical level, irrigate to field capacity
                 potential_irrigation_consumption_m = np.where(
                     readily_available_water[farmer_fields]
@@ -482,7 +481,6 @@ def abstract_water(
 
             # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
             if potential_irrigation_consumption_farmer_m3 > 0.0:
-
                 # if irrigation limit is active, reduce the irrigation demand
                 if not np.isnan(remaining_irrigation_limit_m3[farmer]):
                     adjust_irrigation_to_limit(
@@ -521,7 +519,7 @@ def abstract_water(
 
                             # command areas
                             command_area = command_areas[field]
-                            if command_area >= 0:  # -1 means no command area
+                            if command_area != -1:  # -1 means no command area
                                 irrigation_water_demand_field = withdraw_reservoir(
                                     command_area=command_area,
                                     field=field,
@@ -677,15 +675,15 @@ def plant(
             )
             for i in range(4):
                 if all_loans_annual_cost[farmer_idx, 0, i] == 0:
-                    all_loans_annual_cost[
-                        farmer_idx, 0, i
-                    ] += annual_cost_input_loan  # Add the amount to the input specific loan
+                    all_loans_annual_cost[farmer_idx, 0, i] += (
+                        annual_cost_input_loan  # Add the amount to the input specific loan
+                    )
                     loan_tracker[farmer_idx, 0, i] = loan_duration
                     break  # Exit the loop after adding to the first zero value
 
-            all_loans_annual_cost[
-                farmer_idx, -1, 0
-            ] += annual_cost_input_loan  # Add the amount to the total loan amount
+            all_loans_annual_cost[farmer_idx, -1, 0] += (
+                annual_cost_input_loan  # Add the amount to the total loan amount
+            )
 
             for field in farmer_fields:
                 # a crop is still growing here.
@@ -721,7 +719,7 @@ class CropFarmers(AgentBaseClass):
         self.decision_module = DecisionModule(self)
 
         self.HRU_n = len(self.var.land_owners)
-        self.crop_data_type, self.crop_data = load_crop_data(self.model.model_structure)
+        self.crop_data_type, self.crop_data = load_crop_data(self.model.files)
         self.crop_ids = self.crop_data["name"].to_dict()
         # reverse dictionary
         self.crop_names = {
@@ -740,28 +738,28 @@ class CropFarmers(AgentBaseClass):
         ]["expenditure_cap"]
 
         self.inflation_rate = load_economic_data(
-            self.model.model_structure["dict"]["economics/inflation_rates"]
+            self.model.files["dict"]["economics/inflation_rates"]
         )
         self.lending_rate = load_economic_data(
-            self.model.model_structure["dict"]["economics/lending_rates"]
+            self.model.files["dict"]["economics/lending_rates"]
         )
 
         # India specific old well variables
         # Well cost variables
         self.borewell_cost_1 = load_economic_data(
-            self.model.model_structure["dict"]["economics/borewell_cost_1"]
+            self.model.files["dict"]["economics/borewell_cost_1"]
         )
         self.borewell_cost_2 = load_economic_data(
-            self.model.model_structure["dict"]["economics/borewell_cost_2"]
+            self.model.files["dict"]["economics/borewell_cost_2"]
         )
         self.pump_cost = load_economic_data(
-            self.model.model_structure["dict"]["economics/pump_cost"]
+            self.model.files["dict"]["economics/pump_cost"]
         )
         self.irrigation_maintenance = load_economic_data(
-            self.model.model_structure["dict"]["economics/irrigation_maintenance"]
+            self.model.files["dict"]["economics/irrigation_maintenance"]
         )
         self.electricity_cost = load_economic_data(
-            self.model.model_structure["dict"]["economics/electricity_cost"]
+            self.model.files["dict"]["economics/electricity_cost"]
         )
 
         self.max_paddy_water_level = 0.05
@@ -868,9 +866,7 @@ class CropFarmers(AgentBaseClass):
         self.n_loans = 4
 
         self.elevation_subgrid = MapReader(
-            fp=self.model.model_structure["MERIT_grid"][
-                "landsurface/topo/subgrid_elevation"
-            ],
+            fp=self.model.files["MERIT_grid"]["landsurface/topo/subgrid_elevation"],
             xmin=self.model.xmin,
             ymin=self.model.ymin,
             xmax=self.model.xmax,
@@ -878,7 +874,7 @@ class CropFarmers(AgentBaseClass):
         )
         self.elevation_grid = self.model.data.grid.compress(
             MapReader(
-                fp=self.model.model_structure["grid"]["landsurface/topo/elevation"],
+                fp=self.model.files["grid"]["landsurface/topo/elevation"],
                 xmin=self.model.xmin,
                 ymin=self.model.ymin,
                 xmax=self.model.xmax,
@@ -887,13 +883,13 @@ class CropFarmers(AgentBaseClass):
         )
 
         with open(
-            self.model.model_structure["dict"]["agents/farmers/irrigation_sources"], "r"
+            self.model.files["dict"]["agents/farmers/irrigation_sources"], "r"
         ) as f:
             self.irrigation_source_key = json.load(f)
 
         # load map of all subdistricts
         self.subdistrict_map = MapReader(
-            fp=self.model.model_structure["region_subgrid"]["areamaps/region_subgrid"],
+            fp=self.model.files["region_subgrid"]["areamaps/region_subgrid"],
             xmin=self.model.xmin,
             ymin=self.model.ymin,
             xmax=self.model.xmax,
@@ -982,28 +978,28 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
         self.risk_aversion[:] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/risk_aversion"]
+            self.model.files["binary"]["agents/farmers/risk_aversion"]
         )["data"]
 
         self.interest_rate = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
         self.interest_rate[:] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/interest_rate"]
+            self.model.files["binary"]["agents/farmers/interest_rate"]
         )["data"]
 
         self.discount_rate = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
         self.discount_rate[:] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/discount_rate"]
+            self.model.files["binary"]["agents/farmers/discount_rate"]
         )["data"]
 
         # Load the region_code of each farmer.
         self.region_id = AgentArray(
-            input_array=np.load(
-                self.model.model_structure["binary"]["agents/farmers/region_id"]
-            )["data"],
+            input_array=np.load(self.model.files["binary"]["agents/farmers/region_id"])[
+                "data"
+            ],
             max_n=self.max_n,
         )
 
@@ -1064,7 +1060,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=-1,
         )  # first dimension is the farmers, second is the rotation, third is the crop, planting and growing length
         self.crop_calendar[:] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/crop_calendar"]
+            self.model.files["binary"]["agents/farmers/crop_calendar"]
         )["data"]
         assert self.crop_calendar[:, :, 0].max() < len(self.crop_ids)
 
@@ -1075,9 +1071,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
         self.crop_calendar_rotation_years[:] = np.load(
-            self.model.model_structure["binary"][
-                "agents/farmers/crop_calendar_rotation_years"
-            ]
+            self.model.files["binary"]["agents/farmers/crop_calendar_rotation_years"]
         )["data"]
 
         self.current_crop_calendar_rotation_year_index = AgentArray(
@@ -1094,9 +1088,9 @@ class CropFarmers(AgentBaseClass):
 
         # Set irrigation source
         self.irrigation_source = AgentArray(
-            np.load(
-                self.model.model_structure["binary"]["agents/farmers/irrigation_source"]
-            )["data"],
+            np.load(self.model.files["binary"]["agents/farmers/irrigation_source"])[
+                "data"
+            ],
             max_n=self.max_n,
         )
         # set the adaptation of wells to 1 if farmers have well
@@ -1187,15 +1181,18 @@ class CropFarmers(AgentBaseClass):
 
         ## Base initial wealth on x days of daily expenses, sort of placeholder
         self.household_size = AgentArray(
-            np.load(
-                self.model.model_structure["binary"]["agents/farmers/household_size"]
-            )["data"],
+            np.load(self.model.files["binary"]["agents/farmers/household_size"])[
+                "data"
+            ],
             max_n=self.max_n,
         )
 
         # set no irrigation limit for farmers by default
         self.irrigation_limit_m3 = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan  # m3
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,  # m3
         )
         # set the remaining irrigation limit to the irrigation limit
         self.remaining_irrigation_limit_m3 = AgentArray(
@@ -1216,6 +1213,20 @@ class CropFarmers(AgentBaseClass):
             max_n=self.max_n,
             dtype=np.float32,
             fill_value=1,
+        )
+
+        self.yield_total_per_farmer = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+
+        self.harvested_crop = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.int32,
+            fill_value=-1,
         )
 
         ## Risk perception variables
@@ -1288,7 +1299,7 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1
         )
         self.household_size[:] = np.load(
-            self.model.model_structure["binary"]["agents/farmers/household_size"]
+            self.model.files["binary"]["agents/farmers/household_size"]
         )["data"]
 
         self.yield_ratios_drought_event = AgentArray(
@@ -1606,7 +1617,6 @@ class CropFarmers(AgentBaseClass):
         potential_infiltration_capacity: np.ndarray,
         available_channel_storage_m3: np.ndarray,
         available_groundwater_m3: np.ndarray,
-        groundwater_head: np.ndarray,
         groundwater_depth: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
         command_areas: np.ndarray,
@@ -1634,12 +1644,11 @@ class CropFarmers(AgentBaseClass):
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
 
-        irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
-        total_storage_pre_m3 = (
-            available_channel_storage_m3.sum()
-            + available_groundwater_m3.sum()
-            + available_reservoir_storage_m3.sum()
-        )
+        if __debug__:
+            irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
+            available_channel_storage_m3_pre = available_channel_storage_m3.copy()
+            available_groundwater_m3_pre = available_groundwater_m3.copy()
+            available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         (
             self.channel_abstraction_m3_by_farmer[:],
             self.reservoir_abstraction_m3_by_farmer[:],
@@ -1698,49 +1707,83 @@ class CropFarmers(AgentBaseClass):
             max_paddy_water_level=self.max_paddy_water_level,
         )
 
-        # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
-        assert math.isclose(
-            self.channel_abstraction_m3_by_farmer.sum()
-            + self.reservoir_abstraction_m3_by_farmer.sum()
-            + self.groundwater_abstraction_m3_by_farmer.sum(),
-            (water_withdrawal_m * cell_area).sum(),
-            rel_tol=0.0001,
-            abs_tol=0.0001,
-        )
-        # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
-        assert math.isclose(
-            self.channel_abstraction_m3_by_farmer.sum()
-            + self.reservoir_abstraction_m3_by_farmer.sum()
-            + self.groundwater_abstraction_m3_by_farmer.sum(),
-            total_storage_pre_m3
-            - (
-                available_channel_storage_m3.sum()
-                + available_groundwater_m3.sum()
-                + available_reservoir_storage_m3.sum()
-            ),
-            rel_tol=0.01,
-            abs_tol=0.01,
-        )
-        # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
-        assert math.isclose(
-            (
-                self.channel_abstraction_m3_by_farmer
-                + self.reservoir_abstraction_m3_by_farmer
-                + self.groundwater_abstraction_m3_by_farmer
-            )[~np.isnan(self.remaining_irrigation_limit_m3)].sum(),
-            (irrigation_limit_pre - self.remaining_irrigation_limit_m3)[
-                ~np.isnan(self.remaining_irrigation_limit_m3)
-            ].sum(),
-            rel_tol=0.02,
-            abs_tol=1,
-        )
-        # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
-        assert math.isclose(
-            (water_consumption_m + returnFlowIrr_m + addtoevapotrans_m).sum(),
-            water_withdrawal_m.sum(),
-            rel_tol=0.001,
-            abs_tol=0.001,
-        )
+        if __debug__:
+            # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
+            balance_check(
+                name="water withdrawal_1",
+                how="sum",
+                influxes=(
+                    self.channel_abstraction_m3_by_farmer,
+                    self.reservoir_abstraction_m3_by_farmer,
+                    self.groundwater_abstraction_m3_by_farmer,
+                ),
+                outfluxes=[(water_withdrawal_m * cell_area)],
+                tollerance=1,
+            )
+
+            # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
+            balance_check(
+                name="water withdrawal channel",
+                how="sum",
+                outfluxes=self.channel_abstraction_m3_by_farmer,
+                prestorages=available_channel_storage_m3_pre,
+                poststorages=available_channel_storage_m3,
+                tollerance=10,
+            )
+
+            balance_check(
+                name="water withdrawal reservoir",
+                how="sum",
+                outfluxes=self.reservoir_abstraction_m3_by_farmer,
+                prestorages=available_reservoir_storage_m3_pre,
+                poststorages=available_reservoir_storage_m3,
+                tollerance=10,
+            )
+
+            balance_check(
+                name="water withdrawal groundwater",
+                how="sum",
+                outfluxes=self.groundwater_abstraction_m3_by_farmer,
+                prestorages=available_groundwater_m3_pre,
+                poststorages=available_groundwater_m3,
+                tollerance=10,
+            )
+
+            # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
+            balance_check(
+                name="water withdrawal_2",
+                how="sum",
+                influxes=(
+                    self.channel_abstraction_m3_by_farmer[
+                        ~np.isnan(self.remaining_irrigation_limit_m3)
+                    ],
+                    self.reservoir_abstraction_m3_by_farmer[
+                        ~np.isnan(self.remaining_irrigation_limit_m3)
+                    ],
+                    self.groundwater_abstraction_m3_by_farmer[
+                        ~np.isnan(self.remaining_irrigation_limit_m3)
+                    ],
+                ),
+                prestorages=irrigation_limit_pre[
+                    ~np.isnan(self.remaining_irrigation_limit_m3)
+                ],
+                poststorages=self.remaining_irrigation_limit_m3[
+                    ~np.isnan(self.remaining_irrigation_limit_m3)
+                ],
+            )
+
+            # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
+            balance_check(
+                name="water consumption",
+                how="sum",
+                influxes=(
+                    water_consumption_m,
+                    returnFlowIrr_m,
+                    addtoevapotrans_m,
+                ),
+                outfluxes=water_withdrawal_m,
+                tollerance=0.0001,
+            )
 
         self.groundwater_depth = AgentArray(
             groundwater_depth_per_farmer, max_n=self.max_n
@@ -1962,6 +2005,8 @@ class CropFarmers(AgentBaseClass):
             crop_harvest_age_days=self.var.crop_harvest_age_days,
         )
 
+        self.yield_total_per_farmer.fill(np.nan)
+        self.harvested_crop.fill(-1)
         # If there are fields to be harvested, compute yield ratio and various related metrics
         if np.count_nonzero(harvest):
             # Get yield ratio for the harvested crops
@@ -2009,14 +2054,29 @@ class CropFarmers(AgentBaseClass):
                 self.yield_ratio_management[harvesting_farmer_fields] * yield_ratio
             )
 
+            yield_total_per_field = (
+                yield_ratio_total * max_yield_per_crop * harvested_area
+            )
+            self.yield_total_per_farmer[:] = np.bincount(
+                harvesting_farmer_fields,
+                weights=yield_total_per_field,
+                minlength=self.n,
+            )
+
+            # get the harvested crop per farmer. This assumes each farmer only harvests one crop
+            # on the same day
+            self.harvested_crop[harvesting_farmers] = harvested_crops[
+                np.unique(self.var.land_owners[harvest], return_index=True)[1]
+            ]
+
             # Determine the potential crop yield
-            potential_crop_yield_field = (
+            potential_profit_field = (
                 harvested_area * max_yield_per_crop * crop_price_per_field
             )
-            assert (potential_crop_yield_field >= 0).all()
+            assert (potential_profit_field >= 0).all()
 
             # Determine the profit based on the crop yield in kilos and the price per kilo
-            profit = potential_crop_yield_field * yield_ratio_total
+            profit = potential_profit_field * yield_ratio_total
             assert (profit >= 0).all()
 
             # Convert from the profit and potential profit per field to the profit per farmer
@@ -2025,7 +2085,7 @@ class CropFarmers(AgentBaseClass):
             )
             potential_profit_farmer = np.bincount(
                 harvesting_farmer_fields,
-                weights=potential_crop_yield_field,
+                weights=potential_profit_field,
                 minlength=self.n,
             )
 
@@ -2077,7 +2137,7 @@ class CropFarmers(AgentBaseClass):
         self.var.land_use_type[harvest] = 1
 
         # For unharvested growing crops, increase their age by 1
-        self.var.crop_age_days_map[(harvest == False) & (self.var.crop_map >= 0)] += 1
+        self.var.crop_age_days_map[(~harvest) & (self.var.crop_map >= 0)] += 1
 
         assert (self.var.crop_age_days_map <= self.var.crop_harvest_age_days).all()
 
@@ -2272,10 +2332,10 @@ class CropFarmers(AgentBaseClass):
         assert (self.var.crop_age_days_map[self.var.crop_map > 0] >= 0).all()
 
         self.var.land_use_type[
-            (self.var.crop_map >= 0) & (self.field_is_paddy_irrigated == True)
+            (self.var.crop_map >= 0) & (self.field_is_paddy_irrigated)
         ] = 2
         self.var.land_use_type[
-            (self.var.crop_map >= 0) & (self.field_is_paddy_irrigated == False)
+            (self.var.crop_map >= 0) & (~self.field_is_paddy_irrigated)
         ] = 3
 
     @property
@@ -2299,19 +2359,19 @@ class CropFarmers(AgentBaseClass):
         """
 
         # Update yearly channel water abstraction for each farmer
-        self.yearly_abstraction_m3_by_farmer[
-            :, 0
-        ] += self.channel_abstraction_m3_by_farmer
+        self.yearly_abstraction_m3_by_farmer[:, 0] += (
+            self.channel_abstraction_m3_by_farmer
+        )
 
         # Update yearly reservoir water abstraction for each farmer
-        self.yearly_abstraction_m3_by_farmer[
-            :, 1
-        ] += self.reservoir_abstraction_m3_by_farmer
+        self.yearly_abstraction_m3_by_farmer[:, 1] += (
+            self.reservoir_abstraction_m3_by_farmer
+        )
 
         # Update yearly groundwater water abstraction for each farmer
-        self.yearly_abstraction_m3_by_farmer[
-            :, 2
-        ] += self.groundwater_abstraction_m3_by_farmer
+        self.yearly_abstraction_m3_by_farmer[:, 2] += (
+            self.groundwater_abstraction_m3_by_farmer
+        )
 
         # Compute and update the total water abstraction for each farmer
         self.yearly_abstraction_m3_by_farmer[:, 3] += (
@@ -2665,11 +2725,9 @@ class CropFarmers(AgentBaseClass):
         self.yield_ratio_multiplier[adaptation_mask] = self.yield_ratio_multiplier_value
 
         # Update annual costs
-        self.all_loans_annual_cost[
-            adaptation_mask, ADAPTATION_TYPE + 1, 0
-        ] += annual_cost[
-            adaptation_mask
-        ]  # For drip irrigation specifically
+        self.all_loans_annual_cost[adaptation_mask, ADAPTATION_TYPE + 1, 0] += (
+            annual_cost[adaptation_mask]
+        )  # For drip irrigation specifically
         self.all_loans_annual_cost[adaptation_mask, -1, 0] += annual_cost[
             adaptation_mask
         ]  # Total loan costs
@@ -2752,11 +2810,9 @@ class CropFarmers(AgentBaseClass):
         self.well_depth[adaptation_mask] = well_depth[adaptation_mask]
 
         # Update annual costs and disposable income for adapted farmers
-        self.all_loans_annual_cost[
-            adaptation_mask, ADAPTATION_TYPE + 1, 0
-        ] += annual_cost[
-            adaptation_mask
-        ]  # For wells specifically
+        self.all_loans_annual_cost[adaptation_mask, ADAPTATION_TYPE + 1, 0] += (
+            annual_cost[adaptation_mask]
+        )  # For wells specifically
         self.all_loans_annual_cost[adaptation_mask, -1, 0] += annual_cost[
             adaptation_mask
         ]  # Total loan amount
@@ -2776,7 +2832,6 @@ class CropFarmers(AgentBaseClass):
     def calculate_well_costs_global(
         self,
     ) -> Tuple[np.ndarray, np.ndarray]:
-
         # Replace by actual data derived initial groundwater depth
         initial_sat_thickness = (
             self.aquifer_total_thickness - self.initial_groundwater_depth
@@ -2807,8 +2862,9 @@ class CropFarmers(AgentBaseClass):
         # Determine the total number of hours that the pump is running
         total_pump_duration = np.mean(self.total_crop_age, axis=1)
 
-        # Calculate total hours per year that the pump is active
-        total_pumping_hours_yearly = self.pump_hours * total_pump_duration
+        # TODO: Correct that this is not used? If correct, remove
+        # # Calculate total hours per year that the pump is active
+        # total_pumping_hours_yearly = self.pump_hours * total_pump_duration
 
         # TO DO: update well Q array: Determine through how much agents abstract per person, could be an agent array
         initial_Q = np.mean(self.Q_array)
@@ -3378,15 +3434,6 @@ class CropFarmers(AgentBaseClass):
             reference_profit_m2 >= 0
         ).all()  # Ensure all crop yields are non-negative
 
-        # Calculate the farm area per agent
-        print("CORRECT THAT THE FARM AREA IS NOT USED?")
-        farmer_fields_ID = self.var.land_owners
-        farm_area = np.bincount(
-            farmer_fields_ID[farmer_fields_ID != -1],
-            weights=self.var.cellArea[farmer_fields_ID != -1],
-            minlength=self.n,
-        )
-
         # Calculate profit by multiplying yield with price
         profit_m2 = yield_ratios * reference_profit_m2
 
@@ -3829,8 +3876,6 @@ class CropFarmers(AgentBaseClass):
             # Reset the yearly abstraction
             self.yearly_abstraction_m3_by_farmer[:, :] = 0
 
-            well_costs = self.calculate_well_costs_global()
-
             if not self.model.spinup and not (
                 "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
             ):
@@ -3854,7 +3899,7 @@ class CropFarmers(AgentBaseClass):
                     / self.field_size_per_farmer
                 )
 
-                decision_params = {
+                decision_params_SEUT = {
                     "n_agents": self.n,
                     "T": self.decision_horizon,
                     "discount_rate": self.discount_rate,

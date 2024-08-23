@@ -1,6 +1,10 @@
-import numpy as np
 from numba import njit
 from typing import Tuple
+import math
+import numpy as np
+from pathlib import Path
+
+from honeybees.agents import AgentBaseClass as HoneybeesAgentBaseClass
 
 
 class AgentArray:
@@ -41,7 +45,7 @@ class AgentArray:
                 self._n = n
         else:
             assert dtype is not None
-            assert dtype != object
+            assert dtype is not object
             assert n is not None
             assert max_n is not None
             if extra_dims is None:
@@ -301,7 +305,6 @@ def downscale_volume(
     downscale_mask: np.ndarray,
     HRU_land_size: np.ndarray,
 ) -> np.ndarray:
-
     xoffset = (model_gt[0] - data_gt[0]) / model_gt[1]
     assert 0.0001 > xoffset - round(xoffset) > -0.0001
     xoffset = round(xoffset)
@@ -343,7 +346,7 @@ def downscale_volume(
             land_area_cell = 0
             for yvar in range(y_left, y_right):
                 for xvar in range(x_left, x_right):
-                    if mask[yvar, xvar] == False:
+                    if not mask[yvar, xvar]:
                         k = yvar * xvarsize + xvar
                         HRU_right = grid_to_HRU_uncompressed[k]
                         # assert HRU_right != -1
@@ -361,7 +364,7 @@ def downscale_volume(
             if land_area_cell:
                 for yvar in range(y_left, y_right):
                     for xvar in range(x_left, x_right):
-                        if mask[yvar, xvar] == False:
+                        if not mask[yvar, xvar]:
                             k = yvar * xvarsize + xvar
                             HRU_right = grid_to_HRU_uncompressed[k]
                             # assert HRU_right != -1
@@ -379,3 +382,64 @@ def downscale_volume(
 
     assert i == mask.size - mask.sum()
     return downscaled_array
+
+
+class AgentBaseClass(HoneybeesAgentBaseClass):
+    def __init__(self):
+        if not hasattr(self, "redundancy"):
+            self.redundancy = None  # default redundancy is None
+        super().__init__()
+
+    def get_max_n(self, n):
+        if self.redundancy is None:
+            return n
+        else:
+            max_n = math.ceil(n * (1 + self.redundancy))
+            assert (
+                max_n < 4294967295
+            )  # max value of uint32, consider replacing with uint64
+            return max_n
+
+    def get_save_state_path(self, folder, mkdir=False):
+        folder = Path(self.model.initial_conditions_folder, folder)
+        if mkdir:
+            folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def save_state(self, folder: str):
+        save_state_path = self.get_save_state_path(folder, mkdir=True)
+        with open(save_state_path / "state.txt", "w") as f:
+            for attribute, value in self.agent_arrays.items():
+                f.write(f"{attribute}\n")
+                fp = save_state_path / f"{attribute}.npz"
+                np.savez_compressed(fp, data=value.data)
+
+    def restore_state(self, folder: str):
+        save_state_path = self.get_save_state_path(folder)
+        with open(save_state_path / "state.txt", "r") as f:
+            for line in f:
+                attribute = line.strip()
+                fp = save_state_path / f"{attribute}.npz"
+                values = np.load(fp)["data"]
+                if not hasattr(self, "max_n"):
+                    self.max_n = self.get_max_n(values.shape[0])
+                values = AgentArray(values, max_n=self.max_n)
+
+                setattr(self, attribute, values)
+
+    @property
+    def agent_arrays(self):
+        agent_arrays = {
+            name: value
+            for name, value in vars(self).items()
+            if isinstance(value, AgentArray)
+        }
+        ids = [id(v) for v in agent_arrays.values()]
+        if len(set(ids)) != len(ids):
+            duplicate_arrays = [
+                name for name, value in agent_arrays.items() if ids.count(id(value)) > 1
+            ]
+            raise AssertionError(
+                f"Duplicate agent array names: {', '.join(duplicate_arrays)}."
+            )
+        return agent_arrays
