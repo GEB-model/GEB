@@ -8,5 +8,3 @@ setup_forcing:
 setup_SPEI:
   calibration_period_start: 1980-01-01
   calibration_period_end: 2010-12-31
-
-setup_GEV:

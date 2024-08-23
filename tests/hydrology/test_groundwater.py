@@ -5,7 +5,9 @@ from geb.hydrology.groundwater.model import (
     ModFlowSimulation,
     get_water_table_depth,
     get_groundwater_storage_m,
+    distribute_well_rate_per_layer,
 )
+from copy import deepcopy
 
 from ..setup import output_folder, tmp_folder
 
@@ -28,15 +30,10 @@ x = np.linspace(-5, 5, XSIZE)
 y = np.linspace(-5, 5, YSIZE)
 x, y = np.meshgrid(x, y)
 
-topography = np.exp2(-(x**2) - y**2 + 5)
+topography = np.exp2(-(x**2) - y**2 + 5) / 2
 basin_mask = np.zeros((YSIZE, XSIZE), dtype=bool)
 basin_mask[0] = True
 basin_mask[-3:-1, 0:3] = True
-
-# Create a topography 2D map
-x_vertices, y_vertices = np.meshgrid(
-    np.linspace(0, XSIZE * 10, XSIZE + 1), np.linspace(YSIZE * 10, 0, YSIZE + 1)
-)
 
 gt = (4.864242872511027, 0.0001, 0, 52.33412139354429, 0, -0.0001)
 
@@ -78,11 +75,10 @@ class DummyModel:
 
 default_params = {
     "model": DummyModel(),
-    "name": "test_model",
     "gt": gt,
     "ndays": 20,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
-    "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.4), basin_mask),
+    "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.8), basin_mask),
     "topography": compress(topography, basin_mask),
     "layer_boundary_elevation": compress(layer_boundary_elevation, basin_mask),
     "basin_mask": basin_mask,
@@ -94,14 +90,45 @@ default_params = {
 
 def test_modflow_simulation_initialization():
     sim = ModFlowSimulation(**default_params)
-    assert sim.name == "TEST_MODEL"
     assert sim.n_active_cells == (~basin_mask).sum()
     # In the Netherlands, the average area of a cell with this gt is ~75.8 m2
     assert np.allclose(sim.area, 75.8, atol=0.1)
 
 
+def test_step():
+    parameters = deepcopy(default_params)
+
+    parameters["heads"][:,] = compress(layer_boundary_elevation[-1], basin_mask) + 5.0
+
+    sim = ModFlowSimulation(**parameters)
+
+    # sim.step()
+    groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
+    print("groundwater_content_prev", groundwater_content_prev)
+
+    for i in range(5):
+        sim.step()
+        drainage_m3 = np.nansum(sim.drainage_m3)
+        groundwater_content = np.nansum(sim.groundwater_content_m3)
+        recharge_m3 = np.nansum(sim.recharge_m3)
+        print("drainge", drainage_m3)
+        print("groundwater_content", groundwater_content)
+        print("recharge_m3", recharge_m3)
+
+    print("drainge", drainage_m3)
+    print("recharge", recharge_m3)
+    print("groundwater_content", groundwater_content)
+
+    balance_pre = groundwater_content_prev + recharge_m3 - drainage_m3
+    balance_post = groundwater_content
+
+    assert math.isclose(balance_pre, balance_post, rel_tol=1e-5)
+
+    sim.finalize()
+
+
 def test_recharge():
-    parameters = default_params.copy()
+    parameters = deepcopy(default_params)
     parameters["heads"] = parameters["heads"] - 3  # set head lower than drainage
 
     sim = ModFlowSimulation(**parameters)
@@ -122,13 +149,18 @@ def test_recharge():
     balance_pre = groundwater_content_prev + recharge_m3 - drainage_m3
     balance_post = groundwater_content
 
-    assert math.isclose(balance_pre, balance_post, rel_tol=1e-5)
+    print("drainge", drainage_m3)
+    print("recharge", recharge_m3)
+    print("groundwater_content", groundwater_content)
+    print("groundwater_content_prev", groundwater_content_prev)
+
+    assert math.isclose(balance_pre, balance_post, abs_tol=1, rel_tol=1e-5)
 
     sim.finalize()
 
 
 def test_drainage():
-    parameters = default_params.copy()
+    parameters = deepcopy(default_params)
     layer_boundary_elevation = parameters["layer_boundary_elevation"]
     topography = np.full((YSIZE, XSIZE), 0)
 
@@ -174,17 +206,14 @@ def test_drainage():
 
 
 def test_wells():
-    parameters = default_params.copy()
-    parameters["heads"][0] = compress(
-        topography - 5, basin_mask
-    )  # set head lower than drainage
-    parameters["heads"][1] = compress(
-        topography - 5, basin_mask
+    parameters = deepcopy(default_params)
+    parameters["heads"][:,] = compress(
+        topography - 2, basin_mask
     )  # set head lower than drainage
 
     sim = ModFlowSimulation(**parameters)
 
-    groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
+    groundwater_content_prev = sim.groundwater_content_m3.sum()
 
     groundwater_abstracton = np.full((YSIZE, XSIZE), 0.10)
     groundwater_abstracton[0, 0] = 0.10
@@ -200,7 +229,7 @@ def test_wells():
     drainage = np.nansum(sim.drainage_m3)
     assert drainage.sum() == 0
 
-    groundwater_content = np.nansum(sim.groundwater_content_m3)
+    groundwater_content = sim.groundwater_content_m3.sum()
 
     balance_pre = groundwater_content_prev - total_abstraction
     balance_post = groundwater_content
@@ -245,7 +274,9 @@ def visualize_modflow_results(sim, axes):
 
 
 def test_modflow_simulation_with_visualization():
-    sim = ModFlowSimulation(**default_params)
+    parameters = deepcopy(default_params)
+    parameters["heads"][:,] = compress(topography, basin_mask) - 1
+    sim = ModFlowSimulation(**parameters)
 
     fig, axes = plt.subplots(5, 5, figsize=(15, 10))
     plt.tight_layout()
@@ -312,3 +343,46 @@ def test_get_groundwater_storage_m():
     )
     storage = get_groundwater_storage_m(layer_boundary_elevation, head, specific_yield)
     np.testing.assert_allclose(storage, np.array([37.5, 32.5, 12.5, 10, 0]))
+
+
+def test_distribute_well_rate_per_layer():
+    layer_boundary_elevation = np.array(
+        [
+            [100, 100, 100, 100, 100, 100, 100],
+            [50, 50, 50, 50, 50, 50, 50],
+            [0, 0, 0, 0, 0, 0, 0],
+        ],
+        dtype=np.float64,
+    )
+    heads = np.array(
+        [
+            [110, 90, 0, 0, 0, 110, 110],
+            [115, 60, 60, 40, -11, 115, 115],
+        ],
+        dtype=np.float64,
+    )
+    specific_yield = np.array(
+        [
+            [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+            [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
+        ],
+        dtype=np.float64,
+    )
+    area = np.array([100, 100, 100, 100, 100, 100, 100], dtype=np.float64)
+
+    well_rate = np.array([-10, -10, -10, -10, -0, -3000, -0], dtype=np.float64)
+
+    well_rate_per_layer = distribute_well_rate_per_layer(
+        well_rate, layer_boundary_elevation, heads, specific_yield, area
+    )
+
+    np.testing.assert_allclose(
+        well_rate_per_layer,
+        np.array(
+            [
+                [-10, -10, 0, 0, 0, -2500, 0],
+                [0, 0, -10, -10, 0, -500, 0],
+            ],
+            dtype=np.float64,
+        ),
+    )

@@ -15,6 +15,8 @@
 - An example model.yml, build.yml, update.yml and data_catalog.yml are now included in the model repository.
 - Migrated from black to ruff for code formatting.
 - All input data is now stored in zarr format rather than netCDF.
+- The calculation of SPEI is optimized to be nicer for memory.
+- setup_GEV in hydromt-geb was integrated with setup_SPEI and can be removed.
 - Many other minor fixes and improvements.
 
 ### Migration guide

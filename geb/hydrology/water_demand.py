@@ -222,10 +222,8 @@ class WaterDemand:
         (
             available_channel_storage_m3,
             available_reservoir_storage_m3,
-            available_groundwater_m,
+            available_groundwater_m3,
         ) = self.get_available_water()
-
-        available_groundwater_m3 = self.model.data.grid.MtoM3(available_groundwater_m)
 
         available_channel_storage_m3_pre = available_channel_storage_m3.copy()
         available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()

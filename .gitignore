@@ -1,6 +1,7 @@
 # Custom
 .vscode
 .ruff_cache
+.benchmarks
 .nfs*
 .DS_Store
 workspaces/
