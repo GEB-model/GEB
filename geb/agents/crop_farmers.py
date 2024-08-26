@@ -24,6 +24,7 @@ from ..data import (
 )
 from .decision_module import DecisionModule
 from .general import AgentArray, AgentBaseClass
+from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 
 
 def cumulative_mean(mean, counter, update, mask=None):
@@ -2134,7 +2135,7 @@ class CropFarmers(AgentBaseClass):
         # Update crop and land use maps after harvest
         self.var.crop_map[harvest] = -1
         self.var.crop_age_days_map[harvest] = -1
-        self.var.land_use_type[harvest] = 1
+        self.var.land_use_type[harvest] = GRASSLAND_LIKE
 
         # For unharvested growing crops, increase their age by 1
         self.var.crop_age_days_map[(~harvest) & (self.var.crop_map >= 0)] += 1
@@ -2333,10 +2334,10 @@ class CropFarmers(AgentBaseClass):
 
         self.var.land_use_type[
             (self.var.crop_map >= 0) & (self.field_is_paddy_irrigated)
-        ] = 2
+        ] = PADDY_IRRIGATED
         self.var.land_use_type[
             (self.var.crop_map >= 0) & (~self.field_is_paddy_irrigated)
-        ] = 3
+        ] = NON_PADDY_IRRIGATED
 
     @property
     def field_is_paddy_irrigated(self):

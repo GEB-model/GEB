@@ -23,6 +23,16 @@ import numpy as np
 import xarray as xr
 from geb.workflows import balance_check
 
+from .landcover import (
+    FOREST,
+    GRASSLAND_LIKE,
+    PADDY_IRRIGATED,
+    NON_PADDY_IRRIGATED,
+    SEALED,
+    OPEN_WATER,
+    ALL_LAND_COVER_TYPES,
+)
+
 
 class Interception(object):
     """
@@ -64,33 +74,31 @@ class Interception(object):
         )
 
         minimum_intercept_capacity = {
-            "forest": 0.001,
-            "grassland": 0.001,
-            "irrPaddy": 0.001,
-            "irrNonPaddy": 0.001,
-            "sealed": 0.001,
-            "water": 0.0,
+            FOREST: 0.001,
+            GRASSLAND_LIKE: 0.001,
+            PADDY_IRRIGATED: 0.001,
+            NON_PADDY_IRRIGATED: 0.001,
+            SEALED: 0.001,
+            OPEN_WATER: 0.0,
         }
 
-        for coverNum, coverType in enumerate(self.model.coverTypes):
-            coverType_indices = np.where(self.var.land_use_type == coverNum)
-            self.var.minInterceptCap[coverType_indices] = minimum_intercept_capacity[
-                coverType
-            ]
+        for cover, minimum_intercept_capacity in minimum_intercept_capacity.items():
+            coverType_indices = np.where(self.var.land_use_type == cover)
+            self.var.minInterceptCap[coverType_indices] = minimum_intercept_capacity
 
         assert not np.isnan(self.var.interceptStor).any()
         assert not np.isnan(self.var.minInterceptCap).any()
 
         self.interception = {}
-        for coverType in ("forest", "grassland"):
+        for cover_name, cover in (("forest", FOREST), ("grassland", GRASSLAND_LIKE)):
             ds = xr.open_dataset(
                 self.model.files["forcing"][
-                    f"landcover/{coverType}/interceptCap{coverType.title()}_10days"
+                    f"landcover/{cover_name}/interceptCap{cover_name.title()}_10days"
                 ]
             )
 
-            self.interception[coverType] = ds[
-                f"interceptCap{coverType.title()}_10days"
+            self.interception[cover] = ds[
+                f"interceptCap{cover_name.title()}_10days"
             ].values
             ds.close()
 
@@ -109,12 +117,12 @@ class Interception(object):
             interceptStor_pre = self.var.interceptStor.copy()
 
         interceptCap = self.var.full_compressed(np.nan, dtype=np.float32)
-        for coverNum, coverType in enumerate(self.model.coverTypes):
-            coverType_indices = np.where(self.var.land_use_type == coverNum)
-            if coverType in ("forest", "grassland"):
+        for cover in ALL_LAND_COVER_TYPES:
+            coverType_indices = np.where(self.var.land_use_type == cover)
+            if cover in (FOREST, GRASSLAND_LIKE):
                 interception_cover = self.model.data.to_HRU(
                     data=self.model.data.grid.compress(
-                        self.interception[coverType][
+                        self.interception[cover][
                             (self.model.current_day_of_year - 1) // 10
                         ]
                     ),
@@ -142,11 +150,9 @@ class Interception(object):
             0.0, throughfall + self.var.SnowMelt
         )
 
-        sealed_area = np.where(self.var.land_use_type == 4)
-        water_area = np.where(self.var.land_use_type == 5)
-        bio_area = np.where(
-            self.var.land_use_type < 4
-        )  # 'forest', 'grassland', 'irrPaddy', 'irrNonPaddy'
+        sealed_area = np.where(self.var.land_use_type == SEALED)
+        water_area = np.where(self.var.land_use_type == OPEN_WATER)
+        bio_area = np.where(self.var.land_use_type < SEALED)
 
         self.var.interceptEvap = self.var.full_compressed(np.nan, dtype=np.float32)
         # interceptEvap evaporation from intercepted water (based on potTranspiration)

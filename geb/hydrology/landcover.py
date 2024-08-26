@@ -29,6 +29,23 @@ except (ModuleNotFoundError, ImportError):
 from numba import njit
 from geb.workflows import TimingModule, balance_check
 
+# All natural areas MUST be before the sealed and water areas
+FOREST = 0
+GRASSLAND_LIKE = 1
+PADDY_IRRIGATED = 2
+NON_PADDY_IRRIGATED = 3
+SEALED = 4
+OPEN_WATER = 5
+
+ALL_LAND_COVER_TYPES = [
+    FOREST,
+    GRASSLAND_LIKE,
+    PADDY_IRRIGATED,
+    NON_PADDY_IRRIGATED,
+    SEALED,
+    OPEN_WATER,
+]
+
 
 @njit(cache=True)
 def get_crop_kc_and_root_depths(
@@ -95,15 +112,6 @@ class LandCover(object):
         self.model = model
         self.crop_farmers = model.agents.crop_farmers
 
-        self.model.coverTypes = [
-            "forest",
-            "grassland",
-            "irrPaddy",
-            "irrNonPaddy",
-            "sealed",
-            "water",
-        ]
-
         self.var.capriseindex = self.var.full_compressed(0, dtype=np.float32)
 
         self.var.actBareSoilEvap = self.var.full_compressed(0, dtype=np.float32)
@@ -120,7 +128,7 @@ class LandCover(object):
             * self.var.cellArea
             * ((1 - self.var.capriseindex + 0.25) // 1)
         )
-        riverbedExchangeM3[self.var.land_use_type != 5] = 0
+        riverbedExchangeM3[self.var.land_use_type != OPEN_WATER] = 0
         riverbedExchangeM3 = self.model.data.to_grid(
             HRU_data=riverbedExchangeM3, fn="sum"
         )
@@ -213,7 +221,7 @@ class LandCover(object):
         lakebedExchangeM = self.model.data.grid.leakagelake_factor * (
             (1 - self.var.capriseindex + 0.25) // 1
         )
-        lakebedExchangeM[self.var.land_use_type != 5] = 0
+        lakebedExchangeM[self.var.land_use_type != OPEN_WATER] = 0
         lakebedExchangeM = self.model.data.to_grid(HRU_data=lakebedExchangeM, fn="sum")
         lakebedExchangeM = np.minimum(lakebedExchangeM, minlake)
 
@@ -331,12 +339,12 @@ class LandCover(object):
             init_root_depth=0.01,
         )
 
-        self.var.root_depth[self.var.land_use_type == 0] = 2.0  # forest
+        self.var.root_depth[self.var.land_use_type == FOREST] = 2.0  # forest
         self.var.root_depth[
-            (self.var.land_use_type == 1) & (self.var.land_owners == -1)
+            (self.var.land_use_type == GRASSLAND_LIKE) & (self.var.land_owners == -1)
         ] = 0.1  # grassland
         self.var.root_depth[
-            (self.var.land_use_type == 1) & (self.var.land_owners != -1)
+            (self.var.land_use_type == GRASSLAND_LIKE) & (self.var.land_owners != -1)
         ] = 0.05  # fallow land. The rooting depth
 
         if self.model.use_gpu:
@@ -349,12 +357,12 @@ class LandCover(object):
             fn=None,
         )
 
-        self.var.cropKC[self.var.land_use_type == 0] = forest_cropCoefficientNC[
-            self.var.land_use_type == 0
+        self.var.cropKC[self.var.land_use_type == FOREST] = forest_cropCoefficientNC[
+            self.var.land_use_type == FOREST
         ]  # forest
-        assert (self.var.crop_map[self.var.land_use_type == 1] == -1).all()
+        assert (self.var.crop_map[self.var.land_use_type == GRASSLAND_LIKE] == -1).all()
 
-        self.var.cropKC[self.var.land_use_type == 1] = 0.2
+        self.var.cropKC[self.var.land_use_type == GRASSLAND_LIKE] = 0.2
 
         self.var.potTranspiration, potBareSoilEvap, totalPotET = (
             self.model.evaporation.step(self.var.ETRef)
@@ -391,11 +399,13 @@ class LandCover(object):
             potBareSoilEvap,
             totalPotET,
         )
+        assert not (directRunoff < 0).any()
         timer.new_split("Soil")
 
         directRunoff = self.model.sealed_water.step(
             capillar, openWaterEvap, directRunoff
         )
+        assert not (directRunoff < 0).any()
         timer.new_split("Sealed")
 
         if self.model.use_gpu:
@@ -413,6 +423,7 @@ class LandCover(object):
                 self.var.potTranspiration[self.var.crop_map != -1]
             )
 
+        assert not (directRunoff < 0).any()
         assert not np.isnan(interflow).any()
         assert not np.isnan(groundwater_recharge).any()
         assert not np.isnan(groundwater_abstaction).any()

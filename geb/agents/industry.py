@@ -7,6 +7,7 @@ try:
 except (ModuleNotFoundError, ImportError):
     pass
 from .general import downscale_volume, AgentBaseClass
+from ..hydrology.landcover import SEALED
 
 
 class Industry(AgentBaseClass):
@@ -36,7 +37,7 @@ class Industry(AgentBaseClass):
         pass
 
     def update_water_demand(self):
-        downscale_mask = self.model.data.HRU.land_use_type != 4
+        downscale_mask = self.model.data.HRU.land_use_type != SEALED
         if self.model.use_gpu:
             downscale_mask = downscale_mask.get()
 

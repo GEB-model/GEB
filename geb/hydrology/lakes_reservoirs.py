@@ -625,6 +625,9 @@ class LakesReservoirs(object):
         discharge_m3 = upstream1(self.var.downstruct, discharge) * self.var.dtRouting
         discharge_m3 = laketotal(discharge_m3, self.var.waterBodyID, nan_class=-1)
 
+        assert (runoff_m3 >= 0).all()
+        assert (discharge_m3 >= 0).all()
+        assert (self.var.total_inflow_from_other_water_bodies >= 0).all()
         inflow_m3 = (
             runoff_m3 + discharge_m3 + self.var.total_inflow_from_other_water_bodies
         )

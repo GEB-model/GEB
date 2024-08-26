@@ -34,6 +34,7 @@ from .soil import (
     get_fraction_easily_available_soil_water,
     get_crop_group_number,
 )
+from .landcover import PADDY_IRRIGATED, NON_PADDY_IRRIGATED
 
 from geb.workflows import TimingModule, balance_check
 
@@ -77,7 +78,7 @@ class WaterDemand:
         # Non paddy irrigation -> No = 3
 
         # a function of cropKC (evaporation and transpiration) and available water see Wada et al. 2014 p. 19
-        paddy_irrigated_land = np.where(self.var.land_use_type == 2)
+        paddy_irrigated_land = np.where(self.var.land_use_type == PADDY_IRRIGATED)
 
         paddy_level = self.var.full_compressed(np.nan, dtype=np.float32)
         paddy_level[paddy_irrigated_land] = (
@@ -85,7 +86,9 @@ class WaterDemand:
             + self.var.natural_available_water_infiltration[paddy_irrigated_land]
         )
 
-        nonpaddy_irrigated_land = np.where(self.var.land_use_type == 3)[0]
+        nonpaddy_irrigated_land = np.where(
+            self.var.land_use_type == NON_PADDY_IRRIGATED
+        )[0]
 
         # load crop group number
         crop_group_number = get_crop_group_number(

@@ -21,6 +21,7 @@
 
 import numpy as np
 from geb.workflows import balance_check
+from .landcover import SEALED, OPEN_WATER
 
 
 class SealedWater(object):
@@ -64,24 +65,32 @@ class SealedWater(object):
         """
 
         mult = self.var.full_compressed(0, dtype=np.float32)
-        mult[self.var.land_use_type == 5] = 1
-        mult[self.var.land_use_type == 4] = 0.2
+        mult[self.var.land_use_type == OPEN_WATER] = 1
+        mult[self.var.land_use_type == SEALED] = 0.2
 
         sealed_area = np.where(
-            (self.var.land_use_type == 4) | self.var.land_use_type == 5
+            (self.var.land_use_type == SEALED) | self.var.land_use_type == OPEN_WATER
         )
 
-        # GW capillary rise in sealed area is added to the runoff
-        openWaterEvap[sealed_area] = np.minimum(
-            mult[sealed_area] * self.var.EWRef[sealed_area],
-            self.var.natural_available_water_infiltration[sealed_area]
-            + capillar[sealed_area],
-        )
+        assert (capillar[sealed_area] >= 0).all()
+
+        openWaterEvap[sealed_area] = mult[sealed_area] * self.var.EWRef[sealed_area]
+
+        # as there is no interception on sealed areas, the available water is the sum of the natural available water and the capillar rise
         directRunoff[sealed_area] = (
             self.var.natural_available_water_infiltration[sealed_area]
-            - openWaterEvap[sealed_area]
             + capillar[sealed_area]
         )
+        # limit the evaporation to the available water
+        openWaterEvap[sealed_area] = np.minimum(
+            openWaterEvap[sealed_area], directRunoff[sealed_area]
+        )
+
+        # subtract the evaporation from the runoff water
+        directRunoff[sealed_area] -= openWaterEvap[sealed_area]
+
+        # make sure that the runoff is still positive
+        assert (directRunoff[sealed_area] >= 0).all()
 
         # open water evaporation is directly substracted from the river, lakes, reservoir
         self.var.actualET[sealed_area] = (
@@ -89,6 +98,8 @@ class SealedWater(object):
         )
 
         if __debug__:
+            assert (self.var.actTransTotal[sealed_area] == 0).all()
+            assert (self.var.actBareSoilEvap[sealed_area] == 0).all()
             balance_check(
                 name="sealed_water",
                 how="cellwise",
@@ -98,8 +109,8 @@ class SealedWater(object):
                 ],
                 outfluxes=[
                     directRunoff[sealed_area],
-                    self.var.actTransTotal[sealed_area],
-                    self.var.actBareSoilEvap[sealed_area],
+                    self.var.actTransTotal[sealed_area],  # is all 0
+                    self.var.actBareSoilEvap[sealed_area],  # is all 0
                     openWaterEvap[sealed_area],
                 ],
                 tollerance=1e-6,

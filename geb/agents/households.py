@@ -3,6 +3,7 @@ import geopandas as gpd
 import pyproj
 import calendar
 from .general import AgentArray, downscale_volume, AgentBaseClass
+from ..hydrology.landcover import SEALED
 
 try:
     import cupy as cp
@@ -87,7 +88,7 @@ class Households(AgentBaseClass):
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """
-        downscale_mask = self.model.data.HRU.land_use_type != 4
+        downscale_mask = self.model.data.HRU.land_use_type != SEALED
         if self.model.use_gpu:
             downscale_mask = downscale_mask.get()
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365

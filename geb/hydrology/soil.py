@@ -25,6 +25,15 @@ from geb.workflows import TimingModule, balance_check
 from numba import njit, prange
 
 
+from .landcover import (
+    FOREST,
+    GRASSLAND_LIKE,
+    PADDY_IRRIGATED,
+    NON_PADDY_IRRIGATED,
+    SEALED,
+)
+
+
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
@@ -222,7 +231,7 @@ def get_crop_group_number(
     crop_group_map = np.take(crop_group_numbers, crop_map)
     crop_group_map[crop_map == -1] = np.nan
 
-    natural_land = np.isin(land_use_type, (0, 1))
+    natural_land = np.isin(land_use_type, (FOREST, GRASSLAND_LIKE))
     crop_group_map[natural_land] = natural_crop_groups[natural_land]
     return crop_group_map
 
@@ -315,7 +324,7 @@ def update_soil_water_storage(
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
     available_water_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
     runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
-    is_bioarea = land_use_type <= 3
+    is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
 
     for i in prange(land_use_type.size):
@@ -325,7 +334,7 @@ def update_soil_water_storage(
         if available_water_infiltration[i] < np.float32(0):
             available_water_infiltration[i] = np.float32(0)
         # paddy irrigated land
-        if land_use_type[i] == 2:
+        if land_use_type[i] == PADDY_IRRIGATED:
             if crop_kc[i] > np.float32(0.75):
                 topwater_res[i] += available_water_infiltration[i]
 
@@ -366,7 +375,7 @@ def update_soil_water_storage(
             w[0, i] = ws[0, i]  # set the top layer to full
 
         # get group group numbers for natural areas
-        if land_use_type[i] == 0 or land_use_type[i] == 1:
+        if land_use_type[i] == FOREST or land_use_type[i] == GRASSLAND_LIKE:
             crop_group_number = natural_crop_groups[i]
         else:  #
             crop_group_number = crop_group_number_per_group[crop_map[i]]
@@ -534,7 +543,7 @@ def update_soil_water_storage(
         )
 
         # if soil is frozen, there is no preferential flow, also not on paddy fields
-        if not soil_is_frozen[i] and land_use_type[i] != 2:
+        if not soil_is_frozen[i] and land_use_type[i] != PADDY_IRRIGATED:
             preferential_flow[i] = (
                 available_water_infiltration[i] * relative_saturation**cPrefFlow
             ) * (np.float32(1) - capillary_rise_index[i])
@@ -554,7 +563,7 @@ def update_soil_water_storage(
                 np.float32(0),
             )
 
-        if land_use_type[i] == 2:
+        if land_use_type[i] == PADDY_IRRIGATED:
             topwater_res[i] = max(np.float32(0), topwater_res[i] - infiltration)
             if crop_kc[i] > np.float32(0.75):
                 # if paddy fields flooded only runoff if topwater > 0.05m
@@ -755,7 +764,7 @@ class Soil(object):
             data=lambda_pore_size_distribution, fn=None
         )
         ksat = self.model.data.grid.load(
-            self.model.files["grid"]["soil/ksat"], layer=None
+            self.model.files["grid"]["soil/hydraulic_conductivity"], layer=None
         )
         self.ksat = self.model.data.to_HRU(data=ksat, fn=None)
 
@@ -785,19 +794,16 @@ class Soil(object):
         arnoBetaOro = np.clip(arnoBetaOro, 0.01, 1.2)
 
         arnobeta_cover_types = {
-            "forest": 0.2,
-            "grassland": 0.0,
-            "irrPaddy": 0.2,
-            "irrNonPaddy": 0.2,
+            FOREST: 0.2,
+            GRASSLAND_LIKE: 0.0,
+            PADDY_IRRIGATED: 0.2,
+            NON_PADDY_IRRIGATED: 0.2,
         }
 
-        for coverNum, coverType in enumerate(self.model.coverTypes[:4]):
-            land_use_indices = np.where(self.var.land_use_type == coverNum)[0]
+        for cover, arno_beta in arnobeta_cover_types.items():
+            land_use_indices = np.where(self.var.land_use_type == cover)[0]
 
-            arnoBeta = arnobeta_cover_types[coverType]
-            if not isinstance(arnoBeta, float):
-                arnoBeta = arnoBeta[land_use_indices]
-            self.var.arnoBeta[land_use_indices] = (arnoBetaOro + arnoBeta)[
+            self.var.arnoBeta[land_use_indices] = (arnoBetaOro + arno_beta)[
                 land_use_indices
             ]
             self.var.arnoBeta[land_use_indices] = np.minimum(
@@ -897,7 +903,7 @@ class Soil(object):
             for i, land_use_type_RU in enumerate(self.var.land_use_type):
                 grid_cell = self.var.HRU_to_grid[i]
                 # if land_use_type_RU == 0 and self.var.land_use_ratio[i] > 0.5:
-                if land_use_type_RU == 0 and grid_cell == cell_id:
+                if land_use_type_RU == FOREST and grid_cell == cell_id:
                     if already_has_plantFATE_cell:
                         self.model.plantFATE.append(None)
                     else:
@@ -1053,7 +1059,7 @@ class Soil(object):
 
         timer.new_split("Update soil water storage")
 
-        bioarea = np.where(self.var.land_use_type < 4)[0].astype(np.int32)
+        bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
         self.var.actualET[bioarea] = (
             self.var.actualET[bioarea]
             + self.var.actBareSoilEvap[bioarea]

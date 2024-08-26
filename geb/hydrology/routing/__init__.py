@@ -32,6 +32,7 @@ except (ModuleNotFoundError, ImportError):
     pass
 
 from geb.workflows import balance_check
+from ..landcover import OPEN_WATER
 
 
 class Routing(object):
@@ -345,7 +346,7 @@ class Routing(object):
             fraction_water = cp.array(self.model.data.HRU.land_use_ratio)
         else:
             fraction_water = np.array(self.model.data.HRU.land_use_ratio)
-        fraction_water[self.model.data.HRU.land_use_type != 5] = 0
+        fraction_water[self.model.data.HRU.land_use_type != OPEN_WATER] = 0
         fraction_water = self.model.data.to_grid(HRU_data=fraction_water, fn="sum")
 
         EvapoChannel = np.where(
