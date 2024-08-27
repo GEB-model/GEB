@@ -377,9 +377,12 @@ class LandCover(object):
         timer.new_split("Interception")
 
         # *********  WATER Demand   *************************
-        groundwater_abstaction, channel_abstraction_m, addtoevapotrans, returnFlow = (
-            self.model.water_demand.step(totalPotET)
-        )
+        (
+            groundwater_abstraction_m3,
+            channel_abstraction_m,
+            addtoevapotrans,
+            returnFlow,
+        ) = self.model.water_demand.step(totalPotET)
         timer.new_split("Demand")
 
         openWaterEvap = self.var.full_compressed(0, dtype=np.float32)
@@ -426,7 +429,7 @@ class LandCover(object):
         assert not (directRunoff < 0).any()
         assert not np.isnan(interflow).any()
         assert not np.isnan(groundwater_recharge).any()
-        assert not np.isnan(groundwater_abstaction).any()
+        assert not np.isnan(groundwater_abstraction_m3).any()
         assert not np.isnan(channel_abstraction_m).any()
         assert not np.isnan(openWaterEvap).any()
 
@@ -519,7 +522,7 @@ class LandCover(object):
             self.model.data.to_grid(HRU_data=interflow, fn="weightedmean"),
             self.model.data.to_grid(HRU_data=directRunoff, fn="weightedmean"),
             groundwater_recharge,
-            groundwater_abstaction,
+            groundwater_abstraction_m3,
             channel_abstraction_m,
             openWaterEvap,
             returnFlow,

@@ -75,9 +75,13 @@ def get_water_table_depth(layer_boundary_elevation, head, elevation):
 
 
 @njit(cache=True)
-def get_groundwater_storage_m(layer_boundary_elevation, head, specific_yield):
+def get_groundwater_storage_m(
+    layer_boundary_elevation,
+    head,
+    specific_yield,
+    min_remaining_layer_storage_m=0.0,
+):
     storage = np.zeros(head.shape[1])
-    storage_per_layer = np.zeros_like(head)
     for cell_ix in range(head.shape[1]):
         for layer_ix in range(head.shape[0]):
             layer_head = head[layer_ix, cell_ix]
@@ -86,12 +90,9 @@ def get_groundwater_storage_m(layer_boundary_elevation, head, specific_yield):
             layer_specific_yield = specific_yield[layer_ix, cell_ix]
 
             groundwater_layer_top = min(layer_head, layer_top)
-            if groundwater_layer_top > layer_bottom:
+            if groundwater_layer_top - min_remaining_layer_storage_m > layer_bottom:
                 storage[cell_ix] += (
-                    groundwater_layer_top - layer_bottom
-                ) * layer_specific_yield
-                storage_per_layer[layer_ix, cell_ix] = (
-                    groundwater_layer_top - layer_bottom
+                    groundwater_layer_top - layer_bottom - min_remaining_layer_storage_m
                 ) * layer_specific_yield
     return storage
 
@@ -103,7 +104,7 @@ def distribute_well_rate_per_layer(
     heads,
     specific_yield,
     area,
-    min_layer_storage_m=0.0,
+    min_remaining_layer_storage_m=0.0,
 ):
     nlay, ncells = heads.shape
     well_rate_per_layer = np.zeros((nlay, ncells))
@@ -116,10 +117,14 @@ def distribute_well_rate_per_layer(
             layer_bottom = layer_boundary_elevation[layer_ix + 1, cell_ix]
 
             groundwater_layer_top = min(layer_head, layer_top)
-            if groundwater_layer_top - min_layer_storage_m > layer_bottom:
+            if groundwater_layer_top - min_remaining_layer_storage_m > layer_bottom:
                 layer_specific_yield = specific_yield[layer_ix, cell_ix]
                 layer_storage = (
-                    (groundwater_layer_top - layer_bottom - min_layer_storage_m)
+                    (
+                        groundwater_layer_top
+                        - layer_bottom
+                        - min_remaining_layer_storage_m
+                    )
                     * layer_specific_yield
                     * layer_area
                 )
@@ -132,9 +137,10 @@ def distribute_well_rate_per_layer(
                 if remaining_well_rate == 0:
                     break
 
-        assert (
-            remaining_well_rate == 0
-        ), "Well rate could not be distributed, layers are too dry"
+        if remaining_well_rate != 0:
+            assert (
+                remaining_well_rate == 0
+            ), "Well rate could not be distributed, layers are too dry"
 
     assert np.allclose(well_rate_per_layer.sum(axis=0), well_rate)
     return well_rate_per_layer
@@ -153,6 +159,7 @@ class ModFlowSimulation:
         basin_mask,
         heads,
         hydraulic_conductivity,
+        min_remaining_layer_storage_m=0.1,
         verbose=False,
         never_load_from_disk=False,
     ):
@@ -167,9 +174,12 @@ class ModFlowSimulation:
         self.verbose = verbose
         self.never_load_from_disk = never_load_from_disk
 
+        self.min_remaining_layer_storage_m = min_remaining_layer_storage_m
+
         self.topography = topography
         self.layer_boundary_elevation = layer_boundary_elevation
         self.specific_yield = specific_yield
+        hydraulic_conductivity = hydraulic_conductivity
         self.hydraulic_conductivity_drainage = hydraulic_conductivity[0]
 
         arguments = dict(locals())
@@ -262,8 +272,8 @@ class ModFlowSimulation:
         flopy.mf6.ModflowIms(
             sim,
             print_option=None,
-            complexity="COMPLEX",
-            outer_maximum=10000,
+            complexity="SIMPLE",
+            outer_maximum=100,
             inner_maximum=200,
             linear_acceleration="BICGSTAB",
         )
@@ -296,6 +306,7 @@ class ModFlowSimulation:
         cell2d = []
         nrow, ncol = self.basin_mask.shape
         xy_to_cell = np.full((nrow, ncol), -1, dtype=int)
+        cell_areas = np.full((nrow, ncol), np.nan, dtype=np.float32)
         for row in range(nrow):
             for column in range(ncol):
                 cell_number = row * ncol + column
@@ -329,6 +340,16 @@ class ModFlowSimulation:
                     + y_coordinates_vertices[row + 1, column]
                 ) / 2
 
+                cell_area = (
+                    y_coordinates_vertices[row + 1, column]
+                    - y_coordinates_vertices[row, column]
+                ) * (
+                    x_coordinates_vertices[row, column]
+                    - x_coordinates_vertices[row, column + 1]
+                )
+                assert cell_area > 0
+                cell_areas[row, column] = cell_area
+
                 cell = [
                     cell_number,
                     cell_center_x,
@@ -341,11 +362,10 @@ class ModFlowSimulation:
                 ]
                 cell2d.append(cell)
 
+        cell_areas = cell_areas[~self.basin_mask]
+
         # plt.savefig("cells.png")
         active_cells = xy_to_cell[~self.basin_mask].ravel()
-
-        # Create icelltype array (assuming convertible cells i.e., that can be converted between confined and unconfined)
-        icelltype = np.ones(nrow * ncol, dtype=int)
 
         domain = np.stack([~self.basin_mask] * hydraulic_conductivity.shape[0])
 
@@ -367,23 +387,15 @@ class ModFlowSimulation:
         )
 
         # Initial conditions
-        heads = np.where(
-            ~np.isnan(heads),
-            heads,
-            self.layer_boundary_elevation[1:],
-        )
-
-        heads = np.where(
-            heads > self.layer_boundary_elevation[1:],
-            heads,
-            self.layer_boundary_elevation[1:],
-        )
-
+        # All heads must be above the bottom of the respective layers
+        # can be very minimal but must be
+        assert (heads > self.layer_boundary_elevation[1:]).all()
         heads = self.model.data.grid.decompress(heads)
         flopy.mf6.ModflowGwfic(groundwater_flow, strt=heads)
 
         # Node property flow
         k = self.model.data.grid.decompress(hydraulic_conductivity)
+        # Create icelltype array (assuming convertible cells i.e., that can be converted between confined and unconfined)
         icelltype = np.ones_like(domain, dtype=np.int32)
         flopy.mf6.ModflowGwfnpf(
             groundwater_flow,
@@ -416,7 +428,7 @@ class ModFlowSimulation:
         recharge = flopy.mf6.ModflowGwfrch(
             groundwater_flow,
             fixed_cell=True,
-            save_flows=True,
+            save_flows=save_flows,
             maxbound=len(recharge),
             stress_period_data=recharge,
         )
@@ -433,10 +445,14 @@ class ModFlowSimulation:
             groundwater_flow,
             maxbound=len(wells),
             stress_period_data=wells,
-            auto_flow_reduce=0.1,
+            save_flows=save_flows,
         )
 
         # Drainage
+        # Drainage rate is set as conductivity * area / drainage length
+        # For conductivity we set the conductivity of the top layer
+        # area the total size of the cell, and as we are are approximating
+        # transmissivity, we can set the drainage length to 1
         drainage = []
         for idx, cell in enumerate(active_cells):
             drainage.append(
@@ -444,7 +460,9 @@ class ModFlowSimulation:
                     0,  # top layer
                     cell,
                     self.layer_boundary_elevation[0, idx],  # at elevation of top layer
-                    self.hydraulic_conductivity_drainage[idx],
+                    self.hydraulic_conductivity_drainage[idx]
+                    * cell_areas[idx]
+                    / 1,  # drainage rate
                 )
             )
 
@@ -452,6 +470,8 @@ class ModFlowSimulation:
             groundwater_flow,
             maxbound=len(drainage),
             stress_period_data=drainage,
+            print_flows=save_flows,
+            save_flows=save_flows,
         )
 
         sim.simulation_data.set_sci_note_upper_thres(
@@ -500,13 +520,17 @@ class ModFlowSimulation:
         """Load the Basic Model Interface"""
         success = False
 
-        # Current model version 6.4.2 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.4.2
+        # Current model version 6.5.0 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.5.0
         if platform.system() == "Windows":
             libary_name = "windows/libmf6.dll"
         elif platform.system() == "Linux":
             libary_name = "linux/libmf6.so"
         elif platform.system() == "Darwin":
-            libary_name = "mac/libmf6.dylib"
+            # check for ARM chip
+            if platform.machine() == "arm64":
+                libary_name = "mac_arm/libmf6.dylib"
+            else:
+                libary_name = "mac/libmf6.dylib"
         else:
             raise ValueError(f"Platform {platform.system()} not recognized.")
 
@@ -591,23 +615,47 @@ class ModFlowSimulation:
         return self.groundwater_content_m * self.area
 
     @property
-    def well_tag(self):
-        return self.mf6.get_var_address("BOUND", self.name, "WEL_0")
+    def available_groundwater_m(self):
+        groundwater_available_m = get_groundwater_storage_m(
+            self.layer_boundary_elevation,
+            self.heads,
+            self.specific_yield,
+            min_remaining_layer_storage_m=self.min_remaining_layer_storage_m,
+        )
+        assert (groundwater_available_m >= 0).all()
+        return groundwater_available_m
 
     @property
-    def well_rate(self):
-        return self.mf6.get_value_ptr(self.well_tag)[:, 0]
+    def available_groundwater_m3(self):
+        return self.available_groundwater_m * self.area
 
-    @well_rate.setter
-    def well_rate(self, well_rate):
+    @property
+    def potential_well_rate_tag(self):
+        return self.mf6.get_var_address("Q", self.name, "WEL_0")
+
+    @property
+    def actual_well_rate_tag(self):
+        return self.mf6.get_var_address("SIMVALS", self.name, "WEL_0")
+
+    @property
+    def potential_well_rate(self):
+        return self.mf6.get_value_ptr(self.potential_well_rate_tag)
+
+    @property
+    def actual_well_rate(self):
+        return self.mf6.get_value_ptr(self.actual_well_rate_tag)
+
+    @potential_well_rate.setter
+    def potential_well_rate(self, well_rate):
         well_rate_per_layer = distribute_well_rate_per_layer(
             well_rate,
             self.layer_boundary_elevation,
             self.heads,
             self.specific_yield,
             self.area,
+            min_remaining_layer_storage_m=self.min_remaining_layer_storage_m,
         ).ravel()
-        self.mf6.get_value_ptr(self.well_tag)[:, 0] = well_rate_per_layer
+        self.mf6.get_value_ptr(self.potential_well_rate_tag)[:] = well_rate_per_layer
 
     @property
     def drainage_tag(self):
@@ -627,22 +675,22 @@ class ModFlowSimulation:
 
     @property
     def recharge_tag(self):
-        return self.mf6.get_var_address("BOUND", self.name, "RCH_0")
+        return self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
 
     @property
-    def recharge_m3(self):
-        recharge = self.mf6.get_value_ptr(self.recharge_tag)[:, 0]
+    def recharge_m(self):
+        recharge = self.mf6.get_value_ptr(self.recharge_tag).copy()
         assert not np.isnan(recharge).any()
         return recharge
 
     @property
-    def recharge_m(self):
-        return self.recharge_m3 / self.area
+    def recharge_m3(self):
+        return self.recharge_m * self.area
 
-    @recharge_m3.setter
-    def recharge_m3(self, value):
+    @recharge_m.setter
+    def recharge_m(self, value):
         assert not np.isnan(value).any()
-        self.mf6.get_value_ptr(self.recharge_tag)[:, 0][:] = value
+        self.mf6.get_value_ptr(self.recharge_tag)[:] = value
 
     @property
     def max_iter(self):
@@ -655,14 +703,21 @@ class ModFlowSimulation:
 
     def set_recharge_m(self, recharge):
         """Set recharge, value in m/day"""
-        self.recharge_m3 = recharge * self.area
+        self.recharge_m = recharge
 
-    def set_groundwater_abstraction_m(self, groundwater_abstraction):
-        """Set well rate, value in m/day"""
+    def set_groundwater_abstraction_m3(self, groundwater_abstraction):
+        """Set well rate, value in m3/day"""
         assert not np.isnan(groundwater_abstraction).any()
+
+        assert (
+            self.available_groundwater_m3 >= groundwater_abstraction
+        ).all(), (
+            "Requested groundwater abstraction exceeds available groundwater storage. "
+        )
+
         well_rate = -groundwater_abstraction
         assert (well_rate <= 0).all()
-        self.well_rate = well_rate * self.area
+        self.potential_well_rate = well_rate
 
     def step(self):
         if self.mf6.get_current_time() > self.end_time:
@@ -684,14 +739,19 @@ class ModFlowSimulation:
                 if has_converged:
                     break
             else:
-                raise ValueError("MODFLOW did not converge")
+                raise RuntimeError("MODFLOW did not converge")
 
             self.mf6.finalize_solve(solution_id)
 
         self.mf6.finalize_time_step()
 
-        heads = self.heads
-        assert not np.isnan(heads).any()
+        assert not np.isnan(self.heads).any()
+        assert np.array_equal(self.actual_well_rate, self.potential_well_rate)
+        assert not np.isnan(self.heads).any()
+        assert not np.isnan(self.recharge_m).any()
+        assert not np.isnan(self.potential_well_rate).any()
+        assert not np.isnan(self.groundwater_content_m).any()
+        assert not np.isnan(self.heads[-1] - self.layer_boundary_elevation[-1]).any()
 
         if self.verbose:
             print(

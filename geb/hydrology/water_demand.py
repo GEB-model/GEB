@@ -188,7 +188,7 @@ class WaterDemand:
         return (
             self.model.data.grid.channelStorageM3.copy(),
             available_reservoir_storage_m3,
-            self.model.groundwater.groundwater_content_m3,
+            self.model.groundwater.modflow.available_groundwater_m3.copy(),
         )
 
     def withdraw(self, source, demand):
@@ -339,6 +339,13 @@ class WaterDemand:
         groundwater_abstraction_m3 = (
             available_groundwater_m3_pre - available_groundwater_m3
         )
+        available_groundwater_modflow = (
+            self.model.groundwater.modflow.available_groundwater_m3
+        )
+        assert (groundwater_abstraction_m3 <= available_groundwater_modflow + 1e9).all()
+        groundwater_abstraction_m3 = np.minimum(
+            available_groundwater_modflow, groundwater_abstraction_m3
+        )
         channel_abstraction_m3 = (
             available_channel_storage_m3_pre - available_channel_storage_m3
         )
@@ -394,7 +401,7 @@ class WaterDemand:
             print(timer)
 
         return (
-            groundwater_abstraction_m3 / self.model.data.grid.cellArea,
+            groundwater_abstraction_m3,
             channel_abstraction_m3 / self.model.data.grid.cellArea,
             addtoevapotrans,
             returnFlow,

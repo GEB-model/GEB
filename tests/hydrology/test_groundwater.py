@@ -30,7 +30,7 @@ x = np.linspace(-5, 5, XSIZE)
 y = np.linspace(-5, 5, YSIZE)
 x, y = np.meshgrid(x, y)
 
-topography = np.exp2(-(x**2) - y**2 + 5) / 2
+topography = np.exp2(-(x**2) - y**2 + 5)
 basin_mask = np.zeros((YSIZE, XSIZE), dtype=bool)
 basin_mask[0] = True
 basin_mask[-3:-1, 0:3] = True
@@ -76,7 +76,7 @@ class DummyModel:
 default_params = {
     "model": DummyModel(),
     "gt": gt,
-    "ndays": 20,
+    "ndays": 1000,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.8), basin_mask),
     "topography": compress(topography, basin_mask),
@@ -95,30 +95,27 @@ def test_modflow_simulation_initialization():
     # In the Netherlands, the average area of a cell with this gt is ~75.8 m2
     assert np.allclose(sim.area, 75.8, atol=0.1)
 
+    params = deepcopy(default_params)
+    params["heads"] = params["heads"] - 10
+
+    try:
+        sim = ModFlowSimulation(**params)
+        assert False  # This line should trigger an AssertionError
+    except AssertionError:
+        pass
+
 
 def test_step():
     parameters = deepcopy(default_params)
 
-    parameters["heads"][:,] = compress(layer_boundary_elevation[-1], basin_mask) + 5.0
-
     sim = ModFlowSimulation(**parameters)
 
-    # sim.step()
-    groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
-    print("groundwater_content_prev", groundwater_content_prev)
+    groundwater_content_prev = sim.groundwater_content_m3.sum()
+    sim.step()
 
-    for i in range(5):
-        sim.step()
-        drainage_m3 = np.nansum(sim.drainage_m3)
-        groundwater_content = np.nansum(sim.groundwater_content_m3)
-        recharge_m3 = np.nansum(sim.recharge_m3)
-        print("drainge", drainage_m3)
-        print("groundwater_content", groundwater_content)
-        print("recharge_m3", recharge_m3)
-
-    print("drainge", drainage_m3)
-    print("recharge", recharge_m3)
-    print("groundwater_content", groundwater_content)
+    drainage_m3 = sim.drainage_m3.sum()
+    groundwater_content = sim.groundwater_content_m3.sum()
+    recharge_m3 = sim.recharge_m3.sum()
 
     balance_pre = groundwater_content_prev + recharge_m3 - drainage_m3
     balance_post = groundwater_content
@@ -130,36 +127,11 @@ def test_step():
 
 def test_recharge():
     parameters = deepcopy(default_params)
-    parameters["heads"] = parameters["heads"] - 3  # set head lower than drainage
+    parameters["heads"] = parameters["heads"] - 2
 
     sim = ModFlowSimulation(**parameters)
 
-    groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
-
-    recharge = np.full((YSIZE, XSIZE), 0.1)
-    sim.set_recharge_m(compress(recharge, sim.basin_mask))
-    sim.step()
-
-    drainage_m3 = np.nansum(sim.drainage_m3)
-    assert np.nansum(drainage_m3) == 0
-    groundwater_content = np.nansum(sim.groundwater_content_m3)
-
-    assert np.nansum(sim.recharge_m) == np.nansum(sim.recharge_m3 / sim.area)
-
-    recharge_m3 = np.nansum(sim.recharge_m3)
-    balance_pre = groundwater_content_prev + recharge_m3 - drainage_m3
-    balance_post = groundwater_content
-
-    assert math.isclose(balance_pre, balance_post, abs_tol=1, rel_tol=1e-5)
-
-    sim.finalize()
-
-    parameters = deepcopy(default_params)
-    parameters["heads"] = parameters["heads"] - 8.1  # set head below topography
-
-    sim = ModFlowSimulation(**parameters)
-
-    groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
+    groundwater_content_prev = sim.groundwater_content_m3.sum()
 
     recharge = np.full((YSIZE, XSIZE), 0.1)
     sim.set_recharge_m(compress(recharge, sim.basin_mask))
@@ -185,18 +157,20 @@ def test_drainage():
     layer_boundary_elevation = parameters["layer_boundary_elevation"]
     topography = np.full((YSIZE, XSIZE), 0)
 
-    parameters["topography"] = compress(topography, basin_mask)
-    parameters["heads"][0] = compress(topography, basin_mask)
-    parameters["heads"][1] = compress(topography, basin_mask)
+    parameters["topography"] = np.zeros_like(parameters["topography"])
 
     layer_boundary_elevation[0] = compress(topography - 2, basin_mask)
     layer_boundary_elevation[1] = compress(topography - 10, basin_mask)
     layer_boundary_elevation[2] = compress(topography - 20, basin_mask)
 
+    parameters["heads"][0] = layer_boundary_elevation[0]
+    parameters["heads"][1] = layer_boundary_elevation[0]
+
     sim = ModFlowSimulation(**parameters)
 
     groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
 
+    sim.set_recharge_m(compress(np.full((YSIZE, XSIZE), 0.1), sim.basin_mask))
     sim.step()
 
     drainage = np.nansum(sim.drainage_m3)
@@ -206,7 +180,7 @@ def test_drainage():
 
     groundwater_content = np.nansum(sim.groundwater_content_m3)
 
-    balance_pre = groundwater_content_prev - drainage
+    balance_pre = groundwater_content_prev - drainage + sim.recharge_m3.sum()
     balance_post = groundwater_content
 
     assert math.isclose(balance_pre, balance_post, rel_tol=1e-5)
@@ -241,10 +215,16 @@ def test_wells():
     groundwater_abstracton[1, 1] = 0.05
     groundwater_abstracton[4, 5] = 0.20
     groundwater_abstracton[parameters["basin_mask"]] = np.nan
+    groundwater_abstracton = compress(groundwater_abstracton, sim.basin_mask) * sim.area
 
-    total_abstraction = np.nansum(groundwater_abstracton[~basin_mask] * sim.area)
+    # setting an abstraction that is too high should raise an error
+    try:
+        sim.set_groundwater_abstraction_m3(groundwater_abstracton * 1e9)
+        assert False
+    except AssertionError:
+        pass
 
-    sim.set_groundwater_abstraction_m(compress(groundwater_abstracton, sim.basin_mask))
+    sim.set_groundwater_abstraction_m3(groundwater_abstracton)
     sim.step()
 
     drainage = np.nansum(sim.drainage_m3)
@@ -252,10 +232,17 @@ def test_wells():
 
     groundwater_content = sim.groundwater_content_m3.sum()
 
+    total_abstraction = groundwater_abstracton.sum()
     balance_pre = groundwater_content_prev - total_abstraction
     balance_post = groundwater_content
 
     assert math.isclose(balance_pre, balance_post, rel_tol=1e-6)
+
+    for _ in range(100):
+        sim.set_groundwater_abstraction_m3(
+            np.minimum(groundwater_abstracton, sim.available_groundwater_m3)
+        )
+        sim.step()
 
     sim.finalize()
 
@@ -296,7 +283,7 @@ def visualize_modflow_results(sim, axes):
 
 def test_modflow_simulation_with_visualization():
     parameters = deepcopy(default_params)
-    parameters["heads"][:,] = compress(topography, basin_mask) - 1
+    parameters["heads"][:,] = compress(topography, basin_mask)
     sim = ModFlowSimulation(**parameters)
 
     fig, axes = plt.subplots(5, 5, figsize=(15, 10))
@@ -311,8 +298,8 @@ def test_modflow_simulation_with_visualization():
         groundwater_abstracton[2, 2] = 1.25
         groundwater_abstracton[3, 5] = 0.20
 
-        sim.set_groundwater_abstraction_m(
-            compress(groundwater_abstracton, sim.basin_mask)
+        sim.set_groundwater_abstraction_m3(
+            compress(groundwater_abstracton, sim.basin_mask) * sim.area
         )
         sim.step()
 
@@ -364,6 +351,10 @@ def test_get_groundwater_storage_m():
     )
     storage = get_groundwater_storage_m(layer_boundary_elevation, head, specific_yield)
     np.testing.assert_allclose(storage, np.array([37.5, 32.5, 12.5, 10, 0]))
+    storage = get_groundwater_storage_m(
+        layer_boundary_elevation, head, specific_yield, min_remaining_layer_storage_m=1
+    )
+    np.testing.assert_allclose(storage, np.array([36.75, 31.75, 12.25, 9.75, 0.0]))
 
 
 def test_distribute_well_rate_per_layer():
@@ -403,6 +394,26 @@ def test_distribute_well_rate_per_layer():
             [
                 [-10, -10, 0, 0, 0, -2500, 0],
                 [0, 0, -10, -10, 0, -500, 0],
+            ],
+            dtype=np.float64,
+        ),
+    )
+
+    well_rate_per_layer = distribute_well_rate_per_layer(
+        well_rate,
+        layer_boundary_elevation,
+        heads,
+        specific_yield,
+        area,
+        min_remaining_layer_storage_m=1,
+    )
+
+    np.testing.assert_allclose(
+        well_rate_per_layer,
+        np.array(
+            [
+                [-10, -10, 0, 0, 0, -2450, 0],
+                [0, 0, -10, -10, 0, -550, 0],
             ],
             dtype=np.float64,
         ),

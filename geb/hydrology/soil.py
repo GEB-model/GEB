@@ -201,7 +201,7 @@ def get_transpiration_reduction_factor_single(w, wwp, wcrit):
     return factor
 
 
-@njit
+@njit(inline="always")
 def get_root_ratios(
     root_depth,
     soil_layer_height,

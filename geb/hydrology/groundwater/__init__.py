@@ -63,11 +63,26 @@ class GroundWater:
         self.var.leakagelake_factor = 0.001  # in m/day
 
         self.initial_water_table_depth = 2
+
+        def get_initial_head():
+            heads = self.model.data.grid.load(
+                self.model.files["grid"]["groundwater/heads"], layer=None
+            )
+            heads = np.where(
+                ~np.isnan(heads),
+                heads,
+                layer_boundary_elevation[1:] + 0.1,
+            )
+            heads = np.where(
+                heads > layer_boundary_elevation[1:],
+                heads,
+                layer_boundary_elevation[1:] + 0.1,
+            )
+            return heads
+
         self.var.heads = self.model.data.grid.load_initial(
             "heads",
-            default=self.model.data.grid.load(
-                self.model.files["grid"]["groundwater/heads"], layer=None
-            ),
+            default=get_initial_head(),
         )
 
         self.modflow = ModFlowSimulation(
@@ -88,19 +103,18 @@ class GroundWater:
             "capillar", default=self.var.full_compressed(0, dtype=np.float32)
         )
 
-    def step(self, groundwater_recharge, groundwater_abstraction):
-        assert (groundwater_abstraction + 1e-7 >= 0).all()
-        groundwater_abstraction[groundwater_abstraction < 0] = 0
+    def step(self, groundwater_recharge, groundwater_abstraction_m3):
+        assert (groundwater_abstraction_m3 + 1e-7 >= 0).all()
+        groundwater_abstraction_m3[groundwater_abstraction_m3 < 0] = 0
         assert (groundwater_recharge >= 0).all()
 
         groundwater_storage_pre = self.modflow.groundwater_content_m3
 
         self.modflow.set_recharge_m(groundwater_recharge)
-        self.modflow.set_groundwater_abstraction_m(groundwater_abstraction)
+        self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
         self.modflow.step()
 
         drainage_m3 = self.modflow.drainage_m3
-        groundwater_abstraction_m3 = groundwater_abstraction * self.modflow.area
         recharge_m3 = groundwater_recharge * self.modflow.area
         groundwater_storage_post = self.modflow.groundwater_content_m3
 
