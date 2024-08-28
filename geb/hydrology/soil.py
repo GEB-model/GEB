@@ -271,8 +271,8 @@ def get_available_water_infiltration(
     land_use_type,
     crop_kc,
     EWRef,
-    topwater_res,
-    open_water_evaporation_res,
+    topwater,
+    open_water_evaporation,
 ):
     """
     Update the soil water storage based on the water balance calculations.
@@ -297,18 +297,16 @@ def get_available_water_infiltration(
         # paddy irrigated land
         if land_use_type[i] == PADDY_IRRIGATED:
             if crop_kc[i] > np.float32(0.75):
-                topwater_res[i] += available_water_infiltration[i]
+                topwater[i] += available_water_infiltration[i]
 
             assert EWRef[i] >= np.float32(0)
-            open_water_evaporation_res[i] = min(
-                max(np.float32(0.0), topwater_res[i]), EWRef[i]
-            )
-            topwater_res[i] -= open_water_evaporation_res[i]
-            assert topwater_res[i] >= np.float32(0)
+            open_water_evaporation[i] = min(max(np.float32(0.0), topwater[i]), EWRef[i])
+            topwater[i] -= open_water_evaporation[i]
+            assert topwater[i] >= np.float32(0)
             if crop_kc[i] > np.float32(0.75):
-                available_water_infiltration[i] = topwater_res[i]
+                available_water_infiltration[i] = topwater[i]
             else:
-                available_water_infiltration[i] += topwater_res[i]
+                available_water_infiltration[i] += topwater[i]
     return available_water_infiltration
 
 
@@ -329,12 +327,12 @@ def evapotranspirate(
     potential_bare_soil_evaporation,
     potential_evapotranspiration,
     frost_index,
-    capillar,
+    capillary_rise_from_groundwater,
     crop_group_number_per_group,
     w,
-    topwater_res,
-    open_water_evaporation_res,
-    actual_bare_soil_evaporation_res,
+    topwater,
+    open_water_evaporation,
+    actual_bare_soil_evaporation,
     actual_total_transpiration,
 ):
     bottom_soil_layer_index = N_SOIL_LAYERS - 1
@@ -347,7 +345,7 @@ def evapotranspirate(
     is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
     for i in prange(land_use_type.size):
-        w[bottom_soil_layer_index, i] += capillar[
+        w[bottom_soil_layer_index, i] += capillary_rise_from_groundwater[
             i
         ]  # add capillar rise to the bottom soil layer
 
@@ -488,25 +486,24 @@ def evapotranspirate(
 
         if is_bioarea[i]:
             # limit the bare soil evaporation to the available water in the soil
-            if not soil_is_frozen[i] and topwater_res[i] == np.float32(0):
+            if not soil_is_frozen[i] and topwater[i] == np.float32(0):
                 # TODO: Minor bug, this should only occur when topwater is above 0
                 # fix this after completing soil module speedup
-                actual_bare_soil_evaporation_res[i] = min(
+                actual_bare_soil_evaporation[i] = min(
                     max(
                         np.float32(0),
-                        potential_bare_soil_evaporation[i]
-                        - open_water_evaporation_res[i],
+                        potential_bare_soil_evaporation[i] - open_water_evaporation[i],
                     ),
                     max(
                         w[0, i] - wres[0, i], np.float32(0)
                     ),  # can never be lower than 0
                 )
                 # remove the bare soil evaporation from the top layer
-                w[0, i] -= actual_bare_soil_evaporation_res[i]
+                w[0, i] -= actual_bare_soil_evaporation[i]
             else:
                 # if the soil is frozen, no evaporation occurs
                 # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
-                actual_bare_soil_evaporation_res[i] = np.float32(0)
+                actual_bare_soil_evaporation[i] = np.float32(0)
 
 
 @njit(cache=True, parallel=True)
@@ -520,7 +517,7 @@ def infiltrate(
     capillary_rise_index,
     cPrefFlow,
     w,
-    topwater_res,
+    topwater,
 ):
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
     direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
@@ -580,13 +577,13 @@ def infiltrate(
             )
 
         if land_use_type[i] == PADDY_IRRIGATED:
-            topwater_res[i] = max(np.float32(0), topwater_res[i] - infiltration)
+            topwater[i] = max(np.float32(0), topwater[i] - infiltration)
             if crop_kc[i] > np.float32(0.75):
                 # if paddy fields flooded only runoff if topwater > 0.05m
                 direct_runoff[i] = max(
-                    0, topwater_res[i] - np.float32(0.05)
+                    0, topwater[i] - np.float32(0.05)
                 )  # TODO: Potential minor bug, should this be added to runoff instead of replacing runoff?
-            topwater_res[i] = max(np.float32(0), topwater_res[i] - direct_runoff[i])
+            topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
 
         if is_bioarea[i]:
             direct_runoff[i] += runoff_from_groundwater[i]
@@ -603,7 +600,7 @@ def infiltrate(
 
 
 @njit(cache=True, parallel=True)
-def capillary_rise(
+def capillary_rise_between_soil_layers(
     wfc,
     ws,
     wres,
@@ -750,7 +747,7 @@ class Soil(object):
 
         # set the frost index threshold as global variable for numba
         global FROST_INDEX_THRESHOLD
-        FROST_INDEX_THRESHOLD = np.float32(self.var.FrostIndexThreshold)
+        FROST_INDEX_THRESHOLD = np.float32(self.var.frost_indexThreshold)
 
         # θ saturation, field capacity, wilting point and residual moisture content
         thetas = self.model.data.grid.load(
@@ -1045,11 +1042,11 @@ class Soil(object):
 
     def step(
         self,
-        capillar,
+        capillary_rise_from_groundwater,
         open_water_evaporation,
-        potTranspiration,
-        potBareSoilEvap,
-        totalPotET,
+        potential_transpiration,
+        potential_bare_soil_evaporation,
+        potential_evapotranspiration,
     ):
         """
         Dynamic part of the soil module
@@ -1063,111 +1060,118 @@ class Soil(object):
             w_pre = self.var.w.copy()
             topwater_pre = self.var.topwater.copy()
 
-        groundwater_recharge = self.var.full_compressed(0, dtype=np.float32)
         interflow = self.var.full_compressed(0, dtype=np.float32)
 
         timer = TimingModule("Soil")
 
         available_water_infiltration = get_available_water_infiltration(
-            self.var.natural_available_water_infiltration,
-            self.var.actual_irrigation_consumption,
-            self.var.land_use_type,
-            self.var.cropKC,
-            self.var.EWRef,
-            self.var.topwater,
-            open_water_evaporation,
+            natural_available_water_infiltration=self.var.natural_available_water_infiltration,
+            actual_irrigation_consumption=self.var.actual_irrigation_consumption,
+            land_use_type=self.var.land_use_type,
+            crop_kc=self.var.cropKC,
+            EWRef=self.var.EWRef,
+            topwater=self.var.topwater,
+            open_water_evaporation=open_water_evaporation,
         )
+
+        timer.new_split("Available infiltratrion")
 
         evapotranspirate(
-            self.wwp,
-            self.wfc,
-            self.ws,
-            self.wres,
-            self.var.aeration_days_counter,
-            self.soil_layer_height,
-            self.var.land_use_type,
-            self.var.root_depth,
-            self.var.crop_map,
-            self.natural_crop_groups,
-            self.crop_lag_aeration_days,
-            potTranspiration,
-            potBareSoilEvap,
-            totalPotET,
-            self.var.FrostIndex,
-            capillar.astype(np.float32),
-            self.model.agents.crop_farmers.crop_data["crop_group_number"].values.astype(
+            wwp=self.wwp,
+            wfc=self.wfc,
+            ws=self.ws,
+            wres=self.wres,
+            aeration_days_counter=self.var.aeration_days_counter,
+            soil_layer_height=self.soil_layer_height,
+            land_use_type=self.var.land_use_type,
+            root_depth=self.var.root_depth,
+            crop_map=self.var.crop_map,
+            natural_crop_groups=self.natural_crop_groups,
+            crop_lag_aeration_days=self.crop_lag_aeration_days,
+            potential_transpiration=potential_transpiration,
+            potential_bare_soil_evaporation=potential_bare_soil_evaporation,
+            potential_evapotranspiration=potential_evapotranspiration,
+            frost_index=self.var.frost_index,
+            capillary_rise_from_groundwater=capillary_rise_from_groundwater.astype(
                 np.float32
             ),
-            self.var.w,
-            self.var.topwater,
-            open_water_evaporation,
-            self.var.actBareSoilEvap,
-            self.var.actTransTotal,
+            crop_group_number_per_group=self.model.agents.crop_farmers.crop_data[
+                "crop_group_number"
+            ].values.astype(np.float32),
+            w=self.var.w,
+            topwater=self.var.topwater,
+            open_water_evaporation=open_water_evaporation,
+            actual_bare_soil_evaporation=self.var.actual_bare_soil_evaporation,
+            actual_total_transpiration=self.var.actual_total_transpiration,
         )
+
+        timer.new_split("Evapotranspiration")
 
         preferential_flow, direct_runoff = infiltrate(
-            available_water_infiltration,
-            self.ws,
-            self.var.land_use_type,
-            self.var.cropKC,
-            self.var.FrostIndex,
-            self.var.arnoBeta,
-            self.var.capriseindex,
-            self.var.cPrefFlow,
-            self.var.w,
-            self.var.topwater,
+            available_water_infiltration=available_water_infiltration,
+            ws=self.ws,
+            land_use_type=self.var.land_use_type,
+            crop_kc=self.var.cropKC,
+            frost_index=self.var.frost_index,
+            arno_beta=self.var.arnoBeta,
+            capillary_rise_index=self.var.capriseindex,
+            cPrefFlow=self.var.cPrefFlow,
+            w=self.var.w,
+            topwater=self.var.topwater,
         )
 
-        capillary_rise(
-            self.wfc,
-            self.ws,
-            self.wres,
-            self.ksat,
-            self.lambda_pore_size_distribution,
-            self.var.land_use_type,
-            self.var.w,
+        timer.new_split("Infiltration")
+
+        capillary_rise_between_soil_layers(
+            wfc=self.wfc,
+            ws=self.ws,
+            wres=self.wres,
+            saturated_hydraulic_conductivity=self.ksat,
+            lambda_=self.lambda_pore_size_distribution,
+            land_use_type=self.var.land_use_type,
+            w=self.var.w,
         )
+
+        timer.new_split("Capillary rise")
 
         groundwater_recharge = percolate(
-            preferential_flow,
-            self.ws,
-            self.wres,
-            self.ksat,
-            self.lambda_pore_size_distribution,
-            self.var.land_use_type,
-            self.var.FrostIndex,
-            self.var.capriseindex,
-            self.var.w,
+            preferential_flow=preferential_flow,
+            ws=self.ws,
+            wres=self.wres,
+            saturated_hydraulic_conductivity=self.ksat,
+            lambda_=self.lambda_pore_size_distribution,
+            land_use_type=self.var.land_use_type,
+            frost_index=self.var.frost_index,
+            capillary_rise_index=self.var.capriseindex,
+            w=self.var.w,
         )
 
-        timer.new_split("Update soil water storage")
+        timer.new_split("Percolation")
 
         bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
-        self.var.actualET[bioarea] = (
-            self.var.actualET[bioarea]
-            + self.var.actBareSoilEvap[bioarea]
+        self.var.actual_evapotranspiration_total[bioarea] = (
+            self.var.actual_evapotranspiration_total[bioarea]
+            + self.var.actual_bare_soil_evaporation[bioarea]
             + open_water_evaporation[bioarea]
-            + self.var.actTransTotal[bioarea]
+            + self.var.actual_total_transpiration[bioarea]
         )
 
-        print(np.nansum(self.var.w))
-        print(np.nansum(self.var.actBareSoilEvap))
-
         if __debug__:
+            assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
                 name="soil_1",
                 how="cellwise",
                 influxes=[
                     self.var.natural_available_water_infiltration[bioarea],
-                    capillar[bioarea],
+                    capillary_rise_from_groundwater[bioarea],
                     self.var.actual_irrigation_consumption[bioarea],
                 ],
                 outfluxes=[
                     direct_runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    self.var.actTransTotal[bioarea],
-                    self.var.actBareSoilEvap[bioarea],
+                    self.var.actual_total_transpiration[bioarea],
+                    self.var.actual_bare_soil_evaporation[bioarea],
                     open_water_evaporation[bioarea],
                 ],
                 prestorages=[
@@ -1186,7 +1190,7 @@ class Soil(object):
                 how="cellwise",
                 influxes=[
                     self.var.natural_available_water_infiltration[bioarea],
-                    capillar[bioarea],
+                    capillary_rise_from_groundwater[bioarea],
                     self.var.actual_irrigation_consumption[bioarea],
                     self.var.snowEvap[bioarea],
                     self.var.interceptEvap[bioarea],
@@ -1195,7 +1199,7 @@ class Soil(object):
                     direct_runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    self.var.actualET[bioarea],
+                    self.var.actual_evapotranspiration_total[bioarea],
                 ],
                 prestorages=[
                     w_pre[:, bioarea].sum(axis=0),

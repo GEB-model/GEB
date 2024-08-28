@@ -114,8 +114,12 @@ class LandCover(object):
 
         self.var.capriseindex = self.var.full_compressed(0, dtype=np.float32)
 
-        self.var.actBareSoilEvap = self.var.full_compressed(0, dtype=np.float32)
-        self.var.actTransTotal = self.var.full_compressed(0, dtype=np.float32)
+        self.var.actual_bare_soil_evaporation = self.var.full_compressed(
+            0, dtype=np.float32
+        )
+        self.var.actual_total_transpiration = self.var.full_compressed(
+            0, dtype=np.float32
+        )
 
         self.forest_kc_per_10_days = xr.open_dataset(
             self.model.files["forcing"]["landcover/forest/cropCoefficientForest_10days"]
@@ -413,14 +417,14 @@ class LandCover(object):
 
         if self.model.use_gpu:
             self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
-                self.var.actTransTotal.get()[self.var.crop_map != -1]
+                self.var.actual_total_transpiration.get()[self.var.crop_map != -1]
             )
             self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
                 self.var.potTranspiration.get()[self.var.crop_map != -1]
             )
         else:
             self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
-                self.var.actTransTotal[self.var.crop_map != -1]
+                self.var.actual_total_transpiration[self.var.crop_map != -1]
             )
             self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
                 self.var.potTranspiration[self.var.crop_map != -1]
@@ -459,8 +463,8 @@ class LandCover(object):
                     directRunoff,
                     interflow,
                     groundwater_recharge,
-                    self.var.actTransTotal,
-                    self.var.actBareSoilEvap,
+                    self.var.actual_total_transpiration,
+                    self.var.actual_bare_soil_evaporation,
                     openWaterEvap,
                 ],
                 prestorages=[w_pre, topwater_pre],
@@ -497,8 +501,8 @@ class LandCover(object):
                     directRunoff,
                     interflow,
                     groundwater_recharge,
-                    self.var.actTransTotal,
-                    self.var.actBareSoilEvap,
+                    self.var.actual_total_transpiration,
+                    self.var.actual_bare_soil_evaporation,
                     openWaterEvap,
                     self.var.interceptEvap,
                     self.var.snowEvap,

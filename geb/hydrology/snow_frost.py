@@ -64,14 +64,14 @@ class SnowFrost(object):
     SnowCoverS            snow cover for each layer                                                         m
     Kfrost                Snow depth reduction coefficient, (HH, p. 7.28)                                   m-1
     Afrost                Daily decay coefficient, (Handbook of Hydrology, p. 7.28)                         --
-    FrostIndexThreshold   Degree Days Frost Threshold (stops infiltration, percolation and capillary rise)  --
+    frost_indexThreshold   Degree Days Frost Threshold (stops infiltration, percolation and capillary rise)  --
     SnowWaterEquivalent   Snow water equivalent, (based on snow density of 450 kg/m3) (e.g. Tarboton and L  --
-    FrostIndex            FrostIndex - Molnau and Bissel (1983), A Continuous Frozen Ground Index for Floo  --
-    extfrostindex         Flag for second frostindex                                                        --
-    FrostIndexThreshold2  FrostIndex2 - Molnau and Bissel (1983), A Continuous Frozen Ground Index for Flo
+    frost_index            frost_index - Molnau and Bissel (1983), A Continuous Frozen Ground Index for Floo  --
+    extfrost_index         Flag for second frost_index                                                        --
+    frost_indexThreshold2  frost_index2 - Molnau and Bissel (1983), A Continuous Frozen Ground Index for Flo
     frostInd1             forstindex 1
-    frostInd2             frostindex 2
-    frostindexS           array for frostindex
+    frostInd2             frost_index 2
+    frost_indexS           array for frost_index
     prevSnowCover         snow cover of previous day (only for water balance)                               m
     Snow                  Snow (equal to a part of Precipitation)                                           m
     ====================  ================================================================================  =========
@@ -188,15 +188,15 @@ class SnowFrost(object):
         # Initial part of frost index
 
         self.var.Afrost = 0.97
-        self.var.FrostIndexThreshold = 56.0
+        self.var.frost_indexThreshold = 56.0
         self.var.SnowWaterEquivalent = 0.45
 
-        self.var.FrostIndex = self.model.data.HRU.load_initial(
-            "FrostIndex",
+        self.var.frost_index = self.model.data.HRU.load_initial(
+            "frost_index",
             default=self.model.data.HRU.full_compressed(0, dtype=np.float32),
         )
 
-        self.var.extfrostindex = False
+        self.var.extfrost_index = False
 
     def step(self):
         """
@@ -296,9 +296,9 @@ class SnowFrost(object):
             self.var.Rain += RainS
             self.var.SnowMelt += SnowMeltS
 
-            if self.var.extfrostindex:
+            if self.var.extfrost_index:
                 Kfrost = np.where(TavgS < 0, 0.08, 0.5)
-                FrostIndexChangeRate = -(1 - self.var.Afrost) * self.var.frostindexS[
+                frost_indexChangeRate = -(1 - self.var.Afrost) * self.var.frost_indexS[
                     i
                 ] - TavgS * np.exp(
                     -0.4
@@ -308,8 +308,8 @@ class SnowFrost(object):
                         1.0, self.var.SnowCoverS[i] / self.var.SnowWaterEquivalent
                     )
                 )
-                self.var.frostindexS[i] = np.maximum(
-                    self.var.frostindexS[i] + FrostIndexChangeRate, 0
+                self.var.frost_indexS[i] = np.maximum(
+                    self.var.frost_indexS[i] + frost_indexChangeRate, 0
                 )
 
         Snow /= self.numberSnowLayers
@@ -329,9 +329,9 @@ class SnowFrost(object):
         # ---------------------------------------------------------------------------------
         # Dynamic part of frost index
         Kfrost = np.where(tas_C < 0, 0.08, 0.5).astype(tas_C.dtype)
-        FrostIndexChangeRate = -(
+        frost_indexChangeRate = -(
             1 - self.var.Afrost
-        ) * self.var.FrostIndex - tas_C * np.exp(
+        ) * self.var.frost_index - tas_C * np.exp(
             -0.4
             * 100
             * Kfrost
@@ -342,11 +342,13 @@ class SnowFrost(object):
             )
         )
         # Rate of change of frost index (expressed as rate, [degree days/day])
-        self.var.FrostIndex = np.maximum(self.var.FrostIndex + FrostIndexChangeRate, 0)
+        self.var.frost_index = np.maximum(
+            self.var.frost_index + frost_indexChangeRate, 0
+        )
         # frost index in soil [degree days] based on Molnau and Bissel (1983, A Continuous Frozen Ground Index for Flood
         # Forecasting. In: Maidment, Handbook of Hydrology, p. 7.28, 7.55)
-        # if Tavg is above zero, FrostIndex will stay 0
-        # if Tavg is negative, FrostIndex will increase with 1 per degree C per day
+        # if Tavg is above zero, frost_index will stay 0
+        # if Tavg is negative, frost_index will increase with 1 per degree C per day
         # Exponent of 0.04 (instead of 0.4 in HoH): conversion [cm] to [mm]!  -> from cm to m HERE -> 100 * 0.4
         # maximum snowlayer = 1.0 m
         # Division by SnowDensity because SnowDepth is expressed as equivalent water depth(always less than depth of snow pack)

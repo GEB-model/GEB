@@ -54,7 +54,7 @@ class Interception(object):
     SnowMelt              total snow melt from all layers                                                   m
     interceptEvap         simulated evaporation from water intercepted by vegetation                        m
     potTranspiration      Potential transpiration (after removing of evaporation)                           m
-    actualET              simulated evapotranspiration from soil, flooded area and vegetation               m
+    actual_evapotranspiration_total              simulated evapotranspiration from soil, flooded area and vegetation               m
     snowEvap              total evaporation from snow for a snow layers                                     m
     ====================  ================================================================================  =========
 
@@ -180,7 +180,9 @@ class Interception(object):
 
         # update actual evaporation (after interceptEvap)
         # interceptEvap is the first flux in ET, soil evapo and transpiration are added later
-        self.var.actualET = self.var.interceptEvap + self.var.snowEvap
+        self.var.actual_evapotranspiration_total = (
+            self.var.interceptEvap + self.var.snowEvap
+        )
 
         if __debug__:
             balance_check(

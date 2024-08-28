@@ -40,11 +40,11 @@ class SealedWater(object):
     capillar              Simulated flow from groundwater to the third CWATM soil layer                     m
     waterbalance_module
     availWaterInfiltrati  quantity of water reaching the soil after interception, more snowmelt             m
-    actualET              simulated evapotranspiration from soil, flooded area and vegetation               m
+    actual_evapotranspiration_total              simulated evapotranspiration from soil, flooded area and vegetation               m
     directRunoff          Simulated surface runoff                                                          m
     openWaterEvap         Simulated evaporation from open areas                                             m
-    actTransTotal         Total actual transpiration from the three soil layers                             m
-    actBareSoilEvap       Simulated evaporation from the first soil layer                                   m
+    actual_total_transpiration         Total actual transpiration from the three soil layers                             m
+    actual_bare_soil_evaporation       Simulated evaporation from the first soil layer                                   m
     ====================  ================================================================================  =========
 
     **Functions**
@@ -93,13 +93,14 @@ class SealedWater(object):
         assert (directRunoff[sealed_area] >= 0).all()
 
         # open water evaporation is directly substracted from the river, lakes, reservoir
-        self.var.actualET[sealed_area] = (
-            self.var.actualET[sealed_area] + openWaterEvap[sealed_area]
+        self.var.actual_evapotranspiration_total[sealed_area] = (
+            self.var.actual_evapotranspiration_total[sealed_area]
+            + openWaterEvap[sealed_area]
         )
 
         if __debug__:
-            assert (self.var.actTransTotal[sealed_area] == 0).all()
-            assert (self.var.actBareSoilEvap[sealed_area] == 0).all()
+            assert (self.var.actual_total_transpiration[sealed_area] == 0).all()
+            assert (self.var.actual_bare_soil_evaporation[sealed_area] == 0).all()
             balance_check(
                 name="sealed_water",
                 how="cellwise",
@@ -109,8 +110,8 @@ class SealedWater(object):
                 ],
                 outfluxes=[
                     directRunoff[sealed_area],
-                    self.var.actTransTotal[sealed_area],  # is all 0
-                    self.var.actBareSoilEvap[sealed_area],  # is all 0
+                    self.var.actual_total_transpiration[sealed_area],  # is all 0
+                    self.var.actual_bare_soil_evaporation[sealed_area],  # is all 0
                     openWaterEvap[sealed_area],
                 ],
                 tollerance=1e-6,

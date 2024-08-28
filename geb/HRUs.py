@@ -1024,12 +1024,16 @@ class Data:
         )
         self.HRU.SnowCoverS = self.split_HRU_data(self.HRU.SnowCoverS, HRU)
         self.HRU.DeltaTSnow = self.split_HRU_data(self.HRU.DeltaTSnow, HRU)
-        self.HRU.FrostIndex = self.split_HRU_data(self.HRU.FrostIndex, HRU)
+        self.HRU.frost_index = self.split_HRU_data(self.HRU.frost_index, HRU)
         self.HRU.percolationImp = self.split_HRU_data(self.HRU.percolationImp, HRU)
         self.HRU.cropGroupNumber = self.split_HRU_data(self.HRU.cropGroupNumber, HRU)
         self.HRU.capriseindex = self.split_HRU_data(self.HRU.capriseindex, HRU)
-        self.HRU.actBareSoilEvap = self.split_HRU_data(self.HRU.actBareSoilEvap, HRU)
-        self.HRU.actTransTotal = self.split_HRU_data(self.HRU.actTransTotal, HRU)
+        self.HRU.actual_bare_soil_evaporation = self.split_HRU_data(
+            self.HRU.actual_bare_soil_evaporation, HRU
+        )
+        self.HRU.actual_total_transpiration = self.split_HRU_data(
+            self.HRU.actual_total_transpiration, HRU
+        )
         self.HRU.KSat1 = self.split_HRU_data(self.HRU.KSat1, HRU)
         self.HRU.KSat2 = self.split_HRU_data(self.HRU.KSat2, HRU)
         self.HRU.KSat3 = self.split_HRU_data(self.HRU.KSat3, HRU)
