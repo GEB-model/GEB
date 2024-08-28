@@ -43,7 +43,6 @@ class SealedWater(object):
     actual_evapotranspiration_total              simulated evapotranspiration from soil, flooded area and vegetation               m
     directRunoff          Simulated surface runoff                                                          m
     openWaterEvap         Simulated evaporation from open areas                                             m
-    actual_total_transpiration         Total actual transpiration from the three soil layers                             m
     actual_bare_soil_evaporation       Simulated evaporation from the first soil layer                                   m
     ====================  ================================================================================  =========
 
@@ -99,8 +98,6 @@ class SealedWater(object):
         )
 
         if __debug__:
-            assert (self.var.actual_total_transpiration[sealed_area] == 0).all()
-            assert (self.var.actual_bare_soil_evaporation[sealed_area] == 0).all()
             balance_check(
                 name="sealed_water",
                 how="cellwise",
@@ -110,8 +107,6 @@ class SealedWater(object):
                 ],
                 outfluxes=[
                     directRunoff[sealed_area],
-                    self.var.actual_total_transpiration[sealed_area],  # is all 0
-                    self.var.actual_bare_soil_evaporation[sealed_area],  # is all 0
                     openWaterEvap[sealed_area],
                 ],
                 tollerance=1e-6,

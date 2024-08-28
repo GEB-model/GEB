@@ -1031,9 +1031,6 @@ class Data:
         self.HRU.actual_bare_soil_evaporation = self.split_HRU_data(
             self.HRU.actual_bare_soil_evaporation, HRU
         )
-        self.HRU.actual_total_transpiration = self.split_HRU_data(
-            self.HRU.actual_total_transpiration, HRU
-        )
         self.HRU.KSat1 = self.split_HRU_data(self.HRU.KSat1, HRU)
         self.HRU.KSat2 = self.split_HRU_data(self.HRU.KSat2, HRU)
         self.HRU.KSat3 = self.split_HRU_data(self.HRU.KSat3, HRU)

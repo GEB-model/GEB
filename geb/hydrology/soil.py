@@ -332,8 +332,6 @@ def evapotranspirate(
     w,
     topwater,
     open_water_evaporation,
-    actual_bare_soil_evaporation,
-    actual_total_transpiration,
 ):
     bottom_soil_layer_index = N_SOIL_LAYERS - 1
     root_ratios_matrix = np.zeros_like(soil_layer_height)
@@ -341,9 +339,14 @@ def evapotranspirate(
     root_distribution_per_layer_aeration_stress_corrected_matrix = np.zeros_like(
         soil_layer_height
     )
-    runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
+
     is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
+
+    runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
+    actual_total_transpiration = np.zeros_like(land_use_type, dtype=np.float32)
+    actual_bare_soil_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
+
     for i in prange(land_use_type.size):
         w[bottom_soil_layer_index, i] += capillary_rise_from_groundwater[
             i
@@ -444,10 +447,6 @@ def evapotranspirate(
         total_transpiration_reduction_factor_water_stress /= root_depth[i]
         total_aeration_stress /= root_depth[i]
 
-        actual_total_transpiration[i] = (
-            0  # reset the total transpiration TODO: This may be confusing.
-        )
-
         # correct the transpiration reduction factor for water stress
         # if the soil is frozen, no transpiration occurs, so we can skip the loop
         # and thus transpiration is 0 this also avoids division by zero, and thus NaNs
@@ -496,7 +495,7 @@ def evapotranspirate(
                     ),
                     max(
                         w[0, i] - wres[0, i], np.float32(0)
-                    ),  # can never be lower than 0
+                    ),  # soil moisture can never be lower than 0
                 )
                 # remove the bare soil evaporation from the top layer
                 w[0, i] -= actual_bare_soil_evaporation[i]
@@ -504,7 +503,11 @@ def evapotranspirate(
                 # if the soil is frozen, no evaporation occurs
                 # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
                 actual_bare_soil_evaporation[i] = np.float32(0)
-    return runoff_from_groundwater
+    return (
+        runoff_from_groundwater,
+        actual_total_transpiration,
+        actual_bare_soil_evaporation,
+    )
 
 
 @njit(cache=True, parallel=True)
@@ -517,7 +520,7 @@ def infiltrate(
     frost_index,
     arno_beta,
     capillary_rise_index,
-    cPrefFlow,
+    preferential_flow_constant,
     w,
     topwater,
 ):
@@ -559,7 +562,8 @@ def infiltrate(
         # if soil is frozen, there is no preferential flow, also not on paddy fields
         if not soil_is_frozen[i] and land_use_type[i] != PADDY_IRRIGATED:
             preferential_flow[i] = (
-                available_water_infiltration[i] * relative_saturation**cPrefFlow
+                available_water_infiltration[i]
+                * relative_saturation**preferential_flow_constant
             ) * (np.float32(1) - capillary_rise_index[i])
 
         # no infiltration if the soil is frozen
@@ -824,7 +828,7 @@ class Soil(object):
         self.natural_crop_groups = self.model.data.to_HRU(data=self.natural_crop_groups)
 
         # ------------ Preferential Flow constant ------------------------------------------
-        self.var.cPrefFlow = np.float32(
+        self.preferential_flow_constant = np.float32(
             self.model.config["parameters"]["preferentialFlowConstant"]
         )
 
@@ -1077,7 +1081,11 @@ class Soil(object):
 
         timer.new_split("Available infiltratrion")
 
-        runoff_from_groundwater = evapotranspirate(
+        (
+            runoff_from_groundwater,
+            actual_total_transpiration,
+            actual_bare_soil_evaporation,
+        ) = evapotranspirate(
             wwp=self.wwp,
             wfc=self.wfc,
             ws=self.ws,
@@ -1102,8 +1110,6 @@ class Soil(object):
             w=self.var.w,
             topwater=self.var.topwater,
             open_water_evaporation=open_water_evaporation,
-            actual_bare_soil_evaporation=self.var.actual_bare_soil_evaporation,
-            actual_total_transpiration=self.var.actual_total_transpiration,
         )
 
         timer.new_split("Evapotranspiration")
@@ -1117,7 +1123,7 @@ class Soil(object):
             frost_index=self.var.frost_index,
             arno_beta=self.var.arnoBeta,
             capillary_rise_index=self.var.capriseindex,
-            cPrefFlow=self.var.cPrefFlow,
+            preferential_flow_constant=self.preferential_flow_constant,
             w=self.var.w,
             topwater=self.var.topwater,
         )
@@ -1153,9 +1159,9 @@ class Soil(object):
         bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
         self.var.actual_evapotranspiration_total[bioarea] = (
             self.var.actual_evapotranspiration_total[bioarea]
-            + self.var.actual_bare_soil_evaporation[bioarea]
+            + actual_bare_soil_evaporation[bioarea]
             + open_water_evaporation[bioarea]
-            + self.var.actual_total_transpiration[bioarea]
+            + actual_total_transpiration[bioarea]
         )
 
         if __debug__:
@@ -1172,8 +1178,8 @@ class Soil(object):
                     direct_runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    self.var.actual_total_transpiration[bioarea],
-                    self.var.actual_bare_soil_evaporation[bioarea],
+                    actual_total_transpiration[bioarea],
+                    actual_bare_soil_evaporation[bioarea],
                     open_water_evaporation[bioarea],
                 ],
                 prestorages=[
@@ -1223,4 +1229,6 @@ class Soil(object):
             direct_runoff,
             groundwater_recharge,
             open_water_evaporation,
+            actual_total_transpiration,
+            actual_bare_soil_evaporation,
         )
