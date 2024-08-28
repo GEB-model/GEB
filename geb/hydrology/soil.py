@@ -265,40 +265,14 @@ PERCOLATION_SUBSTEPS = np.int32(3)
 
 
 @njit(cache=True, parallel=True)
-def update_soil_water_storage(
-    wwp,
-    wfc,
-    ws,
-    wres,
-    aeration_days_counter,
-    soil_layer_height,
-    saturated_hydraulic_conductivity,
-    lambda_,
-    land_use_type,
-    root_depth,
-    actual_irrigation_consumption,
+def get_water_available_infiltration(
     natural_available_water_infiltration,
+    actual_irrigation_consumption,
+    land_use_type,
     crop_kc,
-    crop_map,
-    natural_crop_groups,
-    crop_lag_aeration_days,
     EWRef,
-    potential_transpiration,
-    potential_bare_soil_evaporation,
-    potential_evapotranspiration,
-    frost_index,
-    arno_beta,
-    capillar,
-    capillary_rise_index,
-    crop_group_number_per_group,
-    cPrefFlow,
-    w,
     topwater_res,
     open_water_evaporation_res,
-    actual_bare_soil_evaporation_res,
-    actual_total_transpiration,
-    groundwater_recharge,
-    direct_runoff,
 ):
     """
     Update the soil water storage based on the water balance calculations.
@@ -313,20 +287,7 @@ def update_soil_water_storage(
     the compiler to optimize the code better.
     """
 
-    bottom_soil_layer_index = N_SOIL_LAYERS - 1
-    root_ratios_matrix = np.zeros_like(soil_layer_height)
-    root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
-    root_distribution_per_layer_aeration_stress_corrected_matrix = np.zeros_like(
-        soil_layer_height
-    )
-    capillary_rise_soil_matrix = np.zeros_like(soil_layer_height)
-    percolation_matrix = np.zeros_like(soil_layer_height)
-    preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
     available_water_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
-    runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
-    is_bioarea = land_use_type < SEALED
-    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
-
     for i in prange(land_use_type.size):
         available_water_infiltration[i] = (
             natural_available_water_infiltration[i] + actual_irrigation_consumption[i]
@@ -348,14 +309,57 @@ def update_soil_water_storage(
                 available_water_infiltration[i] = topwater_res[i]
             else:
                 available_water_infiltration[i] += topwater_res[i]
+    return available_water_infiltration
 
-            # TODO: Minor bug, this should only occur when topwater is above 0
-            # fix this after completing soil module speedup
-            potential_bare_soil_evaporation[i] = max(
-                np.float32(0),
-                potential_bare_soil_evaporation[i] - open_water_evaporation_res[i],
-            )
 
+@njit(cache=True, parallel=True)
+def update_soil_water_storage(
+    water_available_infiltration,
+    wwp,
+    wfc,
+    ws,
+    wres,
+    aeration_days_counter,
+    soil_layer_height,
+    saturated_hydraulic_conductivity,
+    lambda_,
+    land_use_type,
+    root_depth,
+    actual_irrigation_consumption,
+    crop_kc,
+    crop_map,
+    natural_crop_groups,
+    crop_lag_aeration_days,
+    potential_transpiration,
+    potential_bare_soil_evaporation,
+    potential_evapotranspiration,
+    frost_index,
+    arno_beta,
+    capillar,
+    capillary_rise_index,
+    crop_group_number_per_group,
+    cPrefFlow,
+    w,
+    topwater_res,
+    open_water_evaporation_res,
+    actual_bare_soil_evaporation_res,
+    actual_total_transpiration,
+    groundwater_recharge,
+    direct_runoff,
+):
+    bottom_soil_layer_index = N_SOIL_LAYERS - 1
+    root_ratios_matrix = np.zeros_like(soil_layer_height)
+    root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
+    root_distribution_per_layer_aeration_stress_corrected_matrix = np.zeros_like(
+        soil_layer_height
+    )
+    capillary_rise_soil_matrix = np.zeros_like(soil_layer_height)
+    percolation_matrix = np.zeros_like(soil_layer_height)
+    preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
+    available_water_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
+    runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
+    is_bioarea = land_use_type < SEALED
+    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
     for i in prange(land_use_type.size):
         w[bottom_soil_layer_index, i] += capillar[
             i
@@ -499,8 +503,14 @@ def update_soil_water_storage(
         if is_bioarea[i]:
             # limit the bare soil evaporation to the available water in the soil
             if not soil_is_frozen[i] and topwater_res[i] == np.float32(0):
+                # TODO: Minor bug, this should only occur when topwater is above 0
+                # fix this after completing soil module speedup
                 actual_bare_soil_evaporation_res[i] = min(
-                    potential_bare_soil_evaporation[i],
+                    max(
+                        np.float32(0),
+                        potential_bare_soil_evaporation[i]
+                        - open_water_evaporation_res[i],
+                    ),
                     max(
                         w[0, i] - wres[0, i], np.float32(0)
                     ),  # can never be lower than 0
@@ -1019,7 +1029,18 @@ class Soil(object):
 
         timer = TimingModule("Soil")
 
+        water_available_infiltration = get_water_available_infiltration(
+            self.var.natural_available_water_infiltration,
+            self.var.actual_irrigation_consumption,
+            self.var.land_use_type,
+            self.var.cropKC,
+            self.var.EWRef,
+            self.var.topwater,
+            open_water_evaporation,
+        )
+
         update_soil_water_storage(
+            water_available_infiltration,
             self.wwp,
             self.wfc,
             self.ws,
@@ -1031,12 +1052,10 @@ class Soil(object):
             self.var.land_use_type,
             self.var.root_depth,
             self.var.actual_irrigation_consumption,
-            self.var.natural_available_water_infiltration,
             self.var.cropKC,
             self.var.crop_map,
             self.natural_crop_groups,
             self.crop_lag_aeration_days,
-            self.var.EWRef,
             potTranspiration,
             potBareSoilEvap,
             totalPotET,
@@ -1066,6 +1085,9 @@ class Soil(object):
             + open_water_evaporation[bioarea]
             + self.var.actTransTotal[bioarea]
         )
+
+        print(np.nansum(self.var.w))
+        print(np.nansum(self.var.actBareSoilEvap))
 
         if __debug__:
             balance_check(
