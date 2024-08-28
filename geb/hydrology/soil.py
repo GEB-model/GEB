@@ -504,11 +504,13 @@ def evapotranspirate(
                 # if the soil is frozen, no evaporation occurs
                 # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
                 actual_bare_soil_evaporation[i] = np.float32(0)
+    return runoff_from_groundwater
 
 
 @njit(cache=True, parallel=True)
 def infiltrate(
     available_water_infiltration,
+    runoff_from_groundwater,
     ws,
     land_use_type,
     crop_kc,
@@ -521,7 +523,6 @@ def infiltrate(
 ):
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
     direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
-    runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
 
     is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
@@ -1076,7 +1077,7 @@ class Soil(object):
 
         timer.new_split("Available infiltratrion")
 
-        evapotranspirate(
+        runoff_from_groundwater = evapotranspirate(
             wwp=self.wwp,
             wfc=self.wfc,
             ws=self.ws,
@@ -1109,6 +1110,7 @@ class Soil(object):
 
         preferential_flow, direct_runoff = infiltrate(
             available_water_infiltration=available_water_infiltration,
+            runoff_from_groundwater=runoff_from_groundwater,
             ws=self.ws,
             land_use_type=self.var.land_use_type,
             crop_kc=self.var.cropKC,
