@@ -416,7 +416,9 @@ def build(
             "geom": region["geometry"],
         }
     else:
-        raise ValueError("No region specified in config file.")
+        raise ValueError(
+            "No region specified in config file, should be 'basin', 'pour_point' or 'geometry'."
+        )
 
     geb_model.build(
         opt=configread(build_config),
