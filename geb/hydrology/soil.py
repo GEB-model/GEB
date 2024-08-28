@@ -313,20 +313,15 @@ def get_water_available_infiltration(
 
 
 @njit(cache=True, parallel=True)
-def update_soil_water_storage(
-    water_available_infiltration,
+def evapotranspirate(
     wwp,
     wfc,
     ws,
     wres,
     aeration_days_counter,
     soil_layer_height,
-    saturated_hydraulic_conductivity,
-    lambda_,
     land_use_type,
     root_depth,
-    actual_irrigation_consumption,
-    crop_kc,
     crop_map,
     natural_crop_groups,
     crop_lag_aeration_days,
@@ -334,18 +329,13 @@ def update_soil_water_storage(
     potential_bare_soil_evaporation,
     potential_evapotranspiration,
     frost_index,
-    arno_beta,
     capillar,
-    capillary_rise_index,
     crop_group_number_per_group,
-    cPrefFlow,
     w,
     topwater_res,
     open_water_evaporation_res,
     actual_bare_soil_evaporation_res,
     actual_total_transpiration,
-    groundwater_recharge,
-    direct_runoff,
 ):
     bottom_soil_layer_index = N_SOIL_LAYERS - 1
     root_ratios_matrix = np.zeros_like(soil_layer_height)
@@ -353,10 +343,6 @@ def update_soil_water_storage(
     root_distribution_per_layer_aeration_stress_corrected_matrix = np.zeros_like(
         soil_layer_height
     )
-    capillary_rise_soil_matrix = np.zeros_like(soil_layer_height)
-    percolation_matrix = np.zeros_like(soil_layer_height)
-    preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
-    available_water_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
     runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
     is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
@@ -522,6 +508,33 @@ def update_soil_water_storage(
                 # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
                 actual_bare_soil_evaporation_res[i] = np.float32(0)
 
+
+@njit(cache=True, parallel=True)
+def update_soil_water_storage(
+    available_water_infiltration,
+    wfc,
+    ws,
+    wres,
+    soil_layer_height,
+    saturated_hydraulic_conductivity,
+    lambda_,
+    land_use_type,
+    crop_kc,
+    frost_index,
+    arno_beta,
+    capillary_rise_index,
+    cPrefFlow,
+    w,
+    topwater_res,
+    groundwater_recharge,
+    direct_runoff,
+):
+    capillary_rise_soil_matrix = np.zeros_like(soil_layer_height)
+    percolation_matrix = np.zeros_like(soil_layer_height)
+    preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
+    runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
+    is_bioarea = land_use_type < SEALED
+    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
     for i in prange(land_use_type.size):
         # estimate the infiltration capacity
         # use first 2 soil layers to estimate distribution between runoff and infiltration
@@ -1039,20 +1052,15 @@ class Soil(object):
             open_water_evaporation,
         )
 
-        update_soil_water_storage(
-            water_available_infiltration,
+        evapotranspirate(
             self.wwp,
             self.wfc,
             self.ws,
             self.wres,
             self.var.aeration_days_counter,
             self.soil_layer_height,
-            self.ksat,
-            self.lambda_pore_size_distribution,
             self.var.land_use_type,
             self.var.root_depth,
-            self.var.actual_irrigation_consumption,
-            self.var.cropKC,
             self.var.crop_map,
             self.natural_crop_groups,
             self.crop_lag_aeration_days,
@@ -1060,18 +1068,33 @@ class Soil(object):
             potBareSoilEvap,
             totalPotET,
             self.var.FrostIndex,
-            self.var.arnoBeta,
             capillar.astype(np.float32),
-            self.var.capriseindex,
             self.model.agents.crop_farmers.crop_data["crop_group_number"].values.astype(
                 np.float32
             ),
-            self.var.cPrefFlow,
             self.var.w,
             self.var.topwater,
             open_water_evaporation,
             self.var.actBareSoilEvap,
             self.var.actTransTotal,
+        )
+
+        update_soil_water_storage(
+            water_available_infiltration,
+            self.wfc,
+            self.ws,
+            self.wres,
+            self.soil_layer_height,
+            self.ksat,
+            self.lambda_pore_size_distribution,
+            self.var.land_use_type,
+            self.var.cropKC,
+            self.var.FrostIndex,
+            self.var.arnoBeta,
+            self.var.capriseindex,
+            self.var.cPrefFlow,
+            self.var.w,
+            self.var.topwater,
             groundwater_recharge,
             direct_runoff,
         )
