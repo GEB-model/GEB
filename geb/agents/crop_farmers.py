@@ -2593,7 +2593,7 @@ class CropFarmers(AgentBaseClass):
             spei_prob = spei_prob[mask]
 
             # Set the a and b values of last year to prevent no values on this year
-            if not ((self.farmer_yield_probability_relation == None).all()):
+            if not ((self.farmer_yield_probability_relation is None).all()):
                 a, b = np.median(
                     self.farmer_yield_probability_relation[
                         np.where(
