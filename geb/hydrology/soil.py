@@ -265,7 +265,7 @@ PERCOLATION_SUBSTEPS = np.int32(3)
 
 
 @njit(cache=True, parallel=True)
-def get_water_available_infiltration(
+def get_available_water_infiltration(
     natural_available_water_infiltration,
     actual_irrigation_consumption,
     land_use_type,
@@ -510,14 +510,9 @@ def evapotranspirate(
 
 
 @njit(cache=True, parallel=True)
-def update_soil_water_storage(
+def infiltrate(
     available_water_infiltration,
-    wfc,
     ws,
-    wres,
-    soil_layer_height,
-    saturated_hydraulic_conductivity,
-    lambda_,
     land_use_type,
     crop_kc,
     frost_index,
@@ -526,13 +521,11 @@ def update_soil_water_storage(
     cPrefFlow,
     w,
     topwater_res,
-    groundwater_recharge,
-    direct_runoff,
 ):
-    capillary_rise_soil_matrix = np.zeros_like(soil_layer_height)
-    percolation_matrix = np.zeros_like(soil_layer_height)
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
+    direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
     runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
+
     is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
     for i in prange(land_use_type.size):
@@ -605,6 +598,30 @@ def update_soil_water_storage(
                 w[0, i] - ws[0, i]
             )  # TODO: Solve edge case of the second layer being full, in principle this should not happen as infiltration should be capped by the infilation capacity
             w[0, i] = ws[0, i]
+
+    return preferential_flow, direct_runoff
+
+
+@njit(cache=True, parallel=True)
+def update_soil_water_storage(
+    preferential_flow,
+    wfc,
+    ws,
+    wres,
+    soil_layer_height,
+    saturated_hydraulic_conductivity,
+    lambda_,
+    land_use_type,
+    frost_index,
+    capillary_rise_index,
+    w,
+):
+    capillary_rise_soil_matrix = np.zeros_like(soil_layer_height)
+    percolation_matrix = np.zeros_like(soil_layer_height)
+    groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
+
+    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
+    is_bioarea = land_use_type < SEALED
 
     for i in prange(land_use_type.size):
         # capillary rise between soil layers, iterate from top, but skip bottom (which is has capillary rise from groundwater)
@@ -695,6 +712,7 @@ def update_soil_water_storage(
                 groundwater_recharge[i] = (
                     percolation_to_groundwater + preferential_flow[i]
                 )
+    return groundwater_recharge
 
 
 class Soil(object):
@@ -1037,12 +1055,11 @@ class Soil(object):
             topwater_pre = self.var.topwater.copy()
 
         groundwater_recharge = self.var.full_compressed(0, dtype=np.float32)
-        direct_runoff = self.var.full_compressed(0, dtype=np.float32)
         interflow = self.var.full_compressed(0, dtype=np.float32)
 
         timer = TimingModule("Soil")
 
-        water_available_infiltration = get_water_available_infiltration(
+        available_water_infiltration = get_available_water_infiltration(
             self.var.natural_available_water_infiltration,
             self.var.actual_irrigation_consumption,
             self.var.land_use_type,
@@ -1079,14 +1096,9 @@ class Soil(object):
             self.var.actTransTotal,
         )
 
-        update_soil_water_storage(
-            water_available_infiltration,
-            self.wfc,
+        preferential_flow, direct_runoff = infiltrate(
+            available_water_infiltration,
             self.ws,
-            self.wres,
-            self.soil_layer_height,
-            self.ksat,
-            self.lambda_pore_size_distribution,
             self.var.land_use_type,
             self.var.cropKC,
             self.var.FrostIndex,
@@ -1095,8 +1107,20 @@ class Soil(object):
             self.var.cPrefFlow,
             self.var.w,
             self.var.topwater,
-            groundwater_recharge,
-            direct_runoff,
+        )
+
+        groundwater_recharge = update_soil_water_storage(
+            preferential_flow,
+            self.wfc,
+            self.ws,
+            self.wres,
+            self.soil_layer_height,
+            self.ksat,
+            self.lambda_pore_size_distribution,
+            self.var.land_use_type,
+            self.var.FrostIndex,
+            self.var.capriseindex,
+            self.var.w,
         )
 
         timer.new_split("Update soil water storage")
