@@ -603,25 +603,16 @@ def infiltrate(
 
 
 @njit(cache=True, parallel=True)
-def update_soil_water_storage(
-    preferential_flow,
+def capillary_rise(
     wfc,
     ws,
     wres,
-    soil_layer_height,
     saturated_hydraulic_conductivity,
     lambda_,
     land_use_type,
-    frost_index,
-    capillary_rise_index,
     w,
 ):
-    capillary_rise_soil_matrix = np.zeros_like(soil_layer_height)
-    percolation_matrix = np.zeros_like(soil_layer_height)
-    groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
-
-    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
-    is_bioarea = land_use_type < SEALED
+    capillary_rise_soil_matrix = np.zeros_like(w)
 
     for i in prange(land_use_type.size):
         # capillary rise between soil layers, iterate from top, but skip bottom (which is has capillary rise from groundwater)
@@ -661,6 +652,24 @@ def update_soil_water_storage(
             if layer != 0:
                 w[layer, i] -= capillary_rise_soil_matrix[layer - 1, i]
 
+
+@njit(cache=True, parallel=True)
+def percolate(
+    preferential_flow,
+    ws,
+    wres,
+    saturated_hydraulic_conductivity,
+    lambda_,
+    land_use_type,
+    frost_index,
+    capillary_rise_index,
+    w,
+):
+    percolation_matrix = np.zeros_like(w)
+    groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
+
+    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
+    is_bioarea = land_use_type < SEALED
     for i in prange(land_use_type.size):
         # percolcation (top to bottom soil layer)
         percolation_to_groundwater = np.float32(0.0)
@@ -1109,12 +1118,20 @@ class Soil(object):
             self.var.topwater,
         )
 
-        groundwater_recharge = update_soil_water_storage(
-            preferential_flow,
+        capillary_rise(
             self.wfc,
             self.ws,
             self.wres,
-            self.soil_layer_height,
+            self.ksat,
+            self.lambda_pore_size_distribution,
+            self.var.land_use_type,
+            self.var.w,
+        )
+
+        groundwater_recharge = percolate(
+            preferential_flow,
+            self.ws,
+            self.wres,
             self.ksat,
             self.lambda_pore_size_distribution,
             self.var.land_use_type,
