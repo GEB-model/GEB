@@ -6,6 +6,11 @@ import xarray as xr
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+from hydromt_sfincs import SfincsModel
+import hydromt
+from shapely.geometry import Point
+from rasterio.features import shapes
+import matplotlib.pyplot as plt 
 
 from sfincs_river_flood_simulator import (
     build_sfincs,
@@ -90,14 +95,68 @@ class SFINCS:
         ):
             build_parameters["simulate_coastal_floods"] = True
 
+        def vectorize(data, nodata, transform, crs, name="value"):
+                feats_gen = shapes(data, mask=data != nodata, transform=transform)
+                feats = [{"geometry": geom, "properties": {name: val}} for geom, val in feats_gen]
+                gdf = gpd.GeoDataFrame.from_features(feats, crs=crs)
+                gdf[name] = gdf[name].astype(data.dtype)
+                return gdf
+        
+        region = gpd.read_file(self.model.model_structure["geoms"]["areamaps/region"])
+        sf = SfincsModel(data_libs= self.data_catalogs)
+        catchment_outline_flwdir = sf.data_catalog.get_rasterdataset("merit_hydro", variables=["flwdir"],geom=region,buffer=100)
+        flw = hydromt.flw.flwdir_from_da(catchment_outline_flwdir, ftype='d8', check_ftype=True, mask=None)
+        min_area = 300 # TODO: make automatic based on upstream area of catchment/catchment size 
+        subbas, idxs_out = flw.subbasins_area(min_area)
+        catchment_outline = vectorize(subbas.astype(np.int32), nodata=0, transform = flw.transform, crs=4326, name="basin")
+        catchment_outline = catchment_outline.to_crs(28992)
+
+        def extract_middle_basin(gdf):
+            # Calculate the centroid of each basin
+            gdf['centroid'] = gdf.geometry.centroid
+    
+            # Calculate the geometric center (mean of centroids) of all basins
+            mean_x = gdf.centroid.x.mean()
+            mean_y = gdf.centroid.y.mean()
+            geometric_center = Point(mean_x, mean_y)
+    
+            # Find the basin whose centroid is closest to the geometric center
+            gdf['distance_to_center'] = gdf.centroid.apply(lambda x: x.distance(geometric_center))
+            middle_basin = gdf.loc[gdf['distance_to_center'].idxmin()]
+    
+            # Return the middle basin as a new GeoDataFrame
+            middle_basin_gdf = gpd.GeoDataFrame([middle_basin], geometry='geometry')
+    
+            # Remove the temporary columns before returning
+            middle_basin_gdf = middle_basin_gdf.drop(columns=['centroid', 'distance_to_center'])
+
+            middle_basin_gdf = middle_basin_gdf.set_crs(28992)
+    
+            return middle_basin_gdf
+
+        # Assuming gdf_basins is your GeoDataFrame containing the basins
+        middle_basin = extract_middle_basin(catchment_outline)
+        print(catchment_outline)
+        catchment_outline = catchment_outline.drop(columns=["centroid", "distance_to_center"])
+        catchment_outline.to_file("catchment_outline.gpkg", driver="GPKG")
+        #print("catchment outline is made and saved")
+        #print(catchment_outline)
+
+        middle_basin.to_file("middle_basin.gpkg", driver = "GPKG")
+        print("middle basin is selected:")
+        print(middle_basin)
+        middle_basin = middle_basin.to_crs(4326)
+        print(middle_basin)
+
         build_parameters.update(
             {
                 "config_fn": str(config_fn),
                 "model_root": self.sfincs_model_root(event_name),
                 "data_catalogs": self.data_catalogs,
-                "mask": gpd.read_file(
-                    self.model.model_structure["geoms"]["areamaps/region"]
-                ),
+                "mask": middle_basin,
+                # "mask": gpd.read_file(
+                #     self.model.model_structure["geoms"]["areamaps/region"]
+                # ),
                 "method": "precipitation",
             }
         )
@@ -177,16 +236,20 @@ class SFINCS:
             self.model.timestep_length / substeps
         )
         discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
-        sfincs_precipitation = (
-            xr.open_dataset(
-                self.model.model_structure["forcing"]["climate/pr_hourly"]
-            ).rename(pr_hourly="precip")["precip"]
-            * 3600
-        )  # convert from kg/m2/s to mm/h for
-        sfincs_precipitation.raster.set_crs(
+
+        sfincs_precipitation = event.get("precipitation", None)
+
+        if sfincs_precipitation is None:
+            sfincs_precipitation = (
+                xr.open_dataset(
+                    self.model.model_structure["forcing"]["climate/pr_hourly"]
+                    ).rename(pr_hourly="precip")["precip"]
+                    * 3600
+            )  # convert from kg/m2/s to mm/h for
+            sfincs_precipitation.raster.set_crs(
             4326
-        )  # TODO: Remove when this is added to hydromt_sfincs
-        sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
+            )  # TODO: Remove when this is added to hydromt_sfincs
+            sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
 
         event_name = self.get_event_name(event)
 
@@ -206,24 +269,83 @@ class SFINCS:
         )
         return None
 
-    def run(self, event):
-        start_time = event["start_time"]
+    def run_single_event(self, event, start_time, return_period=None):
         self.setup(event, force_overwrite=False)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
-
         event_name = self.get_event_name(event)
-        run_sfincs_simulation(simulation_root=self.sfincs_simulation_root(event_name))
+        run_sfincs_simulation(root=self.sfincs_simulation_root(event_name))
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
-        )  # xc, yc is for x and y in rotated grid
-        self.flood(flood_map, folder=self.folder)
+            return_period = return_period
+        )  # xc, yc is for x and y in rotated grid`DD`
+        damages = self.flood(flood_map, folder=self.folder, return_period=return_period)
+        return damages
 
-    def flood(self, flood_map, folder):
-        self.model.agents.households.flood(flood_map, folder)
+    def scale_event(self, event, scale_factor):
+        scaled_event = event.copy()
+        sfincs_precipitation = (
+            xr.open_dataset(
+                self.model.model_structure["forcing"]["climate/pr_hourly"]
+            ).rename(pr_hourly="precip")["precip"]
+            * 3600 * scale_factor
+        )  # convert from kg/m2/s to mm/h for
+        sfincs_precipitation.raster.set_crs(
+            4326
+        )  # TODO: Remove when this is added to hydromt_sfincs
+        sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
+
+        scaled_event["precipitation"] = sfincs_precipitation
+        print(scaled_event)
+        return scaled_event
+        
+
+    def run(self, event):
+        start_time = event["start_time"]
+
+        if self.model.config["general"]["calculate_flood_risk"]:
+            scale_factors = pd.read_csv(self.model.model_structure["table"]["floodrisk/rainfall_scaling_factors"])
+            damages_list = []
+            return_periods_list = []
+            exceedence_probabilities_list = [] 
+            for index, row in scale_factors.iterrows():
+                return_period = row["return_period"]
+                exceedence_probability = row["exceedence_prob"]
+                scale_factor = row["scale"]
+                scaled_event = self.scale_event(event, scale_factor)
+                damages = self.run_single_event(scaled_event, start_time, return_period)
+           
+                damages_list.append(damages)
+                return_periods_list.append(return_period)
+                exceedence_probabilities_list.append(exceedence_probability)
+
+            print(damages_list)
+            print(return_periods_list)
+            print(exceedence_probabilities_list)
+
+            plt.plot(return_periods_list, damages_list)
+            plt.xlabel("Return period")
+            plt.ylabel("Flood damages [euro]")
+            plt.title("Damages per return period")
+            plt.show()
+
+            inverted_damage_list = damages_list[::-1]
+            inverted_exceedence_probabilities_list = exceedence_probabilities_list[::-1]
+
+            expected_annual_damage = np.trapz(y=inverted_damage_list, x=inverted_exceedence_probabilities_list) #np.trapezoid or np.trapz -> depends on np version
+            print(f"exptected annual damage is: {expected_annual_damage}")
+        
+        else:
+            self.run_single_event(event, start_time)
+
+    def flood(self, flood_map, folder, return_period):
+        damages = self.model.agents.households.flood(flood_map, folder, return_period)
+        print(f"damages in the flood.household function are: {damages}")
+        return damages
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
             self.model.data.grid.discharge_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
+

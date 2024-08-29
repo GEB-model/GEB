@@ -81,7 +81,7 @@ class Households(AgentBaseClass):
 
                
 
-    def flood(self, flood_map, folder):
+    def flood(self, flood_map, folder, return_period=None):
         self.flood_depth.fill(0)  # Reset flood depth for all households
 
         import matplotlib.pyplot as plt
@@ -118,22 +118,24 @@ class Households(AgentBaseClass):
 
         print("mean risk perception", self.risk_perception.mean())
 
-             
-        flood_map=join(folder, "hmax.tif")
-        #flood_map = r"C:\Users\vbl220\Downloads\hmax_veerle.tif"
+        if return_period is not None:     
+            flood_map=join(folder, f"hmax RP {int(return_period)}.tif")
+        else:
+            flood_map = join(folder,"hmax.tif")
+        print(f"using this flood map: {flood_map}")
         
         #Call RasterScanner and VectorScanner 
         loss_landuse = RasterScanner(landuse_file=self.landuse,
                                      hazard_file=flood_map,
                                      curve_path=self.curves_landuse,maxdam_path=self.max_dam_landuse, lu_crs=4326, haz_crs=32631, dtype=np.int32, save=True, scenario_name='raster')   
 
-        print(loss_landuse)
+        #print(loss_landuse)
         
         damages_buildings_structure = VectorScanner(exposure_file=self.selected_buildings,
                   hazard_file=flood_map,
                   curve_path=self.curves_buildings_structure,
                   maxdam_path = self.max_dam_buildings_structure,
-                  cell_size = 10,
+                  cell_size = 25,
                   exp_crs= 32631, 
                   haz_crs= 32631,                 
                   object_col='landuse',
@@ -147,15 +149,15 @@ class Households(AgentBaseClass):
                   scenario_name = 'building_structure2'
                   )
 
-        print(damages_buildings_structure)
-        total_damage = damages_buildings_structure['damage'].sum()
-        print(total_damage)
+        #print(damages_buildings_structure)
+        total_damage_structure = damages_buildings_structure['damage'].sum()
+       # print(total_damage_structure)
                   
         damages_buildings_contents = VectorScanner(exposure_file=self.centroid_gdf,
                   hazard_file=flood_map,
                   curve_path=self.curves_buildings_contents,
                   maxdam_path = self.max_dam_buildings_contents,
-                  cell_size = 10,
+                  cell_size = 25,
                   exp_crs=32631,
                   haz_crs=32631,                   
                   object_col='landuse',
@@ -168,18 +170,18 @@ class Households(AgentBaseClass):
                   grouped=False,
                   scenario_name = 'building_contents2'
                  )
-        print(damages_buildings_contents)
+       # print(damages_buildings_contents)
         total_damages_contents = damages_buildings_contents['damage'].sum()
-        print(total_damages_contents)
+       # print(total_damages_contents)
 
-        total_damages_buildings = total_damage +total_damages_contents
-        print(total_damages_buildings)
+        total_damages_buildings = total_damage_structure + total_damages_contents
+      #  print(total_damages_buildings)
 
         damages_roads = VectorScanner(exposure_file=self.roads,
                   hazard_file=flood_map,
                   curve_path=self.curves_road,
                   maxdam_path = self.max_dam_road,
-                  cell_size = 10,
+                  cell_size = 25,
                   exp_crs=32631,
                   haz_crs=32631,                   
                   object_col='highway',
@@ -192,15 +194,15 @@ class Households(AgentBaseClass):
                   grouped=False,
                   scenario_name = 'roads'
                  )
-        print(damages_roads)
+      #  print(damages_roads)
         total_damages_roads = damages_roads['damage'].sum()
-        print(total_damages_roads)
+      #  print(total_damages_roads)
 
         damages_rail = VectorScanner(exposure_file=self.rail,
                   hazard_file=flood_map,
                   curve_path=self.curves_rail,
                   maxdam_path = self.max_dam_rail,
-                  cell_size = 10,
+                  cell_size = 25,
                   exp_crs=32631,
                   haz_crs=32631,                   
                   object_col='railway',
@@ -213,11 +215,14 @@ class Households(AgentBaseClass):
                   grouped=False,
                   scenario_name = 'rail'
                  )
-        print(damages_rail)
+     #   print(damages_rail)
         total_damages_rail = damages_rail['damage'].sum()
-        print(total_damages_rail)
+      #  print(total_damages_rail)
 
-        return None
+        total_flood_damages = loss_landuse["damages"].sum() + total_damage_structure + total_damages_contents + total_damages_roads +total_damages_rail 
+        print(f"the total flood damages are: {total_flood_damages}")
+
+        return total_flood_damages
     
 
     def update_water_demand(self):
