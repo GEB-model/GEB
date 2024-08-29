@@ -310,7 +310,39 @@ def get_available_water_infiltration(
     return available_water_infiltration
 
 
-@njit(cache=True, parallel=False)
+@njit(cache=True, parallel=True)
+def rise_from_groundwater(
+    w,
+    ws,
+    capillary_rise_from_groundwater,
+):
+    bottom_soil_layer_index = N_SOIL_LAYERS - 1
+    runoff_from_groundwater = np.zeros_like(
+        capillary_rise_from_groundwater, dtype=np.float32
+    )
+
+    for i in prange(capillary_rise_from_groundwater.size):
+        w[bottom_soil_layer_index, i] += capillary_rise_from_groundwater[
+            i
+        ]  # add capillar rise to the bottom soil layer
+
+        # if the bottom soil layer is full, send water to the above layer, repeat until top layer
+        for j in range(bottom_soil_layer_index, 0, -1):
+            if w[j, i] > ws[j, i]:
+                w[j - 1, i] += w[j, i] - ws[j, i]  # move excess water to layer above
+                w[j, i] = ws[j, i]  # set the current layer to full
+
+        # if the top layer is full, send water to the runoff
+        # TODO: Send to topwater instead of runoff if paddy irrigated
+        if w[0, i] > ws[0, i]:
+            runoff_from_groundwater[i] = (
+                w[0, i] - ws[0, i]
+            )  # move excess water to runoff
+            w[0, i] = ws[0, i]  # set the top layer to full
+    return runoff_from_groundwater
+
+
+@njit(cache=True, parallel=True)
 def evapotranspirate(
     wwp,
     wfc,
@@ -327,13 +359,11 @@ def evapotranspirate(
     potential_bare_soil_evaporation,
     potential_evapotranspiration,
     frost_index,
-    capillary_rise_from_groundwater,
     crop_group_number_per_group,
     w,
     topwater,
     open_water_evaporation,
 ):
-    bottom_soil_layer_index = N_SOIL_LAYERS - 1
     root_ratios_matrix = np.zeros_like(soil_layer_height)
     root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
     root_distribution_per_layer_aeration_stress_corrected_matrix = np.zeros_like(
@@ -343,28 +373,10 @@ def evapotranspirate(
     is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
 
-    runoff_from_groundwater = np.zeros_like(land_use_type, dtype=np.float32)
     actual_total_transpiration = np.zeros_like(land_use_type, dtype=np.float32)
     actual_bare_soil_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
 
     for i in prange(land_use_type.size):
-        w[bottom_soil_layer_index, i] += capillary_rise_from_groundwater[
-            i
-        ]  # add capillar rise to the bottom soil layer
-
-        # if the bottom soil layer is full, send water to the above layer, repeat until top layer
-        for j in range(bottom_soil_layer_index, 0, -1):
-            if w[j, i] > ws[j, i]:
-                w[j - 1, i] += w[j, i] - ws[j, i]  # move excess water to layer above
-                w[j, i] = ws[j, i]  # set the current layer to full
-
-        # if the top layer is full, send water to the runoff
-        if w[0, i] > ws[0, i]:
-            runoff_from_groundwater[i] = (
-                w[0, i] - ws[0, i]
-            )  # move excess water to runoff
-            w[0, i] = ws[0, i]  # set the top layer to full
-
         remaining_potential_transpiration = potential_transpiration[i]
         if land_use_type[i] == PADDY_IRRIGATED:
             transpiration_from_topwater = min(
@@ -513,7 +525,6 @@ def evapotranspirate(
                 actual_bare_soil_evaporation[i] = np.float32(0)
 
     return (
-        runoff_from_groundwater,
         actual_total_transpiration,
         actual_bare_soil_evaporation,
     )
@@ -1090,8 +1101,17 @@ class Soil(object):
 
         timer.new_split("Available infiltratrion")
 
+        runoff_from_groundwater = rise_from_groundwater(
+            w=self.var.w,
+            ws=self.ws,
+            capillary_rise_from_groundwater=capillary_rise_from_groundwater.astype(
+                np.float32
+            ),
+        )
+
+        timer.new_split("Capillary rise from groundwater")
+
         (
-            runoff_from_groundwater,
             actual_total_transpiration,
             actual_bare_soil_evaporation,
         ) = evapotranspirate(
@@ -1110,9 +1130,6 @@ class Soil(object):
             potential_bare_soil_evaporation=potential_bare_soil_evaporation,
             potential_evapotranspiration=potential_evapotranspiration,
             frost_index=self.var.frost_index,
-            capillary_rise_from_groundwater=capillary_rise_from_groundwater.astype(
-                np.float32
-            ),
             crop_group_number_per_group=self.model.agents.crop_farmers.crop_data[
                 "crop_group_number"
             ].values.astype(np.float32),
