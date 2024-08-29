@@ -897,9 +897,6 @@ class CropFarmers(AgentBaseClass):
             ymax=self.model.ymax,
         )
 
-        self.crop_prices = load_regional_crop_data_from_dict(
-            self.model, "crops/crop_prices"
-        )
         self.cultivation_costs = load_regional_crop_data_from_dict(
             self.model, "crops/cultivation_costs"
         )
@@ -2032,24 +2029,21 @@ class CropFarmers(AgentBaseClass):
                 harvesting_farmer_fields, return_inverse=True
             )
 
-            if self.crop_prices[0] is None:
-                crop_prices = self.crop_prices[1]
-                crop_price_per_field = np.full_like(
-                    harvested_crops, crop_prices, dtype=np.float32
-                )
-            else:
-                crop_prices = self.crop_prices[1][
-                    self.crop_prices[0].get(self.model.current_time)
-                ]
-                assert not np.isnan(crop_prices).any()
+            # it's okay for some crop prices to be nan, as they will be filtered out in the next step
+            crop_prices = self.agents.market.crop_prices
 
-                # Determine the region ids of harvesting farmers, as crop prices differ per region
-                region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
+            # Determine the region ids of harvesting farmers, as crop prices differ per region
+            region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
 
-                # Calculate the crop price per field
-                crop_prices_per_farmer = crop_prices[region_ids_harvesting_farmers]
-                crop_prices_per_field = crop_prices_per_farmer[index_farmer_to_field]
-                crop_price_per_field = np.take(crop_prices_per_field, harvested_crops)
+            # Calculate the crop price per field
+            crop_prices_per_farmer = crop_prices[region_ids_harvesting_farmers]
+            crop_prices_per_field = crop_prices_per_farmer[index_farmer_to_field]
+            crop_price_per_field = crop_prices_per_field[
+                np.arange(harvested_crops.size), harvested_crops
+            ]
+
+            # but it's not okay for the crop price to be nan
+            assert not np.isnan(crop_price_per_field).any()
 
             yield_ratio_total = (
                 self.yield_ratio_management[harvesting_farmer_fields] * yield_ratio
@@ -2081,7 +2075,7 @@ class CropFarmers(AgentBaseClass):
             assert (profit >= 0).all()
 
             # Convert from the profit and potential profit per field to the profit per farmer
-            profit_farmer = np.bincount(
+            self.profit_farmer = np.bincount(
                 harvesting_farmer_fields, weights=profit, minlength=self.n
             )
             potential_profit_farmer = np.bincount(
@@ -2117,7 +2111,7 @@ class CropFarmers(AgentBaseClass):
             )
 
             self.save_yearly_profits(
-                harvesting_farmers, profit_farmer, potential_profit_farmer
+                harvesting_farmers, self.profit_farmer, potential_profit_farmer
             )
             self.drought_risk_perception(harvesting_farmers, total_crop_age)
 
@@ -2126,7 +2120,7 @@ class CropFarmers(AgentBaseClass):
             self.previous_month = self.model.current_time.month
 
         else:
-            profit_farmer = np.zeros(self.n, dtype=np.float32)
+            self.profit_farmer = np.zeros(self.n, dtype=np.float32)
 
         # Reset transpiration values for harvested fields
         self.var.actual_transpiration_crop[harvest] = 0
@@ -3402,8 +3396,12 @@ class CropFarmers(AgentBaseClass):
         # Loop through each month from start_date to end_date to get the sum of crop costs over the past year
         current_date = start_date
         while current_date <= end_date:
-            assert self.crop_prices[0] is not None, "behavior needs crop prices to work"
-            monthly_price = self.crop_prices[1][self.crop_prices[0].get(current_date)]
+            assert (
+                self.agents.market[0] is not None
+            ), "behavior needs crop prices to work"
+            monthly_price = self.agents.market[1][
+                self.agents.market[0].get(current_date)
+            ]
             total_price += monthly_price
             # Move to the next month
             if current_date.month == 12:
@@ -3942,7 +3940,7 @@ class CropFarmers(AgentBaseClass):
                         "Cannot adapt without yield - probability relation"
                     )
 
-                self.switch_crops()
+                # self.switch_crops()
 
             # Update management yield ratio score
             self.update_yield_ratio_management()
