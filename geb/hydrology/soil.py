@@ -60,15 +60,15 @@ def get_aeration_stress_threshold(
 
 
 @njit(inline="always")
-def get_aeration_stress_reduction_factor(
+def get_aeration_stress_factor(
     aeration_days_counter, crop_lag_aeration_days, ws, w, aeration_stress_threshold
 ):
     if aeration_days_counter < crop_lag_aeration_days:
         stress = 1 - ((ws - w) / (ws - aeration_stress_threshold))
-        aeration_stress_reduction_factor = 1 - ((aeration_days_counter / 3) * stress)
+        aeration_stress_factor = 1 - ((aeration_days_counter / 3) * stress)
     else:
-        aeration_stress_reduction_factor = (ws - w) / (ws - aeration_stress_threshold)
-    return aeration_stress_reduction_factor
+        aeration_stress_factor = (ws - w) / (ws - aeration_stress_threshold)
+    return aeration_stress_factor
 
 
 @njit(inline="always")
@@ -169,23 +169,23 @@ def get_critical_water_level(p, wfc, wwp):
     return np.maximum(get_critical_soil_moisture_content(p, wfc, wwp) - wwp, 0)
 
 
-def get_total_transpiration_reduction_factor(
-    transpiration_reduction_factor_per_layer, root_ratios, soil_layer_height
+def get_total_transpiration_factor(
+    transpiration_factor_per_layer, root_ratios, soil_layer_height
 ):
-    transpiration_reduction_factor_relative_contribution_per_layer = (
+    transpiration_factor_relative_contribution_per_layer = (
         soil_layer_height * root_ratios
     )
-    transpiration_reduction_factor_total = np.sum(
-        transpiration_reduction_factor_relative_contribution_per_layer
-        / transpiration_reduction_factor_relative_contribution_per_layer.sum(axis=0)
-        * transpiration_reduction_factor_per_layer,
+    transpiration_factor_total = np.sum(
+        transpiration_factor_relative_contribution_per_layer
+        / transpiration_factor_relative_contribution_per_layer.sum(axis=0)
+        * transpiration_factor_per_layer,
         axis=0,
     )
-    return transpiration_reduction_factor_total
+    return transpiration_factor_total
 
 
 @njit(inline="always")
-def get_transpiration_reduction_factor_single(w, wwp, wcrit):
+def get_transpiration_factor_single(w, wwp, wcrit):
     nominator = w - wwp
     denominator = wcrit - wwp
     if denominator == 0:
@@ -310,7 +310,7 @@ def get_available_water_infiltration(
     return available_water_infiltration
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=False)
 def evapotranspirate(
     wwp,
     wfc,
@@ -365,6 +365,15 @@ def evapotranspirate(
             )  # move excess water to runoff
             w[0, i] = ws[0, i]  # set the top layer to full
 
+        remaining_potential_transpiration = potential_transpiration[i]
+        if land_use_type[i] == PADDY_IRRIGATED:
+            transpiration_from_topwater = min(
+                topwater[i], remaining_potential_transpiration
+            )
+            remaining_potential_transpiration -= transpiration_from_topwater
+            topwater[i] -= transpiration_from_topwater
+            actual_total_transpiration[i] += transpiration_from_topwater
+
         # get group group numbers for natural areas
         if land_use_type[i] == FOREST or land_use_type[i] == GRASSLAND_LIKE:
             crop_group_number = natural_crop_groups[i]
@@ -381,11 +390,11 @@ def evapotranspirate(
             root_ratios_matrix[:, i],
         )
 
-        total_transpiration_reduction_factor_water_stress = np.float32(0.0)
+        total_transpiration_factor_water_stress = np.float32(0.0)
         total_aeration_stress = np.float32(0.0)
         total_root_length_rws_corrected = np.float32(
             0.0
-        )  # check if same as total_transpiration_reduction_factor * root_depth
+        )  # check if same as total_transpiration_factor * root_depth
         total_root_length_aeration_stress_corrected = np.float32(0.0)
         for layer in range(N_SOIL_LAYERS):
             root_length_within_layer = soil_layer_height[layer, i] * root_ratios[layer]
@@ -394,16 +403,16 @@ def evapotranspirate(
             critical_soil_moisture_content = get_critical_soil_moisture_content(
                 p, wfc[layer, i], wwp[layer, i]
             )
-            transpiration_reduction_factor = get_transpiration_reduction_factor_single(
+            transpiration_factor = get_transpiration_factor_single(
                 w[layer, i], wwp[layer, i], critical_soil_moisture_content
             )
 
-            total_transpiration_reduction_factor_water_stress += (
-                transpiration_reduction_factor
+            total_transpiration_factor_water_stress += (
+                transpiration_factor
             ) * root_length_within_layer
 
             root_length_within_layer_rws_corrected = (
-                root_length_within_layer * transpiration_reduction_factor
+                root_length_within_layer * transpiration_factor
             )
             total_root_length_rws_corrected += root_length_within_layer_rws_corrected
             root_distribution_per_layer_rws_corrected_matrix[layer, i] = (
@@ -416,7 +425,7 @@ def evapotranspirate(
             )  # 15 is placeholder for crop_aeration_threshold
             if w[layer, i] > aeration_stress_threshold:
                 aeration_days_counter[layer, i] += 1
-                aeration_stress_reduction_factor = get_aeration_stress_reduction_factor(
+                aeration_stress_factor = get_aeration_stress_factor(
                     aeration_days_counter[layer, i],
                     crop_lag_aeration_days[i],
                     ws[layer, i],
@@ -426,14 +435,12 @@ def evapotranspirate(
             else:
                 # Reset aeration days counter where w <= waer
                 aeration_days_counter[layer, i] = 0
-                aeration_stress_reduction_factor = np.float32(1)  # no stress
+                aeration_stress_factor = np.float32(1)  # no stress
 
-            total_aeration_stress += (
-                aeration_stress_reduction_factor * root_length_within_layer
-            )
+            total_aeration_stress += aeration_stress_factor * root_length_within_layer
 
             root_length_within_layer_aeration_stress_corrected = (
-                root_length_within_layer * aeration_stress_reduction_factor
+                root_length_within_layer * aeration_stress_factor
             )
 
             total_root_length_aeration_stress_corrected += (
@@ -444,21 +451,21 @@ def evapotranspirate(
                 root_length_within_layer_aeration_stress_corrected
             )
 
-        total_transpiration_reduction_factor_water_stress /= root_depth[i]
+        total_transpiration_factor_water_stress /= root_depth[i]
         total_aeration_stress /= root_depth[i]
 
         # correct the transpiration reduction factor for water stress
         # if the soil is frozen, no transpiration occurs, so we can skip the loop
         # and thus transpiration is 0 this also avoids division by zero, and thus NaNs
-        # likewise, if the total_transpiration_reduction_factor (full water stress) is 0
+        # likewise, if the total_transpiration_factor (full water stress) is 0
         # or full aeration stress, we can skip the loop
         if (
             not soil_is_frozen[i]
-            and total_transpiration_reduction_factor_water_stress > np.float32(0)
+            and total_transpiration_factor_water_stress > np.float32(0)
             and total_aeration_stress > np.float32(0)
         ):
-            maximum_transpiration = potential_transpiration[i] * min(
-                total_transpiration_reduction_factor_water_stress, total_aeration_stress
+            maximum_transpiration = remaining_potential_transpiration * min(
+                total_transpiration_factor_water_stress, total_aeration_stress
             )
             # distribute the transpiration over the layers, considering the root ratios
             # and the transpiration reduction factor per layer
@@ -479,6 +486,7 @@ def evapotranspirate(
                     transpiration_water_stress_corrected,
                     transpiration_aeration_stress_corrected,
                 )
+                transpiration = transpiration_water_stress_corrected
                 w[layer, i] -= transpiration
                 if is_bioarea[i]:
                     actual_total_transpiration[i] += transpiration
@@ -503,6 +511,7 @@ def evapotranspirate(
                 # if the soil is frozen, no evaporation occurs
                 # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
                 actual_bare_soil_evaporation[i] = np.float32(0)
+
     return (
         runoff_from_groundwater,
         actual_total_transpiration,
