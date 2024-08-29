@@ -111,6 +111,8 @@ class Market(AgentBaseClass):
             # assert model_parameters[-1] < 0, "Price increase with decreasing yield"
             self.parameters[crop] = model_parameters
 
+        print(self.parameters)
+
     def get_modelled_crop_prices(self) -> np.ndarray:
         number_of_regions = self._crop_prices[1].shape[1]
 
