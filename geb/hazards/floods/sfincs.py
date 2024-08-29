@@ -158,6 +158,9 @@ class SFINCS:
                 #     self.model.model_structure["geoms"]["areamaps/region"]
                 # ),
                 "method": "precipitation",
+                "rivers": "detailed",
+                "depth_calculation": "power_law",
+                
             }
         )
         if (
