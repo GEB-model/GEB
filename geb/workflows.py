@@ -1,8 +1,11 @@
-from time import time
-import xarray as xr
-import numpy as np
 import asyncio
+from time import time
 from concurrent.futures import ThreadPoolExecutor
+
+import cftime
+import zarr
+import numpy as np
+import pandas as pd
 
 all_async_readers = []
 
@@ -35,7 +38,7 @@ class TimingModule:
         return to_print
 
 
-class AsyncXarrayReader:
+class AsyncForcingReader:
     shared_loop = (
         asyncio.new_event_loop()
     )  # Shared event loop, note running in a separate thread is slower
@@ -44,20 +47,27 @@ class AsyncXarrayReader:
     def __init__(self, filepath, variable_name):
         self.filepath = filepath
 
-        self.ds = xr.open_dataset(self.filepath, chunks={}, engine="zarr")
+        self.ds = zarr.open_consolidated(self.filepath, mode="r")
         self.var = self.ds[variable_name]
-        self.time_index = self.ds.time.values
 
-        self.time_size = self.time_index.size
+        self.datetime_index = cftime.num2date(
+            self.ds.time[:],
+            units=self.ds.time.attrs.get("units"),
+            calendar=self.ds.time.attrs.get("calendar"),
+        )
+        self.datetime_index = pd.DatetimeIndex(
+            pd.to_datetime([obj.isoformat() for obj in self.datetime_index])
+        ).to_numpy()
+        self.time_size = self.datetime_index.size
 
         all_async_readers.append(self)
         self.preloaded_data_future = None
         self.current_index = -1  # Initialize to -1 to indicate no data loaded yet
         self.executor = ThreadPoolExecutor(max_workers=1)
-        self.loop = AsyncXarrayReader.shared_loop
+        self.loop = AsyncForcingReader.shared_loop
 
     def load(self, index):
-        return self.var.isel(time=index).values
+        return self.var[index]
 
     async def load_await(self, index):
         return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
@@ -88,14 +98,17 @@ class AsyncXarrayReader:
         return data
 
     def get_index(self, date):
-        # convert datetime object to dtype of time coordinate
+        # convert datetime object to dtype of time coordinate. There is a very high probability
+        # that the dataset is the same as the previous one or the next one in line,
+        # so we can just check the current index and the next one. Only if those do not match
+        # we have to search for the correct index.
         numpy_date = np.datetime64(date, "ns")
-        if self.time_index[self.current_index] == numpy_date:
+        if self.datetime_index[self.current_index] == numpy_date:
             return self.current_index
-        elif self.time_index[self.current_index + 1] == numpy_date:
+        elif self.datetime_index[self.current_index + 1] == numpy_date:
             return self.current_index + 1
         else:
-            indices = self.time_index == numpy_date
+            indices = self.datetime_index == numpy_date
             assert np.count_nonzero(indices) == 1, "Date not found in the dataset."
             return indices.argmax()
 
@@ -113,12 +126,11 @@ class AsyncXarrayReader:
         # cancel the preloading of the next timestep
         if self.preloaded_data_future is not None:
             self.preloaded_data_future.cancel()
-        # close the dataset and the executor
-        self.ds.close()
+        # close the executor
         self.executor.shutdown(wait=False)
 
-        AsyncXarrayReader.shared_loop.call_soon_threadsafe(
-            AsyncXarrayReader.shared_loop.stop
+        AsyncForcingReader.shared_loop.call_soon_threadsafe(
+            AsyncForcingReader.shared_loop.stop
         )
 
 
