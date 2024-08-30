@@ -363,6 +363,7 @@ def evapotranspirate(
     w,
     topwater,
     open_water_evaporation,
+    available_water_infiltration,
 ):
     root_ratios_matrix = np.zeros_like(soil_layer_height)
     root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
@@ -384,6 +385,7 @@ def evapotranspirate(
             )
             remaining_potential_transpiration -= transpiration_from_topwater
             topwater[i] -= transpiration_from_topwater
+            available_water_infiltration[i] -= transpiration_from_topwater
             actual_total_transpiration[i] += transpiration_from_topwater
 
         # get group group numbers for natural areas
@@ -1136,6 +1138,7 @@ class Soil(object):
             w=self.var.w,
             topwater=self.var.topwater,
             open_water_evaporation=open_water_evaporation,
+            available_water_infiltration=available_water_infiltration,
         )
 
         timer.new_split("Evapotranspiration")
