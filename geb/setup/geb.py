@@ -4518,7 +4518,6 @@ class GEBModel(GridModel):
                 n_first_resistant = (n // 3) + (
                     n % 3 > 0
                 )  # Ensuring we account for rounding issues
-                n_last_resistant = (n // 3) + (n % 3 > 1)
 
                 # Assign the new values
                 crop_calendar_per_farmer[indices[:n_same], 0, 0] = base_crops
