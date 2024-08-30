@@ -8,7 +8,7 @@ from operator import attrgetter
 import xarray as xr
 import rioxarray as rxr
 import numpy as np
-from geb.workflows import AsyncXarrayReader
+from geb.workflows import AsyncForcingReader
 
 try:
     import cupy as cp
@@ -298,11 +298,11 @@ class Grid(BaseVariables):
         return super().load_initial("grid." + name, default=default)
 
     def load_forcing_ds(self, name):
-        reader = AsyncXarrayReader(
+        reader = AsyncForcingReader(
             self.model.files["forcing"][f"climate/{name}"],
             name,
         )
-        assert reader.ds.variables["y"][0] > reader.ds.variables["y"][-1]
+        assert reader.ds["y"][0] > reader.ds["y"][-1]
         return reader
 
     def load_forcing(self, reader, time, compress=True):

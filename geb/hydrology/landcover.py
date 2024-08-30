@@ -410,20 +410,12 @@ class LandCover(object):
         assert not (directRunoff < 0).any()
         timer.new_split("Sealed")
 
-        if self.model.use_gpu:
-            self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
-                actual_total_transpiration.get()[self.var.crop_map != -1]
-            )
-            self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
-                self.var.potTranspiration.get()[self.var.crop_map != -1]
-            )
-        else:
-            self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
-                actual_total_transpiration[self.var.crop_map != -1]
-            )
-            self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
-                self.var.potTranspiration[self.var.crop_map != -1]
-            )
+        self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
+            actual_total_transpiration[self.var.crop_map != -1]
+        )
+        self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
+            self.var.potTranspiration[self.var.crop_map != -1]
+        )
 
         assert not (directRunoff < 0).any()
         assert not np.isnan(interflow).any()

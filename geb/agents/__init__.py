@@ -6,6 +6,7 @@ from .industry import Industry
 from .reservoir_operators import ReservoirOperators
 from .town_managers import TownManagers
 from .government import Government
+from .market import Market
 
 
 class Agents:
@@ -24,6 +25,7 @@ class Agents:
         self.reservoir_operators = ReservoirOperators(model, self)
         self.town_managers = TownManagers(model, self)
         self.government = Government(model, self)
+        self.market = Market(model, self)
 
         self.agents = [
             self.households,
@@ -33,12 +35,14 @@ class Agents:
             self.reservoir_operators,
             self.town_managers,
             self.government,
+            self.market,
         ]
 
         if not self.model.load_initial_data:
             self.initiate()
         else:
             self.restore_state()
+            self.restart()
 
     def initiate(self) -> None:
         """Initiate all agents."""
@@ -59,3 +63,9 @@ class Agents:
         """Load the state of all agents."""
         for agent_type in self.agents:
             agent_type.restore_state(folder=agent_type.__class__.__name__)
+
+    def restart(self):
+        """Restart all agents."""
+        for agent_type in self.agents:
+            if hasattr(agent_type, "restart"):
+                agent_type.restart()
