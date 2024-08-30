@@ -3070,7 +3070,7 @@ class GEBModel(GridModel):
                 window=1,
                 dist="gamma",
                 method="ML",
-            )
+            ).chunk(chunks)
 
             # remove all nan values as a result of the sliding window
             SPEI.attrs = {
@@ -4749,20 +4749,20 @@ class GEBModel(GridModel):
             filepath = OSM_data_dir / url.split("/")[-1]
             fetch_and_save(url, filepath, overwrite=False)
             for feature_type in feature_types:
-                assert (
-                    feature_type == "buildings"
-                ), f"Only buildings are supported for now, not {feature_type}"
-
                 if feature_type not in all_features:
                     all_features[feature_type] = []
 
-                features = gpd.read_file(
-                    filepath,
-                    mask=self.region,
-                    layer="multipolygons",
-                    use_arrow=True,
-                )
-                features = features[features["building"].notna()]
+                if feature_type == "buildings":
+                    features = gpd.read_file(
+                        filepath,
+                        mask=self.region,
+                        layer="multipolygons",
+                        use_arrow=True,
+                    )
+                    features = features[features["building"].notna()]
+                else:
+                    raise ValueError(f"Unknown feature type {feature_type}")
+
                 all_features[feature_type].append(features)
 
         for feature_type in feature_types:
