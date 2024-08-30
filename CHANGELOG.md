@@ -2,8 +2,9 @@
 
 ### what's new
 
-- GEB and hydromt-geb can now be installed directly from Pypi, using `pip install geb-model` and `pip install hydromt-geb`.
+- GEB and can now be installed directly from Pypi, using `pip install geb-model`.
 - CWatM is now integrated with GEB, and thus (AB)CWatM does not need to be separately installed anymore. We are immensely grateful to the CWatM team for their support and collaboration.
+- Hydromt-geb is now integrated with GEB, and thus does not need to be separately installed anymore.
 - MODFLOW was migrated to an irrigular grid, which makes it compatible with the GEB grid, avoiding complicated regridding.
 - The model now features a two-layer groundwater model, with much better initalization of hydrological parameters (thanks to GLOBGM!). Groundwater outflow is now also directly read from MODFLOW.
 - We now estimate soil parameters at 30'' resolution from the SoilGrids database using pedotransfer functions.
@@ -18,6 +19,7 @@
 - The calculation of SPEI is optimized to be nicer for memory.
 - setup_GEV in hydromt-geb was integrated with setup_SPEI and can be removed.
 - Many other minor fixes and improvements.
+- Included a simple market for future scenarios.
 
 ### Migration guide
 

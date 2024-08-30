@@ -18,8 +18,8 @@ from honeybees.visualization.modules.ChartVisualization import ChartModule
 from honeybees.visualization.canvas import Canvas
 
 from hydromt.config import configread
-import hydromt_geb
-import geb
+from geb import __version__
+from geb import setup
 from geb.model import GEBModel
 from geb.calibrate import calibrate as geb_calibrate
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
@@ -73,7 +73,7 @@ def create_logger(fp):
 
 
 @click.group()
-@click.version_option(geb.__version__, message="GEB version: %(version)s")
+@click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
 def main(ctx):  # , quiet, verbose):
     """Command line interface for GEB."""
@@ -336,12 +336,12 @@ def click_build_options(build_config="build.yml"):
 
 def get_model(custom_model):
     if custom_model is None:
-        return hydromt_geb.GEBModel
+        return setup.GEBModel
     else:
         importlib.import_module(
-            "." + custom_model.split(".")[0], package="hydromt_geb.custom_models"
+            "." + custom_model.split(".")[0], package="geb.setup.custom_models"
         )
-        return attrgetter(custom_model)(hydromt_geb.custom_models)
+        return attrgetter(custom_model)(setup.custom_models)
 
 
 def customize_data_catalog(data_catalogs):

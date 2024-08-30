@@ -6,10 +6,6 @@ The model can be installed with pip as follows:
 
 `pip install geb-model`
 
-The hydromt-plugin for preprocessing data can be installed with:
-
-`pip install hydromt-geb`
-
 ## Overview
 GEB (Geographic Environmental and Behavioural model) aims to simulate both the environment, the individual behaviour of people and their interactions at small and large scale. The model does so through a "deep" coupling of an agent-based model which simulates millions of individual people or households, a hydrological model, a vegetation model and a hydrodynamic model.
 

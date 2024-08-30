@@ -77,7 +77,7 @@ setup_farmer_characteristics_simple:
     well: 20
 
 setup_cultivation_costs:
-  cultivation_costs: 100
+  cultivation_costs: 0
 
 setup_crop_prices:
   crop_prices: 200

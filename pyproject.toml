@@ -12,30 +12,34 @@ authors = [
     {name = "Tim Busker", email = "tim.busker@vu.nl"},
 ]
 dependencies = [
-    "deap",
+    "cdsapi>=0.7.0",
     "dask>=2023.3.0",
-    "flopy",
-    "geopandas>=0.14",
-    "honeybees",
-    "hydromt-geb",
+    "deap>=1.4.1",
+    "flopy>=3.8.0",
+    "geopandas>=1.0.0",
+    "honeybees>=1.0.3",
+    "hydromt==0.10.0",
+    "isimip-client>=1.0.1",
     "matplotlib",
-    "numba",
-    "numpy",
-    "openpyxl",
-    "pandas",
-    "pybind11",
-    "pyyaml",
+    "numba>=0.60.0",
+    "numpy>=2.0.1",
+    "openpyxl>=3.1.2",
+    "pybind11>=2.13.4",
+    "pyogrio>=0.9.0",
+    "pyyaml>=6.0.2",
+    "rasterio>=1.3.10",
     "rioxarray>=0.15",
-    "rasterio",
-    "scipy",
-    "seaborn",
+    "s3fs>=2023.6.0",
     "SALib>=1.4.8",
-    "tbb",
-    "xmipy",
-    "xarray",
-    "zarr",
+    "scipy>=1.14.0",
+    "seaborn>=0.13.2",
+    "tqdm>=4.66.1",
+    "xarray>=2024.3.0",
+    "xesmf>=0.8.4",
+    "xmipy>=1.5.0",
+    "zarr>=2.18.2"
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 readme = "README.md"
 classifiers = [
     # https://pypi.python.org/pypi?%3Aaction=list_classifiers
