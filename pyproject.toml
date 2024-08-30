@@ -33,6 +33,7 @@ dependencies = [
     "SALib>=1.4.8",
     "scipy>=1.14.0",
     "seaborn>=0.13.2",
+    "tbb4py>=2021.13.1",
     "tqdm>=4.66.1",
     "xarray>=2024.3.0",
     "xclim>=0.52.0",

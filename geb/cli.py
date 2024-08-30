@@ -12,6 +12,7 @@ import faulthandler
 from pathlib import Path
 import importlib
 import warnings
+from numba import config
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
@@ -26,6 +27,9 @@ from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.multirun import multi_run as geb_multi_run
 
 faulthandler.enable()
+
+# set threading layer to tbb, this is much faster than other threading layers
+config.THREADING_LAYER = "tbb"
 
 
 def multi_level_merge(dict1, dict2):
