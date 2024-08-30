@@ -76,5 +76,11 @@ gpu = [
 full = [
 ]
 
+fairstream = [
+    "pgmpy>=0.1.24",
+    "daft>=0.1.2",
+    "opt-einsum>=3.3.0",
+]
+
 [project.scripts]
 "geb" = "geb.cli:main"
