@@ -2,14 +2,15 @@
 """This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `model.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`)."""
 
 import os
+import zarr
 import pandas as pd
 from collections.abc import Iterable
 import numpy as np
 import re
-import xarray as xr
 from honeybees.library.raster import coord_to_pixel
 from pathlib import Path
-import netCDF4
+from numcodecs import Blosc
+import zarr.hierarchy
 
 try:
     import cupy as cp
@@ -18,7 +19,8 @@ except ImportError:
 from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
-import time
+
+compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
 
 class hydrology_reporter(ABMReporter):
@@ -42,14 +44,14 @@ class hydrology_reporter(ABMReporter):
                 and self.model.config["report_hydrology"]
             ):
                 for name, config in self.model.config["report_hydrology"].items():
-                    if config["format"] == "netcdf":
+                    if config["format"] == "zarr":
                         assert (
                             "single_file" in config and config["single_file"] is True
-                        ), "Only single_file=True is supported for netcdf format."
-                        netcdf_path = Path(self.export_folder, name + ".nc")
-                        config["absolute_path"] = str(netcdf_path)
-                        if netcdf_path.exists():
-                            netcdf_path.unlink()
+                        ), "Only single_file=True is supported for zarr format."
+                        zarr_path = Path(self.export_folder, name + ".zarr.zip")
+                        config["absolute_path"] = str(zarr_path)
+                        if zarr_path.exists():
+                            zarr_path.unlink()
                         if "time_ranges" not in config:
                             if "substeps" in config:
                                 time = pd.date_range(
@@ -107,37 +109,69 @@ class hydrology_reporter(ABMReporter):
                                     f"WARNING: None of the time ranges for {name} are in the simulation period."
                                 )
 
-                        self.variables[name] = xr.DataArray(
-                            coords={
-                                "time": time,
-                                "y": self.model.data.grid.lat,
-                                "x": self.model.data.grid.lon,
-                            },
-                            dims=["time", "y", "x"],
-                            name=name,
+                        zarr_group = zarr.open_group(zarr_path, mode="w")
+
+                        zarr_group.create_dataset(
+                            "time",
+                            data=np.array(time, dtype="datetime64[ns]"),
+                            dtype="datetime64[ns]",
                         )
-                        self.variables[name] = (
-                            self.variables[name]
-                            .rio.write_crs(self.model.data.grid.crs)
-                            .rio.write_coordinate_system()
+
+                        zarr_group["time"].attrs.update(
+                            {
+                                "standard_name": "time",
+                                "units": "seconds since 1970-01-01T00:00:00",
+                                "calendar": "gregorian",
+                            }
                         )
-                        self.variables[name].to_netcdf(
-                            netcdf_path,
-                            mode="a",
-                            encoding={
-                                name: {
-                                    "chunksizes": (
-                                        1,
-                                        self.variables[name].y.size,
-                                        self.variables[name].x.size,
-                                    ),
-                                    "zlib": True,
-                                    "complevel": 5,
-                                }
-                            },
-                            engine="netcdf4",
+
+                        zarr_group.create_dataset(
+                            "y",
+                            data=self.model.data.grid.lat,
+                            dtype="float32",
                         )
-                        self.variables[name].close()
+                        zarr_group["y"].attrs.update(
+                            {"standard_name": "latitude", "units": "degrees_north"}
+                        )
+
+                        zarr_group.create_dataset(
+                            "x",
+                            data=self.model.data.grid.lon,
+                            dtype="float32",
+                        )
+                        zarr_group["x"].attrs.update(
+                            {"standard_name": "longitude", "units": "degrees_east"}
+                        )
+
+                        zarr_data = zarr_group.create_dataset(
+                            name,
+                            shape=(
+                                time.size,
+                                self.model.data.grid.lat.size,
+                                self.model.data.grid.lon.size,
+                            ),
+                            chunks=(
+                                1,
+                                self.model.data.grid.lat.size,
+                                self.model.data.grid.lon.size,
+                            ),
+                            dtype="float32",
+                            compressor=compressor,
+                        )
+
+                        zarr_data.attrs.update(
+                            {
+                                "grid_mapping": "crs",
+                                "coordinates": "time y x",
+                                "units": "unknown",
+                                "long_name": name,
+                            }
+                        )
+
+                        zarr_group.attrs["crs"] = self.model.data.grid.crs.to_string()
+
+                        self.variables[name] = zarr_group
+
                     else:
                         self.variables[name] = []
 
@@ -171,7 +205,7 @@ class hydrology_reporter(ABMReporter):
 
                 >>> get_array(data.grid.discharge, decompress=True)
         """
-        slicer = re.search("\[([0-9]+)\]$", attr)
+        slicer = re.search(r"\[([0-9]+)\]$", attr)
         if slicer:
             try:
                 array = attrgetter(attr[: slicer.span(0)[0]])(self.model)
@@ -231,39 +265,21 @@ class hydrology_reporter(ABMReporter):
                 )
             with open(fp, "w") as f:
                 f.write("\n".join([str(v) for v in value]))
-        elif conf["format"] == "netcdf":
+        elif conf["format"] == "zarr":
             if np.isin(
                 np.datetime64(self.model.current_time), self.variables[name].time
             ):
-                max_retries = 10
-                retry_delay = 1
+                time_index = np.where(
+                    self.variables[name].time[:]
+                    == np.datetime64(self.model.current_time)
+                )[0].item()
+                if "substeps" in conf:
+                    time_index_start = np.where(time_index)[0][0]
+                    time_index_end = time_index_start + conf["substeps"]
+                    self.variables[name][time_index_start:time_index_end, ...] = value
+                else:
+                    self.variables[name][name][time_index, ...] = value
 
-                for retry in range(max_retries):
-                    try:
-                        with netCDF4.Dataset(
-                            self.model.config["report_hydrology"][name][
-                                "absolute_path"
-                            ],
-                            "a",
-                        ) as nc:
-                            var = nc.variables[name]
-                            time_index = self.variables[name].time == np.datetime64(
-                                self.model.current_time
-                            )
-                            if "substeps" in conf:
-                                time_index_start = np.where(time_index)[0][0]
-                                time_index_end = time_index_start + conf["substeps"]
-                                var[time_index_start:time_index_end, ...] = value
-                            else:
-                                var[time_index, ...] = (
-                                    value  # Assuming new_data is the new values for that time slice
-                                )
-                            nc.sync()
-                        break
-                    except FileNotFoundError:
-                        if retry == max_retries - 1:
-                            raise
-                        time.sleep(retry_delay)
         else:
             raise ValueError(f"{conf['format']} not recognized")
 
@@ -335,8 +351,8 @@ class hydrology_reporter(ABMReporter):
     def report(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
-            if isinstance(values, xr.DataArray):
-                values.close()
+            if isinstance(values, zarr.hierarchy.Group):
+                pass
             else:
                 if isinstance(values[0], Iterable):
                     df = pd.DataFrame.from_dict(

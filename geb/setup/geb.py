@@ -1443,6 +1443,13 @@ class GEBModel(GridModel):
         The resulting waterbody data is set as a table in the model with the name 'routing/lakesreservoirs/basin_lakes_data'.
         """
         self.logger.info("Setting up waterbodies")
+        dtypes = {
+            "waterbody_id": np.int32,
+            "waterbody_type": np.int32,
+            "volume_total": np.float64,
+            "average_discharge": np.float64,
+            "average_area": np.float64,
+        }
         try:
             waterbodies = self.data_catalog.get_geodataframe(
                 "hydro_lakes",
@@ -1456,6 +1463,7 @@ class GEBModel(GridModel):
                     "average_area",
                 ],
             )
+            waterbodies = waterbodies.astype(dtypes)
         except (IndexError, NoDataException):
             self.logger.info(
                 "No water bodies found in domain, skipping water bodies setup"
@@ -1471,9 +1479,9 @@ class GEBModel(GridModel):
                 ],
                 crs=self.crs,
             )
+            waterbodies = waterbodies.astype(dtypes)
             lakesResID = xr.zeros_like(self.grid["areamaps/grid_mask"])
             sublakesResID = xr.zeros_like(self.subgrid["areamaps/sub_grid_mask"])
-
         else:
             lakesResID = self.grid.raster.rasterize(
                 waterbodies,
@@ -1493,7 +1501,6 @@ class GEBModel(GridModel):
         self.set_grid(lakesResID, name="routing/lakesreservoirs/lakesResID")
         self.set_subgrid(sublakesResID, name="routing/lakesreservoirs/sublakesResID")
 
-        waterbodies = waterbodies.set_index("waterbody_id")
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         if command_areas:
@@ -1558,16 +1565,25 @@ class GEBModel(GridModel):
         if custom_reservoir_capacity:
             custom_reservoir_capacity = self.data_catalog.get_dataframe(
                 "custom_reservoir_capacity"
-            ).set_index("waterbody_id")
+            )
             custom_reservoir_capacity = custom_reservoir_capacity[
                 custom_reservoir_capacity.index != -1
             ]
 
+            waterbodies.set_index("waterbody_id", inplace=True)
             waterbodies.update(custom_reservoir_capacity)
+            waterbodies.reset_index(inplace=True)
 
         # spatial dimension is not required anymore, so drop it.
         waterbodies = waterbodies.drop("geometry", axis=1)
 
+        assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
+        assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
+        assert "volume_total" in waterbodies.columns, "volume_total is required"
+        assert (
+            "average_discharge" in waterbodies.columns
+        ), "average_discharge is required"
+        assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_table(waterbodies, name="routing/lakesreservoirs/basin_lakes_data")
 
     def setup_water_demand(self, starttime, endtime, ssp):
@@ -2164,48 +2180,49 @@ class GEBModel(GridModel):
                 retries = 0
                 while retries < max_retries:
                     try:
+                        request = {
+                            "product_type": "reanalysis",
+                            "format": "netcdf",
+                            "variable": [
+                                variable,
+                            ],
+                            "date": f"{start_year}-01-01/{end_year}-12-31",
+                            "time": [
+                                "00:00",
+                                "01:00",
+                                "02:00",
+                                "03:00",
+                                "04:00",
+                                "05:00",
+                                "06:00",
+                                "07:00",
+                                "08:00",
+                                "09:00",
+                                "10:00",
+                                "11:00",
+                                "12:00",
+                                "13:00",
+                                "14:00",
+                                "15:00",
+                                "16:00",
+                                "17:00",
+                                "18:00",
+                                "19:00",
+                                "20:00",
+                                "21:00",
+                                "22:00",
+                                "23:00",
+                            ],
+                            "area": (
+                                ymax,
+                                xmin,
+                                ymin,
+                                xmax,
+                            ),  # North, West, South, East
+                        }
                         cdsapi.Client().retrieve(
                             "reanalysis-era5-land",
-                            {
-                                "product_type": "reanalysis",
-                                "format": "netcdf",
-                                "variable": [
-                                    variable,
-                                ],
-                                "date": f"{start_year}-01-01/{end_year}-12-31",
-                                "time": [
-                                    "00:00",
-                                    "01:00",
-                                    "02:00",
-                                    "03:00",
-                                    "04:00",
-                                    "05:00",
-                                    "06:00",
-                                    "07:00",
-                                    "08:00",
-                                    "09:00",
-                                    "10:00",
-                                    "11:00",
-                                    "12:00",
-                                    "13:00",
-                                    "14:00",
-                                    "15:00",
-                                    "16:00",
-                                    "17:00",
-                                    "18:00",
-                                    "19:00",
-                                    "20:00",
-                                    "21:00",
-                                    "22:00",
-                                    "23:00",
-                                ],
-                                "area": (
-                                    ymax,
-                                    xmin,
-                                    ymin,
-                                    xmax,
-                                ),  # North, West, South, East
-                            },
+                            request,
                             output_fn,
                         )
                         break
@@ -2214,6 +2231,7 @@ class GEBModel(GridModel):
                             f"Download failed. Retrying... ({retries+1}/{max_retries})"
                         )
                         print(e)
+                        print(request)
                         retries += 1
                 if retries == max_retries:
                     raise Exception("Download failed after maximum retries.")
@@ -5489,7 +5507,7 @@ class GEBModel(GridModel):
                     self.logger.debug(f"Writing file {fn}")
                     fp = Path(self.root, fn)
                     fp.parent.mkdir(parents=True, exist_ok=True)
-                    data.to_csv(fp)
+                    data.to_parquet(fp, engine="pyarrow")
 
     def write_binary(self):
         if len(self.binary) == 0:
@@ -5606,7 +5624,7 @@ class GEBModel(GridModel):
     def read_table(self):
         self.read_files()
         for name, fn in self.files["table"].items():
-            table = pd.read_csv(Path(self.root, fn))
+            table = pd.read_parquet(Path(self.root, fn))
             self.set_table(table, name=name, update=False)
 
     def read_dict(self):

@@ -41,7 +41,7 @@ RESERVOIR = 2
 def laketotal(values, areaclass, nan_class):
     mask = areaclass != nan_class
     class_totals = np.bincount(areaclass[mask], weights=values[mask])
-    return class_totals
+    return class_totals.astype(values.dtype)
 
 
 GRAVITY = 9.81
@@ -378,25 +378,22 @@ class LakesReservoirs(object):
         )
 
     def map_water_bodies_IDs(self, compressed_waterbody_ids, waterBodyID_original):
-        water_body_mapping = np.full(
-            compressed_waterbody_ids.max() + 2, -1, dtype=np.int32
-        )  # make sure that the last entry is also -1, so that -1 maps to -1
-        water_body_mapping[compressed_waterbody_ids] = np.arange(
-            0, compressed_waterbody_ids.size, dtype=np.int32
-        )
-        return water_body_mapping[waterBodyID_original], water_body_mapping
+        if compressed_waterbody_ids.size == 0:
+            return np.full_like(waterBodyID_original, -1), np.full(
+                1, -1, dtype=np.int32
+            )
+        else:
+            water_body_mapping = np.full(
+                compressed_waterbody_ids.max() + 2, -1, dtype=np.int32
+            )  # make sure that the last entry is also -1, so that -1 maps to -1
+            water_body_mapping[compressed_waterbody_ids] = np.arange(
+                0, compressed_waterbody_ids.size, dtype=np.int32
+            )
+            return water_body_mapping[waterBodyID_original], water_body_mapping
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
-        water_body_data = pd.read_csv(
+        water_body_data = pd.read_parquet(
             self.model.files["table"]["routing/lakesreservoirs/basin_lakes_data"],
-            dtype={
-                "waterbody_type": np.int32,
-                "volume_total": np.float64,
-                "average_discharge": np.float64,
-                "average_area": np.float64,
-                "volume_flood": np.float64,
-                "relative_area_in_region": np.float64,
-            },
         )
         # drop all data that is not in the original ids
         waterbody_original_ids_compressed = np.unique(waterbody_original_ids)
