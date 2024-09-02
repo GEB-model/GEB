@@ -63,7 +63,7 @@ dev = [
     "ruff",
 ]
 docs = [
-    "sphinx",
+    "sphinx<8",
     "sphinx-autodoc-typehints",
     "sphinxcontrib-autoprogram",
     "sphinx_rtd_theme",
