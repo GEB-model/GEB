@@ -6,7 +6,7 @@ from geb.cli import build
 from .setup import IN_GITHUB_ACTIONS
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in Github Actions.")
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test test requires local data.")
 def test_build():
     runner = CliRunner()
     result = runner.invoke(build, ["-wd", "examples"])
