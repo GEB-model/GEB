@@ -1,5 +1,6 @@
 import click
 import os
+import tempfile
 import sys
 import cProfile
 from pstats import Stats
@@ -11,20 +12,24 @@ import faulthandler
 from pathlib import Path
 import importlib
 import warnings
+from numba import config
 
 from honeybees.visualization.ModularVisualization import ModularServer
-from honeybees.visualization.modules import ChartModule
+from honeybees.visualization.modules.ChartVisualization import ChartModule
 from honeybees.visualization.canvas import Canvas
 
 from hydromt.config import configread
-import hydromt_geb
-import geb
+from geb import __version__
+from geb import setup
 from geb.model import GEBModel
 from geb.calibrate import calibrate as geb_calibrate
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.multirun import multi_run as geb_multi_run
 
 faulthandler.enable()
+
+# set threading layer to tbb, this is much faster than other threading layers
+config.THREADING_LAYER = "tbb"
 
 
 def multi_level_merge(dict1, dict2):
@@ -72,7 +77,7 @@ def create_logger(fp):
 
 
 @click.group()
-@click.version_option(geb.__version__, message="GEB version: %(version)s")
+@click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
 def main(ctx):  # , quiet, verbose):
     """Command line interface for GEB."""
@@ -172,20 +177,20 @@ def run_model(
     os.chdir(working_directory)
 
     if use_gpu:
-        import cupy
+        pass
 
     MODEL_NAME = "GEB"
     config = parse_config(config)
 
-    model_structure = parse_config(
-        "input/model_structure.json"
-        if not "model_stucture" in config["general"]
-        else config["general"]["model_stucture"]
+    files = parse_config(
+        "input/files.json"
+        if "files" not in config["general"]
+        else config["general"]["files"]
     )
 
     model_params = {
         "config": config,
-        "model_structure": model_structure,
+        "files": files,
         "use_gpu": use_gpu,
         "gpu_device": gpu_device,
         "spinup": spinup,
@@ -206,7 +211,7 @@ def run_model(
                 pr.dump_stats("profile.prof")
             else:
                 model.run()
-            report = model.report()
+            model.report()
     else:
         # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
         # the event loop started for reading data, unless we use nest_asyncio.
@@ -335,12 +340,36 @@ def click_build_options(build_config="build.yml"):
 
 def get_model(custom_model):
     if custom_model is None:
-        return hydromt_geb.GEBModel
+        return setup.GEBModel
     else:
         importlib.import_module(
-            "." + custom_model.split(".")[0], package="hydromt_geb.custom_models"
+            "." + custom_model.split(".")[0], package="geb.setup.custom_models"
         )
-        return attrgetter(custom_model)(hydromt_geb.custom_models)
+        return attrgetter(custom_model)(setup.custom_models)
+
+
+def customize_data_catalog(data_catalogs):
+    """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
+    This enables reading the data catalog from a different location than the location of the yml-file
+    without the need to specify root in the meta of the data catalog."""
+    geb_data_root = os.environ.get("GEB_DATA_ROOT", None)
+
+    if geb_data_root:
+        customized_data_catalogs = []
+        for data_catalog in data_catalogs:
+            with open(data_catalog, "r") as stream:
+                data_catalog_yml = yaml.load(stream, Loader=yaml.FullLoader)
+
+                if "meta" not in data_catalog_yml:
+                    data_catalog_yml["meta"] = {}
+                data_catalog_yml["meta"]["root"] = geb_data_root
+
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
+                yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
+                customized_data_catalogs.append(tmp.name)
+        return customized_data_catalogs
+    else:
+        return data_catalogs
 
 
 @main.command()
@@ -359,7 +388,7 @@ def build(
     arguments = {
         "root": input_folder,
         "mode": "w+",
-        "data_libs": data_catalog,
+        "data_libs": customize_data_catalog(data_catalog),
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -391,7 +420,9 @@ def build(
             "geom": region["geometry"],
         }
     else:
-        raise ValueError("No region specified in config file.")
+        raise ValueError(
+            "No region specified in config file, should be 'basin', 'pour_point' or 'geometry'."
+        )
 
     geb_model.build(
         opt=configread(build_config),
@@ -422,7 +453,7 @@ def alter(
     arguments = {
         "root": reference_model_folder,
         "mode": "r+",
-        "data_libs": data_catalog,
+        "data_libs": customize_data_catalog(data_catalog),
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -454,7 +485,7 @@ def update(
     arguments = {
         "root": input_folder,
         "mode": "r+",
-        "data_libs": data_catalog,
+        "data_libs": customize_data_catalog(data_catalog),
         "logger": create_logger("build_update.log"),
         "data_provider": data_provider,
     }
@@ -462,6 +493,12 @@ def update(
     geb_model = get_model(custom_model)(**arguments)
     geb_model.read()
     geb_model.update(opt=configread(build_config))
+
+
+@main.command()
+def evaluate():
+    """Evaluate model."""
+    raise NotImplementedError
 
 
 @click.option(
@@ -481,14 +518,28 @@ def share(working_directory):
     import zipfile
 
     folders = ["input"]
-    files = ["model.yml", "build.yml", "sfincs.yml"]
+    files = ["model.yml", "build.yml"]
     with zipfile.ZipFile("model.zip", "w") as zipf:
+        total_files = sum(
+            [sum(len(files) for _, _, files in os.walk(folder)) for folder in folders]
+        ) + len(files)  # Count total number of files
+        progress = 0  # Initialize progress counter
         for folder in folders:
             for root, _, filenames in os.walk(folder):
                 for filename in filenames:
                     zipf.write(os.path.join(root, filename))
+                    progress += 1  # Increment progress counter
+                    if not progress % 100:
+                        print(
+                            f"Exporting file {progress}/{total_files}"
+                        )  # Print progress
         for file in files:
             zipf.write(file)
+            progress += 1  # Increment progress counter
+            if not progress % 100:
+                print(f"Exporting file {progress}/{total_files}")  # Print progress
+        print(f"Exporting file {progress}/{total_files}")
+        print("Done!")
 
 
 if __name__ == "__main__":

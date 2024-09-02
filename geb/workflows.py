@@ -1,9 +1,11 @@
-from time import time
-import numpy as np
 import asyncio
+from time import time
 from concurrent.futures import ThreadPoolExecutor
-import threading
-import netCDF4
+
+import cftime
+import zarr
+import numpy as np
+import pandas as pd
 
 all_async_readers = []
 
@@ -36,7 +38,7 @@ class TimingModule:
         return to_print
 
 
-class AsyncXarrayReader:
+class AsyncForcingReader:
     shared_loop = (
         asyncio.new_event_loop()
     )  # Shared event loop, note running in a separate thread is slower
@@ -45,47 +47,35 @@ class AsyncXarrayReader:
     def __init__(self, filepath, variable_name):
         self.filepath = filepath
 
-        # netCDF4 is faster than xarray for reading data
-        self.ds = netCDF4.Dataset(filepath)
-        self.var = self.ds.variables[variable_name]
-        self.time_index = self.ds.variables["time"][:]
+        self.ds = zarr.open_consolidated(self.filepath, mode="r")
+        self.var = self.ds[variable_name]
 
-        self.time_index = self.convert_times_to_numpy_datetime(
-            self.ds.variables["time"][:], self.ds.variables["time"].units
+        self.datetime_index = cftime.num2date(
+            self.ds.time[:],
+            units=self.ds.time.attrs.get("units"),
+            calendar=self.ds.time.attrs.get("calendar"),
         )
-
-        self.time_size = self.time_index.size
-        self.var.set_auto_maskandscale(False)
+        self.datetime_index = pd.DatetimeIndex(
+            pd.to_datetime([obj.isoformat() for obj in self.datetime_index])
+        ).to_numpy()
+        self.time_size = self.datetime_index.size
 
         all_async_readers.append(self)
         self.preloaded_data_future = None
         self.current_index = -1  # Initialize to -1 to indicate no data loaded yet
         self.executor = ThreadPoolExecutor(max_workers=1)
-        self.loop = AsyncXarrayReader.shared_loop
+        self.loop = AsyncForcingReader.shared_loop
 
-        self.lock = threading.Lock()
+    def load(self, index):
+        return self.var[index]
 
-    def convert_times_to_numpy_datetime(self, times, units):
-        # Convert NetCDF times to datetime objects
-        datetimes = netCDF4.num2date(times, units)
-        # Convert datetime objects to numpy.datetime64
-        numpy_datetimes = np.array(datetimes, dtype="datetime64[ns]")
-        return numpy_datetimes
-
-    def load_with_lock(self, index):
-        with self.lock:
-            return self.var[index]
-
-    async def load(self, index):
-        # return await asyncio.sleep(1)
-        return await self.loop.run_in_executor(
-            self.executor, lambda: self.load_with_lock(index)
-        )
+    async def load_await(self, index):
+        return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
 
     async def preload_next(self, index):
         # Preload the next timestep asynchronously
         if index + 1 < self.time_size:
-            return await self.load(index + 1)
+            return await self.load_await(index + 1)
         return None
 
     async def read_timestep_async(self, index):
@@ -99,7 +89,7 @@ class AsyncXarrayReader:
             data = await self.preloaded_data_future
         # Load the requested data if not preloaded
         else:
-            data = await self.load(index)
+            data = await self.load_await(index)
 
         # Initiate preloading the next timestep, do not await here, this returns a future
         self.preloaded_data_future = asyncio.create_task(self.preload_next(index))
@@ -108,14 +98,17 @@ class AsyncXarrayReader:
         return data
 
     def get_index(self, date):
-        # convert datetime object to dtype of time coordinate
+        # convert datetime object to dtype of time coordinate. There is a very high probability
+        # that the dataset is the same as the previous one or the next one in line,
+        # so we can just check the current index and the next one. Only if those do not match
+        # we have to search for the correct index.
         numpy_date = np.datetime64(date, "ns")
-        if self.time_index[self.current_index] == numpy_date:
+        if self.datetime_index[self.current_index] == numpy_date:
             return self.current_index
-        elif self.time_index[self.current_index + 1] == numpy_date:
+        elif self.datetime_index[self.current_index + 1] == numpy_date:
             return self.current_index + 1
         else:
-            indices = self.time_index == numpy_date
+            indices = self.datetime_index == numpy_date
             assert np.count_nonzero(indices) == 1, "Date not found in the dataset."
             return indices.argmax()
 
@@ -133,12 +126,11 @@ class AsyncXarrayReader:
         # cancel the preloading of the next timestep
         if self.preloaded_data_future is not None:
             self.preloaded_data_future.cancel()
-        # close the dataset and the executor
-        self.ds.close()
+        # close the executor
         self.executor.shutdown(wait=False)
 
-        AsyncXarrayReader.shared_loop.call_soon_threadsafe(
-            AsyncXarrayReader.shared_loop.stop
+        AsyncForcingReader.shared_loop.call_soon_threadsafe(
+            AsyncForcingReader.shared_loop.stop
         )
 
 

@@ -1,6 +1,5 @@
-from . import AgentBaseClass
 import numpy as np
-from .general import AgentArray
+from .general import AgentArray, AgentBaseClass
 
 from numba import njit
 
@@ -144,6 +143,7 @@ class ReservoirOperators(AgentBaseClass):
             self.norm_limit_ratio.data,
             self.flood_limit_ratio.data,
         )
+        assert (reservoir_outflow >= 0).all()
 
         return reservoir_outflow
 

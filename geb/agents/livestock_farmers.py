@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
-from . import AgentBaseClass
 import calendar
 import numpy as np
-from .general import downscale_volume
+from .general import downscale_volume, AgentBaseClass
+
+try:
+    import cupy as cp
+except (ModuleNotFoundError, ImportError):
+    pass
+from ..hydrology.landcover import GRASSLAND_LIKE
 
 
 class LiveStockFarmers(AgentBaseClass):
@@ -44,7 +49,9 @@ class LiveStockFarmers(AgentBaseClass):
             land_use_type = self.model.data.HRU.land_use_type.get()
         else:
             land_use_type = self.model.data.HRU.land_use_type
-        downscale_mask = (land_use_type != 1) | (self.model.data.HRU.land_owners != -1)
+        downscale_mask = (land_use_type != GRASSLAND_LIKE) | (
+            self.model.data.HRU.land_owners != -1
+        )
 
         # transform from mio m3 per year to m3/day
         water_consumption = (

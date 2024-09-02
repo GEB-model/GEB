@@ -10,28 +10,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python
-      uses: actions/setup-python@v2
+    - uses: actions/checkout@v4
+    - name: "Set up Python"
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.12
-    - name: Install dependencies
-      run: |
-        sudo apt-add-repository ppa:ubuntugis/ubuntugis-unstable
-        sudo apt-get update
-        sudo apt-get install gdal-bin libgdal-dev
-        pip install GDAL==$(gdal-config --version)
-        git config --global url."https://${{ secrets.PAT }}@github".insteadOf https://github
-        python -m pip install --upgrade pip
-        pip install .[tests,full]
-    - name: Install cwam package if not main branch
-      run: |
-        BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
-        if [ "$BRANCH_NAME" != "main" ]; then
-          if git ls-remote --exit-code --heads https://github.com/GEB-model/ABCWatM.git "$BRANCH_NAME" > /dev/null; then
-            pip uninstall -y abcwatm
-            pip install git+https://github.com/GEB-model/ABCWatM.git@"$BRANCH_NAME" --upgrade
-          fi
-        fi
+        python-version-file: "pyproject.toml"
+    - name: Set up uv
+      # Install latest uv version using the installer
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+    - name: Install the project
+      run: uv sync --extra dev
     - name: Run tests
-      run: pytest
+      run: uv run pytest

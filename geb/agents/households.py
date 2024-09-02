@@ -2,8 +2,13 @@ import numpy as np
 import geopandas as gpd
 import pyproj
 import calendar
-from .general import AgentArray, downscale_volume
-from . import AgentBaseClass
+from .general import AgentArray, downscale_volume, AgentBaseClass
+from ..hydrology.landcover import SEALED
+
+try:
+    import cupy as cp
+except (ModuleNotFoundError, ImportError):
+    pass
 
 
 class Households(AgentBaseClass):
@@ -19,16 +24,14 @@ class Households(AgentBaseClass):
         self.current_efficiency = efficiency
 
     def initiate(self) -> None:
-        locations = np.load(
-            self.model.model_structure["binary"]["agents/households/locations"]
-        )["data"]
+        locations = np.load(self.model.files["binary"]["agents/households/locations"])[
+            "data"
+        ]
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
 
         self.locations = AgentArray(locations, max_n=self.max_n)
 
-        sizes = np.load(
-            self.model.model_structure["binary"]["agents/households/sizes"]
-        )["data"]
+        sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
         self.sizes = AgentArray(sizes, max_n=self.max_n)
 
         self.flood_depth = AgentArray(
@@ -38,9 +41,7 @@ class Households(AgentBaseClass):
             n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
         )
 
-        self.buildings = gpd.read_file(
-            self.model.model_structure["geoms"]["assets/buildings"]
-        )
+        self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
 
     def flood(self, flood_map):
         self.flood_depth.fill(0)  # Reset flood depth for all households
@@ -87,7 +88,7 @@ class Households(AgentBaseClass):
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """
-        downscale_mask = self.model.data.HRU.land_use_type != 4
+        downscale_mask = self.model.data.HRU.land_use_type != SEALED
         if self.model.use_gpu:
             downscale_mask = downscale_mask.get()
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365

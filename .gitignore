@@ -1,17 +1,22 @@
 # Custom
 .vscode
+.ruff_cache
+.benchmarks
+.nfs*
 .DS_Store
 workspaces/
 tests/output/
 tests/tmp/
+examples/*
+!examples/build.yml
+!examples/model.yml
+!examples/update.yml
+!examples/data_catalog.yml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
-*.so
 
 # Distribution / packaging
 .Python

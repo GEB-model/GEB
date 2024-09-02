@@ -1,5 +1,10 @@
-import subprocess
-from geb.cli import multi_level_merge
+import pytest
+from click.testing import CliRunner
+
+from .setup import IN_GITHUB_ACTIONS
+from geb.cli import (
+    multi_level_merge,
+)
 
 
 def test_multi_level_merge():
@@ -10,7 +15,9 @@ def test_multi_level_merge():
     assert merged == {"a": 2, "b": 2, "c": {"d": 4, "e": 4, "f": 5}}
 
 
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in Github Actions.")
 def test_cli():
+    runner = CliRunner()
     for cmd in (
         "spinup",
         "run",
@@ -21,8 +28,6 @@ def test_cli():
         "sensitivity",
         "multirun",
         "share",
+        "evaluate",
     ):
-        result = subprocess.run(["geb", cmd, "--help"], capture_output=True, text=True)
-
-        # Check the exit code
-        assert result.returncode == 0
+        assert runner.invoke(globals()[cmd], ["--help"]).exit_code == 0

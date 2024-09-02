@@ -1,22 +1,26 @@
-import pytest
 import numpy as np
 import pandas as pd
 from datetime import date
 import xarray as xr
 from time import time, sleep
 from geb.workflows import (
-    AsyncXarrayReader,
+    AsyncForcingReader,
 )
+from numcodecs import Blosc
 
 from .setup import tmp_folder
 
+compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
-def netcdf_file(varname):
-    size = 2_000
-    # Create a temporary NetCDF file for testing
-    filename = tmp_folder / f"{varname}.nc"
 
-    periods = 5
+def zarr_file(varname):
+    size = 1000
+    # Create a temporary zarr file for testing
+    zarr = tmp_folder / f"{varname}.zarr.zip"
+    if zarr.exists():
+        zarr.unlink()
+
+    periods = 100
 
     times = pd.date_range("2000-01-01", periods=periods, freq="D")
     data = np.empty((periods, size, size), dtype=np.int32)
@@ -29,17 +33,27 @@ def netcdf_file(varname):
         coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)},
     )
 
-    ds.to_netcdf(filename)
-    return filename
+    ds.to_zarr(
+        zarr,
+        mode="w",
+        encoding={
+            varname: {
+                # "compressor": compressor,
+                "chunks": (1, size, size),
+            }
+        },
+        # zarr_version=3,
+    )
+    return zarr
 
 
 def test_read_timestep():
-    temperature_file = netcdf_file("temperature")
-    precipitation_file = netcdf_file("precipitation")
-    pressure_file = netcdf_file("pressure")
-    reader1 = AsyncXarrayReader(temperature_file, variable_name="temperature")
-    reader2 = AsyncXarrayReader(precipitation_file, variable_name="precipitation")
-    reader3 = AsyncXarrayReader(pressure_file, variable_name="pressure")
+    temperature_file = zarr_file("temperature")
+    precipitation_file = zarr_file("precipitation")
+    pressure_file = zarr_file("pressure")
+    reader1 = AsyncForcingReader(temperature_file, variable_name="temperature")
+    reader2 = AsyncForcingReader(precipitation_file, variable_name="precipitation")
+    reader3 = AsyncForcingReader(pressure_file, variable_name="pressure")
 
     data0 = reader1.read_timestep(date(2000, 1, 1))
 
@@ -83,16 +97,16 @@ def test_read_timestep():
     print("Load previous timestep (slow): {:.3f}s".format(t1 - t0))
     assert (data0 == 0).all()
 
-    data0_2 = reader2.read_timestep(date(2000, 1, 1))
-    data0_3 = reader3.read_timestep(date(2000, 1, 1))
+    reader2.read_timestep(date(2000, 1, 1))
+    reader3.read_timestep(date(2000, 1, 1))
 
     sleep(3)  # Simulate some processing time
     print("-----------------")
 
     t0 = time()
     data1 = reader1.read_timestep(date(2000, 1, 2))
-    data1_2 = reader2.read_timestep(date(2000, 1, 2))
-    data1_3 = reader3.read_timestep(date(2000, 1, 2))
+    reader2.read_timestep(date(2000, 1, 2))
+    reader3.read_timestep(date(2000, 1, 2))
     t1 = time()
     print("Load data from three readers (quick): {:.3f}s".format(t1 - t0))
 
