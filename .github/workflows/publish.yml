@@ -26,7 +26,7 @@ jobs:
             uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
             uv-${{ runner.os }}
       - name: Install the project
-        run: uv sync --extra dev
+        run: uv sync --extra publish
       - name: Build package
         run: uv run python -m build
       - name: Publish package distributions to Test PyPI
