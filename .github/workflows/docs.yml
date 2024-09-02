@@ -62,7 +62,7 @@ jobs:
         run: |
           cd docs
           mkdir _build
-          make html
+          uv run make html
       - uses: actions/upload-artifact@v2
         if: failure()
         with:
