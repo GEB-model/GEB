@@ -13,6 +13,7 @@ jobs:
       # Configure a constant location for the uv cache
       UV_CACHE_DIR: /tmp/.uv-cache
     steps:
+    - uses: actions/checkout@v4
     - name: "Set up Python"
       uses: actions/setup-python@v5
       with:
