@@ -2031,15 +2031,17 @@ class CropFarmers(AgentBaseClass):
 
             # it's okay for some crop prices to be nan, as they will be filtered out in the next step
             crop_prices = self.agents.market.crop_prices
+            region_id_per_field = self.region_id
 
             # Determine the region ids of harvesting farmers, as crop prices differ per region
-            region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
+
+            region_id_per_field = self.region_id[self.var.land_owners]
+            region_id_per_field[self.var.land_owners == -1] = -1
+            region_id_per_harvested_field = region_id_per_field[harvest]
 
             # Calculate the crop price per field
-            crop_prices_per_farmer = crop_prices[region_ids_harvesting_farmers]
-            crop_prices_per_field = crop_prices_per_farmer[index_farmer_to_field]
-            crop_price_per_field = crop_prices_per_field[
-                np.arange(harvested_crops.size), harvested_crops
+            crop_price_per_field = crop_prices[
+                region_id_per_harvested_field, harvested_crops
             ]
 
             # but it's not okay for the crop price to be nan
