@@ -1013,6 +1013,27 @@ class GEBModel(GridModel):
 
         return costs
 
+    def setup_cultivation_costs(
+        self,
+        cultivation_costs: Optional[Union[str, int, float]] = 0,
+        project_future_until_year: Optional[int] = False,
+    ):
+        """
+        Sets up the cultivation costs for the model.
+
+        Parameters
+        ----------
+        cultivation_costs : str or int or float, optional
+            The file path or integer of cultivation costs. If a file path is provided, the file is loaded and parsed as JSON.
+            The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
+            IDs and their cultivation costs. If .
+        """
+        self.logger.info("Preparing cultivation costs")
+        cultivation_costs = self.process_crop_data(
+            cultivation_costs, project_future_until_year=project_future_until_year
+        )
+        self.set_dict(cultivation_costs, name="crops/cultivation_costs")
+
     def setup_crop_prices(
         self,
         crop_prices: Optional[Union[str, int, float]] = 0,
