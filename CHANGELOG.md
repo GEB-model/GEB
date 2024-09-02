@@ -20,6 +20,7 @@
 - setup_GEV in hydromt-geb was integrated with setup_SPEI and can be removed.
 - Many other minor fixes and improvements.
 - Included a simple market for future scenarios.
+- Data exporting in model.yml is now to zarr instead of netcdf. Thus set "format: netcdf" to "format: zarr" in model.yml if applicable.
 
 ### Migration guide
 
