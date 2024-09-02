@@ -41,7 +41,7 @@ dependencies = [
     "xmipy>=1.5.0",
     "zarr>=2.18.2"
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.11, <3.13"
 readme = "README.md"
 classifiers = [
     # https://pypi.python.org/pypi?%3Aaction=list_classifiers
