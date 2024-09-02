@@ -2160,13 +2160,11 @@ class GEBModel(GridModel):
                 xmax += 0.1
                 ymax += 0.1
 
-                c = cdsapi.Client()
-
                 max_retries = 3
                 retries = 0
                 while retries < max_retries:
                     try:
-                        c.retrieve(
+                        cdsapi.Client().retrieve(
                             "reanalysis-era5-land",
                             {
                                 "product_type": "reanalysis",
@@ -3048,6 +3046,8 @@ class GEBModel(GridModel):
 
         water_budget.name = "water_budget"
         chunks = {dim: block_edge_size for dim in water_budget.dims}
+        water_budget = water_budget.chunk(chunks)
+
         with tempfile.NamedTemporaryFile(suffix=".zarr.zip") as tmp_water_budget_file:
             print("Exporting temporary water budget to zarr")
             with ProgressBar(dt=10):
@@ -3089,7 +3089,10 @@ class GEBModel(GridModel):
                         encoding={"spei": {"chunks": chunks.values()}},
                     )
 
-                SPEI = xr.open_zarr(tmp_spei_file.name, chunks={})["spei"]
+                SPEI = xr.open_zarr(
+                    tmp_spei_file.name,
+                    chunks={"time": 1, "y": XY_CHUNKSIZE, "x": XY_CHUNKSIZE},
+                )["spei"]
 
                 self.set_forcing(SPEI, name="climate/spei")
 
