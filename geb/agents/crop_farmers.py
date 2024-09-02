@@ -466,7 +466,7 @@ def abstract_water(
                     < critical_water_level[
                         farmer_fields
                     ],  # if there is not enough water
-                    max_water_content[farmer_fields]
+                    critical_water_level[farmer_fields]
                     - readily_available_water[
                         farmer_fields
                     ],  # irrigate to field capacity (if possible)
@@ -998,6 +998,14 @@ class CropFarmers(AgentBaseClass):
         self.discount_rate[:] = np.load(
             self.model.files["binary"]["agents/farmers/discount_rate"]
         )["data"]
+
+        self.intention_factor = AgentArray(
+            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
+        )
+        np.random.seed(42)
+        self.intention_factor[:] = np.random.uniform(
+            0, 1, size=self.intention_factor.shape
+        )
 
         # Load the region_code of each farmer.
         self.region_id = AgentArray(
@@ -2601,7 +2609,7 @@ class CropFarmers(AgentBaseClass):
             spei_prob = spei_prob[mask]
 
             # Set the a and b values of last year to prevent no values on this year
-            if not ((self.farmer_yield_probability_relation is None).all()):
+            if not (self.farmer_yield_probability_relation is None):
                 a, b = np.median(
                     self.farmer_yield_probability_relation[
                         np.where(
@@ -2738,8 +2746,12 @@ class CropFarmers(AgentBaseClass):
         )
         # Calculate the EU of not adapting and adapting respectively
         SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
-        SEUT_adapt_option_1 = self.decision_module.calcEU_do_nothing(**decision_params_1)
-        SEUT_adapt_option_2 = self.decision_module.calcEU_do_nothing(**decision_params_2)
+        SEUT_adapt_option_1 = self.decision_module.calcEU_do_nothing(
+            **decision_params_1
+        )
+        SEUT_adapt_option_2 = self.decision_module.calcEU_do_nothing(
+            **decision_params_2
+        )
 
         assert (
             (SEUT_do_nothing != -1).any
@@ -2753,6 +2765,12 @@ class CropFarmers(AgentBaseClass):
 
         # Determine for which agents it is beneficial to switch crops
         SEUT_adaptation_decision = best_option_SEUT > SEUT_do_nothing
+
+        # Determine whether it passed the intention threshold
+        random_values = np.random.rand(*self.intention_factor.shape)
+        intention_mask = random_values < self.intention_factor
+
+        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
 
         print("crop switching agents", np.count_nonzero(SEUT_adaptation_decision))
         final_chosen_option = chosen_option[SEUT_adaptation_decision]
@@ -2771,27 +2789,35 @@ class CropFarmers(AgentBaseClass):
         assert not np.any(selected_new_crop_nr == -1)
 
         # Assuming self.crop_calendar and extra_constraint are defined
-        unique_values_old, counts_old = np.unique(self.crop_calendar[extra_constraint, 0, 0], return_counts=True)
+        unique_values_old, counts_old = np.unique(
+            self.crop_calendar[extra_constraint, 0, 0], return_counts=True
+        )
 
         # Create a formatted string for the old distribution
-        old_distribution = ', '.join(f"{val}: {cnt}" for val, cnt in zip(unique_values_old, counts_old))
+        old_distribution = ", ".join(
+            f"{val}: {cnt}" for val, cnt in zip(unique_values_old, counts_old)
+        )
 
         # Print the old distribution
-        print('old distribution', '\n', old_distribution)
+        print("old distribution", "\n", old_distribution)
 
         # Switch their crops and update their yield-SPEI relation
         self.crop_calendar[SEUT_adaptation_decision, 0, 0] = selected_new_crop_nr
 
-        unique_values, counts = np.unique(self.crop_calendar[extra_constraint, 0, 0], return_counts=True)
+        unique_values, counts = np.unique(
+            self.crop_calendar[extra_constraint, 0, 0], return_counts=True
+        )
 
         # Calculate the difference in counts
         difference_counts = counts - counts_old
 
         # Create a formatted string for the difference
-        difference_distribution = ', '.join(f"{val}: {cnt}" for val, cnt in zip(unique_values_old, difference_counts))
+        difference_distribution = ", ".join(
+            f"{val}: {cnt}" for val, cnt in zip(unique_values_old, difference_counts)
+        )
 
         # Print the difference
-        print('difference', '\n', difference_distribution)
+        print("difference", "\n", difference_distribution)
         # Update yield-SPEI relation
         self.yearly_yield_ratio[SEUT_adaptation_decision, :] = self.yearly_yield_ratio[
             selected_farmer_id, :
@@ -2939,6 +2965,12 @@ class CropFarmers(AgentBaseClass):
         SEUT_adaptation_decision = (
             SEUT_adapt[adapted == 0] > SEUT_do_nothing[adapted == 0]
         )
+
+        # Determine whether it passed the intention threshold
+        random_values = np.random.rand(*self.intention_factor.shape)
+        intention_mask = random_values < self.intention_factor
+
+        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
 
         # Initialize a mask with default value as False
         SEUT_adapt_mask = np.zeros_like(adapted, dtype=bool)
@@ -3544,14 +3576,13 @@ class CropFarmers(AgentBaseClass):
                         )
                     return yield_ratio_gain
 
-
                 # Calculate mean yield ratio over past years for the unadapted group
                 current_yield_ratio = np.mean(
                     yield_ratios[unique_farmer_groups, :], axis=0
                 )
 
                 if np.isnan(current_yield_ratio).all():
-                        current_yield_ratio = np.zeros_like(current_yield_ratio)
+                    current_yield_ratio = np.zeros_like(current_yield_ratio)
 
                 # Process option 1
                 yield_ratio_gain_relative_option_1 = process_option(
