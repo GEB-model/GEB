@@ -71,7 +71,8 @@ class Market(AgentBaseClass):
         )
 
     def restart(self):
-        self.estimate_price_model()
+        if "dynamic_market" in self.config and self.config["dynamic_market"] is True:
+            self.estimate_price_model()
 
     def estimate_price_model(self) -> None:
         self.parameters = np.full((self.production.shape[0], 2), np.nan)
@@ -90,8 +91,6 @@ class Market(AgentBaseClass):
             :,
             estimation_start_year:estimation_end_year,
         ]
-
-        # TODO: Correct for inflation
 
         print("Look into increasing yield and increasing price")
         for crop in range(self.production.shape[0]):
@@ -144,7 +143,7 @@ class Market(AgentBaseClass):
         # TODO: This does not yet diffentiate per region
         yield_per_crop = np.bincount(
             self.agents.crop_farmers.harvested_crop[mask],
-            weights=self.agents.crop_farmers.yield_total_per_farmer[mask],
+            weights=self.agents.crop_farmers.actual_yield_per_farmer[mask],
             minlength=self.production.shape[0],
         )
         profit_per_crop = np.bincount(
@@ -164,11 +163,15 @@ class Market(AgentBaseClass):
 
     @property
     def crop_prices(self) -> np.ndarray:
-        if self.model.spinup:
+        if (
+            not self.model.spinup
+            and "dynamic_market" in self.config
+            and self.config["dynamic_market"] is True
+        ):
+            return self.get_modelled_crop_prices()
+        else:
             index = self._crop_prices[0].get(self.model.current_time)
             return self._crop_prices[1][index]
-        else:
-            return self.get_modelled_crop_prices()
 
     @property
     def year_index(self) -> int:
