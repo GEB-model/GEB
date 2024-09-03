@@ -234,38 +234,11 @@ class hydrology_reporter(ABMReporter):
             value: The array itself.
             conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
         """
-        folder = os.path.join(self.export_folder, name)
-        try:
-            os.makedirs(folder)
-        except OSError:
-            pass
         if "format" not in conf:
             raise ValueError(
-                f"Export format must be specified for {name} in config file (npy/npz/csv/xlsx)."
+                f"Export format must be specified for {name} in config file (npy/npz/csv/xlsx/zarr)."
             )
-        fn = f"{self.timesteps[-1].isoformat().replace('-', '').replace(':', '')}"
-        if conf["format"] == "npy":
-            fn += ".npy"
-            fp = os.path.join(folder, fn)
-            np.save(fp, value)
-        elif conf["format"] == "npz":
-            fn += ".npz"
-            fp = os.path.join(folder, fn)
-            np.savez_compressed(fp, data=value)
-        elif conf["format"] == "csv":
-            fn += ".csv"
-            fp = os.path.join(folder, fn)
-            if isinstance(value, (np.ndarray, cp.ndarray)):
-                value = value.tolist()
-            if isinstance(value, (float, int)):
-                value = [value]
-            if len(value) > 100_000:
-                self.model.logger.info(
-                    f"Exporting {len(value)} items to csv. This might take a long time and take a lot of space. Consider using NumPy (compressed) binary format (npy/npz)."
-                )
-            with open(fp, "w") as f:
-                f.write("\n".join([str(v) for v in value]))
-        elif conf["format"] == "zarr":
+        if conf["format"] == "zarr":
             if np.isin(
                 np.datetime64(self.model.current_time), self.variables[name].time
             ):
@@ -279,9 +252,33 @@ class hydrology_reporter(ABMReporter):
                     self.variables[name][time_index_start:time_index_end, ...] = value
                 else:
                     self.variables[name][name][time_index, ...] = value
-
         else:
-            raise ValueError(f"{conf['format']} not recognized")
+            folder = os.path.join(self.export_folder, name)
+            os.makedirs(folder, exist_ok=True)
+            fn = f"{self.timesteps[-1].isoformat().replace('-', '').replace(':', '')}"
+            if conf["format"] == "npy":
+                fn += ".npy"
+                fp = os.path.join(folder, fn)
+                np.save(fp, value)
+            elif conf["format"] == "npz":
+                fn += ".npz"
+                fp = os.path.join(folder, fn)
+                np.savez_compressed(fp, data=value)
+            elif conf["format"] == "csv":
+                fn += ".csv"
+                fp = os.path.join(folder, fn)
+                if isinstance(value, (np.ndarray, cp.ndarray)):
+                    value = value.tolist()
+                if isinstance(value, (float, int)):
+                    value = [value]
+                if len(value) > 100_000:
+                    self.model.logger.info(
+                        f"Exporting {len(value)} items to csv. This might take a long time and take a lot of space. Consider using NumPy (compressed) binary format (npy/npz)."
+                    )
+                with open(fp, "w") as f:
+                    f.write("\n".join([str(v) for v in value]))
+            else:
+                raise ValueError(f"{conf['format']} not recognized")
 
     def step(self) -> None:
         """This method is called after every timestep, to collect data for reporting from the model."""
