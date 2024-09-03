@@ -5521,7 +5521,7 @@ class GEBModel(GridModel):
             self._assert_write_mode
             for name, data in self.table.items():
                 if self.is_updated["table"][name]["updated"]:
-                    fn = os.path.join(name + ".csv")
+                    fn = os.path.join(name + ".parquet")
                     self.logger.debug(f"Writing file {fn}")
                     self.files["table"][name] = fn
                     self.is_updated["table"][name]["filename"] = fn
