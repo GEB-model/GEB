@@ -2235,10 +2235,10 @@ class GEBModel(GridModel):
                                 "23:00",
                             ],
                             "area": (
-                                ymax,
-                                xmin,
-                                ymin,
-                                xmax,
+                                float(ymax),
+                                float(xmin),
+                                float(ymin),
+                                float(xmax),
                             ),  # North, West, South, East
                         }
                         cdsapi.Client().retrieve(
@@ -3009,7 +3009,6 @@ class GEBModel(GridModel):
         self,
         calibration_period_start: date = date(1981, 1, 1),
         calibration_period_end: date = date(2010, 1, 1),
-        memory_mb: int = 1000,
     ):
         """
         Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
@@ -3069,22 +3068,12 @@ class GEBModel(GridModel):
 
         water_budget.attrs = {"units": "kg m-2 s-1"}
 
-        max_cells_loaded_in_memory = (
-            memory_mb * 1024 * 1024 / 8  # 8 bytes per float
-        )  # in number of elements
-
-        block_edge_size_time = (
-            max_cells_loaded_in_memory / water_budget.time.size
-        ) ** 0.5
-        block_edge_size_xy = max_cells_loaded_in_memory / (
-            water_budget.x.size * water_budget.y.size
-        )
-
-        # round up to avoid very small chunks at edges
-        block_edge_size = math.ceil(min(block_edge_size_time, block_edge_size_xy))
-
         water_budget.name = "water_budget"
-        chunks = {dim: block_edge_size for dim in water_budget.dims}
+        chunks = {
+            "time": 100,
+            "y": XY_CHUNKSIZE,
+            "x": XY_CHUNKSIZE,
+        }
         water_budget = water_budget.chunk(chunks)
 
         with tempfile.NamedTemporaryFile(suffix=".zarr.zip") as tmp_water_budget_file:
@@ -3130,7 +3119,7 @@ class GEBModel(GridModel):
 
                 SPEI = xr.open_zarr(
                     tmp_spei_file.name,
-                    chunks={"time": 1, "y": XY_CHUNKSIZE, "x": XY_CHUNKSIZE},
+                    chunks={},
                 )["spei"]
 
                 self.set_forcing(SPEI, name="climate/spei")
@@ -4756,40 +4745,80 @@ class GEBModel(GridModel):
 
         return None
 
-    def setup_assets(self, feature_types):
+    def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
+        """
+        Get assets from OpenStreetMap (OSM) data.
+
+        Parameters
+        ----------
+        feature_types : str or list of str
+            The types of features to download from OSM. Available feature types are 'buildings'.
+        source : str, optional
+            The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
+        overwrite : bool, optional
+            Whether to overwrite existing files. Default is False.
+        """
         if isinstance(feature_types, str):
             feature_types = [feature_types]
 
         OSM_data_dir = Path(self.root).parent / "preprocessing" / "osm"
         OSM_data_dir.mkdir(exist_ok=True, parents=True)
 
-        index_file = OSM_data_dir / "geofabrik_region_index.geojson"
-        fetch_and_save(
-            "https://download.geofabrik.de/index-v1.json", index_file, overwrite=False
-        )
-
-        index = gpd.read_file(index_file)
-        # remove Dach region as all individual regions within dach countries are also in the index
-        index = index[index["id"] != "dach"]
-
-        # find all regions that intersect with the bbox
-        intersecting_regions = index[index.intersects(self.region.geometry[0])]
-
-        def filter_regions(ID, parents):
-            return ID not in parents
-
-        intersecting_regions = intersecting_regions[
-            intersecting_regions["id"].apply(
-                lambda x: filter_regions(x, intersecting_regions["parent"].tolist())
+        if source == "geofabrik":
+            index_file = OSM_data_dir / "geofabrik_region_index.geojson"
+            fetch_and_save(
+                "https://download.geofabrik.de/index-v1.json",
+                index_file,
+                overwrite=overwrite,
             )
-        ]
+
+            index = gpd.read_file(index_file)
+            # remove Dach region as all individual regions within dach countries are also in the index
+            index = index[index["id"] != "dach"]
+
+            # find all regions that intersect with the bbox
+            intersecting_regions = index[index.intersects(self.region.geometry[0])]
+
+            def filter_regions(ID, parents):
+                return ID not in parents
+
+            intersecting_regions = intersecting_regions[
+                intersecting_regions["id"].apply(
+                    lambda x: filter_regions(x, intersecting_regions["parent"].tolist())
+                )
+            ]
+
+            urls = (
+                intersecting_regions["urls"]
+                .apply(lambda x: json.loads(x)["pbf"])
+                .tolist()
+            )
+
+        elif source == "movisda":
+            minx, miny, maxx, maxy = self.bounds
+
+            urls = []
+            for x in range(int(minx), int(maxx) + 1):
+                # Movisda seems to switch the W and E for the x coordinate
+                EW_code = f"E{-x:03d}" if x < 0 else f"W{x:03d}"
+                for y in range(int(miny), int(maxy) + 1):
+                    NS_code = f"N{y:02d}" if y >= 0 else f"S{-y:02d}"
+                    url = f"https://osm.download.movisda.io/grid/{NS_code}{EW_code}-latest.osm.pbf"
+
+                    # some tiles do not exists because they are in the ocean. Therefore we check if they exist
+                    # before adding the url
+                    response = requests.head(url, allow_redirects=True)
+                    if response.status_code != 404:
+                        urls.append(url)
+
+        else:
+            raise ValueError(f"Unknown source {source}")
 
         # download all regions
         all_features = {}
-        for _, row in tqdm(intersecting_regions.iterrows()):
-            url = json.loads(row["urls"])["pbf"]
+        for url in tqdm(urls):
             filepath = OSM_data_dir / url.split("/")[-1]
-            fetch_and_save(url, filepath, overwrite=False)
+            fetch_and_save(url, filepath, overwrite=overwrite)
             for feature_type in feature_types:
                 if feature_type not in all_features:
                     all_features[feature_type] = []
