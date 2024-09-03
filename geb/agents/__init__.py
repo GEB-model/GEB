@@ -25,7 +25,7 @@ class Agents:
         self.reservoir_operators = ReservoirOperators(model, self)
         self.town_managers = TownManagers(model, self)
         self.government = Government(model, self)
-        self.market = Market(model, self)
+        # self.market = Market(model, self)
 
         self.agents = [
             self.households,
@@ -35,7 +35,7 @@ class Agents:
             self.reservoir_operators,
             self.town_managers,
             self.government,
-            self.market,
+            # self.market,
         ]
 
         if not self.model.load_initial_data:

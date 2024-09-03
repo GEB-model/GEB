@@ -95,7 +95,7 @@ class Interception(object):
                 self.model.files["forcing"][
                     f"landcover/{cover_name}/interceptCap{cover_name.title()}_10days"
                 ]
-            )
+            , engine='zarr')
 
             self.interception[cover] = ds[
                 f"interceptCap{cover_name.title()}_10days"

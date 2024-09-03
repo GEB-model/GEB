@@ -1036,6 +1036,7 @@ class GEBModel(GridModel):
             project_past_until_year=project_past_until_year,
         )
         self.set_dict(crop_prices, name="crops/crop_prices")
+        self.set_dict(crop_prices, name="crops/cultivation_costs")
 
     def setup_mannings(self) -> None:
         """
@@ -2602,7 +2603,7 @@ class GEBModel(GridModel):
                     )
                     del hurs.attrs["_FillValue"]
                     hurs.name = "hurs"
-                    hurs.to_zarr(fn)
+                    hurs.to_zarr(fn, mode='w')
                 else:
                     hurs = xr.open_dataset(fn, chunks={}, engine="zarr")["hurs"]
                 # assert hasattr(hurs, "spatial_ref")
@@ -5438,7 +5439,7 @@ class GEBModel(GridModel):
                     )
 
                     # move file to final location
-                    shutil.move(tmp_file.name, dst_file)
+                    shutil.copy(tmp_file.name, dst_file)
                 return xr.open_dataset(dst_file, chunks={}, engine="zarr")[forcing.name]
             else:
                 if isinstance(forcing, xr.DataArray):
@@ -5460,7 +5461,7 @@ class GEBModel(GridModel):
                 )
 
                 # move file to final location
-                shutil.move(tmp_file.name, dst_file)
+                shutil.copy(tmp_file.name, dst_file)
 
                 ds = xr.open_dataset(dst_file, chunks={}, engine="zarr")
                 if isinstance(forcing, xr.DataArray):

@@ -819,13 +819,13 @@ class CropFarmers(AgentBaseClass):
         ]["adaptation_well_global"]["maintenance_factor"]
 
         self.why_10 = load_economic_data(
-            self.model.model_structure["dict"]["economics/why_10"]
+            self.model.files["dict"]["economics/why_10"]
         )
         self.why_20 = load_economic_data(
-            self.model.model_structure["dict"]["economics/why_20"]
+            self.model.files["dict"]["economics/why_20"]
         )
         self.why_30 = load_economic_data(
-            self.model.model_structure["dict"]["economics/why_30"]
+            self.model.files["dict"]["economics/why_30"]
         )
 
         # Placeholder values that will be changed by location specific values
@@ -899,18 +899,24 @@ class CropFarmers(AgentBaseClass):
             ymax=self.model.ymax,
         )
 
+        self.crop_prices = load_regional_crop_data_from_dict(
+                    self.model, "crops/crop_prices"
+                )
+        
         self.cultivation_costs = load_regional_crop_data_from_dict(
             self.model, "crops/cultivation_costs"
-        )
+                )
+
         # Set the
         date_index, cultivation_costs_array = self.cultivation_costs
         adjusted_cultivation_costs_array = cultivation_costs_array * 0.05
         self.cultivation_costs = (date_index, adjusted_cultivation_costs_array)
 
-        self.total_spinup_time = (
-            self.model.config["general"]["start_time"].year
-            - self.model.config["general"]["spinup_time"].year
-        )
+        # Test with a high variable for now 
+        self.total_spinup_time = max(
+            self.model.config["general"]["start_time"].year 
+            - self.model.config["general"]["spinup_time"].year, 
+            30)
 
         self.yield_ratio_multiplier_value = self.model.config["agent_settings"][
             "expected_utility"
@@ -1141,8 +1147,8 @@ class CropFarmers(AgentBaseClass):
         self.yearly_abstraction_m3_by_farmer = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(4,),
-            extra_dims_names=("abstraction_type",),
+            extra_dims=(4,self.total_spinup_time),
+            extra_dims_names=("abstraction_type",'year'),
             dtype=np.float32,
             fill_value=0,
         )
@@ -2058,7 +2064,7 @@ class CropFarmers(AgentBaseClass):
             harvesting_farmers, index_farmer_to_field = np.unique(
                 harvesting_farmer_fields, return_inverse=True
             )
-
+            
             if self.crop_prices[0] is None:
                 crop_prices = self.crop_prices[1]
                 crop_price_per_field = np.full_like(
@@ -2069,8 +2075,8 @@ class CropFarmers(AgentBaseClass):
                     self.crop_prices[0].get(self.model.current_time)
                 ]
 
-            # Determine the region ids of harvesting farmers, as crop prices differ per region
-            region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
+                # Determine the region ids of harvesting farmers, as crop prices differ per region
+                region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
 
                 # Calculate the crop price per field
                 crop_prices_per_farmer = crop_prices[region_ids_harvesting_farmers]
@@ -2120,9 +2126,9 @@ class CropFarmers(AgentBaseClass):
             )
 
             ## Convert the yield_ratio per field to the average yield ratio per farmer
-            yield_ratio_per_farmer = np.bincount(
-                harvesting_farmer_fields, weights=yield_ratio_total, minlength=self.n
-            ) / np.bincount(harvesting_farmer_fields, minlength=self.n)
+            # yield_ratio_per_farmer = np.bincount(
+            #     harvesting_farmer_fields, weights=yield_ratio_total, minlength=self.n
+            # ) / np.bincount(harvesting_farmer_fields, minlength=self.n)
             # print(
             #     "well",
             #     np.mean(
@@ -2394,22 +2400,22 @@ class CropFarmers(AgentBaseClass):
         """
 
         # Update yearly channel water abstraction for each farmer
-        self.yearly_abstraction_m3_by_farmer[:, 0] += (
+        self.yearly_abstraction_m3_by_farmer[:, 0, 0] += (
             self.channel_abstraction_m3_by_farmer
         )
 
         # Update yearly reservoir water abstraction for each farmer
-        self.yearly_abstraction_m3_by_farmer[:, 1] += (
+        self.yearly_abstraction_m3_by_farmer[:, 1, 0] += (
             self.reservoir_abstraction_m3_by_farmer
         )
 
         # Update yearly groundwater water abstraction for each farmer
-        self.yearly_abstraction_m3_by_farmer[:, 2] += (
+        self.yearly_abstraction_m3_by_farmer[:, 2, 0] += (
             self.groundwater_abstraction_m3_by_farmer
         )
 
         # Compute and update the total water abstraction for each farmer
-        self.yearly_abstraction_m3_by_farmer[:, 3] += (
+        self.yearly_abstraction_m3_by_farmer[:, 3, 0] += (
             self.channel_abstraction_m3_by_farmer
             + self.reservoir_abstraction_m3_by_farmer
             + self.groundwater_abstraction_m3_by_farmer
@@ -3105,7 +3111,7 @@ class CropFarmers(AgentBaseClass):
         ) / 1000
 
         energy = power * (total_pump_duration * self.pump_hours)  # kWh
-        energy_cost_rate = self.energy_cost_rate  # $ per kWh
+        energy_cost_rate = electricity_costs  # $ per kWh
         energy_cost = energy * energy_cost_rate  # $/year
 
         # Fetch loan configuration
@@ -4195,37 +4201,37 @@ class CropFarmers(AgentBaseClass):
             # Set to 0 if channel abstraction is bigger than reservoir and groundwater, 1 for reservoir, 2 for groundwater and 3 no abstraction
             self.farmer_class[
                 (
-                    self.yearly_abstraction_m3_by_farmer[:, 0]
-                    > self.yearly_abstraction_m3_by_farmer[:, 1]
+                    self.yearly_abstraction_m3_by_farmer[:, 0, 0]
+                    > self.yearly_abstraction_m3_by_farmer[:, 1, 0]
                 )
                 & (
-                    self.yearly_abstraction_m3_by_farmer[:, 0]
-                    > self.yearly_abstraction_m3_by_farmer[:, 2]
+                    self.yearly_abstraction_m3_by_farmer[:, 0, 0]
+                    > self.yearly_abstraction_m3_by_farmer[:, 2, 0]
                 )
             ] = 0
             self.farmer_class[
                 (
-                    self.yearly_abstraction_m3_by_farmer[:, 1]
-                    > self.yearly_abstraction_m3_by_farmer[:, 0]
+                    self.yearly_abstraction_m3_by_farmer[:, 1, 0]
+                    > self.yearly_abstraction_m3_by_farmer[:, 0, 0]
                 )
                 & (
-                    self.yearly_abstraction_m3_by_farmer[:, 1]
-                    > self.yearly_abstraction_m3_by_farmer[:, 2]
+                    self.yearly_abstraction_m3_by_farmer[:, 1, 0]
+                    > self.yearly_abstraction_m3_by_farmer[:, 2, 0]
                 )
             ] = 1
             self.farmer_class[
                 (
-                    self.yearly_abstraction_m3_by_farmer[:, 2]
-                    > self.yearly_abstraction_m3_by_farmer[:, 0]
+                    self.yearly_abstraction_m3_by_farmer[:, 2, 0]
+                    > self.yearly_abstraction_m3_by_farmer[:, 0, 0]
                 )
                 & (
-                    self.yearly_abstraction_m3_by_farmer[:, 2]
-                    > self.yearly_abstraction_m3_by_farmer[:, 1]
+                    self.yearly_abstraction_m3_by_farmer[:, 2, 0]
+                    > self.yearly_abstraction_m3_by_farmer[:, 1, 0]
                 )
             ] = 2
 
             # Set to 3 for precipitation if there is no abstraction
-            self.farmer_class[self.yearly_abstraction_m3_by_farmer[:, 3] == 0] = 3
+            self.farmer_class[self.yearly_abstraction_m3_by_farmer[:, 3, 0] == 0] = 3
 
             print(
                 "well",
