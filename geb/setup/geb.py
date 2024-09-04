@@ -1701,10 +1701,26 @@ class GEBModel(GridModel):
             endtime,
         )
 
-    def setup_groundwater(self):
+    def setup_groundwater(
+        self,
+        minimum_thickness_confined_layer=50,
+        maximum_thickness_confined_layer=1000,
+        intial_heads_source="GLOBGM",
+    ):
         """
         Sets up the MODFLOW grid for GEB. This code is adopted from the GLOBGM
         model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt
+
+        Parameters
+        ----------
+        minimum_thickness_confined_layer : float, optional
+            The minimum thickness of the confined layer in meters. Default is 50.
+        maximum_thickness_confined_layer : float, optional
+            The maximum thickness of the confined layer in meters. Default is 1000.
+        intial_heads_source : str, optional
+            The initial heads dataset to use, options are GLOBGM and Fan. Default is 'GLOBGM'.
+            - More about GLOBGM: https://doi.org/10.5194/gmd-17-275-2024
+            - More about Fan: https://doi.org/10.1126/science.1229881
         """
         self.logger.info("Setting up MODFLOW")
 
@@ -1726,6 +1742,12 @@ class GEBModel(GridModel):
         total_thickness = self.snap_to_grid(total_thickness, self.grid)
         assert total_thickness.shape == self.grid.raster.shape
 
+        total_thickness = np.clip(
+            total_thickness,
+            minimum_thickness_confined_layer,
+            maximum_thickness_confined_layer,
+        )
+
         confining_layer = (
             self.data_catalog.get_rasterdataset(
                 "thickness_confining_layer_globgm",
@@ -1745,7 +1767,9 @@ class GEBModel(GridModel):
 
         if two_layers:
             # make sure that total thickness is at least 50 m thicker than confining layer
-            total_thickness = np.maximum(total_thickness, confining_layer + 50)
+            total_thickness = np.maximum(
+                total_thickness, confining_layer + minimum_thickness_confined_layer
+            )
             # thickness of layer 2 is based on the predefined confiningLayerThickness
             bottom_top_layer = aquifer_top_elevation - confining_layer
             # make sure that the minimum thickness of layer 2 is at least 0.1 m
@@ -1774,64 +1798,6 @@ class GEBModel(GridModel):
         self.set_grid(
             layer_boundary_elevation, name="groundwater/layer_boundary_elevation"
         )
-
-        # load digital elevation model that was used for globgm
-        dem_globgm = (
-            self.data_catalog.get_rasterdataset(
-                "dem_globgm",
-                geom=self.region,
-                buffer=0,
-                variables=["dem_average"],
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .compute()
-        )
-        dem_globgm = self.snap_to_grid(dem_globgm, self.grid)
-        assert dem_globgm.shape == self.grid.raster.shape
-
-        dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
-
-        water_table_depth = self.data_catalog.get_rasterdataset(
-            "water_table_depth_globgm", bbox=self.bounds, buffer=0
-        ).compute()
-        water_table_depth = self.snap_to_grid(water_table_depth, self.grid)
-
-        # heads
-        head_upper_layer = self.data_catalog.get_rasterdataset(
-            "head_upper_globgm", bbox=self.bounds, buffer=0
-        ).compute()
-        head_upper_layer = head_upper_layer.raster.mask_nodata()
-        head_upper_layer = self.snap_to_grid(head_upper_layer, self.grid)
-        head_upper_layer = head_upper_layer - dem_globgm + dem
-        assert head_upper_layer.shape == self.grid.raster.shape
-
-        # assert concistency of datasets. If one layer, this layer should be all nan
-        if not two_layers:
-            assert np.isnan(head_upper_layer).all()
-
-        head_lower_layer = self.data_catalog.get_rasterdataset(
-            "head_lower_globgm", bbox=self.bounds, buffer=0
-        ).compute()
-        head_lower_layer = head_lower_layer.raster.mask_nodata()
-        head_lower_layer = self.snap_to_grid(head_lower_layer, self.grid).compute()
-        head_lower_layer = (head_lower_layer - dem_globgm + dem).compute()
-        # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
-        head_lower_layer = xr.where(
-            head_lower_layer < layer_boundary_elevation[-1],
-            layer_boundary_elevation[-1],
-            head_lower_layer,
-        )
-        assert head_lower_layer.shape == self.grid.raster.shape
-
-        if two_layers:
-            # combine upper and lower layer head in one dataarray
-            heads = xr.concat(
-                [head_upper_layer, head_lower_layer], dim="layer", compat="equals"
-            )
-        else:
-            heads = head_upper_layer.expand_dims(layer=["upper"])
-
-        self.set_grid(heads, name="groundwater/heads")
 
         # load hydraulic conductivity
         hydraulic_conductivity = self.data_catalog.get_rasterdataset(
@@ -1869,39 +1835,6 @@ class GEBModel(GridModel):
             specific_yield = specific_yield.expand_dims(layer=["upper"])
         self.set_grid(specific_yield, name="groundwater/specific_yield")
 
-        # Load in the starting groundwater depth
-        region_continent = np.unique(self.geoms["areamaps/regions"]["CONTINENT"])
-        assert (
-            np.size(region_continent) == 1
-        )  # Transcontinental basins should not be possible
-
-        if (
-            np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Asia"
-            or np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Europe"
-        ):
-            region_continent = "Eurasia"
-        else:
-            region_continent = region_continent[0]
-
-        initial_depth = self.data_catalog.get_rasterdataset(
-            f"initial_groundwater_depth_{region_continent}", bbox=self.bounds, buffer=0
-        ).rename({"lon": "x", "lat": "y"})
-
-        initial_depth_static = initial_depth.isel(time=0)
-        initial_depth_static_reprojected = initial_depth_static.raster.reproject_like(
-            self.grid, method="average"
-        )
-
-        initial_depth_modflow = self.snap_to_grid(
-            initial_depth_static_reprojected, self.grid
-        )
-
-        initial_depth_modflow = initial_depth_modflow["WTD"] * -1
-        self.set_grid(
-            initial_depth_modflow, name="groundwater/initial_water_table_depth"
-        )
-        assert initial_depth_modflow.shape == self.grid.raster.shape
-
         # load aquifer classification from why_map and write it as a grid
         why_map = self.data_catalog.get_rasterdataset(
             "why_map",
@@ -1914,6 +1847,102 @@ class GEBModel(GridModel):
         why_interpolated = self.interpolate(why_map, "nearest").compute()
 
         self.set_grid(why_interpolated, name="groundwater/why_map")
+
+        if intial_heads_source == "GLOBGM":
+            # load digital elevation model that was used for globgm
+            dem_globgm = (
+                self.data_catalog.get_rasterdataset(
+                    "dem_globgm",
+                    geom=self.region,
+                    buffer=0,
+                    variables=["dem_average"],
+                )
+                .rename({"lon": "x", "lat": "y"})
+                .compute()
+            )
+            dem_globgm = self.snap_to_grid(dem_globgm, self.grid)
+            assert dem_globgm.shape == self.grid.raster.shape
+
+            dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
+
+            water_table_depth = self.data_catalog.get_rasterdataset(
+                "water_table_depth_globgm", bbox=self.bounds, buffer=0
+            ).compute()
+            water_table_depth = self.snap_to_grid(water_table_depth, self.grid)
+
+            # heads
+            head_upper_layer = self.data_catalog.get_rasterdataset(
+                "head_upper_globgm", bbox=self.bounds, buffer=0
+            ).compute()
+            head_upper_layer = head_upper_layer.raster.mask_nodata()
+            head_upper_layer = self.snap_to_grid(head_upper_layer, self.grid)
+            head_upper_layer = head_upper_layer - dem_globgm + dem
+            assert head_upper_layer.shape == self.grid.raster.shape
+
+            # assert concistency of datasets. If one layer, this layer should be all nan
+            if not two_layers:
+                assert np.isnan(head_upper_layer).all()
+
+            head_lower_layer = self.data_catalog.get_rasterdataset(
+                "head_lower_globgm", bbox=self.bounds, buffer=0
+            ).compute()
+            head_lower_layer = head_lower_layer.raster.mask_nodata()
+            head_lower_layer = self.snap_to_grid(head_lower_layer, self.grid).compute()
+            head_lower_layer = (head_lower_layer - dem_globgm + dem).compute()
+            # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
+            head_lower_layer = xr.where(
+                head_lower_layer < layer_boundary_elevation[-1],
+                layer_boundary_elevation[-1],
+                head_lower_layer,
+            )
+            assert head_lower_layer.shape == self.grid.raster.shape
+
+            if two_layers:
+                # combine upper and lower layer head in one dataarray
+                heads = xr.concat(
+                    [head_upper_layer, head_lower_layer], dim="layer", compat="equals"
+                )
+            else:
+                heads = head_upper_layer.expand_dims(layer=["upper"])
+
+        elif intial_heads_source == "Fan":
+            # Load in the starting groundwater depth
+            region_continent = np.unique(self.geoms["areamaps/regions"]["CONTINENT"])
+            assert (
+                np.size(region_continent) == 1
+            )  # Transcontinental basins should not be possible
+
+            if (
+                np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Asia"
+                or np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Europe"
+            ):
+                region_continent = "Eurasia"
+            else:
+                region_continent = region_continent[0]
+
+            initial_depth = self.data_catalog.get_rasterdataset(
+                f"initial_groundwater_depth_{region_continent}",
+                bbox=self.bounds,
+                buffer=0,
+            ).rename({"lon": "x", "lat": "y"})
+
+            initial_depth_static = initial_depth.isel(time=0)
+            initial_depth_static_reprojected = (
+                initial_depth_static.raster.reproject_like(self.grid, method="average")
+            )
+
+            initial_depth_modflow = self.snap_to_grid(
+                initial_depth_static_reprojected, self.grid
+            )
+
+            initial_depth_modflow = initial_depth_modflow["WTD"] * -1
+            self.set_grid(
+                initial_depth_modflow, name="groundwater/initial_water_table_depth"
+            )
+            assert initial_depth_modflow.shape == self.grid.raster.shape
+
+        assert heads.shape == hydraulic_conductivity.shape
+        self.set_grid(heads, name="groundwater/heads")
 
     def setup_forcing(
         self,
