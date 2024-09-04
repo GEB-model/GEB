@@ -4549,24 +4549,20 @@ class GEBModel(GridModel):
                 crop_calendar_per_farmer, crop_values, replaced_crop_values
             ):
                 # Find the most common crop value among the given crop_values
-                most_common_value = max(
-                    (
-                        (
-                            value,
-                            np.count_nonzero(
-                                (crop_calendar_per_farmer[:, :, 0] == value).any(axis=1)
-                            ),
-                        )
-                        for value in crop_values
-                    ),
-                    key=lambda x: x[1],
-                )[0]
+                crop_instances = crop_calendar_per_farmer[:, :, 0][
+                    np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+                ]
+
+                # if none of the crops are present, no need to replace anything
+                if crop_instances.size == 0:
+                    return crop_calendar_per_farmer
+
+                crops, crop_counts = np.unique(crop_instances, return_counts=True)
+                most_common_crop = crops[np.argmax(crop_counts)]
 
                 # Determine if there are multiple cropping versions of this crop and assign it to the most common
                 new_crop_types = crop_calendar_per_farmer[
-                    (crop_calendar_per_farmer[:, :, 0] == most_common_value).any(
-                        axis=1
-                    ),
+                    (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
                     :,
                     :,
                 ]
