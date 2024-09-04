@@ -1927,19 +1927,12 @@ class GEBModel(GridModel):
             ).rename({"lon": "x", "lat": "y"})
 
             initial_depth_static = initial_depth.isel(time=0)
-            initial_depth_static_reprojected = (
-                initial_depth_static.raster.reproject_like(self.grid, method="average")
+            initial_depth = initial_depth_static.raster.reproject_like(
+                self.grid, method="average"
             )
-
-            initial_depth_modflow = self.snap_to_grid(
-                initial_depth_static_reprojected, self.grid
+            raise NotImplementedError(
+                "Need to convert initial depth to heads for all layers"
             )
-
-            initial_depth_modflow = initial_depth_modflow["WTD"] * -1
-            self.set_grid(
-                initial_depth_modflow, name="groundwater/initial_water_table_depth"
-            )
-            assert initial_depth_modflow.shape == self.grid.raster.shape
 
         assert heads.shape == hydraulic_conductivity.shape
         self.set_grid(heads, name="groundwater/heads")
