@@ -678,7 +678,7 @@ why_map:
     paper_ref: Richts et al. (2011)
     source_url: https://www.whymap.org/whymap/EN/Maps_Data/Gwr/gwr_node_en.html
   path: groundwater/why_map.tif
-initial_groundwater_depth_{continent}:
+fan_initial_groundwater_depth_{continent}:
   crs: 4326
   data_type: RasterDataset
   driver: netcdf
