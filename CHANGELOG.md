@@ -22,6 +22,9 @@
 - Included a simple market for future scenarios.
 - Data exporting in model.yml is now to zarr instead of netcdf.
 - Included new source for setting up assets (movisda). This can be used when geofabrik is down.
+- Allow reducing the number of crops by using the most frequently grown crop in a specific grop group
+- Set up crop prices from FAO stat
+- Include rails and roads in preprocessing
 
 ### Migration guide
 
@@ -34,3 +37,4 @@
 - Thus set "format: netcdf" to "format: zarr" in model.yml (if applicable)
 - model_structure has been renamed to files, thus change `model_structure` to `files` in all code
 - The format of basin_lakes_data has changed to parquet. If the model is rebuilt this should automatically be updated.
+- `builings` feature type in `setup_assets` has been renamed to `building`

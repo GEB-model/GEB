@@ -4805,7 +4805,7 @@ class GEBModel(GridModel):
         Parameters
         ----------
         feature_types : str or list of str
-            The types of features to download from OSM. Available feature types are 'buildings'.
+            The types of features to download from OSM. Available feature types are 'building', 'rail' and 'road'.
         source : str, optional
             The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
         overwrite : bool, optional
@@ -4876,7 +4876,7 @@ class GEBModel(GridModel):
                 if feature_type not in all_features:
                     all_features[feature_type] = []
 
-                if feature_type == "buildings":
+                if feature_type == "building":
                     features = gpd.read_file(
                         filepath,
                         mask=self.region,
@@ -4884,6 +4884,43 @@ class GEBModel(GridModel):
                         use_arrow=True,
                     )
                     features = features[features["building"].notna()]
+                elif feature_type == "rail":
+                    features = gpd.read_file(
+                        filepath,
+                        mask=self.region,
+                        layer="lines",
+                        use_arrow=True,
+                    )
+                    features = features[
+                        features["railway"].isin(
+                            ["rail", "tram", "subway", "light_rail", "narrow_gauge"]
+                        )
+                    ]
+                elif feature_type == "road":
+                    features = gpd.read_file(
+                        filepath,
+                        mask=self.region,
+                        layer="lines",
+                        use_arrow=True,
+                    )
+                    features = features[
+                        features["highway"].isin(
+                            [
+                                "motorway",
+                                "trunk",
+                                "primary",
+                                "secondary",
+                                "tertiary",
+                                "unclassified",
+                                "residential",
+                                "motorway_link",
+                                "trunk_link",
+                                "primary_link",
+                                "secondary_link",
+                                "tertiary_link",
+                            ]
+                        )
+                    ]
                 else:
                     raise ValueError(f"Unknown feature type {feature_type}")
 
