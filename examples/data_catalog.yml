@@ -532,7 +532,7 @@ ghs_pop_2020_54009_v2023a:
     source_license: CC BY 4.0
     source_url: https://ghsl.jrc.ec.europa.eu/download.php?ds=pop
   path: /scistor/ivm/data_catalogue/population/GHSL/GHS_POP/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif
-crop_price:
+FAO_crop_price:
   path: crops/FAOSTAT_producer_price_lcu.csv
   driver: csv
   data_type: DataFrame
@@ -542,6 +542,12 @@ crop_price:
     source_license: CC-BY-4.0
     source_url: https://www.fao.org/faostat/en/#data/PP
     source_version: Producer price in LCU 
+  rename:
+    Year: year
+    Value: price_per_kg
+    Item: crop
+  unit_mult:
+    price_per_kg: 0.001  # tonne to kg
 era5_hourly:
   crs: 4326
   data_type: RasterDataset

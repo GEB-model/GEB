@@ -52,6 +52,7 @@ from .workflows.farmers import get_farm_locations, create_farms, get_farm_distri
 from .workflows.population import generate_locations
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
+from .workflows.conversions import M49_to_ISO3
 
 XY_CHUNKSIZE = 350
 
@@ -485,36 +486,55 @@ class GEBModel(GridModel):
         """
 
         if crop_prices == "FAO_stat":
-            crop_data = self.data_catalog.get_dataframe("crop_price")
-
-            # Filter and rename necessary columns
-            crop_data = crop_data[["Area", "Year", "Item", "Value"]]
-            crop_data.rename(
-                columns={"Area": "Country Code", "Item": "crops", "Year": "time"},
-                inplace=True,
+            crop_data = self.data_catalog.get_dataframe(
+                "FAO_crop_price",
+                variables=["Area Code (M49)", "year", "crop", "price_per_kg"],
             )
-            crop_data["crops"] = crop_data["crops"].str.lower()
+
+            # Dropping 58 (Belgium-Luxembourg combined), 200 (former Czechoslovakia),
+            # 230 (old code Ethiopia), 891 (Serbia and Montenegro), 736 (former Sudan)
+            crop_data = crop_data[
+                ~crop_data["Area Code (M49)"].isin([58, 200, 230, 891, 736])
+            ]
+
+            crop_data["ISO3"] = crop_data["Area Code (M49)"].map(M49_to_ISO3)
+            crop_data = crop_data.drop(columns=["Area Code (M49)"])
+
+            assert not crop_data["ISO3"].isna().any(), "Missing ISO3 codes"
+
+            crop_data["crop"] = crop_data["crop"].str.lower()
 
             data = {}
 
+            all_years = crop_data["year"].unique()
+            all_crops = crop_data["crop"].unique()
+
             # Setup dataFrame for further data corrections
             for _, region in self.geoms["areamaps/regions"].iterrows():
-                region_name = region["NAME_0"]
                 region_id = str(region["region_id"])
 
-                region_crop_data = crop_data[crop_data["Country Code"] == region_name]
+                region_crop_data = crop_data[crop_data["ISO3"] == region["ISO3"]]
                 region_pivot = region_crop_data.pivot_table(
-                    index="time", columns="crops", values="Value", aggfunc="first"
-                )
+                    index="year",
+                    columns="crop",
+                    values="price_per_kg",
+                    aggfunc="first",
+                ).reindex(index=all_years, columns=all_crops)
 
-                region_pivot["country_name"] = region_name
+                region_pivot["ISO3"] = region["ISO3"]
                 # Store pivoted data in dictionary with region_id as key
                 data[region_id] = region_pivot
 
-            # Concatenate all regional data into a single DataFrame with MultiIndex
-            data = pd.concat(data, names=["Region_ID", "Year"])
+            # Assert non of the dataframes are empty (this will result in missing regions)
+            assert not any([data[region_id].empty for region_id in data])
 
-            total_years = data.index.get_level_values("Year").unique()
+            # Concatenate all regional data into a single DataFrame with MultiIndex
+            data = pd.concat(data, names=["region_id", "year"])
+
+            # Drop crops with no data at all for these regions
+            data = data.dropna(axis=1, how="all")
+
+            total_years = data.index.get_level_values("year").unique()
 
             if project_past_until_year:
                 assert (
@@ -546,16 +566,13 @@ class GEBModel(GridModel):
                     upper_bound=project_future_until_year,
                 )
 
-            # Adjust price per tonne to price per kg
-            data /= 1000
-
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
             crop_data = self.dict["crops/crop_data"]["data"]
             formatted_data = {
                 "type": "time_series",
                 "data": {},
-                "time": data.index.get_level_values("Year")
+                "time": data.index.get_level_values("year")
                 .unique()
                 .tolist(),  # Extract unique years for the time key
             }
@@ -637,7 +654,7 @@ class GEBModel(GridModel):
         Parameters
         ----------
         data : DataFrame
-            A DataFrame containing crop data with a 'country_name' column and indexed by 'Region_ID'. The DataFrame
+            A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'. The DataFrame
             contains crop prices for different regions.
 
         Returns
@@ -651,18 +668,24 @@ class GEBModel(GridModel):
         1. Identifies columns where all values are NaN for each country and stores this information.
         2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
-        4. Drops the 'country_name' column before returning the updated DataFrame.
+        4. Drops the 'ISO3' column before returning the updated DataFrame.
         """
+
+        if "economics/ppp_conversion_rates" not in self.dict:
+            raise ValueError("Please run setup_economic_data first")
 
         ppp_conversion_rate = self.dict["economics/ppp_conversion_rates"]
         columns_with_all_nans_by_country = {}
 
-        for country in data["country_name"].unique():
-            # Filter the data for the current country
-            country_data = data[data["country_name"] == country]
+        # create a copy of the data to avoid using data that was adjusted in this function
+        data_out = data.copy()
 
-            # Group by 'Region_ID' and check each column for NaN values across all years within the region
-            columns_all_nans_by_region = country_data.groupby("Region_ID").apply(
+        for country in data["ISO3"].unique():
+            # Filter the data for the current country
+            country_data = data[data["ISO3"] == country]
+
+            # Group by 'region_id' and check each column for NaN values across all years within the region
+            columns_all_nans_by_region = country_data.groupby("region_id").apply(
                 lambda x: x.isna().all()
             )
 
@@ -678,23 +701,29 @@ class GEBModel(GridModel):
             country,
             columns_with_missing_values,
         ) in columns_with_all_nans_by_country.items():
-            for column in columns_with_missing_values:
-                columns_all_nans_by_region = data.groupby("Region_ID").apply(
+            for crop in columns_with_missing_values:
+                columns_all_nans_by_region = data.groupby("region_id").apply(
                     lambda x: x.isna().all()
                 )
 
                 # Find a region with available data for this column
                 regions_with_data = columns_all_nans_by_region[
-                    ~columns_all_nans_by_region[column]
+                    ~columns_all_nans_by_region[crop]
                 ].index
 
                 if not regions_with_data.empty:
                     # Select which region you want to copy data from. TO DO: Change to closest / most similar country
-                    region_with_data = regions_with_data[0]
+                    if len(regions_with_data) > 1:
+                        region_with_data = regions_with_data[0]
+                        self.logger.warning(
+                            f"Multiple regions with data found for {crop}, taking the first region"
+                        )
+                    else:
+                        region_with_data = regions_with_data[0]
 
-                    column_data_to_copy = data.loc[region_with_data][column]
+                    region_crop_data_to_copy = data.loc[region_with_data][crop]
 
-                    years_to_convert = column_data_to_copy.index.values
+                    years_to_convert = region_crop_data_to_copy.index.values
                     full_years_array = np.array(ppp_conversion_rate["time"], dtype=str)
                     years_index = np.isin(full_years_array, years_to_convert)
                     source_conversion_rates = np.array(
@@ -704,12 +733,12 @@ class GEBModel(GridModel):
 
                     # Find regions that need this data
                     regions_needing_data = columns_all_nans_by_region[
-                        columns_all_nans_by_region[column]
+                        columns_all_nans_by_region[crop]
                     ].index
 
                     # Copy data from the region with data to regions without data
                     for region in regions_needing_data:
-                        values_to_convert = column_data_to_copy.values.copy()
+                        values_to_convert = region_crop_data_to_copy.values.copy()
 
                         target_conversion_rates = np.array(
                             ppp_conversion_rate["data"][region], dtype=float
@@ -721,11 +750,17 @@ class GEBModel(GridModel):
                             target_conversion_rates,
                         )
 
-                        data.loc[region, column] = converted_values
+                        new_data = pd.DataFrame(
+                            {crop: converted_values},
+                            index=pd.MultiIndex.from_product(
+                                [[region], years_to_convert], names=data_out.index.names
+                            ),
+                        )
 
-        data = data.drop(columns=["country_name"])
+                        data_out = data_out.combine_first(new_data)
 
-        return data
+        data_out = data_out.drop(columns=["ISO3"])
+        return data_out
 
     def convert_price_using_ppp(
         self, price_source_LCU, ppp_factor_source, ppp_factor_target
@@ -994,7 +1029,7 @@ class GEBModel(GridModel):
                 empty_row = pd.DataFrame(
                     {col: [None] for col in costs.columns},
                     index=pd.MultiIndex.from_tuples(
-                        [(region_id, year)], names=["Region_ID", "Year"]
+                        [(region_id, year)], names=["region_id", "year"]
                     ),
                 )
                 costs = pd.concat(
