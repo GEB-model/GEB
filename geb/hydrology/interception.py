@@ -94,13 +94,13 @@ class Interception(object):
             ds = xr.open_dataset(
                 self.model.files["forcing"][
                     f"landcover/{cover_name}/interceptCap{cover_name.title()}_10days"
-                ]
+                ],
+                engine="zarr",
             )
 
             self.interception[cover] = ds[
                 f"interceptCap{cover_name.title()}_10days"
             ].values
-            ds.close()
 
     def step(self, potTranspiration):
         """

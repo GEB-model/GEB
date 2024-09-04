@@ -859,19 +859,24 @@ class Data:
 
     def load_water_demand(self):
         self.model.domestic_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/domestic_water_consumption"]
+            self.model.files["forcing"]["water_demand/domestic_water_consumption"],
+            engine="zarr",
         )
         self.model.domestic_water_demand_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/domestic_water_demand"]
+            self.model.files["forcing"]["water_demand/domestic_water_demand"],
+            engine="zarr",
         )
         self.model.industry_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/industry_water_consumption"]
+            self.model.files["forcing"]["water_demand/industry_water_consumption"],
+            engine="zarr",
         )
         self.model.industry_water_demand_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/industry_water_demand"]
+            self.model.files["forcing"]["water_demand/industry_water_demand"],
+            engine="zarr",
         )
         self.model.livestock_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/livestock_water_consumption"]
+            self.model.files["forcing"]["water_demand/livestock_water_consumption"],
+            engine="zarr",
         )
 
     def to_HRU(self, *, data=None, fn=None):
