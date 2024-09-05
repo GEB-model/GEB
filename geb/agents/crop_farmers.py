@@ -729,15 +729,15 @@ class CropFarmers(AgentBaseClass):
         }
 
         ## Set parameters required for drought event perception, risk perception and SEUT
-        self.moving_average_threshold = self.model.config["agent_settings"][
+        self.moving_average_threshold = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["drought_risk_calculations"]["event_perception"]["drought_threshold"]
         self.previous_month = 0
 
         # Assign risk aversion sigma, time discounting preferences, expenditure_cap
-        self.expenditure_cap = self.model.config["agent_settings"]["expected_utility"][
-            "decisions"
-        ]["expenditure_cap"]
+        self.expenditure_cap = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["decisions"]["expenditure_cap"]
 
         self.inflation_rate = load_economic_data(
             self.model.files["dict"]["economics/inflation_rates"]
@@ -745,85 +745,55 @@ class CropFarmers(AgentBaseClass):
         self.lending_rate = load_economic_data(
             self.model.files["dict"]["economics/lending_rates"]
         )
-
-        # India specific old well variables
-        # Well cost variables
-        self.borewell_cost_1 = load_economic_data(
-            self.model.files["dict"]["economics/borewell_cost_1"]
-        )
-        self.borewell_cost_2 = load_economic_data(
-            self.model.files["dict"]["economics/borewell_cost_2"]
-        )
-        self.pump_cost = load_economic_data(
-            self.model.files["dict"]["economics/pump_cost"]
-        )
-        self.irrigation_maintenance = load_economic_data(
-            self.model.files["dict"]["economics/irrigation_maintenance"]
-        )
         self.electricity_cost = load_economic_data(
             self.model.files["dict"]["economics/electricity_cost"]
         )
 
         self.max_paddy_water_level = 0.05
 
-        self.pump_hours = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well"
-        ]["pump_hours"]
-        self.probability_well_failure = self.model.config["agent_settings"][
-            "expected_utility"
-        ]["adaptation_well"]["probability_well_failure"]
-        self.pump_horse_power = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well"
-        ]["pump_horse_power"]
-        self.proportion_irrigation_water_available = self.model.config[
-            "agent_settings"
-        ]["expected_utility"]["adaptation_well"][
-            "proportion_irrigation_water_available"
-        ]
-
         # New global well variables
-        self.pump_hours = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["pump_hours"]
-        self.depletion_limit = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["depletion_limit"]
-        self.ponded_depth = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["ponded_depth"]
-        self.specific_weight_water = self.model.config["agent_settings"][
+        self.pump_hours = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
-        ]["adaptation_well_global"]["specific_weight_water"]
-        self.static_head = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["static_head"]
-        self.max_initial_sat_thickness = self.model.config["agent_settings"][
+        ]["adaptation_well"]["pump_hours"]
+        self.depletion_limit = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
-        ]["adaptation_well_global"]["max_initial_sat_thickness"]
-        self.lifespan = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["lifespan"]
-        self.well_diameter = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["well_diameter"]
-        self.well_yield = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["well_yield"]
-        self.pump_efficiency = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["pump_efficiency"]
-        self.maintenance_factor = self.model.config["agent_settings"][
+        ]["adaptation_well"]["depletion_limit"]
+        self.ponded_depth = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
-        ]["adaptation_well_global"]["maintenance_factor"]
+        ]["adaptation_well"]["ponded_depth"]
+        self.specific_weight_water = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["specific_weight_water"]
+        self.static_head = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["static_head"]
+        self.max_initial_sat_thickness = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["max_initial_sat_thickness"]
+        self.lifespan = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["lifespan"]
+        self.well_diameter = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["well_diameter"]
+        self.well_yield = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["well_yield"]
+        self.pump_efficiency = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["pump_efficiency"]
+        self.maintenance_factor = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["maintenance_factor"]
 
         self.why_10 = load_economic_data(self.model.files["dict"]["economics/why_10"])
         self.why_20 = load_economic_data(self.model.files["dict"]["economics/why_20"])
         self.why_30 = load_economic_data(self.model.files["dict"]["economics/why_30"])
 
         # Placeholder values that will be changed by location specific values
-        self.energy_cost_rate = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["energy_cost_rate"]
+        self.energy_cost_rate = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["energy_cost_rate"]
         self.aquifer_total_thickness = 100  # Total acquifer thickness
 
         self.initial_groundwater_depth = 20
@@ -912,8 +882,8 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.yield_ratio_multiplier_value = self.model.config["agent_settings"][
-            "expected_utility"
-        ]["adaptation_sprinkler"]["yield_multiplier"]
+            "farmers"
+        ]["expected_utility"]["adaptation_sprinkler"]["yield_multiplier"]
 
         self.var.actual_transpiration_crop = self.var.load_initial(
             "actual_transpiration_crop",
@@ -1112,9 +1082,9 @@ class CropFarmers(AgentBaseClass):
         self.well_depth = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            fill_value=self.model.config["agent_settings"]["expected_utility"][
-                "adaptation_well"
-            ]["initial_depth"],
+            fill_value=self.model.config["agent_settings"]["farmers"][
+                "expected_utility"
+            ]["adaptation_well"]["initial_depth"],
             dtype=np.float32,
         )
         # Set how long the agents have adapted somewhere across the lifespan of farmers, would need to be a bit more realistic likely
@@ -1217,9 +1187,9 @@ class CropFarmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             dtype=np.float32,
-            fill_value=self.model.config["agent_settings"]["expected_utility"][
-                "drought_risk_calculations"
-            ]["risk_perception"]["min"],
+            fill_value=self.model.config["agent_settings"]["farmers"][
+                "expected_utility"
+            ]["drought_risk_calculations"]["risk_perception"]["min"],
         )
         self.drought_timer = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=99
@@ -1313,7 +1283,7 @@ class CropFarmers(AgentBaseClass):
         )
         self.base_management_yield_ratio = np.full(
             self.n,
-            self.model.config["agent_settings"]["farmers"][
+            self.model.config["agent_settings"]["farmers"]["farmers"][
                 "base_management_yield_ratio"
             ],
             dtype=np.float32,
@@ -1408,33 +1378,33 @@ class CropFarmers(AgentBaseClass):
             n=self.n,
             max_n=self.max_n,
             dtype=np.float32,
-            fill_value=self.model.config["agent_settings"]["expected_utility"][
-                "drought_risk_calculations"
-            ]["risk_perception"]["min"],
+            fill_value=self.model.config["agent_settings"]["farmers"][
+                "expected_utility"
+            ]["drought_risk_calculations"]["risk_perception"]["min"],
         )
         self.risk_perc_max = AgentArray(
             n=self.n,
             max_n=self.max_n,
             dtype=np.float32,
-            fill_value=self.model.config["agent_settings"]["expected_utility"][
-                "drought_risk_calculations"
-            ]["risk_perception"]["max"],
+            fill_value=self.model.config["agent_settings"]["farmers"][
+                "expected_utility"
+            ]["drought_risk_calculations"]["risk_perception"]["max"],
         )
         self.risk_decr = AgentArray(
             n=self.n,
             max_n=self.max_n,
             dtype=np.float32,
-            fill_value=self.model.config["agent_settings"]["expected_utility"][
-                "drought_risk_calculations"
-            ]["risk_perception"]["coef"],
+            fill_value=self.model.config["agent_settings"]["farmers"][
+                "expected_utility"
+            ]["drought_risk_calculations"]["risk_perception"]["coef"],
         )
         self.decision_horizon = AgentArray(
             n=self.n,
             max_n=self.max_n,
             dtype=np.int32,
-            fill_value=self.model.config["agent_settings"]["expected_utility"][
-                "decisions"
-            ]["decision_horizon"],
+            fill_value=self.model.config["agent_settings"]["farmers"][
+                "expected_utility"
+            ]["decisions"]["decision_horizon"],
         )
 
         self.cumulative_water_deficit_m3 = AgentArray(
@@ -2884,9 +2854,9 @@ class CropFarmers(AgentBaseClass):
         # Solely the annual cost of the adaptation
         annual_cost_m2 = annual_cost / self.field_size_per_farmer
 
-        loan_duration = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well"
-        ]["loan_duration"]
+        loan_duration = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["loan_duration"]
 
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # and who's wells are much shallower than the groundwater depth
@@ -2930,7 +2900,7 @@ class CropFarmers(AgentBaseClass):
             "time_adapted": self.time_adapted[:, adaptation_type].data,
             "T": np.full(
                 self.n,
-                self.model.config["agent_settings"]["expected_utility"][
+                self.model.config["agent_settings"]["farmers"]["expected_utility"][
                     "adaptation_well"
                 ]["decision_horizon"],
             ),
@@ -3021,44 +2991,65 @@ class CropFarmers(AgentBaseClass):
         )
         total_pump_duration = np.mean(self.total_crop_age, axis=1)
 
-        energy_cost = np.zeros_like(self.groundwater_depth)
-        water_cost = np.zeros_like(self.groundwater_depth)
+        crop_elevation_group = self.create_unique_groups()
+        unique_crop_groups = np.unique(crop_elevation_group, axis=0)
+        average_extraction_array = np.full(len(unique_crop_groups), 0, dtype=np.float32)
 
-        for i in range(len(self.yearly_abstraction_m3_by_farmer[0, :, 0])):
-            # Create a mask of agents per irrigation water source
-            irrigation_source_mask = np.where(self.farmer_class == i)
+        yearly_abstraction_m3_per_m2 = (
+            self.yearly_abstraction_m3_by_farmer
+            / self.field_size_per_farmer[..., None, None]
+        )
+
+        for idx, crop_combination in enumerate(unique_crop_groups):
+            unique_farmer_group = np.where(
+                (crop_elevation_group == crop_combination[None, ...]).all(axis=1)
+            )[0]
 
             average_extraction = np.mean(
-                self.yearly_abstraction_m3_by_farmer[:, i, :],
-                axis=1,
+                yearly_abstraction_m3_per_m2[unique_farmer_group, :3, :][
+                    yearly_abstraction_m3_per_m2[unique_farmer_group, :3, :] != 0
+                ]
+            )  # m3 per year
+
+            average_extraction_array[idx] = average_extraction
+
+        # Identify each agent's position within the unique groups
+        positions_agent = np.where(
+            np.all(
+                crop_elevation_group[:, np.newaxis, :]
+                == np.unique(crop_elevation_group, axis=0),
+                axis=-1,
             )
+        )
+        exact_position = positions_agent[1]
 
-            average_extraction_speed = average_extraction / 365 / self.pump_hours
+        average_extraction_m2 = average_extraction_array[exact_position]
+        average_extraction = average_extraction_m2 * self.field_size_per_farmer
 
-            power = (
-                self.specific_weight_water
-                * self.groundwater_depth[irrigation_source_mask]
-                * average_extraction_speed[irrigation_source_mask]
-                / self.pump_efficiency
-            ) / 1000
+        average_extraction_speed = (
+            average_extraction / 365 / self.pump_hours / 3600
+        )  # m3 / s
 
-            energy = power * (
-                total_pump_duration[irrigation_source_mask] * self.pump_hours
-            )  # kWh
-            energy_cost_rate = electricity_costs[irrigation_source_mask]  # $ per kWh
-            energy_cost[irrigation_source_mask] = energy * energy_cost_rate  # $/year
-            water_cost[irrigation_source_mask] = (
-                average_extraction[irrigation_source_mask] * water_costs_m3
-            )
+        power = (
+            self.specific_weight_water
+            * self.groundwater_depth
+            * average_extraction_speed
+            / self.pump_efficiency
+        ) / 1000
+
+        energy = power * (total_pump_duration * self.pump_hours)  # kWh
+        energy_cost_rate = electricity_costs  # LCU per kWh
+        energy_cost = energy * energy_cost_rate  # LCU / year
+        water_cost = average_extraction * water_costs_m3  # Euro / year
 
         return energy_cost, water_cost
 
     def calculate_well_costs_global(
         self,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        cost_reduction_factor = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well_global"
-        ]["cost_reduction_factor"]
+        cost_reduction_factor = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["cost_reduction_factor"]
         # Initialize costs arrays with region-specific values
         why_10 = (
             self.get_value_per_farmer_from_region_id(
@@ -3139,9 +3130,9 @@ class CropFarmers(AgentBaseClass):
         energy_cost = energy * energy_cost_rate  # $/year
 
         # Fetch loan configuration
-        loan_duration = self.model.config["agent_settings"]["expected_utility"][
-            "adaptation_well"
-        ]["loan_duration"]
+        loan_duration = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_well"]["loan_duration"]
 
         # Calculate annual cost based on the interest rate and loan duration
         annual_cost = (
@@ -3787,36 +3778,47 @@ class CropFarmers(AgentBaseClass):
         array_with_reference_yield = nan_array.copy()
         array_with_price = nan_array.copy()
 
-        total_price = 0
-        month_count = 0
+        # Check if prices are monthly or yearly
+        price_frequency = self.model.config["agent_settings"]["market"][
+            "price_frequency"
+        ]
 
-        # Ending date and start date set to one year prior
-        end_date = self.model.current_time
-        start_date = datetime(end_date.year - 1, 1, 1)
+        if price_frequency == "monthly":
+            total_price = 0
+            month_count = 0
 
-        # Loop through each month from start_date to end_date to get the sum of crop costs over the past year
-        current_date = start_date
-        while current_date <= end_date:
-            assert (
-                self.agents.market[0] is not None
-            ), "behavior needs crop prices to work"
-            monthly_price = self.agents.market[1][
-                self.agents.market[0].get(current_date)
-            ]
-            total_price += monthly_price
-            # Move to the next month
-            if current_date.month == 12:
-                current_date = datetime(current_date.year + 1, 1, 1)
-            else:
-                current_date = datetime(current_date.year, current_date.month + 1, 1)
-            month_count += 1
+            # Ending date and start date set to one year prior
+            end_date = self.model.current_time
+            start_date = datetime(end_date.year - 1, 1, 1)
 
-        # Calculate the average price over the last year
-        average_monthly_price = total_price / month_count
+            # Loop through each month from start_date to end_date to get the sum of crop costs over the past year
+            current_date = start_date
+            while current_date <= end_date:
+                assert (
+                    self.crop_prices[0] is not None
+                ), "behavior needs crop prices to work"
+                monthly_price = self.crop_prices[1][
+                    self.crop_prices[0].get(current_date)
+                ]
+                total_price += monthly_price
+                # Move to the next month
+                if current_date.month == 12:
+                    current_date = datetime(current_date.year + 1, 1, 1)
+                else:
+                    current_date = datetime(
+                        current_date.year, current_date.month + 1, 1
+                    )
+                month_count += 1
+
+            # Calculate the average price over the last year
+            crop_prices = total_price / month_count
+
+        else:
+            crop_prices = self.agents.market.crop_prices[self.region_id]
 
         # Assign the reference yield and current crop price to the array based on valid crop mask
         array_with_price[crops_mask] = np.take(
-            average_monthly_price, self.crop_calendar[:, :, 0][crops_mask].astype(int)
+            crop_prices, self.crop_calendar[:, :, 0][crops_mask].astype(int)
         )
         assert not np.isnan(
             array_with_price[crops_mask]
@@ -4264,21 +4266,30 @@ class CropFarmers(AgentBaseClass):
 
             energy_cost, water_cost = self.calculate_water_costs()
 
-            if not self.model.spinup and not (
-                "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
+            if (
+                not self.model.spinup
+                and "ruleset" in self.config
+                and not self.config["ruleset"] == "no-adaptation"
             ):
-                # raise NotImplementedError(
-                #     """Dynamic adaptation for farmers is not currently activated in the main branch, due
-                #     to ongoing generalization efforts. Please use ruleset 'no-adaptation' for now. It is
-                #     one of the main priorities to re-enable this functionality in the near future."""
-                # )
                 # Determine the relation between drought probability and yield
                 self.calculate_yield_spei_relation()
 
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(self.farmer_yield_probability_relation == 0):
-                    # self.adapt_irrigation_well()
-                    self.adapt_crops()
+                    if (
+                        not self.config["expected_utility"]["adaptation_well"][
+                            "ruleset"
+                        ]
+                        == "no-adaptation"
+                    ):
+                        self.adapt_irrigation_well()
+                    if (
+                        not self.config["expected_utility"]["adaptation_well"][
+                            "ruleset"
+                        ]
+                        == "no-adaptation"
+                    ):
+                        self.adapt_crops()
                     # self.adapt_drip_irrigation()
                     # self.switch_crops_neighbors()
                 else:
