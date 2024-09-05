@@ -5,10 +5,8 @@ import json
 import copy
 import calendar
 from typing import Tuple, Union
-from honeybees.library.raster import sample_from_map
 
 from scipy.stats import genextreme
-import scipy.stats as stats
 from scipy.optimize import curve_fit
 
 import numpy as np
@@ -818,15 +816,9 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_well_global"]["maintenance_factor"]
 
-        self.why_10 = load_economic_data(
-            self.model.files["dict"]["economics/why_10"]
-        )
-        self.why_20 = load_economic_data(
-            self.model.files["dict"]["economics/why_20"]
-        )
-        self.why_30 = load_economic_data(
-            self.model.files["dict"]["economics/why_30"]
-        )
+        self.why_10 = load_economic_data(self.model.files["dict"]["economics/why_10"])
+        self.why_20 = load_economic_data(self.model.files["dict"]["economics/why_20"])
+        self.why_30 = load_economic_data(self.model.files["dict"]["economics/why_30"])
 
         # Placeholder values that will be changed by location specific values
         self.energy_cost_rate = self.model.config["agent_settings"]["expected_utility"][
@@ -900,23 +892,24 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.crop_prices = load_regional_crop_data_from_dict(
-                    self.model, "crops/crop_prices"
-                )
-        
+            self.model, "crops/crop_prices"
+        )
+
         self.cultivation_costs = load_regional_crop_data_from_dict(
             self.model, "crops/cultivation_costs"
-                )
+        )
 
         # Set the
         date_index, cultivation_costs_array = self.cultivation_costs
         adjusted_cultivation_costs_array = cultivation_costs_array * 0.05
         self.cultivation_costs = (date_index, adjusted_cultivation_costs_array)
 
-        # Test with a high variable for now 
+        # Test with a high variable for now
         self.total_spinup_time = max(
-            self.model.config["general"]["start_time"].year 
-            - self.model.config["general"]["spinup_time"].year, 
-            30)
+            self.model.config["general"]["start_time"].year
+            - self.model.config["general"]["spinup_time"].year,
+            30,
+        )
 
         self.yield_ratio_multiplier_value = self.model.config["agent_settings"][
             "expected_utility"
@@ -1147,8 +1140,8 @@ class CropFarmers(AgentBaseClass):
         self.yearly_abstraction_m3_by_farmer = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(4,self.total_spinup_time),
-            extra_dims_names=("abstraction_type",'year'),
+            extra_dims=(4, self.total_spinup_time),
+            extra_dims_names=("abstraction_type", "year"),
             dtype=np.float32,
             fill_value=0,
         )
@@ -2064,7 +2057,7 @@ class CropFarmers(AgentBaseClass):
             harvesting_farmers, index_farmer_to_field = np.unique(
                 harvesting_farmer_fields, return_inverse=True
             )
-            
+
             if self.crop_prices[0] is None:
                 crop_prices = self.crop_prices[1]
                 crop_price_per_field = np.full_like(
@@ -2443,8 +2436,8 @@ class CropFarmers(AgentBaseClass):
                 self.GEV_parameters[:, 2],
             )
 
-            abs_spei_values = np.abs(self.cumulative_SPEI_during_growing_season)
-            SPEI_probability_norm = stats.norm.cdf(abs_spei_values)
+            # abs_spei_values = np.abs(self.cumulative_SPEI_during_growing_season)
+            # SPEI_probability_norm = stats.norm.cdf(abs_spei_values)
 
             shift_and_update(self.yearly_SPEI_probability, SPEI_probability)
 
@@ -2615,7 +2608,7 @@ class CropFarmers(AgentBaseClass):
             spei_prob = spei_prob[mask]
 
             # Set the a and b values of last year to prevent no values on this year
-            if not (self.farmer_yield_probability_relation is None):
+            if self.farmer_yield_probability_relation is not None:
                 a, b = np.median(
                     self.farmer_yield_probability_relation[
                         np.where(
@@ -2633,7 +2626,10 @@ class CropFarmers(AgentBaseClass):
             # Fit logarithmic function, except when there is an error
             try:
                 # Attempt to fit the logarithmic_function function
-                a, b = curve_fit(logarithmic_function, yield_ratio, spei_prob)[0]
+                # Sometimes the yields of the first year can give issues
+                a, b = curve_fit(
+                    logarithmic_function, yield_ratio[:-1], spei_prob[:-1]
+                )[0]
 
             except RuntimeError:
                 # RuntimeError is raised when curve_fit fails to converge
@@ -2643,13 +2639,13 @@ class CropFarmers(AgentBaseClass):
                     spei_prob = last_spei_prob
                     # Recalculate a, b with the previous values
                     a, b = curve_fit(
-                        logarithmic_function, last_yield_ratio, last_spei_prob
+                        logarithmic_function, last_yield_ratio[:-1], last_spei_prob[:-1]
                     )[0]
 
             group_yield_probability_relation_log.append(np.array([a, b]))
 
-            residuals = spei_prob - logarithmic_function(yield_ratio, a, b)
-            ss_tot = np.sum((spei_prob - np.mean(spei_prob)) ** 2)
+            residuals = spei_prob[:-1] - logarithmic_function(yield_ratio[:-1], a, b)
+            ss_tot = np.sum((spei_prob[:-1] - np.mean(spei_prob[:-1])) ** 2)
             ss_res = np.sum(residuals**2)
 
             yield_probability_R2_log.append(1 - (ss_res / ss_tot))
@@ -3003,11 +2999,9 @@ class CropFarmers(AgentBaseClass):
         self.well_depth[adaptation_mask] = well_depth[adaptation_mask]
 
         # Update annual costs and disposable income for adapted farmers
-        self.all_loans_annual_cost[
-            adaptation_mask, adaptation_type + 1, 0
-        ] += annual_cost[
-            adaptation_mask
-        ]  # For wells specifically
+        self.all_loans_annual_cost[adaptation_mask, adaptation_type + 1, 0] += (
+            annual_cost[adaptation_mask]
+        )  # For wells specifically
         self.all_loans_annual_cost[adaptation_mask, -1, 0] += annual_cost[
             adaptation_mask
         ]  # Total loan amount
@@ -3024,10 +3018,63 @@ class CropFarmers(AgentBaseClass):
         )
         print("Irrigation well farms:", percentage_adapted, "(%)")
 
+    def calculate_water_costs(self) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        This function determines the costs per volume of water per agent that are actually abstracting and
+        the potential cost for agents that are not
+
+        Note:
+
+        TODO:
+            - Find actual water costs
+            - Change volume based on farmer groups
+        """
+        # Determine static variables
+        water_costs_m3 = 0.20
+        electricity_costs = np.full(
+            self.n,
+            self.get_value_per_farmer_from_region_id(
+                self.electricity_cost, self.model.current_time
+            ),
+            dtype=np.float32,
+        )
+        total_pump_duration = np.mean(self.total_crop_age, axis=1)
+
+        energy_cost = np.zeros_like(self.groundwater_depth)
+        water_cost = np.zeros_like(self.groundwater_depth)
+
+        for i in range(len(self.yearly_abstraction_m3_by_farmer[0, :, 0])):
+            # Create a mask of agents per irrigation water source
+            irrigation_source_mask = np.where(self.farmer_class == i)
+
+            average_extraction = np.mean(
+                self.yearly_abstraction_m3_by_farmer[:, i, :],
+                axis=1,
+            )
+
+            average_extraction_speed = average_extraction / 365 / self.pump_hours
+
+            power = (
+                self.specific_weight_water
+                * self.groundwater_depth[irrigation_source_mask]
+                * average_extraction_speed[irrigation_source_mask]
+                / self.pump_efficiency
+            ) / 1000
+
+            energy = power * (
+                total_pump_duration[irrigation_source_mask] * self.pump_hours
+            )  # kWh
+            energy_cost_rate = electricity_costs[irrigation_source_mask]  # $ per kWh
+            energy_cost[irrigation_source_mask] = energy * energy_cost_rate  # $/year
+            water_cost[irrigation_source_mask] = (
+                average_extraction[irrigation_source_mask] * water_costs_m3
+            )
+
+        return energy_cost, water_cost
+
     def calculate_well_costs_global(
         self,
     ) -> Tuple[np.ndarray, np.ndarray]:
-
         cost_reduction_factor = self.model.config["agent_settings"]["expected_utility"][
             "adaptation_well_global"
         ]["cost_reduction_factor"]
@@ -3068,10 +3115,10 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Replace by actual data derived initial groundwater depth
-        initial_sat_thickness = (
-            self.aquifer_total_thickness - self.initial_groundwater_depth
-        )
-        current_sat_thickness = self.aquifer_total_thickness - self.groundwater_depth
+        # initial_sat_thickness = (
+        #     self.aquifer_total_thickness - self.initial_groundwater_depth
+        # )
+        # current_sat_thickness = self.aquifer_total_thickness - self.groundwater_depth
 
         potential_well_length = np.full_like(
             self.groundwater_depth,
@@ -3079,15 +3126,15 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Set the well length depending on the current acquifer thickness
-        well_length_mask = current_sat_thickness > self.max_initial_sat_thickness
+        # well_length_mask = current_sat_thickness > self.max_initial_sat_thickness
         # potential_well_length[well_length_mask] = self.aquifer_total_thickness
 
-        depleted_volume_fraction = current_sat_thickness / initial_sat_thickness
+        # depleted_volume_fraction = current_sat_thickness / initial_sat_thickness
 
         # Set mask for all those who have not reached the depletion limit yet
-        above_depletion_limit_mask = (
-            1 - depleted_volume_fraction
-        ) < self.depletion_limit
+        # above_depletion_limit_mask = (
+        #     1 - depleted_volume_fraction
+        # ) < self.depletion_limit
 
         ## Determine costs
         install_cost = well_unit_cost * potential_well_length
@@ -3096,10 +3143,6 @@ class CropFarmers(AgentBaseClass):
 
         # Determine the total number of hours that the pump is running
         total_pump_duration = np.mean(self.total_crop_age, axis=1)
-
-        # TODO: Correct that this is not used? If correct, remove
-        # # Calculate total hours per year that the pump is active
-        # total_pumping_hours_yearly = self.pump_hours * total_pump_duration
 
         # TO DO: update well Q array: Determine through how much agents abstract per person, could be an agent array
         initial_Q = np.mean(self.Q_array)
@@ -3198,9 +3241,6 @@ class CropFarmers(AgentBaseClass):
         # Calculate new pump depth as a function of groundwater depth
         new_pump_depth = self.groundwater_depth + 20
 
-        # Create a mask for valid crop indices
-        crops_mask = self.crop_calendar[:, :, 0] >= 0
-
         total_pump_days = np.mean(self.total_crop_age, axis=1)
 
         # Calculate total hours per year that the pump is active
@@ -3277,9 +3317,7 @@ class CropFarmers(AgentBaseClass):
                     gains_adaptation_option_2,
                     new_crop_nr,
                     new_farmer_id,
-                ) = self.crop_yield_ratio_difference(
-                    yield_ratios
-                )  # gain crops
+                ) = self.crop_yield_ratio_difference(yield_ratios)  # gain crops
                 yield_ratios_adaptation_option_1 = (
                     yield_ratios + gains_adaptation_option_1
                 ).clip(0, 1)
@@ -3522,7 +3560,6 @@ class CropFarmers(AgentBaseClass):
 
         # Loop over each unique group of farmers to determine their average yield ratio
         for idx, unique_combination in enumerate(unique_crop_groups):
-
             if unique_combination[0] in crops_with_varieties:
                 unique_farmer_groups = (
                     crop_elevation_group == unique_combination[None, ...]
@@ -3621,11 +3658,10 @@ class CropFarmers(AgentBaseClass):
                     yield_ratio_gain_relative_option_2
                 )
 
-                assert (
-                    not np.isinf(yield_ratio_gain_relative_option_1).any()
-                    and not np.isinf(yield_ratio_gain_relative_option_2).any(),
-                    "gains adaptation value is inf",
-                )
+                assert not (
+                    np.isinf(yield_ratio_gain_relative_option_1).any()
+                    or np.isinf(yield_ratio_gain_relative_option_2).any()
+                ), "gains adaptation value is inf"
 
             else:
                 pass
@@ -4242,8 +4278,10 @@ class CropFarmers(AgentBaseClass):
                 np.mean(self.yearly_yield_ratio[:, 1]),
             )
 
-            # Reset the yearly abstraction
-            self.yearly_abstraction_m3_by_farmer[:, :] = 0
+            for i in range(len(self.yearly_abstraction_m3_by_farmer[0, :, 0])):
+                shift_and_reset_matrix(self.yearly_abstraction_m3_by_farmer[:, i, :])
+
+            energy_cost, water_cost = self.calculate_water_costs()
 
             if not self.model.spinup and not (
                 "ruleset" in self.config and self.config["ruleset"] == "no-adaptation"
