@@ -20,6 +20,11 @@
 - setup_GEV in hydromt-geb was integrated with setup_SPEI and can be removed.
 - Many other minor fixes and improvements.
 - Included a simple market for future scenarios.
+- Data exporting in model.yml is now to zarr instead of netcdf.
+- Included new source for setting up assets (movisda). This can be used when geofabrik is down.
+- Allow reducing the number of crops by using the most frequently grown crop in a specific grop group
+- Set up crop prices from FAO stat
+- Include rails and roads in preprocessing
 
 ### Migration guide
 
@@ -29,3 +34,7 @@
 - We migrated to the new climate data store  (CDS) API, which requires a new API key. Please register at [https://cds-beta.climate.copernicus.eu/](https://cds-beta.climate.copernicus.eu/) and update your `~/.cdsapirc` file with the new key.
 - The ingested data is also slightly different, which means it needs to be re-downloaded.
 - Install ruff for code formatting: `pip install ruff`
+- Thus set "format: netcdf" to "format: zarr" in model.yml (if applicable)
+- model_structure has been renamed to files, thus change `model_structure` to `files` in all code
+- The format of basin_lakes_data has changed to parquet. If the model is rebuilt this should automatically be updated.
+- `builings` feature type in `setup_assets` has been renamed to `building`

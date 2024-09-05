@@ -371,7 +371,7 @@ report_hydrology:
   groundwater_depth_map:
     varname: groundwater.groundwater_depth
     function: null
-    format: netcdf
+    format: zarr
     single_file: true
   reservoir_storage:
     varname: lakes_reservoirs.reservoir_storage
@@ -386,7 +386,7 @@ report_hydrology:
   discharge_daily:
     varname: data.grid.discharge
     function: null
-    format: netcdf
+    format: zarr
     single_file: true
   discharge_daily:
     varname: data.grid.discharge

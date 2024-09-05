@@ -426,7 +426,8 @@ class Grid(BaseVariables):
             self.model.files["grid"]["groundwater/why_map"]
         ) as why_class_src:
             return why_class_src.read(1)
-        
+
+
 class HRUs(BaseVariables):
     """This class forms the basis for the HRUs. To create the `HRUs`, each individual field owned by a farmer becomes a `HRU` first. Then, in addition, each other land use type becomes a separate HRU. `HRUs` never cross cell boundaries. This means that farmers whose fields are dispersed across multiple cells are simulated by multiple `HRUs`. Here, we assume that each `HRU`, is relatively homogeneous as it each `HRU` is operated by 1) a single farmer, or by a single other (i.e., non-farm) land-use type and 2) never crosses the boundary a hydrological model cell.
 
@@ -865,19 +866,24 @@ class Data:
 
     def load_water_demand(self):
         self.model.domestic_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/domestic_water_consumption"], engine = "zarr"
+            self.model.files["forcing"]["water_demand/domestic_water_consumption"],
+            engine="zarr",
         )
         self.model.domestic_water_demand_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/domestic_water_demand"], engine = "zarr"
+            self.model.files["forcing"]["water_demand/domestic_water_demand"],
+            engine="zarr",
         )
         self.model.industry_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/industry_water_consumption"], engine = "zarr"
+            self.model.files["forcing"]["water_demand/industry_water_consumption"],
+            engine="zarr",
         )
         self.model.industry_water_demand_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/industry_water_demand"], engine = "zarr"
+            self.model.files["forcing"]["water_demand/industry_water_demand"],
+            engine="zarr",
         )
         self.model.livestock_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/livestock_water_consumption"], engine = "zarr"
+            self.model.files["forcing"]["water_demand/livestock_water_consumption"],
+            engine="zarr",
         )
 
     def to_HRU(self, *, data=None, fn=None):

@@ -52,6 +52,7 @@ from .workflows.farmers import get_farm_locations, create_farms, get_farm_distri
 from .workflows.population import generate_locations
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
+from .workflows.conversions import M49_to_ISO3
 
 XY_CHUNKSIZE = 350
 
@@ -485,36 +486,55 @@ class GEBModel(GridModel):
         """
 
         if crop_prices == "FAO_stat":
-            crop_data = self.data_catalog.get_dataframe("crop_price")
-
-            # Filter and rename necessary columns
-            crop_data = crop_data[["Area", "Year", "Item", "Value"]]
-            crop_data.rename(
-                columns={"Area": "Country Code", "Item": "crops", "Year": "time"},
-                inplace=True,
+            crop_data = self.data_catalog.get_dataframe(
+                "FAO_crop_price",
+                variables=["Area Code (M49)", "year", "crop", "price_per_kg"],
             )
-            crop_data["crops"] = crop_data["crops"].str.lower()
+
+            # Dropping 58 (Belgium-Luxembourg combined), 200 (former Czechoslovakia),
+            # 230 (old code Ethiopia), 891 (Serbia and Montenegro), 736 (former Sudan)
+            crop_data = crop_data[
+                ~crop_data["Area Code (M49)"].isin([58, 200, 230, 891, 736])
+            ]
+
+            crop_data["ISO3"] = crop_data["Area Code (M49)"].map(M49_to_ISO3)
+            crop_data = crop_data.drop(columns=["Area Code (M49)"])
+
+            assert not crop_data["ISO3"].isna().any(), "Missing ISO3 codes"
+
+            crop_data["crop"] = crop_data["crop"].str.lower()
 
             data = {}
 
+            all_years = crop_data["year"].unique()
+            all_crops = crop_data["crop"].unique()
+
             # Setup dataFrame for further data corrections
             for _, region in self.geoms["areamaps/regions"].iterrows():
-                region_name = region["NAME_0"]
                 region_id = str(region["region_id"])
 
-                region_crop_data = crop_data[crop_data["Country Code"] == region_name]
+                region_crop_data = crop_data[crop_data["ISO3"] == region["ISO3"]]
                 region_pivot = region_crop_data.pivot_table(
-                    index="time", columns="crops", values="Value", aggfunc="first"
-                )
+                    index="year",
+                    columns="crop",
+                    values="price_per_kg",
+                    aggfunc="first",
+                ).reindex(index=all_years, columns=all_crops)
 
-                region_pivot["country_name"] = region_name
+                region_pivot["ISO3"] = region["ISO3"]
                 # Store pivoted data in dictionary with region_id as key
                 data[region_id] = region_pivot
 
-            # Concatenate all regional data into a single DataFrame with MultiIndex
-            data = pd.concat(data, names=["Region_ID", "Year"])
+            # Assert non of the dataframes are empty (this will result in missing regions)
+            assert not any([data[region_id].empty for region_id in data])
 
-            total_years = data.index.get_level_values("Year").unique()
+            # Concatenate all regional data into a single DataFrame with MultiIndex
+            data = pd.concat(data, names=["region_id", "year"])
+
+            # Drop crops with no data at all for these regions
+            data = data.dropna(axis=1, how="all")
+
+            total_years = data.index.get_level_values("year").unique()
 
             if project_past_until_year:
                 assert (
@@ -546,16 +566,13 @@ class GEBModel(GridModel):
                     upper_bound=project_future_until_year,
                 )
 
-            # Adjust price per tonne to price per kg
-            data /= 1000
-
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
             crop_data = self.dict["crops/crop_data"]["data"]
             formatted_data = {
                 "type": "time_series",
                 "data": {},
-                "time": data.index.get_level_values("Year")
+                "time": data.index.get_level_values("year")
                 .unique()
                 .tolist(),  # Extract unique years for the time key
             }
@@ -637,7 +654,7 @@ class GEBModel(GridModel):
         Parameters
         ----------
         data : DataFrame
-            A DataFrame containing crop data with a 'country_name' column and indexed by 'Region_ID'. The DataFrame
+            A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'. The DataFrame
             contains crop prices for different regions.
 
         Returns
@@ -651,18 +668,24 @@ class GEBModel(GridModel):
         1. Identifies columns where all values are NaN for each country and stores this information.
         2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
-        4. Drops the 'country_name' column before returning the updated DataFrame.
+        4. Drops the 'ISO3' column before returning the updated DataFrame.
         """
+
+        if "economics/ppp_conversion_rates" not in self.dict:
+            raise ValueError("Please run setup_economic_data first")
 
         ppp_conversion_rate = self.dict["economics/ppp_conversion_rates"]
         columns_with_all_nans_by_country = {}
 
-        for country in data["country_name"].unique():
-            # Filter the data for the current country
-            country_data = data[data["country_name"] == country]
+        # create a copy of the data to avoid using data that was adjusted in this function
+        data_out = data.copy()
 
-            # Group by 'Region_ID' and check each column for NaN values across all years within the region
-            columns_all_nans_by_region = country_data.groupby("Region_ID").apply(
+        for country in data["ISO3"].unique():
+            # Filter the data for the current country
+            country_data = data[data["ISO3"] == country]
+
+            # Group by 'region_id' and check each column for NaN values across all years within the region
+            columns_all_nans_by_region = country_data.groupby("region_id").apply(
                 lambda x: x.isna().all()
             )
 
@@ -678,23 +701,29 @@ class GEBModel(GridModel):
             country,
             columns_with_missing_values,
         ) in columns_with_all_nans_by_country.items():
-            for column in columns_with_missing_values:
-                columns_all_nans_by_region = data.groupby("Region_ID").apply(
+            for crop in columns_with_missing_values:
+                columns_all_nans_by_region = data.groupby("region_id").apply(
                     lambda x: x.isna().all()
                 )
 
                 # Find a region with available data for this column
                 regions_with_data = columns_all_nans_by_region[
-                    ~columns_all_nans_by_region[column]
+                    ~columns_all_nans_by_region[crop]
                 ].index
 
                 if not regions_with_data.empty:
                     # Select which region you want to copy data from. TO DO: Change to closest / most similar country
-                    region_with_data = regions_with_data[0]
+                    if len(regions_with_data) > 1:
+                        region_with_data = regions_with_data[0]
+                        self.logger.warning(
+                            f"Multiple regions with data found for {crop}, taking the first region"
+                        )
+                    else:
+                        region_with_data = regions_with_data[0]
 
-                    column_data_to_copy = data.loc[region_with_data][column]
+                    region_crop_data_to_copy = data.loc[region_with_data][crop]
 
-                    years_to_convert = column_data_to_copy.index.values
+                    years_to_convert = region_crop_data_to_copy.index.values
                     full_years_array = np.array(ppp_conversion_rate["time"], dtype=str)
                     years_index = np.isin(full_years_array, years_to_convert)
                     source_conversion_rates = np.array(
@@ -704,12 +733,12 @@ class GEBModel(GridModel):
 
                     # Find regions that need this data
                     regions_needing_data = columns_all_nans_by_region[
-                        columns_all_nans_by_region[column]
+                        columns_all_nans_by_region[crop]
                     ].index
 
                     # Copy data from the region with data to regions without data
                     for region in regions_needing_data:
-                        values_to_convert = column_data_to_copy.values.copy()
+                        values_to_convert = region_crop_data_to_copy.values.copy()
 
                         target_conversion_rates = np.array(
                             ppp_conversion_rate["data"][region], dtype=float
@@ -721,11 +750,17 @@ class GEBModel(GridModel):
                             target_conversion_rates,
                         )
 
-                        data.loc[region, column] = converted_values
+                        new_data = pd.DataFrame(
+                            {crop: converted_values},
+                            index=pd.MultiIndex.from_product(
+                                [[region], years_to_convert], names=data_out.index.names
+                            ),
+                        )
 
-        data = data.drop(columns=["country_name"])
+                        data_out = data_out.combine_first(new_data)
 
-        return data
+        data_out = data_out.drop(columns=["ISO3"])
+        return data_out
 
     def convert_price_using_ppp(
         self, price_source_LCU, ppp_factor_source, ppp_factor_target
@@ -994,7 +1029,7 @@ class GEBModel(GridModel):
                 empty_row = pd.DataFrame(
                     {col: [None] for col in costs.columns},
                     index=pd.MultiIndex.from_tuples(
-                        [(region_id, year)], names=["Region_ID", "Year"]
+                        [(region_id, year)], names=["region_id", "year"]
                     ),
                 )
                 costs = pd.concat(
@@ -1012,6 +1047,27 @@ class GEBModel(GridModel):
                 )
 
         return costs
+
+    def setup_cultivation_costs(
+        self,
+        cultivation_costs: Optional[Union[str, int, float]] = 0,
+        project_future_until_year: Optional[int] = False,
+    ):
+        """
+        Sets up the cultivation costs for the model.
+
+        Parameters
+        ----------
+        cultivation_costs : str or int or float, optional
+            The file path or integer of cultivation costs. If a file path is provided, the file is loaded and parsed as JSON.
+            The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
+            IDs and their cultivation costs. If .
+        """
+        self.logger.info("Preparing cultivation costs")
+        cultivation_costs = self.process_crop_data(
+            cultivation_costs, project_future_until_year=project_future_until_year
+        )
+        self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
     def setup_crop_prices(
         self,
@@ -1444,6 +1500,13 @@ class GEBModel(GridModel):
         The resulting waterbody data is set as a table in the model with the name 'routing/lakesreservoirs/basin_lakes_data'.
         """
         self.logger.info("Setting up waterbodies")
+        dtypes = {
+            "waterbody_id": np.int32,
+            "waterbody_type": np.int32,
+            "volume_total": np.float64,
+            "average_discharge": np.float64,
+            "average_area": np.float64,
+        }
         try:
             waterbodies = self.data_catalog.get_geodataframe(
                 "hydro_lakes",
@@ -1457,6 +1520,7 @@ class GEBModel(GridModel):
                     "average_area",
                 ],
             )
+            waterbodies = waterbodies.astype(dtypes)
         except (IndexError, NoDataException):
             self.logger.info(
                 "No water bodies found in domain, skipping water bodies setup"
@@ -1472,9 +1536,9 @@ class GEBModel(GridModel):
                 ],
                 crs=self.crs,
             )
+            waterbodies = waterbodies.astype(dtypes)
             lakesResID = xr.zeros_like(self.grid["areamaps/grid_mask"])
             sublakesResID = xr.zeros_like(self.subgrid["areamaps/sub_grid_mask"])
-
         else:
             lakesResID = self.grid.raster.rasterize(
                 waterbodies,
@@ -1494,7 +1558,6 @@ class GEBModel(GridModel):
         self.set_grid(lakesResID, name="routing/lakesreservoirs/lakesResID")
         self.set_subgrid(sublakesResID, name="routing/lakesreservoirs/sublakesResID")
 
-        waterbodies = waterbodies.set_index("waterbody_id")
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         if command_areas:
@@ -1559,16 +1622,25 @@ class GEBModel(GridModel):
         if custom_reservoir_capacity:
             custom_reservoir_capacity = self.data_catalog.get_dataframe(
                 "custom_reservoir_capacity"
-            ).set_index("waterbody_id")
+            )
             custom_reservoir_capacity = custom_reservoir_capacity[
                 custom_reservoir_capacity.index != -1
             ]
 
+            waterbodies.set_index("waterbody_id", inplace=True)
             waterbodies.update(custom_reservoir_capacity)
+            waterbodies.reset_index(inplace=True)
 
         # spatial dimension is not required anymore, so drop it.
         waterbodies = waterbodies.drop("geometry", axis=1)
 
+        assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
+        assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
+        assert "volume_total" in waterbodies.columns, "volume_total is required"
+        assert (
+            "average_discharge" in waterbodies.columns
+        ), "average_discharge is required"
+        assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_table(waterbodies, name="routing/lakesreservoirs/basin_lakes_data")
 
     def setup_water_demand(self, starttime, endtime, ssp):
@@ -1665,10 +1737,26 @@ class GEBModel(GridModel):
             endtime,
         )
 
-    def setup_groundwater(self):
+    def setup_groundwater(
+        self,
+        minimum_thickness_confined_layer=50,
+        maximum_thickness_confined_layer=1000,
+        intial_heads_source="GLOBGM",
+    ):
         """
         Sets up the MODFLOW grid for GEB. This code is adopted from the GLOBGM
         model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt
+
+        Parameters
+        ----------
+        minimum_thickness_confined_layer : float, optional
+            The minimum thickness of the confined layer in meters. Default is 50.
+        maximum_thickness_confined_layer : float, optional
+            The maximum thickness of the confined layer in meters. Default is 1000.
+        intial_heads_source : str, optional
+            The initial heads dataset to use, options are GLOBGM and Fan. Default is 'GLOBGM'.
+            - More about GLOBGM: https://doi.org/10.5194/gmd-17-275-2024
+            - More about Fan: https://doi.org/10.1126/science.1229881
         """
         self.logger.info("Setting up MODFLOW")
 
@@ -1690,6 +1778,12 @@ class GEBModel(GridModel):
         total_thickness = self.snap_to_grid(total_thickness, self.grid)
         assert total_thickness.shape == self.grid.raster.shape
 
+        total_thickness = np.clip(
+            total_thickness,
+            minimum_thickness_confined_layer,
+            maximum_thickness_confined_layer,
+        )
+
         confining_layer = (
             self.data_catalog.get_rasterdataset(
                 "thickness_confining_layer_globgm",
@@ -1709,7 +1803,9 @@ class GEBModel(GridModel):
 
         if two_layers:
             # make sure that total thickness is at least 50 m thicker than confining layer
-            total_thickness = np.maximum(total_thickness, confining_layer + 50)
+            total_thickness = np.maximum(
+                total_thickness, confining_layer + minimum_thickness_confined_layer
+            )
             # thickness of layer 2 is based on the predefined confiningLayerThickness
             bottom_top_layer = aquifer_top_elevation - confining_layer
             # make sure that the minimum thickness of layer 2 is at least 0.1 m
@@ -1738,64 +1834,6 @@ class GEBModel(GridModel):
         self.set_grid(
             layer_boundary_elevation, name="groundwater/layer_boundary_elevation"
         )
-
-        # load digital elevation model that was used for globgm
-        dem_globgm = (
-            self.data_catalog.get_rasterdataset(
-                "dem_globgm",
-                geom=self.region,
-                buffer=0,
-                variables=["dem_average"],
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .compute()
-        )
-        dem_globgm = self.snap_to_grid(dem_globgm, self.grid)
-        assert dem_globgm.shape == self.grid.raster.shape
-
-        dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
-
-        water_table_depth = self.data_catalog.get_rasterdataset(
-            "water_table_depth_globgm", bbox=self.bounds, buffer=0
-        ).compute()
-        water_table_depth = self.snap_to_grid(water_table_depth, self.grid)
-
-        # heads
-        head_upper_layer = self.data_catalog.get_rasterdataset(
-            "head_upper_globgm", bbox=self.bounds, buffer=0
-        ).compute()
-        head_upper_layer = head_upper_layer.raster.mask_nodata()
-        head_upper_layer = self.snap_to_grid(head_upper_layer, self.grid)
-        head_upper_layer = head_upper_layer - dem_globgm + dem
-        assert head_upper_layer.shape == self.grid.raster.shape
-
-        # assert concistency of datasets. If one layer, this layer should be all nan
-        if not two_layers:
-            assert np.isnan(head_upper_layer).all()
-
-        head_lower_layer = self.data_catalog.get_rasterdataset(
-            "head_lower_globgm", bbox=self.bounds, buffer=0
-        ).compute()
-        head_lower_layer = head_lower_layer.raster.mask_nodata()
-        head_lower_layer = self.snap_to_grid(head_lower_layer, self.grid).compute()
-        head_lower_layer = (head_lower_layer - dem_globgm + dem).compute()
-        # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
-        head_lower_layer = xr.where(
-            head_lower_layer < layer_boundary_elevation[-1],
-            layer_boundary_elevation[-1],
-            head_lower_layer,
-        )
-        assert head_lower_layer.shape == self.grid.raster.shape
-
-        if two_layers:
-            # combine upper and lower layer head in one dataarray
-            heads = xr.concat(
-                [head_upper_layer, head_lower_layer], dim="layer", compat="equals"
-            )
-        else:
-            heads = head_upper_layer.expand_dims(layer=["upper"])
-
-        self.set_grid(heads, name="groundwater/heads")
 
         # load hydraulic conductivity
         hydraulic_conductivity = self.data_catalog.get_rasterdataset(
@@ -1833,39 +1871,6 @@ class GEBModel(GridModel):
             specific_yield = specific_yield.expand_dims(layer=["upper"])
         self.set_grid(specific_yield, name="groundwater/specific_yield")
 
-        # Load in the starting groundwater depth
-        region_continent = np.unique(self.geoms["areamaps/regions"]["CONTINENT"])
-        assert (
-            np.size(region_continent) == 1
-        )  # Transcontinental basins should not be possible
-
-        if (
-            np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Asia"
-            or np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Europe"
-        ):
-            region_continent = "Eurasia"
-        else:
-            region_continent = region_continent[0]
-
-        initial_depth = self.data_catalog.get_rasterdataset(
-            f"initial_groundwater_depth_{region_continent}", bbox=self.bounds, buffer=0
-        ).rename({"lon": "x", "lat": "y"})
-
-        initial_depth_static = initial_depth.isel(time=0)
-        initial_depth_static_reprojected = initial_depth_static.raster.reproject_like(
-            self.grid, method="average"
-        )
-
-        initial_depth_modflow = self.snap_to_grid(
-            initial_depth_static_reprojected, self.grid
-        )
-
-        initial_depth_modflow = initial_depth_modflow["WTD"] * -1
-        self.set_grid(
-            initial_depth_modflow, name="groundwater/initial_water_table_depth"
-        )
-        assert initial_depth_modflow.shape == self.grid.raster.shape
-
         # load aquifer classification from why_map and write it as a grid
         why_map = self.data_catalog.get_rasterdataset(
             "why_map",
@@ -1878,6 +1883,95 @@ class GEBModel(GridModel):
         why_interpolated = self.interpolate(why_map, "nearest").compute()
 
         self.set_grid(why_interpolated, name="groundwater/why_map")
+
+        if intial_heads_source == "GLOBGM":
+            # load digital elevation model that was used for globgm
+            dem_globgm = (
+                self.data_catalog.get_rasterdataset(
+                    "dem_globgm",
+                    geom=self.region,
+                    buffer=0,
+                    variables=["dem_average"],
+                )
+                .rename({"lon": "x", "lat": "y"})
+                .compute()
+            )
+            dem_globgm = self.snap_to_grid(dem_globgm, self.grid)
+            assert dem_globgm.shape == self.grid.raster.shape
+
+            dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
+
+            water_table_depth = self.data_catalog.get_rasterdataset(
+                "water_table_depth_globgm", bbox=self.bounds, buffer=0
+            ).compute()
+            water_table_depth = self.snap_to_grid(water_table_depth, self.grid)
+
+            # heads
+            head_upper_layer = self.data_catalog.get_rasterdataset(
+                "head_upper_globgm", bbox=self.bounds, buffer=0
+            ).compute()
+            head_upper_layer = head_upper_layer.raster.mask_nodata()
+            head_upper_layer = self.snap_to_grid(head_upper_layer, self.grid)
+            head_upper_layer = head_upper_layer - dem_globgm + dem
+            assert head_upper_layer.shape == self.grid.raster.shape
+
+            # assert concistency of datasets. If one layer, this layer should be all nan
+            if not two_layers:
+                assert np.isnan(head_upper_layer).all()
+
+            head_lower_layer = self.data_catalog.get_rasterdataset(
+                "head_lower_globgm", bbox=self.bounds, buffer=0
+            ).compute()
+            head_lower_layer = head_lower_layer.raster.mask_nodata()
+            head_lower_layer = self.snap_to_grid(head_lower_layer, self.grid).compute()
+            head_lower_layer = (head_lower_layer - dem_globgm + dem).compute()
+            # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
+            head_lower_layer = xr.where(
+                head_lower_layer < layer_boundary_elevation[-1],
+                layer_boundary_elevation[-1],
+                head_lower_layer,
+            )
+            assert head_lower_layer.shape == self.grid.raster.shape
+
+            if two_layers:
+                # combine upper and lower layer head in one dataarray
+                heads = xr.concat(
+                    [head_upper_layer, head_lower_layer], dim="layer", compat="equals"
+                )
+            else:
+                heads = head_upper_layer.expand_dims(layer=["upper"])
+
+        elif intial_heads_source == "Fan":
+            # Load in the starting groundwater depth
+            region_continent = np.unique(self.geoms["areamaps/regions"]["CONTINENT"])
+            assert (
+                np.size(region_continent) == 1
+            )  # Transcontinental basins should not be possible
+
+            if (
+                np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Asia"
+                or np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Europe"
+            ):
+                region_continent = "Eurasia"
+            else:
+                region_continent = region_continent[0]
+
+            initial_depth = self.data_catalog.get_rasterdataset(
+                f"initial_groundwater_depth_{region_continent}",
+                bbox=self.bounds,
+                buffer=0,
+            ).rename({"lon": "x", "lat": "y"})
+
+            initial_depth_static = initial_depth.isel(time=0)
+            initial_depth = initial_depth_static.raster.reproject_like(
+                self.grid, method="average"
+            )
+            raise NotImplementedError(
+                "Need to convert initial depth to heads for all layers"
+            )
+
+        assert heads.shape == hydraulic_conductivity.shape
+        self.set_grid(heads, name="groundwater/heads")
 
     def setup_forcing(
         self,
@@ -2165,48 +2259,49 @@ class GEBModel(GridModel):
                 retries = 0
                 while retries < max_retries:
                     try:
+                        request = {
+                            "product_type": "reanalysis",
+                            "format": "netcdf",
+                            "variable": [
+                                variable,
+                            ],
+                            "date": f"{start_year}-01-01/{end_year}-12-31",
+                            "time": [
+                                "00:00",
+                                "01:00",
+                                "02:00",
+                                "03:00",
+                                "04:00",
+                                "05:00",
+                                "06:00",
+                                "07:00",
+                                "08:00",
+                                "09:00",
+                                "10:00",
+                                "11:00",
+                                "12:00",
+                                "13:00",
+                                "14:00",
+                                "15:00",
+                                "16:00",
+                                "17:00",
+                                "18:00",
+                                "19:00",
+                                "20:00",
+                                "21:00",
+                                "22:00",
+                                "23:00",
+                            ],
+                            "area": (
+                                float(ymax),
+                                float(xmin),
+                                float(ymin),
+                                float(xmax),
+                            ),  # North, West, South, East
+                        }
                         cdsapi.Client().retrieve(
                             "reanalysis-era5-land",
-                            {
-                                "product_type": "reanalysis",
-                                "format": "netcdf",
-                                "variable": [
-                                    variable,
-                                ],
-                                "date": f"{start_year}-01-01/{end_year}-12-31",
-                                "time": [
-                                    "00:00",
-                                    "01:00",
-                                    "02:00",
-                                    "03:00",
-                                    "04:00",
-                                    "05:00",
-                                    "06:00",
-                                    "07:00",
-                                    "08:00",
-                                    "09:00",
-                                    "10:00",
-                                    "11:00",
-                                    "12:00",
-                                    "13:00",
-                                    "14:00",
-                                    "15:00",
-                                    "16:00",
-                                    "17:00",
-                                    "18:00",
-                                    "19:00",
-                                    "20:00",
-                                    "21:00",
-                                    "22:00",
-                                    "23:00",
-                                ],
-                                "area": (
-                                    ymax,
-                                    xmin,
-                                    ymin,
-                                    xmax,
-                                ),  # North, West, South, East
-                            },
+                            request,
                             output_fn,
                         )
                         break
@@ -2215,6 +2310,7 @@ class GEBModel(GridModel):
                             f"Download failed. Retrying... ({retries+1}/{max_retries})"
                         )
                         print(e)
+                        print(request)
                         retries += 1
                 if retries == max_retries:
                     raise Exception("Download failed after maximum retries.")
@@ -2971,7 +3067,6 @@ class GEBModel(GridModel):
         self,
         calibration_period_start: date = date(1981, 1, 1),
         calibration_period_end: date = date(2010, 1, 1),
-        memory_mb: int = 1000,
     ):
         """
         Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
@@ -3031,22 +3126,12 @@ class GEBModel(GridModel):
 
         water_budget.attrs = {"units": "kg m-2 s-1"}
 
-        max_cells_loaded_in_memory = (
-            memory_mb * 1024 * 1024 / 8  # 8 bytes per float
-        )  # in number of elements
-
-        block_edge_size_time = (
-            max_cells_loaded_in_memory / water_budget.time.size
-        ) ** 0.5
-        block_edge_size_xy = max_cells_loaded_in_memory / (
-            water_budget.x.size * water_budget.y.size
-        )
-
-        # round up to avoid very small chunks at edges
-        block_edge_size = math.ceil(min(block_edge_size_time, block_edge_size_xy))
-
         water_budget.name = "water_budget"
-        chunks = {dim: block_edge_size for dim in water_budget.dims}
+        chunks = {
+            "time": 100,
+            "y": XY_CHUNKSIZE,
+            "x": XY_CHUNKSIZE,
+        }
         water_budget = water_budget.chunk(chunks)
 
         with tempfile.NamedTemporaryFile(suffix=".zarr.zip") as tmp_water_budget_file:
@@ -3092,7 +3177,7 @@ class GEBModel(GridModel):
 
                 SPEI = xr.open_zarr(
                     tmp_spei_file.name,
-                    chunks={"time": 1, "y": XY_CHUNKSIZE, "x": XY_CHUNKSIZE},
+                    chunks={},
                 )["spei"]
 
                 self.set_forcing(SPEI, name="climate/spei")
@@ -4465,24 +4550,20 @@ class GEBModel(GridModel):
                 crop_calendar_per_farmer, crop_values, replaced_crop_values
             ):
                 # Find the most common crop value among the given crop_values
-                most_common_value = max(
-                    (
-                        (
-                            value,
-                            np.count_nonzero(
-                                (crop_calendar_per_farmer[:, :, 0] == value).any(axis=1)
-                            ),
-                        )
-                        for value in crop_values
-                    ),
-                    key=lambda x: x[1],
-                )[0]
+                crop_instances = crop_calendar_per_farmer[:, :, 0][
+                    np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+                ]
+
+                # if none of the crops are present, no need to replace anything
+                if crop_instances.size == 0:
+                    return crop_calendar_per_farmer
+
+                crops, crop_counts = np.unique(crop_instances, return_counts=True)
+                most_common_crop = crops[np.argmax(crop_counts)]
 
                 # Determine if there are multiple cropping versions of this crop and assign it to the most common
                 new_crop_types = crop_calendar_per_farmer[
-                    (crop_calendar_per_farmer[:, :, 0] == most_common_value).any(
-                        axis=1
-                    ),
+                    (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
                     :,
                     :,
                 ]
@@ -4718,45 +4799,85 @@ class GEBModel(GridModel):
 
         return None
 
-    def setup_assets(self, feature_types):
+    def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
+        """
+        Get assets from OpenStreetMap (OSM) data.
+
+        Parameters
+        ----------
+        feature_types : str or list of str
+            The types of features to download from OSM. Available feature types are 'building', 'rail' and 'road'.
+        source : str, optional
+            The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
+        overwrite : bool, optional
+            Whether to overwrite existing files. Default is False.
+        """
         if isinstance(feature_types, str):
             feature_types = [feature_types]
 
         OSM_data_dir = Path(self.root).parent / "preprocessing" / "osm"
         OSM_data_dir.mkdir(exist_ok=True, parents=True)
 
-        index_file = OSM_data_dir / "geofabrik_region_index.geojson"
-        fetch_and_save(
-            "https://download.geofabrik.de/index-v1.json", index_file, overwrite=False
-        )
-
-        index = gpd.read_file(index_file)
-        # remove Dach region as all individual regions within dach countries are also in the index
-        index = index[index["id"] != "dach"]
-
-        # find all regions that intersect with the bbox
-        intersecting_regions = index[index.intersects(self.region.geometry[0])]
-
-        def filter_regions(ID, parents):
-            return ID not in parents
-
-        intersecting_regions = intersecting_regions[
-            intersecting_regions["id"].apply(
-                lambda x: filter_regions(x, intersecting_regions["parent"].tolist())
+        if source == "geofabrik":
+            index_file = OSM_data_dir / "geofabrik_region_index.geojson"
+            fetch_and_save(
+                "https://download.geofabrik.de/index-v1.json",
+                index_file,
+                overwrite=overwrite,
             )
-        ]
+
+            index = gpd.read_file(index_file)
+            # remove Dach region as all individual regions within dach countries are also in the index
+            index = index[index["id"] != "dach"]
+
+            # find all regions that intersect with the bbox
+            intersecting_regions = index[index.intersects(self.region.geometry[0])]
+
+            def filter_regions(ID, parents):
+                return ID not in parents
+
+            intersecting_regions = intersecting_regions[
+                intersecting_regions["id"].apply(
+                    lambda x: filter_regions(x, intersecting_regions["parent"].tolist())
+                )
+            ]
+
+            urls = (
+                intersecting_regions["urls"]
+                .apply(lambda x: json.loads(x)["pbf"])
+                .tolist()
+            )
+
+        elif source == "movisda":
+            minx, miny, maxx, maxy = self.bounds
+
+            urls = []
+            for x in range(int(minx), int(maxx) + 1):
+                # Movisda seems to switch the W and E for the x coordinate
+                EW_code = f"E{-x:03d}" if x < 0 else f"W{x:03d}"
+                for y in range(int(miny), int(maxy) + 1):
+                    NS_code = f"N{y:02d}" if y >= 0 else f"S{-y:02d}"
+                    url = f"https://osm.download.movisda.io/grid/{NS_code}{EW_code}-latest.osm.pbf"
+
+                    # some tiles do not exists because they are in the ocean. Therefore we check if they exist
+                    # before adding the url
+                    response = requests.head(url, allow_redirects=True)
+                    if response.status_code != 404:
+                        urls.append(url)
+
+        else:
+            raise ValueError(f"Unknown source {source}")
 
         # download all regions
         all_features = {}
-        for _, row in tqdm(intersecting_regions.iterrows()):
-            url = json.loads(row["urls"])["pbf"]
+        for url in tqdm(urls):
             filepath = OSM_data_dir / url.split("/")[-1]
-            fetch_and_save(url, filepath, overwrite=False)
+            fetch_and_save(url, filepath, overwrite=overwrite)
             for feature_type in feature_types:
                 if feature_type not in all_features:
                     all_features[feature_type] = []
 
-                if feature_type == "buildings":
+                if feature_type == "building":
                     features = gpd.read_file(
                         filepath,
                         mask=self.region,
@@ -4764,6 +4885,43 @@ class GEBModel(GridModel):
                         use_arrow=True,
                     )
                     features = features[features["building"].notna()]
+                elif feature_type == "rail":
+                    features = gpd.read_file(
+                        filepath,
+                        mask=self.region,
+                        layer="lines",
+                        use_arrow=True,
+                    )
+                    features = features[
+                        features["railway"].isin(
+                            ["rail", "tram", "subway", "light_rail", "narrow_gauge"]
+                        )
+                    ]
+                elif feature_type == "road":
+                    features = gpd.read_file(
+                        filepath,
+                        mask=self.region,
+                        layer="lines",
+                        use_arrow=True,
+                    )
+                    features = features[
+                        features["highway"].isin(
+                            [
+                                "motorway",
+                                "trunk",
+                                "primary",
+                                "secondary",
+                                "tertiary",
+                                "unclassified",
+                                "residential",
+                                "motorway_link",
+                                "trunk_link",
+                                "primary_link",
+                                "secondary_link",
+                                "tertiary_link",
+                            ]
+                        )
+                    ]
                 else:
                     raise ValueError(f"Unknown feature type {feature_type}")
 
@@ -5483,14 +5641,14 @@ class GEBModel(GridModel):
             self._assert_write_mode
             for name, data in self.table.items():
                 if self.is_updated["table"][name]["updated"]:
-                    fn = os.path.join(name + ".csv")
+                    fn = os.path.join(name + ".parquet")
                     self.logger.debug(f"Writing file {fn}")
                     self.files["table"][name] = fn
                     self.is_updated["table"][name]["filename"] = fn
                     self.logger.debug(f"Writing file {fn}")
                     fp = Path(self.root, fn)
                     fp.parent.mkdir(parents=True, exist_ok=True)
-                    data.to_csv(fp)
+                    data.to_parquet(fp, engine="pyarrow")
 
     def write_binary(self):
         if len(self.binary) == 0:
@@ -5607,7 +5765,7 @@ class GEBModel(GridModel):
     def read_table(self):
         self.read_files()
         for name, fn in self.files["table"].items():
-            table = pd.read_csv(Path(self.root, fn))
+            table = pd.read_parquet(Path(self.root, fn))
             self.set_table(table, name=name, update=False)
 
     def read_dict(self):

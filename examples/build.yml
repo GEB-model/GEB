@@ -11,6 +11,8 @@ setup_regions_and_land_use:
   unique_region_id: UID
   river_threshold: 100
 
+setup_economic_data:
+
 setup_mannings:
 
 setup_channel_width:
@@ -36,8 +38,6 @@ setup_water_demand:
   ssp: ssp2
 
 setup_groundwater:
-
-setup_economic_data:
 
 setup_well_prices_by_reference_year:
   borewell_cost_1: 486.33

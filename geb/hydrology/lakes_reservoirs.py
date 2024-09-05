@@ -24,7 +24,6 @@ import math
 
 import pandas as pd
 import numpy as np
-from scipy.optimize import fsolve
 from geb.workflows import balance_check
 
 from .routing.subroutines import (
@@ -41,7 +40,7 @@ RESERVOIR = 2
 def laketotal(values, areaclass, nan_class):
     mask = areaclass != nan_class
     class_totals = np.bincount(areaclass[mask], weights=values[mask])
-    return class_totals
+    return class_totals.astype(values.dtype)
 
 
 GRAVITY = 9.81
@@ -58,27 +57,6 @@ if SHAPE == "rectangular":
         """inverse function of estimate_lake_outflow"""
         return (outflow / lake_factor) ** (2 / 3)
 
-    def puls_equation(new_storage, SI, lake_factor, lake_area, dt):
-        height = new_storage / lake_area
-        return new_storage / dt + estimate_lake_outflow(lake_factor, height) / 2 - SI
-
-    def solve_puls_equation(storage_above_outflow, SI, lake_factor, lake_area, dt):
-        res = fsolve(
-            puls_equation,
-            storage_above_outflow,
-            args=(
-                SI,
-                lake_factor,
-                lake_area,
-                dt,
-            ),
-            full_output=True,
-        )
-
-        assert res[-2] == 1, "The solution did not converge"
-        new_storage = res[0]
-        return new_storage
-
 elif SHAPE == "parabola":
     overflow_coefficient_mu = 0.612
 
@@ -88,51 +66,6 @@ elif SHAPE == "parabola":
     def outflow_to_height_above_outflow(lake_factor, outflow):
         """inverse function of estimate_lake_outflow"""
         return np.sqrt(outflow / lake_factor)
-
-    def puls_equation(SI, lake_factor, lake_area, dt):
-        """Solving quadratic equation for the new storage (S2)
-
-        S2/dt + α/2 (S2/A)^2 - SI = 0
-
-        A = lake area
-        S2 = new storage
-        dt = time step
-        α = lake factor (function of channel width, gravity and weir coefficient)
-
-        multiply by 2dtA^2 to get rid of the denominator:
-
-        2 A^2 S2 + α S2^2 dt - 2 SI A^2 dt = 0
-
-        rearrange to a quadratic equation:
-
-        α dt S2^2 + 2 A^2 S2 - 2 SI A^2 dt = 0
-
-        solve quadratic formula:
-
-        S2 = (-b ± sqrt(b^2 - 4ac)) / 2a
-
-        where a = α dt, b = 2 A^2, c = -2 SI A^2 dt
-
-        S2 = (-2 A^2 ± sqrt(4 A^4 + 8 α SI A^2 dt^2)) / 2 α dt
-
-        simplify:
-
-        S2 = -A^2 ± A sqrt(A^2 + 2 α SI dt^2) / α dt
-
-        use positive solution
-
-        S2 = -A^2 + A sqrt(A^2 + 2 α SI dt^2) / α dt
-
-        """
-        nominator = -(lake_area**2) + lake_area * np.sqrt(
-            lake_area**2 + 2 * lake_factor * dt**2 * SI
-        )
-        denominator = lake_factor * dt
-        new_storage = nominator / denominator
-        return new_storage
-
-    def solve_puls_equation(storage_above_outflow, SI, lake_factor, lake_area, dt):
-        return puls_equation(SI, lake_factor, lake_area, dt)
 
 else:
     raise ValueError("Invalid shape")
@@ -168,9 +101,7 @@ def estimate_outflow_height(lake_volume, lake_factor, lake_area, avg_outflow):
 def get_lake_outflow_and_storage(
     dt,
     storage,
-    inflow,
-    inflow_prev,
-    outflow_prev,
+    inflow_m3,
     lake_factor,
     lake_area,
     outflow_height,
@@ -205,53 +136,21 @@ def get_lake_outflow_and_storage(
         New storage volume in m3
 
     """
+    storage += inflow_m3
+
     height_above_outflow = get_lake_height_above_outflow(
         storage=storage, lake_area=lake_area, outflow_height=outflow_height
     )
     storage_above_outflow = height_above_outflow * lake_area
-    storage_below_outflow = storage - storage_above_outflow
 
-    SI = (
-        (storage_above_outflow / dt + outflow_prev / 2)
-        - outflow_prev
-        + (inflow_prev + inflow) / 2
-    )
+    outflow_m3_s = estimate_lake_outflow(lake_factor, height_above_outflow)
+    outflow_m3 = outflow_m3_s * dt
 
-    negative_SI = SI <= 0
-    positive_SI = SI > 0
+    outflow_m3 = np.minimum(outflow_m3, storage_above_outflow)
 
-    outflow = np.zeros_like(SI)
-    new_storage_above_outflow = np.zeros_like(SI)
+    new_storage = storage - outflow_m3
 
-    if positive_SI.sum() > 0:
-        new_storage_above_outflow_positive_SI = solve_puls_equation(
-            storage_above_outflow[positive_SI],
-            SI[positive_SI],
-            lake_factor[positive_SI],
-            lake_area[positive_SI],
-            dt,
-        )
-        new_height_above_outflow_positive_SI = (
-            new_storage_above_outflow_positive_SI / lake_area[positive_SI]
-        )
-
-        outflow_positive_SI = estimate_lake_outflow(
-            lake_factor[positive_SI], new_height_above_outflow_positive_SI
-        )
-        outflow_positive_SI = np.minimum(
-            outflow_positive_SI, new_storage_above_outflow_positive_SI / dt
-        )
-
-        outflow[positive_SI] = outflow_positive_SI
-        new_storage_above_outflow[positive_SI] = new_storage_above_outflow_positive_SI
-
-    if negative_SI.sum() > 0:
-        outflow[negative_SI] = storage_above_outflow[negative_SI] / dt
-        new_storage_above_outflow[negative_SI] = 0
-
-    new_storage = storage_below_outflow + new_storage_above_outflow
-
-    return outflow, new_storage, height_above_outflow
+    return outflow_m3, new_storage, height_above_outflow
 
 
 class LakesReservoirs(object):
@@ -378,25 +277,22 @@ class LakesReservoirs(object):
         )
 
     def map_water_bodies_IDs(self, compressed_waterbody_ids, waterBodyID_original):
-        water_body_mapping = np.full(
-            compressed_waterbody_ids.max() + 2, -1, dtype=np.int32
-        )  # make sure that the last entry is also -1, so that -1 maps to -1
-        water_body_mapping[compressed_waterbody_ids] = np.arange(
-            0, compressed_waterbody_ids.size, dtype=np.int32
-        )
-        return water_body_mapping[waterBodyID_original], water_body_mapping
+        if compressed_waterbody_ids.size == 0:
+            return np.full_like(waterBodyID_original, -1), np.full(
+                1, -1, dtype=np.int32
+            )
+        else:
+            water_body_mapping = np.full(
+                compressed_waterbody_ids.max() + 2, -1, dtype=np.int32
+            )  # make sure that the last entry is also -1, so that -1 maps to -1
+            water_body_mapping[compressed_waterbody_ids] = np.arange(
+                0, compressed_waterbody_ids.size, dtype=np.int32
+            )
+            return water_body_mapping[waterBodyID_original], water_body_mapping
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
-        water_body_data = pd.read_csv(
+        water_body_data = pd.read_parquet(
             self.model.files["table"]["routing/lakesreservoirs/basin_lakes_data"],
-            dtype={
-                "waterbody_type": np.int32,
-                "volume_total": np.float64,
-                "average_discharge": np.float64,
-                "average_area": np.float64,
-                "volume_flood": np.float64,
-                "relative_area_in_region": np.float64,
-            },
         )
         # drop all data that is not in the original ids
         waterbody_original_ids_compressed = np.unique(waterbody_original_ids)
@@ -456,7 +352,7 @@ class LakesReservoirs(object):
             if self.model.DynamicResAndLakes:
                 raise NotImplementedError("DynamicResAndLakes not implemented yet")
 
-    def routing_lakes(self, inflowC):
+    def routing_lakes(self, inflow_m3):
         """
         Lake routine to calculate lake outflow
         :param inflowC: inflow to lakes and reservoirs [m3]
@@ -468,87 +364,34 @@ class LakesReservoirs(object):
 
         lakes = self.var.waterBodyTypC == LAKE
 
-        # Lake inflow in [m3/s]
-        lake_inflow_m3_s = np.zeros_like(inflowC)
-        lake_inflow_m3_s[lakes] = inflowC[lakes] / self.var.dtRouting
-
-        self.var.lake_outflow = np.zeros_like(inflowC)
+        lake_outflow_m3 = np.zeros_like(inflow_m3)
 
         # check if there are any lakes in the model
         if lakes.any():
             (
-                self.var.lake_outflow[lakes],
+                lake_outflow_m3[lakes],
                 self.var.storage[lakes],
                 height_above_outflow,
             ) = get_lake_outflow_and_storage(
                 self.var.dtRouting,
                 self.var.storage[lakes],
-                lake_inflow_m3_s[lakes],
-                self.var.prev_lake_inflow[lakes],
-                self.var.prev_lake_outflow[lakes],
+                inflow_m3[lakes],
                 self.lake_factor[lakes],
                 self.var.lake_area[lakes],
                 self.var.outflow_height[lakes],
             )
 
-        # Difference between current and previous inflow
-        lakedaycorrect_m3 = np.zeros_like(inflowC)
-        lakedaycorrect_m3[lakes] = (
-            (lake_inflow_m3_s[lakes] - self.var.prev_lake_inflow[lakes])
-            * 0.5
-            * self.var.dtRouting
-        ) - (
-            (self.var.lake_outflow[lakes] - self.var.prev_lake_outflow[lakes])
-            * 0.5
-            * self.var.dtRouting
-        )  # [m3]
-
-        outflow_m3 = self.var.lake_outflow * self.var.dtRouting
-
         if __debug__:
             balance_check(
-                influxes=[
-                    (lake_inflow_m3_s + self.var.prev_lake_inflow) / 2
-                ],  # In [m3/s]
-                outfluxes=[
-                    (self.var.lake_outflow + self.var.prev_lake_outflow) / 2,
-                ],  # Out
-                prestorages=[prestorage / self.var.dtRouting],
-                poststorages=[self.var.storage / self.var.dtRouting],
+                influxes=[inflow_m3[lakes]],
+                outfluxes=[lake_outflow_m3[lakes]],
+                prestorages=[prestorage[lakes]],
+                poststorages=[self.var.storage[lakes]],
                 name="lake",
-                tollerance=1e-5,
-            )
-
-            inflow_lakes = np.zeros_like(inflowC)
-            inflow_lakes[lakes] = inflowC[lakes]
-            balance_check(
-                influxes=[inflow_lakes / self.var.dtRouting],  # In [m3/s]
-                outfluxes=[
-                    self.var.lake_outflow,
-                    lakedaycorrect_m3 / self.var.dtRouting,
-                ],
-                prestorages=[prestorage / self.var.dtRouting],
-                poststorages=[self.var.storage / self.var.dtRouting],
-                name="lake2",
-                tollerance=1e-5,
-            )
-
-            balance_check(
-                influxes=[inflow_lakes],  # In [m3]
-                outfluxes=[
-                    outflow_m3,
-                    lakedaycorrect_m3,
-                ],
-                prestorages=[prestorage],
-                poststorages=[self.var.storage],
-                name="lake3",
                 tollerance=0.1,
             )
 
-        self.var.prev_lake_inflow = lake_inflow_m3_s
-        self.var.prev_lake_outflow = self.var.lake_outflow
-
-        return outflow_m3, lakedaycorrect_m3
+        return lake_outflow_m3
 
     def routing_reservoirs(self, inflowC):
         """
@@ -639,7 +482,7 @@ class LakesReservoirs(object):
         evaporation[self.var.waterBodyTypC == OFF] = 0
         self.var.storage -= evaporation
 
-        outflow_lakes, lakedaycorrect_m3 = self.routing_lakes(inflow_m3)
+        outflow_lakes = self.routing_lakes(inflow_m3)
         outflow_reservoirs = self.routing_reservoirs(inflow_m3)
 
         outflow = outflow_lakes + outflow_reservoirs
@@ -678,7 +521,7 @@ class LakesReservoirs(object):
                 influxes=[inflow_m3],
                 outfluxes=[outflow, evaporation],
                 prestorages=[prestorage],
-                poststorages=[self.var.storage, lakedaycorrect_m3],
+                poststorages=[self.var.storage],
                 tollerance=1,  # 1 m3
             )
 

@@ -115,8 +115,11 @@ class LandCover(object):
         self.var.capriseindex = self.var.full_compressed(0, dtype=np.float32)
 
         self.forest_kc_per_10_days = xr.open_dataset(
-            self.model.files["forcing"]["landcover/forest/cropCoefficientForest_10days"]
-        , engine = 'zarr')["cropCoefficientForest_10days"].values
+            self.model.files["forcing"][
+                "landcover/forest/cropCoefficientForest_10days"
+            ],
+            engine="zarr",
+        )["cropCoefficientForest_10days"].values
 
     def water_body_exchange(self, groundwater_recharge):
         """computing leakage from rivers"""

@@ -135,6 +135,7 @@ class GroundWater:
 
         self.var.capillar = groundwater_drainage * (1 - self.var.channel_ratio)
         self.var.baseflow = groundwater_drainage * self.var.channel_ratio
+        self.var.heads = self.modflow.heads
 
         # capriseindex is 1 where capilary rise occurs
         self.model.data.HRU.capriseindex = self.model.data.to_HRU(

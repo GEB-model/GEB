@@ -1140,6 +1140,7 @@ class Soil(object):
             open_water_evaporation=open_water_evaporation,
             available_water_infiltration=available_water_infiltration,
         )
+        assert actual_total_transpiration.dtype == np.float32
 
         timer.new_split("Evapotranspiration")
 
@@ -1156,6 +1157,8 @@ class Soil(object):
             w=self.var.w,
             topwater=self.var.topwater,
         )
+        assert preferential_flow.dtype == np.float32
+        assert direct_runoff.dtype == np.float32
 
         timer.new_split("Infiltration")
 
@@ -1182,6 +1185,7 @@ class Soil(object):
             capillary_rise_index=self.var.capriseindex,
             w=self.var.w,
         )
+        assert groundwater_recharge.dtype == np.float32
 
         timer.new_split("Percolation")
 

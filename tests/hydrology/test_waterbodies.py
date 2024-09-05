@@ -81,15 +81,14 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     plt.close()
 
     storage = lake_volume.copy()
-    inflow_prev = avg_outflow.copy()
-    outflow_prev = avg_outflow.copy()
 
     dt = 3600
 
-    inflow = np.full(1_000, 0, dtype=np.float32)
-    inflow[:200] = np.linspace(0, 10, 200)
-    inflow[200:400] = avg_outflow[0]
-    inflow[400:] = np.linspace(avg_outflow[0], 0, 600)
+    inflow_m3_s = np.full(1_000, 0, dtype=np.float32)
+    inflow_m3_s[:200] = np.linspace(0, 10, 200)
+    inflow_m3_s[200:400] = avg_outflow[0]
+    inflow_m3_s[400:] = np.linspace(avg_outflow[0], 0, 600)
+    inflow = inflow_m3_s * dt
 
     evaporation = avg_outflow[0] * 3600 * 0.5
 
@@ -101,14 +100,10 @@ def test_estimate_initial_lake_storage_and_outflow_height():
             dt,
             storage,
             inflow[i],
-            inflow_prev,
-            outflow_prev,
             lake_factor,
             lake_area,
             outflow_height,
         )
-        inflow_prev = inflow[i]
-        outflow_prev = outflow
 
         # evaporation
         storage -= evaporation

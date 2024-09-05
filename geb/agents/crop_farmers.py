@@ -1198,7 +1198,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=1,
         )
 
-        self.yield_total_per_farmer = AgentArray(
+        self.actual_yield_per_farmer = AgentArray(
             n=self.n,
             max_n=self.max_n,
             dtype=np.float32,
@@ -1781,6 +1781,11 @@ class CropFarmers(AgentBaseClass):
                 tollerance=0.0001,
             )
 
+            assert water_withdrawal_m.dtype == np.float32
+            assert water_consumption_m.dtype == np.float32
+            assert returnFlowIrr_m.dtype == np.float32
+            assert addtoevapotrans_m.dtype == np.float32
+
         self.groundwater_depth = AgentArray(
             groundwater_depth_per_farmer, max_n=self.max_n
         )
@@ -2032,18 +2037,18 @@ class CropFarmers(AgentBaseClass):
             crop_harvest_age_days=self.var.crop_harvest_age_days,
         )
 
-        self.yield_total_per_farmer.fill(np.nan)
+        self.actual_yield_per_farmer.fill(np.nan)
         self.harvested_crop.fill(-1)
         # If there are fields to be harvested, compute yield ratio and various related metrics
         if np.count_nonzero(harvest):
             # Get yield ratio for the harvested crops
-            yield_ratio = self.get_yield_ratio(
+            yield_ratio_per_field = self.get_yield_ratio(
                 harvest,
                 self.var.actual_transpiration_crop,
                 self.var.potential_transpiration_crop,
                 self.var.crop_map,
             )
-            assert (yield_ratio >= 0).all()
+            assert (yield_ratio_per_field >= 0).all()
 
             harvesting_farmer_fields = self.var.land_owners[harvest]
             harvested_area = self.var.cellArea[harvest]
@@ -2054,41 +2059,42 @@ class CropFarmers(AgentBaseClass):
             max_yield_per_crop = np.take(
                 self.crop_data["reference_yield_kg_m2"].values, harvested_crops
             )
-            harvesting_farmers, index_farmer_to_field = np.unique(
-                harvesting_farmer_fields, return_inverse=True
+            harvesting_farmers = np.unique(harvesting_farmer_fields)
+
+            # it's okay for some crop prices to be nan, as they will be filtered out in the next step
+            crop_prices = self.agents.market.crop_prices
+            region_id_per_field = self.region_id
+
+            # Determine the region ids of harvesting farmers, as crop prices differ per region
+
+            region_id_per_field = self.region_id[self.var.land_owners]
+            region_id_per_field[self.var.land_owners == -1] = -1
+            region_id_per_harvested_field = region_id_per_field[harvest]
+
+            # Calculate the crop price per field
+            crop_price_per_field = crop_prices[
+                region_id_per_harvested_field, harvested_crops
+            ]
+
+            # but it's not okay for the crop price to be nan now
+            assert not np.isnan(crop_price_per_field).any()
+
+            # Correct yield ratio for management practices
+            yield_ratio_per_field = (
+                self.yield_ratio_management[harvesting_farmer_fields]
+                * yield_ratio_per_field
             )
 
-            if self.crop_prices[0] is None:
-                crop_prices = self.crop_prices[1]
-                crop_price_per_field = np.full_like(
-                    harvested_crops, crop_prices, dtype=np.float32
-                )
-            else:
-                crop_prices = self.crop_prices[1][
-                    self.crop_prices[0].get(self.model.current_time)
-                ]
+            # Calculate the potential yield per field
+            potential_yield_per_field = max_yield_per_crop * harvested_area
 
-                # Determine the region ids of harvesting farmers, as crop prices differ per region
-                region_ids_harvesting_farmers = self.region_id[harvesting_farmers]
+            # Calculate the total yield per field
+            actual_yield_per_field = yield_ratio_per_field * potential_yield_per_field
 
-                # Calculate the crop price per field
-                crop_prices_per_farmer = crop_prices[region_ids_harvesting_farmers]
-                crop_prices_per_field = crop_prices_per_farmer[index_farmer_to_field]
-                crop_price_per_field = np.take(crop_prices_per_field, harvested_crops)
-                assert not np.isnan(
-                    crop_price_per_field
-                ).any()  # Ensure there are no NaN values in crop prices
-
-            yield_ratio_total = (
-                self.yield_ratio_management[harvesting_farmer_fields] * yield_ratio
-            )
-
-            yield_total_per_field = (
-                yield_ratio_total * max_yield_per_crop * harvested_area
-            )
-            self.yield_total_per_farmer[:] = np.bincount(
+            # And sum the total yield per field to get the total yield per farmer
+            self.actual_yield_per_farmer[:] = np.bincount(
                 harvesting_farmer_fields,
-                weights=yield_total_per_field,
+                weights=actual_yield_per_field,
                 minlength=self.n,
             )
 
@@ -2098,45 +2104,30 @@ class CropFarmers(AgentBaseClass):
                 np.unique(self.var.land_owners[harvest], return_index=True)[1]
             ]
 
-            # Determine the potential crop yield
-            potential_profit_field = (
-                harvested_area * max_yield_per_crop * crop_price_per_field
+            # Determine the actual and potential profits
+            potential_profit_per_field = (
+                potential_yield_per_field * crop_price_per_field
             )
-            assert (potential_profit_field >= 0).all()
-
-            # Determine the profit based on the crop yield in kilos and the price per kilo
-            profit = potential_profit_field * yield_ratio_total
-            assert (profit >= 0).all()
+            actual_profit_per_field = actual_yield_per_field * crop_price_per_field
+            assert (potential_profit_per_field >= 0).all()
+            assert (actual_profit_per_field >= 0).all()
 
             # Convert from the profit and potential profit per field to the profit per farmer
-            self.profit_farmer = np.bincount(
-                harvesting_farmer_fields, weights=profit, minlength=self.n
-            )
             potential_profit_farmer = np.bincount(
                 harvesting_farmer_fields,
-                weights=potential_profit_field,
+                weights=potential_profit_per_field,
+                minlength=self.n,
+            )
+            self.profit_farmer = np.bincount(
+                harvesting_farmer_fields,
+                weights=actual_profit_per_field,
                 minlength=self.n,
             )
 
-            ## Convert the yield_ratio per field to the average yield ratio per farmer
-            # yield_ratio_per_farmer = np.bincount(
-            #     harvesting_farmer_fields, weights=yield_ratio_total, minlength=self.n
-            # ) / np.bincount(harvesting_farmer_fields, minlength=self.n)
-            # print(
-            #     "well",
-            #     np.mean(
-            #         yield_ratio_per_farmer[harvesting_farmers][
-            #             self.adapted[harvesting_farmers, 1] == 1
-            #         ]
-            #     ),
-            #     "no well",
-            #     np.mean(
-            #         yield_ratio_per_farmer[harvesting_farmers][
-            #             self.adapted[harvesting_farmers, 1] == 0
-            #         ]
-            #     ),
-            # )
-            ## Get the current crop age
+            # Convert the yield_ratio per field to the average yield ratio per farmer
+            yield_ratio_per_farmer = self.profit_farmer / potential_profit_farmer
+
+            # Get the current crop age
             crop_age = self.var.crop_age_days_map[harvest]
             total_crop_age = np.bincount(
                 harvesting_farmer_fields, weights=crop_age, minlength=self.n
@@ -2149,9 +2140,7 @@ class CropFarmers(AgentBaseClass):
             harvesting_farmers_mask = np.zeros(self.n, dtype=bool)
             harvesting_farmers_mask[harvesting_farmers] = True
 
-            self.save_yearly_profits(
-                harvesting_farmers, self.profit_farmer, potential_profit_farmer
-            )
+            self.save_yearly_profits(self.profit_farmer, potential_profit_farmer)
             self.drought_risk_perception(harvesting_farmers, total_crop_age)
 
             ## After updating the drought risk perception, set the previous month for the next timestep as the current for this timestep.
@@ -2476,7 +2465,6 @@ class CropFarmers(AgentBaseClass):
 
     def save_yearly_profits(
         self,
-        harvesting_farmers: np.ndarray,
         profit: np.ndarray,
         potential_profit: np.ndarray,
     ) -> None:
@@ -2500,9 +2488,6 @@ class CropFarmers(AgentBaseClass):
         assert (profit >= 0).all()
         assert (potential_profit >= 0).all()
 
-        latest_profits = profit[harvesting_farmers]
-        latest_potential_profits = potential_profit[harvesting_farmers]
-
         # Calculate the cumulative inflation from the start year to the current year for each farmer
         inflation_arrays = [
             self.get_value_per_farmer_from_region_id(
@@ -2519,12 +2504,8 @@ class CropFarmers(AgentBaseClass):
             cum_inflation *= inflation
 
         # Adjust yearly profits by the latest profit, field size, and cumulative inflation for each harvesting farmer
-        self.yearly_profits[harvesting_farmers, 0] += (
-            latest_profits / cum_inflation[harvesting_farmers]
-        )
-        self.yearly_potential_profits[harvesting_farmers, 0] += (
-            latest_potential_profits / cum_inflation[harvesting_farmers]
-        )
+        self.yearly_profits[:, 0] += profit / cum_inflation
+        self.yearly_potential_profits[:, 0] += potential_profit / cum_inflation
 
     def calculate_yield_spei_relation(self):
         """
