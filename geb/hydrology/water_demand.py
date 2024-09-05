@@ -25,7 +25,6 @@ try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
-import rasterio
 from .soil import (
     get_root_ratios,
     get_maximum_water_content,
@@ -35,6 +34,7 @@ from .soil import (
     get_crop_group_number,
 )
 from .landcover import PADDY_IRRIGATED, NON_PADDY_IRRIGATED
+from geb.HRUs import load_grid
 
 from geb.workflows import TimingModule, balance_check
 
@@ -54,15 +54,17 @@ class WaterDemand:
         self.households = model.agents.households
         self.reservoir_operators = model.agents.reservoir_operators
 
-        with rasterio.open(
-            self.model.files["subgrid"]["routing/lakesreservoirs/subcommand_areas"],
-            "r",
-        ) as src:
-            reservoir_command_areas = self.var.compress(src.read(1), method="last")
-            water_body_mapping = self.model.lakes_reservoirs.waterbody_mapping
-            self.var.reservoir_command_areas = np.take(
-                water_body_mapping, reservoir_command_areas, mode="clip"
-            )
+        reservoir_command_areas = self.var.compress(
+            load_grid(
+                self.model.files["subgrid"]["routing/lakesreservoirs/subcommand_areas"]
+            ),
+            method="last",
+        )
+
+        water_body_mapping = self.model.lakes_reservoirs.waterbody_mapping
+        self.var.reservoir_command_areas = np.take(
+            water_body_mapping, reservoir_command_areas, mode="clip"
+        )
 
         self.model.data.grid.leakageC = np.compress(
             self.model.data.grid.compress_LR,
