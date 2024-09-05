@@ -2125,7 +2125,7 @@ class CropFarmers(AgentBaseClass):
             )
 
             # Convert the yield_ratio per field to the average yield ratio per farmer
-            yield_ratio_per_farmer = self.profit_farmer / potential_profit_farmer
+            # yield_ratio_per_farmer = self.profit_farmer / potential_profit_farmer
 
             # Get the current crop age
             crop_age = self.var.crop_age_days_map[harvest]
