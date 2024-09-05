@@ -64,7 +64,7 @@ def shift_and_reset_matrix(matrix: np.ndarray) -> None:
     matrix[:, 0] = 0  # Reset the first column to 0
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def get_farmer_HRUs(
     field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int
 ) -> np.ndarray:
@@ -99,6 +99,31 @@ def farmer_command_area(
                 output[farmer_i] = command_area
                 break
     return output
+
+
+@njit(cache=True)
+def get_farmer_groundwater_depth(
+    n, groundwater_depth, HRU_to_grid, field_indices, field_indices_by_farmer, cell_area
+):
+    groundwater_depth_by_farmer = np.full(n, np.nan, dtype=np.float32)
+    for farmer_i in range(n):
+        farmer_fields = get_farmer_HRUs(
+            field_indices=field_indices,
+            field_indices_by_farmer=field_indices_by_farmer,
+            farmer_index=farmer_i,
+        )
+        total_cell_area = 0
+        total_groundwater_depth_times_area = 0
+        for field in farmer_fields:
+            grid_cell = HRU_to_grid[field]
+            total_cell_area += cell_area[field]
+            total_groundwater_depth_times_area += (
+                groundwater_depth[grid_cell] * cell_area[field]
+            )
+        groundwater_depth_by_farmer[farmer_i] = (
+            total_groundwater_depth_times_area / total_cell_area
+        )
+    return groundwater_depth_by_farmer
 
 
 @njit(cache=True)
@@ -393,7 +418,6 @@ def abstract_water(
     groundwater_abstraction_m3_by_farmer = np.zeros(
         activation_order.size, dtype=np.float32
     )
-    groundwater_depth_per_farmer = np.zeros(activation_order.size, dtype=np.float32)
 
     has_access_to_irrigation_water = np.zeros(activation_order.size, dtype=np.bool_)
     for activated_farmer_index in range(activation_order.size):
@@ -412,9 +436,6 @@ def abstract_water(
         farmer_has_access_to_irrigation_water = False
         for field in farmer_fields:
             grid_cell = HRU_to_grid[field]
-
-            # Convert the groundwater depth to groundwater depth per farmer
-            groundwater_depth_per_farmer[farmer] = groundwater_depth[grid_cell]
 
             if well_irrigated[farmer]:
                 if groundwater_depth[grid_cell] < well_depth[farmer]:
@@ -570,7 +591,6 @@ def abstract_water(
         returnFlowIrr_m,
         addtoevapotrans_m,
         has_access_to_irrigation_water,
-        groundwater_depth_per_farmer,
     )
 
 
@@ -1006,6 +1026,7 @@ class CropFarmers(AgentBaseClass):
             input_array=self.elevation_subgrid.sample_coords(self.locations.data),
             max_n=self.max_n,
         )
+        assert not np.isnan(self.elevation).any()
         # Temporary well_unit_cost factor: change to values samples from map
         self.well_unit_cost = AgentArray(
             n=self.n,
@@ -1548,17 +1569,6 @@ class CropFarmers(AgentBaseClass):
             self.field_indices_by_farmer.data,
             self.var.reservoir_command_areas,
         )
-        # output = np.full(self.n, -1, dtype=np.int32)
-        # for farmer_i in range(self.n):
-        #     farmer_fields = get_farmer_HRUs(
-        #         self.field_indices, self.field_indices_by_farmer.data, farmer_i
-        #     )
-        #     for field in farmer_fields:
-        #         command_area = self.var.reservoir_command_areas[field]
-        #         if command_area != -1:
-        #             output[farmer_i] = command_area
-        #             break
-        # return output
 
     @property
     def is_in_command_area(self):
@@ -1607,7 +1617,6 @@ class CropFarmers(AgentBaseClass):
     def abstract_water(
         self,
         cell_area: np.ndarray,
-        HRU_to_grid: np.ndarray,
         paddy_level: np.ndarray,
         readily_available_water: np.ndarray,
         critical_water_level: np.ndarray,
@@ -1656,7 +1665,6 @@ class CropFarmers(AgentBaseClass):
             returnFlowIrr_m,
             addtoevapotrans_m,
             self.has_access_to_irrigation_water,
-            groundwater_depth_per_farmer,
         ) = abstract_water(
             self.model.current_day_of_year - 1,
             self.n,
@@ -1681,7 +1689,7 @@ class CropFarmers(AgentBaseClass):
                 ),
             ),
             cell_area=cell_area,
-            HRU_to_grid=HRU_to_grid,
+            HRU_to_grid=self.model.data.HRU.HRU_to_grid,
             crop_map=self.var.crop_map,
             field_is_paddy_irrigated=self.field_is_paddy_irrigated,
             paddy_level=paddy_level,
@@ -1788,9 +1796,6 @@ class CropFarmers(AgentBaseClass):
             assert returnFlowIrr_m.dtype == np.float32
             assert addtoevapotrans_m.dtype == np.float32
 
-        self.groundwater_depth = AgentArray(
-            groundwater_depth_per_farmer, max_n=self.max_n
-        )
         return (
             water_withdrawal_m,
             water_consumption_m,
@@ -3714,6 +3719,19 @@ class CropFarmers(AgentBaseClass):
         )
         is_irrigated[self.var.land_owners == -1] = False
         return is_irrigated
+
+    @property
+    def groundwater_depth(self):
+        groundwater_depth = get_farmer_groundwater_depth(
+            self.n,
+            self.model.groundwater.groundwater_depth,
+            self.model.data.HRU.HRU_to_grid,
+            self.field_indices,
+            self.field_indices_by_farmer.data,
+            self.model.data.HRU.cellArea,
+        )
+        assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
+        return groundwater_depth
 
     @staticmethod
     @njit(cache=True)
