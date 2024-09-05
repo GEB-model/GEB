@@ -49,10 +49,6 @@ def get_water_table_depth(layer_boundary_elevation, head, elevation):
         for layer_ix in range(head.shape[0]):
             layer_head = head[layer_ix, cell_ix]
 
-            # if there is no head in the current layer, continue to the next layer
-            if np.isnan(layer_head):
-                continue
-
             # if the head is larger than the top of the layer, the water table is equal to the top of the layer
             if layer_head > layer_boundary_elevation[layer_ix, cell_ix]:
                 water_table_depth[cell_ix] = (
@@ -596,11 +592,12 @@ class ModFlowSimulation:
 
     @property
     def groundwater_depth(self):
-        return get_water_table_depth(
+        groundwater_depth = get_water_table_depth(
             self.layer_boundary_elevation,
             self.heads,
             self.topography,
         )
+        return groundwater_depth
 
     @property
     def groundwater_content_m(self):

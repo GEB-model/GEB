@@ -292,7 +292,6 @@ class WaterDemand:
             cell_area=(
                 self.var.cellArea.get() if self.model.use_gpu else self.var.cellArea
             ),
-            HRU_to_grid=self.var.HRU_to_grid,
             paddy_level=paddy_level,
             readily_available_water=readily_available_water,
             critical_water_level=critical_water_level,

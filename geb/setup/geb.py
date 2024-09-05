@@ -1901,11 +1901,6 @@ class GEBModel(GridModel):
 
             dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
 
-            water_table_depth = self.data_catalog.get_rasterdataset(
-                "water_table_depth_globgm", bbox=self.bounds, buffer=0
-            ).compute()
-            water_table_depth = self.snap_to_grid(water_table_depth, self.grid)
-
             # heads
             head_upper_layer = self.data_catalog.get_rasterdataset(
                 "head_upper_globgm", bbox=self.bounds, buffer=0
@@ -1939,7 +1934,7 @@ class GEBModel(GridModel):
                     [head_upper_layer, head_lower_layer], dim="layer", compat="equals"
                 )
             else:
-                heads = head_upper_layer.expand_dims(layer=["upper"])
+                heads = head_lower_layer.expand_dims(layer=["upper"])
 
         elif intial_heads_source == "Fan":
             # Load in the starting groundwater depth
@@ -5502,6 +5497,8 @@ class GEBModel(GridModel):
                 self.is_updated["grid"][var]["filename"] = var + ".tif"
                 fp = Path(self.root, var + ".tif")
                 fp.parent.mkdir(parents=True, exist_ok=True)
+                if fp.exists():
+                    fp.unlink()
                 grid.rio.to_raster(fp, compress="LZW")
 
     def write_subgrid(self):
@@ -5513,6 +5510,8 @@ class GEBModel(GridModel):
                 self.is_updated["subgrid"][var]["filename"] = var + ".tif"
                 fp = Path(self.root, var + ".tif")
                 fp.parent.mkdir(parents=True, exist_ok=True)
+                if fp.exists():
+                    fp.unlink()
                 grid.rio.to_raster(fp)
 
     def write_region_subgrid(self):
@@ -5524,6 +5523,8 @@ class GEBModel(GridModel):
                 self.is_updated["region_subgrid"][var]["filename"] = var + ".tif"
                 fp = Path(self.root, var + ".tif")
                 fp.parent.mkdir(parents=True, exist_ok=True)
+                if fp.exists():
+                    fp.unlink()
                 grid.rio.to_raster(fp)
 
     def write_MERIT_grid(self):
@@ -5535,6 +5536,8 @@ class GEBModel(GridModel):
                 self.is_updated["MERIT_grid"][var]["filename"] = var + ".tif"
                 fp = Path(self.root, var + ".tif")
                 fp.parent.mkdir(parents=True, exist_ok=True)
+                if fp.exists():
+                    fp.unlink()
                 grid.rio.to_raster(fp)
 
     def write_forcing_to_zarr(
@@ -5776,23 +5779,26 @@ class GEBModel(GridModel):
             self.set_dict(d, name=name, update=False)
 
     def read_netcdf(self, fn: str, name: str) -> xr.Dataset:
-        with xr.load_dataset(
+        da = xr.load_dataset(
             Path(self.root) / fn, mask_and_scale=False
         ).rename(  # deleted decode_cf=False
             {"band_data": name}
-        ) as da:
-            if fn.endswith(".tif") and "band" in da.dims and da.band.size == 1:
-                da = da.sel(band=1)
-            if fn.endswith(".tif"):
-                da.x.attrs = {
-                    "long_name": "latitude of grid cell center",
-                    "units": "degrees_north",
-                }
-                da.y.attrs = {
-                    "long_name": "longitude of grid cell center",
-                    "units": "degrees_east",
-                }
-            return da
+        )
+        if fn.endswith(".tif") and "band" in da.dims and da.band.size == 1:
+            # drop band dimension
+            da = da.squeeze("band")
+            # drop band coordinate
+            da = da.drop_vars("band")
+        if fn.endswith(".tif"):
+            da.x.attrs = {
+                "long_name": "latitude of grid cell center",
+                "units": "degrees_north",
+            }
+            da.y.attrs = {
+                "long_name": "longitude of grid cell center",
+                "units": "degrees_east",
+            }
+        return da
 
     def read_grid(self) -> None:
         for name, fn in self.files["grid"].items():
@@ -5909,6 +5915,9 @@ class GEBModel(GridModel):
             data = data.to_dataset()
         elif not isinstance(data, xr.Dataset):
             raise ValueError(f"cannot set data of type {type(data).__name__}")
+
+        if len(grid.data_vars) > 0:
+            data = self.snap_to_grid(data, grid)
         # force read in r+ mode
         if len(grid) == 0:  # trigger init / read
             grid[name] = data[name]
@@ -5917,7 +5926,15 @@ class GEBModel(GridModel):
                 if dvar in grid:
                     if self._read:
                         self.logger.warning(f"Replacing grid map: {dvar}")
+                    assert grid[dvar].shape == data[dvar].shape
+                    assert (grid[dvar].y.values == data[dvar].y.values).all()
+                    assert (grid[dvar].x.values == data[dvar].x.values).all()
+                    assert data.dims == grid.dims
+                    data[dvar].attrs = grid[dvar].attrs
+                    grid = grid.drop_vars(dvar)
+
                 grid[dvar] = data[dvar]
+
         return grid
 
     def set_grid(
