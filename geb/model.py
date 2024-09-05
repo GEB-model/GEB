@@ -30,7 +30,6 @@ class ABM(ABM_Model):
         current_time,
         timestep_length,
         n_timesteps,
-        coordinate_system: str,
     ) -> None:
         """Initializes the agent-based model.
 
@@ -58,10 +57,6 @@ class ABM(ABM_Model):
         self.area = Area(self, study_area)
         self.agents = Agents(self)
         self.artists = Artists(self)
-
-        assert (
-            coordinate_system == "WGS84"
-        )  # coordinate system must be WGS84. If not, all code needs to be reviewed
 
         # This variable is required for the batch runner. To stop the model
         # if some condition is met set running to False.
@@ -92,7 +87,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         use_gpu: bool = False,
         gpu_device=0,
         timing=False,
-        coordinate_system: str = "WGS84",
+        crs=4326,
         mode="w",
     ):
         self.timing = timing
@@ -194,7 +189,6 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                 current_time,
                 timestep_length,
                 n_timesteps,
-                coordinate_system,
             )
 
             if self.config["general"]["simulate_hydrology"]:
