@@ -3,11 +3,15 @@ from typing import Union
 from numba import njit
 from pathlib import Path
 import rasterio
+import warnings
 import os
 import math
+from affine import Affine
 from operator import attrgetter
 import xarray as xr
+import zarr
 import numpy as np
+import zarr.convenience
 from geb.workflows import AsyncForcingReader
 
 try:
@@ -17,13 +21,37 @@ except (ModuleNotFoundError, ImportError):
 
 
 def load_grid(filepath, layer=1, return_transform_and_crs=False):
-    with rasterio.open(filepath) as src:
-        data = src.read(layer)
-        data = data.astype(np.float32) if data.dtype == np.float64 else data
+    if filepath.suffix == ".tif":
+        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
+        with rasterio.open(filepath) as src:
+            data = src.read(layer)
+            data = data.astype(np.float32) if data.dtype == np.float64 else data
+            if return_transform_and_crs:
+                return data, src.transform, src.crs
+            else:
+                return data
+    elif filepath.suffixes == [".zarr", ".zip"]:
+        ds = zarr.convenience.open_group(filepath)
+        data = ds["data"][:]
         if return_transform_and_crs:
-            return data, src.transform, src.crs
+            x = ds.x[:]
+            y = ds.y[:]
+            x_diff = np.diff(x[:]).mean()
+            y_diff = np.diff(y[:]).mean()
+            transform = Affine(
+                a=x_diff,
+                b=0,
+                c=x[:][0] - x_diff / 2,
+                d=0,
+                e=y_diff,
+                f=ds.y[:][0] - y_diff / 2,
+            )
+            wkt = ds.spatial_ref.attrs["spatial_ref"]
+            return data, transform, wkt
         else:
             return data
+    else:
+        raise ValueError("File format not supported.")
 
 
 @njit(cache=True)

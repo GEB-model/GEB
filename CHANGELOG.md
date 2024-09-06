@@ -25,6 +25,7 @@
 - Allow reducing the number of crops by using the most frequently grown crop in a specific grop group
 - Set up crop prices from FAO stat
 - Include rails and roads in preprocessing
+- Migrate all tif files to zarr for consistency of geotransformation and sometimes funny errors in tif files
 
 ### Migration guide
 
@@ -37,4 +38,4 @@
 - Thus set "format: netcdf" to "format: zarr" in model.yml (if applicable)
 - model_structure has been renamed to files, thus change `model_structure` to `files` in all code
 - The format of basin_lakes_data has changed to parquet. If the model is rebuilt this should automatically be updated.
-- `builings` feature type in `setup_assets` has been renamed to `building`
+- `setup_cell_area_map` has been remaned to `setup_cell_area` for consistency with other function names. The old function is still available but will be removed in the next release.

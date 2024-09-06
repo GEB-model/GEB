@@ -21,6 +21,7 @@ import pandas as pd
 import geopandas as gpd
 import pyproj
 from affine import Affine
+from pyproj import CRS
 import xarray as xr
 from dask.diagnostics import ProgressBar
 import xclim.indices as xci
@@ -303,7 +304,7 @@ class GEBModel(GridModel):
 
         self.set_subgrid(submask, name=submask.name)
 
-    def setup_cell_area_map(self) -> None:
+    def setup_cell_area(self) -> None:
         """
         Sets up the cell area map for the model.
 
@@ -334,15 +335,17 @@ class GEBModel(GridModel):
             dtype=np.float32,
             name="areamaps/cell_area",
             lazy=True,
+            crs=self.crs,
         )
         cell_area.data = calculate_cell_area(affine, mask.shape)
         self.set_grid(cell_area, name=cell_area.name)
 
         sub_cell_area = hydromt.raster.full(
-            self.subgrid.raster.coords,
+            self.subgrid["areamaps/sub_grid_mask"].raster.coords,
             nodata=cell_area.raster.nodata,
             dtype=cell_area.dtype,
             name="areamaps/sub_cell_area",
+            crs=self.crs,
             lazy=True,
         )
 
@@ -350,6 +353,12 @@ class GEBModel(GridModel):
             repeat_grid(cell_area.data, self.subgrid_factor) / self.subgrid_factor**2
         )
         self.set_subgrid(sub_cell_area, sub_cell_area.name)
+
+    def setup_cell_area_map(self) -> None:
+        self.logger.warn(
+            "setup_cell_area_map is deprecated, use setup_cell_area instead"
+        )
+        self.setup_cell_area()
 
     def setup_crops(
         self,
@@ -1122,6 +1131,7 @@ class GEBModel(GridModel):
             self.grid.raster.coords,
             nodata=np.nan,
             dtype=np.float32,
+            crs=self.crs,
             name="routing/kinematic/mannings",
             lazy=True,
         )
@@ -1166,6 +1176,7 @@ class GEBModel(GridModel):
             dtype=np.float32,
             name="routing/kinematic/channel_width",
             lazy=True,
+            crs=self.crs,
         )
         channel_width.data = channel_width_data
 
@@ -1207,6 +1218,7 @@ class GEBModel(GridModel):
             dtype=np.float32,
             name="routing/kinematic/channel_depth",
             lazy=True,
+            crs=self.crs,
         )
         channel_depth.data = channel_depth_data
         self.set_grid(channel_depth, channel_depth.name)
@@ -1257,6 +1269,7 @@ class GEBModel(GridModel):
             dtype=np.float32,
             name="routing/kinematic/channel_ratio",
             lazy=True,
+            crs=self.crs,
         )
         channel_ratio.data = channel_ratio_data
         self.set_grid(channel_ratio, channel_ratio.name)
@@ -1353,6 +1366,7 @@ class GEBModel(GridModel):
             dtype=np.float32,
             name="landsurface/topo/elevation",
             lazy=True,
+            crs=self.crs,
         )
         elevation.data = np.mean(elevation_per_cell, axis=(2, 3))
         self.set_grid(elevation, elevation.name)
@@ -3283,7 +3297,7 @@ class GEBModel(GridModel):
             return_slice=True,
             constant_values=1,
         )
-
+        padded_subgrid.raster.set_crs(self.subgrid.raster.crs)
         padded_subgrid.raster.set_nodata(-1)
         self.set_region_subgrid(padded_subgrid, name="areamaps/region_mask")
 
@@ -3403,9 +3417,8 @@ class GEBModel(GridModel):
         cultivated_land = xr.where(
             (hydro_land_use == 1) & (reprojected_land_use == 40), 1, 0, keep_attrs=True
         )
-        cultivated_land = cultivated_land.rio.set_nodata(-1)
-        cultivated_land.rio.set_crs(reprojected_land_use.rio.crs)
-        cultivated_land.rio.set_nodata(-1)
+        cultivated_land.raster.set_crs(self.subgrid.raster.crs)
+        cultivated_land.raster.set_nodata(-1)
 
         self.set_region_subgrid(
             cultivated_land, name="landsurface/full_region_cultivated_land"
@@ -3413,17 +3426,11 @@ class GEBModel(GridModel):
 
         hydro_land_use_region = hydro_land_use.isel(region_subgrid_slice)
 
-        # TODO: Doesn't work when using the original array. Somehow the dtype is changed on adding it to the subgrid. This is a workaround.
-        self.set_subgrid(
-            hydro_land_use_region.values, name="landsurface/land_use_classes"
-        )
+        self.set_subgrid(hydro_land_use_region, name="landsurface/land_use_classes")
 
         cultivated_land_region = cultivated_land.isel(region_subgrid_slice)
 
-        # Same workaround as above
-        self.set_subgrid(
-            cultivated_land_region.values, name="landsurface/cultivated_land"
-        )
+        self.set_subgrid(cultivated_land_region, name="landsurface/cultivated_land")
 
     def setup_economic_data(
         self, project_future_until_year=False, reference_start_year=2000
@@ -3987,8 +3994,17 @@ class GEBModel(GridModel):
         )
         assert farmers.iloc[-1].name == subgrid_farms_in_study_area.max()
 
-        self.set_subgrid(subgrid_farms_in_study_area, name="agents/farmers/farms")
-        self.subgrid["agents/farmers/farms"].rio.set_nodata(-1)
+        subgrid_farms_in_study_area_array = hydromt.raster.full_from_transform(
+            self.subgrid["areamaps/sub_grid_mask"].raster.transform,
+            self.subgrid["areamaps/sub_grid_mask"].raster.shape,
+            nodata=-1,
+            dtype=np.int32,
+            crs=self.subgrid.raster.crs,
+            name="agents/farmers/farms",
+            lazy=True,
+        )
+        subgrid_farms_in_study_area_array[:] = subgrid_farms_in_study_area
+        self.set_subgrid(subgrid_farms_in_study_area_array, name="agents/farmers/farms")
 
         self.set_binary(farmers.index.values, name="agents/farmers/id")
         self.set_binary(farmers["region_id"].values, name="agents/farmers/region_id")
@@ -4800,7 +4816,7 @@ class GEBModel(GridModel):
         Parameters
         ----------
         feature_types : str or list of str
-            The types of features to download from OSM. Available feature types are 'building', 'rail' and 'road'.
+            The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
         source : str, optional
             The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
         overwrite : bool, optional
@@ -4871,7 +4887,7 @@ class GEBModel(GridModel):
                 if feature_type not in all_features:
                     all_features[feature_type] = []
 
-                if feature_type == "building":
+                if feature_type == "buildings":
                     features = gpd.read_file(
                         filepath,
                         mask=self.region,
@@ -4879,7 +4895,7 @@ class GEBModel(GridModel):
                         use_arrow=True,
                     )
                     features = features[features["building"].notna()]
-                elif feature_type == "rail":
+                elif feature_type == "rails":
                     features = gpd.read_file(
                         filepath,
                         mask=self.region,
@@ -4891,7 +4907,7 @@ class GEBModel(GridModel):
                             ["rail", "tram", "subway", "light_rail", "narrow_gauge"]
                         )
                     ]
-                elif feature_type == "road":
+                elif feature_type == "roads":
                     features = gpd.read_file(
                         filepath,
                         mask=self.region,
@@ -5487,57 +5503,60 @@ class GEBModel(GridModel):
             time_chunksize=1e99,  # no chunking
         )
 
+    def _write_grid(self, grid, var, files, is_updated):
+        if is_updated[var]["updated"]:
+            self.logger.info(f"Writing {var}")
+            filename = var + ".zarr.zip"
+            files[var] = filename
+            is_updated[var]["filename"] = filename
+            filepath = Path(self.root, filename)
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+
+            # zarr cannot handle / in variable names
+            grid.name = "data"
+            assert hasattr(grid, "spatial_ref")
+            grid.to_zarr(filepath, mode="w")
+
     def write_grid(self):
         self._assert_write_mode
         for var, grid in self.grid.items():
-            if self.is_updated["grid"][var]["updated"]:
-                self.logger.info(f"Writing {var}")
-                self.files["grid"][var] = var + ".tif"
-                self.is_updated["grid"][var]["filename"] = var + ".tif"
-                fp = Path(self.root, var + ".tif")
-                fp.parent.mkdir(parents=True, exist_ok=True)
-                if fp.exists():
-                    fp.unlink()
-                grid.rio.to_raster(fp, compress="LZW")
+            grid["spatial_ref"] = self.grid.spatial_ref
+            if var == "spatial_ref":
+                continue
+            self._write_grid(grid, var, self.files["grid"], self.is_updated["grid"])
 
     def write_subgrid(self):
         self._assert_write_mode
         for var, grid in self.subgrid.items():
-            if self.is_updated["subgrid"][var]["updated"]:
-                self.logger.info(f"Writing {var}")
-                self.files["subgrid"][var] = var + ".tif"
-                self.is_updated["subgrid"][var]["filename"] = var + ".tif"
-                fp = Path(self.root, var + ".tif")
-                fp.parent.mkdir(parents=True, exist_ok=True)
-                if fp.exists():
-                    fp.unlink()
-                grid.rio.to_raster(fp)
+            if var == "spatial_ref":
+                continue
+            grid["spatial_ref"] = self.subgrid.spatial_ref
+            self._write_grid(
+                grid, var, self.files["subgrid"], self.is_updated["subgrid"]
+            )
 
     def write_region_subgrid(self):
         self._assert_write_mode
         for var, grid in self.region_subgrid.items():
-            if self.is_updated["region_subgrid"][var]["updated"]:
-                self.logger.info(f"Writing {var}")
-                self.files["region_subgrid"][var] = var + ".tif"
-                self.is_updated["region_subgrid"][var]["filename"] = var + ".tif"
-                fp = Path(self.root, var + ".tif")
-                fp.parent.mkdir(parents=True, exist_ok=True)
-                if fp.exists():
-                    fp.unlink()
-                grid.rio.to_raster(fp)
+            grid["spatial_ref"] = self.region_subgrid.spatial_ref
+            if var == "spatial_ref":
+                continue
+            self._write_grid(
+                grid,
+                var,
+                self.files["region_subgrid"],
+                self.is_updated["region_subgrid"],
+            )
 
     def write_MERIT_grid(self):
         self._assert_write_mode
         for var, grid in self.MERIT_grid.items():
-            if self.is_updated["MERIT_grid"][var]["updated"]:
-                self.logger.info(f"Writing {var}")
-                self.files["MERIT_grid"][var] = var + ".tif"
-                self.is_updated["MERIT_grid"][var]["filename"] = var + ".tif"
-                fp = Path(self.root, var + ".tif")
-                fp.parent.mkdir(parents=True, exist_ok=True)
-                if fp.exists():
-                    fp.unlink()
-                grid.rio.to_raster(fp)
+            if var == "spatial_ref":
+                continue
+            grid["spatial_ref"] = self.MERIT_grid.spatial_ref
+            self._write_grid(
+                grid, var, self.files["MERIT_grid"], self.is_updated["MERIT_grid"]
+            )
 
     def write_forcing_to_zarr(
         self,
@@ -5777,18 +5796,23 @@ class GEBModel(GridModel):
                 d = json.load(f)
             self.set_dict(d, name=name, update=False)
 
-    def read_netcdf(self, fn: str, name: str) -> xr.Dataset:
-        da = xr.load_dataset(
-            Path(self.root) / fn, mask_and_scale=False
-        ).rename(  # deleted decode_cf=False
-            {"band_data": name}
-        )
-        if fn.endswith(".tif") and "band" in da.dims and da.band.size == 1:
-            # drop band dimension
-            da = da.squeeze("band")
-            # drop band coordinate
-            da = da.drop_vars("band")
-        if fn.endswith(".tif"):
+    def _read_grid(self, fn: str, name: str) -> xr.Dataset:
+        if fn.endswith(".zarr.zip"):
+            engine = "zarr"
+            da = xr.load_dataset(
+                Path(self.root) / fn, mask_and_scale=False, engine=engine
+            )
+            da = da.rename({"data": name})
+        elif fn.endswith(".tif"):
+            da = xr.load_dataset(Path(self.root) / fn, mask_and_scale=False)
+            da = da.rename(  # deleted decode_cf=False
+                {"band_data": name}
+            )
+            if "band" in da.dims and da.band.size == 1:
+                # drop band dimension
+                da = da.squeeze("band")
+                # drop band coordinate
+                da = da.drop_vars("band")
             da.x.attrs = {
                 "long_name": "latitude of grid cell center",
                 "units": "degrees_north",
@@ -5797,26 +5821,28 @@ class GEBModel(GridModel):
                 "long_name": "longitude of grid cell center",
                 "units": "degrees_east",
             }
+        else:
+            raise ValueError(f"Unsupported file format: {fn}")
         return da
 
     def read_grid(self) -> None:
         for name, fn in self.files["grid"].items():
-            data = self.read_netcdf(fn, name=name)
+            data = self._read_grid(fn, name=name)
             self.set_grid(data, name=name, update=False)
 
     def read_subgrid(self) -> None:
         for name, fn in self.files["subgrid"].items():
-            data = self.read_netcdf(fn, name=name)
+            data = self._read_grid(fn, name=name)
             self.set_subgrid(data, name=name, update=False)
 
     def read_region_subgrid(self) -> None:
         for name, fn in self.files["region_subgrid"].items():
-            data = self.read_netcdf(fn, name=name)
+            data = self._read_grid(fn, name=name)
             self.set_region_subgrid(data, name=name, update=False)
 
     def read_MERIT_grid(self) -> None:
         for name, fn in self.files["MERIT_grid"].items():
-            data = self.read_netcdf(fn, name=name)
+            data = self._read_grid(fn, name=name)
             self.set_MERIT_grid(data, name=name, update=False)
 
     def read_forcing(self) -> None:
@@ -5919,9 +5945,19 @@ class GEBModel(GridModel):
             data = self.snap_to_grid(data, grid)
         # force read in r+ mode
         if len(grid) == 0:  # trigger init / read
-            grid[name] = data[name]
+            # copy spatial reference from data
+            grid["spatial_ref"] = data["spatial_ref"]
+            var = data[name]
+            if "spatial_ref" in data[name].coords:
+                grid[name] = var.drop_vars("spatial_ref")
+            else:
+                grid[name] = var
+            # copy attributes from data
+            grid[name].attrs = data[name].attrs
         else:
             for dvar in data.data_vars:
+                if dvar == "spatial_ref":
+                    continue
                 if dvar in grid:
                     if self._read:
                         self.logger.warning(f"Replacing grid map: {dvar}")
@@ -5929,10 +5965,18 @@ class GEBModel(GridModel):
                     assert (grid[dvar].y.values == data[dvar].y.values).all()
                     assert (grid[dvar].x.values == data[dvar].x.values).all()
                     assert data.dims == grid.dims
-                    data[dvar].attrs = grid[dvar].attrs
                     grid = grid.drop_vars(dvar)
 
-                grid[dvar] = data[dvar]
+                assert CRS.from_wkt(data.spatial_ref.crs_wkt) == CRS.from_wkt(
+                    grid.spatial_ref.crs_wkt
+                )
+                var = data[dvar]
+                var.raster.set_crs(grid.raster.crs)
+                if "spatial_ref" in var.coords:
+                    var = var.drop_vars("spatial_ref")
+
+                grid[dvar] = var
+                grid[dvar].attrs = data[dvar].attrs
 
         return grid
 
