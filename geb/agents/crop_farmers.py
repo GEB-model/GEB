@@ -8,6 +8,7 @@ from typing import Tuple, Union
 
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
+from gplearn.genetic import SymbolicRegressor
 
 import numpy as np
 from numba import njit
@@ -2388,7 +2389,9 @@ class CropFarmers(AgentBaseClass):
         full_size_SPEI_per_farmer = np.zeros_like(
             self.cumulative_SPEI_during_growing_season
         )
-        full_size_SPEI_per_farmer[farmers_with_growing_crops] = current_SPEI_per_farmer
+        full_size_SPEI_per_farmer[farmers_with_growing_crops] = (
+            current_SPEI_per_farmer * -1
+        )
 
         cumulative_mean(
             mean=self.cumulative_SPEI_during_growing_season,
@@ -2452,54 +2455,18 @@ class CropFarmers(AgentBaseClass):
                 3. Determine the relation between yield ratio and profit for all farmer types.
                 4. Sample the individual agent relation from the agent groups and assign to agents.
         """
-        # Step 1: Group farmers based on crop combinations and location in basin and compute averages
-        unique_yearly_yield_ratio = np.empty(
-            (0, self.total_spinup_time), dtype=np.float32
-        )
-        unique_SPEI_probability = np.empty(
-            (0, self.total_spinup_time), dtype=np.float32
-        )
-
         # Create unique groups
         # Calculating the thresholds for the top, middle, and lower thirds
         unique_farmer_groups = self.create_unique_groups()
 
-        for crop_combination in np.unique(unique_farmer_groups, axis=0):
-            unique_farmer_group = np.where(
-                (unique_farmer_groups == crop_combination[None, ...]).all(axis=1)
-            )[0]
-            average_yield_ratio = np.mean(
-                self.yearly_yield_ratio[unique_farmer_group, :], axis=0
-            )
-            average_probability = np.mean(
-                self.yearly_SPEI_probability[unique_farmer_group, :], axis=0
-            )
-            unique_yearly_yield_ratio = np.vstack(
-                (unique_yearly_yield_ratio, average_yield_ratio)
-            )
-            unique_SPEI_probability = np.vstack(
-                (unique_SPEI_probability, average_probability)
-            )
-
-        # Step 2: Mask rows and columns with zeros
-        mask_rows = np.any((unique_yearly_yield_ratio != 0), axis=1) & np.any(
-            (unique_SPEI_probability != 0), axis=1
+        # Mask out empty columns first
+        mask_columns = np.any((self.yearly_yield_ratio != 0), axis=0) & np.any(
+            (self.yearly_SPEI_probability != 0), axis=0
         )
-        if np.any([~mask_rows]):
-            # Sometimes very few farmer (groups) (1 in a million) get yield ratios of only 0
-            # If so, give it the mean of all groups for both the spei and yield ratio
-            unique_yearly_yield_ratio[~mask_rows] = np.mean(
-                unique_yearly_yield_ratio, axis=0
-            )
-            unique_SPEI_probability[~mask_rows] = np.mean(
-                unique_SPEI_probability, axis=0
-            )
 
-        mask_columns = np.any((unique_yearly_yield_ratio != 0), axis=0) & np.any(
-            (unique_SPEI_probability != 0), axis=0
-        )
-        unique_yearly_yield_ratio_mask = unique_yearly_yield_ratio[:, mask_columns]
-        unique_SPEI_probability_mask = unique_SPEI_probability[:, mask_columns]
+        # Apply the mask to the entire dataset before looping
+        masked_yearly_yield_ratio = self.yearly_yield_ratio[:, mask_columns]
+        masked_SPEI_probability = self.yearly_SPEI_probability[:, mask_columns]
 
         # Step 3: Determine the relation between yield ratio and profit
         group_yield_probability_relation_log = []
@@ -2513,14 +2480,21 @@ class CropFarmers(AgentBaseClass):
         def logarithmic_function(x, a, b):
             return a * np.log2(x) + b
 
-        for idx, (yield_ratio, spei_prob) in enumerate(
-            zip(unique_yearly_yield_ratio_mask, unique_SPEI_probability_mask)
-        ):
-            # Filter out zeros, some agents are nearly always at 0 yield ratio
-            # This is a problem for the fitting (and likely an outlier)
-            mask = (yield_ratio != 0) | (spei_prob != 0)
-            yield_ratio = yield_ratio[mask]
-            spei_prob = spei_prob[mask]
+        # Now loop through the unique farmer groups
+        for idx, crop_combination in enumerate(np.unique(unique_farmer_groups, axis=0)):
+            unique_farmer_group = np.where(
+                (unique_farmer_groups == crop_combination[None, ...]).all(axis=1)
+            )[0]
+
+            group_yield_ratio = masked_yearly_yield_ratio[unique_farmer_group, :]
+            group_spei = masked_SPEI_probability[unique_farmer_group, :]
+
+            x = group_spei[:, :-1]
+            y = group_yield_ratio[:, :-1]
+
+            # Filter out only 0s
+            x = x[y != 0].flatten()
+            y = y[y != 0].flatten()
 
             # Set the a and b values of last year to prevent no values on this year
             if self.farmer_yield_probability_relation is not None:
@@ -2542,16 +2516,12 @@ class CropFarmers(AgentBaseClass):
             try:
                 # Attempt to fit the logarithmic_function function
                 # Sometimes the yields of the first year can give issues
-                a, b = curve_fit(
-                    logarithmic_function, yield_ratio[:-1], spei_prob[:-1]
-                )[0]
+                a, b = curve_fit(logarithmic_function, y, x)[0]
 
             except RuntimeError:
                 # RuntimeError is raised when curve_fit fails to converge
                 # In this case, take the values of the previous (similar) group
                 if last_yield_ratio is not None:
-                    yield_ratio = last_yield_ratio
-                    spei_prob = last_spei_prob
                     # Recalculate a, b with the previous values
                     a, b = curve_fit(
                         logarithmic_function, last_yield_ratio[:-1], last_spei_prob[:-1]
@@ -2559,15 +2529,38 @@ class CropFarmers(AgentBaseClass):
 
             group_yield_probability_relation_log.append(np.array([a, b]))
 
-            residuals = spei_prob[:-1] - logarithmic_function(yield_ratio[:-1], a, b)
-            ss_tot = np.sum((spei_prob[:-1] - np.mean(spei_prob[:-1])) ** 2)
+            residuals = x - logarithmic_function(y, a, b)
+            ss_tot = np.sum((x - np.mean(x)) ** 2)
             ss_res = np.sum(residuals**2)
 
             yield_probability_R2_log.append(1 - (ss_res / ss_tot))
 
             # Update last_yield_ratio and last_spei_prob
-            last_yield_ratio = yield_ratio
-            last_spei_prob = spei_prob
+            last_yield_ratio = y
+            last_spei_prob = x
+
+            # est_gp = SymbolicRegressor(
+            #     population_size=1000,
+            #     generations=10,
+            #     stopping_criteria=0.01,
+            #     p_crossover=0.7,
+            #     p_subtree_mutation=0.1,
+            #     p_hoist_mutation=0.05,
+            #     p_point_mutation=0.1,
+            #     max_samples=0.9,
+            #     verbose=1,
+            #     parsimony_coefficient=0.01,
+            #     random_state=42,
+            # )
+
+            # # Fit the model
+            # est_gp.fit(
+            #     x,
+            #     y,
+            # )
+
+            # # Predict using the model
+            # y_gp = est_gp.predict(x)
 
         # Assign relations to agents
         exact_positions = np.where(

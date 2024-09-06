@@ -260,6 +260,9 @@ class DecisionModule:
 
             NPV_adapt_no_flood[:payment_remainder] -= adaptation_costs[i]
 
+            # ensure that it does not become negative to prevent NaNs
+            NPV_adapt_no_flood[NPV_adapt_no_flood < 0] = 0
+
             ## Calculate time discounted NPVs
             NPV_adapt_no_flood = np.sum(
                 NPV_adapt_no_flood / (1 + discount_rate[i]) ** t_agent
@@ -303,5 +306,7 @@ class DecisionModule:
 
             # Integrate EU over probabilities trapezoidal
             EU_adapt[i] = np.trapz(EU_adapt_dict, p_all_events)
+
+            assert not np.isnan(EU_adapt[i]), f"EU_adapt[{i}] is NaN"
 
         return EU_adapt

@@ -56,7 +56,7 @@ def get_crop_kc_and_root_depths(
     crop_stage_data,
     kc_crop_stage,
     rooth_depths,
-    init_root_depth=0.01,
+    init_root_depth=0.2,
 ):
     kc = np.full_like(crop_map, np.nan, dtype=np.float32)
     root_depth = np.full_like(crop_map, np.nan, dtype=np.float32)
