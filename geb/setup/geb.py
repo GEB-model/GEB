@@ -2694,7 +2694,7 @@ class GEBModel(GridModel):
                     )
                     del hurs.attrs["_FillValue"]
                     hurs.name = "hurs"
-                    hurs.to_zarr(fn, mode='w')
+                    hurs.to_zarr(fn, mode="w")
                 else:
                     hurs = xr.open_dataset(fn, chunks={}, engine="zarr")["hurs"]
                 # assert hasattr(hurs, "spatial_ref")
@@ -4437,8 +4437,8 @@ class GEBModel(GridModel):
         irrigation_choice={
             "no": 1.0,
         },
-        risk_aversion_mean=1.5,
-        risk_aversion_standard_deviation=0.5,
+        risk_aversion_mean=0,
+        risk_aversion_standard_deviation=0.387,
         interest_rate=0.05,
         discount_rate=0.1,
         reduce_crops=False,
