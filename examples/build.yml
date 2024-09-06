@@ -3,7 +3,7 @@ setup_grid:
   basin_index_fn: merit_hydro_index
   sub_grid_factor: 20
 
-setup_cell_area_map:
+setup_cell_area:
 
 setup_regions_and_land_use:
   region_database: gadm_level1

@@ -28,6 +28,7 @@ from ..data import (
 from .decision_module import DecisionModule
 from .general import AgentArray, AgentBaseClass
 from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from ..HRUs import load_grid
 
 
 def cumulative_mean(mean, counter, update, mask=None):
@@ -852,21 +853,9 @@ class CropFarmers(AgentBaseClass):
 
         self.n_loans = 4
 
-        self.elevation_subgrid = MapReader(
-            fp=self.model.files["MERIT_grid"]["landsurface/topo/subgrid_elevation"],
-            xmin=self.model.xmin,
-            ymin=self.model.ymin,
-            xmax=self.model.xmax,
-            ymax=self.model.ymax,
-        )
-        self.elevation_grid = self.model.data.grid.compress(
-            MapReader(
-                fp=self.model.files["grid"]["landsurface/topo/elevation"],
-                xmin=self.model.xmin,
-                ymin=self.model.ymin,
-                xmax=self.model.xmax,
-                ymax=self.model.ymax,
-            ).get_data_array()
+        self.elevation_subgrid = load_grid(
+            self.model.files["MERIT_grid"]["landsurface/topo/subgrid_elevation"],
+            return_transform_and_crs=True,
         )
 
         with open(
@@ -1008,7 +997,11 @@ class CropFarmers(AgentBaseClass):
 
         # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
         self.elevation = AgentArray(
-            input_array=self.elevation_subgrid.sample_coords(self.locations.data),
+            input_array=sample_from_map(
+                self.elevation_subgrid[0],
+                self.locations.data,
+                self.elevation_subgrid[1].to_gdal(),
+            ),
             max_n=self.max_n,
         )
 
