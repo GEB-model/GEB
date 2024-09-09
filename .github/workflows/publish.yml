@@ -20,7 +20,7 @@ jobs:
       - name: Install the project
         run: uv sync --extra publish
       - name: Build package
-        run: uv run python -m build
+        run: uv build
       - name: Publish package distributions to Test PyPI
         env:
           TWINE_USERNAME: __token__
