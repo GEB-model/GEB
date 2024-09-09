@@ -16,7 +16,6 @@ from numba import njit
 
 from ..workflows import balance_check
 
-from honeybees.library.mapIO import MapReader
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from honeybees.library.neighbors import find_neighbors
 

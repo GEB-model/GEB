@@ -2267,7 +2267,7 @@ class GEBModel(GridModel):
                 xmax += 0.1
                 ymax += 0.1
 
-                max_retries = 3
+                max_retries = 10
                 retries = 0
                 while retries < max_retries:
                     try:
