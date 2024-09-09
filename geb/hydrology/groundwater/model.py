@@ -133,10 +133,11 @@ def distribute_well_rate_per_layer(
                 if remaining_well_rate == 0:
                     break
 
-        if remaining_well_rate != 0:
-            assert (
-                remaining_well_rate == 0
-            ), "Well rate could not be distributed, layers are too dry"
+        assert (
+            remaining_well_rate > -1e-10
+        ), (
+            "Well rate could not be distributed, layers are too dry"
+        )  # leaving some tollerance for numerical errors
 
     assert np.allclose(well_rate_per_layer.sum(axis=0), well_rate)
     return well_rate_per_layer
