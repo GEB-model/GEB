@@ -313,20 +313,27 @@ def test_modflow_simulation_with_visualization():
 def test_get_water_table_depth():
     layer_boundary_elevation = np.array(
         [
-            [100, 100, 100, 100, 100],
-            [50, 50, 50, 50, 50],
-            [0, 0, 0, 0, 0],
+            [100, 100, 100, 100, 100, 100],
+            [50, 50, 50, 50, 50, 50],
+            [0, 0, 0, 0, 0, 0],
         ]
     )
     head = np.array(
         [
-            [110, 90, np.nan, np.nan, np.nan],
-            [115, 60, 60, 40, -1],
+            [110, 90, 45, 45, -1, 50.05],
+            [115, 60, 60, 40, -1, 50.01],
         ]
     )
-    elevation = np.array([103, 103, 103, 103, 103])
-    water_table_depth = get_water_table_depth(layer_boundary_elevation, head, elevation)
-    np.testing.assert_allclose(water_table_depth, np.array([3, 13, 53, 63, 103]))
+    elevation = np.array([103, 103, 103, 103, 103, 103])
+    water_table_depth = get_water_table_depth(
+        layer_boundary_elevation, head, elevation, min_remaining_layer_storage_m=0
+    )
+    np.testing.assert_allclose(water_table_depth, np.array([3, 13, 53, 63, 103, 52.95]))
+
+    water_table_depth = get_water_table_depth(
+        layer_boundary_elevation, head, elevation, min_remaining_layer_storage_m=0.1
+    )
+    np.testing.assert_allclose(water_table_depth, np.array([3, 13, 53, 63, 103, 52.99]))
 
 
 def test_get_groundwater_storage_m():
