@@ -150,7 +150,9 @@ class Artists(honeybeesArtists):
                         and variable.shape[invariant_dim] == compressed_size
                     ):
                         for i in range(variable.shape[variant_dim]):
-                            self.variables_dict[f"{name}.{varname}[{i}]"] = variable[i]
+                            self.variables_dict[f"{name}.{varname}[{i}]"] = variable[
+                                :, i
+                            ]
                     else:
                         continue
 
