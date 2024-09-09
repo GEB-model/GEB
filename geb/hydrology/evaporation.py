@@ -71,9 +71,9 @@ class Evaporation(object):
         ##  self.var.totalPotET total potential evapotranspiration for a reference crop for a land cover class [m]
         totalPotET = self.model.crop_factor_calibration_factor * self.var.cropKC * ETRef
 
-        ## potTranspiration: Transpiration for each land cover class
-        potTranspiration = np.maximum(
+        ## potential_transpiration: Transpiration for each land cover class
+        potential_transpiration = np.maximum(
             0.0, totalPotET - potBareSoilEvap - self.var.snowEvap
         )
 
-        return potTranspiration, potBareSoilEvap, totalPotET
+        return potential_transpiration, potBareSoilEvap, totalPotET

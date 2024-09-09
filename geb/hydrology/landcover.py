@@ -364,14 +364,14 @@ class LandCover(object):
 
         self.var.cropKC[self.var.land_use_type == GRASSLAND_LIKE] = 0.2
 
-        self.var.potTranspiration, potBareSoilEvap, totalPotET = (
+        potential_transpiration, potBareSoilEvap, totalPotET = (
             self.model.evaporation.step(self.var.ETRef)
         )
 
         timer.new_split("PET")
 
-        potTranspiration_minus_interception_evaporation = self.model.interception.step(
-            self.var.potTranspiration
+        potential_transpiration_minus_interception_evaporation = (
+            self.model.interception.step(potential_transpiration)
         )  # first thing that evaporates is the intercepted water.
 
         timer.new_split("Interception")
@@ -400,7 +400,7 @@ class LandCover(object):
         ) = self.model.soil.step(
             capillar,
             openWaterEvap,
-            potTranspiration_minus_interception_evaporation,
+            potential_transpiration_minus_interception_evaporation,
             potBareSoilEvap,
             totalPotET,
         )
@@ -417,7 +417,7 @@ class LandCover(object):
             actual_total_transpiration[self.var.crop_map != -1]
         )
         self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
-            self.var.potTranspiration[self.var.crop_map != -1]
+            potential_transpiration[self.var.crop_map != -1]
         )
 
         assert not (directRunoff < 0).any()
