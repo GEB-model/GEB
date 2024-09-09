@@ -5398,6 +5398,10 @@ class GEBModel(GridModel):
 
             water_levels = water_levels.sel(stations=station_ids).compute()
 
+            assert (
+                len(water_levels.stations) > 0
+            ), "No stations found in the region. If no stations should be set, set include_coastal=False"
+
             self.set_forcing(
                 water_levels,
                 name="SFINCS/waterlevel",
@@ -5613,7 +5617,7 @@ class GEBModel(GridModel):
                                     (
                                         chunksizes[dim]
                                         if dim in chunksizes
-                                        else getattr(forcing, dim).size
+                                        else max(getattr(forcing, dim).size, 1)
                                     )
                                     for dim in forcing.dims
                                 ),
