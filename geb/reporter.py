@@ -168,7 +168,10 @@ class hydrology_reporter(ABMReporter):
                             }
                         )
 
-                        zarr_group.attrs["crs"] = self.model.data.grid.crs.to_string()
+                        crs = self.model.data.grid.crs
+                        if not isinstance(crs, str):
+                            crs = crs.to_string()
+                        zarr_group.attrs["crs"] = crs
 
                         self.variables[name] = zarr_group
 

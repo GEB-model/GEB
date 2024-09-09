@@ -898,12 +898,8 @@ class CropFarmers(AgentBaseClass):
             self.irrigation_source_key = json.load(f)
 
         # load map of all subdistricts
-        self.subdistrict_map = MapReader(
-            fp=self.model.files["region_subgrid"]["areamaps/region_subgrid"],
-            xmin=self.model.xmin,
-            ymin=self.model.ymin,
-            xmax=self.model.xmax,
-            ymax=self.model.ymax,
+        self.subdistrict_map = load_grid(
+            self.model.files["region_subgrid"]["areamaps/region_subgrid"]
         )
 
         self.cultivation_costs = load_regional_crop_data_from_dict(
