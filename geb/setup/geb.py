@@ -1553,6 +1553,9 @@ class GEBModel(GridModel):
             waterbodies = waterbodies.astype(dtypes)
             lakesResID = xr.zeros_like(self.grid["areamaps/grid_mask"])
             sublakesResID = xr.zeros_like(self.subgrid["areamaps/sub_grid_mask"])
+
+            # When hydroMT 1.0 is released this should not be needed anymore
+            sublakesResID.raster.set_crs(self.subgrid.raster.crs)
         else:
             lakesResID = self.grid.raster.rasterize(
                 waterbodies,
@@ -3348,7 +3351,7 @@ class GEBModel(GridModel):
             region_raster.raster.coords,
             nodata=np.nan,
             dtype=padded_cell_area.dtype,
-            name="areamaps/sub_grid_mask",
+            name="areamaps/sub_grid_mask_region",
             crs=region_raster.raster.crs,
             lazy=False,
         )
@@ -4950,6 +4953,8 @@ class GEBModel(GridModel):
                 xdim: self.grid.x.rename({"x": xdim}),
             },
         )
+        if "inplace" in out_ds.coords:
+            out_ds = out_ds.drop_vars(["dparams", "inplace"])
         assert len(ds.dims) == len(out_ds.dims)
         return out_ds
 
@@ -5195,9 +5200,7 @@ class GEBModel(GridModel):
             ).all()
 
         datasets = [
-            ds.assign_coords(
-                lon=reference["lon"].values, lat=reference["lat"].values, inplace=True
-            )
+            ds.assign_coords(lon=reference["lon"].values, lat=reference["lat"].values)
             for ds in datasets
         ]
         if len(datasets) > 1:
@@ -5213,7 +5216,7 @@ class GEBModel(GridModel):
                 == (ds.time[1] - ds.time[0]).astype(np.int64)
             ).all()
 
-        ds.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=True)
+        ds.raster.set_spatial_dims(x_dim="lon", y_dim="lat")
         assert not ds.lat.attrs, "lat already has attributes"
         assert not ds.lon.attrs, "lon already has attributes"
         ds.lat.attrs = {
@@ -5224,7 +5227,7 @@ class GEBModel(GridModel):
             "long_name": "longitude of grid cell center",
             "units": "degrees_east",
         }
-        ds = ds.rio.write_crs(4326).rio.write_coordinate_system()
+        ds.raster.set_crs(4326)
 
         # check whether data is for noon or midnight. If noon, subtract 12 hours from time coordinate to align with other datasets
         if hasattr(ds, "time") and pd.to_datetime(ds.time[0].values).hour == 12:
@@ -5856,6 +5859,7 @@ class GEBModel(GridModel):
                     self.set_forcing(ds[name.split("/")[-1]], name=name, update=False)
                 else:
                     self.set_forcing(ds, name=name, update=False, split_dataset=False)
+        return None
 
     def read(self):
         with suppress_logging_warning(self.logger):
