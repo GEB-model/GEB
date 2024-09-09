@@ -9,6 +9,7 @@ from typing import Tuple, Union
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
 from gplearn.genetic import SymbolicRegressor
+from scipy.stats import linregress
 
 import numpy as np
 from numba import njit
@@ -2496,9 +2497,9 @@ class CropFarmers(AgentBaseClass):
             x = x[y != 0].flatten()
             y = y[y != 0].flatten()
 
-            # Set the a and b values of last year to prevent no values on this year
+            # Set default slope (m) and intercept (b) values for the first year
             if self.farmer_yield_probability_relation is not None:
-                a, b = np.median(
+                m, b = np.median(
                     self.farmer_yield_probability_relation[
                         np.where(
                             (
@@ -2510,30 +2511,32 @@ class CropFarmers(AgentBaseClass):
                     axis=0,
                 )
             else:
-                a, b = 2, 3
+                m, b = 1, 0  # Default values for linear regression
 
-            # Fit logarithmic function, except when there is an error
+            # Fit linear regression, except when there is an error
             try:
-                # Attempt to fit the logarithmic_function function
-                # Sometimes the yields of the first year can give issues
-                a, b = curve_fit(logarithmic_function, y, x)[0]
+                # Perform linear regression
+                slope, intercept, r_value, p_value, std_err = linregress(y, x)
 
-            except RuntimeError:
-                # RuntimeError is raised when curve_fit fails to converge
-                # In this case, take the values of the previous (similar) group
+            except ValueError:
+                # ValueError can occur if there are insufficient data points
+                # In this case, use the previous group's values
                 if last_yield_ratio is not None:
-                    # Recalculate a, b with the previous values
-                    a, b = curve_fit(
-                        logarithmic_function, last_yield_ratio[:-1], last_spei_prob[:-1]
-                    )[0]
+                    # Recalculate slope and intercept with the previous values
+                    slope, intercept, r_value, p_value, std_err = linregress(
+                        last_yield_ratio[:-1], last_spei_prob[:-1]
+                    )
 
-            group_yield_probability_relation_log.append(np.array([a, b]))
+            # Append the slope and intercept to the group relations list
+            group_yield_probability_relation_log.append(np.array([slope, intercept]))
 
-            residuals = x - logarithmic_function(y, a, b)
+            # Calculate residuals and R^2
+            residuals = x - (slope * y + intercept)
             ss_tot = np.sum((x - np.mean(x)) ** 2)
             ss_res = np.sum(residuals**2)
 
             yield_probability_R2_log.append(1 - (ss_res / ss_tot))
+            r2 = 1 - (ss_res / ss_tot)
 
             # Update last_yield_ratio and last_spei_prob
             last_yield_ratio = y
