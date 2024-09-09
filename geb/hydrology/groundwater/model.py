@@ -43,29 +43,29 @@ def cd(newdir):
 
 
 @njit(cache=True)
-def get_water_table_depth(layer_boundary_elevation, head, elevation):
+def get_water_table_depth(
+    layer_boundary_elevation, head, elevation, min_remaining_layer_storage_m
+):
     water_table_depth = np.zeros(head.shape[1])
     for cell_ix in range(head.shape[1]):
-        for layer_ix in range(head.shape[0]):
+        for layer_ix in range(head.shape[0] - 1, -1, -1):
             layer_head = head[layer_ix, cell_ix]
 
-            # if the head is larger than the top of the layer, the water table is equal to the top of the layer
-            if layer_head > layer_boundary_elevation[layer_ix, cell_ix]:
-                water_table_depth[cell_ix] = (
-                    elevation[cell_ix] - layer_boundary_elevation[layer_ix, cell_ix]
+            # if the head is smaller than the top of the layer, the water table elevation is equal to the topogography minus head
+            if (
+                layer_head - min_remaining_layer_storage_m
+                < layer_boundary_elevation[layer_ix, cell_ix]
+            ):
+                water_table_depth[cell_ix] = elevation[cell_ix] - max(
+                    layer_boundary_elevation[layer_ix + 1, cell_ix], layer_head
                 )
-                break
-
-            # if the head is larger than the bottom of the layer, the water table elevation is equal to the head
-            if layer_head > layer_boundary_elevation[layer_ix + 1, cell_ix]:
-                water_table_depth[cell_ix] = elevation[cell_ix] - layer_head
                 break
 
             # else proceed to the next layer
 
-        else:  # if the water table is in none of the layers, the water table is at the bottom of the bottom layer
+        else:
             water_table_depth[cell_ix] = (
-                elevation[cell_ix] - layer_boundary_elevation[-1, cell_ix]
+                elevation[cell_ix] - layer_boundary_elevation[0, cell_ix]
             )
     return water_table_depth
 
@@ -384,9 +384,6 @@ class ModFlowSimulation:
         )
 
         # Initial conditions
-        # All heads must be above the bottom of the respective layers
-        # can be very minimal but must be
-        assert (heads > self.layer_boundary_elevation[1:]).all()
         heads = self.model.data.grid.decompress(heads)
         flopy.mf6.ModflowGwfic(groundwater_flow, strt=heads)
 
@@ -597,6 +594,7 @@ class ModFlowSimulation:
             self.layer_boundary_elevation,
             self.heads,
             self.topography,
+            min_remaining_layer_storage_m=self.min_remaining_layer_storage_m,
         )
         return groundwater_depth
 
