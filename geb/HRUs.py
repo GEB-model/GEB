@@ -1105,11 +1105,11 @@ class Data:
         self.HRU.totAvlWater = self.split_HRU_data(self.HRU.totAvlWater, HRU)
         self.HRU.minInterceptCap = self.split_HRU_data(self.HRU.minInterceptCap, HRU)
         self.HRU.interceptStor = self.split_HRU_data(self.HRU.interceptStor, HRU)
-        self.HRU.potential_transpiration_crop = self.split_HRU_data(
-            self.HRU.potential_transpiration_crop, HRU
+        self.HRU.potential_evapotranspiration_crop_life = self.split_HRU_data(
+            self.HRU.potential_evapotranspiration_crop_life, HRU
         )
-        self.HRU.actual_transpiration_crop = self.split_HRU_data(
-            self.HRU.actual_transpiration_crop, HRU
+        self.HRU.actual_evapotranspiration_crop_life = self.split_HRU_data(
+            self.HRU.actual_evapotranspiration_crop_life, HRU
         )
         return HRU
 
