@@ -40,7 +40,7 @@ class SealedWater(object):
     capillar              Simulated flow from groundwater to the third CWATM soil layer                     m
     waterbalance_module
     availWaterInfiltrati  quantity of water reaching the soil after interception, more snowmelt             m
-    actual_evapotranspiration_total              simulated evapotranspiration from soil, flooded area and vegetation               m
+    actual_evapotranspiration              simulated evapotranspiration from soil, flooded area and vegetation               m
     directRunoff          Simulated surface runoff                                                          m
     openWaterEvap         Simulated evaporation from open areas                                             m
     actual_bare_soil_evaporation       Simulated evaporation from the first soil layer                                   m
@@ -92,9 +92,8 @@ class SealedWater(object):
         assert (directRunoff[sealed_area] >= 0).all()
 
         # open water evaporation is directly substracted from the river, lakes, reservoir
-        self.var.actual_evapotranspiration_total[sealed_area] = (
-            self.var.actual_evapotranspiration_total[sealed_area]
-            + openWaterEvap[sealed_area]
+        self.var.actual_evapotranspiration[sealed_area] = (
+            self.var.actual_evapotranspiration[sealed_area] + openWaterEvap[sealed_area]
         )
 
         if __debug__:

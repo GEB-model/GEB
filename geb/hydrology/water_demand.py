@@ -71,7 +71,7 @@ class WaterDemand:
             self.model.data.grid.full_compressed(0, dtype=np.float32),
         )
 
-    def get_potential_irrigation_consumption(self, totalPotET):
+    def get_potential_irrigation_consumption(self, potential_evapotranspiration):
         """Calculate the potential irrigation consumption. Not that consumption
         is not the same as withdrawal. Consumption is the amount of water that
         is actually used by the farmers, while withdrawal is the amount of water
@@ -103,7 +103,7 @@ class WaterDemand:
         # p is between 0 and 1 => if p =1 wcrit = wwp, if p= 0 wcrit = wfc
         p = get_fraction_easily_available_soil_water(
             crop_group_number[nonpaddy_irrigated_land],
-            totalPotET[nonpaddy_irrigated_land],
+            potential_evapotranspiration[nonpaddy_irrigated_land],
         )
 
         root_ratios = get_root_ratios(
@@ -199,7 +199,7 @@ class WaterDemand:
         demand -= withdrawal  # update in place
         return withdrawal
 
-    def step(self, totalPotET):
+    def step(self, potential_evapotranspiration):
         timer = TimingModule("Water demand")
 
         domestic_water_demand, domestic_water_efficiency = (
@@ -218,7 +218,7 @@ class WaterDemand:
             critical_water_level,
             max_water_content,
             potential_infiltration_capacity,
-        ) = self.get_potential_irrigation_consumption(totalPotET)
+        ) = self.get_potential_irrigation_consumption(potential_evapotranspiration)
 
         assert (domestic_water_demand >= 0).all()
         assert (industry_water_demand >= 0).all()
@@ -330,10 +330,10 @@ class WaterDemand:
             self.var.actual_irrigation_consumption = cp.asarray(
                 irrigation_water_consumption_m
             )
-            addtoevapotrans = cp.asarray(addtoevapotrans_m)
+            addtoevapotrans_m = cp.asarray(addtoevapotrans_m)
         else:
             self.var.actual_irrigation_consumption = irrigation_water_consumption_m
-            addtoevapotrans = addtoevapotrans_m
+            addtoevapotrans_m = addtoevapotrans_m
 
         assert (self.var.actual_irrigation_consumption + 1e-6 >= 0).all()
 
@@ -404,6 +404,5 @@ class WaterDemand:
         return (
             groundwater_abstraction_m3,
             channel_abstraction_m3 / self.model.data.grid.cellArea,
-            addtoevapotrans,
             returnFlow,
         )

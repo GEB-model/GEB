@@ -914,13 +914,13 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_sprinkler"]["yield_multiplier"]
 
-        self.var.actual_transpiration_crop = self.var.load_initial(
-            "actual_transpiration_crop",
+        self.var.actual_evapotranspiration_crop_life = self.var.load_initial(
+            "actual_evapotranspiration_crop_life",
             default=self.var.full_compressed(0, dtype=np.float32, gpu=False),
             gpu=False,
         )
-        self.var.potential_transpiration_crop = self.var.load_initial(
-            "potential_transpiration_crop",
+        self.var.potential_evapotranspiration_crop_life = self.var.load_initial(
+            "potential_evapotranspiration_crop_life",
             default=self.var.full_compressed(0, dtype=np.float32, gpu=False),
             gpu=False,
         )
@@ -1910,6 +1910,17 @@ class CropFarmers(AgentBaseClass):
             assert not np.isnan(yield_ratio).any()
         else:
             yield_ratio = np.full_like(crop_map[harvest], 1, dtype=np.float32)
+        if harvest.sum() > 0:
+            print(
+                "yield_ratio",
+                yield_ratio.mean(),
+                "min",
+                yield_ratio.min(),
+                "max",
+                yield_ratio.max(),
+                "median",
+                np.median(yield_ratio),
+            )
         return yield_ratio
 
     def update_yield_ratio_management(self) -> None:
@@ -2008,8 +2019,8 @@ class CropFarmers(AgentBaseClass):
             # Get yield ratio for the harvested crops
             yield_ratio_per_field = self.get_yield_ratio(
                 harvest,
-                self.var.actual_transpiration_crop,
-                self.var.potential_transpiration_crop,
+                self.var.actual_evapotranspiration_crop_life,
+                self.var.potential_evapotranspiration_crop_life,
                 self.var.crop_map,
             )
             assert (yield_ratio_per_field >= 0).all()
@@ -2123,8 +2134,8 @@ class CropFarmers(AgentBaseClass):
             self.profit_farmer = np.zeros(self.n, dtype=np.float32)
 
         # Reset transpiration values for harvested fields
-        self.var.actual_transpiration_crop[harvest] = 0
-        self.var.potential_transpiration_crop[harvest] = 0
+        self.var.actual_evapotranspiration_crop_life[harvest] = 0
+        self.var.potential_evapotranspiration_crop_life[harvest] = 0
 
         # Update crop and land use maps after harvest
         self.var.crop_map[harvest] = -1

@@ -1190,8 +1190,8 @@ class Soil(object):
         timer.new_split("Percolation")
 
         bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
-        self.var.actual_evapotranspiration_total[bioarea] = (
-            self.var.actual_evapotranspiration_total[bioarea]
+        self.var.actual_evapotranspiration[bioarea] = (
+            self.var.actual_evapotranspiration[bioarea]
             + actual_bare_soil_evaporation[bioarea]
             + open_water_evaporation[bioarea]
             + actual_total_transpiration[bioarea]
@@ -1240,7 +1240,7 @@ class Soil(object):
                     direct_runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    self.var.actual_evapotranspiration_total[bioarea],
+                    self.var.actual_evapotranspiration[bioarea],
                 ],
                 prestorages=[
                     w_pre[:, bioarea].sum(axis=0),
@@ -1252,6 +1252,20 @@ class Soil(object):
                 ],
                 tollerance=1e-6,
             )
+
+            assert (
+                actual_total_transpiration[bioarea]
+                <= potential_transpiration[bioarea] + 1e-5
+            ).all()
+            assert (
+                actual_bare_soil_evaporation[bioarea]
+                <= potential_bare_soil_evaporation[bioarea] + 1e-5
+            ).all()
+            assert (
+                actual_total_transpiration[bioarea]
+                + actual_bare_soil_evaporation[bioarea]
+                <= potential_evapotranspiration[bioarea] + 1e-5
+            ).all()
 
         timer.new_split("Finalizing")
         if self.model.timing:

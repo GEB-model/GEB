@@ -357,6 +357,9 @@ class LandCover(object):
             fn=None,
         )
 
+        if __debug__:
+            BIOAREA = self.var.land_use_type < SEALED
+
         self.var.cropKC[self.var.land_use_type == FOREST] = forest_cropCoefficientNC[
             self.var.land_use_type == FOREST
         ]  # forest
@@ -364,9 +367,16 @@ class LandCover(object):
 
         self.var.cropKC[self.var.land_use_type == GRASSLAND_LIKE] = 0.2
 
-        potential_transpiration, potBareSoilEvap, totalPotET = (
-            self.model.evaporation.step(self.var.ETRef)
-        )
+        (
+            potential_transpiration,
+            potential_bare_soil_evaporation,
+            potential_evapotranspiration,
+        ) = self.model.evaporation.step(self.var.ETRef)
+
+        assert (
+            potential_evapotranspiration
+            <= potential_transpiration + potential_bare_soil_evaporation + 1e-5
+        )[BIOAREA].all()
 
         timer.new_split("PET")
 
@@ -374,15 +384,19 @@ class LandCover(object):
             self.model.interception.step(potential_transpiration)
         )  # first thing that evaporates is the intercepted water.
 
+        assert (
+            potential_evapotranspiration
+            <= potential_transpiration + potential_bare_soil_evaporation + 1e-5
+        )[BIOAREA].all()
+
         timer.new_split("Interception")
 
-        # *********  WATER Demand   *************************
         (
             groundwater_abstraction_m3,
             channel_abstraction_m,
-            addtoevapotrans,
             returnFlow,
-        ) = self.model.water_demand.step(totalPotET)
+        ) = self.model.water_demand.step(potential_evapotranspiration)
+
         timer.new_split("Demand")
 
         openWaterEvap = self.var.full_compressed(0, dtype=np.float32)
@@ -401,8 +415,8 @@ class LandCover(object):
             capillar,
             openWaterEvap,
             potential_transpiration_minus_interception_evaporation,
-            potBareSoilEvap,
-            totalPotET,
+            potential_bare_soil_evaporation,
+            potential_evapotranspiration,
         )
         assert not (directRunoff < 0).any()
         timer.new_split("Soil")
@@ -411,13 +425,17 @@ class LandCover(object):
             capillar, openWaterEvap, directRunoff
         )
         assert not (directRunoff < 0).any()
+
         timer.new_split("Sealed")
 
-        self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
-            actual_total_transpiration[self.var.crop_map != -1]
+        self.var.actual_evapotranspiration_crop_life[self.var.crop_map != -1] += (
+            np.minimum(
+                self.var.actual_evapotranspiration[self.var.crop_map != -1],
+                potential_evapotranspiration[self.var.crop_map != -1],
+            )
         )
-        self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
-            potential_transpiration[self.var.crop_map != -1]
+        self.var.potential_evapotranspiration_crop_life[self.var.crop_map != -1] += (
+            potential_evapotranspiration[self.var.crop_map != -1]
         )
 
         assert not (directRunoff < 0).any()
