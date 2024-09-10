@@ -5520,6 +5520,9 @@ class GEBModel(GridModel):
             filepath = Path(self.root, filename)
             filepath.parent.mkdir(parents=True, exist_ok=True)
 
+            if grid.dtype == "float64":
+                grid = grid.astype("float32")
+
             # zarr cannot handle / in variable names
             grid.name = "data"
             assert hasattr(grid, "spatial_ref")
@@ -5588,6 +5591,10 @@ class GEBModel(GridModel):
 
         if is_spatial_dataset:
             forcing = forcing.rio.write_crs(self.crs).rio.write_coordinate_system()
+
+        # if data is float64, convert to float32
+        if forcing.dtype == np.float64:
+            forcing = forcing.astype(np.float32)
 
         # write netcdf to temporary file
         with tempfile.NamedTemporaryFile(suffix=".zarr.zip") as tmp_file:
