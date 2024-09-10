@@ -1910,17 +1910,7 @@ class CropFarmers(AgentBaseClass):
             assert not np.isnan(yield_ratio).any()
         else:
             yield_ratio = np.full_like(crop_map[harvest], 1, dtype=np.float32)
-        if harvest.sum() > 0:
-            print(
-                "yield_ratio",
-                yield_ratio.mean(),
-                "min",
-                yield_ratio.min(),
-                "max",
-                yield_ratio.max(),
-                "median",
-                np.median(yield_ratio),
-            )
+
         return yield_ratio
 
     def update_yield_ratio_management(self) -> None:
