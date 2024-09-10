@@ -95,15 +95,6 @@ def test_modflow_simulation_initialization():
     # In the Netherlands, the average area of a cell with this gt is ~75.8 m2
     assert np.allclose(sim.area, 75.8, atol=0.1)
 
-    params = deepcopy(default_params)
-    params["heads"] = params["heads"] - 10
-
-    try:
-        sim = ModFlowSimulation(**params)
-        assert False  # This line should trigger an AssertionError
-    except AssertionError:
-        pass
-
 
 def test_step():
     parameters = deepcopy(default_params)
