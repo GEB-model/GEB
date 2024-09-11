@@ -54,6 +54,10 @@ from .workflows.population import generate_locations
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
 from .workflows.conversions import M49_to_ISO3
+from .workflows.forcing import (
+    reproject_and_apply_lapse_rate_temperature,
+    reproject_and_apply_lapse_rate_pressure,
+)
 
 XY_CHUNKSIZE = 350
 
@@ -2066,19 +2070,7 @@ class GEBModel(GridModel):
             # # Create a thread pool and map the set_forcing function to the variables
             # # Wait for all threads to complete
             # concurrent.futures.wait(futures)
-            DEM = self.grid["landsurface/topo/elevation"]
-
-            # ERA5_elevation = (
-            #     (
-            #         self.data_catalog.get_rasterdataset(
-            #             "ERA5_geopotential", bbox=self.bounds, buffer=1
-            #         )
-            #         / 9.80665
-            #     )
-            #     .isel(time=0)
-            #     .rename({"longitude": "x", "latitude": "y"})
-            # )  # convert from m2/s2 to m (see: https://codes.ecmwf.int/grib/param-db/129)
-            # # LAPSE_RATE = -0.0065
+            mask = self.grid["areamaps/grid_mask"]
 
             pr_hourly = self.download_ERA(
                 "total_precipitation", starttime, endtime, method="accumulation"
@@ -2094,7 +2086,7 @@ class GEBModel(GridModel):
             pr_hourly.name = "pr_hourly"
             self.set_forcing(pr_hourly, name="climate/pr_hourly")
             pr = pr_hourly.resample(time="D").mean()  # get daily mean
-            pr = pr.raster.reproject_like(DEM, method="average")
+            pr = pr.raster.reproject_like(mask, method="average")
             pr.name = "pr"
             self.set_forcing(pr, name="climate/pr")
 
@@ -2113,7 +2105,7 @@ class GEBModel(GridModel):
                 "units": "W m-2",
             }
 
-            rsds = rsds.raster.reproject_like(DEM, method="average")
+            rsds = rsds.raster.reproject_like(mask, method="average")
             rsds.name = "rsds"
             self.set_forcing(rsds, name="climate/rsds")
 
@@ -2129,57 +2121,76 @@ class GEBModel(GridModel):
                 "long_name": "Surface Downwelling Longwave Radiation",
                 "units": "W m-2",
             }
-            rlds = rlds.raster.reproject_like(DEM, method="average")
+            rlds = rlds.raster.reproject_like(mask, method="average")
             rlds.name = "rlds"
             self.set_forcing(rlds, name="climate/rlds")
 
             hourly_tas = self.download_ERA(
                 "2m_temperature", starttime, endtime, method="raw"
             )
-            tas = hourly_tas.resample(time="D").mean()
-            tas.attrs = {
+
+            DEM = self.data_catalog.get_rasterdataset(
+                "fabdem",
+                bbox=hourly_tas.raster.bounds,
+                buffer=100,
+                variables=["fabdem"],
+            )
+            DEM.raster.mask_nodata().fillna(
+                0
+            )  # assuming 0 for missing DEM values above the ocean
+
+            DEM_model_grid = DEM.raster.reproject_like(mask, method="average")
+            DEM_forcing = DEM.raster.reproject_like(hourly_tas, method="average")
+
+            hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
+                hourly_tas, DEM_forcing, DEM_model_grid
+            )
+
+            tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
+            tas_reprojected.attrs = {
                 "standard_name": "air_temperature",
                 "long_name": "Near-Surface Air Temperature",
                 "units": "K",
             }
-            # tas_sea_level = tas - (ERA5_elevation * LAPSE_RATE)
-            tas_reprojected = tas.raster.reproject_like(DEM, method="average")
             tas_reprojected.name = "tas"
             self.set_forcing(tas_reprojected, name="climate/tas")
 
-            tasmax = hourly_tas.resample(time="D").max()
+            tasmax = hourly_tas_reprojected.resample(time="D").max()
             tasmax.attrs = {
                 "standard_name": "air_temperature",
                 "long_name": "Daily Maximum Near-Surface Air Temperature",
                 "units": "K",
             }
-            tasmax = tasmax.raster.reproject_like(DEM, method="average")
             tasmax.name = "tasmax"
             self.set_forcing(tasmax, name="climate/tasmax")
 
-            tasmin = hourly_tas.resample(time="D").min()
+            tasmin = hourly_tas_reprojected.resample(time="D").min()
             tasmin.attrs = {
                 "standard_name": "air_temperature",
                 "long_name": "Daily Minimum Near-Surface Air Temperature",
                 "units": "K",
             }
-            tasmin = tasmin.raster.reproject_like(DEM, method="average")
             tasmin.name = "tasmin"
             self.set_forcing(tasmin, name="climate/tasmin")
 
-            dew_point_tas_C = (
-                self.download_ERA(
-                    "2m_dewpoint_temperature", starttime, endtime, method="raw"
-                )
-                - 273.15
+            dew_point_tas = self.download_ERA(
+                "2m_dewpoint_temperature", starttime, endtime, method="raw"
             )
-            hourly_tas_C = hourly_tas - 273.15
+            dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
+                dew_point_tas, DEM_forcing, DEM_model_grid
+            )
+
             water_vapour_pressure = 0.6108 * np.exp(
-                17.27 * dew_point_tas_C / (237.3 + dew_point_tas_C)
+                17.27
+                * (dew_point_tas_reprojected - 273.15)
+                / (237.3 + (dew_point_tas_reprojected - 273.15))
             )  # calculate water vapour pressure (kPa)
             saturation_vapour_pressure = 0.6108 * np.exp(
-                17.27 * hourly_tas_C / (237.3 + hourly_tas_C)
+                17.27
+                * (hourly_tas_reprojected - 273.15)
+                / (237.3 + (hourly_tas_reprojected - 273.15))
             )
+
             assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
             relative_humidity = (
                 water_vapour_pressure / saturation_vapour_pressure
@@ -2191,7 +2202,7 @@ class GEBModel(GridModel):
             }
             relative_humidity = relative_humidity.resample(time="D").mean()
             relative_humidity = relative_humidity.raster.reproject_like(
-                DEM, method="average"
+                mask, method="average"
             )
             relative_humidity.name = "hurs"
             self.set_forcing(relative_humidity, name="climate/hurs")
@@ -2199,13 +2210,15 @@ class GEBModel(GridModel):
             pressure = self.download_ERA(
                 "surface_pressure", starttime, endtime, method="raw"
             )
+            pressure = reproject_and_apply_lapse_rate_pressure(
+                pressure, DEM_forcing, DEM_model_grid
+            )
             pressure.attrs = {
                 "standard_name": "surface_air_pressure",
                 "long_name": "Surface Air Pressure",
                 "units": "Pa",
             }
             pressure = pressure.resample(time="D").mean()
-            pressure = pressure.raster.reproject_like(DEM, method="average")
             pressure.name = "ps"
             self.set_forcing(pressure, name="climate/ps")
 
@@ -2224,7 +2237,7 @@ class GEBModel(GridModel):
                 "long_name": "Near-Surface Wind Speed",
                 "units": "m s-1",
             }
-            wind_speed = wind_speed.raster.reproject_like(DEM, method="average")
+            wind_speed = wind_speed.raster.reproject_like(mask, method="average")
             wind_speed.name = "sfcwind"
             self.set_forcing(wind_speed, name="climate/sfcwind")
 
