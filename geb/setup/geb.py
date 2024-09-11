@@ -2135,15 +2135,9 @@ class GEBModel(GridModel):
                 buffer=100,
                 variables=["fabdem"],
             )
-            DEM.raster.mask_nodata().fillna(
-                0
-            )  # assuming 0 for missing DEM values above the ocean
-
-            DEM_model_grid = DEM.raster.reproject_like(mask, method="average")
-            DEM_forcing = DEM.raster.reproject_like(hourly_tas, method="average")
 
             hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-                hourly_tas, DEM_forcing, DEM_model_grid
+                hourly_tas, DEM, mask
             )
 
             tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
@@ -2177,7 +2171,7 @@ class GEBModel(GridModel):
                 "2m_dewpoint_temperature", starttime, endtime, method="raw"
             )
             dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-                dew_point_tas, DEM_forcing, DEM_model_grid
+                dew_point_tas, DEM, mask
             )
 
             water_vapour_pressure = 0.6108 * np.exp(
@@ -2210,9 +2204,7 @@ class GEBModel(GridModel):
             pressure = self.download_ERA(
                 "surface_pressure", starttime, endtime, method="raw"
             )
-            pressure = reproject_and_apply_lapse_rate_pressure(
-                pressure, DEM_forcing, DEM_model_grid
-            )
+            pressure = reproject_and_apply_lapse_rate_pressure(pressure, DEM, mask)
             pressure.attrs = {
                 "standard_name": "surface_air_pressure",
                 "long_name": "Surface Air Pressure",
@@ -2505,8 +2497,8 @@ class GEBModel(GridModel):
         The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable, forcing, ssp, starttime, endtime):
-            self.logger.info(f"Setting up {variable}...")
+        def download_variable(variable_name, forcing, ssp, starttime, endtime):
+            self.logger.info(f"Setting up {variable_name}...")
             first_year_future_climate = 2015
             var = []
             if ssp == "picontrol":
@@ -2514,21 +2506,14 @@ class GEBModel(GridModel):
                     product="InputData",
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
-                    variable=variable,
+                    variable=variable_name,
                     starttime=starttime,
                     endtime=endtime,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
-                var.append(
-                    self.interpolate(
-                        ds[variable].raster.clip_bbox(ds.raster.bounds),
-                        "linear",
-                        xdim="lon",
-                        ydim="lat",
-                    )
-                )
+                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
             if (
                 (
                     endtime.year < first_year_future_climate
@@ -2540,21 +2525,14 @@ class GEBModel(GridModel):
                     product="InputData",
                     simulation_round="ISIMIP3b",
                     climate_scenario="historical",
-                    variable=variable,
+                    variable=variable_name,
                     starttime=starttime,
                     endtime=endtime,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
-                var.append(
-                    self.interpolate(
-                        ds[variable].raster.clip_bbox(ds.raster.bounds),
-                        "linear",
-                        xdim="lon",
-                        ydim="lat",
-                    )
-                )
+                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
             if (
                 starttime.year >= first_year_future_climate
                 or endtime.year >= first_year_future_climate
@@ -2565,33 +2543,47 @@ class GEBModel(GridModel):
                     product="InputData",
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
-                    variable=variable,
+                    variable=variable_name,
                     starttime=starttime,
                     endtime=endtime,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
-                var.append(
-                    self.interpolate(
-                        ds[variable].raster.clip_bbox(ds.raster.bounds),
-                        "linear",
-                        xdim="lon",
-                        ydim="lat",
-                    )
-                )
+                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
 
             var = xr.concat(
                 var, dim="time", combine_attrs="drop_conflicts", compat="equals"
             )  # all values and dimensions must be the same
+
             # assert that time is monotonically increasing with a constant step size
             assert (
                 ds.time.diff("time").astype(np.int64)
                 == (ds.time[1] - ds.time[0]).astype(np.int64)
             ).all(), "time is not monotonically increasing with a constant step size"
+
             var = var.rename({"lon": "x", "lat": "y"})
-            self.logger.info(f"Completed {variable}")
-            self.set_forcing(var, name=f"climate/{variable}")
+            if variable_name in ("tas", "tasmin", "tasmax", "ps"):
+                DEM = self.data_catalog.get_rasterdataset(
+                    "fabdem",
+                    bbox=var.raster.bounds,
+                    buffer=100,
+                    variables=["fabdem"],
+                )
+                if variable_name in ("tas", "tasmin", "tasmax"):
+                    var = reproject_and_apply_lapse_rate_temperature(
+                        var, DEM, self.grid["areamaps/grid_mask"]
+                    )
+                elif variable_name == "ps":
+                    var = reproject_and_apply_lapse_rate_pressure(
+                        var, DEM, self.grid["areamaps/grid_mask"]
+                    )
+                else:
+                    raise ValueError
+            else:
+                var = self.interpolate(var, "linear")
+            self.logger.info(f"Completed {variable_name}")
+            self.set_forcing(var, name=f"climate/{variable_name}")
 
         for variable in variables:
             download_variable(variable, forcing, ssp, starttime, endtime)
