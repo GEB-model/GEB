@@ -5475,6 +5475,28 @@ class GEBModel(GridModel):
         )
         return None
 
+    def setup_damage_parameters(self, parameters):
+        for hazard, hazard_parameters in parameters.items():
+            for asset_type, asset_parameters in hazard_parameters.items():
+                for component, asset_compontents in asset_parameters.items():
+                    curve = pd.DataFrame(
+                        asset_compontents["curve"], columns=["severity", "damage_ratio"]
+                    )
+
+                    self.set_table(
+                        curve,
+                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
+                    )
+
+                    maximum_damage = {
+                        "maximum_damage": asset_compontents["maximum_damage"]
+                    }
+
+                    self.set_dict(
+                        maximum_damage,
+                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
+                    )
+
     def setup_discharge_observations(self, files):
         transform = self.grid.raster.transform
 
