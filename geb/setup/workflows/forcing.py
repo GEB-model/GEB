@@ -1,6 +1,3 @@
-import numpy as np
-
-
 def reproject_and_apply_lapse_rate_temperature(T, DEM, grid_mask, lapse_rate=-0.0065):
     DEM.raster.mask_nodata().fillna(
         0
@@ -17,8 +14,8 @@ def reproject_and_apply_lapse_rate_temperature(T, DEM, grid_mask, lapse_rate=-0.
     return T_grid
 
 
-def get_pressure_correction_factor(DEM, g, R_air, Mo, lapse_rate):
-    return np.power(288.15 / (288.15 + lapse_rate * DEM), g * Mo / (R_air * lapse_rate))
+def get_pressure_correction_factor(DEM, g, Mo, lapse_rate):
+    return (288.15 / (288.15 + lapse_rate * DEM)) ** (g * Mo / (8.3144621 * lapse_rate))
 
 
 def reproject_and_apply_lapse_rate_pressure(
@@ -26,7 +23,6 @@ def reproject_and_apply_lapse_rate_pressure(
     DEM,
     grid_mask,
     g=9.80665,
-    R_air=8.3144621,
     Mo=0.0289644,
     lapse_rate=-0.0065,
 ):
@@ -38,8 +34,7 @@ def reproject_and_apply_lapse_rate_pressure(
         DataArray with high res lat/lon axis and elevation data
     g : float, default 9.80665
         gravitational constant [m s-2]
-    R_air : float, default 8.3144621
-        specific gas constant for dry air [J mol-1 K-1]
+
     Mo : float, default 0.0289644
         molecular weight of gas [kg / mol]
     lapse_rate : float, deafult -0.0065
@@ -57,14 +52,14 @@ def reproject_and_apply_lapse_rate_pressure(
     DEM_forcing = DEM.raster.reproject_like(pressure, method="average")
 
     pressure_at_sea_level = pressure / get_pressure_correction_factor(
-        DEM_forcing, g, R_air, Mo, lapse_rate
+        DEM_forcing, g, Mo, lapse_rate
     )  # divide by pressure factor to get pressure at sea level
     pressure_at_sea_level_reprojected = pressure_at_sea_level.raster.reproject_like(
         DEM_grid, method="average"
     )
     pressure_grid = (
         pressure_at_sea_level_reprojected
-        * get_pressure_correction_factor(DEM_grid, g, R_air, Mo, lapse_rate)
+        * get_pressure_correction_factor(DEM_grid, g, Mo, lapse_rate)
     )  # multiply by pressure factor to get pressure at DEM grid, corrected for elevation
     pressure_grid.name = pressure.name
 

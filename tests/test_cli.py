@@ -1,7 +1,7 @@
 import pytest
 from click.testing import CliRunner
 
-from .setup import IN_GITHUB_ACTIONS
+from .testconfig import IN_GITHUB_ACTIONS
 from geb.cli import (
     multi_level_merge,
 )

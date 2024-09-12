@@ -9,7 +9,7 @@ from geb.hydrology.groundwater.model import (
 )
 from copy import deepcopy
 
-from ..setup import output_folder, tmp_folder
+from ..testconfig import output_folder, tmp_folder
 
 
 def decompress(array, mask):
