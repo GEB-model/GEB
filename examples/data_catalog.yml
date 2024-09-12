@@ -10,6 +10,12 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: /scistor/ivm/data_catalogue/topography/fabdem.vrt
+geul_dem:
+  data_type: RasterDataset
+  driver: raster
+  meta:
+    category: topography
+  path: project_data/geul/Geul_Filled_DEM_EPSG28992.tif
 gcn250:
   data_type: RasterDataset
   driver: raster
