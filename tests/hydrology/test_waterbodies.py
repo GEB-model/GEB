@@ -3,7 +3,7 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 
-from ..setup import output_folder
+from ..testconfig import output_folder
 
 from geb.hydrology.lakes_reservoirs import (
     estimate_outflow_height,

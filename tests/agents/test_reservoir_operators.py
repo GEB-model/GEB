@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from geb.agents.reservoir_operators import regulate_reservoir_outflow
-from tests.setup import output_folder
+from tests.testconfig import output_folder
 
 
 def test_regulate_reservoir_outflow():
