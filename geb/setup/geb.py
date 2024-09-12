@@ -5242,8 +5242,16 @@ class GEBModel(GridModel):
             ds = ds.assign_coords(time=ds.time - np.timedelta64(12, "h"))
         return ds
 
-    def setup_sfincs(self, land_cover="esa_worldcover_2021_v200", include_coastal=True):
-        sfincs_data_catalog = DataCatalog()
+    def setup_hydrodynamics(
+        self,
+        land_cover="esa_worldcover_2021_v200",
+        include_coastal=True,
+        DEM=["fabdem", "gebco"],
+    ):
+        if isinstance(DEM, str):
+            DEM = [DEM]
+
+        hydrodynamics_data_catalog = DataCatalog()
 
         # hydrobasins
         hydrobasins = self.data_catalog.get_geodataframe(
@@ -5251,12 +5259,12 @@ class GEBModel(GridModel):
             geom=self.region,
             predicate="intersects",
         )
-        self.set_geoms(hydrobasins, name="SFINCS/hydrobasins")
+        self.set_geoms(hydrobasins, name="hydrodynamics/hydrobasins")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "hydrobasins_level_8",
             GeoDataFrameAdapter(
-                path=os.path.abspath("input/SFINCS/hydrobasins.gpkg"),
+                path=os.path.abspath("input/hydrodynamics/hydrobasins.gpkg"),
                 meta=self.data_catalog.get_source("hydrobasins_8").meta,
             ),  # hydromt likes absolute paths
         )
@@ -5267,29 +5275,30 @@ class GEBModel(GridModel):
             "gcn250", bbox=bounds, buffer=100, variables=["cn_avg"]
         )
         gcn250.name = "gcn250"
-        self.set_forcing(gcn250, name="SFINCS/gcn250")
+        self.set_forcing(gcn250, name="hydrodynamics/gcn250")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "gcn250",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/gcn250.nc"),
+                path=os.path.abspath("input/hydrodynamics/gcn250.nc"),
                 meta=self.data_catalog.get_source("gcn250").meta,
             ),  # hydromt likes absolute paths
         )
 
-        gebco = self.data_catalog.get_rasterdataset(
-            "gebco", bbox=bounds, buffer=100, variables=["elevation"]
-        )
-        gebco.name = "gebco"
-        self.set_forcing(gebco, name="SFINCS/gebco")
+        for DEM_name in DEM:
+            DEM_raster = self.data_catalog.get_rasterdataset(
+                DEM_name, bbox=bounds, buffer=100, variables=["elevation"]
+            ).compute()
+            DEM_raster.name = DEM_name
+            self.set_forcing(DEM_raster, name=f"hydrodynamics/DEM/{DEM_name}")
 
-        sfincs_data_catalog.add_source(
-            "gebco",
-            RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/gebco.nc"),
-                meta=self.data_catalog.get_source("gebco").meta,
-            ),  # hydromt likes absolute paths
-        )
+            hydrodynamics_data_catalog.add_source(
+                DEM_name,
+                RasterDatasetAdapter(
+                    path=os.path.abspath(f"input/hydrodynamics/DEM/{DEM_name}.nc"),
+                    meta=self.data_catalog.get_source(DEM_name).meta,
+                ),  # hydromt likes absolute paths
+            )
 
         # merit hydro
         merit_hydro = self.data_catalog.get_rasterdataset(
@@ -5300,12 +5309,14 @@ class GEBModel(GridModel):
             provider=self.data_provider,
         )
         del merit_hydro["flwdir"].attrs["_FillValue"]
-        self.set_forcing(merit_hydro, name="SFINCS/merit_hydro", split_dataset=False)
+        self.set_forcing(
+            merit_hydro, name="hydrodynamics/merit_hydro", split_dataset=False
+        )
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "merit_hydro",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/merit_hydro.nc"),
+                path=os.path.abspath("input/hydrodynamics/merit_hydro.nc"),
                 meta=self.data_catalog.get_source("merit_hydro").meta,
             ),  # hydromt likes absolute paths
         )
@@ -5319,27 +5330,13 @@ class GEBModel(GridModel):
         )
         glofas_discharge = glofas_discharge.rename({"latitude": "y", "longitude": "x"})
         glofas_discharge.name = "discharge_yearly"
-        self.set_forcing(glofas_discharge, name="SFINCS/discharge_yearly")
+        self.set_forcing(glofas_discharge, name="hydrodynamics/discharge_yearly")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "glofas_discharge_Yearly_Resampled_Global",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/discharge_yearly.nc"),
+                path=os.path.abspath("input/hydrodynamics/discharge_yearly.nc"),
                 meta=self.data_catalog.get_source("glofas_4_0_discharge_yearly").meta,
-            ),  # hydromt likes absolute paths
-        )
-
-        # fabdem
-        fabdem = self.data_catalog.get_rasterdataset(
-            "fabdem", bbox=bounds, buffer=100, variables=["fabdem"]
-        )
-        self.set_forcing(fabdem, name="SFINCS/fabdem")
-
-        sfincs_data_catalog.add_source(
-            "fabdem",
-            RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/fabdem.nc"),
-                meta=self.data_catalog.get_source("fabdem").meta,
             ),  # hydromt likes absolute paths
         )
 
@@ -5349,13 +5346,13 @@ class GEBModel(GridModel):
             bbox=bounds,
             predicate="intersects",
         )
-        self.set_geoms(river_centerlines, name="SFINCS/river_centerlines")
+        self.set_geoms(river_centerlines, name="hydrodynamics/river_centerlines")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "river_centerlines_MERIT_Basins",
             GeoDataFrameAdapter(
                 path=os.path.abspath(
-                    "input/SFINCS/river_centerlines.gpkg"
+                    "input/hydrodynamics/river_centerlines.gpkg"
                 ),  # hydromt likes absolute paths
                 meta=self.data_catalog.get_source(
                     "river_centerlines_MERIT_Basins"
@@ -5371,12 +5368,12 @@ class GEBModel(GridModel):
         )
         del esa_worldcover.attrs["_FillValue"]
         esa_worldcover.name = "esa_worldcover"
-        self.set_forcing(esa_worldcover, name="SFINCS/esa_worldcover")
+        self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "esa_worldcover",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/esa_worldcover.nc"),
+                path=os.path.abspath("input/hydrodynamics/esa_worldcover.nc"),
                 meta=self.data_catalog.get_source(land_cover).meta,
             ),  # hydromt likes absolute paths
         )
@@ -5408,15 +5405,15 @@ class GEBModel(GridModel):
 
             self.set_forcing(
                 water_levels,
-                name="SFINCS/waterlevel",
+                name="hydrodynamics/waterlevel",
                 split_dataset=False,
                 is_spatial_dataset=False,
                 time_chunksize=24 * 6,  # 10 minute data
             )
-            sfincs_data_catalog.add_source(
+            hydrodynamics_data_catalog.add_source(
                 "waterlevel",
                 DatasetAdapter(
-                    path=os.path.abspath("input/SFINCS/waterlevel.nc"),
+                    path=os.path.abspath("input/hydrodynamics/waterlevel.nc"),
                     meta=self.data_catalog.get_source("GTSM").meta,
                 ),  # hydromt likes absolute paths
             )
@@ -5469,11 +5466,11 @@ class GEBModel(GridModel):
             else:
                 self.logger.info("The data catalog is empty, no yml file is written.")
 
-        sfincs_data_catalog.to_yml = to_yml
+        hydrodynamics_data_catalog.to_yml = to_yml
 
-        sfincs_data_catalog.to_yml(
-            sfincs_data_catalog,
-            Path(self.root) / "SFINCS" / "sfincs_data_catalog.yml",
+        hydrodynamics_data_catalog.to_yml(
+            hydrodynamics_data_catalog,
+            Path(self.root) / "hydrodynamics" / "hydrodynamics_data_catalog.yml",
         )
         return None
 
@@ -5531,6 +5528,9 @@ class GEBModel(GridModel):
             grid.name = "data"
             assert hasattr(grid, "spatial_ref")
             grid.to_zarr(filepath, mode="w")
+
+            # also export to tif for easier visualization
+            grid.rio.to_raster(filepath.with_suffix(".tif"))
 
     def write_grid(self):
         self._assert_write_mode
@@ -5596,9 +5596,16 @@ class GEBModel(GridModel):
         if is_spatial_dataset:
             forcing = forcing.rio.write_crs(self.crs).rio.write_coordinate_system()
 
-        # if data is float64, convert to float32
-        if forcing.dtype == np.float64:
-            forcing = forcing.astype(np.float32)
+        if isinstance(forcing, xr.DataArray):
+            # if data is float64, convert to float32
+            if forcing.dtype == np.float64:
+                forcing = forcing.astype(np.float32)
+        elif isinstance(forcing, xr.Dataset):
+            for var in forcing.data_vars:
+                if forcing[var].dtype == np.float64:
+                    forcing[var] = forcing[var].astype(np.float32)
+        else:
+            raise ValueError("forcing must be a DataArray or Dataset")
 
         # write netcdf to temporary file
         with tempfile.NamedTemporaryFile(suffix=".zarr.zip") as tmp_file:
@@ -5657,6 +5664,10 @@ class GEBModel(GridModel):
                     mode="w",
                     encoding=encoding,
                 )
+
+                if isinstance(forcing, xr.DataArray):
+                    # also export to tif for easier visualization
+                    forcing.rio.to_raster(dst_file.with_suffix(".tif"))
 
                 # move file to final location
                 shutil.move(tmp_file.name, dst_file)
