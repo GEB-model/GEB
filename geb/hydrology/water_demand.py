@@ -146,6 +146,7 @@ class WaterDemand:
         )
 
         relative_saturation = soil_water_storage / soil_water_storage_cap
+        assert (relative_saturation <= 1).all(), "Relative saturation should always be <= 1"
 
         satAreaFrac = (
             1 - (1 - relative_saturation) ** self.var.arnoBeta[nonpaddy_irrigated_land]
@@ -164,6 +165,13 @@ class WaterDemand:
         potential_infiltration_capacity[nonpaddy_irrigated_land] = store - store * (
             1 - (1 - satAreaFrac) ** potBeta
         )
+
+        assert not (
+            np.any(np.isnan(potential_infiltration_capacity[nonpaddy_irrigated_land]))
+            and not np.all(
+                np.isnan(potential_infiltration_capacity[nonpaddy_irrigated_land])
+            )
+        ), "Error: Some values in readily_available_water are NaN, but not all."
 
         return (
             paddy_level,
