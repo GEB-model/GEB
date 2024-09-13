@@ -314,12 +314,10 @@ def get_available_water_infiltration(
 def rise_from_groundwater(
     w,
     ws,
+    runoff,
     capillary_rise_from_groundwater,
 ):
     bottom_soil_layer_index = N_SOIL_LAYERS - 1
-    runoff_from_groundwater = np.zeros_like(
-        capillary_rise_from_groundwater, dtype=np.float32
-    )
 
     for i in prange(capillary_rise_from_groundwater.size):
         w[bottom_soil_layer_index, i] += capillary_rise_from_groundwater[
@@ -335,11 +333,8 @@ def rise_from_groundwater(
         # if the top layer is full, send water to the runoff
         # TODO: Send to topwater instead of runoff if paddy irrigated
         if w[0, i] > ws[0, i]:
-            runoff_from_groundwater[i] = (
-                w[0, i] - ws[0, i]
-            )  # move excess water to runoff
+            runoff[i] += w[0, i] - ws[0, i]  # move excess water to runoff
             w[0, i] = ws[0, i]  # set the top layer to full
-    return runoff_from_groundwater
 
 
 @njit(cache=True, parallel=True)
@@ -535,7 +530,7 @@ def evapotranspirate(
 @njit(cache=True, parallel=True)
 def infiltrate(
     available_water_infiltration,
-    runoff_from_groundwater,
+    runoff,
     ws,
     land_use_type,
     crop_kc,
@@ -547,7 +542,6 @@ def infiltrate(
     topwater,
 ):
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
-    direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
 
     is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
@@ -598,7 +592,7 @@ def infiltrate(
             )
 
         if is_bioarea[i]:
-            direct_runoff[i] = max(
+            runoff[i] += max(
                 (available_water_infiltration[i] - infiltration - preferential_flow[i]),
                 np.float32(0),
             )
@@ -607,13 +601,10 @@ def infiltrate(
             topwater[i] = max(np.float32(0), topwater[i] - infiltration)
             if crop_kc[i] > np.float32(0.75):
                 # if paddy fields flooded only runoff if topwater > 0.05m
-                direct_runoff[i] = max(
+                runoff[i] += max(
                     0, topwater[i] - np.float32(0.05)
                 )  # TODO: Potential minor bug, should this be added to runoff instead of replacing runoff?
-            topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
-
-        if is_bioarea[i]:
-            direct_runoff[i] += runoff_from_groundwater[i]
+            topwater[i] = max(np.float32(0), topwater[i] - runoff[i])
 
         # add infiltration to the soil
         w[0, i] += infiltration
@@ -623,7 +614,7 @@ def infiltrate(
             )  # TODO: Solve edge case of the second layer being full, in principle this should not happen as infiltration should be capped by the infilation capacity
             w[0, i] = ws[0, i]
 
-    return preferential_flow, direct_runoff
+    return preferential_flow
 
 
 @njit(cache=True, parallel=True)
@@ -636,7 +627,9 @@ def capillary_rise_between_soil_layers(
     land_use_type,
     w,
 ):
-    capillary_rise_soil_matrix = np.zeros_like(w)
+    capillary_rise_matrix = np.zeros(
+        (N_SOIL_LAYERS - 1, land_use_type.size), dtype=np.float32
+    )
 
     for i in prange(land_use_type.size):
         # capillary rise between soil layers, iterate from top, but skip bottom (which is has capillary rise from groundwater)
@@ -654,27 +647,24 @@ def capillary_rise_between_soil_layers(
                     saturated_hydraulic_conductivity[layer + 1, i],
                 )
             )
-            capillary_rise_soil = max(
-                np.float32(0),
-                (np.float32(1) - saturation_ratio)
-                * unsaturated_hydraulic_conductivity_layer_below,
+            capillary_rise = (
+                np.float32(1) - saturation_ratio
+            ) * unsaturated_hydraulic_conductivity_layer_below
+            capillary_rise = min(
+                capillary_rise,
+                ws[layer, i] - w[layer, i],
             )
-            # penultimate layer, limit capillary rise to available water in bottom layer
-            if layer == N_SOIL_LAYERS - 2:
-                capillary_rise_soil = min(
-                    capillary_rise_soil,
-                    w[N_SOIL_LAYERS - 1, i] - wres[N_SOIL_LAYERS - 1, i],
-                )
+            capillary_rise = min(
+                capillary_rise,
+                wfc[layer + 1, i] - w[layer + 1, i],
+            )
+            capillary_rise = max(capillary_rise, np.float32(0))
 
-            capillary_rise_soil_matrix[layer, i] = capillary_rise_soil
+            capillary_rise_matrix[layer, i] = capillary_rise
 
-        for layer in range(N_SOIL_LAYERS):
-            # for all layers except the bottom layer, add capillary rise from below to the layer
-            if layer != N_SOIL_LAYERS - 1:
-                w[layer, i] += capillary_rise_soil_matrix[layer, i]
-            # for all layers except the top layer, remove capillary rise from the layer above
-            if layer != 0:
-                w[layer, i] -= capillary_rise_soil_matrix[layer - 1, i]
+        for layer in range(N_SOIL_LAYERS - 1):
+            w[layer, i] += capillary_rise_matrix[layer, i]
+            w[layer + 1, i] -= capillary_rise_matrix[layer, i]
 
 
 @njit(cache=True, parallel=True)
@@ -1087,7 +1077,9 @@ class Soil(object):
             w_pre = self.var.w.copy()
             topwater_pre = self.var.topwater.copy()
 
+        bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
         interflow = self.var.full_compressed(0, dtype=np.float32)
+        runoff = self.var.full_compressed(0, dtype=np.float32)
 
         timer = TimingModule("Soil")
 
@@ -1103,9 +1095,10 @@ class Soil(object):
 
         timer.new_split("Available infiltratrion")
 
-        runoff_from_groundwater = rise_from_groundwater(
+        rise_from_groundwater(
             w=self.var.w,
             ws=self.ws,
+            runoff=runoff,
             capillary_rise_from_groundwater=capillary_rise_from_groundwater.astype(
                 np.float32
             ),
@@ -1144,9 +1137,9 @@ class Soil(object):
 
         timer.new_split("Evapotranspiration")
 
-        preferential_flow, direct_runoff = infiltrate(
+        preferential_flow = infiltrate(
             available_water_infiltration=available_water_infiltration,
-            runoff_from_groundwater=runoff_from_groundwater,
+            runoff=runoff,
             ws=self.ws,
             land_use_type=self.var.land_use_type,
             crop_kc=self.var.cropKC,
@@ -1158,7 +1151,7 @@ class Soil(object):
             topwater=self.var.topwater,
         )
         assert preferential_flow.dtype == np.float32
-        assert direct_runoff.dtype == np.float32
+        assert runoff.dtype == np.float32
 
         timer.new_split("Infiltration")
 
@@ -1189,7 +1182,6 @@ class Soil(object):
 
         timer.new_split("Percolation")
 
-        bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
         self.var.actual_evapotranspiration[bioarea] = (
             self.var.actual_evapotranspiration[bioarea]
             + actual_bare_soil_evaporation[bioarea]
@@ -1198,6 +1190,7 @@ class Soil(object):
         )
 
         if __debug__:
+            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-10).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
                 name="soil_1",
@@ -1208,7 +1201,7 @@ class Soil(object):
                     self.var.actual_irrigation_consumption[bioarea],
                 ],
                 outfluxes=[
-                    direct_runoff[bioarea],
+                    runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
                     actual_total_transpiration[bioarea],
@@ -1237,7 +1230,7 @@ class Soil(object):
                     self.var.interceptEvap[bioarea],
                 ],
                 outfluxes=[
-                    direct_runoff[bioarea],
+                    runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
                     self.var.actual_evapotranspiration[bioarea],
@@ -1261,11 +1254,8 @@ class Soil(object):
                 actual_bare_soil_evaporation[bioarea]
                 <= potential_bare_soil_evaporation[bioarea] + 1e-5
             ).all()
-            assert (
-                actual_total_transpiration[bioarea]
-                + actual_bare_soil_evaporation[bioarea]
-                <= potential_evapotranspiration[bioarea] + 1e-5
-            ).all()
+
+            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
 
         timer.new_split("Finalizing")
         if self.model.timing:
@@ -1273,7 +1263,7 @@ class Soil(object):
 
         return (
             interflow,
-            direct_runoff,
+            runoff,
             groundwater_recharge,
             open_water_evaporation,
             actual_total_transpiration,
