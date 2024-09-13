@@ -983,7 +983,7 @@ class CropFarmers(AgentBaseClass):
         )
         np.random.seed(42)
         self.intention_factor[:] = np.random.uniform(
-            0, 1, size=self.intention_factor.shape
+            0, 0.6, size=self.intention_factor.shape
         )
 
         # Load the region_code of each farmer.
@@ -1280,12 +1280,12 @@ class CropFarmers(AgentBaseClass):
 
         # Create a random set of irrigating farmers --> chance that it does not line up with farmers that are expected to have this
         # Create a random generator object with a seed
-        # rng = np.random.default_rng(42)
+        rng = np.random.default_rng(42)
 
         self.irrigation_efficiency = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
-        self.irrigation_efficiency[:] = 0.5
+        self.irrigation_efficiency[:] = rng.random(self.n)
         # Set the people who already have more van 90% irrigation efficiency to already adapted for the drip irrgation adaptation
         self.adapted[:, 2][self.irrigation_efficiency >= 0.90] = 1
         self.adaptation_mechanism[self.adapted[:, 2] == 1, 2] = 1
@@ -1505,7 +1505,7 @@ class CropFarmers(AgentBaseClass):
             max_n=self.max_n,
             extra_dims=(n_neighbor,),
             extra_dims_names=("neighbors",),
-            dtype=np.float32,
+            dtype=np.int32,
             fill_value=np.nan,
         )
 
@@ -2833,67 +2833,90 @@ class CropFarmers(AgentBaseClass):
         # Determine for which agents it is beneficial to switch crops
         SEUT_adaptation_decision = best_option_SEUT > SEUT_do_nothing
 
-        print("crop switching agents", np.count_nonzero(SEUT_adaptation_decision))
+        # Determine whether the chosen option is the first or second option
+        new_crop_nr_temp = np.where(
+            chosen_option == 0,
+            new_crop_nr[:, 0],
+            new_crop_nr[:, 1],
+        )
+
+        # Adjust the intention threshold based on whether neighbors already have similar crop
+        # Check for each farmer which crops their neighbors are cultivating
+        social_network_crops = self.crop_calendar[self.social_network, 0, 0]
+
+        # Check whether adapting agents have adaptation type in their network and create mask
+        network_has_crop = np.any(
+            social_network_crops == new_crop_nr_temp[:, None],
+            axis=1,
+        )
+
+        # Increase intention factor if someone in network has crop
+        intention_factor_adjusted = self.intention_factor.copy()
+        intention_factor_adjusted[network_has_crop] += 0.3
+
+        # Determine whether it passed the intention threshold
+        random_values = np.random.rand(*intention_factor_adjusted.shape)
+        intention_mask = random_values < intention_factor_adjusted
+
+        # Set the adaptation mask
+        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
         final_chosen_option = chosen_option[SEUT_adaptation_decision]
 
-        # Determine whether the chosen option is the first or second option
-        selected_new_crop_nr = np.where(
+        print("Crop switching farmers", np.count_nonzero(SEUT_adaptation_decision))
+
+        # Make final selection of which crops the agents will switch to
+        new_crop_nr_final = np.where(
             final_chosen_option == 0,
             new_crop_nr[SEUT_adaptation_decision, 0],
             new_crop_nr[SEUT_adaptation_decision, 1],
         )
 
-        # Determine whether it passed the intention threshold
-        random_values = np.random.rand(*self.intention_factor.shape)
-        intention_mask = random_values < self.intention_factor
-
-        # Adjust the intention threshold based on whether neighbors already have similar crop
-        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
-
-        selected_farmer_id = np.where(
+        # Select farmer id from which they will copy the yield/spei relation
+        new_farmer_id = np.where(
             final_chosen_option == 0,
             new_farmer_id[SEUT_adaptation_decision, 0],
             new_farmer_id[SEUT_adaptation_decision, 1],
         )
 
-        assert not np.any(selected_new_crop_nr == -1)
+        assert not np.any(new_crop_nr_final == -1)
 
-        # Assuming self.crop_calendar and extra_constraint are defined
-        unique_values_old, counts_old = np.unique(
-            self.crop_calendar[extra_constraint, 0, 0], return_counts=True
-        )
+        # # Assuming self.crop_calendar and extra_constraint are defined
+        # unique_values_old, counts_old = np.unique(
+        #     self.crop_calendar[extra_constraint, 0, 0], return_counts=True
+        # )
 
-        # Create a formatted string for the old distribution
-        old_distribution = ", ".join(
-            f"{val}: {cnt}" for val, cnt in zip(unique_values_old, counts_old)
-        )
+        # # Create a formatted string for the old distribution
+        # old_distribution = ", ".join(
+        #     f"{val}: {cnt}" for val, cnt in zip(unique_values_old, counts_old)
+        # )
 
-        # Print the old distribution
-        print("old distribution", "\n", old_distribution)
+        # # Print the old distribution
+        # print("old distribution", "\n", old_distribution)
 
         # Switch their crops and update their yield-SPEI relation
-        self.crop_calendar[SEUT_adaptation_decision, 0, 0] = selected_new_crop_nr
+        self.crop_calendar[SEUT_adaptation_decision, 0, 0] = new_crop_nr_final
 
-        unique_values, counts = np.unique(
-            self.crop_calendar[extra_constraint, 0, 0], return_counts=True
-        )
+        # unique_values, counts = np.unique(
+        #     self.crop_calendar[extra_constraint, 0, 0], return_counts=True
+        # )
 
-        # Calculate the difference in counts
-        difference_counts = counts - counts_old
+        # # Calculate the difference in counts
+        # difference_counts = counts - counts_old
 
-        # Create a formatted string for the difference
-        difference_distribution = ", ".join(
-            f"{val}: {cnt}" for val, cnt in zip(unique_values_old, difference_counts)
-        )
+        # # Create a formatted string for the difference
+        # difference_distribution = ", ".join(
+        #     f"{val}: {cnt}" for val, cnt in zip(unique_values_old, difference_counts)
+        # )
 
-        # Print the difference
-        print("difference", "\n", difference_distribution)
+        # # Print the difference
+        # print("difference", "\n", difference_distribution)
+
         # Update yield-SPEI relation
         self.yearly_yield_ratio[SEUT_adaptation_decision, :] = self.yearly_yield_ratio[
-            selected_farmer_id, :
+            new_farmer_id, :
         ]
         self.yearly_SPEI_probability[SEUT_adaptation_decision, :] = (
-            self.yearly_SPEI_probability[selected_farmer_id, :]
+            self.yearly_SPEI_probability[new_farmer_id, :]
         )
 
     def switch_crops_neighbors(self) -> None:
@@ -3037,49 +3060,54 @@ class CropFarmers(AgentBaseClass):
         assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
 
         # Compare EU values for those who haven't adapted yet and get boolean results
-        SEUT_adaptation_decision = (
-            SEUT_adapt[adapted == 0] > SEUT_do_nothing[adapted == 0]
-        )
+        SEUT_adaptation_decision = SEUT_adapt > SEUT_do_nothing
+
+        # Adjust the intention threshold based on whether neighbors already have similar crop
+        # Check for each farmer which crops their neighbors are cultivating
+        social_network_wells = adapted[self.social_network]
+
+        # Check whether adapting agents have adaptation type in their network and create mask
+        network_has_crop = np.any(social_network_wells == 1, axis=1)
+
+        # Increase intention factor if someone in network has crop
+        intention_factor_adjusted = self.intention_factor.copy()
+        intention_factor_adjusted[network_has_crop] += 0.3
 
         # Determine whether it passed the intention threshold
-        random_values = np.random.rand(*self.intention_factor.shape)
-        intention_mask = random_values < self.intention_factor
+        random_values = np.random.rand(*intention_factor_adjusted.shape)
+        intention_mask = random_values < intention_factor_adjusted
 
-        SEUT_adaptation_decision = (
-            SEUT_adaptation_decision & intention_mask[adapted == 0]
-        )
-
-        # Initialize a mask with default value as False
-        SEUT_adapt_mask = np.zeros_like(adapted, dtype=bool)
-
-        # Update the mask based on EU decisions
-        SEUT_adapt_mask[adapted == 0] = SEUT_adaptation_decision
+        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
 
         # Update the adaptation status
-        self.adapted[SEUT_adapt_mask, adaptation_type] = 1
+        self.adapted[SEUT_adaptation_decision, adaptation_type] = 1
 
         # Reset the timer for newly adapting farmers and update timers for others
-        self.time_adapted[SEUT_adapt_mask, adaptation_type] = 0
+        self.time_adapted[SEUT_adaptation_decision, adaptation_type] = 0
         self.time_adapted[
             self.time_adapted[:, adaptation_type] != -1, adaptation_type
         ] += 1
 
         # Update irrigation source for farmers who adapted
-        self.irrigation_source[SEUT_adapt_mask] = self.irrigation_source_key["well"]
+        self.irrigation_source[SEUT_adaptation_decision] = self.irrigation_source_key[
+            "well"
+        ]
 
         # Set their well depth
-        self.well_depth[SEUT_adapt_mask] = well_depth[SEUT_adapt_mask]
+        self.well_depth[SEUT_adaptation_decision] = well_depth[SEUT_adaptation_decision]
 
         # Update annual costs and disposable income for adapted farmers
-        self.all_loans_annual_cost[SEUT_adapt_mask, adaptation_type + 1, 0] += (
-            annual_cost[SEUT_adapt_mask]
-        )  # For wells specifically
-        self.all_loans_annual_cost[SEUT_adapt_mask, -1, 0] += annual_cost[
-            SEUT_adapt_mask
+        self.all_loans_annual_cost[
+            SEUT_adaptation_decision, adaptation_type + 1, 0
+        ] += annual_cost[SEUT_adaptation_decision]  # For wells specifically
+        self.all_loans_annual_cost[SEUT_adaptation_decision, -1, 0] += annual_cost[
+            SEUT_adaptation_decision
         ]  # Total loan amount
 
         # set loan tracker
-        self.loan_tracker[SEUT_adapt_mask, adaptation_type + 1, 0] += loan_duration
+        self.loan_tracker[SEUT_adaptation_decision, adaptation_type + 1, 0] += (
+            loan_duration
+        )
 
         # Print the percentage of adapted households
         percentage_adapted = round(
@@ -3149,9 +3177,10 @@ class CropFarmers(AgentBaseClass):
         (
             total_profits,
             profits_no_event,
-            total_profits_adaptation,
-            profits_no_event_adaptation,
-        ) = self.profits_SEUT(adaptation_type, adapted)
+        ) = self.profits_SEUT(0, adapted)
+
+        total_profits_adaptation = total_profits + energy_diff + water_diff
+        profits_no_event_adaptation = profits_no_event + energy_diff + water_diff
 
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params = {
