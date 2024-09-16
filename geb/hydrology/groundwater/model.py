@@ -57,7 +57,8 @@ def get_water_table_depth(
                 < layer_boundary_elevation[layer_ix, cell_ix]
             ):
                 water_table_depth[cell_ix] = elevation[cell_ix] - max(
-                    layer_boundary_elevation[layer_ix + 1, cell_ix], layer_head
+                    layer_boundary_elevation[layer_ix + 1, cell_ix],
+                    min(layer_head, layer_boundary_elevation[layer_ix, cell_ix]),
                 )
                 break
 
@@ -175,6 +176,7 @@ class ModFlowSimulation:
 
         self.topography = topography
         self.layer_boundary_elevation = layer_boundary_elevation
+        assert (self.topography >= self.layer_boundary_elevation[0]).all()
         self.specific_yield = specific_yield
         hydraulic_conductivity = hydraulic_conductivity
         self.hydraulic_conductivity_drainage = hydraulic_conductivity[0]
@@ -596,6 +598,7 @@ class ModFlowSimulation:
             self.topography,
             min_remaining_layer_storage_m=self.min_remaining_layer_storage_m,
         )
+        assert (groundwater_depth >= 0).all()
         return groundwater_depth
 
     @property

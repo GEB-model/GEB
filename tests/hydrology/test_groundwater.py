@@ -30,7 +30,7 @@ x = np.linspace(-5, 5, XSIZE)
 y = np.linspace(-5, 5, YSIZE)
 x, y = np.meshgrid(x, y)
 
-topography = np.exp2(-(x**2) - y**2 + 5)
+topography = np.exp2(-(x**2) - y**2 + 5).astype(np.float32)
 basin_mask = np.zeros((YSIZE, XSIZE), dtype=bool)
 basin_mask[0] = True
 basin_mask[-3:-1, 0:3] = True
@@ -304,27 +304,29 @@ def test_modflow_simulation_with_visualization():
 def test_get_water_table_depth():
     layer_boundary_elevation = np.array(
         [
-            [100, 100, 100, 100, 100, 100],
-            [50, 50, 50, 50, 50, 50],
-            [0, 0, 0, 0, 0, 0],
+            [100, 100, 100, 100, 100, 100, 100],
+            [50, 50, 50, 50, 50, 50, 50],
+            [0, 0, 0, 0, 0, 0, 0],
         ]
     )
     head = np.array(
         [
-            [110, 90, 45, 45, -1, 50.05],
-            [115, 60, 60, 40, -1, 50.01],
+            [110, 90, 45, 45, -1, 50.05, 100.01],
+            [115, 60, 60, 40, -1, 50.01, 100.01],
         ]
     )
-    elevation = np.array([103, 103, 103, 103, 103, 103])
+    elevation = np.array([103, 103, 103, 103, 103, 103, 103])
     water_table_depth = get_water_table_depth(
         layer_boundary_elevation, head, elevation, min_remaining_layer_storage_m=0
     )
-    np.testing.assert_allclose(water_table_depth, np.array([3, 13, 53, 63, 103, 52.95]))
+    np.testing.assert_allclose(
+        water_table_depth, np.array([3, 13, 53, 63, 103, 52.95, 3])
+    )
 
     water_table_depth = get_water_table_depth(
         layer_boundary_elevation, head, elevation, min_remaining_layer_storage_m=0.1
     )
-    np.testing.assert_allclose(water_table_depth, np.array([3, 13, 53, 63, 103, 52.99]))
+    np.testing.assert_allclose(water_table_depth, np.array([3, 13, 53, 63, 103, 53, 3]))
 
 
 def test_get_groundwater_storage_m():
