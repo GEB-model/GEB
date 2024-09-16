@@ -624,14 +624,11 @@ def capillary_rise_between_soil_layers(
     wres,
     saturated_hydraulic_conductivity,
     lambda_,
-    land_use_type,
     w,
 ):
-    capillary_rise_matrix = np.zeros(
-        (N_SOIL_LAYERS - 1, land_use_type.size), dtype=np.float32
-    )
+    capillary_rise_matrix = np.zeros((N_SOIL_LAYERS - 1, w.shape[1]), dtype=np.float32)
 
-    for i in prange(land_use_type.size):
+    for i in prange(w.shape[1]):
         # capillary rise between soil layers, iterate from top, but skip bottom (which is has capillary rise from groundwater)
         for layer in range(N_SOIL_LAYERS - 1):
             saturation_ratio = max(
