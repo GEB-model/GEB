@@ -519,10 +519,18 @@ def share(working_directory):
 
     folders = ["input"]
     files = ["model.yml", "build.yml"]
+    optional_files = ["sfincs.yml", "update.yml", "data_catalog.yml"]
     with zipfile.ZipFile("model.zip", "w") as zipf:
-        total_files = sum(
-            [sum(len(files) for _, _, files in os.walk(folder)) for folder in folders]
-        ) + len(files)  # Count total number of files
+        total_files = (
+            sum(
+                [
+                    sum(len(files) for _, _, files in os.walk(folder))
+                    for folder in folders
+                ]
+            )
+            + len(files)
+            + len(optional_files)
+        )  # Count total number of files
         progress = 0  # Initialize progress counter
         for folder in folders:
             for root, _, filenames in os.walk(folder):
@@ -535,6 +543,12 @@ def share(working_directory):
                         )  # Print progress
         for file in files:
             zipf.write(file)
+            progress += 1  # Increment progress counter
+            if not progress % 100:
+                print(f"Exporting file {progress}/{total_files}")  # Print progress
+        for file in optional_files:
+            if os.path.exists(file):
+                zipf.write(file)
             progress += 1  # Increment progress counter
             if not progress % 100:
                 print(f"Exporting file {progress}/{total_files}")  # Print progress
