@@ -3,7 +3,7 @@ from click.testing import CliRunner
 
 from geb.cli import build
 
-from .setup import IN_GITHUB_ACTIONS
+from .testconfig import IN_GITHUB_ACTIONS
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test test requires local data.")

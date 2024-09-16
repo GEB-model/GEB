@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from ..setup import output_folder
+from ..testconfig import output_folder
 
 import geb.hydrology.soil
 from geb.hydrology.soil import (

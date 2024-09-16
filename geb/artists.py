@@ -232,10 +232,10 @@ class Artists(honeybeesArtists):
         else:
             options = {}
         if "type" not in options:
-            if np.issubsctype(array, np.floating):
+            if np.issubdtype(array.dtype, np.floating):
                 options["type"] = "continuous"
                 options["nanvalue"] = np.nan
-            elif np.issubsctype(array, np.integer):
+            elif np.issubdtype(array.dtype, np.integer):
                 if np.unique(array).size < 30:
                     options["type"] = "categorical"
                     options["nanvalue"] = -1
@@ -245,7 +245,7 @@ class Artists(honeybeesArtists):
                     )
                     options["type"] = "continuous"
                     array = array.astype(np.float64)
-            elif np.issubsctype(array, bool):
+            elif np.issubdtype(array.dtype, bool):
                 options["type"] = "bool"
                 options["nanvalue"] = -1
             else:
@@ -260,9 +260,9 @@ class Artists(honeybeesArtists):
             minvalue, maxvalue = 0, 1
         else:
             if not maxvalue:
-                maxvalue = np.nanmax(array[~mask], initial=0).item()
+                maxvalue = np.nanmax(array[~mask]).item()
             if not minvalue:
-                minvalue = np.nanmin(array[~mask], initial=0).item()
+                minvalue = np.nanmin(array[~mask]).item()
             if np.isnan(maxvalue):  # minvalue must be nan as well
                 minvalue, maxvalue = 0, 0
 

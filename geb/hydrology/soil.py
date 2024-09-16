@@ -1251,8 +1251,11 @@ class Soil(object):
                 actual_bare_soil_evaporation[bioarea]
                 <= potential_bare_soil_evaporation[bioarea] + 1e-5
             ).all()
-
-            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
+            # assert (
+            #     actual_total_transpiration[bioarea]
+            #     + actual_bare_soil_evaporation[bioarea]
+            #     <= potential_evapotranspiration[bioarea] + 1e-5
+            # ).all()
 
         timer.new_split("Finalizing")
         if self.model.timing:

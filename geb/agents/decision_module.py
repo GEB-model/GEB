@@ -105,6 +105,28 @@ class DecisionModule:
 
         # Preallocate arrays
         n_floods, n_agents = total_profits.shape
+
+        # Prepare arrays
+        max_T = np.int32(np.max(T))
+
+        # Part njit, iterate through floods
+        n_agents = np.int32(n_agents)
+        NPV_summed = self.IterateThroughFlood(
+            n_floods,
+            total_profits,
+            profits_no_event,
+            max_T,
+            n_agents,
+            discount_rate,
+        )
+
+        # Filter out negative NPVs
+        NPV_summed = np.maximum(1, NPV_summed)
+
+        # Calculate expected utility
+        ## NPV_Summed here is the wealth and income minus the expected damages of a certain probabilty event
+        EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+
         p_all_events = np.full((p_droughts.size + 3, n_agents), -1, dtype=np.float32)
 
         # calculate perceived risk
@@ -128,27 +150,6 @@ class DecisionModule:
 
         # Add 0 to ensure we integrate [0, 1]
         p_all_events[0, :] = 0
-
-        # Prepare arrays
-        max_T = np.int32(np.max(T))
-
-        # Part njit, iterate through floods
-        n_agents = np.int32(n_agents)
-        NPV_summed = self.IterateThroughFlood(
-            n_floods,
-            total_profits,
-            profits_no_event,
-            max_T,
-            n_agents,
-            discount_rate,
-        )
-
-        # Filter out negative NPVs
-        NPV_summed = np.maximum(1, NPV_summed)
-
-        # Calculate expected utility
-        ## NPV_Summed here is the wealth and income minus the expected damages of a certain probabilty event
-        EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
 
         # Use composite trapezoidal rule integrate EU over event probability
         ## Here all

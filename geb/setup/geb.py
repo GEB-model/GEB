@@ -54,6 +54,10 @@ from .workflows.population import generate_locations
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
 from .workflows.conversions import M49_to_ISO3
+from .workflows.forcing import (
+    reproject_and_apply_lapse_rate_temperature,
+    reproject_and_apply_lapse_rate_pressure,
+)
 
 XY_CHUNKSIZE = 350
 
@@ -2067,19 +2071,7 @@ class GEBModel(GridModel):
             # # Create a thread pool and map the set_forcing function to the variables
             # # Wait for all threads to complete
             # concurrent.futures.wait(futures)
-            DEM = self.grid["landsurface/topo/elevation"]
-
-            # ERA5_elevation = (
-            #     (
-            #         self.data_catalog.get_rasterdataset(
-            #             "ERA5_geopotential", bbox=self.bounds, buffer=1
-            #         )
-            #         / 9.80665
-            #     )
-            #     .isel(time=0)
-            #     .rename({"longitude": "x", "latitude": "y"})
-            # )  # convert from m2/s2 to m (see: https://codes.ecmwf.int/grib/param-db/129)
-            # # LAPSE_RATE = -0.0065
+            mask = self.grid["areamaps/grid_mask"]
 
             pr_hourly = self.download_ERA(
                 "total_precipitation", starttime, endtime, method="accumulation"
@@ -2095,7 +2087,7 @@ class GEBModel(GridModel):
             pr_hourly.name = "pr_hourly"
             self.set_forcing(pr_hourly, name="climate/pr_hourly")
             pr = pr_hourly.resample(time="D").mean()  # get daily mean
-            pr = pr.raster.reproject_like(DEM, method="average")
+            pr = pr.raster.reproject_like(mask, method="average")
             pr.name = "pr"
             self.set_forcing(pr, name="climate/pr")
 
@@ -2114,7 +2106,7 @@ class GEBModel(GridModel):
                 "units": "W m-2",
             }
 
-            rsds = rsds.raster.reproject_like(DEM, method="average")
+            rsds = rsds.raster.reproject_like(mask, method="average")
             rsds.name = "rsds"
             self.set_forcing(rsds, name="climate/rsds")
 
@@ -2130,57 +2122,70 @@ class GEBModel(GridModel):
                 "long_name": "Surface Downwelling Longwave Radiation",
                 "units": "W m-2",
             }
-            rlds = rlds.raster.reproject_like(DEM, method="average")
+            rlds = rlds.raster.reproject_like(mask, method="average")
             rlds.name = "rlds"
             self.set_forcing(rlds, name="climate/rlds")
 
             hourly_tas = self.download_ERA(
                 "2m_temperature", starttime, endtime, method="raw"
             )
-            tas = hourly_tas.resample(time="D").mean()
-            tas.attrs = {
+
+            DEM = self.data_catalog.get_rasterdataset(
+                "fabdem",
+                bbox=hourly_tas.raster.bounds,
+                buffer=100,
+                variables=["fabdem"],
+            )
+
+            hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
+                hourly_tas, DEM, mask
+            )
+
+            tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
+            tas_reprojected.attrs = {
                 "standard_name": "air_temperature",
                 "long_name": "Near-Surface Air Temperature",
                 "units": "K",
             }
-            # tas_sea_level = tas - (ERA5_elevation * LAPSE_RATE)
-            tas_reprojected = tas.raster.reproject_like(DEM, method="average")
             tas_reprojected.name = "tas"
             self.set_forcing(tas_reprojected, name="climate/tas")
 
-            tasmax = hourly_tas.resample(time="D").max()
+            tasmax = hourly_tas_reprojected.resample(time="D").max()
             tasmax.attrs = {
                 "standard_name": "air_temperature",
                 "long_name": "Daily Maximum Near-Surface Air Temperature",
                 "units": "K",
             }
-            tasmax = tasmax.raster.reproject_like(DEM, method="average")
             tasmax.name = "tasmax"
             self.set_forcing(tasmax, name="climate/tasmax")
 
-            tasmin = hourly_tas.resample(time="D").min()
+            tasmin = hourly_tas_reprojected.resample(time="D").min()
             tasmin.attrs = {
                 "standard_name": "air_temperature",
                 "long_name": "Daily Minimum Near-Surface Air Temperature",
                 "units": "K",
             }
-            tasmin = tasmin.raster.reproject_like(DEM, method="average")
             tasmin.name = "tasmin"
             self.set_forcing(tasmin, name="climate/tasmin")
 
-            dew_point_tas_C = (
-                self.download_ERA(
-                    "2m_dewpoint_temperature", starttime, endtime, method="raw"
-                )
-                - 273.15
+            dew_point_tas = self.download_ERA(
+                "2m_dewpoint_temperature", starttime, endtime, method="raw"
             )
-            hourly_tas_C = hourly_tas - 273.15
+            dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
+                dew_point_tas, DEM, mask
+            )
+
             water_vapour_pressure = 0.6108 * np.exp(
-                17.27 * dew_point_tas_C / (237.3 + dew_point_tas_C)
+                17.27
+                * (dew_point_tas_reprojected - 273.15)
+                / (237.3 + (dew_point_tas_reprojected - 273.15))
             )  # calculate water vapour pressure (kPa)
             saturation_vapour_pressure = 0.6108 * np.exp(
-                17.27 * hourly_tas_C / (237.3 + hourly_tas_C)
+                17.27
+                * (hourly_tas_reprojected - 273.15)
+                / (237.3 + (hourly_tas_reprojected - 273.15))
             )
+
             assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
             relative_humidity = (
                 water_vapour_pressure / saturation_vapour_pressure
@@ -2192,7 +2197,7 @@ class GEBModel(GridModel):
             }
             relative_humidity = relative_humidity.resample(time="D").mean()
             relative_humidity = relative_humidity.raster.reproject_like(
-                DEM, method="average"
+                mask, method="average"
             )
             relative_humidity.name = "hurs"
             self.set_forcing(relative_humidity, name="climate/hurs")
@@ -2200,13 +2205,13 @@ class GEBModel(GridModel):
             pressure = self.download_ERA(
                 "surface_pressure", starttime, endtime, method="raw"
             )
+            pressure = reproject_and_apply_lapse_rate_pressure(pressure, DEM, mask)
             pressure.attrs = {
                 "standard_name": "surface_air_pressure",
                 "long_name": "Surface Air Pressure",
                 "units": "Pa",
             }
             pressure = pressure.resample(time="D").mean()
-            pressure = pressure.raster.reproject_like(DEM, method="average")
             pressure.name = "ps"
             self.set_forcing(pressure, name="climate/ps")
 
@@ -2225,7 +2230,7 @@ class GEBModel(GridModel):
                 "long_name": "Near-Surface Wind Speed",
                 "units": "m s-1",
             }
-            wind_speed = wind_speed.raster.reproject_like(DEM, method="average")
+            wind_speed = wind_speed.raster.reproject_like(mask, method="average")
             wind_speed.name = "sfcwind"
             self.set_forcing(wind_speed, name="climate/sfcwind")
 
@@ -2493,8 +2498,8 @@ class GEBModel(GridModel):
         The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable, forcing, ssp, starttime, endtime):
-            self.logger.info(f"Setting up {variable}...")
+        def download_variable(variable_name, forcing, ssp, starttime, endtime):
+            self.logger.info(f"Setting up {variable_name}...")
             first_year_future_climate = 2015
             var = []
             if ssp == "picontrol":
@@ -2502,21 +2507,14 @@ class GEBModel(GridModel):
                     product="InputData",
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
-                    variable=variable,
+                    variable=variable_name,
                     starttime=starttime,
                     endtime=endtime,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
-                var.append(
-                    self.interpolate(
-                        ds[variable].raster.clip_bbox(ds.raster.bounds),
-                        "linear",
-                        xdim="lon",
-                        ydim="lat",
-                    )
-                )
+                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
             if (
                 (
                     endtime.year < first_year_future_climate
@@ -2528,21 +2526,14 @@ class GEBModel(GridModel):
                     product="InputData",
                     simulation_round="ISIMIP3b",
                     climate_scenario="historical",
-                    variable=variable,
+                    variable=variable_name,
                     starttime=starttime,
                     endtime=endtime,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
-                var.append(
-                    self.interpolate(
-                        ds[variable].raster.clip_bbox(ds.raster.bounds),
-                        "linear",
-                        xdim="lon",
-                        ydim="lat",
-                    )
-                )
+                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
             if (
                 starttime.year >= first_year_future_climate
                 or endtime.year >= first_year_future_climate
@@ -2553,33 +2544,47 @@ class GEBModel(GridModel):
                     product="InputData",
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
-                    variable=variable,
+                    variable=variable_name,
                     starttime=starttime,
                     endtime=endtime,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
-                var.append(
-                    self.interpolate(
-                        ds[variable].raster.clip_bbox(ds.raster.bounds),
-                        "linear",
-                        xdim="lon",
-                        ydim="lat",
-                    )
-                )
+                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
 
             var = xr.concat(
                 var, dim="time", combine_attrs="drop_conflicts", compat="equals"
             )  # all values and dimensions must be the same
+
             # assert that time is monotonically increasing with a constant step size
             assert (
                 ds.time.diff("time").astype(np.int64)
                 == (ds.time[1] - ds.time[0]).astype(np.int64)
             ).all(), "time is not monotonically increasing with a constant step size"
+
             var = var.rename({"lon": "x", "lat": "y"})
-            self.logger.info(f"Completed {variable}")
-            self.set_forcing(var, name=f"climate/{variable}")
+            if variable_name in ("tas", "tasmin", "tasmax", "ps"):
+                DEM = self.data_catalog.get_rasterdataset(
+                    "fabdem",
+                    bbox=var.raster.bounds,
+                    buffer=100,
+                    variables=["fabdem"],
+                )
+                if variable_name in ("tas", "tasmin", "tasmax"):
+                    var = reproject_and_apply_lapse_rate_temperature(
+                        var, DEM, self.grid["areamaps/grid_mask"]
+                    )
+                elif variable_name == "ps":
+                    var = reproject_and_apply_lapse_rate_pressure(
+                        var, DEM, self.grid["areamaps/grid_mask"]
+                    )
+                else:
+                    raise ValueError
+            else:
+                var = self.interpolate(var, "linear")
+            self.logger.info(f"Completed {variable_name}")
+            self.set_forcing(var, name=f"climate/{variable_name}")
 
         for variable in variables:
             download_variable(variable, forcing, ssp, starttime, endtime)
@@ -5238,8 +5243,16 @@ class GEBModel(GridModel):
             ds = ds.assign_coords(time=ds.time - np.timedelta64(12, "h"))
         return ds
 
-    def setup_sfincs(self, land_cover="esa_worldcover_2021_v200", include_coastal=True):
-        sfincs_data_catalog = DataCatalog()
+    def setup_hydrodynamics(
+        self,
+        land_cover="esa_worldcover_2021_v200",
+        include_coastal=True,
+        DEM=["fabdem", "gebco"],
+    ):
+        if isinstance(DEM, str):
+            DEM = [DEM]
+
+        hydrodynamics_data_catalog = DataCatalog()
 
         # hydrobasins
         hydrobasins = self.data_catalog.get_geodataframe(
@@ -5247,12 +5260,12 @@ class GEBModel(GridModel):
             geom=self.region,
             predicate="intersects",
         )
-        self.set_geoms(hydrobasins, name="SFINCS/hydrobasins")
+        self.set_geoms(hydrobasins, name="hydrodynamics/hydrobasins")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "hydrobasins_level_8",
             GeoDataFrameAdapter(
-                path=os.path.abspath("input/SFINCS/hydrobasins.gpkg"),
+                path=os.path.abspath("input/hydrodynamics/hydrobasins.gpkg"),
                 meta=self.data_catalog.get_source("hydrobasins_8").meta,
             ),  # hydromt likes absolute paths
         )
@@ -5263,29 +5276,30 @@ class GEBModel(GridModel):
             "gcn250", bbox=bounds, buffer=100, variables=["cn_avg"]
         )
         gcn250.name = "gcn250"
-        self.set_forcing(gcn250, name="SFINCS/gcn250")
+        self.set_forcing(gcn250, name="hydrodynamics/gcn250")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "gcn250",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/gcn250.nc"),
+                path=os.path.abspath("input/hydrodynamics/gcn250.nc"),
                 meta=self.data_catalog.get_source("gcn250").meta,
             ),  # hydromt likes absolute paths
         )
 
-        gebco = self.data_catalog.get_rasterdataset(
-            "gebco", bbox=bounds, buffer=100, variables=["elevation"]
-        )
-        gebco.name = "gebco"
-        self.set_forcing(gebco, name="SFINCS/gebco")
+        for DEM_name in DEM:
+            DEM_raster = self.data_catalog.get_rasterdataset(
+                DEM_name, bbox=bounds, buffer=100, variables=["elevation"]
+            ).compute()
+            DEM_raster.name = DEM_name
+            self.set_forcing(DEM_raster, name=f"hydrodynamics/DEM/{DEM_name}")
 
-        sfincs_data_catalog.add_source(
-            "gebco",
-            RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/gebco.nc"),
-                meta=self.data_catalog.get_source("gebco").meta,
-            ),  # hydromt likes absolute paths
-        )
+            hydrodynamics_data_catalog.add_source(
+                DEM_name,
+                RasterDatasetAdapter(
+                    path=os.path.abspath(f"input/hydrodynamics/DEM/{DEM_name}.nc"),
+                    meta=self.data_catalog.get_source(DEM_name).meta,
+                ),  # hydromt likes absolute paths
+            )
 
         # merit hydro
         merit_hydro = self.data_catalog.get_rasterdataset(
@@ -5296,12 +5310,14 @@ class GEBModel(GridModel):
             provider=self.data_provider,
         )
         del merit_hydro["flwdir"].attrs["_FillValue"]
-        self.set_forcing(merit_hydro, name="SFINCS/merit_hydro", split_dataset=False)
+        self.set_forcing(
+            merit_hydro, name="hydrodynamics/merit_hydro", split_dataset=False
+        )
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "merit_hydro",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/merit_hydro.nc"),
+                path=os.path.abspath("input/hydrodynamics/merit_hydro.nc"),
                 meta=self.data_catalog.get_source("merit_hydro").meta,
             ),  # hydromt likes absolute paths
         )
@@ -5315,27 +5331,13 @@ class GEBModel(GridModel):
         )
         glofas_discharge = glofas_discharge.rename({"latitude": "y", "longitude": "x"})
         glofas_discharge.name = "discharge_yearly"
-        self.set_forcing(glofas_discharge, name="SFINCS/discharge_yearly")
+        self.set_forcing(glofas_discharge, name="hydrodynamics/discharge_yearly")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "glofas_discharge_Yearly_Resampled_Global",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/discharge_yearly.nc"),
+                path=os.path.abspath("input/hydrodynamics/discharge_yearly.nc"),
                 meta=self.data_catalog.get_source("glofas_4_0_discharge_yearly").meta,
-            ),  # hydromt likes absolute paths
-        )
-
-        # fabdem
-        fabdem = self.data_catalog.get_rasterdataset(
-            "fabdem", bbox=bounds, buffer=100, variables=["fabdem"]
-        )
-        self.set_forcing(fabdem, name="SFINCS/fabdem")
-
-        sfincs_data_catalog.add_source(
-            "fabdem",
-            RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/fabdem.nc"),
-                meta=self.data_catalog.get_source("fabdem").meta,
             ),  # hydromt likes absolute paths
         )
 
@@ -5345,13 +5347,13 @@ class GEBModel(GridModel):
             bbox=bounds,
             predicate="intersects",
         )
-        self.set_geoms(river_centerlines, name="SFINCS/river_centerlines")
+        self.set_geoms(river_centerlines, name="hydrodynamics/river_centerlines")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "river_centerlines_MERIT_Basins",
             GeoDataFrameAdapter(
                 path=os.path.abspath(
-                    "input/SFINCS/river_centerlines.gpkg"
+                    "input/hydrodynamics/river_centerlines.gpkg"
                 ),  # hydromt likes absolute paths
                 meta=self.data_catalog.get_source(
                     "river_centerlines_MERIT_Basins"
@@ -5367,12 +5369,12 @@ class GEBModel(GridModel):
         )
         del esa_worldcover.attrs["_FillValue"]
         esa_worldcover.name = "esa_worldcover"
-        self.set_forcing(esa_worldcover, name="SFINCS/esa_worldcover")
+        self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover")
 
-        sfincs_data_catalog.add_source(
+        hydrodynamics_data_catalog.add_source(
             "esa_worldcover",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/SFINCS/esa_worldcover.nc"),
+                path=os.path.abspath("input/hydrodynamics/esa_worldcover.nc"),
                 meta=self.data_catalog.get_source(land_cover).meta,
             ),  # hydromt likes absolute paths
         )
@@ -5404,15 +5406,15 @@ class GEBModel(GridModel):
 
             self.set_forcing(
                 water_levels,
-                name="SFINCS/waterlevel",
+                name="hydrodynamics/waterlevel",
                 split_dataset=False,
                 is_spatial_dataset=False,
                 time_chunksize=24 * 6,  # 10 minute data
             )
-            sfincs_data_catalog.add_source(
+            hydrodynamics_data_catalog.add_source(
                 "waterlevel",
                 DatasetAdapter(
-                    path=os.path.abspath("input/SFINCS/waterlevel.nc"),
+                    path=os.path.abspath("input/hydrodynamics/waterlevel.nc"),
                     meta=self.data_catalog.get_source("GTSM").meta,
                 ),  # hydromt likes absolute paths
             )
@@ -5465,13 +5467,35 @@ class GEBModel(GridModel):
             else:
                 self.logger.info("The data catalog is empty, no yml file is written.")
 
-        sfincs_data_catalog.to_yml = to_yml
+        hydrodynamics_data_catalog.to_yml = to_yml
 
-        sfincs_data_catalog.to_yml(
-            sfincs_data_catalog,
-            Path(self.root) / "SFINCS" / "sfincs_data_catalog.yml",
+        hydrodynamics_data_catalog.to_yml(
+            hydrodynamics_data_catalog,
+            Path(self.root) / "hydrodynamics" / "hydrodynamics_data_catalog.yml",
         )
         return None
+
+    def setup_damage_parameters(self, parameters):
+        for hazard, hazard_parameters in parameters.items():
+            for asset_type, asset_parameters in hazard_parameters.items():
+                for component, asset_compontents in asset_parameters.items():
+                    curve = pd.DataFrame(
+                        asset_compontents["curve"], columns=["severity", "damage_ratio"]
+                    )
+
+                    self.set_table(
+                        curve,
+                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
+                    )
+
+                    maximum_damage = {
+                        "maximum_damage": asset_compontents["maximum_damage"]
+                    }
+
+                    self.set_dict(
+                        maximum_damage,
+                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
+                    )
 
     def setup_discharge_observations(self, files):
         transform = self.grid.raster.transform
@@ -5520,10 +5544,16 @@ class GEBModel(GridModel):
             filepath = Path(self.root, filename)
             filepath.parent.mkdir(parents=True, exist_ok=True)
 
+            if grid.dtype == "float64":
+                grid = grid.astype("float32")
+
             # zarr cannot handle / in variable names
             grid.name = "data"
             assert hasattr(grid, "spatial_ref")
             grid.to_zarr(filepath, mode="w")
+
+            # also export to tif for easier visualization
+            grid.rio.to_raster(filepath.with_suffix(".tif"))
 
     def write_grid(self):
         self._assert_write_mode
@@ -5589,6 +5619,17 @@ class GEBModel(GridModel):
         if is_spatial_dataset:
             forcing = forcing.rio.write_crs(self.crs).rio.write_coordinate_system()
 
+        if isinstance(forcing, xr.DataArray):
+            # if data is float64, convert to float32
+            if forcing.dtype == np.float64:
+                forcing = forcing.astype(np.float32)
+        elif isinstance(forcing, xr.Dataset):
+            for var in forcing.data_vars:
+                if forcing[var].dtype == np.float64:
+                    forcing[var] = forcing[var].astype(np.float32)
+        else:
+            raise ValueError("forcing must be a DataArray or Dataset")
+
         # write netcdf to temporary file
         with tempfile.NamedTemporaryFile(suffix=".zarr.zip") as tmp_file:
             if "time" in forcing.dims:
@@ -5646,6 +5687,10 @@ class GEBModel(GridModel):
                     mode="w",
                     encoding=encoding,
                 )
+
+                if isinstance(forcing, xr.DataArray):
+                    # also export to tif for easier visualization
+                    forcing.rio.to_raster(dst_file.with_suffix(".tif"))
 
                 # move file to final location
                 shutil.copy(tmp_file.name, dst_file)
