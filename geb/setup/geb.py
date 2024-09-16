@@ -5512,6 +5512,14 @@ class GEBModel(GridModel):
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
+    def setup_precipitation_scaling_factors_for_return_periods(
+        self, risk_scaling_factors
+    ):
+        risk_scaling_factors = pd.DataFrame(
+            risk_scaling_factors, columns=["exceedance_probability", "scaling_factor"]
+        )
+        self.set_table(risk_scaling_factors, name="hydrodynamics/risk_scaling_factors")
+
     def setup_discharge_observations(self, files):
         transform = self.grid.raster.transform
 
