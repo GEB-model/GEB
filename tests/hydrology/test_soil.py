@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 
 from ..testconfig import output_folder
 
+import geb.hydrology.soil
 from geb.hydrology.soil import (
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
@@ -12,6 +13,7 @@ from geb.hydrology.soil import (
     get_aeration_stress_factor,
     get_unsaturated_hydraulic_conductivity,
     get_soil_moisture_at_pressure,
+    capillary_rise_between_soil_layers,
 )
 
 
@@ -302,3 +304,130 @@ def test_get_unsaturated_hydraulic_conductivity():
     ax.legend()
 
     plt.savefig(output_folder / "unsaturated_hydraulic_conductivity.png")
+
+
+def plot_soil_layers(ax, soil_thickness, w, wres, ws, capillary_rise=None):
+    n_soil_columns = soil_thickness.shape[1]
+    for column in range(n_soil_columns):
+        current_depth = 0
+        for layer in range(0, soil_thickness.shape[0]):
+            cell_thickness = soil_thickness[layer, column]
+
+            alpha = (
+                w[layer, column] / cell_thickness - wres[layer, column] / cell_thickness
+            ) / (
+                ws[layer, column] / cell_thickness
+                - wres[layer, column] / cell_thickness
+            )
+            color = "blue"
+            if alpha < 0:
+                alpha = 1
+                color = "red"
+            if alpha > 1:
+                alpha = 1
+                color = "green"
+
+            rect = plt.Rectangle(
+                (column, current_depth),
+                1,
+                cell_thickness,
+                color=color,
+                alpha=alpha,
+                linewidth=0,
+            )
+            ax.add_patch(rect)
+            current_depth += cell_thickness
+
+            if capillary_rise is not None and layer != soil_thickness.shape[0] - 1:
+                capillary_rise_cell = capillary_rise[layer, column]
+                if capillary_rise_cell > 0:
+                    ax.arrow(
+                        column + 0.5,
+                        current_depth,
+                        0,
+                        -capillary_rise_cell * 1000,
+                        head_width=0.1,
+                        head_length=0.05,
+                        fc="red",
+                        ec="red",
+                    )
+
+    ax.set_xlim(0, n_soil_columns)
+    ax.set_ylim(0, current_depth)
+    ax.set_xlabel("Layer index")
+    ax.set_ylabel("Soil layer depth")
+    ax.invert_yaxis()
+
+
+def test_capillary_rise_between_soil_layers():
+    soil_thickness = np.array([[0.001, 0.2, 0.4, 0.8, 0.3, 0.2]])
+    soil_thickness = np.vstack([soil_thickness] * 11).T
+
+    geb.hydrology.soil.N_SOIL_LAYERS = soil_thickness.shape[0]
+
+    theta_fc = np.full_like(soil_thickness, 0.4)
+    theta_s = np.full_like(soil_thickness, 0.5)
+    theta_res = np.full_like(soil_thickness, 0.1)
+
+    saturated_hydraulic_conductivity = np.full_like(soil_thickness, 100.0)
+    lambda_ = np.full_like(soil_thickness, 0.9)
+
+    wres = theta_res * soil_thickness
+    ws = theta_s * soil_thickness
+    wfc = theta_fc * soil_thickness
+
+    theta = np.full_like(soil_thickness, 0)
+    theta[:, 0] = theta_res[:, 0]
+    theta[:, 1] = theta_s[:, 1]
+    theta[:, 2] = theta_fc[:, 2]
+    theta[:, 3] = 0.2
+    theta[:, 4] = np.linspace(theta_res[0, 4], theta_s[0, 4], soil_thickness.shape[0])
+    theta[:, 5] = np.linspace(theta_s[0, 5], theta_res[0, 5], soil_thickness.shape[0])
+    theta[:, 6] = np.linspace(theta_fc[0, 6], theta_res[0, 6], soil_thickness.shape[0])
+    theta[:, 7] = np.linspace(theta_fc[0, 7], theta_s[0, 7], soil_thickness.shape[0])
+    theta[:, 8] = np.linspace(theta_res[0, 8], theta_fc[0, 8], soil_thickness.shape[0])
+    theta[:, 9] = np.linspace(theta_s[0, 9], theta_fc[0, 9], soil_thickness.shape[0])
+    theta[:, 10] = theta_res[:, 10]
+    theta[-1, 10] = theta_s[-1, 10]
+
+    w = theta * soil_thickness
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig.tight_layout()
+
+    plot_soil_layers(axes[0], soil_thickness, w, wres, ws)
+
+    capillary_rise = capillary_rise_between_soil_layers(
+        wfc=wfc,
+        ws=ws,
+        wres=wres,
+        saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+        lambda_=lambda_,
+        w=w,
+    )
+
+    plot_soil_layers(axes[1], soil_thickness, w, wres, ws, capillary_rise)
+
+    for _ in range(1000):
+        capillary_rise = capillary_rise_between_soil_layers(
+            wfc=wfc,
+            ws=ws,
+            wres=wres,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            lambda_=lambda_,
+            w=w,
+        )
+
+    plot_soil_layers(axes[2], soil_thickness, w, wres, ws, capillary_rise)
+
+    plt.savefig(output_folder / "soil_layers.png")
+
+    soil_thickness[0] = 0.001
+    capillary_rise = capillary_rise_between_soil_layers(
+        wfc=wfc,
+        ws=ws,
+        wres=wres,
+        saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+        lambda_=lambda_,
+        w=w,
+    )
