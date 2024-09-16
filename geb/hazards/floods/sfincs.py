@@ -51,8 +51,8 @@ class SFINCS:
         return [
             str(
                 Path(self.model.config["general"]["input_folder"])
-                / "SFINCS"
-                / "sfincs_data_catalog.yml"
+                / "hydrodynamics"
+                / "data_catalog.yml"
             )
         ]
 
@@ -92,7 +92,7 @@ class SFINCS:
                 "config_fn": str(config_fn),
                 "model_root": self.sfincs_model_root(event_name),
                 "data_catalogs": self.data_catalogs,
-                "mask": gpd.read_file(self.model.files["geoms"]["areamaps/region"]),
+                "mask": gpd.read_file(self.model.files["geoms"]["region"]),
                 "method": "precipitation",
             }
         )

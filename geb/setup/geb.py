@@ -5259,12 +5259,12 @@ class GEBModel(GridModel):
             geom=self.region,
             predicate="intersects",
         )
-        self.set_geoms(hydrobasins, name="hydrodynamics/hydrobasins")
+        path = self.set_geoms(hydrobasins, name="hydrodynamics/hydrobasins")
 
         hydrodynamics_data_catalog.add_source(
             "hydrobasins_level_8",
             GeoDataFrameAdapter(
-                path=os.path.abspath("input/hydrodynamics/hydrobasins.gpkg"),
+                path=Path(self.root) / path,
                 meta=self.data_catalog.get_source("hydrobasins_8").meta,
             ),  # hydromt likes absolute paths
         )
@@ -5275,28 +5275,42 @@ class GEBModel(GridModel):
             "gcn250", bbox=bounds, buffer=100, variables=["cn_avg"]
         )
         gcn250.name = "gcn250"
-        self.set_forcing(gcn250, name="hydrodynamics/gcn250")
+        path = self.set_forcing(gcn250, name="hydrodynamics/gcn250")
 
         hydrodynamics_data_catalog.add_source(
             "gcn250",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/hydrodynamics/gcn250.nc"),
+                path=Path(self.root) / path,
                 meta=self.data_catalog.get_source("gcn250").meta,
+                driver="zarr",
             ),  # hydromt likes absolute paths
         )
 
         for DEM_name in DEM:
             DEM_raster = self.data_catalog.get_rasterdataset(
-                DEM_name, bbox=bounds, buffer=100, variables=["elevation"]
+                DEM_name,
+                bbox=bounds,
+                buffer=100,
+                variables=["elevation"],
+                single_var_as_array=False,
             ).compute()
-            DEM_raster.name = DEM_name
-            self.set_forcing(DEM_raster, name=f"hydrodynamics/DEM/{DEM_name}")
+            DEM_raster = DEM_raster.rename({"elevation": "elevtn"})
+
+            # hydromt-sfincs requires the data to be a Dataset. This code here makes
+            # data with only one variable a Dataarray, which is not supported in hydromt-sfincs
+            # therefore we add a dummy variable to the data thus forcing the data to
+            # be considered a Dataset
+            DEM_raster["_dummy"] = 0
+            path = self.set_forcing(
+                DEM_raster, name=f"hydrodynamics/DEM/{DEM_name}", split_dataset=False
+            )
 
             hydrodynamics_data_catalog.add_source(
                 DEM_name,
                 RasterDatasetAdapter(
-                    path=os.path.abspath(f"input/hydrodynamics/DEM/{DEM_name}.nc"),
+                    path=Path(self.root) / path,
                     meta=self.data_catalog.get_source(DEM_name).meta,
+                    driver="zarr",
                 ),  # hydromt likes absolute paths
             )
 
@@ -5309,15 +5323,16 @@ class GEBModel(GridModel):
             provider=self.data_provider,
         )
         del merit_hydro["flwdir"].attrs["_FillValue"]
-        self.set_forcing(
+        path = self.set_forcing(
             merit_hydro, name="hydrodynamics/merit_hydro", split_dataset=False
         )
 
         hydrodynamics_data_catalog.add_source(
             "merit_hydro",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/hydrodynamics/merit_hydro.nc"),
+                path=Path(self.root) / path,
                 meta=self.data_catalog.get_source("merit_hydro").meta,
+                driver="zarr",
             ),  # hydromt likes absolute paths
         )
 
@@ -5330,13 +5345,14 @@ class GEBModel(GridModel):
         )
         glofas_discharge = glofas_discharge.rename({"latitude": "y", "longitude": "x"})
         glofas_discharge.name = "discharge_yearly"
-        self.set_forcing(glofas_discharge, name="hydrodynamics/discharge_yearly")
+        path = self.set_forcing(glofas_discharge, name="hydrodynamics/discharge_yearly")
 
         hydrodynamics_data_catalog.add_source(
             "glofas_discharge_Yearly_Resampled_Global",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/hydrodynamics/discharge_yearly.nc"),
+                path=Path(self.root) / path,
                 meta=self.data_catalog.get_source("glofas_4_0_discharge_yearly").meta,
+                driver="zarr",
             ),  # hydromt likes absolute paths
         )
 
@@ -5346,14 +5362,12 @@ class GEBModel(GridModel):
             bbox=bounds,
             predicate="intersects",
         )
-        self.set_geoms(river_centerlines, name="hydrodynamics/river_centerlines")
+        path = self.set_geoms(river_centerlines, name="hydrodynamics/river_centerlines")
 
         hydrodynamics_data_catalog.add_source(
             "river_centerlines_MERIT_Basins",
             GeoDataFrameAdapter(
-                path=os.path.abspath(
-                    "input/hydrodynamics/river_centerlines.gpkg"
-                ),  # hydromt likes absolute paths
+                path=Path(self.root) / path,  # hydromt likes absolute paths
                 meta=self.data_catalog.get_source(
                     "river_centerlines_MERIT_Basins"
                 ).meta,
@@ -5368,13 +5382,14 @@ class GEBModel(GridModel):
         )
         del esa_worldcover.attrs["_FillValue"]
         esa_worldcover.name = "esa_worldcover"
-        self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover")
+        path = self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover")
 
         hydrodynamics_data_catalog.add_source(
             "esa_worldcover",
             RasterDatasetAdapter(
-                path=os.path.abspath("input/hydrodynamics/esa_worldcover.nc"),
+                path=Path(self.root) / path,
                 meta=self.data_catalog.get_source(land_cover).meta,
+                driver="zarr",
             ),  # hydromt likes absolute paths
         )
 
@@ -5403,7 +5418,7 @@ class GEBModel(GridModel):
                 len(water_levels.stations) > 0
             ), "No stations found in the region. If no stations should be set, set include_coastal=False"
 
-            self.set_forcing(
+            path = self.set_forcing(
                 water_levels,
                 name="hydrodynamics/waterlevel",
                 split_dataset=False,
@@ -5413,8 +5428,9 @@ class GEBModel(GridModel):
             hydrodynamics_data_catalog.add_source(
                 "waterlevel",
                 DatasetAdapter(
-                    path=os.path.abspath("input/hydrodynamics/waterlevel.nc"),
+                    path=Path(self.root) / path,
                     meta=self.data_catalog.get_source("GTSM").meta,
+                    driver="zarr",
                 ),  # hydromt likes absolute paths
             )
 
@@ -5470,7 +5486,7 @@ class GEBModel(GridModel):
 
         hydrodynamics_data_catalog.to_yml(
             hydrodynamics_data_catalog,
-            Path(self.root) / "hydrodynamics" / "hydrodynamics_data_catalog.yml",
+            Path(self.root) / "hydrodynamics" / "data_catalog.yml",
         )
         return None
 
@@ -5674,7 +5690,7 @@ class GEBModel(GridModel):
                     encoding = {forcing.name: {"compressor": compressor}}
                 elif isinstance(forcing, xr.Dataset):
                     assert (
-                        len(forcing.data_vars) > 1
+                        len(forcing.data_vars) > 0
                     ), "forcing must have more than one variable or name must be set"
                     encoding = {
                         var: {"compressor": compressor} for var in forcing.data_vars
@@ -5690,6 +5706,11 @@ class GEBModel(GridModel):
                 if isinstance(forcing, xr.DataArray):
                     # also export to tif for easier visualization
                     forcing.rio.to_raster(dst_file.with_suffix(".tif"))
+                elif isinstance(forcing, xr.Dataset) and len(forcing.data_vars) == 1:
+                    # also export to tif for easier visualization, but only if there is one variable
+                    forcing[list(forcing.data_vars)[0]].rio.to_raster(
+                        dst_file.with_suffix(".tif")
+                    )
 
                 # move file to final location
                 shutil.move(tmp_file.name, dst_file)
@@ -5928,6 +5949,7 @@ class GEBModel(GridModel):
     def set_geoms(self, geoms, name, update=True):
         self.is_updated["geoms"][name] = {"updated": update}
         super().set_geoms(geoms, name=name)
+        return self.files["geoms"][name]
 
     def set_forcing(
         self,
@@ -5939,6 +5961,7 @@ class GEBModel(GridModel):
         y_chunksize=XY_CHUNKSIZE,
         time_chunksize=1,
         is_spatial_dataset=True,
+        split_dataset=True,
         *args,
         **kwargs,
     ):
@@ -5955,7 +5978,10 @@ class GEBModel(GridModel):
                 is_spatial_dataset=is_spatial_dataset,
             )
             self.is_updated["forcing"][name]["updated"] = False
-        super().set_forcing(data, name=name, *args, **kwargs)
+        super().set_forcing(
+            data, name=name, split_dataset=split_dataset, *args, **kwargs
+        )
+        return self.files["forcing"][name]
 
     def _set_grid(
         self,
@@ -6038,24 +6064,28 @@ class GEBModel(GridModel):
     ) -> None:
         self.is_updated["grid"][name] = {"updated": update}
         super().set_grid(data, name=name)
+        return self.files["grid"][name]
 
     def set_subgrid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["subgrid"][name] = {"updated": update}
         self._set_grid(self.subgrid, data, name=name)
+        return self.files["subgrid"][name]
 
     def set_region_subgrid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["region_subgrid"][name] = {"updated": update}
         self._set_grid(self.region_subgrid, data, name=name)
+        return self.files["region_subgrid"][name]
 
     def set_MERIT_grid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["MERIT_grid"][name] = {"updated": update}
         self._set_grid(self.MERIT_grid, data, name=name)
+        return self.files["MERIT_grid"][name]
 
     def set_alternate_root(self, root, mode):
         relative_path = Path(os.path.relpath(Path(self.root), root.resolve()))
