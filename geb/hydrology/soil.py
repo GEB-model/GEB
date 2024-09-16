@@ -1158,7 +1158,6 @@ class Soil(object):
             wres=self.wres,
             saturated_hydraulic_conductivity=self.ksat,
             lambda_=self.lambda_pore_size_distribution,
-            land_use_type=self.var.land_use_type,
             w=self.var.w,
         )
 

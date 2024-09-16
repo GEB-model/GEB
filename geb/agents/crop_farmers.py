@@ -826,9 +826,14 @@ class CropFarmers(AgentBaseClass):
             self.model, "crops/cultivation_costs"
         )
 
-        # Set the
+        # Set the cultivation costs
+        cultivation_cost_fraction = self.model.config["agent_settings"]["farmers"][
+            "base_management_yield_ratio"
+        ]  # Cultivation costs are set as a fraction of crop prices
         date_index, cultivation_costs_array = self.cultivation_costs
-        adjusted_cultivation_costs_array = cultivation_costs_array * 0.5
+        adjusted_cultivation_costs_array = (
+            cultivation_costs_array * cultivation_cost_fraction
+        )
         self.cultivation_costs = (date_index, adjusted_cultivation_costs_array)
 
         # Test with a high variable for now
@@ -3041,6 +3046,7 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_sprinkler"]["loan_duration"]
 
+        # Placeholder
         costs_irrigation_system = 10000
 
         annual_cost = costs_irrigation_system * (
@@ -3097,8 +3103,8 @@ class CropFarmers(AgentBaseClass):
             "profits_no_event_adaptation": profits_no_event_adaptation,
             "total_profits": total_profits,
             "risk_perception": self.risk_perception.data,
-            "total_annual_costs": total_annual_costs_m2,
-            "adaptation_costs": annual_cost_m2,
+            "total_annual_costs": total_annual_costs_m2.data,
+            "adaptation_costs": annual_cost_m2.data,
             "adapted": adapted,
             "time_adapted": self.time_adapted[:, adaptation_type],
             "T": np.full(
@@ -3118,46 +3124,53 @@ class CropFarmers(AgentBaseClass):
         assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
 
         # Compare EU values for those who haven't adapted yet and get boolean results
-        SEUT_adaptation_decision = (
-            SEUT_adapt[adapted == 0] > SEUT_do_nothing[adapted == 0]
-        )
+        SEUT_adaptation_decision = SEUT_adapt > SEUT_do_nothing
+
+        social_network_adaptation = adapted[self.social_network]
+
+        # Check whether adapting agents have adaptation type in their network and create mask
+        network_has_adaptation = np.any(social_network_adaptation == 1, axis=1)
+
+        # Increase intention factor if someone in network has crop
+        intention_factor_adjusted = self.intention_factor.copy()
+        intention_factor_adjusted[network_has_adaptation] += 0.3
 
         # Determine whether it passed the intention threshold
-        random_values = np.random.rand(*self.intention_factor.shape)
-        intention_mask = random_values < self.intention_factor
+        random_values = np.random.rand(*intention_factor_adjusted.shape)
+        intention_mask = random_values < intention_factor_adjusted
 
-        SEUT_adaptation_decision = (
-            SEUT_adaptation_decision & intention_mask[adapted == 0]
-        )
-
-        # Initialize a mask with default value as False
-        SEUT_adapt_mask = np.zeros_like(adapted, dtype=bool)
-
-        # Update the mask based on EU decisions
-        SEUT_adapt_mask[adapted == 0] = SEUT_adaptation_decision
+        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
 
         # Update the adaptation status
-        self.adapted[SEUT_adapt_mask, adaptation_type] = 1
+        self.adapted[SEUT_adaptation_decision, adaptation_type] = 1
 
         # Reset the timer for newly adapting farmers and update timers for others
-        self.time_adapted[SEUT_adapt_mask, adaptation_type] = 0
+        self.time_adapted[SEUT_adaptation_decision, adaptation_type] = 0
+        self.time_adapted[
+            self.time_adapted[:, adaptation_type] != -1, adaptation_type
+        ] += 1
+
+        # Reset the timer for newly adapting farmers and update timers for others
+        self.time_adapted[SEUT_adaptation_decision, adaptation_type] = 0
         self.time_adapted[
             self.time_adapted[:, adaptation_type] != -1, adaptation_type
         ] += 1
 
         # Update irrigation efficiency for farmers who adapted
-        self.irrigation_efficiency[SEUT_adapt_mask] = 0.9
+        self.irrigation_efficiency[SEUT_adaptation_decision] = 0.9
 
         # Update annual costs and disposable income for adapted farmers
-        self.all_loans_annual_cost[SEUT_adapt_mask, adaptation_type + 1, 0] += (
-            annual_cost[SEUT_adapt_mask]
-        )  # For wells specifically
-        self.all_loans_annual_cost[SEUT_adapt_mask, -1, 0] += annual_cost[
-            SEUT_adapt_mask
+        self.all_loans_annual_cost[
+            SEUT_adaptation_decision, adaptation_type + 1, 0
+        ] += annual_cost[SEUT_adaptation_decision]  # For wells specifically
+        self.all_loans_annual_cost[SEUT_adaptation_decision, -1, 0] += annual_cost[
+            SEUT_adaptation_decision
         ]  # Total loan amount
 
         # set loan tracker
-        self.loan_tracker[SEUT_adapt_mask, adaptation_type + 1, 0] += loan_duration
+        self.loan_tracker[SEUT_adaptation_decision, adaptation_type + 1, 0] += (
+            loan_duration
+        )
 
         # Print the percentage of adapted households
         percentage_adapted = round(
