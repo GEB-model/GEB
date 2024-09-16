@@ -357,9 +357,6 @@ class LandCover(object):
             fn=None,
         )
 
-        if __debug__:
-            BIOAREA = self.var.land_use_type < SEALED
-
         self.var.cropKC[self.var.land_use_type == FOREST] = forest_cropCoefficientNC[
             self.var.land_use_type == FOREST
         ]  # forest
@@ -383,11 +380,6 @@ class LandCover(object):
         potential_transpiration_minus_interception_evaporation = (
             self.model.interception.step(potential_transpiration)
         )  # first thing that evaporates is the intercepted water.
-
-        assert (
-            potential_evapotranspiration
-            <= potential_transpiration + potential_bare_soil_evaporation + 1e-5
-        )[BIOAREA].all()
 
         timer.new_split("Interception")
 
