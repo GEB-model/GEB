@@ -166,14 +166,20 @@ class SFINCS:
             )
 
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
-        discharge_grid.raster.set_crs(self.model.data.grid.crs.to_proj4())
+        from pyproj import CRS
+
+        # Convert the WKT string to a pyproj CRS object
+        crs_obj = CRS.from_wkt(self.model.data.grid.crs)
+
+        # Now you can safely call to_proj4() on the CRS object
+        discharge_grid.raster.set_crs(crs_obj.to_proj4())
         tstart = start_time
         tend = discharge_grid.time[-1] + pd.Timedelta(
             self.model.timestep_length / substeps
         )
         discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
         sfincs_precipitation = (
-            xr.open_dataset(self.model.files["forcing"]["climate/pr_hourly"]).rename(
+            xr.open_dataset(self.model.files["forcing"]["climate/pr_hourly"], engine="zarr").rename(
                 pr_hourly="precip"
             )["precip"]
             * 3600
@@ -196,8 +202,8 @@ class SFINCS:
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
-                self.model.files["grid"]["routing/kinematic/upstream_area"]
-            ).isel(band=0),
+                self.model.files["grid"]["routing/kinematic/upstream_area"], engine="zarr"
+            )#.isel(band=0),
         )
         return None
 
@@ -208,7 +214,7 @@ class SFINCS:
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
 
         event_name = self.get_event_name(event)
-        run_sfincs_simulation(simulation_root=self.sfincs_simulation_root(event_name))
+        run_sfincs_simulation(root=self.sfincs_simulation_root(event_name))
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
