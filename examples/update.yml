@@ -1,8 +1,7 @@
-setup_forcing:
-  data_source: era5
-  starttime: 1980-01-01
-  endtime: 2023-12-31
-
-setup_SPEI:
-  calibration_period_start: 1980-01-01
-  calibration_period_end: 2010-12-31
+setup_well_prices_by_reference_year_global:
+  WHY_10: 82.0209974 # $/m
+  WHY_20: 164 # $/m
+  WHY_30: 50 # $/m
+  reference_year: 2017
+  start_year: 1960
+  end_year: 2020
