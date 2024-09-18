@@ -157,6 +157,7 @@ class hydrology_reporter(ABMReporter):
                             ),
                             dtype="float32",
                             compressor=compressor,
+                            fill_value=np.nan,
                         )
 
                         zarr_data.attrs.update(
