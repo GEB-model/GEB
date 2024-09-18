@@ -26,7 +26,6 @@ general:
   name: default
   export_inital_on_spinup: true
   simulate_hydrology: true
-  simulate_floods: false
   simulate_forest: false
 
 ###
@@ -97,6 +96,10 @@ agent_settings:
     interest_rate_factor: 1
     well_cost_factor: 1
     drought_threshold_factor: 1
+
+hazards:
+  floods:
+    simulate: false
 
 ###
 # This sections contains settings for logging of the model. 
