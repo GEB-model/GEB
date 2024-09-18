@@ -26,9 +26,11 @@ general:
   name: default
   export_inital_on_spinup: true
   simulate_hydrology: true
-  simulate_floods: false
   simulate_forest: false
 
+hazards:
+  floods:
+    simulate: false
 ###
 # This section can contain settings to change the behavior of the agents.
 agent_settings:
