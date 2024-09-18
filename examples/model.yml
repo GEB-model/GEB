@@ -28,68 +28,70 @@ general:
   simulate_hydrology: true
   simulate_forest: false
 
+hazards:
+  floods:
+    simulate: false
 ###
 # This section can contain settings to change the behavior of the agents.
 agent_settings:
-  expected_utility:
-    adaptation_well_global:
-      pump_hours: 3.5
-      depletion_limit: 0.5
-      ponded_depth: 0.3 # m
-      specific_weight_water: 9800 # (kg/m3*m/s2)
-      static_head: 0 # m
-      max_initial_sat_thickness: 100 # m
-      lifespan: 20
-      well_diameter: 0.28 # m
-      well_yield: 0.00005 # m3/s
-      pump_efficiency: 0.7 # $/KWh
-      energy_cost_rate: 0.074
-      maintenance_factor: 0.07
-      WHY_10: 82.0209974 # $/m
-      WHY_20: 164 # $/m
-      WHY_30: 50 # $/m
-    adaptation_sprinkler:
-      interest_rate: 0.04
-      lifespan: 10
-      loan_duration: 11
-      yield_multiplier: 1
-    adaptation_well:
-      initial_depth: 25
-      interest_rate: 0.04
-      lifespan: 15
-      loan_duration: 16
-      probability_well_failure: 0.2
-      proportion_irrigation_water_available: 1
-      pump_horse_power: 10
-      pump_hours: 3.5
-    decisions:
-      decision_horizon: 10
-      expenditure_cap: 0.38962302946474586
-    drought_risk_calculations:
-      event_perception:
-        drought_threshold: 8.486673829564989
-      risk_perception:
-        base: 1.6
-        coef: -2.5
-        max: 4.4118829846402114
-        min: 0.1
-    general:
-      include_adaptation: true
+  market:
+    dynamic_market: false
+    price_frequency: yearly
   farmers:
-    ruleset: no-adaptation
-    base_management_yield_ratio: 0.4971775122106625
+    ruleset: base
+    base_management_yield_ratio: 1
     farmers_going_out_of_business: false
     microcredit:
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
     return_fraction: 0.5172748734767878
+    social_network:
+      radius: 5000 # m
+      size: 10 # nr of neighbors
+    expected_utility:
+      crop_switching: 
+        ruleset: no-adaptation
+      adaptation_sprinkler:
+        ruleset: base
+        interest_rate: 0.04
+        lifespan: 10
+        loan_duration: 11
+        yield_multiplier: 1
+        decision_horizon: 10
+      adaptation_well:
+        loan_duration: 21
+        lifespan: 20
+        decision_horizon: 20
+        ruleset: no-adaptation
+        pump_hours: 3.5
+        specific_weight_water: 9800 # (kg/m3*m/s2)
+        max_initial_sat_thickness: 50 # m
+        well_yield: 0.00005 # m3/s
+        pump_efficiency: 0.7 # $/KWh
+        energy_cost_rate: 0.074
+        maintenance_factor: 0.07
+        WHY_10: 82.0209974 # $/m
+        WHY_20: 164 # $/m
+        WHY_30: 50 # $/m
+      decisions:
+        decision_horizon: 10
+        expenditure_cap: 0.5
+      drought_risk_calculations:
+        event_perception:
+          drought_threshold: 5
+        risk_perception:
+          base: 1.6
+          coef: -2.5
+          max: 4.4118829846402114
+          min: 0.1
   fix_activation_order: true
   reservoir_operators:
     MinOutflowQ: 0.0
     NonDamagingOutflowQ: 4.0
     NormalOutflowQ: 0.1
-    max_reservoir_release_factor: 1
+    max_reservoir_release_factor: 0.03380636312896216
+    ruleset: no-adaptation
   sensitivity_analysis:
     risk_aversion_factor: 1
     discount_rate_factor: 1

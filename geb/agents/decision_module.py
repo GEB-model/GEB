@@ -53,7 +53,7 @@ class DecisionModule:
             # Calculate time discounted NPVs
             t_arr = np.arange(1, max_T, dtype=np.float32)
 
-            discounts = 1 / (1 + discount_rate.reshape(-1, 1)) ** t_arr
+            discounts = 1 / (1 + np.reshape(discount_rate, (-1, 1))) ** t_arr
             NPV_tx = np.sum(discounts, axis=1) * NPV_flood_i
 
             # Add NPV at t0 (which is not discounted)
@@ -105,6 +105,28 @@ class DecisionModule:
 
         # Preallocate arrays
         n_floods, n_agents = total_profits.shape
+
+        # Prepare arrays
+        max_T = np.int32(np.max(T))
+
+        # Part njit, iterate through floods
+        n_agents = np.int32(n_agents)
+        NPV_summed = self.IterateThroughFlood(
+            n_floods,
+            total_profits,
+            profits_no_event,
+            max_T,
+            n_agents,
+            discount_rate,
+        )
+
+        # Filter out negative NPVs
+        NPV_summed = np.maximum(1, NPV_summed)
+
+        # Calculate expected utility
+        ## NPV_Summed here is the wealth and income minus the expected damages of a certain probabilty event
+        EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+
         p_all_events = np.full((p_droughts.size + 3, n_agents), -1, dtype=np.float32)
 
         # calculate perceived risk
@@ -128,30 +150,6 @@ class DecisionModule:
 
         # Add 0 to ensure we integrate [0, 1]
         p_all_events[0, :] = 0
-
-        # Prepare arrays
-        max_T = np.int32(np.max(T))
-
-        # Part njit, iterate through floods
-        n_agents = np.int32(n_agents)
-        NPV_summed = self.IterateThroughFlood(
-            n_floods,
-            total_profits,
-            profits_no_event,
-            max_T,
-            n_agents,
-            discount_rate.data,
-        )
-
-        # Filter out negative NPVs
-        NPV_summed = np.maximum(1, NPV_summed)
-
-        if (NPV_summed == 1).any():
-            print(f"Warning, {np.sum(NPV_summed == 1)} negative NPVs encountered")
-
-        # Calculate expected utility
-        ## NPV_Summed here is the wealth and income minus the expected damages of a certain probabilty event
-        EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
 
         # Use composite trapezoidal rule integrate EU over event probability
         ## Here all
@@ -222,18 +220,26 @@ class DecisionModule:
         total_profits_adaptation = total_profits_adaptation[indices]
         p_droughts = np.sort(p_droughts)
 
-        # Identify agents able to afford the adaptation and that have not yet adapted
-        unconstrained = np.where(
-            (profits_no_event * expenditure_cap > total_annual_costs)
-            & (adapted == 0)
-            & extra_constraint
-        )
-        # Create a mask to mask all constrained agents
-        unconstrained_mask = (
-            (profits_no_event * expenditure_cap > total_annual_costs)
-            & (adapted == 0)
-            & extra_constraint
-        )
+        if adapted is not None:
+            # Identify agents able to afford the adaptation and that have not yet adapted
+            unconstrained = np.where(
+                (profits_no_event * expenditure_cap > total_annual_costs)
+                & (adapted == 0)
+                & extra_constraint
+            )
+            # Create a mask to mask all constrained agents
+            unconstrained_mask = (
+                (profits_no_event * expenditure_cap > total_annual_costs)
+                & (adapted == 0)
+                & extra_constraint
+            )
+        else:  # For now, state that are no monetary constraints for switching crops
+            unconstrained = np.where(
+                # (profits_no_event * expenditure_cap > total_annual_costs)
+                extra_constraint
+            )
+            # Create a mask to mask all constrained agents
+            unconstrained_mask = extra_constraint
 
         # Those who cannot affort it cannot adapt
         EU_adapt[~unconstrained_mask] = -np.inf
@@ -254,6 +260,9 @@ class DecisionModule:
             )
 
             NPV_adapt_no_flood[:payment_remainder] -= adaptation_costs[i]
+
+            # ensure that it does not become negative to prevent NaNs
+            NPV_adapt_no_flood[NPV_adapt_no_flood < 0] = 0
 
             ## Calculate time discounted NPVs
             NPV_adapt_no_flood = np.sum(
@@ -298,5 +307,7 @@ class DecisionModule:
 
             # Integrate EU over probabilities trapezoidal
             EU_adapt[i] = np.trapz(EU_adapt_dict, p_all_events)
+
+            assert not np.isnan(EU_adapt[i]), f"EU_adapt[{i}] is NaN"
 
         return EU_adapt

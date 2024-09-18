@@ -392,6 +392,7 @@ class Grid(BaseVariables):
         if not hasattr(self, "rlds_ds"):
             self.rlds_ds = self.load_forcing_ds("rlds")
         rlds = self.load_forcing(self.rlds_ds, self.model.current_time)
+        rlds = rlds.astype(np.float32)
         assert (rlds >= 0).all(), "rlds must be positive or zero"
         return rlds
 

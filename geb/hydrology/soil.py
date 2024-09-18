@@ -507,7 +507,7 @@ def evapotranspirate(
 
             # Aeration stress
             aeration_stress_threshold = get_aeration_stress_threshold(
-                ws[layer, i], soil_layer_height[layer, i], np.float32(15)
+                ws[layer, i], soil_layer_height[layer, i], np.float32(5)
             )  # 15 is placeholder for crop_aeration_threshold
             if w[layer, i] > aeration_stress_threshold:
                 aeration_days_counter[layer, i] += 1

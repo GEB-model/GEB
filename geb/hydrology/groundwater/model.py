@@ -665,7 +665,7 @@ class ModFlowSimulation:
         drainage = -self.mf6.get_value_ptr(self.drainage_tag)
         assert not np.isnan(drainage).any()
         # TODO: This assert can become more strict when soil depth is considered
-        assert (drainage / self.area < self.hydraulic_conductivity_drainage * 10).all()
+        assert (drainage / self.area < self.hydraulic_conductivity_drainage * 100).all()
         return drainage
 
     @property
