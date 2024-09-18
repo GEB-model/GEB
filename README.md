@@ -39,6 +39,7 @@ GEB builds on, couples and extends several models, depicted in the figure below.
 ## Developers (ordered by full-time equivalent working time on model)
 - [Jens de Bruijn](https://research.vu.nl/en/persons/jens-de-bruijn)
 - [Maurice Kalthof](https://research.vu.nl/en/persons/maurice-kalthof)
+- [Tarun Sadana](https://research.vu.nl/en/persons/tarun-sadana)
 - [Veerle Bril](https://research.vu.nl/en/persons/veerle-bril)
 - [Tim Busker](https://research.vu.nl/en/persons/tim-busker)
 
