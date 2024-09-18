@@ -15,7 +15,6 @@ from geb.hydrology.soil import (
     get_aeration_stress_factor,
     get_unsaturated_hydraulic_conductivity,
     get_soil_moisture_at_pressure,
-    capillary_rise_between_soil_layers,
     vertical_water_transport,
     get_soil_water_potential,
 )
@@ -398,80 +397,6 @@ def plot_soil_layers(ax, soil_thickness, w, wres, ws, fluxes=None):
     ax.set_xlabel("Layer index")
     ax.set_ylabel("Soil layer depth")
     ax.invert_yaxis()
-
-
-def test_capillary_rise_between_soil_layers():
-    soil_thickness = np.array([[0.001, 0.2, 0.4, 0.8, 0.3, 0.2]])
-    soil_thickness = np.vstack([soil_thickness] * 11).T
-
-    geb.hydrology.soil.N_SOIL_LAYERS = soil_thickness.shape[0]
-
-    theta_fc = np.full_like(soil_thickness, 0.4)
-    theta_s = np.full_like(soil_thickness, 0.5)
-    theta_res = np.full_like(soil_thickness, 0.1)
-
-    saturated_hydraulic_conductivity = np.full_like(soil_thickness, 100.0)
-    lambda_ = np.full_like(soil_thickness, 0.9)
-
-    wres = theta_res * soil_thickness
-    ws = theta_s * soil_thickness
-    wfc = theta_fc * soil_thickness
-
-    theta = np.full_like(soil_thickness, 0)
-    theta[:, 0] = theta_res[:, 0]
-    theta[:, 1] = theta_s[:, 1]
-    theta[:, 2] = theta_fc[:, 2]
-    theta[:, 3] = 0.2
-    theta[:, 4] = np.linspace(theta_res[0, 4], theta_s[0, 4], soil_thickness.shape[0])
-    theta[:, 5] = np.linspace(theta_s[0, 5], theta_res[0, 5], soil_thickness.shape[0])
-    theta[:, 6] = np.linspace(theta_fc[0, 6], theta_res[0, 6], soil_thickness.shape[0])
-    theta[:, 7] = np.linspace(theta_fc[0, 7], theta_s[0, 7], soil_thickness.shape[0])
-    theta[:, 8] = np.linspace(theta_res[0, 8], theta_fc[0, 8], soil_thickness.shape[0])
-    theta[:, 9] = np.linspace(theta_s[0, 9], theta_fc[0, 9], soil_thickness.shape[0])
-    theta[:, 10] = theta_res[:, 10]
-    theta[-1, 10] = theta_s[-1, 10]
-
-    w = theta * soil_thickness
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    fig.tight_layout()
-
-    plot_soil_layers(axes[0], soil_thickness, w, wres, ws)
-
-    capillary_rise = capillary_rise_between_soil_layers(
-        wfc=wfc,
-        ws=ws,
-        wres=wres,
-        saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-        lambda_=lambda_,
-        w=w,
-    )
-
-    plot_soil_layers(axes[1], soil_thickness, w, wres, ws, capillary_rise)
-
-    for _ in range(1000):
-        capillary_rise = capillary_rise_between_soil_layers(
-            wfc=wfc,
-            ws=ws,
-            wres=wres,
-            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-            lambda_=lambda_,
-            w=w,
-        )
-
-    plot_soil_layers(axes[2], soil_thickness, w, wres, ws, capillary_rise)
-
-    plt.savefig(output_folder / "soil_layers.png")
-
-    soil_thickness[0] = 0.001
-    capillary_rise = capillary_rise_between_soil_layers(
-        wfc=wfc,
-        ws=ws,
-        wres=wres,
-        saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-        lambda_=lambda_,
-        w=w,
-    )
 
 
 @pytest.mark.parametrize("capillary_rise_from_groundwater", [0.0, 0.01])

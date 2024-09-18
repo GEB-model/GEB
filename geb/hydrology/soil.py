@@ -605,207 +605,6 @@ def evapotranspirate(
 
 
 @njit(cache=True, parallel=True)
-def infiltrate(
-    available_water_infiltration,
-    ws,
-    land_use_type,
-    frost_index,
-    arno_beta,
-    capillary_rise_index,
-    preferential_flow_constant,
-    w,
-    topwater,
-):
-    preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
-    direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
-    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
-    for i in prange(land_use_type.size):
-        # estimate the infiltration capacity
-        # use first 2 soil layers to estimate distribution between runoff and infiltration
-        soil_water_storage = w[0, i] + w[1, i]
-        soil_water_storage_max = ws[0, i] + ws[1, i]
-        relative_saturation = soil_water_storage / soil_water_storage_max
-        if relative_saturation > np.float32(
-            1
-        ):  # cap the relative saturation at 1 - this should not happen
-            relative_saturation = np.float32(1)
-
-        # Fraction of pixel that is at saturation as a function of
-        # the ratio Theta1/ThetaS1. Distribution function taken from
-        # Zhao,1977, as cited in Todini, 1996 (JoH 175, 339-382) Eq. A.4.
-        saturated_area_fraction = (
-            np.float32(1) - (np.float32(1) - relative_saturation) ** arno_beta[i]
-        )
-        if saturated_area_fraction > np.float32(1):
-            saturated_area_fraction = np.float32(1)
-        elif saturated_area_fraction < np.float32(0):
-            saturated_area_fraction = np.float32(0)
-
-        store = (
-            soil_water_storage_max / (arno_beta[i] + np.float32(1))
-        )  # it is unclear what "store" means exactly, refer to source material to improve variable name
-        pot_beta = (arno_beta[i] + np.float32(1)) / arno_beta[i]  # idem
-        potential_infiltration = store - store * (
-            np.float32(1) - (np.float32(1) - saturated_area_fraction) ** pot_beta
-        )
-
-        # if soil is frozen, there is no preferential flow, also not on paddy fields
-        if not soil_is_frozen[i] and land_use_type[i] != PADDY_IRRIGATED:
-            preferential_flow[i] = (
-                available_water_infiltration[i]
-                * relative_saturation**preferential_flow_constant
-            ) * (np.float32(1) - capillary_rise_index[i])
-
-        # no infiltration if the soil is frozen
-        if soil_is_frozen[i]:
-            infiltration = np.float32(0)
-        else:
-            infiltration = min(
-                potential_infiltration,
-                available_water_infiltration[i] - preferential_flow[i],
-            )
-
-        if land_use_type[i] == PADDY_IRRIGATED:
-            # infiltration is removed from topwater
-            topwater[i] = max(np.float32(0), topwater[i] - infiltration)
-            direct_runoff[i] = max(0, topwater[i] - np.float32(0.05))
-            topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
-        else:
-            direct_runoff[i] = max(
-                (available_water_infiltration[i] - infiltration - preferential_flow[i]),
-                np.float32(0),
-            )
-
-        # add infiltration to the soil
-        w[0, i] += infiltration
-        if w[0, i] > ws[0, i]:
-            w[1, i] += (
-                w[0, i] - ws[0, i]
-            )  # TODO: Solve edge case of the second layer being full, in principle this should not happen as infiltration should be capped by the infilation capacity
-            w[0, i] = ws[0, i]
-
-    return preferential_flow, direct_runoff
-
-
-@njit(cache=True, parallel=True)
-def capillary_rise_between_soil_layers(
-    wfc,
-    ws,
-    wres,
-    saturated_hydraulic_conductivity,
-    lambda_,
-    w,
-):
-    capillary_rise_matrix = np.zeros((N_SOIL_LAYERS - 1, w.shape[1]), dtype=np.float32)
-
-    for i in prange(w.shape[1]):
-        # capillary rise between soil layers, iterate from top, but skip bottom (which is has capillary rise from groundwater)
-        for layer in range(N_SOIL_LAYERS - 1):
-            saturation_ratio = max(
-                (w[layer, i] - wres[layer, i]) / (wfc[layer, i] - wres[layer, i]),
-                np.float32(0),
-            )
-            unsaturated_hydraulic_conductivity_layer_below = (
-                get_unsaturated_hydraulic_conductivity(
-                    w[layer + 1, i],
-                    wres[layer + 1, i],
-                    ws[layer + 1, i],
-                    lambda_[layer + 1, i],
-                    saturated_hydraulic_conductivity[layer + 1, i],
-                )
-            )
-            capillary_rise = (
-                np.float32(1) - saturation_ratio
-            ) * unsaturated_hydraulic_conductivity_layer_below
-            capillary_rise = min(
-                capillary_rise,
-                ws[layer, i] - w[layer, i],
-            )
-            capillary_rise = min(
-                capillary_rise,
-                wfc[layer + 1, i] - w[layer + 1, i],
-            )
-            capillary_rise = max(capillary_rise, np.float32(0))
-
-            capillary_rise_matrix[layer, i] = capillary_rise
-
-        for layer in range(N_SOIL_LAYERS - 1):
-            w[layer, i] += capillary_rise_matrix[layer, i]
-            w[layer + 1, i] -= capillary_rise_matrix[layer, i]
-
-
-@njit(cache=True, parallel=True)
-def percolate(
-    preferential_flow,
-    ws,
-    wres,
-    saturated_hydraulic_conductivity,
-    lambda_,
-    land_use_type,
-    frost_index,
-    capillary_rise_index,
-    w,
-):
-    percolation_matrix = np.zeros_like(w)
-    groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
-
-    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
-    is_bioarea = land_use_type < SEALED
-    for i in prange(land_use_type.size):
-        # percolcation (top to bottom soil layer)
-        percolation_to_groundwater = np.float32(0.0)
-        for _ in range(PERCOLATION_SUBSTEPS):
-            for layer in range(N_SOIL_LAYERS):
-                unsaturated_hydraulic_conductivity = (
-                    get_unsaturated_hydraulic_conductivity(
-                        w[layer, i],
-                        wres[layer, i],
-                        ws[layer, i],
-                        lambda_[layer, i],
-                        saturated_hydraulic_conductivity[layer, i],
-                    )
-                )
-                percolation = unsaturated_hydraulic_conductivity / PERCOLATION_SUBSTEPS
-                # no percolation if the soil is frozen in the top 2 layers.
-                if not (soil_is_frozen[i] and (layer == 0 or layer == 1)):
-                    # limit percolation by the available water in the layer
-                    available_water = max(w[layer, i] - wres[layer, i], np.float32(0))
-                    percolation = min(percolation, available_water)
-                    if layer == N_SOIL_LAYERS - 1:  # last soil layer
-                        # limit percolation by available water, and consider the capillary rise index
-                        # TODO: Check how the capillary rise index works
-                        percolation *= np.float32(1) - capillary_rise_index[i]
-                    else:
-                        # limit percolation the remaining water storage capacity of the layer below
-                        percolation = min(
-                            percolation, ws[layer + 1, i] - w[layer + 1, i]
-                        )
-                else:
-                    percolation = (
-                        0  # must be set for percolation to groundwater to be correct
-                    )
-
-                # save percolation in matrix
-                percolation_matrix[layer, i] = percolation
-
-            # for bottom soil layer, save percolation to groundwater
-            percolation_to_groundwater += percolation
-
-            for layer in range(N_SOIL_LAYERS):
-                # for all layers, remove percolation from the layer
-                w[layer, i] -= percolation_matrix[layer, i]
-                # for all layers except the top layer, add percolation from the layer above (-1)
-                if layer != 0:
-                    w[layer, i] += percolation_matrix[layer - 1, i]
-
-            if is_bioarea[i]:
-                groundwater_recharge[i] = (
-                    percolation_to_groundwater + preferential_flow[i]
-                )
-    return groundwater_recharge
-
-
-@njit(cache=True, parallel=True)
 def vertical_water_transport(
     available_water_infiltration,
     ws,
@@ -819,7 +618,7 @@ def vertical_water_transport(
     preferential_flow_constant,
     w,
     topwater,
-    soil_thickness,
+    soil_layer_height,
 ):
     """
     Parameters
@@ -831,23 +630,30 @@ def vertical_water_transport(
     Simulates vertical transport of water in the soil using Darcy's equation,
     combining infiltration, percolation, and capillary rise into a single process.
     Considers soil water potential and varying soil layer heights.
+
+    Returns
+    -------
+    preferential_flow : np.ndarray
+        The preferential flow of water through the soil
+    direct_runoff : np.ndarray
+        The direct runoff of water from the soil
+    groundwater_recharge : np.ndarray
+        The recharge of groundwater from the soil
+    net_fluxes : np.ndarray
+        The net fluxes of water between soil layers. Only used for tests.
+
     """
     # Initialize variables
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
     direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
-    groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
+
+    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
     net_fluxes = np.zeros(
         (N_SOIL_LAYERS, w.shape[1]), dtype=np.float32
     )  # Fluxes between layers
-    psi = np.zeros_like(net_fluxes)
-    K_unsat = np.zeros_like(net_fluxes)
-    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
-    is_bioarea = land_use_type < SEALED
+    delta_z = (soil_layer_height[:-1, :] + soil_layer_height[1:, :]) / 2
 
-    assert (w >= wres).all()
-    assert (w <= ws).all()
-
-    for i in range(land_use_type.size):
+    for i in prange(land_use_type.size):
         # Infiltration and preferential flow
         # Estimate the infiltration capacity
         # Use first 2 soil layers to estimate distribution between runoff and infiltration
@@ -868,7 +674,8 @@ def vertical_water_transport(
             np.float32(1) - (np.float32(1) - saturated_area_fraction) ** pot_beta
         )
 
-        # Preferential flow calculation
+        # Preferential flow calculation. Higher preferential flow constant results in less preferential flow
+        # because relative saturation is always below 1
         if (
             not soil_is_frozen[i]
             and land_use_type[i] != PADDY_IRRIGATED
@@ -880,7 +687,7 @@ def vertical_water_transport(
                 * relative_saturation**preferential_flow_constant
             )
 
-        # Infiltration accounting for frozen soil
+        # If the soil is frozen, no infiltration occurs
         if soil_is_frozen[i]:
             infiltration = np.float32(0)
         else:
@@ -891,10 +698,11 @@ def vertical_water_transport(
 
         # add infiltration to the soil
         w[0, i] += infiltration
+        # if the top layer is full, send water to the second layer. Since we consider the
+        # storage capacity of the first two layers for infiltration, we can assume that
+        # the second layer is never full
         if w[0, i] > ws[0, i]:
-            w[1, i] += (
-                w[0, i] - ws[0, i]
-            )  # TODO: Solve edge case of the second layer being full, in principle this should not happen as infiltration should be capped by the infilation capacity
+            w[1, i] += w[0, i] - ws[0, i]
             w[0, i] = ws[0, i]
 
         # Runoff and topwater update for paddy fields
@@ -911,6 +719,10 @@ def vertical_water_transport(
         # Add infiltration flux at the soil surface
         net_fluxes[0, i] = infiltration
 
+    psi = np.zeros_like(net_fluxes)
+    K_unsat = np.zeros_like(net_fluxes)
+
+    for i in prange(land_use_type.size):
         # Compute unsaturated hydraulic conductivity and soil water potential
         for layer in range(N_SOIL_LAYERS):
             # Compute unsaturated hydraulic conductivity. Here it is important that some flow is always possible.
@@ -924,7 +736,6 @@ def vertical_water_transport(
                 saturated_hydraulic_conductivity[layer, i],
                 minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought vulnerability
             )
-            assert K_unsat[layer, i] > 0
 
             # Compute soil water potential
             psi[layer, i] = get_soil_water_potential(
@@ -936,21 +747,16 @@ def vertical_water_transport(
                 minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought vulnerability
             )
 
-        # Compute depths to midpoints of soil layers
-        depth_to_top = np.zeros(N_SOIL_LAYERS + 1, dtype=np.float32)
-        for layer in range(1, N_SOIL_LAYERS + 1):
-            depth_to_top[layer] = depth_to_top[layer - 1] + soil_thickness[layer - 1, i]
-        depth_midpoint = np.zeros(N_SOIL_LAYERS, dtype=np.float32)
-        for layer in range(N_SOIL_LAYERS):
-            depth_midpoint[layer] = depth_to_top[layer] + soil_thickness[
-                layer, i
-            ] / np.float32(2.0)
+    groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
+    is_bioarea = land_use_type < SEALED
 
+    for i in prange(land_use_type.size):
         # Compute fluxes between layers using Darcy's law
         for layer in range(N_SOIL_LAYERS):  # From top (0) to bottom (N_SOIL_LAYERS)
             if layer == N_SOIL_LAYERS - 1:
                 # If there is capillary rise from groundwater, there will be no
-                # percolation to the groundwater
+                # percolation to the groundwater. A potential capillary rise from
+                # the groundwater is already accounted for in rise_from_groundwater
                 if capillary_rise_from_groundwater[i] > 0:
                     flux = 0
                 else:
@@ -962,21 +768,17 @@ def vertical_water_transport(
                     flux = min(flux, available_water_source)
                     w[layer, i] -= flux
             else:
-                # Compute delta_z between midpoints
-                delta_z = depth_midpoint[layer + 1] - depth_midpoint[layer]
                 # Taking the mean of the hydraulic conductivities
                 # by using the geometric mean of the conductivities we put a bit more
                 # weight on the lower layer with lower conductivity
                 K_unsat_avg = (K_unsat[layer + 1, i] * K_unsat[layer, i]) ** (1 / 2)
-                assert K_unsat_avg >= 0
 
                 # Compute flux using Darcy's law
                 flux = -K_unsat_avg * (
-                    (psi[layer + 1, i] - psi[layer, i]) / delta_z - 1
+                    (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i] - 1
                 )
 
-                # Limit flux by available water and storage capacity
-                if flux >= 0:  # Downward flux
+                if flux >= 0:  # Downward flux (percolation)
                     positive_flux = flux
                     source = layer
                     sink = layer + 1
@@ -985,6 +787,7 @@ def vertical_water_transport(
                     source = layer + 1
                     sink = layer
 
+                # Limit flux by available water in source and storage capacity of sink
                 remaining_storage_capacity_sink = ws[sink, i] - w[sink, i]
                 available_water_source = w[source, i] - wres[source, i]
                 positive_flux = min(
@@ -998,11 +801,11 @@ def vertical_water_transport(
 
             net_fluxes[layer, i] = flux
 
-            assert w[source, i] >= wres[source, i] - 1e-6
-            assert w[sink, i] <= ws[sink, i] + 1e-6
-
-            w[source, i] = max(w[source, i], wres[source, i])
+            # Due to numerical errors, the water content in the sink layer can exceed the storage capacity
+            # and the source layer can fall below the residual water storage. Thus cap these to the
+            # storage capacity and residual water storage, respectively
             w[sink, i] = min(w[sink, i], ws[sink, i])
+            w[source, i] = max(w[source, i], wres[source, i])
 
         if is_bioarea[i]:
             groundwater_recharge[i] = net_fluxes[-1, i] + preferential_flow[i]
@@ -1406,49 +1209,43 @@ class Soil(object):
 
         timer.new_split("Evapotranspiration")
 
-        preferential_flow, direct_runoff = infiltrate(
-            available_water_infiltration=available_water_infiltration,
-            ws=self.ws,
-            land_use_type=self.var.land_use_type,
-            frost_index=self.var.frost_index,
-            arno_beta=self.var.arnoBeta,
-            capillary_rise_index=self.var.capriseindex,
-            preferential_flow_constant=self.preferential_flow_constant,
-            w=self.var.w,
-            topwater=self.var.topwater,
-        )
+        n_substeps = 3
+        preferential_flow = np.zeros_like(self.var.land_use_type, dtype=np.float32)
+        direct_runoff = np.zeros_like(self.var.land_use_type, dtype=np.float32)
+        groundwater_recharge = np.zeros_like(self.var.land_use_type, dtype=np.float32)
+
+        for _ in range(n_substeps):
+            (
+                preferential_flow_substep,
+                direct_runoff_substep,
+                groundwater_recharge_substep,
+                _,
+            ) = vertical_water_transport(
+                available_water_infiltration / n_substeps,
+                self.ws,
+                self.wres,
+                self.ksat / n_substeps,
+                self.lambda_pore_size_distribution,
+                self.var.land_use_type,
+                self.var.frost_index,
+                capillary_rise_from_groundwater,
+                self.var.arnoBeta,
+                self.preferential_flow_constant,
+                self.var.w,
+                self.var.topwater,
+                self.soil_layer_height,
+            )
+
+            preferential_flow += preferential_flow_substep
+            direct_runoff += direct_runoff_substep
+            groundwater_recharge += groundwater_recharge_substep
+
         runoff = direct_runoff + runoff_from_groundwater
+
+        timer.new_split("Vertical transport")
 
         assert preferential_flow.dtype == np.float32
         assert runoff.dtype == np.float32
-
-        timer.new_split("Infiltration")
-
-        capillary_rise_between_soil_layers(
-            wfc=self.wfc,
-            ws=self.ws,
-            wres=self.wres,
-            saturated_hydraulic_conductivity=self.ksat,
-            lambda_=self.lambda_pore_size_distribution,
-            w=self.var.w,
-        )
-
-        timer.new_split("Capillary rise")
-
-        groundwater_recharge = percolate(
-            preferential_flow=preferential_flow,
-            ws=self.ws,
-            wres=self.wres,
-            saturated_hydraulic_conductivity=self.ksat,
-            lambda_=self.lambda_pore_size_distribution,
-            land_use_type=self.var.land_use_type,
-            frost_index=self.var.frost_index,
-            capillary_rise_index=self.var.capriseindex,
-            w=self.var.w,
-        )
-        assert groundwater_recharge.dtype == np.float32
-
-        timer.new_split("Percolation")
 
         bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
         self.var.actual_evapotranspiration[bioarea] += (
@@ -1459,6 +1256,7 @@ class Soil(object):
 
         if __debug__:
             assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-10).all()
+            assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-10).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
                 name="soil_1",
