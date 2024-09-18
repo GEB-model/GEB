@@ -34,9 +34,74 @@ from .landcover import (
 )
 
 
+@njit(cache=True, inline="always")
+def get_soil_water_potential(
+    theta,
+    thetar,
+    thetas,
+    lambda_,
+    bubbling_pressure_cm,
+    minimum_effective_saturation=np.float32(0.0),
+):
+    """
+    Calculates the soil water potential (capillary suction) using the van Genuchten model.
+
+    Note that theta, thetar and thetas can also be given as the height of the water column
+    in the soil layer as w, wres and ws since only there relative size is used. Of course
+    consistency is key.
+
+    Parameters
+    ----------
+    theta : np.ndarray
+        The soil moisture content (m³/m³)
+    thetar : np.ndarray
+        The residual soil moisture content (m³/m³)
+    thetas : np.ndarray
+        The saturated soil moisture content (m³/m³)
+    lambda_ : np.ndarray
+        The van Genuchten parameter lambda (1/m)
+    bubbling_pressure_cm : np.ndarray
+        The bubbling pressure (cm)
+    """
+    # van Genuchten parameters
+    alpha = bubbling_pressure_cm**-1
+    n = lambda_ + 1
+    m = 1 - 1 / n
+
+    # Effective saturation
+    effective_saturation = (theta - thetar) / (thetas - thetar)
+    effective_saturation = max(minimum_effective_saturation, effective_saturation)
+
+    # Compute capillary pressure head (phi)
+    phi = ((effective_saturation) ** (-1 / m) - 1) ** (1 / n) / alpha  # Positive value
+
+    # Soil water potential (negative value for suction)
+    capillary_suction = -phi
+
+    return capillary_suction
+
+
+@njit(cache=True, inline="always")
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
+    """
+    Calculates the soil moisture content at a given soil water potential (capillary suction)
+    using the van Genuchten model.
+
+    Parameters
+    ----------
+    capillary_suction : np.ndarray
+        The soil water potential (capillary suction) (m)
+    bubbling_pressure_cm : np.ndarray
+        The bubbling pressure (cm)
+    thetas : np.ndarray
+        The saturated soil moisture content (m³/m³)
+    thetar : np.ndarray
+        The residual soil moisture content (m³/m³)
+    lambda_ : np.ndarray
+        The van Genuchten parameter lambda (1/m)
+    """
     alpha = bubbling_pressure_cm**-1
     n = lambda_ + 1
     m = 1 - 1 / n
@@ -48,7 +113,7 @@ def get_soil_moisture_at_pressure(
     return theta
 
 
-@njit(inline="always")
+@njit(cache=True, inline="always")
 def get_aeration_stress_threshold(
     ws, soil_layer_height, crop_aeration_stress_threshold
 ):
@@ -59,7 +124,7 @@ def get_aeration_stress_threshold(
     ) * soil_layer_height
 
 
-@njit(inline="always")
+@njit(cache=True, inline="always")
 def get_aeration_stress_factor(
     aeration_days_counter, crop_lag_aeration_days, ws, w, aeration_stress_threshold
 ):
@@ -71,7 +136,7 @@ def get_aeration_stress_factor(
     return aeration_stress_factor
 
 
-@njit(inline="always")
+@njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(p, wfc, wwp):
     """
     "The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -95,7 +160,7 @@ def get_maximum_water_content(wfc, wwp):
     return wfc - wwp
 
 
-@njit
+@njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
     crop_group_number, potential_evapotranspiration
 ):
@@ -125,7 +190,7 @@ def get_fraction_easily_available_soil_water(
     return p
 
 
-@njit(inline="always")
+@njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water_single(
     crop_group_number, potential_evapotranspiration
 ):
@@ -184,7 +249,7 @@ def get_total_transpiration_factor(
     return transpiration_factor_total
 
 
-@njit(inline="always")
+@njit(cache=True, inline="always")
 def get_transpiration_factor_single(w, wwp, wcrit):
     nominator = w - wwp
     denominator = wcrit - wwp
@@ -201,7 +266,7 @@ def get_transpiration_factor_single(w, wwp, wcrit):
     return factor
 
 
-@njit(inline="always")
+@njit(cache=True, inline="always")
 def get_root_ratios(
     root_depth,
     soil_layer_height,
@@ -236,9 +301,14 @@ def get_crop_group_number(
     return crop_group_map
 
 
-@njit
+@njit(cache=True)
 def get_unsaturated_hydraulic_conductivity(
-    w, wres, ws, lambda_, saturated_hydraulic_conductivity
+    w,
+    wres,
+    ws,
+    lambda_,
+    saturated_hydraulic_conductivity,
+    minimum_effective_saturation=np.float32(0.0),
 ):
     """This function calculates the unsaturated hydraulic conductivity based on the soil moisture content
     following van Genuchten (1980) and Mualem (1976)
@@ -250,6 +320,8 @@ def get_unsaturated_hydraulic_conductivity(
         effective_saturation = 0
     elif effective_saturation > 1:
         effective_saturation = 1
+
+    effective_saturation = max(minimum_effective_saturation, effective_saturation)
 
     n = lambda_ + 1
     m = 1 - 1 / n
@@ -537,7 +609,6 @@ def infiltrate(
     available_water_infiltration,
     ws,
     land_use_type,
-    crop_kc,
     frost_index,
     arno_beta,
     capillary_rise_index,
@@ -597,11 +668,7 @@ def infiltrate(
         if land_use_type[i] == PADDY_IRRIGATED:
             # infiltration is removed from topwater
             topwater[i] = max(np.float32(0), topwater[i] - infiltration)
-            if crop_kc[i] > np.float32(0.75):
-                # if paddy fields flooded only runoff if topwater > 0.05m
-                direct_runoff[i] = max(0, topwater[i] - np.float32(0.05))
-            else:
-                direct_runoff[i] = topwater[i]
+            direct_runoff[i] = max(0, topwater[i] - np.float32(0.05))
             topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
         else:
             direct_runoff[i] = max(
@@ -736,6 +803,211 @@ def percolate(
                     percolation_to_groundwater + preferential_flow[i]
                 )
     return groundwater_recharge
+
+
+@njit(cache=True, parallel=True)
+def vertical_water_transport(
+    available_water_infiltration,
+    ws,
+    wres,
+    saturated_hydraulic_conductivity,
+    lambda_,
+    land_use_type,
+    frost_index,
+    capillary_rise_from_groundwater,
+    arno_beta,
+    preferential_flow_constant,
+    w,
+    topwater,
+    soil_thickness,
+):
+    """
+    Parameters
+    ----------
+    preferential_flow_constant : float
+        The preferential flow constant. Because effective saturation is always below 1, a higher
+        preferential flow constant will result in less preferential flow.
+
+    Simulates vertical transport of water in the soil using Darcy's equation,
+    combining infiltration, percolation, and capillary rise into a single process.
+    Considers soil water potential and varying soil layer heights.
+    """
+    # Initialize variables
+    preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
+    direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
+    groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
+    net_fluxes = np.zeros(
+        (N_SOIL_LAYERS, w.shape[1]), dtype=np.float32
+    )  # Fluxes between layers
+    psi = np.zeros_like(net_fluxes)
+    K_unsat = np.zeros_like(net_fluxes)
+    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
+    is_bioarea = land_use_type < SEALED
+
+    assert (w >= wres).all()
+    assert (w <= ws).all()
+
+    for i in range(land_use_type.size):
+        # Infiltration and preferential flow
+        # Estimate the infiltration capacity
+        # Use first 2 soil layers to estimate distribution between runoff and infiltration
+        soil_water_storage = w[0, i] + w[1, i]
+        soil_water_storage_max = ws[0, i] + ws[1, i]
+        relative_saturation = soil_water_storage / soil_water_storage_max
+
+        # Fraction of pixel that is at saturation
+        saturated_area_fraction = (
+            np.float32(1) - (np.float32(1) - relative_saturation) ** arno_beta[i]
+        )
+        saturated_area_fraction = max(saturated_area_fraction, np.float32(0))
+        saturated_area_fraction = min(saturated_area_fraction, np.float32(1))
+
+        store = soil_water_storage_max / (arno_beta[i] + np.float32(1))
+        pot_beta = (arno_beta[i] + np.float32(1)) / arno_beta[i]
+        potential_infiltration = store - store * (
+            np.float32(1) - (np.float32(1) - saturated_area_fraction) ** pot_beta
+        )
+
+        # Preferential flow calculation
+        if (
+            not soil_is_frozen[i]
+            and land_use_type[i] != PADDY_IRRIGATED
+            and capillary_rise_from_groundwater[i]
+            == 0  # preferential flow only occurs when there is no capillary rise from groundwater
+        ):
+            preferential_flow[i] = (
+                available_water_infiltration[i]
+                * relative_saturation**preferential_flow_constant
+            )
+
+        # Infiltration accounting for frozen soil
+        if soil_is_frozen[i]:
+            infiltration = np.float32(0)
+        else:
+            infiltration = min(
+                potential_infiltration,
+                available_water_infiltration[i] - preferential_flow[i],
+            )
+
+        # add infiltration to the soil
+        w[0, i] += infiltration
+        if w[0, i] > ws[0, i]:
+            w[1, i] += (
+                w[0, i] - ws[0, i]
+            )  # TODO: Solve edge case of the second layer being full, in principle this should not happen as infiltration should be capped by the infilation capacity
+            w[0, i] = ws[0, i]
+
+        # Runoff and topwater update for paddy fields
+        if land_use_type[i] == PADDY_IRRIGATED:
+            topwater[i] = max(np.float32(0), topwater[i] - infiltration)
+            direct_runoff[i] = max(0, topwater[i] - np.float32(0.05))
+            topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
+        else:
+            direct_runoff[i] = max(
+                (available_water_infiltration[i] - infiltration - preferential_flow[i]),
+                np.float32(0),
+            )
+
+        # Add infiltration flux at the soil surface
+        net_fluxes[0, i] = infiltration
+
+        # Compute unsaturated hydraulic conductivity and soil water potential
+        for layer in range(N_SOIL_LAYERS):
+            # Compute unsaturated hydraulic conductivity. Here it is important that some flow is always possible.
+            # Therefore we use a minimum effective saturation to ensure that some flow is always possible.
+            # This is something that could be better paremeterized, especially when looking at flood-drought
+            K_unsat[layer, i] = get_unsaturated_hydraulic_conductivity(
+                w[layer, i],
+                wres[layer, i],
+                ws[layer, i],
+                lambda_[layer, i],
+                saturated_hydraulic_conductivity[layer, i],
+                minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought vulnerability
+            )
+            assert K_unsat[layer, i] > 0
+
+            # Compute soil water potential
+            psi[layer, i] = get_soil_water_potential(
+                w[layer, i],
+                wres[layer, i],
+                ws[layer, i],
+                lambda_[layer, i],
+                saturated_hydraulic_conductivity[layer, i],
+                minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought vulnerability
+            )
+
+        # Compute depths to midpoints of soil layers
+        depth_to_top = np.zeros(N_SOIL_LAYERS + 1, dtype=np.float32)
+        for layer in range(1, N_SOIL_LAYERS + 1):
+            depth_to_top[layer] = depth_to_top[layer - 1] + soil_thickness[layer - 1, i]
+        depth_midpoint = np.zeros(N_SOIL_LAYERS, dtype=np.float32)
+        for layer in range(N_SOIL_LAYERS):
+            depth_midpoint[layer] = depth_to_top[layer] + soil_thickness[
+                layer, i
+            ] / np.float32(2.0)
+
+        # Compute fluxes between layers using Darcy's law
+        for layer in range(N_SOIL_LAYERS):  # From top (0) to bottom (N_SOIL_LAYERS)
+            if layer == N_SOIL_LAYERS - 1:
+                # If there is capillary rise from groundwater, there will be no
+                # percolation to the groundwater
+                if capillary_rise_from_groundwater[i] > 0:
+                    flux = 0
+                else:
+                    # Else we assume that the bottom layer is draining under gravity
+                    # i.e., assuming homogeneous soil water potential below
+                    # bottom layer all the way to groundwater
+                    flux = K_unsat[layer, i]  # Assume draining under gravity
+                    available_water_source = w[layer, i] - wres[layer, i]
+                    flux = min(flux, available_water_source)
+                    w[layer, i] -= flux
+            else:
+                # Compute delta_z between midpoints
+                delta_z = depth_midpoint[layer + 1] - depth_midpoint[layer]
+                # Taking the mean of the hydraulic conductivities
+                # by using the geometric mean of the conductivities we put a bit more
+                # weight on the lower layer with lower conductivity
+                K_unsat_avg = (K_unsat[layer + 1, i] * K_unsat[layer, i]) ** (1 / 2)
+                assert K_unsat_avg >= 0
+
+                # Compute flux using Darcy's law
+                flux = -K_unsat_avg * (
+                    (psi[layer + 1, i] - psi[layer, i]) / delta_z - 1
+                )
+
+                # Limit flux by available water and storage capacity
+                if flux >= 0:  # Downward flux
+                    positive_flux = flux
+                    source = layer
+                    sink = layer + 1
+                else:  # Upward flux (capillary rise)
+                    positive_flux = -flux
+                    source = layer + 1
+                    sink = layer
+
+                remaining_storage_capacity_sink = ws[sink, i] - w[sink, i]
+                available_water_source = w[source, i] - wres[source, i]
+                positive_flux = min(
+                    positive_flux,
+                    remaining_storage_capacity_sink,
+                    available_water_source,
+                )
+
+                w[source, i] -= positive_flux
+                w[sink, i] += positive_flux
+
+            net_fluxes[layer, i] = flux
+
+            assert w[source, i] >= wres[source, i] - 1e-6
+            assert w[sink, i] <= ws[sink, i] + 1e-6
+
+            w[source, i] = max(w[source, i], wres[source, i])
+            w[sink, i] = min(w[sink, i], ws[sink, i])
+
+        if is_bioarea[i]:
+            groundwater_recharge[i] = net_fluxes[-1, i] + preferential_flow[i]
+
+    return preferential_flow, direct_runoff, groundwater_recharge, net_fluxes
 
 
 class Soil(object):
@@ -1138,7 +1410,6 @@ class Soil(object):
             available_water_infiltration=available_water_infiltration,
             ws=self.ws,
             land_use_type=self.var.land_use_type,
-            crop_kc=self.var.cropKC,
             frost_index=self.var.frost_index,
             arno_beta=self.var.arnoBeta,
             capillary_rise_index=self.var.capriseindex,
