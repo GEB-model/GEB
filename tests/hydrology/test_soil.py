@@ -1,4 +1,6 @@
 import numpy as np
+import pytest
+
 import matplotlib.pyplot as plt
 
 from ..testconfig import output_folder
@@ -13,8 +15,12 @@ from geb.hydrology.soil import (
     get_aeration_stress_factor,
     get_unsaturated_hydraulic_conductivity,
     get_soil_moisture_at_pressure,
-    capillary_rise_between_soil_layers,
+    vertical_water_transport,
+    get_soil_water_potential,
 )
+
+output_folder_soil = output_folder / "soil"
+output_folder_soil.mkdir(exist_ok=True)
 
 
 def test_get_soil_moisture_at_pressure():
@@ -44,6 +50,41 @@ def test_get_soil_moisture_at_pressure():
     ax.legend()
 
     plt.savefig(output_folder / "soil_moisture_at_pressure.png")
+
+
+@pytest.mark.parametrize("pf_value", [2.0, 4.2])
+def test_soil_moisture_potential_inverse(pf_value):
+    # Convert pF value to capillary suction in cm (h)
+    capillary_suction = -(10**pf_value)  # Negative value for suction
+
+    # Define soil parameters for the test
+    thetas = 0.45  # Saturated water content (volumetric)
+    thetar = 0.05  # Residual water content (volumetric)
+    lambda_ = 0.5  # Pore-size distribution index
+    bubbling_pressure_cm = 10.0  # Bubbling pressure in cm
+
+    # Step 1: Calculate theta from capillary suction
+    theta = get_soil_moisture_at_pressure(
+        capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
+    )
+
+    # Step 2: Calculate capillary suction from theta
+    capillary_suction_calculated = get_soil_water_potential(
+        theta,
+        thetar,
+        thetas,
+        lambda_,
+        bubbling_pressure_cm,
+        minimum_effective_saturation=0,
+    )
+
+    # Allow a small tolerance due to numerical approximations
+    tolerance = 1e-2 * abs(capillary_suction)  # 1% of the suction value
+
+    # Assert that the original and calculated capillary suctions are approximately equal
+    assert np.isclose(
+        capillary_suction, capillary_suction_calculated, atol=tolerance
+    ), f"Capillary suction mismatch at pF {pf_value}: original {capillary_suction}, calculated {capillary_suction_calculated}"
 
 
 def test_get_fraction_easily_available_soil_water():
@@ -234,8 +275,6 @@ def test_get_aeration_stress_factor():
         aeration_stress_threshold=aeration_stress_threshold,
     )
 
-    print(aeration_stress_factor)
-
     aeration_stress_factor = get_aeration_stress_factor(
         aeration_days_counter=4,
         crop_lag_aeration_days=crop_lag_aeration_days,
@@ -243,8 +282,6 @@ def test_get_aeration_stress_factor():
         w=w,
         aeration_stress_threshold=aeration_stress_threshold,
     )
-
-    print(aeration_stress_factor)
 
     aeration_stress_factor = get_aeration_stress_factor(
         aeration_days_counter=aeration_days_counter,
@@ -306,12 +343,13 @@ def test_get_unsaturated_hydraulic_conductivity():
     plt.savefig(output_folder / "unsaturated_hydraulic_conductivity.png")
 
 
-def plot_soil_layers(ax, soil_thickness, w, wres, ws, capillary_rise=None):
+def plot_soil_layers(ax, soil_thickness, w, wres, ws, fluxes=None):
     n_soil_columns = soil_thickness.shape[1]
     for column in range(n_soil_columns):
         current_depth = 0
-        for layer in range(0, soil_thickness.shape[0]):
+        for layer in range(soil_thickness.shape[0]):
             cell_thickness = soil_thickness[layer, column]
+            cell_center = current_depth + cell_thickness / 2
 
             alpha = (
                 w[layer, column] / cell_thickness - wres[layer, column] / cell_thickness
@@ -334,22 +372,24 @@ def plot_soil_layers(ax, soil_thickness, w, wres, ws, capillary_rise=None):
                 color=color,
                 alpha=alpha,
                 linewidth=0,
+                zorder=0,
             )
             ax.add_patch(rect)
             current_depth += cell_thickness
 
-            if capillary_rise is not None and layer != soil_thickness.shape[0] - 1:
-                capillary_rise_cell = capillary_rise[layer, column]
-                if capillary_rise_cell > 0:
+            if fluxes is not None:
+                flux = fluxes[layer, column]
+                if flux != 0:
                     ax.arrow(
                         column + 0.5,
-                        current_depth,
-                        0,
-                        -capillary_rise_cell * 1000,
+                        cell_center,
+                        0,  # vertical arrow
+                        flux * 10,
                         head_width=0.1,
                         head_length=0.05,
                         fc="red",
                         ec="red",
+                        zorder=1,
                     )
 
     ax.set_xlim(0, n_soil_columns)
@@ -359,22 +399,35 @@ def plot_soil_layers(ax, soil_thickness, w, wres, ws, capillary_rise=None):
     ax.invert_yaxis()
 
 
-def test_capillary_rise_between_soil_layers():
-    soil_thickness = np.array([[0.001, 0.2, 0.4, 0.8, 0.3, 0.2]])
-    soil_thickness = np.vstack([soil_thickness] * 11).T
+@pytest.mark.parametrize("capillary_rise_from_groundwater", [0.0, 0.01])
+def test_vertical_water_transport(capillary_rise_from_groundwater):
+    ncols = 11
+
+    soil_thickness = np.array([[0.05, 0.10, 0.15, 0.30, 0.40, 1.00]], dtype=np.float32)
+    # soil_thickness = np.array([[0.4, 0.4, 0.4, 0.4, 0.4, 0.4]])
+    soil_thickness = np.vstack([soil_thickness] * ncols).T
+
+    available_water_infiltration = np.full(ncols, 0.005, dtype=np.float32)
+    land_use_type = np.full_like(available_water_infiltration, 0.1, dtype=np.int32)
+    frost_index = np.full_like(
+        available_water_infiltration, -9999, dtype=np.float32
+    )  # no frost
+    arno_beta = np.full_like(available_water_infiltration, 1.0, dtype=np.float32)
+    preferential_flow_constant = 4.5
+    topwater = np.zeros_like(available_water_infiltration)
 
     geb.hydrology.soil.N_SOIL_LAYERS = soil_thickness.shape[0]
+    geb.hydrology.soil.FROST_INDEX_THRESHOLD = 0
 
     theta_fc = np.full_like(soil_thickness, 0.4)
     theta_s = np.full_like(soil_thickness, 0.5)
     theta_res = np.full_like(soil_thickness, 0.1)
 
-    saturated_hydraulic_conductivity = np.full_like(soil_thickness, 100.0)
+    saturated_hydraulic_conductivity = np.full_like(soil_thickness, 0.1)
     lambda_ = np.full_like(soil_thickness, 0.9)
 
     wres = theta_res * soil_thickness
     ws = theta_s * soil_thickness
-    wfc = theta_fc * soil_thickness
 
     theta = np.full_like(soil_thickness, 0)
     theta[:, 0] = theta_res[:, 0]
@@ -392,42 +445,56 @@ def test_capillary_rise_between_soil_layers():
 
     w = theta * soil_thickness
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), dpi=300)
     fig.tight_layout()
 
     plot_soil_layers(axes[0], soil_thickness, w, wres, ws)
 
-    capillary_rise = capillary_rise_between_soil_layers(
-        wfc=wfc,
-        ws=ws,
-        wres=wres,
-        saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-        lambda_=lambda_,
-        w=w,
+    preferential_flow, direct_runoff, groundwater_recharge, net_fluxes = (
+        vertical_water_transport(
+            available_water_infiltration,
+            ws,
+            wres,
+            saturated_hydraulic_conductivity,
+            lambda_,
+            land_use_type,
+            frost_index,
+            np.full_like(available_water_infiltration, capillary_rise_from_groundwater),
+            arno_beta,
+            preferential_flow_constant,
+            w,
+            topwater,
+            soil_thickness,
+        )
     )
 
-    plot_soil_layers(axes[1], soil_thickness, w, wres, ws, capillary_rise)
+    plot_soil_layers(axes[1], soil_thickness, w, wres, ws, net_fluxes)
 
+    # available_water_infiltration.fill(0)
     for _ in range(1000):
-        capillary_rise = capillary_rise_between_soil_layers(
-            wfc=wfc,
-            ws=ws,
-            wres=wres,
-            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-            lambda_=lambda_,
-            w=w,
+        preferential_flow, direct_runoff, groundwater_recharge, net_fluxes = (
+            vertical_water_transport(
+                available_water_infiltration,
+                ws,
+                wres,
+                saturated_hydraulic_conductivity,
+                lambda_,
+                land_use_type,
+                frost_index,
+                np.full_like(
+                    available_water_infiltration, capillary_rise_from_groundwater
+                ),
+                arno_beta,
+                preferential_flow_constant,
+                w,
+                topwater,
+                soil_thickness,
+            )
         )
 
-    plot_soil_layers(axes[2], soil_thickness, w, wres, ws, capillary_rise)
+    plot_soil_layers(axes[2], soil_thickness, w, wres, ws, net_fluxes)
 
-    plt.savefig(output_folder / "soil_layers.png")
-
-    soil_thickness[0] = 0.001
-    capillary_rise = capillary_rise_between_soil_layers(
-        wfc=wfc,
-        ws=ws,
-        wres=wres,
-        saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-        lambda_=lambda_,
-        w=w,
+    plt.savefig(
+        output_folder_soil
+        / f"vertical_water_transport_caprise_{capillary_rise_from_groundwater}.png"
     )
