@@ -50,6 +50,12 @@ def postorder(dirUp, catchment, node, catch, dirDown):
     :return: dirDown and catchment
     """
 
+    import sys
+
+    original_recursion_limit = sys.getrecursionlimit()
+
+    sys.setrecursionlimit(10000)
+
     if dirUp[node] != []:
         postorder(dirUp, catchment, dirUp[node][0], catch, dirDown)
         catchment[dirUp[node][0]] = catch
@@ -86,6 +92,9 @@ def postorder(dirUp, catchment, node, catch, dirDown):
                                     )
                                     catchment[dirUp[node][7]] = catch
                                     dirDown.append(dirUp[node][7])
+
+    sys.setrecursionlimit(original_recursion_limit)
+    return
 
 
 def dirUpstream(dirshort):

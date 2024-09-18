@@ -370,11 +370,6 @@ class LandCover(object):
             potential_evapotranspiration,
         ) = self.model.evaporation.step(self.var.ETRef)
 
-        # assert (
-        #     potential_evapotranspiration
-        #     <= potential_transpiration + potential_bare_soil_evaporation + 1e-5
-        # )[BIOAREA].all()
-
         timer.new_split("PET")
 
         potential_transpiration_minus_interception_evaporation = (

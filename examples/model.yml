@@ -99,6 +99,10 @@ agent_settings:
     well_cost_factor: 1
     drought_threshold_factor: 1
 
+hazards:
+  floods:
+    simulate: false
+
 ###
 # This sections contains settings for logging of the model. 
 logging:
