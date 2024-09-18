@@ -6,6 +6,13 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
+from hydromt_sfincs import SfincsModel
+import hydromt
+from shapely.geometry import Point
+from rasterio.features import shapes
+import matplotlib.pyplot as plt 
+import math
+
 from sfincs_river_flood_simulator import (
     build_sfincs,
     update_sfincs_model_forcing,
@@ -55,6 +62,76 @@ class SFINCS:
                 / "data_catalog.yml"
             )
         ]
+    
+    def get_utm_zone(self, region_file):
+        region = gpd.read_file(region_file)
+        # Step 1: Calculate the central longitude of the dataset
+        centroid = region.geometry.centroid
+        central_lon = centroid.x.mean()  # Mean longitude of the dataset
+
+        # Step 2: Determine the UTM zone based on the longitude
+        utm_zone = int((central_lon + 180) // 6) + 1
+
+        # Step 3: Determine if the data is in the Northern or Southern Hemisphere
+        # The EPSG code for UTM in the northern hemisphere is EPSG:326xx (xx = zone)
+        # The EPSG code for UTM in the southern hemisphere is EPSG:327xx (xx = zone)
+        if centroid.y.mean() > 0:
+            utm_crs = f"EPSG:326{utm_zone}"  # Northern hemisphere
+        else:
+            utm_crs = f"EPSG:327{utm_zone}"  # Southern hemisphere
+        return utm_crs
+        
+
+    def get_detailed_catchment_outline(self, region_file):
+        region = gpd.read_file(region_file)
+        utm_zone = self.get_utm_zone(region_file)
+        region = region.to_crs(utm_zone)
+        area = region.geometry.area.item()
+        area = area / 1000000
+        rounded_area = math.floor(area / 100) * 100 # Round down to nearest hundred 
+        print(rounded_area)
+
+        def vectorize(data, nodata, transform, crs, name="value"):
+                feats_gen = shapes(data, mask=data != nodata, transform=transform)
+                feats = [{"geometry": geom, "properties": {name: val}} for geom, val in feats_gen]
+                gdf = gpd.GeoDataFrame.from_features(feats, crs=crs)
+                gdf[name] = gdf[name].astype(data.dtype)
+                return gdf
+        
+        # Initialize datacatalog with all sfincs data
+        sf = SfincsModel(data_libs= self.data_catalogs)
+        merit_hydro = sf.data_catalog.get_rasterdataset("merit_hydro", variables=["flwdir"],geom=region,buffer=100) # get flow directions from merit hydro dataset
+        flw = hydromt.flw.flwdir_from_da(merit_hydro, ftype='d8', check_ftype=True, mask=None) # Put it in the correct data type 
+        min_area = rounded_area # TODO:check whether this would work for other catchments as well   
+        subbas, idxs_out = flw.subbasins_area(min_area) # Extract basin based on minimum upstream area 
+        catchment_outline = vectorize(subbas.astype(np.int32), nodata=0, transform = flw.transform, crs=4326, name="basin") # Vectorize the basin 
+        catchment_outline = catchment_outline.to_crs(utm_zone) #TODO: check if this is the correct crs 
+
+        def extract_middle_basin(gdf):
+            # Calculate the centroid of each basin
+            gdf['centroid'] = gdf.geometry.centroid
+    
+            # Calculate the geometric center (mean of centroids) of all basins
+            mean_x = gdf.centroid.x.mean()
+            mean_y = gdf.centroid.y.mean()
+            geometric_center = Point(mean_x, mean_y)
+    
+            # Find the basin whose centroid is closest to the geometric center
+            gdf['distance_to_center'] = gdf.centroid.apply(lambda x: x.distance(geometric_center))
+            middle_basin = gdf.loc[gdf['distance_to_center'].idxmin()]
+    
+            # Return the middle basin as a new GeoDataFrame
+            middle_basin_gdf = gpd.GeoDataFrame([middle_basin], geometry='geometry')
+    
+            # Remove the temporary columns before returning
+            middle_basin_gdf = middle_basin_gdf.drop(columns=['centroid', 'distance_to_center'])
+            middle_basin_gdf = middle_basin_gdf.set_crs(utm_zone)  
+            return middle_basin_gdf
+
+        detailed_region = extract_middle_basin(catchment_outline) # We're only interested in the basin which is in the middle 
+        detailed_region.to_file("detailed_region.gpkg", driver = "GPKG")
+        detailed_region = detailed_region.to_crs(4326)
+        return detailed_region
 
     def setup(self, event, config_fn="sfincs.yml", force_overwrite=False):
         build_parameters = {}
@@ -86,13 +163,15 @@ class SFINCS:
             and self.model.config["general"]["simulate_coastal_floods"]
         ):
             build_parameters["simulate_coastal_floods"] = True
+        
+        detailed_region = self.get_detailed_catchment_outline(region_file = self.model.files["geoms"]["region"])
 
         build_parameters.update(
             {
                 "config_fn": str(config_fn),
                 "model_root": self.sfincs_model_root(event_name),
                 "data_catalogs": self.data_catalogs,
-                "mask": gpd.read_file(self.model.files["geoms"]["region"]),
+                "mask": detailed_region,
                 "method": "precipitation",
             }
         )
@@ -214,7 +293,7 @@ class SFINCS:
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
 
         event_name = self.get_event_name(event)
-        run_sfincs_simulation(root=self.sfincs_simulation_root(event_name))
+        run_sfincs_simulation(model_root=self.sfincs_model_root(event_name), simulation_root=self.sfincs_simulation_root(event_name))
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
