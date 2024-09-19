@@ -395,8 +395,8 @@ def IterateToQnew(Qin, Qold, sideflow, alpha, beta, deltaT, deltaX):
 
     # If deltaX (channel length) is 0 this should be a pit, handle inflow but no outflow
     if deltaX == 0:
-        # Inflow into the pit occurs, so return Qin + sideflow (assuming no outflow)
-        return max(Qin + sideflow, 0)
+        # Inflow into the pit occurs, so return Qin
+        return max(Qin, 0)
 
     # If no input, then output = 0
     if (Qin + Qold + sideflow) == 0:
