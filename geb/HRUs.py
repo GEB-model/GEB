@@ -443,7 +443,7 @@ class Grid(BaseVariables):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
         spei = self.load_forcing(self.spei_ds, self.model.current_time, compress=False)
-        assert not np.isnan(spei).any()
+        assert not np.isnan(spei[~self.mask]).any()  # no nan values in non-masked cells
         return spei
 
     @property
