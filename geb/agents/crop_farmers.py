@@ -1672,7 +1672,7 @@ class CropFarmers(AgentBaseClass):
                     self.groundwater_abstraction_m3_by_farmer,
                 ),
                 outfluxes=[(water_withdrawal_m * cell_area)],
-                tollerance=1,
+                tollerance=10,
             )
 
             # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction

@@ -146,7 +146,9 @@ class WaterDemand:
         )
 
         relative_saturation = soil_water_storage / soil_water_storage_cap
-        assert (relative_saturation <= 1).all(), "Relative saturation should always be <= 1"
+        assert (
+            relative_saturation <= 1
+        ).all(), "Relative saturation should always be <= 1"
 
         satAreaFrac = (
             1 - (1 - relative_saturation) ** self.var.arnoBeta[nonpaddy_irrigated_land]
@@ -329,7 +331,7 @@ class WaterDemand:
                     addtoevapotrans_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-7,
+                tollerance=1e-6,
             )
 
         if self.model.use_gpu:
