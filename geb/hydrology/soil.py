@@ -575,6 +575,9 @@ def evapotranspirate(
                 )
                 transpiration = transpiration_water_stress_corrected
                 w[layer, i] -= transpiration
+                w[layer, i] = max(
+                    w[layer, i], wres[layer, i]
+                )  # soil moisture can never be lower than wres
                 if is_bioarea[i]:
                     actual_total_transpiration[i] += transpiration
 
@@ -594,6 +597,9 @@ def evapotranspirate(
                 )
                 # remove the bare soil evaporation from the top layer
                 w[0, i] -= actual_bare_soil_evaporation[i]
+                w[0, i] = max(
+                    w[0, i], wres[0, i]
+                )  # soil moisture can never be lower than wres
             else:
                 # if the soil is frozen, no evaporation occurs
                 # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
@@ -742,7 +748,7 @@ def vertical_water_transport(
                 saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
                     layer, i
                 ],
-                minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought vulnerability
+                minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought interactions
             )
 
             # Compute soil water potential
@@ -752,7 +758,7 @@ def vertical_water_transport(
                 thetas=ws[layer, i],
                 lambda_=lambda_[layer, i],
                 bubbling_pressure_cm=bubbling_pressure_cm[layer, i],
-                minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought vulnerability
+                minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought interactions
             )
 
     groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
@@ -1176,7 +1182,10 @@ class Soil(object):
             open_water_evaporation=open_water_evaporation,
         )
 
-        timer.new_split("Available infiltratrion")
+        timer.new_split("Available infiltration")
+
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
 
         runoff_from_groundwater = rise_from_groundwater(
             w=self.var.w,
@@ -1185,6 +1194,9 @@ class Soil(object):
                 np.float32
             ),
         )
+
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
 
         timer.new_split("Capillary rise from groundwater")
 
@@ -1224,8 +1236,8 @@ class Soil(object):
         direct_runoff = np.zeros_like(self.var.land_use_type, dtype=np.float32)
         groundwater_recharge = np.zeros_like(self.var.land_use_type, dtype=np.float32)
 
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-7).all()
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
 
         for _ in range(n_substeps):
             (
@@ -1254,8 +1266,8 @@ class Soil(object):
             direct_runoff += direct_runoff_substep
             groundwater_recharge += groundwater_recharge_substep
 
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-7).all()
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
 
         runoff = direct_runoff + runoff_from_groundwater
 
@@ -1271,8 +1283,8 @@ class Soil(object):
         )
 
         if __debug__:
-            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
-            assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-7).all()
+            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
+            assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
                 name="soil_1",
