@@ -264,7 +264,7 @@ class SFINCS:
         if sfincs_precipitation is None:
             sfincs_precipitation = (
                 xr.open_dataset(
-                    self.model.files["forcing"]["climate/pr_hourly"]
+                    self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
                     ).rename(pr_hourly="precip")["precip"]
                     * 3600
             )  # convert from kg/m2/s to mm/h for
@@ -296,7 +296,7 @@ class SFINCS:
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         event_name = self.get_event_name(event)
-        run_sfincs_simulation(root=self.sfincs_simulation_root(event_name))
+        run_sfincs_simulation(simulation_root=self.sfincs_simulation_root(event_name), model_root=self.sfincs_model_root(event_name))
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
@@ -309,7 +309,7 @@ class SFINCS:
         scaled_event = event.copy()
         sfincs_precipitation = (
             xr.open_dataset(
-                self.model.files["forcing"]["climate/pr_hourly"]
+                self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
             ).rename(pr_hourly="precip")["precip"]
             * 3600 * scale_factor
         )  # convert from kg/m2/s to mm/h for
@@ -336,8 +336,8 @@ class SFINCS:
             exceedence_probabilities_list = [] 
             for index, row in scale_factors.iterrows():
                 return_period = row["return_period"]
-                exceedence_probability = row["exceedence_prob"]
-                scale_factor = row["scale"]
+                exceedence_probability = row["exceedance_probability"]
+                scale_factor = row["scaling_factor"]
                 scaled_event = self.scale_event(event, scale_factor)
                 damages = self.run_single_event(scaled_event, start_time, return_period)
            
