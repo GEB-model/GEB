@@ -71,6 +71,7 @@ def get_soil_water_potential(
     # Effective saturation
     effective_saturation = (theta - thetar) / (thetas - thetar)
     effective_saturation = max(minimum_effective_saturation, effective_saturation)
+    effective_saturation = min(np.float32(1), effective_saturation)
 
     # Compute capillary pressure head (phi)
     phi = ((effective_saturation) ** (-1 / m) - 1) ** (1 / n) / alpha  # Positive value
@@ -611,6 +612,7 @@ def vertical_water_transport(
     wres,
     saturated_hydraulic_conductivity,
     lambda_,
+    bubbling_pressure_cm,
     land_use_type,
     frost_index,
     capillary_rise_from_groundwater,
@@ -729,21 +731,23 @@ def vertical_water_transport(
             # Therefore we use a minimum effective saturation to ensure that some flow is always possible.
             # This is something that could be better paremeterized, especially when looking at flood-drought
             K_unsat[layer, i] = get_unsaturated_hydraulic_conductivity(
-                w[layer, i],
-                wres[layer, i],
-                ws[layer, i],
-                lambda_[layer, i],
-                saturated_hydraulic_conductivity[layer, i],
+                w=w[layer, i],
+                wres=wres[layer, i],
+                ws=ws[layer, i],
+                lambda_=lambda_[layer, i],
+                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
+                    layer, i
+                ],
                 minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought vulnerability
             )
 
             # Compute soil water potential
             psi[layer, i] = get_soil_water_potential(
-                w[layer, i],
-                wres[layer, i],
-                ws[layer, i],
-                lambda_[layer, i],
-                saturated_hydraulic_conductivity[layer, i],
+                theta=w[layer, i],
+                thetar=wres[layer, i],
+                thetas=ws[layer, i],
+                lambda_=lambda_[layer, i],
+                bubbling_pressure_cm=bubbling_pressure_cm[layer, i],
                 minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought vulnerability
             )
 
@@ -854,7 +858,7 @@ class Soil(object):
         bubbling_pressure_cm = self.model.data.grid.load(
             self.model.files["grid"]["soil/bubbling_pressure_cm"], layer=None
         )
-        bubbling_pressure_cm = self.model.data.to_HRU(
+        self.bubbling_pressure_cm = self.model.data.to_HRU(
             data=bubbling_pressure_cm, fn=None
         )
 
@@ -867,7 +871,7 @@ class Soil(object):
 
         thetafc = get_soil_moisture_at_pressure(
             -100,  # assuming field capacity is at -100 cm (pF 2)
-            bubbling_pressure_cm,
+            self.bubbling_pressure_cm,
             thetas,
             thetar,
             lambda_pore_size_distribution,
@@ -875,7 +879,7 @@ class Soil(object):
 
         thetawp = get_soil_moisture_at_pressure(
             -(10**4.2),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
-            bubbling_pressure_cm,
+            self.bubbling_pressure_cm,
             thetas,
             thetar,
             lambda_pore_size_distribution,
@@ -1152,6 +1156,8 @@ class Soil(object):
             w_pre = self.var.w.copy()
             topwater_pre = self.var.topwater.copy()
 
+        bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
+
         interflow = self.var.full_compressed(0, dtype=np.float32)
 
         timer = TimingModule("Soil")
@@ -1214,6 +1220,9 @@ class Soil(object):
         direct_runoff = np.zeros_like(self.var.land_use_type, dtype=np.float32)
         groundwater_recharge = np.zeros_like(self.var.land_use_type, dtype=np.float32)
 
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-9).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-9).all()
+
         for _ in range(n_substeps):
             (
                 preferential_flow_substep,
@@ -1226,6 +1235,7 @@ class Soil(object):
                 self.wres,
                 self.ksat / n_substeps,
                 self.lambda_pore_size_distribution,
+                self.bubbling_pressure_cm,
                 self.var.land_use_type,
                 self.var.frost_index,
                 capillary_rise_from_groundwater,
@@ -1240,6 +1250,9 @@ class Soil(object):
             direct_runoff += direct_runoff_substep
             groundwater_recharge += groundwater_recharge_substep
 
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-10).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-10).all()
+
         runoff = direct_runoff + runoff_from_groundwater
 
         timer.new_split("Vertical transport")
@@ -1247,7 +1260,6 @@ class Soil(object):
         assert preferential_flow.dtype == np.float32
         assert runoff.dtype == np.float32
 
-        bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
         self.var.actual_evapotranspiration[bioarea] += (
             actual_bare_soil_evaporation[bioarea]
             + open_water_evaporation[bioarea]
