@@ -325,7 +325,7 @@ report:
   yearly_abstraction_m3_by_farmer_channel:
     type: crop_farmers
     function: null
-    varname: yearly_abstraction_m3_by_farmer[:, 0]
+    varname: yearly_abstraction_m3_by_farmer[:, 0, 0]
     format: npz
     frequency:
       every: year
@@ -334,7 +334,7 @@ report:
   yearly_abstraction_m3_by_farmer_reservoir:
     type: crop_farmers
     function: null
-    varname: yearly_abstraction_m3_by_farmer[:, 1]
+    varname: yearly_abstraction_m3_by_farmer[:, 1, 0]
     format: npz
     frequency:
       every: year
@@ -343,7 +343,7 @@ report:
   yearly_abstraction_m3_by_farmer_groundwater:
     type: crop_farmers
     function: null
-    varname: yearly_abstraction_m3_by_farmer[:, 2]
+    varname: yearly_abstraction_m3_by_farmer[:, 2, 0]
     format: npz
     frequency:
       every: year
