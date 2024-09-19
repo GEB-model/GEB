@@ -158,6 +158,8 @@ class WaterDemand:
         ).all(), "Relative saturation should always be <= 1"
         relative_saturation[relative_saturation > 1] = 1
 
+        relative_saturation[relative_saturation > 1] = 1
+
         satAreaFrac = (
             1 - (1 - relative_saturation) ** self.var.arnoBeta[nonpaddy_irrigated_land]
         )

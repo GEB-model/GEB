@@ -8,7 +8,9 @@ from typing import Any, Dict, Tuple, Union
 
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
+
 # from gplearn.genetic import SymbolicRegressor
+from geb.workflows import TimingModule
 
 import numpy as np
 from numba import njit
@@ -2550,151 +2552,80 @@ class CropFarmers(AgentBaseClass):
         print(f"Median R^2 (lin): {np.median(yield_probability_R2_lin)}")
 
     def calculate_yield_spei_relation(self):
-        """
-        Computes the yearly yield ratios and SPEI probabilities, then calculates the yearly mean for each unique farmer type.
-
-        Note:
-            This function performs the following operations:
-                1. Group farmers based on crop combinations and compute averages for each group.
-                2. Mask rows and columns with only zeros.
-                3. Determine the relation between yield ratio and profit for all farmer types.
-                4. Sample the individual agent relation from the agent groups and assign to agents.
-        """
         # Create unique groups
-        # Calculating the thresholds for the top, middle, and lower thirds
         crop_elevation_group = self.create_unique_groups()
-
-        # Mask out empty columns first
-        mask_columns = np.any((self.yearly_yield_ratio != 0), axis=0) & np.any(
-            (self.yearly_SPEI_probability != 0), axis=0
+        unique_crop_combinations, group_indices = np.unique(
+            crop_elevation_group, axis=0, return_inverse=True
         )
 
-        # Apply the mask to the entire dataset before looping
+        # Mask out empty columns
+        mask_columns = np.any(self.yearly_yield_ratio != 0, axis=0) & np.any(
+            self.yearly_SPEI_probability != 0, axis=0
+        )
+
         masked_yearly_yield_ratio = self.yearly_yield_ratio[:, mask_columns]
         masked_SPEI_probability = self.yearly_SPEI_probability[:, mask_columns]
 
-        # Step 3: Determine the relation between yield ratio and profit
-        group_yield_probability_relation_log = []
-        yield_probability_R2_log = []
-        yield_probability_p_scipy = []
+        # Prepare data
+        X_all = np.log10(masked_SPEI_probability[:, :-1].flatten())
+        y_all = masked_yearly_yield_ratio[:, :-1].flatten()
 
-        # Variables to store the last yield_ratio and spei_prob
-        last_yield_ratio = None
-        last_spei_prob = None
+        # Filter out invalid values
+        valid_mask = (
+            (~np.isnan(X_all))
+            & (~np.isnan(y_all))
+            & (X_all > -np.inf)
+            & (y_all > -np.inf)
+        )
+        X_all = X_all[valid_mask]
+        y_all = y_all[valid_mask]
+        group_indices_all = np.repeat(
+            group_indices, masked_SPEI_probability.shape[1] - 1
+        )[valid_mask]
 
-        def logarithmic_function(x, a, b):
-            return a * np.log10(x) + b
+        # Number of groups
+        n_groups = unique_crop_combinations.shape[0]
 
-        # Now loop through the unique farmer groups
-        for idx, crop_combination in enumerate(np.unique(crop_elevation_group, axis=0)):
-            unique_farmer_group = np.where(
-                (crop_elevation_group == crop_combination[None, ...]).all(axis=1)
-            )[0]
+        # Initialize arrays for coefficients and R²
+        a_array = np.zeros(n_groups)
+        b_array = np.zeros(n_groups)
+        r_squared_array = np.zeros(n_groups)
 
-            group_yield_ratio = masked_yearly_yield_ratio[unique_farmer_group, :]
-            group_spei = masked_SPEI_probability[unique_farmer_group, :]
+        # For each group, perform linear regression
+        for group_idx in range(n_groups):
+            # Get data for the group
+            group_mask = group_indices_all == group_idx
+            X_group = X_all[group_mask]
+            y_group = y_all[group_mask]
 
-            x = group_spei[:, :-1]
-            y = group_yield_ratio[:, :-1]
+            if len(X_group) >= 2:
+                # Prepare matrices
+                X_matrix = np.vstack([X_group, np.ones(len(X_group))]).T
+                # Perform linear regression
+                coefficients = np.linalg.lstsq(X_matrix, y_group, rcond=None)[0]
+                a, b = coefficients[0], coefficients[1]
 
-            # Filter out only 0s
-            x = x[y != 0].flatten()
-            y = y[y != 0].flatten()
-
-            # Set the a and b values of last year to prevent no values on this year
-            if self.farmer_yield_probability_relation is not None:
-                a, b = np.median(
-                    self.farmer_yield_probability_relation[
-                        np.where(
-                            (
-                                crop_elevation_group
-                                == np.unique(crop_elevation_group, axis=0)[idx]
-                            ).all(axis=1)
-                        )[0]
-                    ],
-                    axis=0,
-                )
+                # Calculate R²
+                y_pred = a * X_group + b
+                ss_res = np.sum((y_group - y_pred) ** 2)
+                ss_tot = np.sum((y_group - np.mean(y_group)) ** 2)
+                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
             else:
-                a, b = 0.8, 1
+                # Not enough data points
+                a, b, r_squared = np.nan, np.nan, np.nan
 
-            # Fit logarithmic function, except when there is an error
-            try:
-                # Attempt to fit the logarithmic_function function
-                # Sometimes the yields of the first year can give issues
-                a, b = curve_fit(
-                    logarithmic_function, x, y, bounds=([0, 0], [np.inf, np.inf])
-                )[0]
-            except RuntimeError:
-                # RuntimeError is raised when curve_fit fails to converge
-                # In this case, take the values of the previous (similar) group
-                if last_yield_ratio is not None:
-                    # Recalculate a, b with the previous values
-                    a, b = curve_fit(
-                        logarithmic_function,
-                        last_spei_prob,
-                        last_yield_ratio,
-                        bounds=([0, 0], [np.inf, np.inf]),
-                    )[0]
-
-            group_yield_probability_relation_log.append(np.array([a, b]))
-
-            residuals = y - logarithmic_function(x, a, b)
-            ss_tot = np.sum((y - np.mean(y)) ** 2)
-            ss_res = np.sum(residuals**2)
-
-            yield_probability_R2_log.append(1 - (ss_res / ss_tot))
-            # r2 = 1 - (ss_res / ss_tot)
-
-            # Update last_yield_ratio and last_spei_prob
-            last_yield_ratio = y
-            last_spei_prob = x
-
-            # est_gp = SymbolicRegressor(
-            #     population_size=1000,
-            #     generations=10,
-            #     stopping_criteria=0.01,
-            #     p_crossover=0.7,
-            #     p_subtree_mutation=0.1,
-            #     p_hoist_mutation=0.05,
-            #     p_point_mutation=0.1,
-            #     max_samples=0.9,
-            #     verbose=1,
-            #     parsimony_coefficient=0.01,
-            #     random_state=42,
-            # )
-
-            # # Fit the model
-            # est_gp.fit(
-            #     x.reshape(-1, 1),
-            #     y.reshape(-1, 1),
-            # )
-
-            # # Predict using the model
-            # y_gp = est_gp.predict(x.reshape(-1, 1))
-            # print(y_gp)
+            a_array[group_idx] = a
+            b_array[group_idx] = b
+            r_squared_array[group_idx] = r_squared
 
         # Assign relations to agents
-        exact_positions = np.where(
-            np.all(
-                crop_elevation_group[:, np.newaxis, :]
-                == np.unique(crop_elevation_group, axis=0),
-                axis=-1,
-            )
-        )[1]
-        if len(group_yield_probability_relation_log) > max(exact_positions):
-            self.farmer_yield_probability_relation = np.array(
-                group_yield_probability_relation_log
-            )[exact_positions]
-            assert isinstance(
-                self.farmer_yield_probability_relation, np.ndarray
-            ), "self.farmer_yield_probability_relation must be a np.ndarray"
-
-        print(
-            "r2_log:",
-            np.median(yield_probability_R2_log),
-            "p:",
-            np.median(yield_probability_p_scipy),
+        self.farmer_yield_probability_relation = np.column_stack(
+            (a_array[group_indices], b_array[group_indices])
         )
+
+        # Print median R²
+        valid_r2 = r_squared_array[~np.isnan(r_squared_array)]
+        print("Median R²:", np.median(valid_r2) if len(valid_r2) > 0 else "N/A")
 
     def adapt_crops(self) -> None:
         # Fetch loan configuration
@@ -2963,6 +2894,7 @@ class CropFarmers(AgentBaseClass):
 
         # Calculate the EU of not adapting and adapting respectively
         SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
+
         SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
 
         assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
@@ -4302,10 +4234,6 @@ class CropFarmers(AgentBaseClass):
                 self.yearly_profits / self.yearly_potential_profits
             )
 
-            # Shift the potential and yearly profits forward
-            shift_and_reset_matrix(self.yearly_profits)
-            shift_and_reset_matrix(self.yearly_potential_profits)
-
             # reset the irrigation limit, but only if a full year has passed already. Otherwise
             # the cumulative water deficit is not year completed.
             if self.model.current_time.year - 1 > self.model.spinup_start.year:
@@ -4362,8 +4290,7 @@ class CropFarmers(AgentBaseClass):
                 self.calculate_water_costs()
             )
 
-            for i in range(len(self.yearly_abstraction_m3_by_farmer[0, :, 0])):
-                shift_and_reset_matrix(self.yearly_abstraction_m3_by_farmer[:, i, :])
+            timer = TimingModule("crop_farmers")
 
             if (
                 not self.model.spinup
@@ -4373,6 +4300,7 @@ class CropFarmers(AgentBaseClass):
                 # Determine the relation between drought probability and yield
                 self.calculate_yield_spei_relation()
                 # self.calculate_yield_spei_relation_test()
+                timer.new_split("yield-spei relation")
 
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(self.farmer_yield_probability_relation == 0):
@@ -4383,6 +4311,7 @@ class CropFarmers(AgentBaseClass):
                         == "no-adaptation"
                     ):
                         self.adapt_irrigation_well(average_extraction_speed)
+                        timer.new_split("irr well")
                     if (
                         not self.config["expected_utility"]["adaptation_sprinkler"][
                             "ruleset"
@@ -4390,17 +4319,20 @@ class CropFarmers(AgentBaseClass):
                         == "no-adaptation"
                     ):
                         self.adapt_irrigation_efficiency(energy_cost, water_cost)
+                        timer.new_split("irr efficiency")
                     if (
                         not self.config["expected_utility"]["crop_switching"]["ruleset"]
                         == "no-adaptation"
                     ):
                         self.adapt_crops()
+                        timer.new_split("adapt crops")
                     # self.switch_crops_neighbors()
                 else:
                     raise AssertionError(
                         "Cannot adapt without yield - probability relation"
                     )
 
+            print(timer)
             advance_crop_rotation_year(
                 current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index,
                 crop_calendar_rotation_years=self.crop_calendar_rotation_years,
@@ -4412,6 +4344,12 @@ class CropFarmers(AgentBaseClass):
             # Reset total crop age
             shift_and_update(self.total_crop_age, self.total_crop_age[:, 0])
 
+            for i in range(len(self.yearly_abstraction_m3_by_farmer[0, :, 0])):
+                shift_and_reset_matrix(self.yearly_abstraction_m3_by_farmer[:, i, :])
+
+            # Shift the potential and yearly profits forward
+            shift_and_reset_matrix(self.yearly_profits)
+            shift_and_reset_matrix(self.yearly_potential_profits)
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         # if self.model.current_timestep == 105:
