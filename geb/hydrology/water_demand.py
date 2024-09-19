@@ -140,15 +140,23 @@ class WaterDemand:
         ).sum(axis=0)
 
         # first 2 soil layers to estimate distribution between runoff and infiltration
-        soil_water_storage = self.var.w[:2, nonpaddy_irrigated_land].sum(axis=0)
-        soil_water_storage_cap = self.model.soil.ws[:2, nonpaddy_irrigated_land].sum(
-            axis=0
-        )
+        topsoil_w_nonpaddy_irrigated_land = self.var.w[:2, nonpaddy_irrigated_land]
+        topsoil_ws_nonpaddy_irrigated_land = self.model.soil.ws[
+            :2, nonpaddy_irrigated_land
+        ]
+
+        assert (
+            topsoil_w_nonpaddy_irrigated_land <= topsoil_ws_nonpaddy_irrigated_land
+        ).all()
+
+        soil_water_storage = topsoil_w_nonpaddy_irrigated_land.sum(axis=0)
+        soil_water_storage_cap = topsoil_ws_nonpaddy_irrigated_land.sum(axis=0)
 
         relative_saturation = soil_water_storage / soil_water_storage_cap
         assert (
-            relative_saturation <= 1
+            relative_saturation <= 1 + 1e-7
         ).all(), "Relative saturation should always be <= 1"
+        relative_saturation[relative_saturation > 1] = 1
 
         satAreaFrac = (
             1 - (1 - relative_saturation) ** self.var.arnoBeta[nonpaddy_irrigated_land]

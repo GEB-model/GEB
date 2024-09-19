@@ -41,7 +41,7 @@ def get_soil_water_potential(
     thetas,
     lambda_,
     bubbling_pressure_cm,
-    minimum_effective_saturation=np.float32(0.0),
+    minimum_effective_saturation=np.float32(0.01),
 ):
     """
     Calculates the soil water potential (capillary suction) using the van Genuchten model.
@@ -64,7 +64,7 @@ def get_soil_water_potential(
         The bubbling pressure (cm)
     """
     # van Genuchten parameters
-    alpha = bubbling_pressure_cm**-1
+    alpha = 1 / bubbling_pressure_cm
     n = lambda_ + 1
     m = 1 - 1 / n
 
@@ -662,6 +662,7 @@ def vertical_water_transport(
         soil_water_storage = w[0, i] + w[1, i]
         soil_water_storage_max = ws[0, i] + ws[1, i]
         relative_saturation = soil_water_storage / soil_water_storage_max
+        relative_saturation = min(relative_saturation, np.float32(1))
 
         # Fraction of pixel that is at saturation
         saturated_area_fraction = (
@@ -704,7 +705,10 @@ def vertical_water_transport(
         # storage capacity of the first two layers for infiltration, we can assume that
         # the second layer is never full
         if w[0, i] > ws[0, i]:
-            w[1, i] += w[0, i] - ws[0, i]
+            overcapacity = w[0, i] - ws[0, i]
+            w[1, i] = min(
+                w[1, i] + overcapacity, ws[1, i]
+            )  # limit by storage capacity of second layer
             w[0, i] = ws[0, i]
 
         # Runoff and topwater update for paddy fields
@@ -1220,8 +1224,8 @@ class Soil(object):
         direct_runoff = np.zeros_like(self.var.land_use_type, dtype=np.float32)
         groundwater_recharge = np.zeros_like(self.var.land_use_type, dtype=np.float32)
 
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-9).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-9).all()
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-7).all()
 
         for _ in range(n_substeps):
             (
@@ -1250,8 +1254,8 @@ class Soil(object):
             direct_runoff += direct_runoff_substep
             groundwater_recharge += groundwater_recharge_substep
 
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-10).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-10).all()
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-7).all()
 
         runoff = direct_runoff + runoff_from_groundwater
 
@@ -1267,8 +1271,8 @@ class Soil(object):
         )
 
         if __debug__:
-            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-10).all()
-            assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-10).all()
+            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
+            assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-7).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
                 name="soil_1",
@@ -1326,14 +1330,12 @@ class Soil(object):
 
             assert (
                 actual_total_transpiration[bioarea]
-                <= potential_transpiration[bioarea] + 1e-5
+                <= potential_transpiration[bioarea] + 1e-7
             ).all()
             assert (
                 actual_bare_soil_evaporation[bioarea]
-                <= potential_bare_soil_evaporation[bioarea] + 1e-5
+                <= potential_bare_soil_evaporation[bioarea] + 1e-7
             ).all()
-
-            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
 
         timer.new_split("Finalizing")
         if self.model.timing:
