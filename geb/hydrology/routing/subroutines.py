@@ -23,6 +23,16 @@
 import numpy as np
 from numba import njit
 
+BOTTOM_LEFT = 1
+BOTTOM = 2
+BOTTOM_RIGHT = 3
+LEFT = 4
+PIT = 5
+RIGHT = 6
+TOP_LEFT = 7
+TOP = 8
+TOP_RIGHT = 9
+
 
 def Compress(map, mask):
     """
@@ -143,7 +153,7 @@ def dirDownstream(dirUp, lddcomp, dirDown):
     )  # not sure whether int64 is necessary
     j = 0
     for pit in range(lddcomp.shape[0]):
-        if lddcomp[pit] == 5:
+        if lddcomp[pit] == PIT:
             j += 1
             postorder(dirUp, catchment, pit, j, dirDown)
             dirDown.append(pit)
@@ -252,7 +262,7 @@ def define_river_network(ldd2D, grid):
     # each upstream pixel gets the id of the downstream pixel
     downstruct = downstream1(dirUp, inAr).astype(np.int64)
     # all pits gets a high number
-    downstruct[lddCompress == 5] = grid.compressed_size
+    downstruct[lddCompress == PIT] = grid.compressed_size
 
     # self.var.dirDown: direction downstream - from each cell the pointer to a downstream cell (can only be 1)
     # self.var.catchment: each catchment with a pit gets a own ID
@@ -286,22 +296,22 @@ def repairLdd1(ldd):
             lddvalue = ldd[i, j]
             assert lddvalue >= 0 and lddvalue < 10
 
-            if lddvalue != 0 and lddvalue != 5:
+            if lddvalue != 0 and lddvalue != PIT:
                 y = i + dirY[lddvalue]  # y of outflow cell
                 x = j + dirX[lddvalue]  # x of outflow cell
                 if (
                     y < 0 or y == sizei
                 ):  # if outflow cell is outside the domain, make it a pit
-                    ldd[i, j] = 5
+                    ldd[i, j] = PIT
                 if (
                     x < 0 or x == sizej
                 ):  # if outflow cell is outside the domain, make it a pit
-                    ldd[i, j] = 5
-                if lddvalue != 5:
+                    ldd[i, j] = PIT
+                if lddvalue != PIT:
                     if (
                         ldd[y, x] == 0
                     ):  # if outflow cell has no flow, make inflow cell a pit
-                        ldd[i, j] = 5
+                        ldd[i, j] = PIT
     return ldd
 
 
@@ -319,7 +329,7 @@ def dirID(lddorder, ldd):
             lddvalue = ldd[i, j]
             assert lddvalue >= 0 and lddvalue < 10
 
-            if lddvalue != 0 and lddvalue != 5:
+            if lddvalue != 0 and lddvalue != PIT:
                 x = j + dirX[lddvalue]
                 y = i + dirY[lddvalue]
                 if 0 <= x < sizej and 0 <= y < sizei:
@@ -338,11 +348,11 @@ def repairLdd2(ldd, dir):
         while True:
             if j in path:
                 id = path[k - 1]
-                ldd[id] = 5
+                ldd[id] = PIT
                 dir[id] = -1
                 break
-            # if drainage direction is a pit (5) or cell is already checked, break
-            if ldd[j] == 5 or check[j] == 1:
+            # if drainage direction is a pit or cell is already checked, break
+            if ldd[j] == PIT or check[j] == 1:
                 break
             path.append(j)
             k += 1
@@ -383,6 +393,11 @@ MAX_ITERS = 10
 def IterateToQnew(Qin, Qold, sideflow, alpha, beta, deltaT, deltaX):
     epsilon = np.float64(0.0001)
 
+    # If deltaX (channel length) is 0 this should be a pit, handle inflow but no outflow
+    if deltaX == 0:
+        # Inflow into the pit occurs, so return Qin + sideflow (assuming no outflow)
+        return max(Qin + sideflow, 0)
+
     # If no input, then output = 0
     if (Qin + Qold + sideflow) == 0:
         return 0
@@ -420,6 +435,16 @@ def IterateToQnew(Qin, Qold, sideflow, alpha, beta, deltaT, deltaX):
 
 @njit(cache=True)
 def kinematic(Qold, sideflow, dirDown, dirUpLen, dirUpID, alpha, beta, deltaT, deltaX):
+    """
+    Kinematic wave routing
+
+    Parameters
+    ----------
+    deltaT: float
+        Time step, must be > 0
+    deltaX: np.ndarray
+        Array of floats containing the channel length, must be > 0
+    """
     Qnew = np.zeros_like(Qold)
     for i in range(Qold.size):
         Qin = np.float32(0.0)

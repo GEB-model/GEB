@@ -33,6 +33,7 @@ except (ModuleNotFoundError, ImportError):
 
 from geb.workflows import balance_check
 from ..landcover import OPEN_WATER
+from .subroutines import PIT
 
 
 class Routing(object):
@@ -170,6 +171,9 @@ class Routing(object):
         self.var.chanLength = self.var.load(
             self.model.files["grid"]["routing/kinematic/channel_length"]
         )
+        assert (
+            self.var.chanLength[self.var.lddCompress != PIT] > 0
+        ).all(), "Channel length must be greater than 0 for all cells except for pits"
         # Channel bottom width [meters]
         self.var.chanWidth = self.var.load(
             self.model.files["grid"]["routing/kinematic/channel_width"]
@@ -407,6 +411,13 @@ class Routing(object):
             sumwaterbody_evaporation += waterbody_evaporation
 
             sideflowChan = sideflowChanM3 * self.var.invchanLength / self.var.dtRouting
+            # pits have a channel length of zero, thus an inverse channel length of infinity
+            # this leads to a division by zero in the kinematic wave subroutine
+            # however as sideflow is not affected by the length of the channel here
+            # we can simply divide the sideflow by the time step
+            sideflowChan[self.var.lddCompress == PIT] = (
+                sideflowChanM3[self.var.lddCompress == PIT] / self.var.dtRouting
+            )
 
             self.var.discharge = kinematic(
                 self.var.discharge,
@@ -425,7 +436,7 @@ class Routing(object):
             if __debug__:
                 # Discharge at outlets and lakes and reservoirs
                 discharge_at_outlets += self.var.discharge[
-                    self.var.lddCompress_LR == 5
+                    self.var.lddCompress_LR == PIT
                 ].sum()
 
                 sumsideflow += sideflowChanM3
