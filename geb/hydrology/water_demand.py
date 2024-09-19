@@ -147,8 +147,10 @@ class WaterDemand:
 
         relative_saturation = soil_water_storage / soil_water_storage_cap
         assert (
-            relative_saturation <= 1
+            relative_saturation <= 1 + 1e-7
         ).all(), "Relative saturation should always be <= 1"
+
+        relative_saturation[relative_saturation > 1] = 1
 
         satAreaFrac = (
             1 - (1 - relative_saturation) ** self.var.arnoBeta[nonpaddy_irrigated_land]

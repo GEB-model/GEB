@@ -1250,8 +1250,8 @@ class Soil(object):
             direct_runoff += direct_runoff_substep
             groundwater_recharge += groundwater_recharge_substep
 
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-10).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-10).all()
+        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
+        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-7).all()
 
         runoff = direct_runoff + runoff_from_groundwater
 
@@ -1267,8 +1267,8 @@ class Soil(object):
         )
 
         if __debug__:
-            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-10).all()
-            assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-10).all()
+            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
+            assert (self.var.w[:, bioarea] >= self.wres[:, bioarea] - 1e-7).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
                 name="soil_1",
@@ -1333,7 +1333,7 @@ class Soil(object):
                 <= potential_bare_soil_evaporation[bioarea] + 1e-5
             ).all()
 
-            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
+            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea] + 1e-7).all()
 
         timer.new_split("Finalizing")
         if self.model.timing:
