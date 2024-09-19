@@ -10,8 +10,8 @@ from hydromt_sfincs import SfincsModel
 import hydromt
 from shapely.geometry import Point
 from rasterio.features import shapes
-import matplotlib.pyplot as plt 
 import math
+import matplotlib.pyplot as plt
 
 from sfincs_river_flood_simulator import (
     build_sfincs,
@@ -245,6 +245,7 @@ class SFINCS:
             )
 
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
+        
         from pyproj import CRS
 
         # Convert the WKT string to a pyproj CRS object
@@ -257,16 +258,20 @@ class SFINCS:
             self.model.timestep_length / substeps
         )
         discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
-        sfincs_precipitation = (
-            xr.open_dataset(self.model.files["forcing"]["climate/pr_hourly"], engine="zarr").rename(
-                pr_hourly="precip"
-            )["precip"]
-            * 3600
-        )  # convert from kg/m2/s to mm/h for
-        sfincs_precipitation.raster.set_crs(
+        
+        sfincs_precipitation = event.get("precipitation", None)
+
+        if sfincs_precipitation is None:
+            sfincs_precipitation = (
+                xr.open_dataset(
+                    self.model.files["forcing"]["climate/pr_hourly"]
+                    ).rename(pr_hourly="precip")["precip"]
+                    * 3600
+            )  # convert from kg/m2/s to mm/h for
+            sfincs_precipitation.raster.set_crs(
             4326
-        )  # TODO: Remove when this is added to hydromt_sfincs
-        sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
+            )  # TODO: Remove when this is added to hydromt_sfincs
+            sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
 
         event_name = self.get_event_name(event)
 
@@ -286,19 +291,78 @@ class SFINCS:
         )
         return None
 
-    def run(self, event):
-        start_time = event["start_time"]
+    def run_single_event(self, event, start_time, return_period=None):
         self.setup(event, force_overwrite=False)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
-
         event_name = self.get_event_name(event)
-        run_sfincs_simulation(model_root=self.sfincs_model_root(event_name), simulation_root=self.sfincs_simulation_root(event_name))
+        run_sfincs_simulation(root=self.sfincs_simulation_root(event_name))
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
-        )  # xc, yc is for x and y in rotated grid
-        self.flood(flood_map)
+            return_period = return_period
+        )  # xc, yc is for x and y in rotated grid`DD`
+        damages = self.flood(flood_map, folder=self.folder, return_period=return_period)
+        return damages
+
+    def scale_event(self, event, scale_factor):
+        scaled_event = event.copy()
+        sfincs_precipitation = (
+            xr.open_dataset(
+                self.model.files["forcing"]["climate/pr_hourly"]
+            ).rename(pr_hourly="precip")["precip"]
+            * 3600 * scale_factor
+        )  # convert from kg/m2/s to mm/h for
+        sfincs_precipitation.raster.set_crs(
+            4326
+        )  # TODO: Remove when this is added to hydromt_sfincs
+        sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
+
+        scaled_event["precipitation"] = sfincs_precipitation
+        print(scaled_event)
+        return scaled_event
+        
+
+    def run(self, event):
+        start_time = event["start_time"]
+
+        if self.model.config["hazards"]["floods"]["flood_risk"]:
+            print("config settings are read")
+            scale_factors = pd.read_parquet(self.model.files["table"]["hydrodynamics/risk_scaling_factors"])
+            scale_factors["return_period"] = 1 / scale_factors["exceedance_probability"]
+            print(scale_factors)
+            damages_list = []
+            return_periods_list = []
+            exceedence_probabilities_list = [] 
+            for index, row in scale_factors.iterrows():
+                return_period = row["return_period"]
+                exceedence_probability = row["exceedence_prob"]
+                scale_factor = row["scale"]
+                scaled_event = self.scale_event(event, scale_factor)
+                damages = self.run_single_event(scaled_event, start_time, return_period)
+           
+                damages_list.append(damages)
+                return_periods_list.append(return_period)
+                exceedence_probabilities_list.append(exceedence_probability)
+
+            print(damages_list)
+            print(return_periods_list)
+            print(exceedence_probabilities_list)
+
+            plt.plot(return_periods_list, damages_list)
+            plt.xlabel("Return period")
+            plt.ylabel("Flood damages [euro]")
+            plt.title("Damages per return period")
+            plt.show()
+
+            inverted_damage_list = damages_list[::-1]
+            inverted_exceedence_probabilities_list = exceedence_probabilities_list[::-1]
+
+            expected_annual_damage = np.trapz(y=inverted_damage_list, x=inverted_exceedence_probabilities_list) #np.trapezoid or np.trapz -> depends on np version
+            print(f"exptected annual damage is: {expected_annual_damage}")
+        
+        else:
+            self.run_single_event(event, start_time)
 
     def flood(self, flood_map):
         self.model.agents.households.flood(flood_map)
