@@ -411,13 +411,14 @@ class Routing(object):
             sumwaterbody_evaporation += waterbody_evaporation
 
             sideflowChan = sideflowChanM3 * self.var.invchanLength / self.var.dtRouting
-            # pits have a channel length of zero, thus an inverse channel length of infinity
-            # this leads to a division by zero in the kinematic wave subroutine
-            # however as sideflow is not affected by the length of the channel here
-            # we can simply divide the sideflow by the time step
-            sideflowChan[self.var.lddCompress == PIT] = (
-                sideflowChanM3[self.var.lddCompress == PIT] / self.var.dtRouting
-            )
+
+            # NOTE: If there is a sideflow in cells with channel length of 0, this will lead to
+            # issues in the kinematic wave approach and the calculation of the channel storage.
+            # Therefore for now we just have an assert to check if the sideflow is zero.
+            # If we hit this assert at some point, we will have to come up with a better solution.
+            assert (
+                sideflowChanM3[self.var.chanLength == 0].sum() == 0
+            ), "sideflowChanM3 must be zero for cells with no channel"
 
             self.var.discharge = kinematic(
                 self.var.discharge,

@@ -63,6 +63,17 @@ def test_get_soil_water_potential():
         )
     )
 
+    assert (
+        get_soil_water_potential(
+            theta=0.015,
+            thetar=0.016,
+            thetas=0.067,
+            lambda_=0.202,
+            bubbling_pressure_cm=40,
+        )
+        != np.inf
+    )
+
 
 @pytest.mark.parametrize("pf_value", [2.0, 4.2])
 def test_soil_moisture_potential_inverse(pf_value):
