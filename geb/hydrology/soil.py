@@ -34,7 +34,7 @@ from .landcover import (
 )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_soil_water_potential(
     theta,
     thetar,
@@ -64,9 +64,9 @@ def get_soil_water_potential(
         The bubbling pressure (cm)
     """
     # van Genuchten parameters
-    alpha = 1 / bubbling_pressure_cm
-    n = lambda_ + 1
-    m = 1 - 1 / n
+    alpha = np.float32(1) / bubbling_pressure_cm
+    n = lambda_ + np.float32(1)
+    m = np.float32(1) - np.float32(1) / n
 
     # Effective saturation
     effective_saturation = (theta - thetar) / (thetas - thetar)
@@ -74,7 +74,9 @@ def get_soil_water_potential(
     effective_saturation = min(np.float32(1), effective_saturation)
 
     # Compute capillary pressure head (phi)
-    phi = ((effective_saturation) ** (-1 / m) - 1) ** (1 / n) / alpha  # Positive value
+    phi = ((effective_saturation) ** (-np.float32(1) / m) - np.float32(1)) ** (
+        np.float32(1) / n
+    ) / alpha  # Positive value
 
     # Soil water potential (negative value for suction)
     capillary_suction = -phi
@@ -82,7 +84,7 @@ def get_soil_water_potential(
     return capillary_suction
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
@@ -103,41 +105,41 @@ def get_soil_moisture_at_pressure(
     lambda_ : np.ndarray
         The van Genuchten parameter lambda (1/m)
     """
-    alpha = bubbling_pressure_cm**-1
-    n = lambda_ + 1
-    m = 1 - 1 / n
+    alpha = np.float32(1) / bubbling_pressure_cm
+    n = lambda_ + np.float32(1)
+    m = np.float32(1) - np.float32(1) / n
     phi = -capillary_suction
 
-    water_retention_curve = (1 / (1 + (alpha * phi) ** n)) ** m
+    water_retention_curve = (np.float32(1) / (np.float32(1) + (alpha * phi) ** n)) ** m
 
     theta = water_retention_curve * (thetas - thetar) + thetar
     return theta
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_aeration_stress_threshold(
     ws, soil_layer_height, crop_aeration_stress_threshold
 ):
     max_saturation_fraction = ws / soil_layer_height
     # Water storage in root zone at aeration stress threshold (m)
     return (
-        max_saturation_fraction - (crop_aeration_stress_threshold / 100)
+        max_saturation_fraction - (crop_aeration_stress_threshold / np.float32(100))
     ) * soil_layer_height
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_aeration_stress_factor(
     aeration_days_counter, crop_lag_aeration_days, ws, w, aeration_stress_threshold
 ):
     if aeration_days_counter < crop_lag_aeration_days:
-        stress = 1 - ((ws - w) / (ws - aeration_stress_threshold))
-        aeration_stress_factor = 1 - ((aeration_days_counter / 3) * stress)
+        stress = np.float32(1) - ((ws - w) / (ws - aeration_stress_threshold))
+        aeration_stress_factor = np.float32(1) - ((aeration_days_counter / 3) * stress)
     else:
         aeration_stress_factor = (ws - w) / (ws - aeration_stress_threshold)
     return aeration_stress_factor
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_critical_soil_moisture_content(p, wfc, wwp):
     """
     "The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -150,7 +152,7 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
     soil moisture content is equal to the wilting point, and when p is 0 the critical soil moisture
     content is equal to the field capacity.
     """
-    return (1 - p) * (wfc - wwp) + wwp
+    return (np.float32(1) - p) * (wfc - wwp) + wwp
 
 
 def get_available_water(w, wwp):
@@ -163,7 +165,7 @@ def get_maximum_water_content(wfc, wwp):
 
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
-    crop_group_number, potential_evapotranspiration
+    crop_group_number, potential_evapotranspiration, fastmath=True
 ):
     """
     Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
@@ -193,7 +195,7 @@ def get_fraction_easily_available_soil_water(
 
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water_single(
-    crop_group_number, potential_evapotranspiration
+    crop_group_number, potential_evapotranspiration, fastmath=True
 ):
     """
     Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
@@ -212,27 +214,29 @@ def get_fraction_easily_available_soil_water_single(
     np.ndarray
         The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
     """
-    potential_evapotranspiration_cm = potential_evapotranspiration * 100.0
+    potential_evapotranspiration_cm = potential_evapotranspiration * np.float32(100)
 
-    p = 1.0 / (0.76 + 1.5 * potential_evapotranspiration_cm) - 0.10 * (
-        5.0 - crop_group_number
-    )
+    p = np.float32(1) / (
+        np.float32(0.76) + np.float32(1.5) * potential_evapotranspiration_cm
+    ) - np.float32(0.1) * (np.float32(5) - crop_group_number)
 
     # Additional correction for crop groups 1 and 2
-    if crop_group_number <= 2.5:
-        p = p + (potential_evapotranspiration_cm - 0.6) / (
-            crop_group_number * (crop_group_number + 3.0)
+    if crop_group_number <= np.float32(2.5):
+        p = p + (potential_evapotranspiration_cm - np.float32(0.6)) / (
+            crop_group_number * (crop_group_number + np.float32(3.0))
         )
 
-    if p < 0.0:
-        p = 0.0
-    if p > 1.0:
-        p = 1.0
+    if p < np.float32(0):
+        p = np.float32(0)
+    if p > np.float32(1):
+        p = np.float32(1)
     return p
 
 
 def get_critical_water_level(p, wfc, wwp):
-    return np.maximum(get_critical_soil_moisture_content(p, wfc, wwp) - wwp, 0)
+    return np.maximum(
+        get_critical_soil_moisture_content(p, wfc, wwp) - wwp, np.float32(0)
+    )
 
 
 def get_total_transpiration_factor(
@@ -250,24 +254,24 @@ def get_total_transpiration_factor(
     return transpiration_factor_total
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_transpiration_factor_single(w, wwp, wcrit):
     nominator = w - wwp
     denominator = wcrit - wwp
-    if denominator == 0:
-        if nominator > 0:
-            return 1
+    if denominator == np.float32(0):
+        if nominator > np.float32(0):
+            return np.float32(1)
         else:
-            return 0
+            return np.float32(0)
     factor = nominator / denominator
-    if factor < 0:
-        return 0
-    if factor > 1:
-        return 1
+    if factor < np.float32(0):
+        return np.float32(0)
+    if factor > np.float32(1):
+        return np.float32(1)
     return factor
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_root_ratios(
     root_depth,
     soil_layer_height,
@@ -280,13 +284,15 @@ def get_root_ratios(
     return root_ratios
 
 
-@njit(inline="always")
+@njit(inline="always", fastmath=True)
 def set_root_ratios_single(root_depth, soil_layer_height, root_ratios):
     remaining_root_depth = root_depth
     for layer in range(N_SOIL_LAYERS):
-        root_ratios[layer] = min(remaining_root_depth / soil_layer_height[layer], 1)
+        root_ratios[layer] = min(
+            remaining_root_depth / soil_layer_height[layer], np.float32(1)
+        )
         remaining_root_depth -= soil_layer_height[layer]
-        if remaining_root_depth < 0:
+        if remaining_root_depth < np.float32(0):
             return root_ratios
     return root_ratios
 
@@ -302,7 +308,7 @@ def get_crop_group_number(
     return crop_group_map
 
 
-@njit(cache=True)
+@njit(cache=True, fastmath=True)
 def get_unsaturated_hydraulic_conductivity(
     w,
     wres,
@@ -317,27 +323,31 @@ def get_unsaturated_hydraulic_conductivity(
     See https://archive.org/details/watershedmanagem0000unse_d4j9/page/295/mode/1up?view=theater (p. 295)
     """
     effective_saturation = (w - wres) / (ws - wres)
-    if effective_saturation < 0:
-        effective_saturation = 0
-    elif effective_saturation > 1:
-        effective_saturation = 1
+    if effective_saturation < np.float32(0):
+        effective_saturation = np.float32(0)
+    elif effective_saturation > np.float32(1):
+        effective_saturation = np.float32(1)
 
     effective_saturation = max(minimum_effective_saturation, effective_saturation)
 
-    n = lambda_ + 1
-    m = 1 - 1 / n
+    n = lambda_ + np.float32(1)
+    m = np.float32(1) - np.float32(1) / n
 
     return (
         saturated_hydraulic_conductivity
-        * effective_saturation**0.5
-        * (1 - (1 - effective_saturation ** (1 / m)) ** m) ** 2
+        * np.sqrt(effective_saturation)
+        * (
+            np.float32(1)
+            - (np.float32(1) - effective_saturation ** (np.float32(1) / m)) ** m
+        )
+        ** 2
     )
 
 
 PERCOLATION_SUBSTEPS = np.int32(3)
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=True, fastmath=True)
 def get_available_water_infiltration(
     natural_available_water_infiltration,
     actual_irrigation_consumption,
@@ -383,7 +393,7 @@ def get_available_water_infiltration(
     return available_water_infiltration
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=True, fastmath=True)
 def rise_from_groundwater(
     w,
     ws,
@@ -415,7 +425,7 @@ def rise_from_groundwater(
     return runoff_from_groundwater
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=True, fastmath=True)
 def evapotranspirate(
     wwp,
     wfc,
@@ -611,7 +621,7 @@ def evapotranspirate(
     )
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=True, fastmath=True)
 def vertical_water_transport(
     available_water_infiltration,
     ws,
@@ -689,7 +699,9 @@ def vertical_water_transport(
             not soil_is_frozen[i]
             and land_use_type[i] != PADDY_IRRIGATED
             and capillary_rise_from_groundwater[i]
-            == 0  # preferential flow only occurs when there is no capillary rise from groundwater
+            == np.float32(
+                0
+            )  # preferential flow only occurs when there is no capillary rise from groundwater
         ):
             preferential_flow[i] = (
                 available_water_infiltration[i]
@@ -748,7 +760,9 @@ def vertical_water_transport(
                 saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
                     layer, i
                 ],
-                minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought interactions
+                minimum_effective_saturation=np.float32(
+                    0.01
+                ),  # this could be better defined when looking at flood-drought interactions
             )
 
             # Compute soil water potential
@@ -758,7 +772,9 @@ def vertical_water_transport(
                 thetas=ws[layer, i],
                 lambda_=lambda_[layer, i],
                 bubbling_pressure_cm=bubbling_pressure_cm[layer, i],
-                minimum_effective_saturation=0.01,  # this could be better defined when looking at flood-drought interactions
+                minimum_effective_saturation=np.float32(
+                    0.01
+                ),  # this could be better defined when looking at flood-drought interactions
             )
 
     groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
@@ -771,8 +787,8 @@ def vertical_water_transport(
                 # If there is capillary rise from groundwater, there will be no
                 # percolation to the groundwater. A potential capillary rise from
                 # the groundwater is already accounted for in rise_from_groundwater
-                if capillary_rise_from_groundwater[i] > 0:
-                    flux = 0
+                if capillary_rise_from_groundwater[i] > np.float32(0):
+                    flux = np.float32(0)
                 else:
                     # Else we assume that the bottom layer is draining under gravity
                     # i.e., assuming homogeneous soil water potential below
@@ -785,11 +801,12 @@ def vertical_water_transport(
                 # Taking the mean of the hydraulic conductivities
                 # by using the geometric mean of the conductivities we put a bit more
                 # weight on the lower layer with lower conductivity
-                K_unsat_avg = (K_unsat[layer + 1, i] * K_unsat[layer, i]) ** (1 / 2)
+                K_unsat_avg = np.sqrt(K_unsat[layer + 1, i] * K_unsat[layer, i])
 
                 # Compute flux using Darcy's law
                 flux = -K_unsat_avg * (
-                    (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i] - 1
+                    (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i]
+                    - np.float32(1)
                 )
 
                 if flux >= 0:  # Downward flux (percolation)
