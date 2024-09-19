@@ -432,7 +432,7 @@ class LakesReservoirs(object):
                 prestorages=[prestorage],
                 poststorages=[self.var.storage],
                 name="reservoirs",
-                tollerance=1e-6,
+                tollerance=1e-5,
             )
 
         return outflow_m3

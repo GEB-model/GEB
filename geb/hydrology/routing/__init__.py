@@ -33,6 +33,7 @@ except (ModuleNotFoundError, ImportError):
 
 from geb.workflows import balance_check
 from ..landcover import OPEN_WATER
+from .subroutines import PIT
 
 
 class Routing(object):
@@ -170,6 +171,9 @@ class Routing(object):
         self.var.chanLength = self.var.load(
             self.model.files["grid"]["routing/kinematic/channel_length"]
         )
+        assert (
+            self.var.chanLength[self.var.lddCompress != PIT] > 0
+        ).all(), "Channel length must be greater than 0 for all cells except for pits"
         # Channel bottom width [meters]
         self.var.chanWidth = self.var.load(
             self.model.files["grid"]["routing/kinematic/channel_width"]
@@ -408,6 +412,14 @@ class Routing(object):
 
             sideflowChan = sideflowChanM3 * self.var.invchanLength / self.var.dtRouting
 
+            # NOTE: If there is a sideflow in cells with channel length of 0, this will lead to
+            # issues in the kinematic wave approach and the calculation of the channel storage.
+            # Therefore for now we just have an assert to check if the sideflow is zero.
+            # If we hit this assert at some point, we will have to come up with a better solution.
+            assert (
+                sideflowChanM3[self.var.chanLength == 0].sum() == 0
+            ), "sideflowChanM3 must be zero for cells with no channel"
+
             self.var.discharge = kinematic(
                 self.var.discharge,
                 sideflowChan.astype(np.float32),
@@ -425,7 +437,7 @@ class Routing(object):
             if __debug__:
                 # Discharge at outlets and lakes and reservoirs
                 discharge_at_outlets += self.var.discharge[
-                    self.var.lddCompress_LR == 5
+                    self.var.lddCompress_LR == PIT
                 ].sum()
 
                 sumsideflow += sideflowChanM3

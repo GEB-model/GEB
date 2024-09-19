@@ -53,7 +53,7 @@ from .workflows.farmers import get_farm_locations, create_farms, get_farm_distri
 from .workflows.population import generate_locations
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
-from .workflows.conversions import M49_to_ISO3
+from .workflows.conversions import M49_to_ISO3, SUPERWELL_NAME_TO_ISO3
 from .workflows.forcing import (
     reproject_and_apply_lapse_rate_temperature,
     reproject_and_apply_lapse_rate_pressure,
@@ -3732,6 +3732,9 @@ class GEBModel(GridModel):
         source_conversion_rates = 1  # US ppp is 1
 
         electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
+        electricity_rates["ISO3"] = electricity_rates["Country"].map(
+            SUPERWELL_NAME_TO_ISO3
+        )
         # Create a dictionary to store the various types of prices with their initial reference year values
         price_types = {
             "why_10": WHY_10,
@@ -3745,14 +3748,13 @@ class GEBModel(GridModel):
             prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
 
             for _, region in self.geoms["areamaps/regions"].iterrows():
-                region_name = region["NAME_0"]
                 region_id = str(region["region_id"])
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
 
                 if price_type == "electricity_cost":
                     country_price = initial_price.loc[
-                        initial_price["Country"] == region_name, "Rate"
+                        initial_price["ISO3"] == region["ISO3"], "Rate"
                     ].values[0]
 
                     target_conversion_rates = np.array(

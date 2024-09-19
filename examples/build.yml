@@ -57,13 +57,6 @@ setup_well_prices_by_reference_year_global:
   start_year: 1960
   end_year: 2020
 
-setup_drip_irrigation_prices_by_reference_year:
-  drip_irrigation_price: 40000
-  upkeep_price_per_m2: 0
-  reference_year: 2021
-  start_year: 1960
-  end_year: 2020
-
 setup_irrigation_sources:
   irrigation_sources:
     "no": -1

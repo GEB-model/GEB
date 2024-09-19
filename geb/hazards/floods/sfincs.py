@@ -6,12 +6,17 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
-from sfincs_river_flood_simulator import (
-    build_sfincs,
-    update_sfincs_model_forcing,
-    run_sfincs_simulation,
-    read_flood_map,
-)
+try:
+    from geb_hydrodynamics import (
+        build_sfincs,
+        update_sfincs_model_forcing,
+        run_sfincs_simulation,
+        read_flood_map,
+    )
+except ModuleNotFoundError:
+    raise ModuleNotFoundError(
+        "The 'GEB-hydrodynamics' package is not installed. Please install it by running 'pip install geb-hydrodynamics'."
+    )
 
 
 class SFINCS:

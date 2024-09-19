@@ -52,6 +52,29 @@ def test_get_soil_moisture_at_pressure():
     plt.savefig(output_folder / "soil_moisture_at_pressure.png")
 
 
+def test_get_soil_water_potential():
+    assert not np.isnan(
+        get_soil_water_potential(
+            theta=0.068,
+            thetar=0.016,
+            thetas=0.067,
+            lambda_=0.202,
+            bubbling_pressure_cm=0.007,
+        )
+    )
+
+    assert (
+        get_soil_water_potential(
+            theta=0.015,
+            thetar=0.016,
+            thetas=0.067,
+            lambda_=0.202,
+            bubbling_pressure_cm=40,
+        )
+        != np.inf
+    )
+
+
 @pytest.mark.parametrize("pf_value", [2.0, 4.2])
 def test_soil_moisture_potential_inverse(pf_value):
     # Convert pF value to capillary suction in cm (h)
@@ -425,6 +448,7 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     saturated_hydraulic_conductivity = np.full_like(soil_thickness, 0.1)
     lambda_ = np.full_like(soil_thickness, 0.9)
+    bubbling_pressure_cm = np.full_like(soil_thickness, 40)
 
     wres = theta_res * soil_thickness
     ws = theta_s * soil_thickness
@@ -457,6 +481,7 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
             wres,
             saturated_hydraulic_conductivity,
             lambda_,
+            bubbling_pressure_cm,
             land_use_type,
             frost_index,
             np.full_like(available_water_infiltration, capillary_rise_from_groundwater),
@@ -479,6 +504,7 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
                 wres,
                 saturated_hydraulic_conductivity,
                 lambda_,
+                bubbling_pressure_cm,
                 land_use_type,
                 frost_index,
                 np.full_like(
