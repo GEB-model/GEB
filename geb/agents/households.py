@@ -38,6 +38,8 @@ class Households(AgentBaseClass):
         self.selected_buildings.reset_index(drop=True, inplace=True)
         self.roads = self.roads.to_crs(32631)
         self.rail = self.rail.to_crs(32631)
+        print(self.rail)
+        #self.rail.to_csv("rail.csv")
 
         # Only take the center point for each building 
         self.centroid_gdf = gpd.GeoDataFrame(geometry=self.selected_buildings.centroid)
@@ -58,7 +60,11 @@ class Households(AgentBaseClass):
         self.max_dam_buildings_content['building'] = self.max_dam_buildings_content.pop('maximum_damage')
         print(self.max_dam_buildings_content)
        
-        # self.max_dam_road_main = pd.read_json(self.model.files["damage_parameters/flood/rail/main/maximum_damage"])
+        with open(model.files["dict"]["damage_parameters/flood/rail/main/maximum_damage"], "r") as f:
+            self.max_dam_rail = json.load(f)
+        self.max_dam_rail['rail'] = self.max_dam_rail.pop('maximum_damage')
+        print(self.max_dam_rail)
+
         # self.max_dam_road_residential = pd.read_json(self.model.files["damage_parameters/flood/road/residential/maximum_damage"])
         # self.max_dam_road_unclassified = pd.read_json(self.model.files["damage_parameters/flood/road/unclassified/maximum_damage"])
         # self.max_dam_road_tertiary = pd.read_json(self.model.files["damage_parameters/flood/road/tertiary/maximum_damage"])
@@ -94,7 +100,9 @@ class Households(AgentBaseClass):
         self.buildings_content_curve.rename(columns={'damage_ratio': 'building'}, inplace=True)
         print(self.buildings_content_curve)
 
-        #self.rail_curve = pd.read_parquet(self.model.files["damage_parameters/flood/rail/main/curve"])
+        self.rail_curve = pd.read_parquet(self.model.files["table"]["damage_parameters/flood/rail/main/curve"])
+        self.rail_curve.rename(columns={'damage_ratio': "rail"}, inplace=True)
+        print(self.rail_curve)
 
         super().__init__()
 
@@ -169,7 +177,7 @@ class Households(AgentBaseClass):
                   hazard_file=flood_map,
                   curve_path=self.buildings_structure_curve,
                   maxdam_path = self.max_dam_buildings_structure,
-                  cell_size = 25,
+                  cell_size = 20,
                   exp_crs= 32631, 
                   haz_crs= 32631,                 
                   object_col='landuse',
@@ -185,13 +193,13 @@ class Households(AgentBaseClass):
 
         #print(damages_buildings_structure)
         total_damage_structure = damages_buildings_structure['damage'].sum()
-        print(total_damage_structure)
+        print(f"building structure damage is: {total_damage_structure}")
                   
         damages_buildings_content = VectorScanner(exposure_file=self.centroid_gdf,
                   hazard_file=flood_map,
                   curve_path=self.buildings_content_curve,
                   maxdam_path = self.max_dam_buildings_content,
-                  cell_size = 25,
+                  cell_size = 20,
                   exp_crs=32631,
                   haz_crs=32631,                   
                   object_col='landuse',
@@ -206,10 +214,55 @@ class Households(AgentBaseClass):
                  )
        # print(damages_buildings_contents)
         total_damages_content = damages_buildings_content['damage'].sum()
-        print(total_damages_content)
+        print(f"building content damage is: { total_damages_content}")
 
         total_damages_buildings = total_damage_structure + total_damages_content
-        print(total_damages_buildings)
+        print(f"total damage to buildings is: { total_damages_buildings} ")
+
+    #     damages_roads = VectorScanner(exposure_file=self.roads,
+    #               hazard_file=flood_map,
+    #               curve_path=self.curves_road,
+    #               maxdam_path = self.max_dam_road,
+    #               cell_size = 25,
+    #               exp_crs=32631,
+    #               haz_crs=32631,                   
+    #               object_col='highway',
+    #               hazard_col='hmax',
+    #               lat_col="xc",
+    #               lon_col="yc",
+    #               centimeters=False,
+    #               save=False,
+    #               plot=False,
+    #               grouped=False,
+    #               scenario_name = 'roads'
+    #              )
+    #   #  print(damages_roads)
+    #     total_damages_roads = damages_roads['damage'].sum()
+    #   #  print(total_damages_roads)
+
+        damages_rail = VectorScanner(exposure_file=self.rail,
+                  hazard_file=flood_map,
+                  curve_path=self.rail_curve,
+                  maxdam_path = self.max_dam_rail,
+                  cell_size = 20,
+                  exp_crs=32631,
+                  haz_crs=32631,                   
+                  object_col='railway',
+                  hazard_col='hmax',
+                  lat_col="xc",
+                  lon_col="yc",
+                  centimeters=False,
+                  save=False,
+                  plot=False,
+                  grouped=False,
+                  scenario_name = 'rail'
+                 )
+        total_damages_rail = damages_rail['damage'].sum()
+        print(f"damage to rail is: {total_damages_rail}")
+
+        # total_flood_damages = loss_landuse["damages"].sum() + total_damage_structure + total_damages_contents + total_damages_roads +total_damages_rail 
+        # print(f"the total flood damages are: {total_flood_damages}")
+
 
         return total_damages_buildings
 
