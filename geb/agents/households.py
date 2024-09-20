@@ -9,6 +9,7 @@ from os.path import join
 from damagescanner.core import RasterScanner
 from damagescanner.core import VectorScanner
 import json
+import xarray as xr
 
 try:
     import cupy as cp
@@ -26,7 +27,9 @@ class Households(AgentBaseClass):
         self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
         self.roads = gpd.read_file(self.model.files["geoms"]["assets/roads"])
         self.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
-        self.landuse=self.model.files["region_subgrid"]["landsurface/full_region_cultivated_land"]
+        self.landuse=xr.open_dataset(self.model.files["region_subgrid"]["landsurface/full_region_cultivated_land"],
+                 engine="zarr")
+        
 
         #Processing of exposure data
         all_buildings_geul_polygons = self.buildings[self.buildings != 'Point'] # Only use polygons in analysis
@@ -65,34 +68,85 @@ class Households(AgentBaseClass):
         self.max_dam_rail['rail'] = self.max_dam_rail.pop('maximum_damage')
         print(self.max_dam_rail)
 
-        # self.max_dam_road_residential = pd.read_json(self.model.files["damage_parameters/flood/road/residential/maximum_damage"])
-        # self.max_dam_road_unclassified = pd.read_json(self.model.files["damage_parameters/flood/road/unclassified/maximum_damage"])
-        # self.max_dam_road_tertiary = pd.read_json(self.model.files["damage_parameters/flood/road/tertiary/maximum_damage"])
-        # self.max_dam_road_primary = pd.read_json(self.model.files["damage_parameters/flood/road/primary/maximum_damage"])
-        # self.max_dam_road_secondary = pd.read_json(self.model.files["damage_parameters/flood/road/secondary/maximum_damage"])
-        # self.max_dam_road_motorway = pd.read_json(self.model.files["damage_parameters/flood/road/motorway/maximum_damage"])
-        # self.max_dam_road_motorway_link = pd.read_json(self.model.files["damage_parameters/flood/road/motorway_link/maximum_damage"])
-        # self.max_dam_road_trunk = pd.read_json(self.model.files["damage_parameters/flood/road/trunk/maximum_damage"])
-        # self.max_dam_road_trunk_link = pd.read_json(self.model.files["damage_parameters/flood/road/trunk_link/maximum_damage"])
-        # self.max_dam_primary_link = pd.read_json(self.model.files["damage_parameters/flood/road/primary_link/maximum_damage"])
-        # self.max_dam_secondary_link = pd.read_json(self.model.files["damage_parameters/flood/road/secondary_link/maximum_damage"])
-        # self.max_dam_forest = pd.read_json(self.model.files["damage_parameters/flood/land_use/forest/maximum_damage"])
-        # self.max_dam_agriculture = pd.read_json(self.model.files["damage_parameters/flood/land_use/agriculture/maximum_damage"])
+        self.max_dam_road = {}
+        road_types = [
+            ("residential", "damage_parameters/flood/road/residential/maximum_damage"),
+            ("unclassified", "damage_parameters/flood/road/unclassified/maximum_damage"),
+            ("tertiary", "damage_parameters/flood/road/tertiary/maximum_damage"),
+            ("primary", "damage_parameters/flood/road/primary/maximum_damage"),
+            ("primary_link", "damage_parameters/flood/road/primary_link/maximum_damage"),
+            ("secondary", "damage_parameters/flood/road/secondary/maximum_damage"),
+            ("secondary_link", "damage_parameters/flood/road/secondary_link/maximum_damage"),
+            ("motorway", "damage_parameters/flood/road/motorway/maximum_damage"),
+            ("motorway_link", "damage_parameters/flood/road/motorway_link/maximum_damage"),
+            ("trunk", "damage_parameters/flood/road/trunk/maximum_damage"),
+            ("trunk_link", "damage_parameters/flood/road/trunk_link/maximum_damage")
+        ]
+
+        # Loop through each road type and load the corresponding data
+        for road_type, path in road_types:
+            with open(model.files["dict"][path], "r") as f:
+                max_damage = json.load(f)
+                # Rename the key from 'maximum_damage' to the corresponding road type
+            self.max_dam_road[road_type] = max_damage['maximum_damage']
+        print(self.max_dam_road)
+
+        with open(model.files["dict"]["damage_parameters/flood/land_use/forest/maximum_damage"], "r") as f:
+            self.max_dam_forest= json.load(f)
+        self.max_dam_forest['0'] = self.max_dam_forest.pop('maximum_damage')
+        print(self.max_dam_forest)
+        with open(model.files["dict"]["damage_parameters/flood/land_use/agriculture/maximum_damage"], "r") as f:
+            self.max_dam_agriculture= json.load(f)
+        self.max_dam_agriculture['1'] = self.max_dam_agriculture.pop('maximum_damage')
+        print(self.max_dam_agriculture)        
+        self.max_dam_landuse = {**self.max_dam_forest, **self.max_dam_agriculture}
 
         # Here we load in all vulnerability curves 
-        # self.road_residential_curve = pd.read_parquet(self.model.files["table"]["damage_parameters/flood/road/residential/curve"])
-        # self.road_unclassified_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/unclassified/curve"])
-        # self.road_tertiary_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/tertiary/curve"])
-        # self.road_primary_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/primary/curve"])
-        # self.road_secondary_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/secondary/curve"])
-        # self.road_motorway_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/motorway/curve"])
-        # self.road_motorway_link_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/motorway_link/curve"])
-        # self.road_trunk_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/trunk/curve"])
-        # self.road_trunk_link_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/trunk_link/curve"])
-        # self.road_primary_link_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/primary_link/curve"])
-        # self.road_secondary_link_curve = pd.read_parquet(self.model.files["damage_parameters/flood/road/secondary_link/curve"])
-        # self.forest_curve = pd.read_parquet(self.model.files["damage_parameters/flood/land_use/forest/curve"])
-        # self.agriculture_curve = pd.read_parquet(self.model.files["damage_parameters/flood/land_use/agriculture/curve"])
+        self.road_curves = []
+        road_types = [
+            ("residential", "damage_parameters/flood/road/residential/curve"),
+            ("unclassified", "damage_parameters/flood/road/unclassified/curve"),
+            ("tertiary", "damage_parameters/flood/road/tertiary/curve"),
+            ("primary", "damage_parameters/flood/road/primary/curve"),
+            ("primary_link", "damage_parameters/flood/road/primary_link/curve"),
+            ("secondary", "damage_parameters/flood/road/secondary/curve"),
+            ("secondary_link", "damage_parameters/flood/road/secondary_link/curve"),
+            ("motorway", "damage_parameters/flood/road/motorway/curve"),
+            ("motorway_link", "damage_parameters/flood/road/motorway_link/curve"),
+            ("trunk", "damage_parameters/flood/road/trunk/curve"),
+            ("trunk_link", "damage_parameters/flood/road/trunk_link/curve")
+        ]
+
+        severity_column = None
+        # Loop through each road type and load the corresponding data
+        for road_type, path in road_types:
+            # Read the parquet file for each road type
+            df = pd.read_parquet(self.model.files["table"][path])
+            
+            # If this is the first DataFrame, save the 'severity' column
+            if severity_column is None:
+                severity_column = df['severity'] / 100
+            
+            # Rename the 'damage_ratio' column to the road type name
+            df = df.rename(columns={"damage_ratio": road_type})
+            
+            # Append the modified DataFrame to the list, keeping only the new road type column
+            self.road_curves.append(df[[road_type]])
+
+        # Concatenate the severity column with all the road type DataFrames
+        self.road_curves = pd.concat([severity_column] + self.road_curves, axis=1)
+        print(self.road_curves)
+        
+        self.forest_curve = pd.read_parquet(self.model.files["table"]["damage_parameters/flood/land_use/forest/curve"])
+        self.forest_curve.rename(columns={'damage_ratio': '0'}, inplace=True)
+        print(self.forest_curve)
+        self.agriculture_curve = pd.read_parquet(self.model.files["table"]["damage_parameters/flood/land_use/agriculture/curve"])
+        self.agriculture_curve.rename(columns={'damage_ratio': '1'}, inplace=True)
+        print(self.agriculture_curve)
+
+        self.curves_landuse = pd.merge(self.forest_curve, self.agriculture_curve, on="severity")
+        print(self.curves_landuse)
+        
         self.buildings_structure_curve = pd.read_parquet(self.model.files["table"]["damage_parameters/flood/buildings/structure/curve"])
         self.buildings_structure_curve.rename(columns={'damage_ratio': 'building'}, inplace=True)
         print(self.buildings_structure_curve)
@@ -173,6 +227,12 @@ class Households(AgentBaseClass):
             flood_map = join(simulation_root,"hmax.tif")
         print(f"using this flood map: {flood_map}")
 
+        # loss_landuse = RasterScanner(landuse_file=self.landuse,
+        #                              hazard_file=flood_map,
+        #                              curve_path=self.curves_landuse,maxdam_path=self.max_dam_landuse, lu_crs=4326, haz_crs=32631, dtype=np.int32, save=True, scenario_name='raster')   
+
+        # print(loss_landuse)
+
         damages_buildings_structure = VectorScanner(exposure_file=self.selected_buildings,
                   hazard_file=flood_map,
                   curve_path=self.buildings_structure_curve,
@@ -219,26 +279,26 @@ class Households(AgentBaseClass):
         total_damages_buildings = total_damage_structure + total_damages_content
         print(f"total damage to buildings is: { total_damages_buildings} ")
 
-    #     damages_roads = VectorScanner(exposure_file=self.roads,
-    #               hazard_file=flood_map,
-    #               curve_path=self.curves_road,
-    #               maxdam_path = self.max_dam_road,
-    #               cell_size = 25,
-    #               exp_crs=32631,
-    #               haz_crs=32631,                   
-    #               object_col='highway',
-    #               hazard_col='hmax',
-    #               lat_col="xc",
-    #               lon_col="yc",
-    #               centimeters=False,
-    #               save=False,
-    #               plot=False,
-    #               grouped=False,
-    #               scenario_name = 'roads'
-    #              )
-    #   #  print(damages_roads)
-    #     total_damages_roads = damages_roads['damage'].sum()
-    #   #  print(total_damages_roads)
+        damages_roads = VectorScanner(exposure_file=self.roads,
+                  hazard_file=flood_map,
+                  curve_path=self.merged_df,
+                  maxdam_path = self.max_dam_road,
+                  cell_size = 20,
+                  exp_crs=32631,
+                  haz_crs=32631,                   
+                  object_col='highway',
+                  hazard_col='hmax',
+                  lat_col="xc",
+                  lon_col="yc",
+                  centimeters=False,
+                  save=False,
+                  plot=False,
+                  grouped=False,
+                  scenario_name = 'roads'
+                 )
+        
+        total_damages_roads = damages_roads['damage'].sum()
+        print(f"damages to roads: {total_damages_roads} ")
 
         damages_rail = VectorScanner(exposure_file=self.rail,
                   hazard_file=flood_map,
@@ -260,11 +320,10 @@ class Households(AgentBaseClass):
         total_damages_rail = damages_rail['damage'].sum()
         print(f"damage to rail is: {total_damages_rail}")
 
-        # total_flood_damages = loss_landuse["damages"].sum() + total_damage_structure + total_damages_contents + total_damages_roads +total_damages_rail 
-        # print(f"the total flood damages are: {total_flood_damages}")
+        total_flood_damages = loss_landuse["damages"].sum() + total_damage_structure + total_damages_content + total_damages_roads +total_damages_rail 
+        print(f"the total flood damages are: {total_flood_damages}")
 
-
-        return total_damages_buildings
+        return total_flood_damages
 
     def update_water_demand(self):
         """
