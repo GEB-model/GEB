@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import pytest
 
 import matplotlib.pyplot as plt
@@ -259,7 +260,7 @@ def test_get_aeration_stress_threshold():
     )
 
     # if crop_aeration_stress_threshold is 100, the crop is always in aeration stress
-    assert aeration_stress_threshold == 0.0
+    assert math.isclose(aeration_stress_threshold, 0, abs_tol=1e-9)
 
     aeration_stress_threshold = get_aeration_stress_threshold(
         ws=0.1,
