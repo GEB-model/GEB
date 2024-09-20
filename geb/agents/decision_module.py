@@ -155,7 +155,7 @@ class DecisionModule:
         ## Here all
         y = EU_store
         x = p_all_events
-        EU_do_nothing_array = np.trapz(y=y, x=x, axis=0)
+        EU_do_nothing_array = np.trapezoid(y=y, x=x, axis=0)
 
         # People who already adapted cannot adapt, changed to a condition in the function that calls this, need the SEUT of doing nothing of those that have adapted
         # EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
