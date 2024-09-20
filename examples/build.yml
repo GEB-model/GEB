@@ -39,16 +39,6 @@ setup_water_demand:
 
 setup_groundwater:
 
-setup_well_prices_by_reference_year:
-  borewell_cost_1: 486.33
-  borewell_cost_2: 0.00824
-  pump_cost: 3570
-  irrigation_maintenance: 6598
-  electricity_cost: 4
-  reference_year: 2018
-  start_year: 1960
-  end_year: 2020
-
 setup_well_prices_by_reference_year_global:
   WHY_10: 82.0209974 # $/m
   WHY_20: 164 # $/m
