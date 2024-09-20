@@ -302,7 +302,7 @@ class SFINCS:
             simulation_root=self.sfincs_simulation_root(event_name),
             return_period = return_period
         )  # xc, yc is for x and y in rotated grid`DD`
-        damages = self.flood(flood_map, folder=self.folder, return_period=return_period)
+        damages = self.flood(flood_map=flood_map, simulation_root=self.sfincs_simulation_root(event_name), return_period=return_period)
         return damages
 
     def scale_event(self, event, scale_factor):
@@ -364,8 +364,8 @@ class SFINCS:
         else:
             self.run_single_event(event, start_time)
 
-    def flood(self, flood_map):
-        self.model.agents.households.flood(flood_map)
+    def flood(self, simulation_root, flood_map, return_period=None):
+        self.model.agents.households.flood(simulation_root=simulation_root, flood_map=flood_map, return_period=return_period)
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
