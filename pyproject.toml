@@ -12,7 +12,7 @@ authors = [
     {name = "Tim Busker", email = "tim.busker@vu.nl"},
 ]
 dependencies = [
-    "cdsapi>=0.7.0",
+    "cdsapi>=0.7.3",
     "dask>=2024.8.2",
     "deap>=1.4.1",
     "flopy>=3.8.0",
