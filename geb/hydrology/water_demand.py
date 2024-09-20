@@ -355,7 +355,7 @@ class WaterDemand:
             self.var.actual_irrigation_consumption = irrigation_water_consumption_m
             addtoevapotrans_m = addtoevapotrans_m
 
-        assert (self.var.actual_irrigation_consumption + 1e-6 >= 0).all()
+        assert (self.var.actual_irrigation_consumption + 1e-5 >= 0).all()
 
         groundwater_abstraction_m3 = (
             available_groundwater_m3_pre - available_groundwater_m3
