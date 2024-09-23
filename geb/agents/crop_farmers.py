@@ -256,15 +256,14 @@ def withdraw_channel(
     channel_abstraction_m3_by_farmer: np.ndarray,
 ):
     # channel abstraction
-    available_channel_storage_cell_m = (
-        available_channel_storage_m3[grid_cell] / cell_area[field]
+    channel_abstraction_cell_m3 = min(
+        available_channel_storage_m3[grid_cell],
+        irrigation_water_demand_field * cell_area[field],
     )
-    channel_abstraction_cell_m = min(
-        available_channel_storage_cell_m,
-        irrigation_water_demand_field,
-    )
-    channel_abstraction_cell_m3 = channel_abstraction_cell_m * cell_area[field]
+    assert channel_abstraction_cell_m3 >= 0
+    channel_abstraction_cell_m = channel_abstraction_cell_m3 / cell_area[field]
     available_channel_storage_m3[grid_cell] -= channel_abstraction_cell_m3
+
     water_withdrawal_m[field] += channel_abstraction_cell_m
 
     if not np.isnan(remaining_irrigation_limit_m3[farmer]):
@@ -273,6 +272,7 @@ def withdraw_channel(
     channel_abstraction_m3_by_farmer[farmer] += channel_abstraction_cell_m3
 
     irrigation_water_demand_field -= channel_abstraction_cell_m
+
     return irrigation_water_demand_field
 
 
@@ -323,17 +323,18 @@ def withdraw_groundwater(
 ):
     # groundwater irrigation
     if groundwater_depth[grid_cell] < well_depth[farmer]:
-        available_groundwater_cell_m = (
-            available_groundwater_m3[grid_cell] / cell_area[field]
+        groundwater_abstraction_cell_m3 = min(
+            available_groundwater_m3[grid_cell],
+            irrigation_water_demand_field * cell_area[field],
         )
-        groundwater_abstraction_cell_m = min(
-            available_groundwater_cell_m,
-            irrigation_water_demand_field,
-        )
-        groundwater_abstraction_cell_m3 = (
-            groundwater_abstraction_cell_m * cell_area[field]
-        )
+        assert groundwater_abstraction_cell_m3 >= 0
+
         available_groundwater_m3[grid_cell] -= groundwater_abstraction_cell_m3
+
+        groundwater_abstraction_cell_m = (
+            groundwater_abstraction_cell_m3 / cell_area[field]
+        )
+
         water_withdrawal_m[field] += groundwater_abstraction_cell_m
 
         if not np.isnan(remaining_irrigation_limit_m3[farmer]):
@@ -542,6 +543,7 @@ def abstract_water(
                                 remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                                 channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
                             )
+                            assert water_withdrawal_m[field] >= 0
 
                             # command areas
                             command_area = command_areas[field]
@@ -557,6 +559,7 @@ def abstract_water(
                                     reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
                                     cell_area=cell_area,
                                 )
+                                assert water_withdrawal_m[field] >= 0
 
                         if well_irrigated[farmer]:
                             irrigation_water_demand_field = withdraw_groundwater(
@@ -572,10 +575,16 @@ def abstract_water(
                                 remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                                 groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
                             )
+                            assert water_withdrawal_m[field] >= 0
 
                         assert (
                             irrigation_water_demand_field >= -1e15
                         )  # Make sure irrigation water demand is zero, or positive. Allow very small error.
+
+                    assert water_consumption_m[field] >= 0
+                    assert water_withdrawal_m[field] >= 0
+                    assert 1 >= irrigation_efficiency_farmer >= 0
+                    assert 1 >= return_fraction >= 0
 
                     water_consumption_m[field] = (
                         water_withdrawal_m[field] * irrigation_efficiency_farmer
@@ -583,8 +592,11 @@ def abstract_water(
                     irrigation_loss_m = (
                         water_withdrawal_m[field] - water_consumption_m[field]
                     )
+                    assert irrigation_loss_m >= 0
                     returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
-                    addtoevapotrans_m[field] = irrigation_loss_m * (1 - return_fraction)
+                    addtoevapotrans_m[field] = (
+                        irrigation_loss_m - returnFlowIrr_m[field]
+                    )
 
     return (
         channel_abstraction_m3_by_farmer,

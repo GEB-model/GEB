@@ -2,7 +2,9 @@ def reproject_and_apply_lapse_rate_temperature(T, DEM, grid_mask, lapse_rate=-0.
     DEM.raster.mask_nodata().fillna(
         0
     )  # assuming 0 for missing DEM values above the ocean
-    DEM_grid = DEM.raster.reproject_like(grid_mask, method="average")
+    DEM_grid = DEM.raster.reproject_like(grid_mask, method="average").drop_vars(
+        ["dparams", "inplace"]
+    )
     DEM_forcing = DEM.raster.reproject_like(T, method="average")
 
     t_at_sea_level = T - DEM_forcing * lapse_rate
@@ -11,6 +13,7 @@ def reproject_and_apply_lapse_rate_temperature(T, DEM, grid_mask, lapse_rate=-0.
     )
     T_grid = t_at_sea_level_reprojected + lapse_rate * DEM_grid
     T_grid.name = T.name
+    T_grid.attrs = T.attrs
     return T_grid
 
 
@@ -48,7 +51,9 @@ def reproject_and_apply_lapse_rate_pressure(
     DEM.raster.mask_nodata().fillna(
         0
     )  # assuming 0 for missing DEM values above the ocean
-    DEM_grid = DEM.raster.reproject_like(grid_mask, method="average")
+    DEM_grid = DEM.raster.reproject_like(grid_mask, method="average").drop_vars(
+        ["dparams", "inplace"]
+    )
     DEM_forcing = DEM.raster.reproject_like(pressure, method="average")
 
     pressure_at_sea_level = pressure / get_pressure_correction_factor(
@@ -62,5 +67,6 @@ def reproject_and_apply_lapse_rate_pressure(
         * get_pressure_correction_factor(DEM_grid, g, Mo, lapse_rate)
     )  # multiply by pressure factor to get pressure at DEM grid, corrected for elevation
     pressure_grid.name = pressure.name
+    pressure_grid.attrs = pressure.attrs
 
     return pressure_grid
