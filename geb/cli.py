@@ -31,6 +31,11 @@ faulthandler.enable()
 # set threading layer to tbb, this is much faster than other threading layers
 config.THREADING_LAYER = "tbb"
 
+# set environment variable for GEB package directory
+os.environ["GEB_PACKAGE_DIR"] = str(
+    Path(importlib.util.find_spec("geb").origin).parent.parent
+)
+
 
 def multi_level_merge(dict1, dict2):
     for key, value in dict2.items():
@@ -50,16 +55,12 @@ def parse_config(config_path):
 
     if "inherits" in config:
         inherit_config_path = config["inherits"]
-
-        # in special case where {GEB} is used in inherits path, we replace it with the path to the geb package
-        if r"{GEB}" in inherit_config_path:
-            inherit_config_path = inherit_config_path.format(
-                GEB=Path(importlib.util.find_spec("geb").origin).parent.parent
-            )
+        inherit_config_path = inherit_config_path.format(**os.environ)
+        # replace {VAR} with environment variable VAR if it exists
+        inherit_config_path = os.path.expandvars(inherit_config_path)
         # if inherits is not an absolute path, we assume it is relative to the config file
-        elif not Path(inherit_config_path).is_absolute():
+        if not Path(inherit_config_path).is_absolute():
             inherit_config_path = Path(config_path).parent / config["inherits"]
-
         inherited_config = yaml.load(
             open(inherit_config_path, "r"),
             Loader=yaml.FullLoader,
