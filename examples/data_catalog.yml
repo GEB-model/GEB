@@ -776,4 +776,9 @@ soilgrids_2017_{variable}:
     variable: ["BDTICM"]
   unit_mult:
     BDTICM_M_250m_ll: 0.01
-    
+GLOBIOM_regions:
+  data_type: DataFrame
+  driver: excel
+  path: GLOBIOM/Region_Country_Mapping.xlsx
+  meta:
+    source_url: https://www.isric.org/explore/soilgrids
