@@ -53,7 +53,11 @@ from .workflows.farmers import get_farm_locations, create_farms, get_farm_distri
 from .workflows.population import generate_locations
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
-from .workflows.conversions import M49_to_ISO3, SUPERWELL_NAME_TO_ISO3
+from .workflows.conversions import (
+    M49_to_ISO3,
+    SUPERWELL_NAME_TO_ISO3,
+    GLOBIOM_NAME_TO_ISO3,
+)
 from .workflows.forcing import (
     reproject_and_apply_lapse_rate_temperature,
     reproject_and_apply_lapse_rate_pressure,
@@ -521,6 +525,12 @@ class GEBModel(GridModel):
 
             all_years = crop_data["year"].unique()
             all_crops = crop_data["crop"].unique()
+
+            GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions")
+            GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
+                GLOBIOM_NAME_TO_ISO3
+            )
+            assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
             # Setup dataFrame for further data corrections
             for _, region in self.geoms["areamaps/regions"].iterrows():
@@ -1084,7 +1094,7 @@ class GEBModel(GridModel):
 
     def setup_crop_prices(
         self,
-        crop_prices: Optional[Union[str, int, float]] = 0,
+        crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
         project_future_until_year: Optional[int] = False,
         project_past_until_year: Optional[int] = False,
     ):
@@ -5960,7 +5970,7 @@ class GEBModel(GridModel):
     def set_geoms(self, geoms, name, update=True):
         self.is_updated["geoms"][name] = {"updated": update}
         super().set_geoms(geoms, name=name)
-        return self.files["geoms"][name]
+        return self.geoms[name]
 
     def set_forcing(
         self,
@@ -6075,28 +6085,28 @@ class GEBModel(GridModel):
     ) -> None:
         self.is_updated["grid"][name] = {"updated": update}
         super().set_grid(data, name=name)
-        return self.files["grid"][name]
+        return self.grid[name]
 
     def set_subgrid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["subgrid"][name] = {"updated": update}
         self._set_grid(self.subgrid, data, name=name)
-        return self.files["subgrid"][name]
+        return self.subgrid[name]
 
     def set_region_subgrid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["region_subgrid"][name] = {"updated": update}
         self._set_grid(self.region_subgrid, data, name=name)
-        return self.files["region_subgrid"][name]
+        return self.region_subgrid[name]
 
     def set_MERIT_grid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["MERIT_grid"][name] = {"updated": update}
         self._set_grid(self.MERIT_grid, data, name=name)
-        return self.files["MERIT_grid"][name]
+        return self.MERIT_grid[name]
 
     def set_alternate_root(self, root, mode):
         relative_path = Path(os.path.relpath(Path(self.root), root.resolve()))
