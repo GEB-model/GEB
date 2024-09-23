@@ -173,6 +173,8 @@ class SFINCS:
                 "data_catalogs": self.data_catalogs,
                 "mask": detailed_region,
                 "method": "precipitation",
+                "rivers": "detailed",
+                "depth_calculation": "power_law"
             }
         )
         if (
@@ -365,7 +367,8 @@ class SFINCS:
             self.run_single_event(event, start_time)
 
     def flood(self, simulation_root, flood_map, return_period=None):
-        self.model.agents.households.flood(simulation_root=simulation_root, flood_map=flood_map, return_period=return_period)
+        damages = self.model.agents.households.flood(simulation_root=simulation_root, flood_map=flood_map, return_period=return_period)
+        return damages
 
     def save_discharge(self):
         self.discharge_per_timestep.append(

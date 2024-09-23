@@ -27,8 +27,7 @@ class Households(AgentBaseClass):
         self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
         self.roads = gpd.read_file(self.model.files["geoms"]["assets/roads"])
         self.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
-        self.landuse=xr.open_dataset(self.model.files["region_subgrid"]["landsurface/full_region_cultivated_land"],
-                 engine="zarr")
+        self.landuse=self.model.files["region_subgrid"]["landsurface/full_region_cultivated_land"]#xr.open_dataset(,engine="zarr")
         
 
         #Processing of exposure data
@@ -100,6 +99,11 @@ class Households(AgentBaseClass):
         self.max_dam_agriculture['1'] = self.max_dam_agriculture.pop('maximum_damage')
         print(self.max_dam_agriculture)        
         self.max_dam_landuse = {**self.max_dam_forest, **self.max_dam_agriculture}
+        self.max_dam_landuse = pd.DataFrame.from_dict(self.max_dam_landuse, orient='index', columns=['maximum_damage'])
+        self.max_dam_landuse['landuse'] = ['0', '1']  # Or assign programmatically if needed
+        self.max_dam_landuse = self.max_dam_landuse[['landuse', 'maximum_damage']]
+        print(self.max_dam_landuse)
+
 
         # Here we load in all vulnerability curves 
         self.road_curves = []
@@ -227,11 +231,11 @@ class Households(AgentBaseClass):
             flood_map = join(simulation_root,"hmax.tif")
         print(f"using this flood map: {flood_map}")
 
-        # loss_landuse = RasterScanner(landuse_file=self.landuse,
-        #                              hazard_file=flood_map,
-        #                              curve_path=self.curves_landuse,maxdam_path=self.max_dam_landuse, lu_crs=4326, haz_crs=32631, dtype=np.int32, save=True, scenario_name='raster')   
+        loss_landuse = RasterScanner(landuse_file=self.landuse,
+                                      hazard_file=flood_map,
+                                      curve_path=self.curves_landuse,maxdam_path=self.max_dam_landuse, lu_crs=4326, haz_crs=32631, dtype=np.int32, save=True, scenario_name='raster')   
 
-        # print(loss_landuse)
+        print(loss_landuse)
 
         damages_buildings_structure = VectorScanner(exposure_file=self.selected_buildings,
                   hazard_file=flood_map,
@@ -281,7 +285,7 @@ class Households(AgentBaseClass):
 
         damages_roads = VectorScanner(exposure_file=self.roads,
                   hazard_file=flood_map,
-                  curve_path=self.merged_df,
+                  curve_path=self.road_curves,
                   maxdam_path = self.max_dam_road,
                   cell_size = 20,
                   exp_crs=32631,
