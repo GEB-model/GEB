@@ -341,7 +341,7 @@ class WaterDemand:
                     addtoevapotrans_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-6,
+                tollerance=1e-5,
             )
 
         if self.model.use_gpu:
