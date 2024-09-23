@@ -2434,126 +2434,190 @@ class CropFarmers(AgentBaseClass):
         self.yearly_potential_profits[:, 0] += potential_profit / cum_inflation
 
     def calculate_yield_spei_relation_test(self):
-        """
-        Computes the yearly yield ratios and SPEI probabilities, then calculates the yearly mean for each unique farmer type.
-        """
-
         # Create unique groups
-        unique_farmer_groups = self.create_unique_groups()
-
-        # Mask out empty columns first
-        mask_columns = np.any((self.yearly_yield_ratio != 0), axis=0) & np.any(
-            (self.yearly_SPEI_probability != 0), axis=0
+        crop_elevation_group = self.create_unique_groups(4)
+        unique_crop_combinations, group_indices = np.unique(
+            crop_elevation_group, axis=0, return_inverse=True
         )
 
-        # Apply the mask to the entire dataset before looping
+        # Mask out empty columns
+        mask_columns = np.any(self.yearly_yield_ratio != 0, axis=0) & np.any(
+            self.yearly_SPEI_probability != 0, axis=0
+        )
+
         masked_yearly_yield_ratio = self.yearly_yield_ratio[:, mask_columns]
         masked_SPEI_probability = self.yearly_SPEI_probability[:, mask_columns]
 
-        group_yield_probability_relation_log = []
-        group_yield_probability_relation_exp = []
-        group_yield_probability_relation_lin = []
+        # Prepare data
+        X_all_log = np.log10(masked_SPEI_probability[:, :-1].flatten())
+        X_all_raw = masked_SPEI_probability[:, :-1].flatten()
+        y_all = masked_yearly_yield_ratio[:, :-1].flatten()
 
-        yield_probability_R2_log = []
-        yield_probability_R2_exp = []
-        yield_probability_R2_lin = []
+        # Filter out invalid values
+        valid_mask = (
+            (~np.isnan(X_all_log))
+            & (~np.isnan(y_all))
+            & (X_all_log > -np.inf)
+            & (y_all > -np.inf)
+        )
+        X_all_log = X_all_log[valid_mask]
+        X_all_raw = X_all_raw[valid_mask]
+        y_all = y_all[valid_mask]
+        group_indices_all = np.repeat(
+            group_indices, masked_SPEI_probability.shape[1] - 1
+        )[valid_mask]
 
-        def logarithmic_function(x, a, b):
-            return a * np.log10(x) + b
+        # Number of groups
+        n_groups = unique_crop_combinations.shape[0]
 
-        def exponential_function(x, a, b):
-            return a * np.exp(b * x)
+        # Define regression models
+        def linear_model(X, a, b):
+            return a * X + b
 
-        def linear_function(x, a, b):
-            return a * x + b
+        def exponential_model(X, a, b):
+            return a * np.exp(b * X)
 
-        last_yield_ratio = None
-        last_spei_prob = None
+        def logarithmic_model(X, a, b):
+            return a * np.log(X) + b
 
-        for idx, crop_combination in enumerate(np.unique(unique_farmer_groups, axis=0)):
-            unique_farmer_group = np.where(
-                (unique_farmer_groups == crop_combination[None, ...]).all(axis=1)
-            )[0]
+        def quadratic_model(X, a, b, c):
+            return a * X**2 + b * X + c
 
-            group_yield_ratio = masked_yearly_yield_ratio[unique_farmer_group, :]
-            group_spei = masked_SPEI_probability[unique_farmer_group, :]
+        def power_model(X, a, b):
+            return a * X**b
 
-            x = group_spei[:, :-1]
-            y = group_yield_ratio[:, :-1]
+        # Initialize dictionaries for coefficients and R² values
+        model_names = [
+            "linear",
+            "linear_raw",
+            "exponential",
+            "logarithmic",
+            "quadratic",
+            "power",
+        ]
+        r_squared_dict = {model: np.zeros(n_groups) for model in model_names}
+        coefficients_dict = {model: [] for model in model_names}
 
-            # Filter out only 0s
-            x = x[y != 0].flatten()
-            y = y[y != 0].flatten()
+        # For each group, perform regression with different models
+        for group_idx in range(n_groups):
+            # Get data for the group
+            group_mask = group_indices_all == group_idx
+            X_group_log = X_all_log[group_mask]  # Log-transformed data
+            X_group_raw = X_all_raw[group_mask]  # Raw data
+            y_group = y_all[group_mask]
 
-            try:
-                # Logarithmic fit
-                a_log, b_log = curve_fit(logarithmic_function, x, y)[0]
-                group_yield_probability_relation_log.append(np.array([a_log, b_log]))
+            if len(X_group_log) >= 2:
+                # Model 1: Linear in log-transformed X
+                X_matrix = np.vstack([X_group_log, np.ones(len(X_group_log))]).T
+                coefficients = np.linalg.lstsq(X_matrix, y_group, rcond=None)[0]
+                a, b = coefficients
+                y_pred = linear_model(X_group_log, a, b)
+                ss_res = np.sum((y_group - y_pred) ** 2)
+                ss_tot = np.sum((y_group - np.mean(y_group)) ** 2)
+                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                r_squared_dict["linear"][group_idx] = r_squared
+                coefficients_dict["linear"].append((a, b))
 
-                residuals_log = y - logarithmic_function(x, a_log, b_log)
-                ss_tot_log = np.sum((y - np.mean(y)) ** 2)
-                ss_res_log = np.sum(residuals_log**2)
-                r2_log = 1 - (ss_res_log / ss_tot_log)
-                yield_probability_R2_log.append(r2_log)
+                # Model 2: Linear in raw X
+                X_matrix = np.vstack([X_group_raw, np.ones(len(X_group_raw))]).T
+                coefficients = np.linalg.lstsq(X_matrix, y_group, rcond=None)[0]
+                a, b = coefficients
+                y_pred = linear_model(X_group_raw, a, b)
+                ss_res = np.sum((y_group - y_pred) ** 2)
+                ss_tot = np.sum((y_group - np.mean(y_group)) ** 2)
+                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                r_squared_dict["linear_raw"][group_idx] = r_squared
+                coefficients_dict["linear_raw"].append((a, b))
 
-                # Exponential fit
-                a_exp, b_exp = curve_fit(exponential_function, x, y, maxfev=10000)[0]
-                group_yield_probability_relation_exp.append(np.array([a_exp, b_exp]))
-
-                residuals_exp = y - exponential_function(x, a_exp, b_exp)
-                ss_tot_exp = np.sum((y - np.mean(y)) ** 2)
-                ss_res_exp = np.sum(residuals_exp**2)
-                r2_exp = 1 - (ss_res_exp / ss_tot_exp)
-                yield_probability_R2_exp.append(r2_exp)
-
-                # Linear fit
-                a_lin, b_lin = curve_fit(linear_function, x, y)[0]
-                group_yield_probability_relation_lin.append(np.array([a_lin, b_lin]))
-
-                residuals_lin = y - linear_function(x, a_lin, b_lin)
-                ss_tot_lin = np.sum((y - np.mean(y)) ** 2)
-                ss_res_lin = np.sum(residuals_lin**2)
-                r2_lin = 1 - (ss_res_lin / ss_tot_lin)
-                yield_probability_R2_lin.append(r2_lin)
-
-            except RuntimeError:
-                if last_yield_ratio is not None:
-                    a_log, b_log = curve_fit(
-                        logarithmic_function, last_spei_prob, last_yield_ratio
-                    )[0]
-                    group_yield_probability_relation_log.append(
-                        np.array([a_log, b_log])
+                # Model 3: Exponential
+                try:
+                    popt, _ = curve_fit(
+                        exponential_model, X_group_raw, y_group, maxfev=10000
                     )
+                    y_pred = exponential_model(X_group_raw, *popt)
+                    ss_res = np.sum((y_group - y_pred) ** 2)
+                    ss_tot = np.sum((y_group - np.mean(y_group)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["exponential"][group_idx] = r_squared
+                    coefficients_dict["exponential"].append(popt)
+                except RuntimeError:
+                    r_squared_dict["exponential"][group_idx] = np.nan
+                    coefficients_dict["exponential"].append((np.nan, np.nan))
 
-                    a_exp, b_exp = curve_fit(
-                        exponential_function,
-                        last_spei_prob,
-                        last_yield_ratio,
-                        maxfev=10000,
-                    )[0]
-                    group_yield_probability_relation_exp.append(
-                        np.array([a_exp, b_exp])
+                # Model 4: Logarithmic (ensure X > 0)
+                positive_mask = X_group_raw > 0
+                if np.sum(positive_mask) >= 2:
+                    X_positive = X_group_raw[positive_mask]
+                    y_positive = y_group[positive_mask]
+                    popt, _ = curve_fit(
+                        logarithmic_model, X_positive, y_positive, maxfev=10000
                     )
+                    y_pred = logarithmic_model(X_positive, *popt)
+                    ss_res = np.sum((y_positive - y_pred) ** 2)
+                    ss_tot = np.sum((y_positive - np.mean(y_positive)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["logarithmic"][group_idx] = r_squared
+                    coefficients_dict["logarithmic"].append(popt)
+                else:
+                    r_squared_dict["logarithmic"][group_idx] = np.nan
+                    coefficients_dict["logarithmic"].append((np.nan, np.nan))
 
-                    a_lin, b_lin = curve_fit(
-                        linear_function, last_spei_prob, last_yield_ratio
-                    )[0]
-                    group_yield_probability_relation_lin.append(
-                        np.array([a_lin, b_lin])
-                    )
+                # Model 5: Quadratic
+                X_matrix = np.vstack(
+                    [X_group_raw**2, X_group_raw, np.ones(len(X_group_raw))]
+                ).T
+                coefficients = np.linalg.lstsq(X_matrix, y_group, rcond=None)[0]
+                a, b, c = coefficients
+                y_pred = quadratic_model(X_group_raw, a, b, c)
+                ss_res = np.sum((y_group - y_pred) ** 2)
+                ss_tot = np.sum((y_group - np.mean(y_group)) ** 2)
+                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                r_squared_dict["quadratic"][group_idx] = r_squared
+                coefficients_dict["quadratic"].append((a, b, c))
 
-            # Update last_yield_ratio and last_spei_prob
-            last_yield_ratio = y
-            last_spei_prob = x
+                # Model 6: Power (ensure X > 0)
+                if np.sum(positive_mask) >= 2:
+                    X_positive = X_group_raw[positive_mask]
+                    y_positive = y_group[positive_mask]
+                    try:
+                        popt, _ = curve_fit(
+                            power_model, X_positive, y_positive, maxfev=10000
+                        )
+                        y_pred = power_model(X_positive, *popt)
+                        ss_res = np.sum((y_positive - y_pred) ** 2)
+                        ss_tot = np.sum((y_positive - np.mean(y_positive)) ** 2)
+                        r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                        r_squared_dict["power"][group_idx] = r_squared
+                        coefficients_dict["power"].append(popt)
+                    except RuntimeError:
+                        r_squared_dict["power"][group_idx] = np.nan
+                        coefficients_dict["power"].append((np.nan, np.nan))
+                else:
+                    r_squared_dict["power"][group_idx] = np.nan
+                    coefficients_dict["power"].append((np.nan, np.nan))
+            else:
+                # Not enough data points
+                for model in model_names:
+                    r_squared_dict[model][group_idx] = np.nan
+                    coefficients_dict[model].append(None)
 
-        # Print the median R-squared values for each model
-        print(f"Median R^2 (log): {np.median(yield_probability_R2_log)}")
-        print(f"Median R^2 (exp): {np.median(yield_probability_R2_exp)}")
-        print(f"Median R^2 (lin): {np.median(yield_probability_R2_lin)}")
+        # Compute median R² for each model
+        for model in model_names:
+            valid_r2 = r_squared_dict[model][~np.isnan(r_squared_dict[model])]
+            median_r2 = np.median(valid_r2) if len(valid_r2) > 0 else np.nan
+            print(f"Median R² for {model}: {median_r2}")
+
+        # Optionally, assign the best-fitting model to agents based on highest R²
+        # Example: Assign linear model coefficients (you can modify this as needed)
+        best_model = max(r_squared_dict, key=lambda k: np.nanmedian(r_squared_dict[k]))
+        print(f"Best-fitting model overall: {best_model}")
+
+        # Assign relations to agents (using best model)
+        best_coefficients = coefficients_dict[best_model]
 
     def calculate_yield_spei_relation(self):
         # Create unique groups
-        crop_elevation_group = self.create_unique_groups()
+        crop_elevation_group = self.create_unique_groups(1)
         unique_crop_combinations, group_indices = np.unique(
             crop_elevation_group, axis=0, return_inverse=True
         )
@@ -2979,7 +3043,7 @@ class CropFarmers(AgentBaseClass):
         ]["adaptation_sprinkler"]["loan_duration"]
 
         # Placeholder
-        costs_irrigation_system = 10000
+        costs_irrigation_system = 4 * self.field_size_per_farmer
 
         annual_cost = costs_irrigation_system * (
             self.interest_rate
@@ -3035,8 +3099,8 @@ class CropFarmers(AgentBaseClass):
             "profits_no_event_adaptation": profits_no_event_adaptation,
             "total_profits": total_profits,
             "risk_perception": self.risk_perception.data,
-            "total_annual_costs": total_annual_costs_m2.data,
-            "adaptation_costs": annual_cost_m2.data,
+            "total_annual_costs": total_annual_costs_m2,
+            "adaptation_costs": annual_cost_m2,
             "adapted": adapted,
             "time_adapted": self.time_adapted[:, adaptation_type],
             "T": np.full(
@@ -3604,28 +3668,24 @@ class CropFarmers(AgentBaseClass):
 
         return self.yield_ratios_drought_event
 
-    def create_unique_groups(self):
+    def create_unique_groups(self, N=3):
         """
         Create unique groups based on elevation data and merge with crop calendar.
 
         Parameters:
-        elevation_data (numpy.ndarray): Array of elevation data.
-        crop_calendar (numpy.ndarray): Array of crop calendar data with shape (n, m, 2).
+        N (int): Number of groups to divide the elevation data into.
 
         Returns:
         numpy.ndarray: Merged array with crop calendar and elevation distribution groups.
         """
-        # Calculating the thresholds for the top, middle, and lower thirds
-        basin_elevation_thresholds = np.percentile(self.elevation.data, [33.33, 66.67])
+        # Calculating the thresholds for the N groups
+        percentiles = [100 * i / N for i in range(1, N)]
+        basin_elevation_thresholds = np.percentile(self.elevation.data, percentiles)
 
-        # 0 for upper, 1 for mid, and 2 for lower
-        distribution_array = np.zeros_like(self.elevation)
-        distribution_array[self.elevation > basin_elevation_thresholds[1]] = 0  # Upper
-        distribution_array[
-            (self.elevation > basin_elevation_thresholds[0])
-            & (self.elevation <= basin_elevation_thresholds[1])
-        ] = 1  # Mid
-        distribution_array[self.elevation <= basin_elevation_thresholds[0]] = 2  # Lower
+        # Use np.digitize to assign group labels
+        distribution_array = np.digitize(
+            self.elevation.data, bins=basin_elevation_thresholds, right=False
+        )
 
         # Merging crop calendar and distribution array
         crop_elevation_group = np.hstack(
@@ -3918,7 +3978,7 @@ class CropFarmers(AgentBaseClass):
 
     def adaptation_water_cost_difference(
         self, adapted: np.ndarray, energy_cost, water_cost
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate the relative yield ratio improvement for farmers adopting a certain adaptation.
 
@@ -3926,82 +3986,62 @@ class CropFarmers(AgentBaseClass):
         are doing in terms of their yield ratio as compared to those who haven't.
 
         Args:
-            adaptation_type: The type of adaptation being considered.
+            adapted (np.ndarray): Array indicating adaptation status (0 or 1) for each agent.
+            energy_cost (np.ndarray): Array of energy costs for each agent.
+            water_cost (np.ndarray): Array of water costs for each agent.
 
         Returns:
-            An array representing the relative yield ratio improvement for each agent.
-
-        TO DO: vectorize
+            Tuple[np.ndarray, np.ndarray]: Arrays representing the relative energy cost and water cost improvements for each agent.
         """
 
+        # Create unique groups based on elevation data
         crop_elevation_group = self.create_unique_groups()
 
-        # Add a column of zeros to represent farmers who have not adapted yet
-        crop_groups_onlyzeros = np.hstack(
-            (crop_elevation_group, np.zeros(self.n).reshape(-1, 1))
+        # Get unique groups and group indices
+        unique_groups, group_indices = np.unique(
+            crop_elevation_group, axis=0, return_inverse=True
         )
 
-        # Combine current crops with their respective adaptation status
-        crop_groups = np.hstack((crop_elevation_group, adapted.reshape(-1, 1)))
+        n_groups = unique_groups.shape[0]
 
-        # Initialize array to store relative yield ratio improvement for unique groups
-        unique_water_cost_gain = np.full(
-            len(np.unique(crop_groups_onlyzeros, axis=0)), 0, dtype=np.float32
-        )
-        unique_energy_cost_gain = np.full(
-            len(np.unique(crop_groups_onlyzeros, axis=0)), 0, dtype=np.float32
-        )
-        # Loop over each unique group of farmers to determine their water cost increase
-        for idx, unique_combination in enumerate(
-            np.unique(crop_groups_onlyzeros, axis=0)
-        ):
-            unique_farmer_groups = (crop_groups == unique_combination[None, ...]).all(
-                axis=1
-            )
+        # Initialize arrays to store gains per group
+        unique_water_cost_gain = np.zeros(n_groups, dtype=np.float32)
+        unique_energy_cost_gain = np.zeros(n_groups, dtype=np.float32)
 
-            # Identify the adapted counterpart of the current group
-            unique_combination_adapted = unique_combination.copy()
-            unique_combination_adapted[-1] = 1
-            unique_farmer_groups_adapted = (
-                crop_groups == unique_combination_adapted[None, ...]
-            ).all(axis=1)
+        # For each group, compute gains
+        for g in range(n_groups):
+            # Agents in the current group
+            group_members = group_indices == g
 
-            if (
-                np.count_nonzero(unique_farmer_groups) != 0
-                and np.count_nonzero(unique_farmer_groups_adapted) != 0
-            ):
-                # Calculate mean yield ratio over past years for both adapted and unadapted groups
-                unadapted_water_cost = np.mean(water_cost[unique_farmer_groups], axis=0)
-                adapted_water_cost = np.mean(
-                    water_cost[unique_farmer_groups_adapted], axis=0
-                )
+            # Split agents into adapted and unadapted within the group
+            unadapted_agents = group_members & (adapted == 0)
+            adapted_agents = group_members & (adapted == 1)
 
-                unadapted_energy_cost = np.mean(
-                    energy_cost[unique_farmer_groups], axis=0
-                )
-                adapted_energy_cost = np.mean(
-                    energy_cost[unique_farmer_groups_adapted], axis=0
-                )
+            # Check if both adapted and unadapted agents are present
+            if np.any(unadapted_agents) and np.any(adapted_agents):
+                # Calculate mean water and energy costs for unadapted agents
+                unadapted_water_cost = np.mean(water_cost[unadapted_agents], axis=0)
+                unadapted_energy_cost = np.mean(energy_cost[unadapted_agents], axis=0)
 
+                # Calculate mean water and energy costs for adapted agents
+                adapted_water_cost = np.mean(water_cost[adapted_agents], axis=0)
+                adapted_energy_cost = np.mean(energy_cost[adapted_agents], axis=0)
+
+                # Calculate gains
                 water_cost_gain = adapted_water_cost - unadapted_water_cost
                 energy_cost_gain = adapted_energy_cost - unadapted_energy_cost
 
-                unique_water_cost_gain[idx] = water_cost_gain
-                unique_energy_cost_gain[idx] = energy_cost_gain
+                # Store gains for the group
+                unique_water_cost_gain[g] = water_cost_gain
+                unique_energy_cost_gain[g] = energy_cost_gain
+            else:
+                # If not enough data, set gains to zero or np.nan
+                unique_water_cost_gain[g] = 0  # or np.nan
+                unique_energy_cost_gain[g] = 0  # or np.nan
 
-        # Identify each agent's position within the unique groups
-        positions_agent = np.where(
-            np.all(
-                crop_groups_onlyzeros[:, np.newaxis, :]
-                == np.unique(crop_groups_onlyzeros, axis=0),
-                axis=-1,
-            )
-        )
-        exact_position = positions_agent[1]
-
-        # Convert group-based results into agent-specific results
-        water_cost_adaptation_gain = unique_water_cost_gain[exact_position]
-        energy_cost_adaptation_gain = unique_energy_cost_gain[exact_position]
+        # Map gains back to agents using group indices
+        water_cost_adaptation_gain = unique_water_cost_gain[group_indices]
+        energy_cost_adaptation_gain = unique_energy_cost_gain[group_indices]
 
         return energy_cost_adaptation_gain, water_cost_adaptation_gain
 
