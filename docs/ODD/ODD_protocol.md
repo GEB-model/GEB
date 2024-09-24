@@ -109,7 +109,7 @@ CWatM processes run at a daily timestep, except routing, which runs at a hourly 
 
 Daily timestep: CWatM simulates all daily hydrological processes depending on, e.g., the meteorological forcing, land use types, crop potential evapotranspiration etc. Reservoir agents determine reservoir release based on the current reservoir storage and inflow plus a set minimum, normal and maximum outflow, flood cushion and maximum fill. This water is made available to be released into the river channel. The water made available for irrigating farmers is a set percentage of the total volume daily, which is first available to the most upstream agents, cascading downstream. In the same timestep, farmer agents then determine whether they will irrigate (depending on whether they have access to either reservoir water, river channel water or groundwater) and how much they will irrigate (which is determined by how much water the farmer’s crop is short from fully filling field capacity so that actual evapotranspiration equals potential evapotranspiration). This water is then abstracted and added from and to the corresponding storages in CWatM, and CWatM updates all appropriate stocks, this is done asynchronously, with elevation determining the order. Each agents then checks whether it is time to plant their crops if they have no current crops planted (depending on the crop rotation of the farmer and the start of the season) and adds the input costs to their yearly costs. Additionally, they check whether it is time to harvest if they currently have a crop planted (depending on when the crop was planted and how long that specific crop grows).
 
-[image of model overview](images/model_overview.svg)
+![image of model overview](images/model_overview.svg)
 
 Figure 1 Overview of model actions, taken from De Bruijn et al. (2023). The government and NGO agents do not affect the model in this paper.
 
@@ -147,7 +147,7 @@ Where d is  a reduction factor, e is a minimum underestimation of risk and c is 
 
 Growing season / yearly timestep: At growing season / yearly timestep the agents average those seasons’ SPEI probabilities and yield ratios. The farmers are then ordered into groups of farmers that have the same crop rotation, are in the same division of the river basin (upper / middle / lower) and have wells or not. The SPEI probability and yield ratios are averaged and a relation is made between all past SPEI probabilities and yield ratios (for calculation see section 3.4), which counts as their objective risk experience (i.e. the “objective truth” of what severity/probability drought leads to what severity yield loss) (figure 2). To decide whether they will dig a well or not, they use their own objective risk experience and subjective risk perception (i.e., after a drought overestimating the probability that droughts will happen), risk aversion and discount rate to calculate the subjective expected utility (SEUT) of not adapting. As wells both increase profits during non-drought years and reduce loss during drought years, the added benefit of wells is difficult to predict. Therefore, the SEUT of wells is calculated using the objective risk experience (i.e. relation between drought probability and yield) of the same group of farmers (in the same region of the basin, with the same crop rotation) that instead do have a well, but their personal subjective risk perception, risk aversion, discount rate, interest rate for loans, and well cost (which is dependent on the local groundwater depth). For calculation see section 3.4. If the SEUT of digging a well is higher and the price of adaptation is within the farmer’s budget constraints, they then adapt and the yearly loan amount (depending on well depth / cost, interest rate and loan duration, for calculation see section 3.4) is added to their yearly costs. This is done synchronously. To determine whether farmers will switch crops, all farmers calculate only their own crop rotation’s SEUT and objective EUT (using neutral risk perception, aversion and discount rate). Then, agents compare their current crop rotation’s SEUT with the EUT of max 5 random neighboring farmers using similar irrigation sources (within a 1 km radius, using reservoir, surface, groundwater or no irrigation). The EUT is used since using a neighbor’s SEUT would mean using another agent’s subjective factors. They then adopt the crop rotation of the neighbor who’s EUT is highest, if this exceeds their own SEUT. This is done asynchronously, following the same order as used for irrigation. 
 
-[image of model behaviour concepts](images/model_behaviour.jpg)
+![image of model behaviour concepts](images/model_behaviour.jpg)
 
 Figure 2 Specific overview of the updated behavior in this study.
 
@@ -183,7 +183,7 @@ Interest rates: To account for the variation in access to credit and interest ra
 
 Table 4 Interest rates per landholding size
 
-[image of distribution of characteristics](images/distributions_of_characteristics.png)
+![image of distribution of characteristics](images/distributions_of_characteristics.png)
 
 Figure 3 Distributions of the farm sizes, risk aversion, discount and interest rates.
 
