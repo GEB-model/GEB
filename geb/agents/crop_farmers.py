@@ -3937,14 +3937,17 @@ class CropFarmers(AgentBaseClass):
         crop_elevation_group = self.create_unique_groups()
 
         # Initialize array to store relative yield ratio improvement for unique groups
-        unique_yield_ratio_gain_relative = np.full(
-            (len(np.unique(crop_elevation_group, axis=0)), 6), 0, dtype=np.float32
+        unique_yield_ratio_gain_relative = np.zeros(
+            (len(np.unique(crop_elevation_group, axis=0)), 6), dtype=np.float32
+        )
+
+        # Get unique groups and group indices
+        unique_groups, group_indices = np.unique(
+            crop_elevation_group, axis=0, return_inverse=True
         )
 
         # Loop over each unique group of farmers to determine their average yield ratio
-        for idx, unique_combination in enumerate(
-            np.unique(crop_elevation_group, axis=0)
-        ):
+        for idx, unique_combination in enumerate(unique_groups):
             unique_farmer_groups = (
                 crop_elevation_group == unique_combination[None, ...]
             ).all(axis=1)
@@ -3972,18 +3975,9 @@ class CropFarmers(AgentBaseClass):
 
                 unique_yield_ratio_gain_relative[idx, :] = yield_ratio_gain
 
-        # Identify each agent's position within the unique groups
-        positions_agent = np.where(
-            np.all(
-                crop_elevation_group[:, np.newaxis, :]
-                == np.unique(crop_elevation_group, axis=0),
-                axis=-1,
-            )
-        )
-        exact_position = positions_agent[1]
-
         # Convert group-based results into agent-specific results
-        gains_adaptation = unique_yield_ratio_gain_relative[exact_position, :]
+        gains_adaptation = unique_yield_ratio_gain_relative[group_indices, :]
+
         assert np.max(gains_adaptation) != np.inf, "gains adaptation value is inf"
 
         return gains_adaptation
