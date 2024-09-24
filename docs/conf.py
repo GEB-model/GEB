@@ -26,12 +26,15 @@ with open("authors.rst", "r") as f:
     author = f.read()
 
 
+prevdir = os.getcwd()
+os.chdir("ODD")
 output = pypandoc.convert_file(
-    "ODD/ODD_protocol.md",
+    "../ODD_protocol.md",
     "pdf",
     outputfile="ODD_protocol.pdf",
     extra_args=["--pdf-engine=xelatex"],
 )
+os.chdir(prevdir)
 
 # -- General configuration ---------------------------------------------------
 
