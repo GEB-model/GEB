@@ -5272,12 +5272,12 @@ class GEBModel(GridModel):
             geom=self.region,
             predicate="intersects",
         )
-        path = self.set_geoms(hydrobasins, name="hydrodynamics/hydrobasins")
+        self.set_geoms(hydrobasins, name="hydrodynamics/hydrobasins")
 
         hydrodynamics_data_catalog.add_source(
             "hydrobasins_level_8",
             GeoDataFrameAdapter(
-                path=Path(self.root) / path,
+                path=Path(self.root) / "hydrodynamics" / "hydrobasins.gpkg",
                 meta=self.data_catalog.get_source("hydrobasins_8").meta,
             ),  # hydromt likes absolute paths
         )
@@ -5288,12 +5288,12 @@ class GEBModel(GridModel):
             "gcn250", bbox=bounds, buffer=100, variables=["cn_avg"]
         )
         gcn250.name = "gcn250"
-        path = self.set_forcing(gcn250, name="hydrodynamics/gcn250")
+        self.set_forcing(gcn250, name="hydrodynamics/gcn250")
 
         hydrodynamics_data_catalog.add_source(
             "gcn250",
             RasterDatasetAdapter(
-                path=Path(self.root) / path,
+                path=Path(self.root) / "hydrodynamics" / "gcn250.zarr.zip",
                 meta=self.data_catalog.get_source("gcn250").meta,
                 driver="zarr",
             ),  # hydromt likes absolute paths
@@ -5314,14 +5314,17 @@ class GEBModel(GridModel):
             # therefore we add a dummy variable to the data thus forcing the data to
             # be considered a Dataset
             DEM_raster["_dummy"] = 0
-            path = self.set_forcing(
+            self.set_forcing(
                 DEM_raster, name=f"hydrodynamics/DEM/{DEM_name}", split_dataset=False
             )
 
             hydrodynamics_data_catalog.add_source(
                 DEM_name,
                 RasterDatasetAdapter(
-                    path=Path(self.root) / path,
+                    path=Path(self.root)
+                    / "hydrodynamics"
+                    / "DEM"
+                    / f"{DEM_name}.zarr.zip",
                     meta=self.data_catalog.get_source(DEM_name).meta,
                     driver="zarr",
                 ),  # hydromt likes absolute paths
@@ -5336,14 +5339,14 @@ class GEBModel(GridModel):
             provider=self.data_provider,
         )
         del merit_hydro["flwdir"].attrs["_FillValue"]
-        path = self.set_forcing(
+        self.set_forcing(
             merit_hydro, name="hydrodynamics/merit_hydro", split_dataset=False
         )
 
         hydrodynamics_data_catalog.add_source(
             "merit_hydro",
             RasterDatasetAdapter(
-                path=Path(self.root) / path,
+                path=Path(self.root) / "hydrodynamic" / "merit_hydro.zarr.zip",
                 meta=self.data_catalog.get_source("merit_hydro").meta,
                 driver="zarr",
             ),  # hydromt likes absolute paths
@@ -5358,12 +5361,12 @@ class GEBModel(GridModel):
         )
         glofas_discharge = glofas_discharge.rename({"latitude": "y", "longitude": "x"})
         glofas_discharge.name = "discharge_yearly"
-        path = self.set_forcing(glofas_discharge, name="hydrodynamics/discharge_yearly")
+        self.set_forcing(glofas_discharge, name="hydrodynamics/discharge_yearly")
 
         hydrodynamics_data_catalog.add_source(
             "glofas_discharge_Yearly_Resampled_Global",
             RasterDatasetAdapter(
-                path=Path(self.root) / path,
+                path=Path(self.root) / "hydrodynamics" / "discharge_yearly.zarr.zip",
                 meta=self.data_catalog.get_source("glofas_4_0_discharge_yearly").meta,
                 driver="zarr",
             ),  # hydromt likes absolute paths
@@ -5375,12 +5378,14 @@ class GEBModel(GridModel):
             bbox=bounds,
             predicate="intersects",
         )
-        path = self.set_geoms(river_centerlines, name="hydrodynamics/river_centerlines")
+        self.set_geoms(river_centerlines, name="hydrodynamics/river_centerlines")
 
         hydrodynamics_data_catalog.add_source(
             "river_centerlines_MERIT_Basins",
             GeoDataFrameAdapter(
-                path=Path(self.root) / path,  # hydromt likes absolute paths
+                path=Path(self.root)
+                / "hydrodynamics"
+                / "river_centerlines.gpkg",  # hydromt likes absolute paths
                 meta=self.data_catalog.get_source(
                     "river_centerlines_MERIT_Basins"
                 ).meta,
@@ -5395,12 +5400,12 @@ class GEBModel(GridModel):
         )
         del esa_worldcover.attrs["_FillValue"]
         esa_worldcover.name = "esa_worldcover"
-        path = self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover")
+        self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover")
 
         hydrodynamics_data_catalog.add_source(
             "esa_worldcover",
             RasterDatasetAdapter(
-                path=Path(self.root) / path,
+                path=Path(self.root) / "hydrodynamics" / "esa_worldcover.zarr.zip",
                 meta=self.data_catalog.get_source(land_cover).meta,
                 driver="zarr",
             ),  # hydromt likes absolute paths
