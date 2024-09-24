@@ -151,6 +151,16 @@ glofas_4_0_discharge_yearly:
   meta:
       version:  LISFLOOD 4.0
       source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
+glofas_uparea:
+  data_type: RasterDataset
+  path: /scistor/ivm/data_catalogue/hydrology/discharge/uparea_glofas_v4_0.nc
+  driver: netcdf
+  crs: 4326
+  unit_mult:
+    uparea: 0.000001
+  meta:
+      version:  LISFLOOD 4.0
+      source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
 gcn250:
   data_type: RasterDataset
   path: /scistor/ivm/data_catalogue/hydrology/soil/gcn_sfincs/{variable}.tif
