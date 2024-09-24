@@ -26,11 +26,11 @@ jobs:
         with:
             python-version-file: "pyproject.toml"
 
-      # Install Pandoc and pdflatex engine
-      - name: Install Pandoc and pdflatex
+      # Install Pandoc and xelatex engine
+      - name: Install Pandoc and xelatex
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc texlive-latex-base texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra
+          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra
 
       - name: Set up uv
         # Install latest uv version using the installer

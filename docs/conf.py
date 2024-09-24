@@ -27,7 +27,10 @@ with open("authors.rst", "r") as f:
 
 
 output = pypandoc.convert_file(
-    "ODD/ODD_protocol.md", "pdf", outputfile="build/ODD_protocol.pdf"
+    "ODD/ODD_protocol.md",
+    "pdf",
+    outputfile="build/ODD_protocol.pdf",
+    extra_args=["--pdf-engine=xelatex"],
 )
 
 # -- General configuration ---------------------------------------------------
