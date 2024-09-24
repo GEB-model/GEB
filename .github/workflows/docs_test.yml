@@ -61,7 +61,7 @@ jobs:
         run: |
           cd docs
           mkdir -p _build
-          make html
+          uv run make html
 
       # Upload the build logs as an artifact if the build fails
       - uses: actions/upload-artifact@v4
