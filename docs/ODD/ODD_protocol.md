@@ -397,7 +397,7 @@ $$
 
 $$
 
-Utility U(x) is a function of expected income Inc and potential adapted income Incadapt per event i and adaptation costs Cadapt. In eq. 2, Cadapt is dependent on groundwater levels and in eq. 4 on current market prices. To calculate the utility of all decisions, we take the integral of the summed and time (t, years) discounted (r) utility under all possible events i with a probability of pi and adjust pi with the subjective risk perception $\beta$t. See table B1 for an overview of all model parameters. The utility U (x) as a function of risk aversion $\sigma$ is as follows:
+Utility U(x) is a function of expected income Inc and potential adapted income Incadapt per event i and adaptation costs Cadapt. In eq. 2, Cadapt is dependent on groundwater levels and in eq. 4 on current market prices. To calculate the utility of all decisions, we take the integral of the summed and time (t, years) discounted (r) utility under all possible events i with a probability of pi and adjust pi with the subjective risk perception $\beta_t$. See table B1 for an overview of all model parameters. The utility U (x) as a function of risk aversion $\sigma$ is as follows:
 
 $$
 
