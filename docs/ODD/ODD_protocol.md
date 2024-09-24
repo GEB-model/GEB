@@ -115,18 +115,6 @@ Figure 1 Overview of model actions, taken from De Bruijn et al. (2023). The gove
 
 Farmers grow pearl millet, groundnut, sorghum, paddy rice, sugar cane, wheat, cotton, chickpea, maize, green gram, finger millet, sunflower and red gram. Each crop undergoes four growth stages (d1 to d4). The crop coefficient (Kc) is then calculated as follows (Fischer et al., 2021):
 
-$$
-
-Kc_t =
-\begin{cases} 
-  Kc1, & t < d_1 \\
-  Kc1 + (t - d_1) \times \frac{Kc2 - Kc1}{d_2}, & d_1 \leq t < d_2 \\
-  Kc2, & d_2 \leq t < d_3 \\
-  Kc2 + (t - (d_1 + d_2 + d_3)) \times \frac{Kc3 - Kc2}{d_4}, & \text{otherwise}
-\end{cases}
-
-$$
-
 where t represents the number of days since planting, and d1 to d4 are the durations of each growth stage. Each crop has their own set of these parameters. At the harvest stage, the actual yield (Ya) is determined based on a maximum reference yield (Yr; Siebert & Döll, 2010), the water-stress reduction factor (KyT), and the ratio of actual evapotranspiration (AET) to potential evapotranspiration (PET) throughout the growth period (Fischer et al., 2021):
 
 $$
