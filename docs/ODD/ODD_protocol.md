@@ -115,7 +115,7 @@ Figure 1 Overview of model actions, taken from De Bruijn et al. (2023). The gove
 
 Farmers grow pearl millet, groundnut, sorghum, paddy rice, sugar cane, wheat, cotton, chickpea, maize, green gram, finger millet, sunflower and red gram. Each crop undergoes four growth stages (d1 to d4). The crop coefficient (Kc) is then calculated as follows (Fischer et al., 2021):
 
-$$
+<!-- $$
 
 Kc_t =
 \begin{cases} 
@@ -125,23 +125,23 @@ Kc_t =
   Kc2 + (t - (d_1 + d_2 + d_3)) \times \frac{Kc3 - Kc2}{d_4}, & \text{otherwise}
 \end{cases}
 
-$$
+$$ -->
 
 where t represents the number of days since planting, and d1 to d4 are the durations of each growth stage. Each crop has their own set of these parameters. At the harvest stage, the actual yield (Ya) is determined based on a maximum reference yield (Yr; Siebert & Döll, 2010), the water-stress reduction factor (KyT), and the ratio of actual evapotranspiration (AET) to potential evapotranspiration (PET) throughout the growth period (Fischer et al., 2021):
 
-$$
+<!-- $$
 
 Y_a = Y_r \times \left( 1 - KyT \times \left( 1 - \frac{\sum_{t=0}^{t=h} \text{AET}_t}{\sum_{t=0}^{t=h} \text{PET}_t} \right) \right)
 
-$$
+$$ -->
 
 After they harvest, yield is converted to income depending on the current market price of that specific crop. At the end of each season, farmers track their yield ratio of that harvest, their potential and actual profits and the 12-month SPEI of that season (from the 12-month SPEI between 1979 and 2016, calibrated from 1981-2010). They also check whether this season’s yield ratio is lower than a moving reference point plus a certain “drought threshold”. The reference point is the 5-year average difference between the reference potential yield and the actual yield, and the additional drought threshold is a calibrated factor. If it is below the moving average reference point and the drought threshold (e.g., 15% below the average yield of the last 5 years), the farmer experiences a drought. In that case, their time since the last drought (table 1) resets and their risk perception rises according to
 
-$$
+<!-- $$
 
 \beta_t = c \times 1.6^{-d \times t} + e
 
-$$
+$$ -->
 
 Where d is  a reduction factor, e is a minimum underestimation of risk and c is the maximum overestimation of risk. The amount that is below the threshold is then multiplied by the yearly average income and added as a two year loan (with interest) to yearly costs as microcredit. 
 
@@ -385,7 +385,7 @@ The following submodels were not described yet in process overview and schedulin
 
 Submodel expected utility calculations: 
 
-$$
+<!-- $$
 
 \text{SEUT}_{\text{no\_action}} = \int_{p_2}^{p_1} \beta_t \times p_i \times U \left( \sum_{t=0}^{T} \frac{\text{Inc}_{i,x,t}}{(1 + r)^t} \right) dp
 
@@ -407,99 +407,99 @@ $$
 
 \text{EUT}_{\text{own\_crop\_rotation}} = \int_{p_2}^{p_1} p_i \times U \left( \sum_{t=0}^{T} \frac{\text{Inc}_{i,x,t} - C_{t,m}^{\text{input}}}{(1 + r)^t} \right) dp
 
-$$
+$$ -->
 
 Utility U(x) is a function of expected income Inc and potential adapted income Incadapt per event i and adaptation costs Cadapt. In eq. 2, Cadapt is dependent on groundwater levels and in eq. 4 on current market prices. To calculate the utility of all decisions, we take the integral of the summed and time (t, years) discounted (r) utility under all possible events i with a probability of pi and adjust pi with the subjective risk perception $\beta$t. See table B1 for an overview of all model parameters. The utility U (x) as a function of risk aversion $\sigma$ is as follows:
 
-$$
+<!-- $$
 
 U(x) = \frac{x^{1-\sigma}}{1-\sigma}
 
-$$
+$$ -->
 
 Submodel drought probability – yield calculations:
 
 The SPEI relation is fitted with by determining a and b in  following formula, which was chosen as it they returned the highest R-squared between drought probability and yield ratio for this region (~ 0.50): 
 
-$$
+<!-- $$
 
 \text{SPEI}_{i,t} = a \times \log_2\left( \text{yield}_{i,t} \right) + b
 
-$$
+$$ -->
 
 Submodel annual well investment costs calculations:
 
 Annual investment cost: The yearly adaptation costs are a function of the well depth, the pump’s horsepower (HP), its maintenance costs and the cost of groundwater pumping. This is adjusted for the loan duration (n) using the agent’s yearly interest rate (r). 
 
-$$
+<!-- $$
 
 C_{t,d}^{\text{adapt}} = \left( C_D + C_{HP} \right) \times \frac{r \times (1 + r)^n}{(1 + r)^n - 1} + C_M + C_I
 
-$$
+$$ -->
 
 Borewell construction cost: The borewell construction cost is dependent on the probability of well failure (prD) and the groundwater depth for the agent (D). The constants are adjusted yearly based on inflation. 
 
-$$
+<!-- $$
 
 C_{t,d}^{\text{adapt}} = \left( C_D + C_{HP} \right) \times \frac{r \times (1 + r)^n}{(1 + r)^n - 1} + C_M + C_I
 
-$$
+$$ -->
 
 Initial borewell depth: Initial borewell depth (DI) of agents who had wells before the adaptation started was based on the average groundwater depth in the Bhima basin + 20 m. 
 
-$$
+<!-- $$
 
 C_{HP} = 3570 \times HP
 
-$$
+$$ -->
 
 Pump Cost: The pump cost is dependent on the horsepower (HP) of the pump. The constant is adjusted yearly based on inflation.
 
-$$
+<!-- $$
 
 C_M = 6598 \times W^{0.16}
 
-$$
+$$ -->
 
 Irrigation maintenance cost: The irrigation maintenance cost is dependent on the potential amount of water pumped (W). The constant is adjusted yearly based on inflation. 
 
-$$
+<!-- $$
 
 W_t = FR \times L \times A_t \times pr_I
 
-$$
+$$ -->
 
 Potential amount of water: The potential amount of water pumped is dependent on the flow rate (FR), the total planted time (L), the number of hours pumping per day (At) and the proportion of available water for pumping prI. 
 
-$$
+<!-- $$
 
 W_t = FR \times L \times A_t \times pr_I
 
-$$
+$$ -->
 
 Flow rate: The flow rate is dependent on the groundwater table (G). 
 
-$$
+<!-- $$
 
 FR = 79.93 \times G^{-0.728}
 
-$$
+$$ -->
 
 Cost of groundwater pumping: The yearly cost of groundwater irrigation (CI)  is dependent on the total planted time (L), the number of hours pumping per day (At), the proportion of available water for pumping prI, the electric power (E) and the electricity unit costs (CE). 
 
-$$
+<!-- $$
 
 C_I = L \times A_t \times pr_I \times E \times C_E
 
-$$
+$$ -->
 
 Electric power (kilowatt hour): The electric power is dependent on the horsepower  (HP) to watt conversion. 
 
-$$
+<!-- $$
 
 E = 745.7 \times HP
 
-$$
+$$ -->
 
 ### 3.4.2 What are the model parameters, their dimensions and reference values?
 
