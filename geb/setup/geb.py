@@ -5346,7 +5346,7 @@ class GEBModel(GridModel):
         hydrodynamics_data_catalog.add_source(
             "merit_hydro",
             RasterDatasetAdapter(
-                path=Path(self.root) / "hydrodynamic" / "merit_hydro.zarr.zip",
+                path=Path(self.root) / "hydrodynamics" / "merit_hydro.zarr.zip",
                 meta=self.data_catalog.get_source("merit_hydro").meta,
                 driver="zarr",
             ),  # hydromt likes absolute paths
@@ -5418,8 +5418,10 @@ class GEBModel(GridModel):
             buffer=200,  # 2 km buffer
         )
         del esa_worldcover.attrs["_FillValue"]
-        esa_worldcover.name = "esa_worldcover"
-        self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover")
+        esa_worldcover.name = "lulc"
+        esa_worldcover = esa_worldcover.to_dataset()
+        esa_worldcover["_dummy"] = 0
+        self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover", split_dataset=False)
 
         hydrodynamics_data_catalog.add_source(
             "esa_worldcover",
