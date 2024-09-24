@@ -3094,6 +3094,7 @@ class GEBModel(GridModel):
         self,
         calibration_period_start: date = date(1981, 1, 1),
         calibration_period_end: date = date(2010, 1, 1),
+        window: int = 12,
     ):
         """
         Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
@@ -3180,7 +3181,7 @@ class GEBModel(GridModel):
                 cal_start=calibration_period_start,
                 cal_end=calibration_period_end,
                 freq="MS",
-                window=1,
+                window=window,
                 dist="gamma",
                 method="ML",
             ).chunk(chunks)
@@ -4359,7 +4360,8 @@ class GEBModel(GridModel):
                     assert not np.isnan(n_cells_per_size_class.loc[size_class])
 
             assert math.isclose(
-                cultivated_land_region_total_cells, n_cells_per_size_class.sum()
+                cultivated_land_region_total_cells,
+                round(n_cells_per_size_class.sum().item()),
             )
 
             whole_cells_per_size_class = (n_cells_per_size_class // 1).astype(int)
