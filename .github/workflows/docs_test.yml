@@ -1,0 +1,67 @@
+name: Test Sphinx Docs (Non-Main Branches)
+
+on:
+  push:
+    branches-ignore:  # Run on all branches except 'main'
+      - main
+  workflow_dispatch:
+
+env:
+  DEFAULT_BRANCH: "main"
+
+jobs:
+  build-docs:
+    name: Build Sphinx Documentation
+    runs-on: ubuntu-24.04
+    steps:
+      # Check out the repository
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      # Set up Python
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Install Pandoc and pdflatex engine
+      - name: Install Pandoc and pdflatex
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-latex-base texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra
+
+      # Install project dependencies (including Sphinx and docs dependencies)
+      - name: Install the project
+        run: |
+          pip install -r docs/requirements.txt
+
+      # Debugging information
+      - name: Debugging information
+        run: |
+          echo "github.ref: ${{ github.ref }}"
+          echo "github.event_name: ${{ github.event_name }}"
+          echo "github.head_ref: ${{ github.head_ref }}"
+          echo "github.base_ref: ${{ github.base_ref }}"
+          set -x
+          git rev-parse --abbrev-ref HEAD
+          git branch
+          git branch -a
+          git remote -v
+          python -V
+          pip list
+
+      # Build Sphinx documentation
+      - name: Build Sphinx docs
+        run: |
+          cd docs
+          mkdir -p _build
+          make html
+
+      # Upload the build logs as an artifact if the build fails
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build_logs
+          path: /tmp/sphinx-err-*.log

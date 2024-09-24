@@ -13,6 +13,7 @@
 #
 import os
 import sys
+import pypandoc
 
 sys.path.insert(0, os.path.abspath(".."))
 
@@ -23,6 +24,11 @@ with open("copyright.rst", "r") as f:
     copyright = f.read()
 with open("authors.rst", "r") as f:
     author = f.read()
+
+
+output = pypandoc.convert_file(
+    "ODD/ODD_protocol.md", "pdf", outputfile="build/ODD_protocol.pdf"
+)
 
 # -- General configuration ---------------------------------------------------
 

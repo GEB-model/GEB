@@ -69,7 +69,8 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinxcontrib-autoprogram",
     "sphinx_rtd_theme",
-    "sphinxcontrib-autoyaml"
+    "sphinxcontrib-autoyaml",
+    "pypandoc",
 ]
 gpu = [
     "cupy"
