@@ -24,7 +24,7 @@ jobs:
       - name: "Set up Python"
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+            python-version-file: "pyproject.toml"
 
       # Install Pandoc and pdflatex engine
       - name: Install Pandoc and pdflatex
@@ -32,10 +32,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pandoc texlive-latex-base texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra
 
+      - name: Set up uv
+        # Install latest uv version using the installer
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
       # Install project dependencies (including Sphinx and docs dependencies)
       - name: Install the project
         run: |
-          pip install -r docs/requirements.txt
+          uv sync --extra docs
 
       # Debugging information
       - name: Debugging information
