@@ -26,6 +26,7 @@ with open("copyright.rst", "r") as f:
 with open("authors.rst", "r") as f:
     author = f.read()
 
+os.chdir("ODD")
 output_folder = Path("../_build/html/ODD")
 output_folder.mkdir(exist_ok=True, parents=True)
 output = pypandoc.convert_file(
@@ -37,8 +38,8 @@ output = pypandoc.convert_file(
         "-V",
         "geometry:margin=1.0in",
     ],
-    cworkdir="ODD",
 )
+os.chdir("..")
 
 # -- General configuration ---------------------------------------------------
 
