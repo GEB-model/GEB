@@ -1,6 +1,4 @@
-Supplementary information 1: ODD+D protocol 
-
-Based on the protocol by Müller et al. (2013)
+ODD+D protocol. Based on the protocol by Müller et al. (2013)
 
 # Overview
 
