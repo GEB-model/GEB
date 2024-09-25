@@ -26,10 +26,10 @@ with open("copyright.rst", "r") as f:
 with open("authors.rst", "r") as f:
     author = f.read()
 
-output_folder = Path("_build/html/ODD")
+output_folder = Path("../_build/html/ODD")
 output_folder.mkdir(exist_ok=True, parents=True)
 output = pypandoc.convert_file(
-    "ODD/ODD_protocol.md",
+    "ODD_protocol.md",
     "pdf",
     outputfile=output_folder / "ODD_protocol.pdf",
     extra_args=[
@@ -37,6 +37,7 @@ output = pypandoc.convert_file(
         "-V",
         "geometry:margin=1.0in",
     ],
+    cworkdir="ODD",
 )
 
 # -- General configuration ---------------------------------------------------
