@@ -69,6 +69,7 @@ docs = [
     "sphinx<8",
     "sphinx-autodoc-typehints",
     "sphinxcontrib-autoprogram",
+    "sphinxcontrib-bibtex",
     "sphinx_rtd_theme",
     "sphinxcontrib-autoyaml",
     "pypandoc",

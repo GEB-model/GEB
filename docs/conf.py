@@ -37,6 +37,8 @@ output = pypandoc.convert_file(
         "--pdf-engine=xelatex",
         "-V",
         "geometry:margin=1.0in",
+        "--citeproc",
+        "--bibliography=../references.bib",
     ],
 )
 os.chdir("..")
@@ -55,6 +57,7 @@ extensions = [
     "sphinx_autodoc_typehints",
     "sphinxcontrib.autoprogram",
     "sphinxcontrib.autoyaml",
+    "sphinxcontrib.bibtex",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
