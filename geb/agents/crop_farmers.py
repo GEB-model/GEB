@@ -257,7 +257,7 @@ def withdraw_channel(
 ):
     # channel abstraction
     channel_abstraction_cell_m3 = min(
-        available_channel_storage_m3[grid_cell],
+        max(available_channel_storage_m3[grid_cell] - 100, 0),
         irrigation_water_demand_field * cell_area[field],
     )
     assert channel_abstraction_cell_m3 >= 0
@@ -532,17 +532,17 @@ def abstract_water(
                         )
 
                         if surface_irrigated[farmer]:
-                            irrigation_water_demand_field = withdraw_channel(
-                                available_channel_storage_m3=available_channel_storage_m3,
-                                grid_cell=grid_cell,
-                                cell_area=cell_area,
-                                field=field,
-                                farmer=farmer,
-                                water_withdrawal_m=water_withdrawal_m,
-                                irrigation_water_demand_field=irrigation_water_demand_field,
-                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                                channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
-                            )
+                            # irrigation_water_demand_field = withdraw_channel(
+                            #     available_channel_storage_m3=available_channel_storage_m3,
+                            #     grid_cell=grid_cell,
+                            #     cell_area=cell_area,
+                            #     field=field,
+                            #     farmer=farmer,
+                            #     water_withdrawal_m=water_withdrawal_m,
+                            #     irrigation_water_demand_field=irrigation_water_demand_field,
+                            #     remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                            #     channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                            # )
                             assert water_withdrawal_m[field] >= 0
 
                             # command areas
@@ -1612,6 +1612,10 @@ class CropFarmers(AgentBaseClass):
         assert (available_channel_storage_m3 >= 0).all()
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
+
+        self.activation_order_by_elevation_ = AgentArray(
+            self.activation_order_by_elevation, max_n=self.max_n
+        )
 
         if __debug__:
             irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
