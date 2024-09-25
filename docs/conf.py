@@ -32,7 +32,11 @@ output = pypandoc.convert_file(
     "ODD/ODD_protocol.md",
     "pdf",
     outputfile=output_folder / "ODD_protocol.pdf",
-    extra_args=["--pdf-engine=xelatex"],
+    extra_args=[
+        "--pdf-engine=xelatex",
+        "-V",
+        "geometry:margin=1.0in",
+    ],
 )
 
 # -- General configuration ---------------------------------------------------
