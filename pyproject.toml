@@ -13,6 +13,7 @@ authors = [
 ]
 dependencies = [
     "cdsapi>=0.7.3",
+    "DamageScanner @ git+https://github.com/VU-IVM/DamageScanner@vector-update",
     "dask>=2024.6",
     "deap>=1.4.1",
     "flopy>=3.8.0",
@@ -42,7 +43,6 @@ dependencies = [
     "xesmf>=0.8.4",
     "xmipy>=1.5.0",
     "zarr>=2.18.2",
-    "DamageScanner @ git+https://github.com/VU-IVM/DamageScanner@vector-update",
 ]
 requires-python = ">=3.11, <3.13"
 readme = "README.md"
@@ -70,17 +70,14 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinxcontrib-autoprogram",
     "sphinx_rtd_theme",
-    "sphinxcontrib-autoyaml"
+    "sphinxcontrib-autoyaml",
+    "pypandoc",
 ]
 gpu = [
     "cupy"
 ]
 
 full = [
-]
-
-publish = [
-    "twine",
 ]
 
 fairstream = [
