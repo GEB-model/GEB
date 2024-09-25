@@ -79,6 +79,7 @@ add_module_names = False
 napoleon_custom_sections = [("Returns", "params_style")]
 autoclass_content = "both"
 autoyaml_level = 3
+bibtex_bibfiles = ["references.bib"]
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
