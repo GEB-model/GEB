@@ -31,7 +31,7 @@ os.chdir("ODD")
 output = pypandoc.convert_file(
     "ODD_protocol.md",
     "pdf",
-    outputfile="../ODD_protocol.pdf",
+    outputfile="ODD_protocol.pdf",
     extra_args=["--pdf-engine=xelatex"],
 )
 os.chdir(prevdir)

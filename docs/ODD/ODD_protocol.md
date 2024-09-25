@@ -495,11 +495,9 @@ $$ -->
 
 Electric power (kilowatt hour): The electric power is dependent on the horsepower  (HP) to watt conversion. 
 
-<!-- $$
-
+$$
 E = 745.7 \times HP
-
-$$ -->
+$$
 
 ### 3.4.2 What are the model parameters, their dimensions and reference values?
 
