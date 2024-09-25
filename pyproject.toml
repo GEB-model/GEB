@@ -80,10 +80,6 @@ gpu = [
 full = [
 ]
 
-publish = [
-    "twine",
-]
-
 fairstream = [
     "pgmpy>=0.1.24",
     "daft>=0.1.2",

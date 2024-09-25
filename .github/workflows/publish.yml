@@ -18,12 +18,9 @@ jobs:
         # Install latest uv version using the installer
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Install the project
-        run: uv sync --extra publish
+        run: uv sync
       - name: Build package
         run: uv build
       - name: Publish package distributions to Test PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI }}
         run: |
-          uv run python -m twine upload --repository-url https://upload.pypi.org/legacy/ dist/*
+          uv publish -t ${{ secrets.PYPI }} --publish-url https://upload.pypi.org/legacy/ dist/*
