@@ -30,7 +30,7 @@ jobs:
       - name: Install Pandoc and xelatex
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc pandoc-citeproc texlive-xetex texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra librsvg2-bin
+          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra librsvg2-bin
 
       - name: Set up uv
         # Install latest uv version using the installer
