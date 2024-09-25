@@ -65,7 +65,7 @@ Table 2 Reservoir operator agents attributes and their values in GEB
 CWatM and MODFLOW attributes. This table shows only the calibrated attributes. Full hydrological settings can be found in the CwatM.ini file on Zenodo (Kalthof & De Bruijn, 2024). 
 
 | Variable / Parameter           | Definition, unit                                       | Value / range                    |
-|--------------------------------|--------------------------------------------------------|----------------------------------|
+|-------------------------------------------------|--------------------------------------------------------|----------------|
 | **Hydrological parameters (CWATM)** | (Burek et al., 2020; De Bruijn et al., 2023)           |                                  |
 | **SnowMeltCoef***              | Snow melt coefficient. *not calibrated as no snow in study area | 0.004                            |
 | **arnoBeta_add**               |                                                        | 0.14                             |
