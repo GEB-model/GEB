@@ -87,7 +87,7 @@ The routing was determined by identifying the outlet of the Upper Bhima basin an
 
 Historical water demand is taken from CWatM and consists of domestic, industry and livestock demand following the method of Wada et al. (2011). 
 
-Crop cultivation costs are sourced from the Ministry of Agriculture and Farmers Welfare in Rupees (Rs) per hectare (https://eands.dacnet. Nic.in/Cost_of_Cultivation.htm, last access: 15 July 2022) (De Bruijn et al., 2023). Historical monthly crop market sell prices are sourced from Agmarknet (https://agmarknet.gov.in, last accessed on 27 July 2022) (De Bruijn et al., 2023) in Rupees (Rs) per kg.
+Crop cultivation costs are sourced from the Ministry of Agriculture and Farmers Welfare in Rupees (Rs) per hectare (https://eands.dacnet. Nic.in/Cost_of_Cultivation.htm, last access: 15 July 2022) [@gmd-16-2437-2023]. Historical monthly crop market sell prices are sourced from Agmarknet (https://agmarknet.gov.in, last accessed on 27 July 2022) (De Bruijn et al., 2023) in Rupees (Rs) per kg.
 
 ### 1.2.4. If applicable, how is space included in the model?
 
