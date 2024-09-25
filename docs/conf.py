@@ -26,7 +26,7 @@ with open("copyright.rst", "r") as f:
 with open("authors.rst", "r") as f:
     author = f.read()
 
-output_folder = Path("_build/html")
+output_folder = Path("_build/html/ODD")
 output_folder.mkdir(exist_ok=True, parents=True)
 output = pypandoc.convert_file(
     "ODD/ODD_protocol.md",
