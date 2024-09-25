@@ -19,6 +19,8 @@ general:
 hazards:
   floods:
     simulate: false
+  damage:
+    simulate: false
 
 agent_settings:
   market:
