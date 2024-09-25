@@ -13,6 +13,8 @@
 #
 import os
 import sys
+from pathlib import Path
+import pypandoc
 
 sys.path.insert(0, os.path.abspath(".."))
 
@@ -23,6 +25,21 @@ with open("copyright.rst", "r") as f:
     copyright = f.read()
 with open("authors.rst", "r") as f:
     author = f.read()
+
+os.chdir("ODD")
+output_folder = Path("../_build/html/ODD")
+output_folder.mkdir(exist_ok=True, parents=True)
+output = pypandoc.convert_file(
+    "ODD_protocol.md",
+    "pdf",
+    outputfile=output_folder / "ODD_protocol.pdf",
+    extra_args=[
+        "--pdf-engine=xelatex",
+        "-V",
+        "geometry:margin=1.0in",
+    ],
+)
+os.chdir("..")
 
 # -- General configuration ---------------------------------------------------
 

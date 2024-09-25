@@ -37,6 +37,7 @@ The figure below shows a schematic overview of some parts of the model, showing 
   Running the model <running>
   Visualisation <visualisation>
   Calibration <calibration>
+  ODD protocol <ODD/ODD.rst>
 
 .. toctree::
   :maxdepth: 1
