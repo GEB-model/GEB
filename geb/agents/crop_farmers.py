@@ -254,10 +254,11 @@ def withdraw_channel(
     water_withdrawal_m: np.ndarray,
     remaining_irrigation_limit_m3: np.ndarray,
     channel_abstraction_m3_by_farmer: np.ndarray,
+    minimum_channel_storage_m3: float = 100,
 ):
     # channel abstraction
     channel_abstraction_cell_m3 = min(
-        max(available_channel_storage_m3[grid_cell] - 100, 0),
+        max(available_channel_storage_m3[grid_cell] - minimum_channel_storage_m3, 0),
         irrigation_water_demand_field * cell_area[field],
     )
     assert channel_abstraction_cell_m3 >= 0
@@ -542,6 +543,7 @@ def abstract_water(
                             #     irrigation_water_demand_field=irrigation_water_demand_field,
                             #     remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                             #     channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                            #     minimum_channel_storage_m3=100.0,
                             # )
                             assert water_withdrawal_m[field] >= 0
 
