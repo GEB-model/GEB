@@ -5421,7 +5421,9 @@ class GEBModel(GridModel):
         esa_worldcover.name = "lulc"
         esa_worldcover = esa_worldcover.to_dataset()
         esa_worldcover["_dummy"] = 0
-        self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover", split_dataset=False)
+        self.set_forcing(
+            esa_worldcover, name="hydrodynamics/esa_worldcover", split_dataset=False
+        )
 
         hydrodynamics_data_catalog.add_source(
             "esa_worldcover",
