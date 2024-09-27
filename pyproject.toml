@@ -13,7 +13,7 @@ authors = [
 ]
 dependencies = [
     "cdsapi>=0.7.3",
-    "DamageScanner @ git+https://github.com/VU-IVM/DamageScanner@vector-update",
+    "DamageScanner @ git+https://github.com/VU-IVM/DamageScanner@test-exact-extract",
     "dask>=2024.6",
     "deap>=1.4.1",
     "flopy>=3.8.0",
