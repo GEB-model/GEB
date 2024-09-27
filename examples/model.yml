@@ -1,6 +1,6 @@
-# The {GEB} prefix is a special prefix that is replaced by the path to the geb package.
+# The {GEB_PACKAGE_DIR} prefix is a special prefix that is replaced by the path to the geb package.
 # You can also find the reasonable_defaults/model.yml file relative to this file.
-inherits: "{GEB}/examples/reasonable_defaults/model.yml"
+inherits: "{GEB_PACKAGE_DIR}/examples/reasonable_defaults/model.yml"
 
 ###
 # This section contains several general model settings.
