@@ -6,10 +6,10 @@ from .general import AgentArray, downscale_volume, AgentBaseClass
 from ..hydrology.landcover import SEALED
 import pandas as pd
 from os.path import join
-from damagescanner.core import RasterScanner
-from damagescanner.core import VectorScanner
 import json
-import xarray as xr
+
+# from damagescanner.core import RasterScanner
+# from damagescanner.core import VectorScanner
 
 try:
     import cupy as cp

@@ -37,6 +37,8 @@ output = pypandoc.convert_file(
         "--pdf-engine=xelatex",
         "-V",
         "geometry:margin=1.0in",
+        "--citeproc",
+        "--bibliography=../references.bib",
     ],
 )
 os.chdir("..")
@@ -55,6 +57,7 @@ extensions = [
     "sphinx_autodoc_typehints",
     "sphinxcontrib.autoprogram",
     "sphinxcontrib.autoyaml",
+    "sphinxcontrib.bibtex",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -76,6 +79,7 @@ add_module_names = False
 napoleon_custom_sections = [("Returns", "params_style")]
 autoclass_content = "both"
 autoyaml_level = 3
+bibtex_bibfiles = ["references.bib"]
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
