@@ -323,7 +323,7 @@ class SFINCS:
         return None
 
     def run_single_event(self, event, start_time, return_period=None):
-        self.setup(event, force_overwrite=False)
+        self.setup(event, force_overwrite=True)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         event_name = self.get_event_name(event)
