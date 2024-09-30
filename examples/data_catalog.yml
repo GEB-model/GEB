@@ -340,6 +340,10 @@ gcam_electricity_rates:
   path: economics/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
+  meta:
+    source_url: https://github.com/JGCRI/superwell
+    source_version: 1.0
+    unit: USD (2016)
 gadm_level1:
   crs: 4326
   data_type: GeoDataFrame
