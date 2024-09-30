@@ -3667,14 +3667,9 @@ class GEBModel(GridModel):
         # Retrieve the inflation rates data
         inflation_rates = self.dict["economics/inflation_rates"]
         ppp_conversion_rates = self.dict["economics/ppp_conversion_rates"]
-        lcu_per_usd_conversion_rates = self.dict[
-            "economics/lcu_per_usd_conversion_rates"
-        ]
 
         full_years_array_ppp = np.array(ppp_conversion_rates["time"], dtype=str)
         years_index_ppp = np.isin(full_years_array_ppp, str(reference_year))
-        full_years_array_lcu = np.array(lcu_per_usd_conversion_rates["time"], dtype=str)
-        years_index_lcu = np.isin(full_years_array_lcu, str(reference_year))
         source_conversion_rates = 1  # US ppp is 1
 
         electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
