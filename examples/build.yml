@@ -71,7 +71,105 @@ setup_cultivation_costs:
   cultivation_costs: 0
 
 setup_crop_prices:
-  crop_prices: 200
+  crop_prices: FAO_stat
+  translate_crop_names:
+    cassava: 
+      - cassava, fresh
+    citrus: 
+      - lemons and lime
+      - oranges
+      - other citrus fruit, n.e.c.
+      - pomelos and grapefruits
+      - tangerines, mandarins, clementines
+    coffee: 
+      - coffee, green
+    cocoa:
+      - cocoa beans
+    cotton: 
+      - cotton lint, ginned
+    date palm: 
+      - dates
+    groundnuts: 
+      - groundnuts, excluding shelled
+    maize: 
+      - maize (corn)
+    millet:
+      - millet
+    oil palm: 
+      - palm oil
+    others annual:
+      - buckwheat
+      - cabbages
+      - cantaloupes and other melons
+      - carrots and turnips
+      - cauliflowers and broccoli
+      - chillies and peppers, green (capsicum spp. and pimenta spp.)
+      - cucumbers and gherkins
+      - green garlic
+      - lettuce and chicory
+      - linseed
+      - lupins
+      - mushrooms and truffles
+      - mustard seed
+      - onions and shallots, dry (excluding dehydrated)
+      - onions and shallots, green
+      - other beans, green
+      - other fruits, n.e.c.
+      - other vegetables, fresh n.e.c.
+      - peas, dry
+      - peas, green
+      - pumpkins, squash and gourds
+      - shorn wool, greasy, including fleece-washed shorn wool
+      - spinach
+      - strawberries
+      - tomatoes
+      - triticale
+      - unmanufactured tobacco
+      - vetches
+    others perennial:
+      - apples
+      - apricots
+      - artichokes
+      - asparagus
+      - blueberries
+      - cherries
+      - currants
+      - gooseberries
+      - hop cones
+      - kiwi fruit
+      - leeks and other alliaceous vegetables
+      - other berries and fruits of the genus vaccinium n.e.c.
+      - other stone fruits
+      - peaches and nectarines
+      - pears
+      - plums and sloes
+      - quinces
+      - raspberries
+      - sour cherries
+      - walnuts, in shell
+    pulses: 
+      - bambara beans, dry
+      - beans, dry
+      - broad beans and horse beans, dry
+      - broad beans and horse beans, green
+      - chick peas, dry
+      - cow peas, dry
+      - lentils, dry
+      - lupins
+      - peas, dry
+      - peas, green
+      - pigeon peas, dry
+      - vetches
+    rapeseed: 
+      - rape or colza seed
+    soybeans: 
+      - soya beans
+    sugar beets: 
+      - sugar beet
+    sugar cane: 
+      - sugar cane
+    sunflower: 
+      - sunflower seed
 
 setup_population:
 
