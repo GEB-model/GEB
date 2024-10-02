@@ -5,7 +5,7 @@ GEB runs on Python 3.11+ and can be installed using pip.
 
 .. code-block:: bash
 
-    pip install geb-model
+    pip install geb
 
 Installation in development mode
 --------------------------------

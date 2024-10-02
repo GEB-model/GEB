@@ -254,10 +254,11 @@ def withdraw_channel(
     water_withdrawal_m: np.ndarray,
     remaining_irrigation_limit_m3: np.ndarray,
     channel_abstraction_m3_by_farmer: np.ndarray,
+    minimum_channel_storage_m3: float = 100,
 ):
     # channel abstraction
     channel_abstraction_cell_m3 = min(
-        available_channel_storage_m3[grid_cell],
+        max(available_channel_storage_m3[grid_cell] - minimum_channel_storage_m3, 0),
         irrigation_water_demand_field * cell_area[field],
     )
     assert channel_abstraction_cell_m3 >= 0
@@ -424,7 +425,6 @@ def abstract_water(
         activation_order.size, dtype=np.float32
     )
 
-    has_access_to_irrigation_water = np.zeros(activation_order.size, dtype=np.bool_)
     for activated_farmer_index in range(activation_order.size):
         farmer = activation_order[activated_farmer_index]
         farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
@@ -438,7 +438,6 @@ def abstract_water(
             continue
 
         # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
-        farmer_has_access_to_irrigation_water = False
         for field in farmer_fields:
             grid_cell = HRU_to_grid[field]
 
@@ -458,10 +457,6 @@ def abstract_water(
                 ):
                     farmer_has_access_to_irrigation_water = True
                     break
-
-        has_access_to_irrigation_water[activated_farmer_index] = (
-            farmer_has_access_to_irrigation_water
-        )
 
         # Actual irrigation from surface, reservoir and groundwater
         # If farmer doesn't have access to irrigation water, skip the irrigation abstraction
@@ -542,6 +537,7 @@ def abstract_water(
                                 irrigation_water_demand_field=irrigation_water_demand_field,
                                 remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                                 channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                                minimum_channel_storage_m3=100.0,
                             )
                             assert water_withdrawal_m[field] >= 0
 
@@ -606,7 +602,6 @@ def abstract_water(
         water_consumption_m,
         returnFlowIrr_m,
         addtoevapotrans_m,
-        has_access_to_irrigation_water,
     )
 
 
@@ -1515,13 +1510,13 @@ class CropFarmers(AgentBaseClass):
         # algorithm such that the random shuffling in the previous step is conserved
         # in groups with identical elevation.
         activation_order_shuffled = np.argsort(elevation_shuffled, kind="stable")[::-1]
-        argsort_agend_ids = agent_ids_shuffled[activation_order_shuffled]
-        # Return the agent ids ranks in the order of activation.
-        ranks = np.empty_like(argsort_agend_ids)
-        ranks[argsort_agend_ids] = np.arange(argsort_agend_ids.size)
+        # unshuffle the agent_ids to get the activation order
+        activation_order = agent_ids_shuffled[activation_order_shuffled]
         if self.model.config["agent_settings"]["fix_activation_order"]:
-            self.activation_order_by_elevation_fixed = (self.n, ranks)
-        return ranks
+            self.activation_order_by_elevation_fixed = (self.n, activation_order)
+        # Check if the activation order is correct, by checking if elevation is decreasing
+        assert np.diff(elevation[activation_order]).max() <= 0
+        return activation_order
 
     @property
     def farmer_command_area(self):
@@ -1613,6 +1608,10 @@ class CropFarmers(AgentBaseClass):
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
 
+        self.activation_order_by_elevation_ = AgentArray(
+            self.activation_order_by_elevation, max_n=self.max_n
+        )
+
         if __debug__:
             irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
@@ -1626,7 +1625,6 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
-            self.has_access_to_irrigation_water,
         ) = abstract_water(
             self.model.current_day_of_year - 1,
             self.n,

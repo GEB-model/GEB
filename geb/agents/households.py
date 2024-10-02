@@ -9,7 +9,9 @@ from os.path import join
 from damagescanner.core import RasterScanner
 from damagescanner.core import VectorScanner
 import json
-import xarray as xr
+
+# from damagescanner.core import RasterScanner
+# from damagescanner.core import VectorScanner
 
 try:
     import cupy as cp
@@ -163,99 +165,103 @@ class Households(AgentBaseClass):
                     ),
                 ]
 
-                for road_type, path in road_types:
-                    with open(model.files["dict"][path], "r") as f:
-                        max_damage = json.load(f)
-                    self.max_dam_road[road_type] = max_damage["maximum_damage"]
+        for road_type, path in road_types:
+            with open(model.files["dict"][path], "r") as f:
+                max_damage = json.load(f)
+            self.max_dam_road[road_type] = max_damage["maximum_damage"]
 
-                # Load vulnerability curves for roads
-                self.road_curves = []
-                severity_column = None
-                for road_type, path in road_types:
-                    curve_path = path.replace("maximum_damage", "curve")
-                    df = pd.read_parquet(self.model.files["table"][curve_path])
+        with open(
+            model.files["dict"][
+                "damage_parameters/flood/land_use/forest/maximum_damage"
+            ],
+            "r",
+        ) as f:
+            self.max_dam_forest = json.load(f)
+        self.max_dam_forest["0"] = self.max_dam_forest.pop("maximum_damage")
 
-                    if severity_column is None:
-                        severity_column = df["severity"] / 100
+        with open(
+            model.files["dict"][
+                "damage_parameters/flood/land_use/agriculture/maximum_damage"
+            ],
+            "r",
+        ) as f:
+            self.max_dam_agriculture = json.load(f)
+        self.max_dam_agriculture["1"] = self.max_dam_agriculture.pop("maximum_damage")
 
-                    df = df.rename(columns={"damage_ratio": road_type})
-                    self.road_curves.append(df[[road_type]])
+        self.max_dam_landuse = {**self.max_dam_forest, **self.max_dam_agriculture}
+        self.max_dam_landuse = pd.DataFrame.from_dict(
+            self.max_dam_landuse, orient="index", columns=["maximum_damage"]
+        )
+        self.max_dam_landuse["landuse"] = [
+            "0",
+            "1",
+        ]
+        self.max_dam_landuse = self.max_dam_landuse[["landuse", "maximum_damage"]]
 
-                self.road_curves = pd.concat(
-                    [severity_column] + self.road_curves, axis=1
-                )
-            else:
-                self.max_dam_road = None
-                self.road_curves = None
+        # Here we load in all vulnerability curves
+        self.road_curves = []
+        road_types = [
+            ("residential", "damage_parameters/flood/road/residential/curve"),
+            ("unclassified", "damage_parameters/flood/road/unclassified/curve"),
+            ("tertiary", "damage_parameters/flood/road/tertiary/curve"),
+            ("primary", "damage_parameters/flood/road/primary/curve"),
+            ("primary_link", "damage_parameters/flood/road/primary_link/curve"),
+            ("secondary", "damage_parameters/flood/road/secondary/curve"),
+            ("secondary_link", "damage_parameters/flood/road/secondary_link/curve"),
+            ("motorway", "damage_parameters/flood/road/motorway/curve"),
+            ("motorway_link", "damage_parameters/flood/road/motorway_link/curve"),
+            ("trunk", "damage_parameters/flood/road/trunk/curve"),
+            ("trunk_link", "damage_parameters/flood/road/trunk_link/curve"),
+        ]
 
-            if self.rail is not None:
-                self.rail = self.rail.to_crs(32631)
+        severity_column = None
+        for road_type, path in road_types:
+            df = pd.read_parquet(self.model.files["table"][path])
 
-                # Load maximum damages for rail
-                with open(
-                    model.files["dict"][
-                        "damage_parameters/flood/rail/main/maximum_damage"
-                    ],
-                    "r",
-                ) as f:
-                    self.max_dam_rail = json.load(f)
-                self.max_dam_rail["rail"] = self.max_dam_rail.pop("maximum_damage")
+            if severity_column is None:
+                severity_column = df["severity"]
 
-                # Load vulnerability curves for rail
-                self.rail_curve = pd.read_parquet(
-                    self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
-                )
-                self.rail_curve.rename(columns={"damage_ratio": "rail"}, inplace=True)
-            else:
-                self.max_dam_rail = None
-                self.rail_curve = None
+            df = df.rename(columns={"damage_ratio": road_type})
 
-            # Process land use data
-            with open(
-                model.files["dict"][
-                    "damage_parameters/flood/land_use/forest/maximum_damage"
-                ],
-                "r",
-            ) as f:
-                self.max_dam_forest = json.load(f)
-            self.max_dam_forest["0"] = self.max_dam_forest.pop("maximum_damage")
+            self.road_curves.append(df[[road_type]])
+        self.road_curves = pd.concat([severity_column] + self.road_curves, axis=1)
 
-            with open(
-                model.files["dict"][
-                    "damage_parameters/flood/land_use/agriculture/maximum_damage"
-                ],
-                "r",
-            ) as f:
-                self.max_dam_agriculture = json.load(f)
-            self.max_dam_agriculture["1"] = self.max_dam_agriculture.pop(
-                "maximum_damage"
-            )
+        self.forest_curve = pd.read_parquet(
+            self.model.files["table"]["damage_parameters/flood/land_use/forest/curve"]
+        )
+        self.forest_curve.rename(columns={"damage_ratio": "0"}, inplace=True)
 
-            self.max_dam_landuse = {**self.max_dam_forest, **self.max_dam_agriculture}
-            self.max_dam_landuse = pd.DataFrame.from_dict(
-                self.max_dam_landuse, orient="index", columns=["maximum_damage"]
-            )
-            self.max_dam_landuse["landuse"] = ["0", "1"]
-            self.max_dam_landuse = self.max_dam_landuse[["landuse", "maximum_damage"]]
+        self.agriculture_curve = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/land_use/agriculture/curve"
+            ]
+        )
+        self.agriculture_curve.rename(columns={"damage_ratio": "1"}, inplace=True)
 
-            # Load vulnerability curves for land use
-            self.forest_curve = pd.read_parquet(
-                self.model.files["table"][
-                    "damage_parameters/flood/land_use/forest/curve"
-                ]
-            )
-            self.forest_curve.rename(columns={"damage_ratio": "0"}, inplace=True)
+        self.curves_landuse = pd.merge(
+            self.forest_curve, self.agriculture_curve, on="severity"
+        )
 
-            self.agriculture_curve = pd.read_parquet(
-                self.model.files["table"][
-                    "damage_parameters/flood/land_use/agriculture/curve"
-                ]
-            )
-            self.agriculture_curve.rename(columns={"damage_ratio": "1"}, inplace=True)
+        self.buildings_structure_curve = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/structure/curve"
+            ]
+        )
+        self.buildings_structure_curve.rename(
+            columns={"damage_ratio": "building"}, inplace=True
+        )
 
-            self.curves_landuse = pd.merge(
-                self.forest_curve, self.agriculture_curve, on="severity"
-            )
+        self.buildings_content_curve = pd.read_parquet(
+            self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
+        )
+        self.buildings_content_curve.rename(
+            columns={"damage_ratio": "building"}, inplace=True
+        )
+
+        self.rail_curve = pd.read_parquet(
+            self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
+        )
+        self.rail_curve.rename(columns={"damage_ratio": "rail"}, inplace=True)
 
         super().__init__()
 
@@ -276,7 +282,7 @@ class Households(AgentBaseClass):
             flood_map = join(simulation_root, f"hmax RP {int(return_period)}.tif")
         else:
             flood_map = join(simulation_root, "hmax.tif")
-        print(f"Using this flood map: {flood_map}")
+        # print(f"using this flood map: {flood_map}")
 
         # Initialize total damages
         total_flood_damages = 0

@@ -470,6 +470,7 @@ class GEBModel(GridModel):
         crop_prices,
         project_past_until_year=False,
         project_future_until_year=False,
+        translate_crop_names=None,
     ):
         """
         Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
@@ -517,26 +518,32 @@ class GEBModel(GridModel):
             crop_data["ISO3"] = crop_data["Area Code (M49)"].map(M49_to_ISO3)
             crop_data = crop_data.drop(columns=["Area Code (M49)"])
 
-            assert not crop_data["ISO3"].isna().any(), "Missing ISO3 codes"
-
             crop_data["crop"] = crop_data["crop"].str.lower()
 
-            data = {}
+            assert not crop_data["ISO3"].isna().any(), "Missing ISO3 codes"
 
             all_years = crop_data["year"].unique()
+            all_years.sort()
             all_crops = crop_data["crop"].unique()
 
-            GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions")
+            GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions_37")
             GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
                 GLOBIOM_NAME_TO_ISO3
             )
             assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
-            # Setup dataFrame for further data corrections
-            for _, region in self.geoms["areamaps/regions"].iterrows():
-                region_id = str(region["region_id"])
+            ISO3_codes_region = self.geoms["areamaps/regions"]["ISO3"].unique()
+            GLOBIOM_regions_region = GLOBIOM_regions[
+                GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
+            ]["Region37"].unique()
+            ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
+                GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
+            ]["ISO3"]
 
-                region_crop_data = crop_data[crop_data["ISO3"] == region["ISO3"]]
+            # Setup dataFrame for further data corrections
+            donor_data = {}
+            for ISO3 in ISO3_codes_GLOBIOM_region:
+                region_crop_data = crop_data[crop_data["ISO3"] == ISO3]
                 region_pivot = region_crop_data.pivot_table(
                     index="year",
                     columns="crop",
@@ -544,20 +551,17 @@ class GEBModel(GridModel):
                     aggfunc="first",
                 ).reindex(index=all_years, columns=all_crops)
 
-                region_pivot["ISO3"] = region["ISO3"]
+                region_pivot["ISO3"] = ISO3
                 # Store pivoted data in dictionary with region_id as key
-                data[region_id] = region_pivot
-
-            # Assert non of the dataframes are empty (this will result in missing regions)
-            assert not any([data[region_id].empty for region_id in data])
+                donor_data[ISO3] = region_pivot
 
             # Concatenate all regional data into a single DataFrame with MultiIndex
-            data = pd.concat(data, names=["region_id", "year"])
+            donor_data = pd.concat(donor_data, names=["ISO3", "year"])
 
             # Drop crops with no data at all for these regions
-            data = data.dropna(axis=1, how="all")
+            donor_data = donor_data.dropna(axis=1, how="all")
 
-            total_years = data.index.get_level_values("year").unique()
+            total_years = donor_data.index.get_level_values("year").unique()
 
             if project_past_until_year:
                 assert (
@@ -569,14 +573,46 @@ class GEBModel(GridModel):
                 ), f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
 
             # Filter out columns that contain the word 'meat'
-            data = data[
-                [column for column in data.columns if "meat" not in column.lower()]
+            donor_data = donor_data[
+                [
+                    column
+                    for column in donor_data.columns
+                    if "meat" not in column.lower()
+                ]
             ]
 
-            data = self.adjust_crops_for_countries(data)
+            data = self.donate_and_receive_crop_prices(
+                donor_data, self.geoms["areamaps/regions"], GLOBIOM_regions
+            )
 
-            prices_plus_changes = self.determine_price_variability(data)
-            data = self.inter_and_extrapolate_prices(prices_plus_changes)
+            prices_plus_crop_price_inflation = self.determine_price_variability(data)
+
+            # combine and rename crops
+            all_crop_names_model = [
+                d["name"] for d in self.dict["crops/crop_data"]["data"].values()
+            ]
+            for crop_name in all_crop_names_model:
+                if crop_name in translate_crop_names:
+                    sub_crops = [
+                        crop
+                        for crop in translate_crop_names[crop_name]
+                        if crop in data.columns
+                    ]
+                    if sub_crops:
+                        data[crop_name] = data[sub_crops].mean(axis=1, skipna=True)
+                    else:
+                        data[crop_name] = np.nan
+                        self.logger.warning(
+                            f"No crop price data available for crop {crop_name}"
+                        )
+                else:
+                    if crop_name not in data.columns:
+                        data[crop_name] = np.nan
+                        self.logger.warning(
+                            f"No crop price data available for crop {crop_name}"
+                        )
+
+            data = self.inter_and_extrapolate_prices(prices_plus_crop_price_inflation)
 
             if (
                 project_past_until_year is not None
@@ -602,7 +638,7 @@ class GEBModel(GridModel):
 
             for _, region in self.geoms["areamaps/regions"].iterrows():
                 region_dict = {}
-                region_id = str(region["region_id"])
+                region_id = region["region_id"]
                 region_data = data.loc[region_id]
 
                 # Ensuring all crops are present according to the crop_data keys
@@ -618,7 +654,7 @@ class GEBModel(GridModel):
                         # Add NaN entries for the entire time period if crop is not present in the region data
                         region_dict[str(crop_id)] = [np.nan] * len(region_data)
 
-                formatted_data["data"][region_id] = region_dict
+                formatted_data["data"][str(region_id)] = region_dict
 
             data = formatted_data.copy()
 
@@ -668,7 +704,9 @@ class GEBModel(GridModel):
 
         return data
 
-    def adjust_crops_for_countries(self, data):
+    def donate_and_receive_crop_prices(
+        self, donor_data, recipient_regions, GLOBIOM_regions
+    ):
         """
         If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
         this gives issues. This function adjusts crop data for those countries by filling in missing values using data from nearby regions
@@ -697,89 +735,63 @@ class GEBModel(GridModel):
         if "economics/ppp_conversion_rates" not in self.dict:
             raise ValueError("Please run setup_economic_data first")
 
-        ppp_conversion_rate = self.dict["economics/ppp_conversion_rates"]
-        columns_with_all_nans_by_country = {}
-
         # create a copy of the data to avoid using data that was adjusted in this function
-        data_out = data.copy()
+        data_out = None
 
-        for country in data["ISO3"].unique():
+        for _, region in recipient_regions.iterrows():
+            ISO3 = region["ISO3"]
             # Filter the data for the current country
-            country_data = data[data["ISO3"] == country]
+            country_data = donor_data[donor_data["ISO3"] == ISO3]
 
-            # Group by 'region_id' and check each column for NaN values across all years within the region
-            columns_all_nans_by_region = country_data.groupby("region_id").apply(
-                lambda x: x.isna().all()
-            )
+            GLOBIOM_region = GLOBIOM_regions.loc[
+                GLOBIOM_regions["ISO3"] == ISO3, "Region37"
+            ].item()
+            GLOBIOM_region_countries = GLOBIOM_regions.loc[
+                GLOBIOM_regions["Region37"] == GLOBIOM_region, "ISO3"
+            ]
 
-            # Check for columns where all values are NaN across any region
-            columns_with_missing_values = columns_all_nans_by_region.any(axis=0)
+            for column in country_data.columns:
+                if country_data[column].isna().all():
+                    donor_data_region = donor_data.loc[
+                        donor_data["ISO3"].isin(GLOBIOM_region_countries), column
+                    ]
 
-            # Store the result in the dictionary
-            columns_with_all_nans_by_country[country] = columns_with_missing_values[
-                columns_with_missing_values
-            ].index.tolist()
+                    # get the country with the least non-NaN values
+                    non_na_values = donor_data_region.groupby("ISO3").count()
+                    assert (
+                        non_na_values.max() > 0
+                    ), "No data available for this crop in any country in the region"
 
-        for (
-            country,
-            columns_with_missing_values,
-        ) in columns_with_all_nans_by_country.items():
-            for crop in columns_with_missing_values:
-                columns_all_nans_by_region = data.groupby("region_id").apply(
-                    lambda x: x.isna().all()
-                )
+                    donor_country = non_na_values.idxmax()
+                    donor_data_country = donor_data_region[donor_country]
 
-                # Find a region with available data for this column
-                regions_with_data = columns_all_nans_by_region[
-                    ~columns_all_nans_by_region[crop]
-                ].index
-
-                if not regions_with_data.empty:
-                    # Select which region you want to copy data from. TO DO: Change to closest / most similar country
-                    if len(regions_with_data) > 1:
-                        region_with_data = regions_with_data[0]
-                        self.logger.warning(
-                            f"Multiple regions with data found for {crop}, taking the first region"
-                        )
+                    new_data = pd.DataFrame(
+                        donor_data_country.values,
+                        index=pd.MultiIndex.from_product(
+                            [[region["region_id"]], donor_data_country.index],
+                            names=["region_id", "year"],
+                        ),
+                        columns=[donor_data_country.name],
+                    )
+                    if data_out is None:
+                        data_out = new_data
                     else:
-                        region_with_data = regions_with_data[0]
-
-                    region_crop_data_to_copy = data.loc[region_with_data][crop]
-
-                    years_to_convert = region_crop_data_to_copy.index.values
-                    full_years_array = np.array(ppp_conversion_rate["time"], dtype=str)
-                    years_index = np.isin(full_years_array, years_to_convert)
-                    source_conversion_rates = np.array(
-                        ppp_conversion_rate["data"][region_with_data],
-                        dtype=float,
-                    )[years_index]
-
-                    # Find regions that need this data
-                    regions_needing_data = columns_all_nans_by_region[
-                        columns_all_nans_by_region[crop]
-                    ].index
-
-                    # Copy data from the region with data to regions without data
-                    for region in regions_needing_data:
-                        values_to_convert = region_crop_data_to_copy.values.copy()
-
-                        target_conversion_rates = np.array(
-                            ppp_conversion_rate["data"][region], dtype=float
-                        )[years_index]
-
-                        converted_values = self.convert_price_using_ppp(
-                            values_to_convert,
-                            source_conversion_rates,
-                            target_conversion_rates,
-                        )
-
-                        new_data = pd.DataFrame(
-                            {crop: converted_values},
-                            index=pd.MultiIndex.from_product(
-                                [[region], years_to_convert], names=data_out.index.names
-                            ),
-                        )
-
+                        data_out = data_out.combine_first(new_data)
+                else:
+                    new_data = pd.DataFrame(
+                        country_data[column].values,
+                        index=pd.MultiIndex.from_product(
+                            [
+                                [region["region_id"]],
+                                country_data.droplevel(level=0).index,
+                            ],
+                            names=["region_id", "year"],
+                        ),
+                        columns=[column],
+                    )
+                    if data_out is None:
+                        data_out = new_data
+                    else:
                         data_out = data_out.combine_first(new_data)
 
         data_out = data_out.drop(columns=["ISO3"])
@@ -816,17 +828,17 @@ class GEBModel(GridModel):
         DataFrame
             The updated DataFrame with a new column 'changes' that contains the average price changes for each region.
         """
-        costs["changes"] = np.nan
+        costs["_crop_price_inflation"] = np.nan
         # Determine the average changes of price of all crops in the region and add it to the data
         for _, region in self.geoms["areamaps/regions"].iterrows():
-            region_id = str(region["region_id"])
+            region_id = region["region_id"]
             region_data = costs.loc[region_id]
             changes = np.nanmean(
                 region_data[1:].to_numpy() / region_data[:-1].to_numpy(), axis=1
             )
             changes = np.insert(changes, 0, np.nan)
 
-            costs.at[region_id, "changes"] = changes
+            costs.at[region_id, "_crop_price_inflation"] = changes
 
         return costs
 
@@ -862,105 +874,28 @@ class GEBModel(GridModel):
             for idx, crop in self.dict["crops/crop_data"]["data"].items()
         ]
 
-        # Additional potential crops that fall under the others annual category
-        other_perennial_crops = {
-            "apples",
-            "apricots",
-            "asparagus",
-            "blueberries",
-            "cherries",
-            "currants",
-            "gooseberries",
-            "hop cones",
-            "leeks and other alliaceous vegetables",
-            "other berries and fruits of the genus vaccinium n.e.c.",
-            "other stone fruits",
-            "peaches and nectarines",
-            "pears",
-            "plums and sloes",
-            "raspberries",
-            "sour cherries",
-            "walnuts, in shell",
-            "artichokes",
-            "kiwi fruit",
-            "quinces",
-        }
-
-        other_annual_crops = {
-            "cabbages",
-            "carrots and turnips",
-            "cauliflowers and broccoli",
-            "cucumbers and gherkins",
-            "lettuce and chicory",
-            "lupins",
-            "mushrooms and truffles",
-            "mustard seed",
-            "onions and shallots, dry (excluding dehydrated)",
-            "onions and shallots, green",
-            "other beans, green",
-            "other fruits, n.e.c.",
-            "other vegetables, fresh n.e.c.",
-            "peas, green",
-            "pumpkins, squash and gourds",
-            "shorn wool, greasy, including fleece-washed shorn wool",
-            "spinach",
-            "strawberries",
-            "tomatoes",
-            "triticale",
-            "unmanufactured tobacco",
-            "vetches",
-            "buckwheat",
-            "cantaloupes and other melons",
-            "chillies and peppers, green (capsicum spp. and pimenta spp.)",
-            "green garlic",
-            "linseed",
-            "peas, dry",
-        }
-
-        def process_other_crops(data, other_crops, crop_names):
-            other_data = data[
-                [
-                    col
-                    for col in data.columns
-                    if col.lower() in other_crops or col == "changes"
-                ]
-            ]
-            other_data = other_data.drop(columns=["changes"])
-
-            mean_other = other_data.mean(axis=1, skipna=True)
-
-            return mean_other
-
-        # Set the perennial and other annual crops
-        others_perennial_column = process_other_crops(
-            data, other_perennial_crops, crop_names
-        )
-        others_annual_column = process_other_crops(data, other_annual_crops, crop_names)
-
         # Filter the columns of the data DataFrame
         data = data[
             [
                 col
                 for col in data.columns
-                if col.lower() in crop_names or col == "changes"
+                if col.lower() in crop_names or col == "_crop_price_inflation"
             ]
         ]
 
-        # Set the perennial and other annual crops
-        data["others perennial"] = others_perennial_column
-        data["others annual"] = others_annual_column
-
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in self.geoms["areamaps/regions"].iterrows():
-            region_id = str(region["region_id"])
+            region_id = region["region_id"]
             region_data = data.loc[region_id]
 
             n = len(region_data)
             for crop in region_data.columns:
-                if crop == "changes":
+                if crop == "_crop_price_inflation":
                     continue
                 crop_data = region_data[crop].to_numpy()
-                changes_data = region_data["changes"].to_numpy()
+                if np.isnan(crop_data).all():
+                    continue
+                changes_data = region_data["_crop_price_inflation"].to_numpy()
                 k = -1
                 while np.isnan(crop_data[k]):
                     k -= 1
@@ -977,21 +912,20 @@ class GEBModel(GridModel):
                         while np.isnan(crop_data[k]):
                             k += 1
                         empty_size = k - j
-                        step_changes = changes_data[j : k + 1]
-                        total_changes = np.prod(step_changes)
-                        real_changes = crop_data[k] / crop_data[j - 1]
-                        scaled_changes = (
-                            step_changes
-                            * (real_changes ** (1 / empty_size))
-                            / (total_changes ** (1 / empty_size))
+                        step_crop_price_inflation = changes_data[j : k + 1]
+                        total_crop_price_inflation = np.prod(step_crop_price_inflation)
+                        real_crop_price_inflation = crop_data[k] / crop_data[j - 1]
+                        scaled_crop_price_inflation = (
+                            step_crop_price_inflation
+                            * (real_crop_price_inflation ** (1 / empty_size))
+                            / (total_crop_price_inflation ** (1 / empty_size))
                         )
-                        for i, change in zip(range(j, k), scaled_changes):
+                        for i, change in zip(range(j, k), scaled_crop_price_inflation):
                             crop_data[i] = crop_data[i - 1] * change
                 data.loc[region_id, crop] = crop_data
 
         # assert no nan values in costs
-        data = data.drop(columns=["changes"])
-        assert not data.isnull().values.any()
+        data = data.drop(columns=["_crop_price_inflation"])
         return data
 
     def process_additional_years(
@@ -1097,6 +1031,7 @@ class GEBModel(GridModel):
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
         project_future_until_year: Optional[int] = False,
         project_past_until_year: Optional[int] = False,
+        translate_crop_names: Optional[Dict[str, str]] = None,
     ):
         """
         Sets up the crop prices for the model.
@@ -1113,6 +1048,7 @@ class GEBModel(GridModel):
             crop_prices=crop_prices,
             project_future_until_year=project_future_until_year,
             project_past_until_year=project_past_until_year,
+            translate_crop_names=translate_crop_names,
         )
         self.set_dict(crop_prices, name="crops/crop_prices")
         self.set_dict(crop_prices, name="crops/cultivation_costs")
@@ -3852,14 +3788,9 @@ class GEBModel(GridModel):
         # Retrieve the inflation rates data
         inflation_rates = self.dict["economics/inflation_rates"]
         ppp_conversion_rates = self.dict["economics/ppp_conversion_rates"]
-        lcu_per_usd_conversion_rates = self.dict[
-            "economics/lcu_per_usd_conversion_rates"
-        ]
 
         full_years_array_ppp = np.array(ppp_conversion_rates["time"], dtype=str)
         years_index_ppp = np.isin(full_years_array_ppp, str(reference_year))
-        full_years_array_lcu = np.array(lcu_per_usd_conversion_rates["time"], dtype=str)
-        years_index_lcu = np.isin(full_years_array_lcu, str(reference_year))
         source_conversion_rates = 1  # US ppp is 1
 
         electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
@@ -3883,32 +3814,15 @@ class GEBModel(GridModel):
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
 
-                if price_type == "electricity_cost":
-                    country_price = initial_price.loc[
-                        initial_price["ISO3"] == region["ISO3"], "Rate"
-                    ].values[0]
+                target_conversion_rates = np.array(
+                    ppp_conversion_rates["data"][region_id], dtype=float
+                )[years_index_ppp]
 
-                    target_conversion_rates = np.array(
-                        lcu_per_usd_conversion_rates["data"][region_id], dtype=float
-                    )[years_index_lcu]
-
-                    # Conversion is same as with ppp
-                    prices.loc[reference_year] = self.convert_price_using_ppp(
-                        country_price,
-                        source_conversion_rates,
-                        target_conversion_rates,
-                    )
-
-                else:
-                    target_conversion_rates = np.array(
-                        ppp_conversion_rates["data"][region_id], dtype=float
-                    )[years_index_ppp]
-
-                    prices.loc[reference_year] = self.convert_price_using_ppp(
-                        initial_price,
-                        source_conversion_rates,
-                        target_conversion_rates,
-                    )
+                prices.loc[reference_year] = self.convert_price_using_ppp(
+                    initial_price,
+                    source_conversion_rates,
+                    target_conversion_rates,
+                )
 
                 # Forward calculation from the reference year
                 for year in range(reference_year + 1, end_year + 1):
