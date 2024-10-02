@@ -6,7 +6,7 @@ import copy
 import calendar
 from typing import Any, Dict, Tuple, Union
 
-from scipy.stats import genextreme
+from scipy.stats import genextreme, norm
 from scipy.optimize import curve_fit
 
 # from gplearn.genetic import SymbolicRegressor
@@ -810,7 +810,7 @@ class CropFarmers(AgentBaseClass):
         self.why_20 = load_economic_data(self.model.files["dict"]["economics/why_20"])
         self.why_30 = load_economic_data(self.model.files["dict"]["economics/why_30"])
 
-        self.p_droughts = np.array([50, 25, 10, 5, 2, 1])
+        self.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1])
 
         # Set water costs
         self.water_costs_m3_channel = 0.20
@@ -2075,6 +2075,7 @@ class CropFarmers(AgentBaseClass):
             harvesting_farmers_mask[harvesting_farmers] = True
 
             self.save_yearly_profits(self.profit_farmer, potential_profit_farmer)
+            self.save_harvest_spei(harvesting_farmers)
             self.drought_risk_perception(harvesting_farmers, total_crop_age)
 
             ## After updating the drought risk perception, set the previous month for the next timestep as the current for this timestep.
@@ -2339,7 +2340,7 @@ class CropFarmers(AgentBaseClass):
             + self.groundwater_abstraction_m3_by_farmer
         )
 
-    def cumulative_SPEI(self) -> None:
+    def save_harvest_spei(self, harvesting_farmers) -> None:
         """
         Update the monthly Standardized Precipitation Evapotranspiration Index (SPEI) array by shifting past records and
         adding the SPEI for the current month.
@@ -2347,59 +2348,48 @@ class CropFarmers(AgentBaseClass):
         Note:
             This method updates the `monthly_SPEI` attribute in place.
         """
-
-        # Sample the SPEI value for the current month from `SPEI_map` based on the given locations.
-        # The sampling is done for the first day of the current month.
-        assert self.model.current_time.day == 1
-
-        if self.model.current_time.month == 1:
-            # calculate the SPEI probability using GEV parameters
-            SPEI_probability = genextreme.sf(
-                self.cumulative_SPEI_during_growing_season,
-                self.GEV_parameters[:, 0],
-                self.GEV_parameters[:, 1],
-                self.GEV_parameters[:, 2],
-            )
-
-            # abs_spei_values = np.abs(self.cumulative_SPEI_during_growing_season)
-            # SPEI_probability_norm = stats.norm.cdf(abs_spei_values)
-
-            shift_and_update(self.yearly_SPEI_probability, SPEI_probability)
-
-            # Reset the cumulative SPEI array at the beginning of the year
-            self.cumulative_SPEI_during_growing_season.fill(0)
-            self.cumulative_SPEI_count_during_growing_season.fill(0)
-
-        fields_with_growing_crops = self.var.crop_map[self.var.land_owners != -1] != -1
-        farmers_with_growing_crops = (
-            np.bincount(
-                self.var.land_owners[self.var.land_owners != -1],
-                weights=fields_with_growing_crops,
-            )
-            > 0
-        )
-        if farmers_with_growing_crops.sum() == 0:
-            return
-
         current_SPEI_per_farmer = sample_from_map(
             array=self.model.data.grid.spei_uncompressed,
-            coords=self.locations[farmers_with_growing_crops].data,
+            coords=self.locations[harvesting_farmers].data,
             gt=self.model.data.grid.gt,
         )
 
         full_size_SPEI_per_farmer = np.zeros_like(
             self.cumulative_SPEI_during_growing_season
         )
-        full_size_SPEI_per_farmer[farmers_with_growing_crops] = (
-            current_SPEI_per_farmer * -1
-        )
+        full_size_SPEI_per_farmer[harvesting_farmers] = current_SPEI_per_farmer
 
         cumulative_mean(
             mean=self.cumulative_SPEI_during_growing_season,
             counter=self.cumulative_SPEI_count_during_growing_season,
             update=full_size_SPEI_per_farmer,
-            mask=farmers_with_growing_crops,
+            mask=harvesting_farmers,
         )
+        print(
+            "season SPEI",
+            np.mean(full_size_SPEI_per_farmer[harvesting_farmers]),
+        )
+
+    def save_yearly_spei(self):
+        assert self.model.current_time.month == 1
+
+        # calculate the SPEI probability using GEV parameters
+        SPEI_probability = genextreme.sf(
+            self.cumulative_SPEI_during_growing_season,
+            self.GEV_parameters[:, 0],
+            self.GEV_parameters[:, 1],
+            self.GEV_parameters[:, 2],
+        )
+
+        # SPEI_probability_norm = norm.cdf(self.cumulative_SPEI_during_growing_season)
+
+        print("Yearly probability", np.mean(1 - SPEI_probability))
+
+        shift_and_update(self.yearly_SPEI_probability, (1 - SPEI_probability))
+
+        # Reset the cumulative SPEI array at the beginning of the year
+        self.cumulative_SPEI_during_growing_season.fill(0)
+        self.cumulative_SPEI_count_during_growing_season.fill(0)
 
     def save_yearly_profits(
         self,
@@ -2445,26 +2435,252 @@ class CropFarmers(AgentBaseClass):
         self.yearly_profits[:, 0] += profit / cum_inflation
         self.yearly_potential_profits[:, 0] += potential_profit / cum_inflation
 
-    def calculate_yield_spei_relation_test(self):
+    def calculate_yield_spei_relation_test_solo(self):
         import os
         import matplotlib
 
         matplotlib.use("Agg")  # Use the 'Agg' backend for non-interactive plotting
         import matplotlib.pyplot as plt
 
-        # Create unique groups
-        crop_elevation_group = self.create_unique_groups(4)
+        # Number of agents
+        n_agents = self.yearly_yield_ratio.shape[0]
+
+        # Define regression models
+        def linear_model(X, a, b):
+            return a * X + b
+
+        def exponential_model(X, a, b):
+            return a * np.exp(b * X)
+
+        def logarithmic_model(X, a, b):
+            return a * np.log(X) + b
+
+        def quadratic_model(X, a, b, c):
+            return a * X**2 + b * X + c
+
+        def power_model(X, a, b):
+            return a * X**b
+
+        # Initialize dictionaries for coefficients and R² values
+        model_names = ["linear", "exponential", "logarithmic", "quadratic", "power"]
+        r_squared_dict = {model: np.zeros(n_agents) for model in model_names}
+        coefficients_dict = {model: [] for model in model_names}
+
+        # Create a folder to save the plots
+        output_folder = "plots"
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
+        # For each agent, perform regression with different models
+        for agent_idx in range(n_agents):
+            # Get data for the agent
+            y_data = self.yearly_yield_ratio[agent_idx, :]  # shape (n_years,)
+            X_data = self.yearly_SPEI_probability[agent_idx, :]  # shape (n_years,)
+
+            # Filter out invalid values
+            valid_mask = (
+                (~np.isnan(X_data)) & (~np.isnan(y_data)) & (X_data > 0) & (y_data != 0)
+            )
+            X_valid = X_data[valid_mask]
+            y_valid = y_data[valid_mask]
+
+            if len(X_valid) >= 2:
+                # Prepare data
+                X_log = np.log10(X_valid)
+
+                # Model 1: Linear in log-transformed X
+                try:
+                    popt, _ = curve_fit(linear_model, X_log, y_valid, maxfev=10000)
+                    a, b = popt
+                    y_pred = linear_model(X_log, a, b)
+                    ss_res = np.sum((y_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["linear"][agent_idx] = r_squared
+                    coefficients_dict["linear"].append((a, b))
+                except RuntimeError:
+                    r_squared_dict["linear"][agent_idx] = np.nan
+                    coefficients_dict["linear"].append((np.nan, np.nan))
+
+                # Model 2: Exponential
+                try:
+                    popt, _ = curve_fit(
+                        exponential_model, X_valid, y_valid, maxfev=10000
+                    )
+                    y_pred = exponential_model(X_valid, *popt)
+                    ss_res = np.sum((y_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["exponential"][agent_idx] = r_squared
+                    coefficients_dict["exponential"].append(popt)
+                except RuntimeError:
+                    r_squared_dict["exponential"][agent_idx] = np.nan
+                    coefficients_dict["exponential"].append((np.nan, np.nan))
+
+                # Model 3: Logarithmic (ensure X > 0)
+                try:
+                    popt, _ = curve_fit(
+                        logarithmic_model, X_valid, y_valid, maxfev=10000
+                    )
+                    y_pred = logarithmic_model(X_valid, *popt)
+                    ss_res = np.sum((y_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["logarithmic"][agent_idx] = r_squared
+                    coefficients_dict["logarithmic"].append(popt)
+                except RuntimeError:
+                    r_squared_dict["logarithmic"][agent_idx] = np.nan
+                    coefficients_dict["logarithmic"].append((np.nan, np.nan))
+
+                # Model 4: Quadratic
+                try:
+                    popt, _ = curve_fit(quadratic_model, X_valid, y_valid, maxfev=10000)
+                    y_pred = quadratic_model(X_valid, *popt)
+                    ss_res = np.sum((y_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["quadratic"][agent_idx] = r_squared
+                    coefficients_dict["quadratic"].append(popt)
+                except RuntimeError:
+                    r_squared_dict["quadratic"][agent_idx] = np.nan
+                    coefficients_dict["quadratic"].append((np.nan, np.nan))
+
+                # Model 5: Power
+                try:
+                    popt, _ = curve_fit(power_model, X_valid, y_valid, maxfev=10000)
+                    y_pred = power_model(X_valid, *popt)
+                    ss_res = np.sum((y_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["power"][agent_idx] = r_squared
+                    coefficients_dict["power"].append(popt)
+                except RuntimeError:
+                    r_squared_dict["power"][agent_idx] = np.nan
+                    coefficients_dict["power"].append((np.nan, np.nan))
+            else:
+                # Not enough data points
+                for model in model_names:
+                    r_squared_dict[model][agent_idx] = np.nan
+                    coefficients_dict[model].append(None)
+
+            # Plotting code for this agent
+
+            # Create a new figure
+            plt.figure(figsize=(10, 6))
+
+            # Plot the data points
+            plt.scatter(X_valid, y_valid, label="Data", color="black")
+
+            # Generate x values for plotting fitted curves
+            x_min = np.min(X_valid)
+            x_max = np.max(X_valid)
+            x_plot = np.linspace(x_min, x_max, 100)
+
+            # Plot each fitted model with R² in the label
+            for model in model_names:
+                coeffs = coefficients_dict[model][agent_idx]
+                r_squared = r_squared_dict[model][agent_idx]
+
+                if (
+                    coeffs is not None
+                    and not any([np.isnan(c) for c in np.atleast_1d(coeffs)])
+                    and not np.isnan(r_squared)
+                ):
+                    # Depending on the model, compute y values for plotting
+                    if model == "linear":
+                        a, b = coeffs
+                        x_plot_log = np.log10(x_plot[x_plot > 0])
+                        if len(x_plot_log) > 0:
+                            y_plot = linear_model(x_plot_log, a, b)
+                            plt.plot(
+                                x_plot[x_plot > 0],
+                                y_plot,
+                                label=f"{model} (R²={r_squared:.3f})",
+                                linewidth=2,
+                            )
+                    elif model == "exponential":
+                        y_plot = exponential_model(x_plot, *coeffs)
+                        plt.plot(
+                            x_plot,
+                            y_plot,
+                            label=f"{model} (R²={r_squared:.3f})",
+                            linewidth=2,
+                        )
+                    elif model == "logarithmic":
+                        x_plot_positive = x_plot[x_plot > 0]
+                        if len(x_plot_positive) > 0:
+                            y_plot = logarithmic_model(x_plot_positive, *coeffs)
+                            plt.plot(
+                                x_plot_positive,
+                                y_plot,
+                                label=f"{model} (R²={r_squared:.3f})",
+                                linewidth=2,
+                            )
+                    elif model == "quadratic":
+                        y_plot = quadratic_model(x_plot, *coeffs)
+                        plt.plot(
+                            x_plot,
+                            y_plot,
+                            label=f"{model} (R²={r_squared:.3f})",
+                            linewidth=2,
+                        )
+                    elif model == "power":
+                        x_plot_positive = x_plot[x_plot > 0]
+                        if len(x_plot_positive) > 0:
+                            y_plot = power_model(x_plot_positive, *coeffs)
+                            plt.plot(
+                                x_plot_positive,
+                                y_plot,
+                                label=f"{model} (R²={r_squared:.3f})",
+                                linewidth=2,
+                            )
+                else:
+                    continue  # Skip models with invalid coefficients or R²
+
+            # Add labels and legend
+            plt.xlabel("SPEI Probability")
+            plt.ylabel("Yield Ratio")
+            plt.title(
+                f"Agent {agent_idx}, irr class {self.farmer_class[agent_idx]}, crop {self.crop_calendar[agent_idx, 0, 0]} "
+            )
+            plt.legend()
+            plt.grid(True)
+
+            # Save the plot to a file
+            filename = os.path.join(output_folder, f"agent_{agent_idx}.png")
+            plt.savefig(filename)
+            plt.close()
+
+        # Compute median R² for each model
+        for model in model_names:
+            valid_r2 = r_squared_dict[model][~np.isnan(r_squared_dict[model])]
+            median_r2 = np.median(valid_r2) if len(valid_r2) > 0 else np.nan
+            print(f"Median R² for {model}: {median_r2}")
+
+    def calculate_yield_spei_relation_test_group(self):
+        import os
+        import matplotlib
+
+        matplotlib.use("Agg")  # Use the 'Agg' backend for non-interactive plotting
+        import matplotlib.pyplot as plt
+        from scipy.optimize import curve_fit
+        import numpy as np
+
+        # Create unique groups based on agent properties
+        crop_elevation_group = self.create_unique_groups()
         unique_crop_combinations, group_indices = np.unique(
             crop_elevation_group, axis=0, return_inverse=True
         )
 
-        # Mask out empty columns
-        mask_columns = np.any(self.yearly_yield_ratio != 0, axis=0) & np.any(
-            self.yearly_SPEI_probability != 0, axis=0
+        # Mask out empty rows (agents) where data is zero or NaN
+        mask_agents = np.any(self.yearly_yield_ratio != 0, axis=1) & np.any(
+            self.yearly_SPEI_probability != 0, axis=1
         )
 
-        masked_yearly_yield_ratio = self.yearly_yield_ratio[:, mask_columns]
-        masked_SPEI_probability = self.yearly_SPEI_probability[:, mask_columns]
+        # Apply the mask to data and group indices
+        masked_yearly_yield_ratio = self.yearly_yield_ratio[mask_agents, :]
+        masked_SPEI_probability = self.yearly_SPEI_probability[mask_agents, :]
+        group_indices = group_indices[mask_agents]
 
         # Number of groups
         n_groups = unique_crop_combinations.shape[0]
@@ -2486,15 +2702,9 @@ class CropFarmers(AgentBaseClass):
             return a * X**b
 
         # Initialize dictionaries for coefficients and R² values
-        model_names = [
-            "linear",
-            "exponential",
-            "logarithmic",
-            "quadratic",
-            "power",
-        ]
-        r_squared_dict = {model: np.zeros(n_groups) for model in model_names}
-        coefficients_dict = {model: [] for model in model_names}
+        model_names = ["linear", "exponential", "logarithmic", "quadratic", "power"]
+        r_squared_dict = {model: np.full(n_groups, np.nan) for model in model_names}
+        coefficients_dict = {model: [None] * n_groups for model in model_names}
 
         # Create a folder to save the plots
         output_folder = "plots"
@@ -2503,47 +2713,51 @@ class CropFarmers(AgentBaseClass):
 
         # For each group, perform regression with different models
         for group_idx in range(n_groups):
-            # Get column indices for the group
-            col_indices = np.where(group_indices == group_idx)[0]
+            # Get indices of agents in this group
+            agent_indices = np.where(group_indices == group_idx)[0]
 
-            if len(col_indices) == 0:
+            if len(agent_indices) == 0:
                 # No data for this group
-                for model in model_names:
-                    r_squared_dict[model][group_idx] = np.nan
-                    coefficients_dict[model].append(None)
                 continue
 
             # Get data for the group
             y_data = masked_yearly_yield_ratio[
-                col_indices, :
-            ]  # shape (num_years, num_cols_in_group)
-            X_data = masked_SPEI_probability[
-                col_indices, :
-            ]  # shape (num_years, num_cols_in_group)
+                agent_indices, :
+            ]  # shape (num_agents_in_group, num_years)
+            X_data = masked_SPEI_probability[agent_indices, :]  # same shape
 
-            # Compute mean over columns (axis=1)
+            # Remove values where SPEI probability is greater than 1
+            invalid_mask = X_data >= 1
+            y_data[invalid_mask] = np.nan
+            X_data[invalid_mask] = np.nan
+
+            # Compute mean over agents in the group (axis=0 corresponds to years)
             y_group = np.nanmean(y_data, axis=0)  # shape (num_years,)
             X_group = np.nanmean(X_data, axis=0)  # same shape
 
-            # Filter out invalid values
-            valid_mask = (~np.isnan(X_group)) & (~np.isnan(y_group)) & (X_group > 0)
-            X_group_valid = X_group[valid_mask]
-            y_group_valid = y_group[valid_mask]
+            # Remove any years with NaN values
+            valid_indices = (~np.isnan(y_group)) & (~np.isnan(X_group)) & (X_group > 0)
+            y_group_valid = y_group[valid_indices]
+            X_group_valid = X_group[valid_indices]
 
             if len(X_group_valid) >= 2:
                 # Prepare data
                 X_group_log = np.log10(X_group_valid)
 
                 # Model 1: Linear in log-transformed X
-                X_matrix = np.vstack([X_group_log, np.ones(len(X_group_log))]).T
-                coefficients = np.linalg.lstsq(X_matrix, y_group_valid, rcond=None)[0]
-                a, b = coefficients
-                y_pred = linear_model(X_group_log, a, b)
-                ss_res = np.sum((y_group_valid - y_pred) ** 2)
-                ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
-                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                r_squared_dict["linear"][group_idx] = r_squared
-                coefficients_dict["linear"].append((a, b))
+                try:
+                    popt, _ = curve_fit(
+                        linear_model, X_group_log, y_group_valid, maxfev=10000
+                    )
+                    a, b = popt
+                    y_pred = linear_model(X_group_log, a, b)
+                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["linear"][group_idx] = r_squared
+                    coefficients_dict["linear"][group_idx] = (a, b)
+                except (RuntimeError, ValueError):
+                    pass  # Keep NaN in R² and None in coefficients
 
                 # Model 2: Exponential
                 try:
@@ -2555,163 +2769,224 @@ class CropFarmers(AgentBaseClass):
                     ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
                     r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
                     r_squared_dict["exponential"][group_idx] = r_squared
-                    coefficients_dict["exponential"].append(popt)
-                except RuntimeError:
-                    r_squared_dict["exponential"][group_idx] = np.nan
-                    coefficients_dict["exponential"].append((np.nan, np.nan))
+                    coefficients_dict["exponential"][group_idx] = popt
+                except (RuntimeError, ValueError):
+                    pass
 
-                # Model 3: Logarithmic (ensure X > 0)
-                positive_mask = X_group_valid > 0
-                if np.sum(positive_mask) >= 2:
-                    X_positive = X_group_valid[positive_mask]
-                    y_positive = y_group_valid[positive_mask]
-                    try:
-                        popt, _ = curve_fit(
-                            logarithmic_model, X_positive, y_positive, maxfev=10000
-                        )
-                        y_pred = logarithmic_model(X_positive, *popt)
-                        ss_res = np.sum((y_positive - y_pred) ** 2)
-                        ss_tot = np.sum((y_positive - np.mean(y_positive)) ** 2)
-                        r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                        r_squared_dict["logarithmic"][group_idx] = r_squared
-                        coefficients_dict["logarithmic"].append(popt)
-                    except RuntimeError:
-                        r_squared_dict["logarithmic"][group_idx] = np.nan
-                        coefficients_dict["logarithmic"].append((np.nan, np.nan))
-                else:
-                    r_squared_dict["logarithmic"][group_idx] = np.nan
-                    coefficients_dict["logarithmic"].append((np.nan, np.nan))
+                # Model 3: Logarithmic
+                try:
+                    popt, _ = curve_fit(
+                        logarithmic_model, X_group_valid, y_group_valid, maxfev=10000
+                    )
+                    y_pred = logarithmic_model(X_group_valid, *popt)
+                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["logarithmic"][group_idx] = r_squared
+                    coefficients_dict["logarithmic"][group_idx] = popt
+                except (RuntimeError, ValueError):
+                    pass
 
                 # Model 4: Quadratic
-                X_matrix = np.vstack(
-                    [X_group_valid**2, X_group_valid, np.ones(len(X_group_valid))]
-                ).T
-                coefficients = np.linalg.lstsq(X_matrix, y_group_valid, rcond=None)[0]
-                a, b, c = coefficients
-                y_pred = quadratic_model(X_group_valid, a, b, c)
-                ss_res = np.sum((y_group_valid - y_pred) ** 2)
-                ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
-                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                r_squared_dict["quadratic"][group_idx] = r_squared
-                coefficients_dict["quadratic"].append((a, b, c))
+                try:
+                    popt, _ = curve_fit(
+                        quadratic_model, X_group_valid, y_group_valid, maxfev=10000
+                    )
+                    y_pred = quadratic_model(X_group_valid, *popt)
+                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["quadratic"][group_idx] = r_squared
+                    coefficients_dict["quadratic"][group_idx] = popt
+                except (RuntimeError, ValueError):
+                    pass
 
-                # Model 5: Power (ensure X > 0)
-                if np.sum(positive_mask) >= 2:
-                    X_positive = X_group_valid[positive_mask]
-                    y_positive = y_group_valid[positive_mask]
-                    try:
-                        popt, _ = curve_fit(
-                            power_model, X_positive, y_positive, maxfev=10000
-                        )
-                        y_pred = power_model(X_positive, *popt)
-                        ss_res = np.sum((y_positive - y_pred) ** 2)
-                        ss_tot = np.sum((y_positive - np.mean(y_positive)) ** 2)
-                        r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                        r_squared_dict["power"][group_idx] = r_squared
-                        coefficients_dict["power"].append(popt)
-                    except RuntimeError:
-                        r_squared_dict["power"][group_idx] = np.nan
-                        coefficients_dict["power"].append((np.nan, np.nan))
-                else:
-                    r_squared_dict["power"][group_idx] = np.nan
-                    coefficients_dict["power"].append((np.nan, np.nan))
+                # Model 5: Power
+                try:
+                    popt, _ = curve_fit(
+                        power_model, X_group_valid, y_group_valid, maxfev=10000
+                    )
+                    y_pred = power_model(X_group_valid, *popt)
+                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
+                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
+                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    r_squared_dict["power"][group_idx] = r_squared
+                    coefficients_dict["power"][group_idx] = popt
+                except (RuntimeError, ValueError):
+                    pass
 
-            else:
-                # Not enough data points
+                # Plotting code for this group
+                plt.figure(figsize=(10, 6))
+                plt.scatter(X_group_valid, y_group_valid, label="Data", color="black")
+
+                # Generate x values for plotting fitted curves
+                x_min = np.min(X_group_valid)
+                x_max = np.max(X_group_valid)
+                x_plot = np.linspace(x_min, x_max, 100)
+
                 for model in model_names:
-                    r_squared_dict[model][group_idx] = np.nan
-                    coefficients_dict[model].append(None)
+                    coeffs = coefficients_dict[model][group_idx]
+                    r_squared = r_squared_dict[model][group_idx]
 
-            # Plotting code for this group
-
-            # Create a new figure
-            plt.figure(figsize=(10, 6))
-
-            # Plot the data points
-            plt.scatter(X_group_valid, y_group_valid, label="Data", color="black")
-
-            # Generate x values for plotting fitted curves
-            x_min = np.min(X_group_valid)
-            x_max = np.max(X_group_valid)
-            x_plot = np.linspace(x_min, x_max, 100)
-
-            # Plot each fitted model with R² in the label
-            for model in model_names:
-                coeffs = coefficients_dict[model][group_idx]
-                r_squared = r_squared_dict[model][group_idx]
-
-                if (
-                    coeffs is not None
-                    and not any([np.isnan(c) for c in np.atleast_1d(coeffs)])
-                    and not np.isnan(r_squared)
-                ):
-                    # Depending on the model, compute y values for plotting
-                    if model == "linear":
-                        # Linear model in log-transformed X
-                        a, b = coeffs
-                        x_plot_positive = x_plot[x_plot > 0]
-                        if len(x_plot_positive) > 0:
-                            X_plot_log = np.log10(x_plot_positive)
-                            y_plot = linear_model(X_plot_log, a, b)
-                            label = f"{model} (R²={r_squared:.3f})"
-                            plt.plot(x_plot_positive, y_plot, label=label, linewidth=2)
-                    elif model == "exponential":
-                        a, b = coeffs
-                        y_plot = exponential_model(x_plot, a, b)
-                        label = f"{model} (R²={r_squared:.3f})"
-                        plt.plot(x_plot, y_plot, label=label, linewidth=2)
-                    elif model == "logarithmic":
-                        # Ensure x_plot > 0
-                        x_plot_positive = x_plot[x_plot > 0]
-                        if len(x_plot_positive) > 0:
+                    if (
+                        coeffs is not None
+                        and not any([np.isnan(c) for c in np.atleast_1d(coeffs)])
+                        and not np.isnan(r_squared)
+                    ):
+                        if model == "linear":
                             a, b = coeffs
-                            y_plot = logarithmic_model(x_plot_positive, a, b)
-                            label = f"{model} (R²={r_squared:.3f})"
-                            plt.plot(x_plot_positive, y_plot, label=label, linewidth=2)
-                    elif model == "quadratic":
-                        a, b, c = coeffs
-                        y_plot = quadratic_model(x_plot, a, b, c)
-                        label = f"{model} (R²={r_squared:.3f})"
-                        plt.plot(x_plot, y_plot, label=label, linewidth=2)
-                    elif model == "power":
-                        # Ensure x_plot > 0
-                        x_plot_positive = x_plot[x_plot > 0]
-                        if len(x_plot_positive) > 0:
-                            a, b = coeffs
-                            y_plot = power_model(x_plot_positive, a, b)
-                            label = f"{model} (R²={r_squared:.3f})"
-                            plt.plot(x_plot_positive, y_plot, label=label, linewidth=2)
-                    else:
-                        continue  # Skip unknown models
-                else:
-                    continue  # Skip models with invalid coefficients or R²
+                            x_plot_positive = x_plot[x_plot > 0]
+                            x_plot_log = np.log10(x_plot_positive)
+                            if len(x_plot_log) > 0:
+                                y_plot = linear_model(x_plot_log, a, b)
+                                plt.plot(
+                                    x_plot_positive,
+                                    y_plot,
+                                    label=f"{model} (R²={r_squared:.3f})",
+                                    linewidth=2,
+                                )
+                        elif model == "exponential":
+                            y_plot = exponential_model(x_plot, *coeffs)
+                            plt.plot(
+                                x_plot,
+                                y_plot,
+                                label=f"{model} (R²={r_squared:.3f})",
+                                linewidth=2,
+                            )
+                        elif model == "logarithmic":
+                            x_plot_positive = x_plot[x_plot > 0]
+                            if len(x_plot_positive) > 0:
+                                y_plot = logarithmic_model(x_plot_positive, *coeffs)
+                                plt.plot(
+                                    x_plot_positive,
+                                    y_plot,
+                                    label=f"{model} (R²={r_squared:.3f})",
+                                    linewidth=2,
+                                )
+                        elif model == "quadratic":
+                            y_plot = quadratic_model(x_plot, *coeffs)
+                            plt.plot(
+                                x_plot,
+                                y_plot,
+                                label=f"{model} (R²={r_squared:.3f})",
+                                linewidth=2,
+                            )
+                        elif model == "power":
+                            x_plot_positive = x_plot[x_plot > 0]
+                            if len(x_plot_positive) > 0:
+                                y_plot = power_model(x_plot_positive, *coeffs)
+                                plt.plot(
+                                    x_plot_positive,
+                                    y_plot,
+                                    label=f"{model} (R²={r_squared:.3f})",
+                                    linewidth=2,
+                                )
+                # Add labels and legend
+                plt.xlabel("SPEI Probability")
+                plt.ylabel("Yield Ratio")
+                plt.title(f"Group {group_idx}")
+                plt.legend()
+                plt.grid(True)
 
-            # Add labels and legend
-            plt.xlabel("X (mean of SPEI probabilities)")
-            plt.ylabel("Y (mean of yield ratios)")
-            plt.title(f"Group {unique_crop_combinations[group_idx]}, {group_idx}")
-            plt.legend()
-            plt.grid(True)
+                # Save the plot to a file
+                filename = os.path.join(output_folder, f"group_{group_idx}.png")
+                plt.savefig(filename)
+                plt.close()
+            else:
+                # Not enough data points for this group
+                continue
 
-            # Save the plot to a file
-            filename = os.path.join(output_folder, f"group_{group_idx}.png")
-            plt.savefig(filename)
-            plt.close()
-
-        # Compute median R² for each model
+        # Compute median R² for each model across all groups
         for model in model_names:
             valid_r2 = r_squared_dict[model][~np.isnan(r_squared_dict[model])]
             median_r2 = np.median(valid_r2) if len(valid_r2) > 0 else np.nan
             print(f"Median R² for {model}: {median_r2}")
 
-        # Optionally, assign the best-fitting model to agents based on highest R²
-        # Example: Assign linear model coefficients (you can modify this as needed)
-        best_model = max(r_squared_dict, key=lambda k: np.nanmedian(r_squared_dict[k]))
-        print(f"Best-fitting model overall: {best_model}")
+        # Assign relations to agents based on their group
+        # Here, we'll choose the model with the highest median R²
+        # Alternatively, you can select the best model per group
+        # For simplicity, we'll assign the linear model coefficients to agents
+
+        # Example: Assign linear model coefficients to agents
+        a_array = np.full(len(group_indices), np.nan)
+        b_array = np.full(len(group_indices), np.nan)
+
+        for group_idx in range(n_groups):
+            if coefficients_dict["linear"][group_idx] is not None:
+                a, b = coefficients_dict["linear"][group_idx]
+                agent_mask = group_indices == group_idx
+                a_array[agent_mask] = a
+                b_array[agent_mask] = b
+
+        # Assign to agents
+        self.farmer_yield_probability_relation = np.column_stack((a_array, b_array))
+
+        # Print overall best-fitting model based on median R²
+        median_r2_values = {
+            model: np.nanmedian(r_squared_dict[model]) for model in model_names
+        }
+        best_model_overall = max(median_r2_values, key=median_r2_values.get)
+        print(f"Best-fitting model overall: {best_model_overall}")
 
     def calculate_yield_spei_relation(self):
+        # Number of agents
+        n_agents = self.yearly_yield_ratio.shape[0]
+
+        # Initialize arrays for coefficients and R²
+        a_array = np.zeros(n_agents)
+        b_array = np.zeros(n_agents)
+        r_squared_array = np.zeros(n_agents)
+
+        # Loop over each agent
+        for agent_idx in range(n_agents):
+            # Get data for the agent
+            y_data = self.yearly_yield_ratio[agent_idx, :]
+            X_data = self.yearly_SPEI_probability[agent_idx, :]
+
+            # Log-transform X_data, handling zeros
+            with np.errstate(divide="ignore"):
+                X_data_log = np.log10(X_data)
+
+            # Mask out zeros and NaNs
+            valid_mask = (
+                (~np.isnan(y_data))
+                & (~np.isnan(X_data_log))
+                & (y_data != 0)
+                & (X_data != 0)
+            )
+            y_valid = y_data[valid_mask]
+            X_valid = X_data_log[valid_mask]
+
+            if len(X_valid) >= 2:
+                # Prepare matrices
+                X_matrix = np.vstack([X_valid, np.ones(len(X_valid))]).T
+                # Perform linear regression
+                coefficients = np.linalg.lstsq(X_matrix, y_valid, rcond=None)[0]
+                a, b = coefficients
+
+                # Calculate R²
+                y_pred = a * X_valid + b
+                ss_res = np.sum((y_valid - y_pred) ** 2)
+                ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
+                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+            else:
+                # Not enough data points
+                a, b, r_squared = np.nan, np.nan, np.nan
+
+            a_array[agent_idx] = a
+            b_array[agent_idx] = b
+            r_squared_array[agent_idx] = r_squared
+
+        # Assign relations to agents
+        self.farmer_yield_probability_relation = np.column_stack((a_array, b_array))
+
+        # Print median R²
+        valid_r2 = r_squared_array[~np.isnan(r_squared_array)]
+        print("Median R²:", np.median(valid_r2) if len(valid_r2) > 0 else "N/A")
+
+    def calculate_yield_spei_relation_group(self):
         # Create unique groups
-        crop_elevation_group = self.create_unique_groups(1)
+        crop_elevation_group = self.create_unique_groups()
         unique_crop_combinations, group_indices = np.unique(
             crop_elevation_group, axis=0, return_inverse=True
         )
@@ -2723,23 +2998,10 @@ class CropFarmers(AgentBaseClass):
 
         masked_yearly_yield_ratio = self.yearly_yield_ratio[:, mask_columns]
         masked_SPEI_probability = self.yearly_SPEI_probability[:, mask_columns]
+        masked_SPEI_probability_log = np.log10(masked_SPEI_probability)
 
-        # Prepare data
-        X_all = np.log10(masked_SPEI_probability[:, :-1].flatten())
-        y_all = masked_yearly_yield_ratio[:, :-1].flatten()
-
-        # Filter out invalid values
-        valid_mask = (
-            (~np.isnan(X_all))
-            & (~np.isnan(y_all))
-            & (X_all > -np.inf)
-            & (y_all > -np.inf)
-        )
-        X_all = X_all[valid_mask]
-        y_all = y_all[valid_mask]
-        group_indices_all = np.repeat(
-            group_indices, masked_SPEI_probability.shape[1] - 1
-        )[valid_mask]
+        # Number of groups
+        n_groups = unique_crop_combinations.shape[0]
 
         # Number of groups
         n_groups = unique_crop_combinations.shape[0]
@@ -2749,19 +3011,34 @@ class CropFarmers(AgentBaseClass):
         b_array = np.zeros(n_groups)
         r_squared_array = np.zeros(n_groups)
 
-        # For each group, perform linear regression
         for group_idx in range(n_groups):
+            col_indices = np.where(group_indices == group_idx)[0]
+
             # Get data for the group
-            group_mask = group_indices_all == group_idx
-            X_group = X_all[group_mask]
-            y_group = y_all[group_mask]
+            y_data = masked_yearly_yield_ratio[col_indices, :]
+            X_data_log = masked_SPEI_probability_log[col_indices, :]
+            X_data_prob = masked_SPEI_probability[col_indices, :]
+
+            # Remove values where the probability is > 1
+            mask = X_data_prob >= 1
+            y_data[mask] = np.nan
+            X_data_log[mask] = np.nan
+
+            # Compute mean over columns (axis=1)
+            y_group = np.nanmean(y_data, axis=1)
+            X_group = np.nanmean(X_data_log, axis=1)
+
+            # Remove any years with NaN values
+            valid_indices = ~np.isnan(y_group) & ~np.isnan(X_group)
+            y_group = y_group[valid_indices]
+            X_group = X_group[valid_indices]
 
             if len(X_group) >= 2:
                 # Prepare matrices
                 X_matrix = np.vstack([X_group, np.ones(len(X_group))]).T
                 # Perform linear regression
                 coefficients = np.linalg.lstsq(X_matrix, y_group, rcond=None)[0]
-                a, b = coefficients[0], coefficients[1]
+                a, b = coefficients
 
                 # Calculate R²
                 y_pred = a * X_group + b
@@ -2962,7 +3239,9 @@ class CropFarmers(AgentBaseClass):
             self.yearly_SPEI_probability[new_farmer_id, :]
         )
 
-    def adapt_irrigation_well(self, average_extraction_speed) -> None:
+    def adapt_irrigation_well(
+        self, average_extraction_speed, energy_cost, water_cost
+    ) -> None:
         """
         Handle the adaptation of farmers to irrigation wells.
 
@@ -3018,11 +3297,21 @@ class CropFarmers(AgentBaseClass):
         adapted = np.where((self.adapted[:, 1] == 1), 1, 0)
 
         (
+            energy_diff,
+            water_diff,
+        ) = self.adaptation_water_cost_difference(adapted, energy_cost, water_cost)
+
+        (
             total_profits,
             profits_no_event,
             total_profits_adaptation,
             profits_no_event_adaptation,
         ) = self.profits_SEUT(adaptation_type, adapted)
+
+        total_profits_adaptation = total_profits_adaptation + energy_diff + water_diff
+        profits_no_event_adaptation = (
+            profits_no_event_adaptation + energy_diff + water_diff
+        )
 
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params = {
@@ -3762,7 +4051,7 @@ class CropFarmers(AgentBaseClass):
 
         return self.yield_ratios_drought_event
 
-    def create_unique_groups(self, N=3):
+    def create_unique_groups(self, N=5):
         """
         Create unique groups based on elevation data and merge with crop calendar.
 
@@ -3811,13 +4100,16 @@ class CropFarmers(AgentBaseClass):
         # Make array based on elevation and crop calendar
         crop_elevation_group = self.create_unique_groups()
 
-        unique_crop_groups = np.unique(crop_elevation_group, axis=0)
+        # Get unique groups and group indices
+        unique_crop_groups, group_indices = np.unique(
+            crop_elevation_group, axis=0, return_inverse=True
+        )
         # Initialize array to store relative yield ratio improvement for unique groups
         unique_yield_ratio_gain_option_1 = np.full(
-            (len(unique_crop_groups), 6), 0, dtype=np.float32
+            (len(unique_crop_groups), len(self.p_droughts)), 0, dtype=np.float32
         )
         unique_yield_ratio_gain_option_2 = np.full(
-            (len(unique_crop_groups), 6), 0, dtype=np.float32
+            (len(unique_crop_groups), len(self.p_droughts)), 0, dtype=np.float32
         )
         id_to_switch_to = np.full((len(unique_crop_groups), 2), -1)
         crop_to_switch_to = np.full((len(unique_crop_groups), 2), -1)
@@ -3975,21 +4267,11 @@ class CropFarmers(AgentBaseClass):
             else:
                 pass
 
-        # Identify each agent's position within the unique groups
-        positions_agent = np.where(
-            np.all(
-                crop_elevation_group[:, np.newaxis, :]
-                == np.unique(crop_elevation_group, axis=0),
-                axis=-1,
-            )
-        )
-        exact_position = positions_agent[1]
-
         # Convert group-based results into agent-specific results
-        gains_adaptation_option_1 = unique_yield_ratio_gain_option_1[exact_position, :]
-        gains_adaptation_option_2 = unique_yield_ratio_gain_option_2[exact_position, :]
-        new_crop_nr = crop_to_switch_to[exact_position, :]
-        new_farmer_id = id_to_switch_to[exact_position, :]
+        gains_adaptation_option_1 = unique_yield_ratio_gain_option_1[group_indices, :]
+        gains_adaptation_option_2 = unique_yield_ratio_gain_option_2[group_indices, :]
+        new_crop_nr = crop_to_switch_to[group_indices, :]
+        new_farmer_id = id_to_switch_to[group_indices, :]
 
         return (
             gains_adaptation_option_1,
@@ -4020,7 +4302,8 @@ class CropFarmers(AgentBaseClass):
 
         # Initialize array to store relative yield ratio improvement for unique groups
         unique_yield_ratio_gain_relative = np.zeros(
-            (len(np.unique(crop_elevation_group, axis=0)), 6), dtype=np.float32
+            (len(np.unique(crop_elevation_group, axis=0)), len(self.p_droughts)),
+            dtype=np.float32,
         )
 
         # Get unique groups and group indices
@@ -4351,16 +4634,14 @@ class CropFarmers(AgentBaseClass):
         self.plant()
         self.water_abstraction_sum()
 
-        # monthly actions
-        if self.model.current_time.day == 1:
-            self.cumulative_SPEI()
-
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
             # Set yearly yield ratio based on the difference between saved actual and potential profit
             self.yearly_yield_ratio = (
                 self.yearly_profits / self.yearly_potential_profits
             )
+
+            self.save_yearly_spei()
 
             # reset the irrigation limit, but only if a full year has passed already. Otherwise
             # the cumulative water deficit is not year completed.
@@ -4426,8 +4707,9 @@ class CropFarmers(AgentBaseClass):
                 and not self.config["ruleset"] == "no-adaptation"
             ):
                 # Determine the relation between drought probability and yield
-                self.calculate_yield_spei_relation()
-                self.calculate_yield_spei_relation_test()
+                # self.calculate_yield_spei_relation()
+                # self.calculate_yield_spei_relation_group()
+                self.calculate_yield_spei_relation_test_group()
                 timer.new_split("yield-spei relation")
 
                 # These adaptations can only be done if there is a yield-probability relation
@@ -4438,7 +4720,9 @@ class CropFarmers(AgentBaseClass):
                         ]
                         == "no-adaptation"
                     ):
-                        self.adapt_irrigation_well(average_extraction_speed)
+                        self.adapt_irrigation_well(
+                            average_extraction_speed, energy_cost, water_cost
+                        )
                         timer.new_split("irr well")
                     if (
                         not self.config["expected_utility"]["adaptation_sprinkler"][
