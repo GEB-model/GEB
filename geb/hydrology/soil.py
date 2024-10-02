@@ -34,6 +34,74 @@ from .landcover import (
 )
 
 
+def calculate_soil_water_potential_MPa(
+    soil_moisture,  # [m]
+    soil_moisture_wilting_point,  # [m]
+    soil_moisture_field_capacity,  # [m]
+    soil_tickness,  # [m]
+    wilting_point=-1500,  # kPa
+    field_capacity=-33,  # kPa
+):
+    # https://doi.org/10.1016/B978-0-12-374460-9.00007-X (eq. 7.16)
+    soil_moisture_fraction = soil_moisture / soil_tickness
+    # assert (soil_moisture_fraction >= 0).all() and (soil_moisture_fraction <= 1).all()
+    del soil_moisture
+    soil_moisture_wilting_point_fraction = soil_moisture_wilting_point / soil_tickness
+    # assert (soil_moisture_wilting_point_fraction).all() >= 0 and (
+    #     soil_moisture_wilting_point_fraction
+    # ).all() <= 1
+    del soil_moisture_wilting_point
+    soil_moisture_field_capacity_fraction = soil_moisture_field_capacity / soil_tickness
+    # assert (soil_moisture_field_capacity_fraction >= 0).all() and (
+    #     soil_moisture_field_capacity_fraction <= 1
+    # ).all()
+    del soil_moisture_field_capacity
+
+    n_potential = -(
+        np.log(wilting_point / field_capacity)
+        / np.log(
+            soil_moisture_wilting_point_fraction / soil_moisture_field_capacity_fraction
+        )
+    )
+    # assert (n_potential >= 0).all()
+    a_potential = 1.5 * 10**6 * soil_moisture_wilting_point_fraction**n_potential
+    # assert (a_potential >= 0).all()
+    soil_water_potential = -a_potential * soil_moisture_fraction ** (-n_potential)
+    return soil_water_potential / 1_000_000  # Pa to MPa
+
+
+def calculate_vapour_pressure_deficit_kPa(temperature_K, relative_humidity):
+    temperature_C = temperature_K - 273.15
+    assert (
+        temperature_C < 100
+    ).all()  # temperature is in Celsius. So on earth should be well below 100.
+    assert (
+        temperature_C > -100
+    ).all()  # temperature is in Celsius. So on earth should be well above -100.
+    assert (
+        relative_humidity >= 1
+    ).all()  # below 1 is so rare that it shouldn't be there at the resolutions of current climate models, and this catches errors with relative_humidity as a ratio [0-1].
+    assert (
+        relative_humidity <= 100
+    ).all()  # below 1 is so rare that it shouldn't be there at the resolutions of current climate models, and this catches errors with relative_humidity as a ratio [0-1].
+    # https://soilwater.github.io/pynotes-agriscience/notebooks/vapor_pressure_deficit.html
+    saturated_vapour_pressure = 0.611 * np.exp(
+        (17.502 * temperature_C) / (temperature_C + 240.97)
+    )  # kPa
+    actual_vapour_pressure = saturated_vapour_pressure * relative_humidity / 100  # kPa
+    vapour_pressure_deficit = saturated_vapour_pressure - actual_vapour_pressure
+    return vapour_pressure_deficit
+
+
+def calculate_photosynthetic_photon_flux_density(shortwave_radiation, xi=0.5):
+    # https://search.r-project.org/CRAN/refmans/bigleaf/html/Rg.to.PPFD.html
+    photosynthetically_active_radiation = shortwave_radiation * xi
+    photosynthetic_photon_flux_density = (
+        photosynthetically_active_radiation * 4.6
+    )  #  W/m2 -> umol/m2/s
+    return photosynthetic_photon_flux_density
+
+
 @njit(cache=True, inline="always", fastmath=True)
 def get_soil_water_potential(
     theta,
@@ -447,6 +515,7 @@ def evapotranspirate(
     topwater,
     open_water_evaporation,
     available_water_infiltration,
+    mask,
 ):
     root_ratios_matrix = np.zeros_like(soil_layer_height)
     root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
@@ -454,7 +523,6 @@ def evapotranspirate(
         soil_layer_height
     )
 
-    is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
 
     actual_total_transpiration = np.zeros_like(land_use_type, dtype=np.float32)
@@ -588,10 +656,10 @@ def evapotranspirate(
                 w[layer, i] = max(
                     w[layer, i], wres[layer, i]
                 )  # soil moisture can never be lower than wres
-                if is_bioarea[i]:
+                if not mask[i]:
                     actual_total_transpiration[i] += transpiration
 
-        if is_bioarea[i]:
+        if not mask[i]:
             # limit the bare soil evaporation to the available water in the soil
             if not soil_is_frozen[i] and topwater[i] == np.float32(0):
                 # TODO: Minor bug, this should only occur when topwater is above 0
@@ -1225,6 +1293,10 @@ class Soil(object):
 
         timer.new_split("Capillary rise from groundwater")
 
+        mask = self.var.land_use_type >= SEALED
+        if self.model.config["general"]["simulate_forest"]:
+            mask[self.var.land_use_type == FOREST] = True
+
         (
             actual_total_transpiration,
             actual_bare_soil_evaporation,
@@ -1251,8 +1323,33 @@ class Soil(object):
             topwater=self.var.topwater,
             open_water_evaporation=open_water_evaporation,
             available_water_infiltration=available_water_infiltration,
+            mask=self.var.land_use_type < SEALED,
         )
         assert actual_total_transpiration.dtype == np.float32
+
+        if self.model.config["general"]["simulate_forest"]:
+            self.var.w
+            self.ws
+            self.wres
+            self.soil_layer_height
+            actual_total_transpiration
+            actual_bare_soil_evaporation
+            calculate_soil_water_potential_MPa(
+                soil_moisture=self.var.w.sum(axis=0),
+                soil_moisture_wilting_point=self.wres.mean(axis=0),
+                soil_moisture_field_capacity=self.wfc.mean(axis=0),
+                soil_tickness=self.soil_layer_height.sum(axis=0),
+            )
+            calculate_vapour_pressure_deficit_kPa(
+                relative_humidity=self.var.hurs,
+                temperature_K=self.var.tas,
+            )
+            calculate_photosynthetic_photon_flux_density(
+                shortwave_radiation=self.var.rsds
+            )
+            actual_total_transpiration += plantfate_transpiration
+            actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
+            self.var.w -= plantfate_evapotranspiration_per_soil_layer
 
         timer.new_split("Evapotranspiration")
 
