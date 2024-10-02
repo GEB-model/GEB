@@ -81,7 +81,7 @@ GEB has a prebuilt calibration function. It can be used for both one- and multi-
        SCRIPT_DIR="$HOME/GEB/GEB_models/"
        cd $SCRIPT_DIR
        
-       conda activate geb  # activate conda environment
+       conda activate geeb  # activate conda environment
        
        cd models/
        geb calibrate -wd $1/base

@@ -8,7 +8,7 @@ from geb.workflows import (
 )
 from numcodecs import Blosc
 
-from .setup import tmp_folder
+from .testconfig import tmp_folder
 
 compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 

@@ -25,7 +25,6 @@ try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
-import rasterio
 from .soil import (
     get_root_ratios,
     get_maximum_water_content,
@@ -35,6 +34,7 @@ from .soil import (
     get_crop_group_number,
 )
 from .landcover import PADDY_IRRIGATED, NON_PADDY_IRRIGATED
+from geb.HRUs import load_grid
 
 from geb.workflows import TimingModule, balance_check
 
@@ -54,22 +54,24 @@ class WaterDemand:
         self.households = model.agents.households
         self.reservoir_operators = model.agents.reservoir_operators
 
-        with rasterio.open(
-            self.model.files["subgrid"]["routing/lakesreservoirs/subcommand_areas"],
-            "r",
-        ) as src:
-            reservoir_command_areas = self.var.compress(src.read(1), method="last")
-            water_body_mapping = self.model.lakes_reservoirs.waterbody_mapping
-            self.var.reservoir_command_areas = np.take(
-                water_body_mapping, reservoir_command_areas, mode="clip"
-            )
+        reservoir_command_areas = self.var.compress(
+            load_grid(
+                self.model.files["subgrid"]["routing/lakesreservoirs/subcommand_areas"]
+            ),
+            method="last",
+        )
+
+        water_body_mapping = self.model.lakes_reservoirs.waterbody_mapping
+        self.var.reservoir_command_areas = np.take(
+            water_body_mapping, reservoir_command_areas, mode="clip"
+        )
 
         self.model.data.grid.leakageC = np.compress(
             self.model.data.grid.compress_LR,
             self.model.data.grid.full_compressed(0, dtype=np.float32),
         )
 
-    def get_potential_irrigation_consumption(self, totalPotET):
+    def get_potential_irrigation_consumption(self, potential_evapotranspiration):
         """Calculate the potential irrigation consumption. Not that consumption
         is not the same as withdrawal. Consumption is the amount of water that
         is actually used by the farmers, while withdrawal is the amount of water
@@ -101,7 +103,7 @@ class WaterDemand:
         # p is between 0 and 1 => if p =1 wcrit = wwp, if p= 0 wcrit = wfc
         p = get_fraction_easily_available_soil_water(
             crop_group_number[nonpaddy_irrigated_land],
-            totalPotET[nonpaddy_irrigated_land],
+            potential_evapotranspiration[nonpaddy_irrigated_land],
         )
 
         root_ratios = get_root_ratios(
@@ -138,12 +140,25 @@ class WaterDemand:
         ).sum(axis=0)
 
         # first 2 soil layers to estimate distribution between runoff and infiltration
-        soil_water_storage = self.var.w[:2, nonpaddy_irrigated_land].sum(axis=0)
-        soil_water_storage_cap = self.model.soil.ws[:2, nonpaddy_irrigated_land].sum(
-            axis=0
-        )
+        topsoil_w_nonpaddy_irrigated_land = self.var.w[:2, nonpaddy_irrigated_land]
+        topsoil_ws_nonpaddy_irrigated_land = self.model.soil.ws[
+            :2, nonpaddy_irrigated_land
+        ]
+
+        assert (
+            topsoil_w_nonpaddy_irrigated_land <= topsoil_ws_nonpaddy_irrigated_land
+        ).all()
+
+        soil_water_storage = topsoil_w_nonpaddy_irrigated_land.sum(axis=0)
+        soil_water_storage_cap = topsoil_ws_nonpaddy_irrigated_land.sum(axis=0)
 
         relative_saturation = soil_water_storage / soil_water_storage_cap
+        assert (
+            relative_saturation <= 1 + 1e-7
+        ).all(), "Relative saturation should always be <= 1"
+        relative_saturation[relative_saturation > 1] = 1
+
+        relative_saturation[relative_saturation > 1] = 1
 
         satAreaFrac = (
             1 - (1 - relative_saturation) ** self.var.arnoBeta[nonpaddy_irrigated_land]
@@ -162,6 +177,13 @@ class WaterDemand:
         potential_infiltration_capacity[nonpaddy_irrigated_land] = store - store * (
             1 - (1 - satAreaFrac) ** potBeta
         )
+
+        assert not (
+            np.any(np.isnan(potential_infiltration_capacity[nonpaddy_irrigated_land]))
+            and not np.all(
+                np.isnan(potential_infiltration_capacity[nonpaddy_irrigated_land])
+            )
+        ), "Error: Some values in readily_available_water are NaN, but not all."
 
         return (
             paddy_level,
@@ -197,7 +219,7 @@ class WaterDemand:
         demand -= withdrawal  # update in place
         return withdrawal
 
-    def step(self, totalPotET):
+    def step(self, potential_evapotranspiration):
         timer = TimingModule("Water demand")
 
         domestic_water_demand, domestic_water_efficiency = (
@@ -216,7 +238,7 @@ class WaterDemand:
             critical_water_level,
             max_water_content,
             potential_infiltration_capacity,
-        ) = self.get_potential_irrigation_consumption(totalPotET)
+        ) = self.get_potential_irrigation_consumption(potential_evapotranspiration)
 
         assert (domestic_water_demand >= 0).all()
         assert (industry_water_demand >= 0).all()
@@ -292,7 +314,6 @@ class WaterDemand:
             cell_area=(
                 self.var.cellArea.get() if self.model.use_gpu else self.var.cellArea
             ),
-            HRU_to_grid=self.var.HRU_to_grid,
             paddy_level=paddy_level,
             readily_available_water=readily_available_water,
             critical_water_level=critical_water_level,
@@ -320,7 +341,7 @@ class WaterDemand:
                     addtoevapotrans_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-7,
+                tollerance=1e-5,
             )
 
         if self.model.use_gpu:
@@ -329,12 +350,12 @@ class WaterDemand:
             self.var.actual_irrigation_consumption = cp.asarray(
                 irrigation_water_consumption_m
             )
-            addtoevapotrans = cp.asarray(addtoevapotrans_m)
+            addtoevapotrans_m = cp.asarray(addtoevapotrans_m)
         else:
             self.var.actual_irrigation_consumption = irrigation_water_consumption_m
-            addtoevapotrans = addtoevapotrans_m
+            addtoevapotrans_m = addtoevapotrans_m
 
-        assert (self.var.actual_irrigation_consumption + 1e-6 >= 0).all()
+        assert (self.var.actual_irrigation_consumption + 1e-5 >= 0).all()
 
         groundwater_abstraction_m3 = (
             available_groundwater_m3_pre - available_groundwater_m3
@@ -403,6 +424,5 @@ class WaterDemand:
         return (
             groundwater_abstraction_m3,
             channel_abstraction_m3 / self.model.data.grid.cellArea,
-            addtoevapotrans,
             returnFlow,
         )

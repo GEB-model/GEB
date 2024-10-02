@@ -10,6 +10,12 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: /scistor/ivm/data_catalogue/topography/fabdem.vrt
+geul_dem:
+  data_type: RasterDataset
+  driver: raster
+  meta:
+    category: topography
+  path: project_data/geul/Geul_Filled_DEM_EPSG28992.tif
 gcn250:
   data_type: RasterDataset
   driver: raster
@@ -142,6 +148,16 @@ glofas_4_0_discharge_yearly:
   crs: 4326
   rename:
     dis24: discharge
+  meta:
+      version:  LISFLOOD 4.0
+      source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
+glofas_uparea:
+  data_type: RasterDataset
+  path: /scistor/ivm/data_catalogue/hydrology/discharge/uparea_glofas_v4_0.nc
+  driver: netcdf
+  crs: 4326
+  unit_mult:
+    uparea: 0.000001
   meta:
       version:  LISFLOOD 4.0
       source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
@@ -324,6 +340,10 @@ gcam_electricity_rates:
   path: economics/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
+  meta:
+    source_url: https://github.com/JGCRI/superwell
+    source_version: 1.0
+    unit: USD (2016)
 gadm_level1:
   crs: 4326
   data_type: GeoDataFrame
@@ -532,8 +552,8 @@ ghs_pop_2020_54009_v2023a:
     source_license: CC BY 4.0
     source_url: https://ghsl.jrc.ec.europa.eu/download.php?ds=pop
   path: /scistor/ivm/data_catalogue/population/GHSL/GHS_POP/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif
-crop_price:
-  path: crops/FAOSTAT_producer_price_lcu.csv
+FAO_crop_price:
+  path: crops/FAOSTAT_data_en_9-27-2024.csv
   driver: csv
   data_type: DataFrame
   meta:
@@ -541,7 +561,13 @@ crop_price:
     source_author: FAO
     source_license: CC-BY-4.0
     source_url: https://www.fao.org/faostat/en/#data/PP
-    source_version: Producer price in LCU 
+    source_version: Producer price in USD per tonne 
+  rename:
+    Year: year
+    Value: price_per_kg
+    Item: crop
+  unit_mult:
+    price_per_kg: 0.001  # tonne to kg
 era5_hourly:
   crs: 4326
   data_type: RasterDataset
@@ -678,7 +704,7 @@ why_map:
     paper_ref: Richts et al. (2011)
     source_url: https://www.whymap.org/whymap/EN/Maps_Data/Gwr/gwr_node_en.html
   path: groundwater/why_map.tif
-initial_groundwater_depth_{continent}:
+fan_initial_groundwater_depth_{continent}:
   crs: 4326
   data_type: RasterDataset
   driver: netcdf
@@ -764,4 +790,19 @@ soilgrids_2017_{variable}:
     variable: ["BDTICM"]
   unit_mult:
     BDTICM_M_250m_ll: 0.01
-    
+GLOBIOM_regions_59:
+  data_type: DataFrame
+  driver: excel
+  path: GLOBIOM/Region_Country_Mapping.xlsx
+  meta:
+    source_url: https://www.isric.org/explore/soilgrids
+  kwargs:
+    sheet_name: Region59
+GLOBIOM_regions_37:
+  data_type: DataFrame
+  driver: excel
+  path: GLOBIOM/Region_Country_Mapping.xlsx
+  meta:
+    source_url: https://www.isric.org/explore/soilgrids
+  kwargs:
+    sheet_name: Region37

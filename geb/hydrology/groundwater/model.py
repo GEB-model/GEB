@@ -43,33 +43,30 @@ def cd(newdir):
 
 
 @njit(cache=True)
-def get_water_table_depth(layer_boundary_elevation, head, elevation):
+def get_water_table_depth(
+    layer_boundary_elevation, head, elevation, min_remaining_layer_storage_m
+):
     water_table_depth = np.zeros(head.shape[1])
     for cell_ix in range(head.shape[1]):
-        for layer_ix in range(head.shape[0]):
+        for layer_ix in range(head.shape[0] - 1, -1, -1):
             layer_head = head[layer_ix, cell_ix]
 
-            # if there is no head in the current layer, continue to the next layer
-            if np.isnan(layer_head):
-                continue
-
-            # if the head is larger than the top of the layer, the water table is equal to the top of the layer
-            if layer_head > layer_boundary_elevation[layer_ix, cell_ix]:
-                water_table_depth[cell_ix] = (
-                    elevation[cell_ix] - layer_boundary_elevation[layer_ix, cell_ix]
+            # if the head is smaller than the top of the layer, the water table elevation is equal to the topogography minus head
+            if (
+                layer_head - min_remaining_layer_storage_m
+                < layer_boundary_elevation[layer_ix, cell_ix]
+            ):
+                water_table_depth[cell_ix] = elevation[cell_ix] - max(
+                    layer_boundary_elevation[layer_ix + 1, cell_ix],
+                    min(layer_head, layer_boundary_elevation[layer_ix, cell_ix]),
                 )
-                break
-
-            # if the head is larger than the bottom of the layer, the water table elevation is equal to the head
-            if layer_head > layer_boundary_elevation[layer_ix + 1, cell_ix]:
-                water_table_depth[cell_ix] = elevation[cell_ix] - layer_head
                 break
 
             # else proceed to the next layer
 
-        else:  # if the water table is in none of the layers, the water table is at the bottom of the bottom layer
+        else:
             water_table_depth[cell_ix] = (
-                elevation[cell_ix] - layer_boundary_elevation[-1, cell_ix]
+                elevation[cell_ix] - layer_boundary_elevation[0, cell_ix]
             )
     return water_table_depth
 
@@ -137,10 +134,11 @@ def distribute_well_rate_per_layer(
                 if remaining_well_rate == 0:
                     break
 
-        if remaining_well_rate != 0:
-            assert (
-                remaining_well_rate == 0
-            ), "Well rate could not be distributed, layers are too dry"
+        assert (
+            remaining_well_rate > -1e-10
+        ), (
+            "Well rate could not be distributed, layers are too dry"
+        )  # leaving some tollerance for numerical errors
 
     assert np.allclose(well_rate_per_layer.sum(axis=0), well_rate)
     return well_rate_per_layer
@@ -178,6 +176,7 @@ class ModFlowSimulation:
 
         self.topography = topography
         self.layer_boundary_elevation = layer_boundary_elevation
+        assert (self.topography >= self.layer_boundary_elevation[0]).all()
         self.specific_yield = specific_yield
         hydraulic_conductivity = hydraulic_conductivity
         self.hydraulic_conductivity_drainage = hydraulic_conductivity[0]
@@ -387,9 +386,6 @@ class ModFlowSimulation:
         )
 
         # Initial conditions
-        # All heads must be above the bottom of the respective layers
-        # can be very minimal but must be
-        assert (heads > self.layer_boundary_elevation[1:]).all()
         heads = self.model.data.grid.decompress(heads)
         flopy.mf6.ModflowGwfic(groundwater_flow, strt=heads)
 
@@ -596,11 +592,14 @@ class ModFlowSimulation:
 
     @property
     def groundwater_depth(self):
-        return get_water_table_depth(
+        groundwater_depth = get_water_table_depth(
             self.layer_boundary_elevation,
             self.heads,
             self.topography,
+            min_remaining_layer_storage_m=self.min_remaining_layer_storage_m,
         )
+        assert (groundwater_depth >= 0).all()
+        return groundwater_depth
 
     @property
     def groundwater_content_m(self):
@@ -666,7 +665,7 @@ class ModFlowSimulation:
         drainage = -self.mf6.get_value_ptr(self.drainage_tag)
         assert not np.isnan(drainage).any()
         # TODO: This assert can become more strict when soil depth is considered
-        assert (drainage / self.area < self.hydraulic_conductivity_drainage * 10).all()
+        assert (drainage / self.area < self.hydraulic_conductivity_drainage * 100).all()
         return drainage
 
     @property

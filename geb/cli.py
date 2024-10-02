@@ -12,20 +12,29 @@ import faulthandler
 from pathlib import Path
 import importlib
 import warnings
+from numba import config
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
 from honeybees.visualization.canvas import Canvas
 
 from hydromt.config import configread
-import hydromt_geb
-import geb
+from geb import __version__
+from geb import setup
 from geb.model import GEBModel
 from geb.calibrate import calibrate as geb_calibrate
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.multirun import multi_run as geb_multi_run
 
 faulthandler.enable()
+
+# set threading layer to tbb, this is much faster than other threading layers
+config.THREADING_LAYER = "tbb"
+
+# set environment variable for GEB package directory
+os.environ["GEB_PACKAGE_DIR"] = str(
+    Path(importlib.util.find_spec("geb").origin).parent.parent
+)
 
 
 def multi_level_merge(dict1, dict2):
@@ -37,16 +46,37 @@ def multi_level_merge(dict1, dict2):
     return dict1
 
 
-def parse_config(config_path):
+def parse_config(config_path, current_directory=None):
     """Parse config."""
-    config = yaml.load(open(config_path, "r"), Loader=yaml.FullLoader)
+    if current_directory is None:
+        current_directory = Path.cwd()
+
+    if isinstance(config_path, dict):
+        config = config_path
+    else:
+        config = yaml.load(
+            open(current_directory / config_path, "r"), Loader=yaml.FullLoader
+        )
+        current_directory = current_directory / Path(config_path).parent
+
     if "inherits" in config:
+        inherit_config_path = config["inherits"]
+        inherit_config_path = inherit_config_path.format(**os.environ)
+        # replace {VAR} with environment variable VAR if it exists
+        inherit_config_path = os.path.expandvars(inherit_config_path)
+        # if inherits is not an absolute path, we assume it is relative to the config file
+        if not Path(inherit_config_path).is_absolute():
+            inherit_config_path = current_directory / config["inherits"]
         inherited_config = yaml.load(
-            open(Path(config_path).parent / config["inherits"], "r"),
+            open(inherit_config_path, "r"),
             Loader=yaml.FullLoader,
         )
-        del config["inherits"]
+        current_directory = current_directory / Path(inherit_config_path).parent
+        del config[
+            "inherits"
+        ]  # remove inherits key from config to avoid infinite recursion
         config = multi_level_merge(inherited_config, config)
+        config = parse_config(config, current_directory=current_directory)
     return config
 
 
@@ -73,7 +103,7 @@ def create_logger(fp):
 
 
 @click.group()
-@click.version_option(geb.__version__, message="GEB version: %(version)s")
+@click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
 def main(ctx):  # , quiet, verbose):
     """Command line interface for GEB."""
@@ -298,8 +328,12 @@ def click_build_options(build_config="build.yml"):
             "-d",
             type=str,
             multiple=True,
-            default=[os.environ.get("GEB_DATA_CATALOG", "data_catalog.yml")],
-            help="""A list of paths to the data library YAML files. By default the GEB_DATA_CATALOG environment variable is used. If this is not set, defaults to data_catalog.yml""",
+            default=[
+                Path(os.environ.get("GEB_PACKAGE_DIR"))
+                / "examples"
+                / "data_catalog.yml"
+            ],
+            help="""A list of paths to the data library YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
         )
         @click.option(
             "--build-config",
@@ -336,12 +370,12 @@ def click_build_options(build_config="build.yml"):
 
 def get_model(custom_model):
     if custom_model is None:
-        return hydromt_geb.GEBModel
+        return setup.GEBModel
     else:
         importlib.import_module(
-            "." + custom_model.split(".")[0], package="hydromt_geb.custom_models"
+            "." + custom_model.split(".")[0], package="geb.setup.custom_models"
         )
-        return attrgetter(custom_model)(hydromt_geb.custom_models)
+        return attrgetter(custom_model)(setup.custom_models)
 
 
 def customize_data_catalog(data_catalogs):
@@ -515,10 +549,18 @@ def share(working_directory):
 
     folders = ["input"]
     files = ["model.yml", "build.yml"]
+    optional_files = ["sfincs.yml", "update.yml", "data_catalog.yml"]
     with zipfile.ZipFile("model.zip", "w") as zipf:
-        total_files = sum(
-            [sum(len(files) for _, _, files in os.walk(folder)) for folder in folders]
-        ) + len(files)  # Count total number of files
+        total_files = (
+            sum(
+                [
+                    sum(len(files) for _, _, files in os.walk(folder))
+                    for folder in folders
+                ]
+            )
+            + len(files)
+            + len(optional_files)
+        )  # Count total number of files
         progress = 0  # Initialize progress counter
         for folder in folders:
             for root, _, filenames in os.walk(folder):
@@ -531,6 +573,12 @@ def share(working_directory):
                         )  # Print progress
         for file in files:
             zipf.write(file)
+            progress += 1  # Increment progress counter
+            if not progress % 100:
+                print(f"Exporting file {progress}/{total_files}")  # Print progress
+        for file in optional_files:
+            if os.path.exists(file):
+                zipf.write(file)
             progress += 1  # Increment progress counter
             if not progress % 100:
                 print(f"Exporting file {progress}/{total_files}")  # Print progress

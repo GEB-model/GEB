@@ -33,6 +33,7 @@ except (ModuleNotFoundError, ImportError):
 
 from geb.workflows import balance_check
 from ..landcover import OPEN_WATER
+from .subroutines import PIT
 
 
 class Routing(object):
@@ -170,6 +171,9 @@ class Routing(object):
         self.var.chanLength = self.var.load(
             self.model.files["grid"]["routing/kinematic/channel_length"]
         )
+        assert (
+            self.var.chanLength[self.var.lddCompress != PIT] > 0
+        ).all(), "Channel length must be greater than 0 for all cells except for pits"
         # Channel bottom width [meters]
         self.var.chanWidth = self.var.load(
             self.model.files["grid"]["routing/kinematic/channel_width"]
@@ -425,7 +429,7 @@ class Routing(object):
             if __debug__:
                 # Discharge at outlets and lakes and reservoirs
                 discharge_at_outlets += self.var.discharge[
-                    self.var.lddCompress_LR == 5
+                    self.var.lddCompress_LR == PIT
                 ].sum()
 
                 sumsideflow += sideflowChanM3

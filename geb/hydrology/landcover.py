@@ -56,7 +56,7 @@ def get_crop_kc_and_root_depths(
     crop_stage_data,
     kc_crop_stage,
     rooth_depths,
-    init_root_depth=0.01,
+    init_root_depth=0.2,
 ):
     kc = np.full_like(crop_map, np.nan, dtype=np.float32)
     root_depth = np.full_like(crop_map, np.nan, dtype=np.float32)
@@ -115,7 +115,10 @@ class LandCover(object):
         self.var.capriseindex = self.var.full_compressed(0, dtype=np.float32)
 
         self.forest_kc_per_10_days = xr.open_dataset(
-            self.model.files["forcing"]["landcover/forest/cropCoefficientForest_10days"]
+            self.model.files["forcing"][
+                "landcover/forest/cropCoefficientForest_10days"
+            ],
+            engine="zarr",
         )["cropCoefficientForest_10days"].values
 
     def water_body_exchange(self, groundwater_recharge):
@@ -361,25 +364,26 @@ class LandCover(object):
 
         self.var.cropKC[self.var.land_use_type == GRASSLAND_LIKE] = 0.2
 
-        self.var.potTranspiration, potBareSoilEvap, totalPotET = (
-            self.model.evaporation.step(self.var.ETRef)
-        )
+        (
+            potential_transpiration,
+            potential_bare_soil_evaporation,
+            potential_evapotranspiration,
+        ) = self.model.evaporation.step(self.var.ETRef)
 
         timer.new_split("PET")
 
-        potTranspiration_minus_interception_evaporation = self.model.interception.step(
-            self.var.potTranspiration
+        potential_transpiration_minus_interception_evaporation = (
+            self.model.interception.step(potential_transpiration)
         )  # first thing that evaporates is the intercepted water.
 
         timer.new_split("Interception")
 
-        # *********  WATER Demand   *************************
         (
             groundwater_abstraction_m3,
             channel_abstraction_m,
-            addtoevapotrans,
             returnFlow,
-        ) = self.model.water_demand.step(totalPotET)
+        ) = self.model.water_demand.step(potential_evapotranspiration)
+
         timer.new_split("Demand")
 
         openWaterEvap = self.var.full_compressed(0, dtype=np.float32)
@@ -397,9 +401,9 @@ class LandCover(object):
         ) = self.model.soil.step(
             capillar,
             openWaterEvap,
-            potTranspiration_minus_interception_evaporation,
-            potBareSoilEvap,
-            totalPotET,
+            potential_transpiration_minus_interception_evaporation,
+            potential_bare_soil_evaporation,
+            potential_evapotranspiration,
         )
         assert not (directRunoff < 0).any()
         timer.new_split("Soil")
@@ -408,13 +412,17 @@ class LandCover(object):
             capillar, openWaterEvap, directRunoff
         )
         assert not (directRunoff < 0).any()
+
         timer.new_split("Sealed")
 
-        self.var.actual_transpiration_crop[self.var.crop_map != -1] += (
-            actual_total_transpiration[self.var.crop_map != -1]
+        self.var.actual_evapotranspiration_crop_life[self.var.crop_map != -1] += (
+            np.minimum(
+                self.var.actual_evapotranspiration[self.var.crop_map != -1],
+                potential_evapotranspiration[self.var.crop_map != -1],
+            )
         )
-        self.var.potential_transpiration_crop[self.var.crop_map != -1] += (
-            self.var.potTranspiration[self.var.crop_map != -1]
+        self.var.potential_evapotranspiration_crop_life[self.var.crop_map != -1] += (
+            potential_evapotranspiration[self.var.crop_map != -1]
         )
 
         assert not (directRunoff < 0).any()

@@ -53,8 +53,8 @@ class Interception(object):
     availWaterInfiltrati  quantity of water reaching the soil after interception, more snowmelt             m
     SnowMelt              total snow melt from all layers                                                   m
     interceptEvap         simulated evaporation from water intercepted by vegetation                        m
-    potTranspiration      Potential transpiration (after removing of evaporation)                           m
-    actual_evapotranspiration_total              simulated evapotranspiration from soil, flooded area and vegetation               m
+    potential_transpiration      Potential transpiration (after removing of evaporation)                           m
+    actual_evapotranspiration              simulated evapotranspiration from soil, flooded area and vegetation               m
     snowEvap              total evaporation from snow for a snow layers                                     m
     ====================  ================================================================================  =========
 
@@ -94,15 +94,15 @@ class Interception(object):
             ds = xr.open_dataset(
                 self.model.files["forcing"][
                     f"landcover/{cover_name}/interceptCap{cover_name.title()}_10days"
-                ]
+                ],
+                engine="zarr",
             )
 
             self.interception[cover] = ds[
                 f"interceptCap{cover_name.title()}_10days"
             ].values
-            ds.close()
 
-    def step(self, potTranspiration):
+    def step(self, potential_transpiration):
         """
         Dynamic part of the interception module
         calculating interception for each land cover class
@@ -155,10 +155,10 @@ class Interception(object):
         bio_area = np.where(self.var.land_use_type < SEALED)
 
         self.var.interceptEvap = self.var.full_compressed(np.nan, dtype=np.float32)
-        # interceptEvap evaporation from intercepted water (based on potTranspiration)
+        # interceptEvap evaporation from intercepted water (based on potential_transpiration)
         self.var.interceptEvap[bio_area] = np.minimum(
             self.var.interceptStor[bio_area],
-            potTranspiration[bio_area]
+            potential_transpiration[bio_area]
             * np.nan_to_num(
                 self.var.interceptStor[bio_area] / interceptCap[bio_area], nan=0.0
             )
@@ -174,15 +174,15 @@ class Interception(object):
 
         self.var.interceptEvap[water_area] = 0  # never interception for water
 
-        # update interception storage and potTranspiration
+        # update interception storage and potential_transpiration
         self.var.interceptStor = self.var.interceptStor - self.var.interceptEvap
-        potTranspiration = np.maximum(0, potTranspiration - self.var.interceptEvap)
+        potential_transpiration = np.maximum(
+            0, potential_transpiration - self.var.interceptEvap
+        )
 
         # update actual evaporation (after interceptEvap)
         # interceptEvap is the first flux in ET, soil evapo and transpiration are added later
-        self.var.actual_evapotranspiration_total = (
-            self.var.interceptEvap + self.var.snowEvap
-        )
+        self.var.actual_evapotranspiration = self.var.interceptEvap + self.var.snowEvap
 
         if __debug__:
             balance_check(
@@ -198,5 +198,5 @@ class Interception(object):
                 tollerance=1e-7,
             )
 
-        assert not np.isnan(potTranspiration[bio_area]).any()
-        return potTranspiration
+        assert not np.isnan(potential_transpiration[bio_area]).any()
+        return potential_transpiration

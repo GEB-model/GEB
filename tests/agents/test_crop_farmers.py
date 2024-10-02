@@ -363,6 +363,7 @@ def test_withdraw_channel():
         water_withdrawal_m=water_withdrawal_m,
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+        minimum_channel_storage_m3=100.0,
     )
     assert irrigation_water_demand_field == 0.0
     assert available_channel_storage_m3[0] == 1000.0
@@ -379,11 +380,12 @@ def test_withdraw_channel():
         water_withdrawal_m=water_withdrawal_m,
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+        minimum_channel_storage_m3=100.0,
     )
-    assert irrigation_water_demand_field == 10.0
-    assert available_channel_storage_m3[0] == 0.0
-    assert water_withdrawal_m[0] == 20.0
-    assert channel_abstraction_m3_by_farmer[0] == 2000.0
+    assert irrigation_water_demand_field == 11.0  # keep 100 m3 in the channel
+    assert available_channel_storage_m3[0] == 100.0
+    assert water_withdrawal_m[0] == 19.0
+    assert channel_abstraction_m3_by_farmer[0] == 1900.0
 
 
 def test_reservoir():

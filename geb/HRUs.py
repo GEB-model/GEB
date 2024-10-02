@@ -3,17 +3,55 @@ from typing import Union
 from numba import njit
 from pathlib import Path
 import rasterio
+import warnings
 import os
+import math
+from affine import Affine
 from operator import attrgetter
 import xarray as xr
-import rioxarray as rxr
+import zarr
 import numpy as np
+import zarr.convenience
 from geb.workflows import AsyncForcingReader
 
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
+
+
+def load_grid(filepath, layer=1, return_transform_and_crs=False):
+    if filepath.suffix == ".tif":
+        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
+        with rasterio.open(filepath) as src:
+            data = src.read(layer)
+            data = data.astype(np.float32) if data.dtype == np.float64 else data
+            if return_transform_and_crs:
+                return data, src.transform, src.crs
+            else:
+                return data
+    elif filepath.suffixes == [".zarr", ".zip"]:
+        ds = zarr.convenience.open_group(filepath)
+        data = ds["data"][:]
+        if return_transform_and_crs:
+            x = ds.x[:]
+            y = ds.y[:]
+            x_diff = np.diff(x[:]).mean()
+            y_diff = np.diff(y[:]).mean()
+            transform = Affine(
+                a=x_diff,
+                b=0,
+                c=x[:][0] - x_diff / 2,
+                d=0,
+                e=y_diff,
+                f=ds.y[:][0] - y_diff / 2,
+            )
+            wkt = ds.spatial_ref.attrs["spatial_ref"]
+            return data, transform, wkt
+        else:
+            return data
+    else:
+        raise ValueError("File format not supported.")
 
 
 @njit(cache=True)
@@ -178,21 +216,35 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        with rasterio.open(self.model.files["grid"]["areamaps/grid_mask"]) as mask_src:
-            self.mask = mask_src.read(1).astype(bool)
-            self.gt = mask_src.transform.to_gdal()
-            self.bounds = tuple(mask_src.bounds)
-            self.cell_size = mask_src.transform.a
-        with rxr.open_rasterio(
-            self.model.files["grid"]["areamaps/grid_mask"]
-        ) as mask_src:
-            self.crs = mask_src.rio.crs
-            self.lon = mask_src.x.values
-            self.lat = mask_src.y.values
-        with rasterio.open(
+        mask, transform, self.crs = load_grid(
+            self.model.files["grid"]["areamaps/grid_mask"],
+            return_transform_and_crs=True,
+        )
+        self.mask = mask.astype(bool)
+        self.gt = transform.to_gdal()
+        self.bounds = (
+            transform.c,
+            transform.f + transform.e * mask.shape[0],
+            transform.c + transform.a * mask.shape[1],
+            transform.f,
+        )
+        self.lon = np.linspace(
+            transform.c + transform.a / 2,
+            transform.c + transform.a * mask.shape[1] - transform.a / 2,
+            mask.shape[1],
+        )
+        self.lat = np.linspace(
+            transform.f + transform.e / 2,
+            transform.f + transform.e * mask.shape[0] - transform.e / 2,
+            mask.shape[0],
+        )
+
+        assert math.isclose(transform.a, -transform.e)
+        self.cell_size = transform.a
+
+        self.cell_area_uncompressed = load_grid(
             self.model.files["grid"]["areamaps/cell_area"]
-        ) as cell_area_src:
-            self.cell_area_uncompressed = cell_area_src.read(1)
+        )
 
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
@@ -287,9 +339,7 @@ class Grid(BaseVariables):
         Returns:
             array: Loaded array.
         """
-        with rasterio.open(filepath) as src:
-            data = src.read(layer)
-        data = data.astype(np.float32) if data.dtype == np.float64 else data
+        data = load_grid(filepath, layer=layer)
         if compress:
             data = self.data.grid.compress(data)
         return data
@@ -342,6 +392,7 @@ class Grid(BaseVariables):
         if not hasattr(self, "rlds_ds"):
             self.rlds_ds = self.load_forcing_ds("rlds")
         rlds = self.load_forcing(self.rlds_ds, self.model.current_time)
+        rlds = rlds.astype(np.float32)
         assert (rlds >= 0).all(), "rlds must be positive or zero"
         return rlds
 
@@ -392,7 +443,7 @@ class Grid(BaseVariables):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
         spei = self.load_forcing(self.spei_ds, self.model.current_time, compress=False)
-        assert not np.isnan(spei).any()
+        assert not np.isnan(spei[~self.mask]).any()  # no nan values in non-masked cells
         return spei
 
     @property
@@ -405,20 +456,15 @@ class Grid(BaseVariables):
 
     @property
     def gev_c(self):
-        with rasterio.open(self.model.files["grid"]["climate/gev_c"]) as gev_c_src:
-            return gev_c_src.read(1)
+        return load_grid(self.model.files["grid"]["climate/gev_c"])
 
     @property
     def gev_loc(self):
-        with rasterio.open(self.model.files["grid"]["climate/gev_loc"]) as gev_loc_src:
-            return gev_loc_src.read(1)
+        return load_grid(self.model.files["grid"]["climate/gev_loc"])
 
     @property
     def gev_scale(self):
-        with rasterio.open(
-            self.model.files["grid"]["climate/gev_scale"]
-        ) as gev_scale_src:
-            return gev_scale_src.read(1)
+        return load_grid(self.model.files["grid"]["climate/gev_scale"])
 
 
 class HRUs(BaseVariables):
@@ -434,11 +480,10 @@ class HRUs(BaseVariables):
     def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
-        with rasterio.open(
-            self.model.files["subgrid"]["areamaps/sub_grid_mask"]
-        ) as mask_src:
-            submask_height = mask_src.profile["height"]
-            submask_width = mask_src.profile["width"]
+
+        subgrid_mask = load_grid(self.model.files["subgrid"]["areamaps/sub_grid_mask"])
+        submask_height, submask_width = subgrid_mask.shape
+
         self.scaling = submask_height // self.data.grid.shape[0]
         assert submask_width // self.data.grid.shape[1] == self.scaling
         self.gt = (
@@ -667,10 +712,9 @@ class HRUs(BaseVariables):
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             unmerged_HRU_indices: The index of the HRU to the subcell.
         """
-        with rasterio.open(
-            self.model.files["subgrid"]["landsurface/land_use_classes"], "r"
-        ) as src:
-            land_use_classes = src.read()[0]
+        land_use_classes = load_grid(
+            self.model.files["subgrid"]["landsurface/land_use_classes"]
+        )
         return self.create_HRUs_numba(
             self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
         )
@@ -842,10 +886,7 @@ class Data:
     def __init__(self, model):
         self.model = model
 
-        with rasterio.open(
-            self.model.files["subgrid"]["agents/farmers/farms"], "r"
-        ) as farms_src:
-            self.farms = farms_src.read()[0]
+        self.farms = load_grid(self.model.files["subgrid"]["agents/farmers/farms"])
 
         self.initial_conditions = []
 
@@ -859,19 +900,24 @@ class Data:
 
     def load_water_demand(self):
         self.model.domestic_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/domestic_water_consumption"]
+            self.model.files["forcing"]["water_demand/domestic_water_consumption"],
+            engine="zarr",
         )
         self.model.domestic_water_demand_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/domestic_water_demand"]
+            self.model.files["forcing"]["water_demand/domestic_water_demand"],
+            engine="zarr",
         )
         self.model.industry_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/industry_water_consumption"]
+            self.model.files["forcing"]["water_demand/industry_water_consumption"],
+            engine="zarr",
         )
         self.model.industry_water_demand_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/industry_water_demand"]
+            self.model.files["forcing"]["water_demand/industry_water_demand"],
+            engine="zarr",
         )
         self.model.livestock_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/livestock_water_consumption"]
+            self.model.files["forcing"]["water_demand/livestock_water_consumption"],
+            engine="zarr",
         )
 
     def to_HRU(self, *, data=None, fn=None):
@@ -1059,11 +1105,11 @@ class Data:
         self.HRU.totAvlWater = self.split_HRU_data(self.HRU.totAvlWater, HRU)
         self.HRU.minInterceptCap = self.split_HRU_data(self.HRU.minInterceptCap, HRU)
         self.HRU.interceptStor = self.split_HRU_data(self.HRU.interceptStor, HRU)
-        self.HRU.potential_transpiration_crop = self.split_HRU_data(
-            self.HRU.potential_transpiration_crop, HRU
+        self.HRU.potential_evapotranspiration_crop_life = self.split_HRU_data(
+            self.HRU.potential_evapotranspiration_crop_life, HRU
         )
-        self.HRU.actual_transpiration_crop = self.split_HRU_data(
-            self.HRU.actual_transpiration_crop, HRU
+        self.HRU.actual_evapotranspiration_crop_life = self.split_HRU_data(
+            self.HRU.actual_evapotranspiration_crop_life, HRU
         )
         return HRU
 

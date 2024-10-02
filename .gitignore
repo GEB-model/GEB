@@ -12,6 +12,8 @@ examples/*
 !examples/model.yml
 !examples/update.yml
 !examples/data_catalog.yml
+!examples/reasonable_defaults
+!examples/reasonable_defaults/model.yml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
