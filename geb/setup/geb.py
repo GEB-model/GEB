@@ -3212,23 +3212,143 @@ class GEBModel(GridModel):
 
                 self.logger.info("calculating GEV parameters...")
 
-                # invert the values and take the max
-                inverted_SPEI = SPEI * -1
+                # negative_SPEI = SPEI.where(SPEI < 0)
 
                 # Group the data by year and find the maximum monthly sum for each year
-                SPEI_yearly_max = inverted_SPEI.groupby("time.year").max(dim="time")
-                SPEI_yearly_max = (
-                    SPEI_yearly_max.rename({"year": "time"})
+                SPEI_yearly_min = SPEI.groupby("time.year").min(dim="time", skipna=True)
+
+                SPEI_yearly_min = SPEI_yearly_min.dropna(dim="year")
+
+                SPEI_yearly_min = (
+                    SPEI_yearly_min.rename({"year": "time"})
                     .chunk({"time": -1})
                     .compute()
                 )
 
-                GEV = xci.stats.fit(SPEI_yearly_max, dist="genextreme").compute()
+                GEV = xci.stats.fit(SPEI_yearly_min, dist="genextreme").compute()
                 GEV.name = "gev"
 
                 self.set_grid(GEV.sel(dparams="c"), name="climate/gev_c")
                 self.set_grid(GEV.sel(dparams="loc"), name="climate/gev_loc")
                 self.set_grid(GEV.sel(dparams="scale"), name="climate/gev_scale")
+
+    def setup_gev(self):
+        import os
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from scipy.stats import genextreme
+
+        # Create the plots_setup directory if it doesn't exist
+        os.makedirs("plots_setup", exist_ok=True)
+
+        # Load in SPEI
+        SPEI = self.forcing["climate/spei"]
+
+        # Select a single spatial point (e.g., first x and y index)
+        SPEI = SPEI.isel(x=0, y=0)
+
+        # Define rolling window sizes
+        rolling_windows = [5, 6, 7, 8, 9, 10]  # 6-month and 12-month rolling averages
+
+        for window in rolling_windows:
+            # Calculate rolling average
+            SPEI_rolling = SPEI.rolling(time=window, center=False).mean()
+
+            # Adjust time labels after rolling to match the window's end time
+            SPEI_rolling = SPEI_rolling.dropna("time")
+
+            # Plot SPEI rolling time series
+            SPEI_rolling.plot()
+            plt.title(f"SPEI {window}-Month Rolling Average at Selected Point")
+            plt.xlabel("Time")
+            plt.ylabel("SPEI")
+            plt.savefig(f"plots_setup/SPEI_{window}month_rolling_time_series.png")
+            plt.close()
+
+            # Select negative values
+            # negative_SPEI = SPEI_rolling.where(SPEI_rolling < 0)
+
+            # # Plot negative SPEI rolling time series
+            # negative_SPEI.plot()
+            # plt.title(f"Negative SPEI {window}-Month Rolling Average at Selected Point")
+            # plt.xlabel("Time")
+            # plt.ylabel("Negative SPEI")
+            # plt.savefig(
+            #     f"plots_setup/negative_SPEI_{window}month_rolling_time_series.png"
+            # )
+            # plt.close()
+
+            # Group the data by year and find the most negative value for each year
+            SPEI_yearly_neg_min = SPEI_rolling.groupby("time.year").min(
+                dim="time", skipna=True
+            )
+            # Replace NaN with 0 for years with no negative values
+            SPEI_yearly_neg_min = SPEI_yearly_neg_min.dropna(dim="year")
+
+            # Rename 'year' dimension to 'time' for consistency
+            SPEI_yearly_neg_min = SPEI_yearly_neg_min.rename({"year": "time"})
+
+            # Plot SPEI yearly negative minima
+            SPEI_yearly_neg_min.plot(marker="o")
+            plt.title(f"Yearly Most Negative SPEI {window}-Month Rolling Average")
+            plt.xlabel("Year")
+            plt.ylabel("Most Negative SPEI")
+            plt.savefig(f"plots_setup/SPEI_yearly_neg_min_{window}month.png")
+            plt.close()
+
+            # Ensure data is computed and chunked appropriately
+            SPEI_yearly_neg_min = SPEI_yearly_neg_min.chunk({"time": -1}).compute()
+
+            # Fit the Generalized Extreme Value distribution
+            # Assuming xclim is already imported as xci
+            GEV = xci.stats.fit(SPEI_yearly_neg_min, dist="genextreme").compute()
+            GEV.name = "gev"
+
+            # Extract GEV parameters
+            gev_c = GEV.sel(dparams="c")
+            gev_loc = GEV.sel(dparams="loc")
+            gev_scale = GEV.sel(dparams="scale")
+
+            # Since we have only one point, the parameters are scalars
+            # Print the GEV parameters
+            print(f"GEV Parameters for {window}-Month Rolling Average:")
+            print(f"c parameter: {gev_c.values}")
+            print(f"loc parameter: {gev_loc.values}")
+            print(f"scale parameter: {gev_scale.values}")
+
+            # Optionally, you can plot the probability density function (PDF)
+            # Assuming numpy is imported as np and genextreme is imported from scipy.stats
+
+            # Generate a range of SPEI values for plotting the PDF
+            x_values = np.linspace(
+                SPEI_yearly_neg_min.min(), SPEI_yearly_neg_min.max(), 100
+            )
+            pdf_values = genextreme.pdf(
+                x_values, c=gev_c.values, loc=gev_loc.values, scale=gev_scale.values
+            )
+
+            # Plot the fitted GEV PDF
+            plt.plot(x_values, pdf_values)
+            plt.title(
+                f"Fitted GEV Distribution at Selected Point ({window}-Month Rolling)"
+            )
+            plt.xlabel("SPEI")
+            plt.ylabel("Probability Density")
+            plt.savefig(f"plots_setup/gev_pdf_{window}month.png")
+            plt.close()
+
+            # Save the PDF data points into a table (CSV file)
+            # Assuming pandas is imported as pd
+            pdf_table = pd.DataFrame(
+                {"SPEI": x_values, "Probability Density": pdf_values}
+            )
+            pdf_table.to_csv(f"plots_setup/gev_pdf_{window}month_data.csv", index=False)
+
+            print(f"Finished processing for {window}-month rolling average.\n")
+
+        print("All processing done.")
 
     def setup_regions_and_land_use(
         self,
@@ -3815,7 +3935,6 @@ class GEBModel(GridModel):
     def setup_drip_irrigation_prices_by_reference_year(
         self,
         drip_irrigation_price: float,
-        upkeep_price_per_m2: float,
         reference_year: int,
         start_year: int,
         end_year: int,
@@ -3827,8 +3946,7 @@ class GEBModel(GridModel):
         ----------
         drip_irrigation_price : float
             The price of a drip_irrigation in the reference year.
-        upkeep_price_per_m2 : float
-            The upkeep price per square meter of a drip_irrigation in the reference year.
+
         reference_year : int
             The reference year for the drip_irrigation prices and upkeep prices.
         start_year : int
@@ -3838,78 +3956,51 @@ class GEBModel(GridModel):
 
         Notes
         -----
-        This method sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `economics/inflation_rates` dictionary. It then creates dictionaries to
-        store the drip_irrigation prices and upkeep prices for each region, with the years as the time dimension and the prices as the
-        data dimension.
 
-        The drip_irrigation prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+        The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
         resulting prices are stored in the dictionaries with the region ID as the key.
 
-        The resulting drip_irrigation prices and upkeep prices data are set as dictionary with names of the form
-        'economics/drip_irrigation_prices' and 'economics/upkeep_prices_drip_irrigation_per_m2', respectively.
         """
-        self.logger.info("Setting up drip_irrigation prices by reference year")
-        # create dictory with prices for drip_irrigation_prices per year by applying inflation rates
+        self.logger.info("Setting up well prices by reference year")
+
+        # Retrieve the inflation rates data
         inflation_rates = self.dict["economics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
 
-        drip_irrigation_prices_dict = {
-            "time": list(range(start_year, end_year + 1)),
-            "data": {},
+        # Create a dictionary to store the various types of prices with their initial reference year values
+        price_types = {
+            "drip_irrigation_price": drip_irrigation_price,
         }
-        for region in regions:
-            drip_irrigation_prices = pd.Series(index=range(start_year, end_year + 1))
-            drip_irrigation_prices.loc[reference_year] = drip_irrigation_price
 
-            for year in range(reference_year + 1, end_year + 1):
-                drip_irrigation_prices.loc[year] = (
-                    drip_irrigation_prices[year - 1]
-                    * inflation_rates["data"][region][
-                        inflation_rates["time"].index(str(year))
-                    ]
-                )
-            for year in range(reference_year - 1, start_year - 1, -1):
-                drip_irrigation_prices.loc[year] = (
-                    drip_irrigation_prices[year + 1]
-                    / inflation_rates["data"][region][
-                        inflation_rates["time"].index(str(year + 1))
-                    ]
-                )
+        # Iterate over each price type and calculate the prices across years for each region
+        for price_type, initial_price in price_types.items():
+            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
 
-            drip_irrigation_prices_dict["data"][region] = (
-                drip_irrigation_prices.tolist()
-            )
+            for region in regions:
+                prices = pd.Series(index=range(start_year, end_year + 1))
+                prices.loc[reference_year] = initial_price
 
-        self.set_dict(
-            drip_irrigation_prices_dict, name="economics/drip_irrigation_prices"
-        )
+                # Forward calculation from the reference year
+                for year in range(reference_year + 1, end_year + 1):
+                    prices.loc[year] = (
+                        prices[year - 1]
+                        * inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year))
+                        ]
+                    )
+                # Backward calculation from the reference year
+                for year in range(reference_year - 1, start_year - 1, -1):
+                    prices.loc[year] = (
+                        prices[year + 1]
+                        / inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year + 1))
+                        ]
+                    )
 
-        upkeep_prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
-        for region in regions:
-            upkeep_prices = pd.Series(index=range(start_year, end_year + 1))
-            upkeep_prices.loc[reference_year] = upkeep_price_per_m2
+                prices_dict["data"][region] = prices.tolist()
 
-            for year in range(reference_year + 1, end_year + 1):
-                upkeep_prices.loc[year] = (
-                    upkeep_prices[year - 1]
-                    * inflation_rates["data"][region][
-                        inflation_rates["time"].index(str(year))
-                    ]
-                )
-            for year in range(reference_year - 1, start_year - 1, -1):
-                upkeep_prices.loc[year] = (
-                    upkeep_prices[year + 1]
-                    / inflation_rates["data"][region][
-                        inflation_rates["time"].index(str(year + 1))
-                    ]
-                )
-
-            upkeep_prices_dict["data"][region] = upkeep_prices.tolist()
-
-        self.set_dict(
-            upkeep_prices_dict, name="economics/upkeep_prices_drip_irrigation_per_m2"
-        )
+            # Set the calculated prices in the appropriate dictionary
+            self.set_dict(prices_dict, name=f"economics/{price_type}")
 
     def setup_farmers(self, farmers):
         """
@@ -5423,7 +5514,9 @@ class GEBModel(GridModel):
         esa_worldcover.name = "lulc"
         esa_worldcover = esa_worldcover.to_dataset()
         esa_worldcover["_dummy"] = 0
-        self.set_forcing(esa_worldcover, name="hydrodynamics/esa_worldcover", split_dataset=False)
+        self.set_forcing(
+            esa_worldcover, name="hydrodynamics/esa_worldcover", split_dataset=False
+        )
 
         hydrodynamics_data_catalog.add_source(
             "esa_worldcover",
