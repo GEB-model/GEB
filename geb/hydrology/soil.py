@@ -1328,28 +1328,52 @@ class Soil(object):
         assert actual_total_transpiration.dtype == np.float32
 
         if self.model.config["general"]["simulate_forest"]:
-            self.var.w
-            self.ws
-            self.wres
-            self.soil_layer_height
-            actual_total_transpiration
-            actual_bare_soil_evaporation
-            calculate_soil_water_potential_MPa(
-                soil_moisture=self.var.w.sum(axis=0),
-                soil_moisture_wilting_point=self.wres.mean(axis=0),
-                soil_moisture_field_capacity=self.wfc.mean(axis=0),
-                soil_tickness=self.soil_layer_height.sum(axis=0),
-            )
-            calculate_vapour_pressure_deficit_kPa(
-                relative_humidity=self.var.hurs,
-                temperature_K=self.var.tas,
-            )
-            calculate_photosynthetic_photon_flux_density(
-                shortwave_radiation=self.var.rsds
-            )
+            plantFATE_data = {
+                "soil_water_potential": self.calculate_soil_water_potential_MPa(
+                    soil_moisture=self.var.w.sum(axis=0),
+                    soil_moisture_wilting_point=self.wres.mean(axis=0),
+                    soil_moisture_field_capacity=self.wfc.mean(axis=0),
+                    soil_tickness=self.soil_layer_height.sum(axis=0),
+                ),
+                "vapour_pressure_deficit": self.calculate_vapour_pressure_deficit_kPa(
+                    relative_humidity=self.var.hurs,
+                    temperature_K=self.var.tas,
+                ),
+                "photosynthetic_photon_flux_density": self.calculate_photosynthetic_photon_flux_density(
+                    shortwave_radiation=self.var.rsds
+                ),
+                "temperature": self.var.Tavg[m],  # - 273.15,  # K to C
+                "topsoil_volumetric_water_content": calculate_topsoil_volumetric_content(
+                    topsoil_water_content=self.var.w.sum(axis=0), # todo: need to set up for topsoil layer only
+                    topsoil_wilting_point=self.wres.mean(axis=0),
+                    topsoil_fieldcap=self.wfc.mean(axis=0)
+                ),
+                "net_radiation": self.calculate_net_radiation(
+                    shortwave_radiation_downwelling=self.var.Rsds[m] / self.var.WtoMJ,
+                    longwave_radiation_net=self.var.RLN[m] / self.var.WtoMJ,
+                    albedo=self.var.albedoLand[m]
+                )
+            }
+
+            if dateVar['newStart']:
+                self.model.plantFATE[m].first_step(
+                    tstart=dateVar['currDate'], **plantFATE_data
+                )
+                plantfate_transpiration = 0
+                plantfate_bare_soil_evaporation = 0
+            else:
+                (
+                    plantfate_transpiration,
+                    plantfate_bare_soil_evaporation,
+                    _,
+                    _,
+                    _,
+                ) = self.model.plantFATE[m].step(curr_time=dateVar['currDate'],
+                                                 **plantFATE_data)
+
             actual_total_transpiration += plantfate_transpiration
             actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
-            self.var.w -= plantfate_evapotranspiration_per_soil_layer
+            self.var.w -= plantfate_evapotranspiration_per_soil_layer ## not used for now
 
         timer.new_split("Evapotranspiration")
 
