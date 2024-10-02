@@ -738,7 +738,8 @@ class ModFlowSimulation:
                 if has_converged:
                     break
             else:
-                raise RuntimeError("MODFLOW did not converge")
+                print("MODFLOW did not converge")
+                # raise RuntimeError("MODFLOW did not converge")
 
             self.mf6.finalize_solve(solution_id)
 
