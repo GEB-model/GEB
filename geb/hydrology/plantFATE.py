@@ -3,28 +3,37 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from plantFATE import Simulator as sim
-from plantFATE import Clim
-
+from pypfate import Patch as patch
 
 class Model:
-    def __init__(self, param_file):
-        self.plantFATE_model = sim(str(param_file))
-        self.environment = pd.DataFrame(
-            columns=[
-                "date",
-                "tair",
-                "ppfd_max",
-                "ppfd",
-                "vpd",
-                "elv",
-                "co2",
-                "swp",
-                "type",
-            ]
-        )
-        self.emergentProps = pd.DataFrame()
-        self.speciesProps = pd.DataFrame()
+    def __init__(self, param_file, acclim_forcing_file, use_acclim):
+        self.plantFATE_model = patch(str(param_file))
+        self.time_unit_base = self.process_time_units()
+        self.tcurrent = 0
+        #
+        # self.use_acclim = use_acclim
+        # if use_acclim:
+        #     self.acclimation_forcing = self.read_acclimation_file(acclim_forcing_file)
+        #     self.use_acclim = use_acclim
+
+    def read_acclimation_file(self, file):
+        df = pd.read_csv(file)
+        alldates = df['date'].map(lambda x: datetime.strptime(x, "%Y-%m-%d") - self.time_unit_base)
+        alldates = alldates.map(lambda x: x.days - 1)
+        df['date_jul'] = alldates
+        return df
+
+    def process_time_units(self):
+        time_unit = self.plantFATE_model.config.time_unit
+        time_unit = time_unit.split()
+        if time_unit[0] != 'days' or time_unit[1] != 'since':
+            print("incorrect plantFATE time unit; cwatm coupling supports only daily timescale")
+            return
+        else:
+            time_unit = time_unit[2].split("-")
+            return datetime(int(time_unit[0]),
+                            int(time_unit[1]),
+                            int(time_unit[2]))
 
     def runstep(
         self,
@@ -32,124 +41,92 @@ class Model:
         vapour_pressure_deficit,
         photosynthetic_photon_flux_density,
         temperature,
+        net_radiation,
+        topsoil_volumetric_water_content
     ):
-        self.plantFATE_model.update_environment(
+
+        self.plantFATE_model.update_climate(
+            368.9,  # co2 - need to make it better
             temperature - 273.15,
-            photosynthetic_photon_flux_density * 4,
-            photosynthetic_photon_flux_density,
             vapour_pressure_deficit * 1000,
-            np.nan,
-            np.nan,
+            photosynthetic_photon_flux_density,
             soil_water_potential,
+            net_radiation,
         )
-        self.plantFATE_model.simulate_step()
+        #
+        # if (self.use_acclim):
+        #     index_acclim = self.acclimation_forcing.index[
+        #         self.acclimation_forcing['date_jul'] == self.tcurrent].tolist()
+        #     self.plantFATE_model.update_climate_acclim(self.tcurrent,
+        #                                      368.9,
+        #                                      self.acclimation_forcing.loc[index_acclim, 'temp.C.'],
+        #                                      self.acclimation_forcing.loc[index_acclim, 'vpd'],
+        #                                      self.calculate_photosynthetic_photon_flux_density(
+        #                                          self.acclimation_forcing.loc[index_acclim, 'shortwave.W.m2.'], albedo),
+        #                                      soil_water_potential)
 
-        # self.saveEnvironment()
-        # self.saveEmergentProps()
+        self.plantFATE_model.simulate_to(self.tcurrent)
+        trans = self.plantFATE_model.props.fluxes.trans
+        potential_soil_evaporation = self.plantFATE_model.props.fluxes.pe_soil
 
-        trans = self.plantFATE_model.props.trans / 365
-        # return evapotranspiration, soil_specific_depletion_1, soil_specific_depletion_2, soil_specific_depletion_3
-        return trans, 0, 0, 0
+        soil_evaporation = potential_soil_evaporation * topsoil_volumetric_water_content
 
-    def saveEnvironment(self):
-        e = pd.DataFrame(
-            {
-                "date": [
-                    self.plantFATE_model.E.tcurrent,
-                    self.plantFATE_model.E.tcurrent,
-                ],
-                "tair": [
-                    self.plantFATE_model.E.weightedAveClim.tc,
-                    self.plantFATE_model.E.currentClim.tc,
-                ],
-                "ppfd_max": [
-                    self.plantFATE_model.E.weightedAveClim.ppfd_max,
-                    self.plantFATE_model.E.currentClim.ppfd_max,
-                ],
-                "ppfd": [
-                    self.plantFATE_model.E.weightedAveClim.ppfd,
-                    self.plantFATE_model.E.currentClim.ppfd,
-                ],
-                "vpd": [
-                    self.plantFATE_model.E.weightedAveClim.vpd,
-                    self.plantFATE_model.E.currentClim.vpd,
-                ],
-                "elv": [
-                    self.plantFATE_model.E.weightedAveClim.elv,
-                    self.plantFATE_model.E.currentClim.elv,
-                ],
-                "co2": [
-                    self.plantFATE_model.E.weightedAveClim.co2,
-                    self.plantFATE_model.E.currentClim.co2,
-                ],
-                "swp": [
-                    self.plantFATE_model.E.weightedAveClim.swp,
-                    self.plantFATE_model.E.currentClim.swp,
-                ],
-                "type": ["WeightedAverage", "Instantaneous"],
-            }
-        )
-
-        self.environment = pd.concat([self.environment, e])
-
-    def saveEmergentProps(self):
-        e = pd.DataFrame(
-            {
-                "date": [self.plantFATE_model.tcurrent],
-                "trans": [self.plantFATE_model.props.trans / 365],
-                "gs": [self.plantFATE_model.props.gs],
-                "gpp": [self.plantFATE_model.props.gpp * 0.5 / 365 * 1000],
-                "lai": [self.plantFATE_model.props.lai],
-                "npp": [self.plantFATE_model.props.npp * 0.5 / 365 * 1000],
-                "cc_est": [self.plantFATE_model.props.cc_est],
-                "croot_mass": [self.plantFATE_model.props.croot_mass * 1000 * 0.5],
-                "froot_mass": [self.plantFATE_model.props.froot_mass * 1000 * 0.5],
-                "lai_vert": [self.plantFATE_model.props.lai_vert],
-                "leaf_mass": [self.plantFATE_model.props.leaf_mass * 1000 * 0.5],
-                "resp_auto": [self.plantFATE_model.props.resp_auto * 0.5 / 365 * 1000],
-                "stem_mass": [self.plantFATE_model.props.stem_mass * 1000 * 0.5],
-            }
-        )
-        self.emergentProps = pd.concat([self.emergentProps, e])
-
-    def exportEnvironment(self, out_file):
-        self.environment.to_csv(out_file, sep=",", index=False, encoding="utf-8")
-
-    def exportEmergentProps(self, out_file):
-        self.emergentProps.to_csv(out_file, sep=",", index=False, encoding="utf-8")
-
-    def exportSpeciesProps(self, out_file):
-        self.speciesProps.to_csv(out_file, sep=",", index=False, encoding="utf-8")
+        # return transpiration, soil_evaporation, soil_specific_depletion_1, soil_specific_depletion_2, soil_specific_depletion_3
+        return trans, soil_evaporation, 0, 0, 0
 
     def first_step(
-        self,
-        tstart,
-        vapour_pressure_deficit,
-        soil_water_potential,
-        photosynthetic_photon_flux_density,
-        temperature,
+            self,
+            tstart,
+            soil_water_potential,
+            vapour_pressure_deficit,
+            photosynthetic_photon_flux_density,
+            temperature,  # degrees Celcius, mean temperature
+            topsoil_volumetric_water_content,
+            net_radiation
     ):
-        newclim = Clim()
-        newclim.tc = temperature - 273.15  # C
-        newclim.ppfd_max = photosynthetic_photon_flux_density * 4
-        newclim.ppfd = photosynthetic_photon_flux_density
-        newclim.vpd = vapour_pressure_deficit * 1000  # kPa -> Pa
-        newclim.swp = soil_water_potential  # MPa
+        datestart = datetime(tstart.year, tstart.month, tstart.day)
+        datediff = datestart - self.time_unit_base
+        datediff = datediff.days - 1
 
-        datestart = tstart
-        datediff = datestart - datetime(datestart.year, 1, 1)
-        tstart = datestart.year + datediff.days / 365
-        self.plantFATE_model.init(tstart, newclim)
+        self.patch.init(datediff, datediff + 1000)
+
+        self.tcurrent = datediff
+        self.patch.update_climate(368.9,
+                                  temperature,
+                                  vapour_pressure_deficit * 1000,
+                                  photosynthetic_photon_flux_density,
+                                  soil_water_potential,
+                                  net_radiation)
+
+        # if (self.use_acclim):
+        #     index_acclim = self.acclimation_forcing.index[
+        #         self.acclimation_forcing['date_jul'] == self.tcurrent].tolist()
+        #     self.patch.update_climate_acclim(self.tcurrent,
+        #                                      368.9,
+        #                                      self.acclimation_forcing.loc[index_acclim, 'temp.C.'],
+        #                                      self.acclimation_forcing.loc[index_acclim, 'vpd'],
+        #                                      self.calculate_photosynthetic_photon_flux_density(
+        #                                          self.acclimation_forcing.loc[index_acclim, 'shortwave.W.m2.'], albedo),
+        #                                      soil_water_potential)
 
     def step(
-        self,
-        soil_water_potential,
-        vapour_pressure_deficit,
-        photosynthetic_photon_flux_density,
-        temperature,
+            self,
+            curr_time,
+            soil_water_potential,
+            vapour_pressure_deficit,
+            photosynthetic_photon_flux_density,
+            temperature,  # degrees Celcius, mean temperature
+            topsoil_volumetric_water_content,
+            net_radiation
     ):
+
+        curr_time_dt = datetime(curr_time.year, curr_time.month, curr_time.day)
+        timediff = curr_time_dt - self.time_unit_base
+        self.tcurrent = timediff.days - 1
+
         (
-            evapotranspiration,
+            transpiration,
+            soil_evaporation,
             soil_specific_depletion_1,
             soil_specific_depletion_2,
             soil_specific_depletion_3,
@@ -158,16 +135,19 @@ class Model:
             vapour_pressure_deficit,
             photosynthetic_photon_flux_density,
             temperature,
+            net_radiation,
+            topsoil_volumetric_water_content
         )
 
         soil_specific_depletion_1 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
         soil_specific_depletion_2 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
         soil_specific_depletion_3 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
 
-        evapotranspiration = evapotranspiration / 1000  # kg H2O/m2/day to m/day
+        transpiration = transpiration / 1000  # kg H2O/m2/day to m/day - double check this value
 
         return (
-            evapotranspiration,
+            transpiration,
+            soil_evaporation,
             soil_specific_depletion_1,
             soil_specific_depletion_2,
             soil_specific_depletion_3,

@@ -1163,6 +1163,14 @@ class Soil(object):
         )  #  W/m2 -> umol/m2/s
         return photosynthetic_photon_flux_density
 
+    def calculate_topsoil_volumetric_content(self, topsoil_water_content, topsoil_wilting_point, topsoil_fieldcap):
+        topsoil_volumetric_content = (topsoil_water_content - topsoil_wilting_point)/(topsoil_fieldcap - topsoil_wilting_point)
+        return topsoil_volumetric_content
+    
+    def calculate_net_radiation(self, shortwave_radiation_downwelling, longwave_radiation_net, albedo):
+        net_radiation = shortwave_radiation_downwelling * (1-albedo) - longwave_radiation_net # W/m2
+        return net_radiation
+
     def step(
         self,
         capillary_rise_from_groundwater,
@@ -1378,3 +1386,6 @@ class Soil(object):
             actual_total_transpiration,
             actual_bare_soil_evaporation,
         )
+    def
+
+
