@@ -1342,16 +1342,16 @@ class Soil(object):
                 "photosynthetic_photon_flux_density": self.calculate_photosynthetic_photon_flux_density(
                     shortwave_radiation=self.var.rsds
                 ),
-                "temperature": self.var.Tavg[m],  # - 273.15,  # K to C
+                "temperature": self.var.tas - 273.15,  # - 273.15,  # K to C
                 "topsoil_volumetric_water_content": calculate_topsoil_volumetric_content(
                     topsoil_water_content=self.var.w.sum(axis=0), # todo: need to set up for topsoil layer only
-                    topsoil_wilting_point=self.wres.mean(axis=0),
-                    topsoil_fieldcap=self.wfc.mean(axis=0)
+                    topsoil_wilting_point=self.wres.mean(axis=0), # todo: need to set up for topsoil layer only
+                    topsoil_fieldcap=self.wfc.mean(axis=0) # todo: need to set up for topsoil layer only
                 ),
                 "net_radiation": self.calculate_net_radiation(
-                    shortwave_radiation_downwelling=self.var.Rsds[m] / self.var.WtoMJ,
-                    longwave_radiation_net=self.var.RLN[m] / self.var.WtoMJ,
-                    albedo=self.var.albedoLand[m]
+                    shortwave_radiation_downwelling=self.var.rsds,
+                    longwave_radiation_net=self.var.rlds,
+                    albedo=0.13 # temporary value for forest
                 )
             }
 
@@ -1507,6 +1507,5 @@ class Soil(object):
             actual_total_transpiration,
             actual_bare_soil_evaporation,
         )
-    def
 
 
