@@ -111,7 +111,6 @@ class Model:
 
     def step(
             self,
-            curr_time,
             soil_water_potential,
             vapour_pressure_deficit,
             photosynthetic_photon_flux_density,
@@ -120,9 +119,8 @@ class Model:
             net_radiation
     ):
 
-        curr_time_dt = datetime(curr_time.year, curr_time.month, curr_time.day)
-        timediff = curr_time_dt - self.time_unit_base
-        self.tcurrent = timediff.days - 1
+
+        self.tcurrent += 1
 
         (
             transpiration,

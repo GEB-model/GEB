@@ -1154,7 +1154,14 @@ class Soil(object):
                             biodiversity_scenario,
                         )
                         already_has_plantFATE_cell = True
-                        self.model.plantFATE.append(plantFATE.Model(ini_path))
+                        pfModel = plantFATE.Model(ini_path)
+                        pfModel.plantFATE_model.config.parent_dir = "output_parent_dir"
+                        pfModel.plantFATE_model.config.expt_dir = "output_cell_dir"
+                        pfModel.plantFATE_model.config.continueFrom_stateFile = "default_cluster_start_state"
+                        pfModel.plantFATE_model.config.continueFrom_configFile = "default_cluster_start_config_file"
+                        pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
+                        self.model.plantFATE.append(pfModel)
+
                 else:
                     self.model.plantFATE.append(None)
 
@@ -1343,7 +1350,7 @@ class Soil(object):
                     shortwave_radiation=self.var.rsds
                 ),
                 "temperature": self.var.tas - 273.15,  # - 273.15,  # K to C
-                "topsoil_volumetric_water_content": calculate_topsoil_volumetric_content(
+                "topsoil_volumetric_water_content": self.calculate_topsoil_volumetric_content(
                     topsoil_water_content=self.var.w.sum(axis=0), # todo: need to set up for topsoil layer only
                     topsoil_wilting_point=self.wres.mean(axis=0), # todo: need to set up for topsoil layer only
                     topsoil_fieldcap=self.wfc.mean(axis=0) # todo: need to set up for topsoil layer only
@@ -1354,10 +1361,11 @@ class Soil(object):
                     albedo=0.13 # temporary value for forest
                 )
             }
-
-            if dateVar['newStart']:
-                self.model.plantFATE[m].first_step(
-                    tstart=dateVar['currDate'], **plantFATE_data
+            print(self.model.current_timestep)
+            if self.model.current_timestep == 0:
+                print("First PlantFATE")
+                self.model.plantFATE.first_step(
+                    tstart=0, **plantFATE_data
                 )
                 plantfate_transpiration = 0
                 plantfate_bare_soil_evaporation = 0
@@ -1368,12 +1376,11 @@ class Soil(object):
                     _,
                     _,
                     _,
-                ) = self.model.plantFATE[m].step(curr_time=dateVar['currDate'],
-                                                 **plantFATE_data)
+                ) = self.model.plantFATE.step(**plantFATE_data)
 
             actual_total_transpiration += plantfate_transpiration
             actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
-            self.var.w -= plantfate_evapotranspiration_per_soil_layer ## not used for now
+            # self.var.w -= plantfate_evapotranspiration_per_soil_layer ## not used for now
 
         timer.new_split("Evapotranspiration")
 
