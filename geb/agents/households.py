@@ -165,10 +165,10 @@ class Households(AgentBaseClass):
                     ),
                 ]
 
-        for road_type, path in road_types:
-            with open(model.files["dict"][path], "r") as f:
-                max_damage = json.load(f)
-            self.max_dam_road[road_type] = max_damage["maximum_damage"]
+                for road_type, path in road_types:
+                    with open(model.files["dict"][path], "r") as f:
+                        max_damage = json.load(f)
+                    self.max_dam_road[road_type] = max_damage["maximum_damage"]
 
         with open(
             model.files["dict"][
