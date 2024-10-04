@@ -78,7 +78,7 @@ os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 logger = logging.getLogger(__name__)
 # Define the compressor using Blosc (e.g., Zstandard compression)
 
-compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+compressor = Blosc(cname="lz4", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
 
 @contextmanager
@@ -581,11 +581,26 @@ class GEBModel(GridModel):
                 ]
             ]
 
+            national_data = False
+            # Check whether there is national or subnational data
+            duplicates = donor_data.index.duplicated(keep=False)
+            if duplicates.any():
+                # Data is subnational
+                unique_regions = self.geoms["areamaps/regions"]
+            else:
+                # Data is national
+                unique_regions = (
+                    self.geoms["areamaps/regions"].groupby("ISO3").first().reset_index()
+                )
+                national_data = True
+
             data = self.donate_and_receive_crop_prices(
-                donor_data, self.geoms["areamaps/regions"], GLOBIOM_regions
+                donor_data, unique_regions, GLOBIOM_regions
             )
 
-            prices_plus_crop_price_inflation = self.determine_price_variability(data)
+            prices_plus_crop_price_inflation = self.determine_price_variability(
+                data, unique_regions
+            )
 
             # combine and rename crops
             all_crop_names_model = [
@@ -612,15 +627,18 @@ class GEBModel(GridModel):
                             f"No crop price data available for crop {crop_name}"
                         )
 
-            data = self.inter_and_extrapolate_prices(prices_plus_crop_price_inflation)
+            data = self.inter_and_extrapolate_prices(
+                prices_plus_crop_price_inflation, unique_regions
+            )
 
             if (
                 project_past_until_year is not None
                 or project_future_until_year is not None
             ):
                 data = self.process_additional_years(
-                    data,
+                    costs=data,
                     total_years=total_years,
+                    unique_regions=unique_regions,
                     lower_bound=project_past_until_year,
                     upper_bound=project_future_until_year,
                 )
@@ -636,10 +654,41 @@ class GEBModel(GridModel):
                 .tolist(),  # Extract unique years for the time key
             }
 
+            # If national_data is True, create a mapping from ISO3 code to representative region_id
+            if national_data:
+                unique_regions = data.index.get_level_values("region_id").unique()
+                iso3_codes = (
+                    self.geoms["areamaps/regions"]
+                    .set_index("region_id")
+                    .loc[unique_regions]["ISO3"]
+                )
+                iso3_to_representative_region_id = dict(zip(iso3_codes, unique_regions))
+
             for _, region in self.geoms["areamaps/regions"].iterrows():
                 region_dict = {}
                 region_id = region["region_id"]
-                region_data = data.loc[region_id]
+                region_iso3 = region["ISO3"]
+
+                # Determine the region_id to use based on national_data
+                if national_data:
+                    # Use the representative region_id for this ISO3 code
+                    selected_region_id = iso3_to_representative_region_id.get(
+                        region_iso3
+                    )
+                else:
+                    # Use the actual region_id
+                    selected_region_id = region_id
+
+                # Fetch the data for the selected region_id
+                if selected_region_id in data.index.get_level_values("region_id"):
+                    region_data = data.loc[selected_region_id]
+                else:
+                    # If data is not available for the region, fill with NaNs
+                    region_data = pd.DataFrame(
+                        np.nan, index=formatted_data["time"], columns=data.columns
+                    )
+
+                region_data.index.name = "year"  # Ensure index name is 'year'
 
                 # Ensuring all crops are present according to the crop_data keys
                 for crop_id, crop_info in crop_data.items():
@@ -649,10 +698,12 @@ class GEBModel(GridModel):
                         crop_name = crop_name.rsplit("_", 1)[0]
 
                     if crop_name in region_data.columns:
-                        region_dict[str(crop_id)] = region_data[crop_name].to_list()
+                        region_dict[str(crop_id)] = region_data[crop_name].tolist()
                     else:
                         # Add NaN entries for the entire time period if crop is not present in the region data
-                        region_dict[str(crop_id)] = [np.nan] * len(region_data)
+                        region_dict[str(crop_id)] = [np.nan] * len(
+                            formatted_data["time"]
+                        )
 
                 formatted_data["data"][str(region_id)] = region_dict
 
@@ -740,6 +791,8 @@ class GEBModel(GridModel):
 
         for _, region in recipient_regions.iterrows():
             ISO3 = region["ISO3"]
+            region_id = region["region_id"]
+            self.logger.debug(f"Processing region {region_id}")
             # Filter the data for the current country
             country_data = donor_data[donor_data["ISO3"] == ISO3]
 
@@ -758,9 +811,9 @@ class GEBModel(GridModel):
 
                     # get the country with the least non-NaN values
                     non_na_values = donor_data_region.groupby("ISO3").count()
-                    assert (
-                        non_na_values.max() > 0
-                    ), "No data available for this crop in any country in the region"
+
+                    if non_na_values.max() == 0:
+                        continue
 
                     donor_country = non_na_values.idxmax()
                     donor_data_country = donor_data_region[donor_country]
@@ -794,6 +847,8 @@ class GEBModel(GridModel):
                     else:
                         data_out = data_out.combine_first(new_data)
 
+        # Drop columns that are all NaN
+        data_out = data_out.dropna(axis=1, how="all")
         data_out = data_out.drop(columns=["ISO3"])
         return data_out
 
@@ -814,7 +869,7 @@ class GEBModel(GridModel):
         price_target_LCU = (price_source_LCU / ppp_factor_source) * ppp_factor_target
         return price_target_LCU
 
-    def determine_price_variability(self, costs):
+    def determine_price_variability(self, costs, unique_regions):
         """
         Determines the price variability of all crops in the region and adds a column that describes this variability.
 
@@ -830,7 +885,7 @@ class GEBModel(GridModel):
         """
         costs["_crop_price_inflation"] = np.nan
         # Determine the average changes of price of all crops in the region and add it to the data
-        for _, region in self.geoms["areamaps/regions"].iterrows():
+        for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
             region_data = costs.loc[region_id]
             changes = np.nanmean(
@@ -842,7 +897,7 @@ class GEBModel(GridModel):
 
         return costs
 
-    def inter_and_extrapolate_prices(self, data):
+    def inter_and_extrapolate_prices(self, data, unique_regions):
         """
         Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
@@ -884,7 +939,7 @@ class GEBModel(GridModel):
         ]
 
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
-        for _, region in self.geoms["areamaps/regions"].iterrows():
+        for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
             region_data = data.loc[region_id]
 
@@ -929,11 +984,11 @@ class GEBModel(GridModel):
         return data
 
     def process_additional_years(
-        self, costs, total_years, lower_bound=None, upper_bound=None
+        self, costs, total_years, unique_regions, lower_bound=None, upper_bound=None
     ):
         inflation = self.dict["economics/inflation_rates"]
-        for _, region in self.geoms["areamaps/regions"].iterrows():
-            region_id = str(region["region_id"])
+        for _, region in unique_regions.iterrows():
+            region_id = region["region_id"]
 
             if lower_bound:
                 costs = self.process_region_years(
@@ -974,7 +1029,7 @@ class GEBModel(GridModel):
             operator = "mul"
             step = 1
 
-        inflation_rate_region = inflation["data"][region_id]
+        inflation_rate_region = inflation["data"][str(region_id)]
 
         for year in range(start_year, end_year, step):
             year_str = str(year)
@@ -3168,124 +3223,6 @@ class GEBModel(GridModel):
                 self.set_grid(GEV.sel(dparams="loc"), name="climate/gev_loc")
                 self.set_grid(GEV.sel(dparams="scale"), name="climate/gev_scale")
 
-    def setup_gev(self):
-        import os
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        from scipy.stats import genextreme
-
-        # Create the plots_setup directory if it doesn't exist
-        os.makedirs("plots_setup", exist_ok=True)
-
-        # Load in SPEI
-        SPEI = self.forcing["climate/spei"]
-
-        # Select a single spatial point (e.g., first x and y index)
-        SPEI = SPEI.isel(x=0, y=0)
-
-        # Define rolling window sizes
-        rolling_windows = [5, 6, 7, 8, 9, 10]  # 6-month and 12-month rolling averages
-
-        for window in rolling_windows:
-            # Calculate rolling average
-            SPEI_rolling = SPEI.rolling(time=window, center=False).mean()
-
-            # Adjust time labels after rolling to match the window's end time
-            SPEI_rolling = SPEI_rolling.dropna("time")
-
-            # Plot SPEI rolling time series
-            SPEI_rolling.plot()
-            plt.title(f"SPEI {window}-Month Rolling Average at Selected Point")
-            plt.xlabel("Time")
-            plt.ylabel("SPEI")
-            plt.savefig(f"plots_setup/SPEI_{window}month_rolling_time_series.png")
-            plt.close()
-
-            # Select negative values
-            # negative_SPEI = SPEI_rolling.where(SPEI_rolling < 0)
-
-            # # Plot negative SPEI rolling time series
-            # negative_SPEI.plot()
-            # plt.title(f"Negative SPEI {window}-Month Rolling Average at Selected Point")
-            # plt.xlabel("Time")
-            # plt.ylabel("Negative SPEI")
-            # plt.savefig(
-            #     f"plots_setup/negative_SPEI_{window}month_rolling_time_series.png"
-            # )
-            # plt.close()
-
-            # Group the data by year and find the most negative value for each year
-            SPEI_yearly_neg_min = SPEI_rolling.groupby("time.year").min(
-                dim="time", skipna=True
-            )
-            # Replace NaN with 0 for years with no negative values
-            SPEI_yearly_neg_min = SPEI_yearly_neg_min.dropna(dim="year")
-
-            # Rename 'year' dimension to 'time' for consistency
-            SPEI_yearly_neg_min = SPEI_yearly_neg_min.rename({"year": "time"})
-
-            # Plot SPEI yearly negative minima
-            SPEI_yearly_neg_min.plot(marker="o")
-            plt.title(f"Yearly Most Negative SPEI {window}-Month Rolling Average")
-            plt.xlabel("Year")
-            plt.ylabel("Most Negative SPEI")
-            plt.savefig(f"plots_setup/SPEI_yearly_neg_min_{window}month.png")
-            plt.close()
-
-            # Ensure data is computed and chunked appropriately
-            SPEI_yearly_neg_min = SPEI_yearly_neg_min.chunk({"time": -1}).compute()
-
-            # Fit the Generalized Extreme Value distribution
-            # Assuming xclim is already imported as xci
-            GEV = xci.stats.fit(SPEI_yearly_neg_min, dist="genextreme").compute()
-            GEV.name = "gev"
-
-            # Extract GEV parameters
-            gev_c = GEV.sel(dparams="c")
-            gev_loc = GEV.sel(dparams="loc")
-            gev_scale = GEV.sel(dparams="scale")
-
-            # Since we have only one point, the parameters are scalars
-            # Print the GEV parameters
-            print(f"GEV Parameters for {window}-Month Rolling Average:")
-            print(f"c parameter: {gev_c.values}")
-            print(f"loc parameter: {gev_loc.values}")
-            print(f"scale parameter: {gev_scale.values}")
-
-            # Optionally, you can plot the probability density function (PDF)
-            # Assuming numpy is imported as np and genextreme is imported from scipy.stats
-
-            # Generate a range of SPEI values for plotting the PDF
-            x_values = np.linspace(
-                SPEI_yearly_neg_min.min(), SPEI_yearly_neg_min.max(), 100
-            )
-            pdf_values = genextreme.pdf(
-                x_values, c=gev_c.values, loc=gev_loc.values, scale=gev_scale.values
-            )
-
-            # Plot the fitted GEV PDF
-            plt.plot(x_values, pdf_values)
-            plt.title(
-                f"Fitted GEV Distribution at Selected Point ({window}-Month Rolling)"
-            )
-            plt.xlabel("SPEI")
-            plt.ylabel("Probability Density")
-            plt.savefig(f"plots_setup/gev_pdf_{window}month.png")
-            plt.close()
-
-            # Save the PDF data points into a table (CSV file)
-            # Assuming pandas is imported as pd
-            pdf_table = pd.DataFrame(
-                {"SPEI": x_values, "Probability Density": pdf_values}
-            )
-            pdf_table.to_csv(f"plots_setup/gev_pdf_{window}month_data.csv", index=False)
-
-            print(f"Finished processing for {window}-month rolling average.\n")
-
-        print("All processing done.")
-
     def setup_regions_and_land_use(
         self,
         region_database="gadm_level1",
@@ -5423,7 +5360,7 @@ class GEBModel(GridModel):
             land_cover,
             geom=self.geoms["areamaps/regions"],
             buffer=200,  # 2 km buffer
-        )
+        ).chunk({"x": XY_CHUNKSIZE, "y": XY_CHUNKSIZE})
         del esa_worldcover.attrs["_FillValue"]
         esa_worldcover.name = "lulc"
         esa_worldcover = esa_worldcover.to_dataset()
