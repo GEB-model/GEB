@@ -837,7 +837,7 @@ class CropFarmers(AgentBaseClass):
 
         # Set the cultivation costs
         cultivation_cost_fraction = self.model.config["agent_settings"]["farmers"][
-            "base_management_yield_ratio"
+            "cultivation_cost_fraction"
         ]  # Cultivation costs are set as a fraction of crop prices
         date_index, cultivation_costs_array = self.cultivation_costs
         adjusted_cultivation_costs_array = (
@@ -2465,7 +2465,7 @@ class CropFarmers(AgentBaseClass):
         coefficients_dict = {model: [] for model in model_names}
 
         # Create a folder to save the plots
-        output_folder = "plots"
+        output_folder = "plot/relation_test"
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
@@ -2705,7 +2705,7 @@ class CropFarmers(AgentBaseClass):
         coefficients_dict = {model: [None] * n_groups for model in model_names}
 
         # Create a folder to save the plots
-        output_folder = "plots"
+        output_folder = "plots/relation_test"
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
@@ -4705,9 +4705,9 @@ class CropFarmers(AgentBaseClass):
                 and not self.config["ruleset"] == "no-adaptation"
             ):
                 # Determine the relation between drought probability and yield
-                # self.calculate_yield_spei_relation()
+                self.calculate_yield_spei_relation()
                 # self.calculate_yield_spei_relation_group()
-                self.calculate_yield_spei_relation_test_group()
+                # self.calculate_yield_spei_relation_test_group()
                 timer.new_split("yield-spei relation")
 
                 # These adaptations can only be done if there is a yield-probability relation
