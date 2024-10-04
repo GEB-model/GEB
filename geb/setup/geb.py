@@ -78,7 +78,7 @@ os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 logger = logging.getLogger(__name__)
 # Define the compressor using Blosc (e.g., Zstandard compression)
 
-compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+compressor = Blosc(cname="lz4", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
 
 @contextmanager
@@ -581,11 +581,26 @@ class GEBModel(GridModel):
                 ]
             ]
 
+            national_data = False
+            # Check whether there is national or subnational data
+            duplicates = donor_data.index.duplicated(keep=False)
+            if duplicates.any():
+                # Data is subnational
+                unique_regions = self.geoms["areamaps/regions"]
+            else:
+                # Data is national
+                unique_regions = (
+                    self.geoms["areamaps/regions"].groupby("ISO3").first().reset_index()
+                )
+                national_data = True
+
             data = self.donate_and_receive_crop_prices(
-                donor_data, self.geoms["areamaps/regions"], GLOBIOM_regions
+                donor_data, unique_regions, GLOBIOM_regions
             )
 
-            prices_plus_crop_price_inflation = self.determine_price_variability(data)
+            prices_plus_crop_price_inflation = self.determine_price_variability(
+                data, unique_regions
+            )
 
             # combine and rename crops
             all_crop_names_model = [
@@ -612,15 +627,18 @@ class GEBModel(GridModel):
                             f"No crop price data available for crop {crop_name}"
                         )
 
-            data = self.inter_and_extrapolate_prices(prices_plus_crop_price_inflation)
+            data = self.inter_and_extrapolate_prices(
+                prices_plus_crop_price_inflation, unique_regions
+            )
 
             if (
                 project_past_until_year is not None
                 or project_future_until_year is not None
             ):
                 data = self.process_additional_years(
-                    data,
+                    costs=data,
                     total_years=total_years,
+                    unique_regions=unique_regions,
                     lower_bound=project_past_until_year,
                     upper_bound=project_future_until_year,
                 )
@@ -636,10 +654,41 @@ class GEBModel(GridModel):
                 .tolist(),  # Extract unique years for the time key
             }
 
+            # If national_data is True, create a mapping from ISO3 code to representative region_id
+            if national_data:
+                unique_regions = data.index.get_level_values("region_id").unique()
+                iso3_codes = (
+                    self.geoms["areamaps/regions"]
+                    .set_index("region_id")
+                    .loc[unique_regions]["ISO3"]
+                )
+                iso3_to_representative_region_id = dict(zip(iso3_codes, unique_regions))
+
             for _, region in self.geoms["areamaps/regions"].iterrows():
                 region_dict = {}
                 region_id = region["region_id"]
-                region_data = data.loc[region_id]
+                region_iso3 = region["ISO3"]
+
+                # Determine the region_id to use based on national_data
+                if national_data:
+                    # Use the representative region_id for this ISO3 code
+                    selected_region_id = iso3_to_representative_region_id.get(
+                        region_iso3
+                    )
+                else:
+                    # Use the actual region_id
+                    selected_region_id = region_id
+
+                # Fetch the data for the selected region_id
+                if selected_region_id in data.index.get_level_values("region_id"):
+                    region_data = data.loc[selected_region_id]
+                else:
+                    # If data is not available for the region, fill with NaNs
+                    region_data = pd.DataFrame(
+                        np.nan, index=formatted_data["time"], columns=data.columns
+                    )
+
+                region_data.index.name = "year"  # Ensure index name is 'year'
 
                 # Ensuring all crops are present according to the crop_data keys
                 for crop_id, crop_info in crop_data.items():
@@ -649,10 +698,12 @@ class GEBModel(GridModel):
                         crop_name = crop_name.rsplit("_", 1)[0]
 
                     if crop_name in region_data.columns:
-                        region_dict[str(crop_id)] = region_data[crop_name].to_list()
+                        region_dict[str(crop_id)] = region_data[crop_name].tolist()
                     else:
                         # Add NaN entries for the entire time period if crop is not present in the region data
-                        region_dict[str(crop_id)] = [np.nan] * len(region_data)
+                        region_dict[str(crop_id)] = [np.nan] * len(
+                            formatted_data["time"]
+                        )
 
                 formatted_data["data"][str(region_id)] = region_dict
 
@@ -740,6 +791,8 @@ class GEBModel(GridModel):
 
         for _, region in recipient_regions.iterrows():
             ISO3 = region["ISO3"]
+            region_id = region["region_id"]
+            self.logger.debug(f"Processing region {region_id}")
             # Filter the data for the current country
             country_data = donor_data[donor_data["ISO3"] == ISO3]
 
@@ -758,9 +811,9 @@ class GEBModel(GridModel):
 
                     # get the country with the least non-NaN values
                     non_na_values = donor_data_region.groupby("ISO3").count()
-                    assert (
-                        non_na_values.max() > 0
-                    ), "No data available for this crop in any country in the region"
+
+                    if non_na_values.max() == 0:
+                        continue
 
                     donor_country = non_na_values.idxmax()
                     donor_data_country = donor_data_region[donor_country]
@@ -794,6 +847,8 @@ class GEBModel(GridModel):
                     else:
                         data_out = data_out.combine_first(new_data)
 
+        # Drop columns that are all NaN
+        data_out = data_out.dropna(axis=1, how="all")
         data_out = data_out.drop(columns=["ISO3"])
         return data_out
 
@@ -814,7 +869,7 @@ class GEBModel(GridModel):
         price_target_LCU = (price_source_LCU / ppp_factor_source) * ppp_factor_target
         return price_target_LCU
 
-    def determine_price_variability(self, costs):
+    def determine_price_variability(self, costs, unique_regions):
         """
         Determines the price variability of all crops in the region and adds a column that describes this variability.
 
@@ -830,7 +885,7 @@ class GEBModel(GridModel):
         """
         costs["_crop_price_inflation"] = np.nan
         # Determine the average changes of price of all crops in the region and add it to the data
-        for _, region in self.geoms["areamaps/regions"].iterrows():
+        for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
             region_data = costs.loc[region_id]
             changes = np.nanmean(
@@ -842,7 +897,7 @@ class GEBModel(GridModel):
 
         return costs
 
-    def inter_and_extrapolate_prices(self, data):
+    def inter_and_extrapolate_prices(self, data, unique_regions):
         """
         Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
@@ -884,7 +939,7 @@ class GEBModel(GridModel):
         ]
 
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
-        for _, region in self.geoms["areamaps/regions"].iterrows():
+        for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
             region_data = data.loc[region_id]
 
@@ -929,11 +984,11 @@ class GEBModel(GridModel):
         return data
 
     def process_additional_years(
-        self, costs, total_years, lower_bound=None, upper_bound=None
+        self, costs, total_years, unique_regions, lower_bound=None, upper_bound=None
     ):
         inflation = self.dict["economics/inflation_rates"]
-        for _, region in self.geoms["areamaps/regions"].iterrows():
-            region_id = str(region["region_id"])
+        for _, region in unique_regions.iterrows():
+            region_id = region["region_id"]
 
             if lower_bound:
                 costs = self.process_region_years(
@@ -974,7 +1029,7 @@ class GEBModel(GridModel):
             operator = "mul"
             step = 1
 
-        inflation_rate_region = inflation["data"][region_id]
+        inflation_rate_region = inflation["data"][str(region_id)]
 
         for year in range(start_year, end_year, step):
             year_str = str(year)
@@ -2967,17 +3022,20 @@ class GEBModel(GridModel):
         from https://github.com/johanna-malle/w5e5_downscale, which was licenced under GNU General Public License v3.0.
 
         The resulting wind data is set as forcing data in the model with names of the form 'climate/wind'.
+
+        Currently the global wind atlas database is offline, so the correction is removed
         """
-        global_wind_atlas = self.data_catalog.get_rasterdataset(
-            "global_wind_atlas", bbox=self.grid.raster.bounds, buffer=10
-        ).rename({"x": "lon", "y": "lat"})
-        target = self.grid["areamaps/grid_mask"].rename({"x": "lon", "y": "lat"})
         import xesmf as xe
 
-        regridder = xe.Regridder(global_wind_atlas.copy(), target, "bilinear")
-        global_wind_atlas_regridded = regridder(
-            global_wind_atlas, output_chunks=(-1, -1)
-        )
+        # global_wind_atlas = self.data_catalog.get_rasterdataset(
+        #     "global_wind_atlas", bbox=self.grid.raster.bounds, buffer=10
+        # ).rename({"x": "lon", "y": "lat"})
+        target = self.grid["areamaps/grid_mask"].rename({"x": "lon", "y": "lat"})
+
+        # regridder = xe.Regridder(global_wind_atlas.copy(), target, "bilinear")
+        # global_wind_atlas_regridded = regridder(
+        #     global_wind_atlas, output_chunks=(-1, -1)
+        # )
 
         wind_30_min_avg = self.download_isimip(
             product="SecondaryInputData",
@@ -2990,17 +3048,17 @@ class GEBModel(GridModel):
             dim="time"
         )  # some buffer to avoid edge effects / errors in ISIMIP API
         regridder_30_min = xe.Regridder(wind_30_min_avg, target, "bilinear")
-        wind_30_min_avg_regridded = regridder_30_min(wind_30_min_avg)
+        # wind_30_min_avg_regridded = regridder_30_min(wind_30_min_avg)
 
-        # create diff layer:
-        # assume wind follows weibull distribution => do log transform
-        wind_30_min_avg_regridded_log = np.log(wind_30_min_avg_regridded)
+        # # create diff layer:
+        # # assume wind follows weibull distribution => do log transform
+        # wind_30_min_avg_regridded_log = np.log(wind_30_min_avg_regridded)
 
-        global_wind_atlas_regridded_log = np.log(global_wind_atlas_regridded)
+        # global_wind_atlas_regridded_log = np.log(global_wind_atlas_regridded)
 
-        diff_layer = (
-            global_wind_atlas_regridded_log - wind_30_min_avg_regridded_log
-        )  # to be added to log-transformed daily
+        # diff_layer = (
+        #     global_wind_atlas_regridded_log - wind_30_min_avg_regridded_log
+        # )  # to be added to log-transformed daily
 
         wind_30_min = self.download_isimip(
             product="SecondaryInputData",
@@ -3014,8 +3072,8 @@ class GEBModel(GridModel):
         wind_30min_regridded = regridder_30_min(wind_30_min)
         wind_30min_regridded_log = np.log(wind_30min_regridded)
 
-        wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
-        wind_30min_regridded_corr = np.exp(wind_30min_regridded_log_corr)
+        # wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
+        wind_30min_regridded_corr = np.exp(wind_30min_regridded_log)
 
         wind_output_clipped = wind_30min_regridded_corr.raster.clip_bbox(
             self.grid.raster.bounds
@@ -3030,6 +3088,7 @@ class GEBModel(GridModel):
         self,
         calibration_period_start: date = date(1981, 1, 1),
         calibration_period_end: date = date(2010, 1, 1),
+        window: int = 12,
     ):
         """
         Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
@@ -3116,7 +3175,7 @@ class GEBModel(GridModel):
                 cal_start=calibration_period_start,
                 cal_end=calibration_period_end,
                 freq="MS",
-                window=1,
+                window=window,
                 dist="gamma",
                 method="ML",
             ).chunk(chunks)
@@ -3147,18 +3206,20 @@ class GEBModel(GridModel):
 
                 self.logger.info("calculating GEV parameters...")
 
-                # invert the values and take the max
-                inverted_SPEI = SPEI * -1
+                # negative_SPEI = SPEI.where(SPEI < 0)
 
                 # Group the data by year and find the maximum monthly sum for each year
-                SPEI_yearly_max = inverted_SPEI.groupby("time.year").max(dim="time")
-                SPEI_yearly_max = (
-                    SPEI_yearly_max.rename({"year": "time"})
+                SPEI_yearly_min = SPEI.groupby("time.year").min(dim="time", skipna=True)
+
+                SPEI_yearly_min = SPEI_yearly_min.dropna(dim="year")
+
+                SPEI_yearly_min = (
+                    SPEI_yearly_min.rename({"year": "time"})
                     .chunk({"time": -1})
                     .compute()
                 )
 
-                GEV = xci.stats.fit(SPEI_yearly_max, dist="genextreme").compute()
+                GEV = xci.stats.fit(SPEI_yearly_min, dist="genextreme").compute()
                 GEV.name = "gev"
 
                 self.set_grid(GEV.sel(dparams="c"), name="climate/gev_c")
@@ -3728,7 +3789,6 @@ class GEBModel(GridModel):
     def setup_drip_irrigation_prices_by_reference_year(
         self,
         drip_irrigation_price: float,
-        upkeep_price_per_m2: float,
         reference_year: int,
         start_year: int,
         end_year: int,
@@ -3740,8 +3800,7 @@ class GEBModel(GridModel):
         ----------
         drip_irrigation_price : float
             The price of a drip_irrigation in the reference year.
-        upkeep_price_per_m2 : float
-            The upkeep price per square meter of a drip_irrigation in the reference year.
+
         reference_year : int
             The reference year for the drip_irrigation prices and upkeep prices.
         start_year : int
@@ -3751,78 +3810,51 @@ class GEBModel(GridModel):
 
         Notes
         -----
-        This method sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `economics/inflation_rates` dictionary. It then creates dictionaries to
-        store the drip_irrigation prices and upkeep prices for each region, with the years as the time dimension and the prices as the
-        data dimension.
 
-        The drip_irrigation prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+        The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
         resulting prices are stored in the dictionaries with the region ID as the key.
 
-        The resulting drip_irrigation prices and upkeep prices data are set as dictionary with names of the form
-        'economics/drip_irrigation_prices' and 'economics/upkeep_prices_drip_irrigation_per_m2', respectively.
         """
-        self.logger.info("Setting up drip_irrigation prices by reference year")
-        # create dictory with prices for drip_irrigation_prices per year by applying inflation rates
+        self.logger.info("Setting up well prices by reference year")
+
+        # Retrieve the inflation rates data
         inflation_rates = self.dict["economics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
 
-        drip_irrigation_prices_dict = {
-            "time": list(range(start_year, end_year + 1)),
-            "data": {},
+        # Create a dictionary to store the various types of prices with their initial reference year values
+        price_types = {
+            "drip_irrigation_price": drip_irrigation_price,
         }
-        for region in regions:
-            drip_irrigation_prices = pd.Series(index=range(start_year, end_year + 1))
-            drip_irrigation_prices.loc[reference_year] = drip_irrigation_price
 
-            for year in range(reference_year + 1, end_year + 1):
-                drip_irrigation_prices.loc[year] = (
-                    drip_irrigation_prices[year - 1]
-                    * inflation_rates["data"][region][
-                        inflation_rates["time"].index(str(year))
-                    ]
-                )
-            for year in range(reference_year - 1, start_year - 1, -1):
-                drip_irrigation_prices.loc[year] = (
-                    drip_irrigation_prices[year + 1]
-                    / inflation_rates["data"][region][
-                        inflation_rates["time"].index(str(year + 1))
-                    ]
-                )
+        # Iterate over each price type and calculate the prices across years for each region
+        for price_type, initial_price in price_types.items():
+            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
 
-            drip_irrigation_prices_dict["data"][region] = (
-                drip_irrigation_prices.tolist()
-            )
+            for region in regions:
+                prices = pd.Series(index=range(start_year, end_year + 1))
+                prices.loc[reference_year] = initial_price
 
-        self.set_dict(
-            drip_irrigation_prices_dict, name="economics/drip_irrigation_prices"
-        )
+                # Forward calculation from the reference year
+                for year in range(reference_year + 1, end_year + 1):
+                    prices.loc[year] = (
+                        prices[year - 1]
+                        * inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year))
+                        ]
+                    )
+                # Backward calculation from the reference year
+                for year in range(reference_year - 1, start_year - 1, -1):
+                    prices.loc[year] = (
+                        prices[year + 1]
+                        / inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year + 1))
+                        ]
+                    )
 
-        upkeep_prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
-        for region in regions:
-            upkeep_prices = pd.Series(index=range(start_year, end_year + 1))
-            upkeep_prices.loc[reference_year] = upkeep_price_per_m2
+                prices_dict["data"][region] = prices.tolist()
 
-            for year in range(reference_year + 1, end_year + 1):
-                upkeep_prices.loc[year] = (
-                    upkeep_prices[year - 1]
-                    * inflation_rates["data"][region][
-                        inflation_rates["time"].index(str(year))
-                    ]
-                )
-            for year in range(reference_year - 1, start_year - 1, -1):
-                upkeep_prices.loc[year] = (
-                    upkeep_prices[year + 1]
-                    / inflation_rates["data"][region][
-                        inflation_rates["time"].index(str(year + 1))
-                    ]
-                )
-
-            upkeep_prices_dict["data"][region] = upkeep_prices.tolist()
-
-        self.set_dict(
-            upkeep_prices_dict, name="economics/upkeep_prices_drip_irrigation_per_m2"
-        )
+            # Set the calculated prices in the appropriate dictionary
+            self.set_dict(prices_dict, name=f"economics/{price_type}")
 
     def setup_farmers(self, farmers):
         """
@@ -4273,7 +4305,8 @@ class GEBModel(GridModel):
                     assert not np.isnan(n_cells_per_size_class.loc[size_class])
 
             assert math.isclose(
-                cultivated_land_region_total_cells, n_cells_per_size_class.sum()
+                cultivated_land_region_total_cells,
+                round(n_cells_per_size_class.sum().item()),
             )
 
             whole_cells_per_size_class = (n_cells_per_size_class // 1).astype(int)
@@ -5330,7 +5363,7 @@ class GEBModel(GridModel):
             land_cover,
             geom=self.geoms["areamaps/regions"],
             buffer=200,  # 2 km buffer
-        )
+        ).chunk({"x": XY_CHUNKSIZE, "y": XY_CHUNKSIZE})
         del esa_worldcover.attrs["_FillValue"]
         esa_worldcover.name = "lulc"
         esa_worldcover = esa_worldcover.to_dataset()

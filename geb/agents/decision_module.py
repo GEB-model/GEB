@@ -224,9 +224,6 @@ class DecisionModule:
             & extra_constraint
         )
 
-        # Those who cannot afford it cannot adapt
-        EU_adapt[~unconstrained_mask] = -np.inf
-
         # Iterate only through agents who can afford to adapt
         unconstrained_indices = np.where(unconstrained_mask)[0]
 

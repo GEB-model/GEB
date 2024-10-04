@@ -442,8 +442,25 @@ class Grid(BaseVariables):
     def spei_uncompressed(self):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
-        spei = self.load_forcing(self.spei_ds, self.model.current_time, compress=False)
-        assert not np.isnan(spei[~self.mask]).any()  # no nan values in non-masked cells
+
+        current_time = self.model.current_time
+
+        # Determine the nearest first day of the month
+        if current_time.day <= 15:
+            spei_time = current_time.replace(day=1)
+        else:
+            # Move to the first day of the next month
+            if current_time.month == 12:
+                spei_time = current_time.replace(
+                    year=current_time.year + 1, month=1, day=1
+                )
+            else:
+                spei_time = current_time.replace(month=current_time.month + 1, day=1)
+
+        spei = self.load_forcing(self.spei_ds, spei_time, compress=False)
+        assert not np.isnan(
+            spei[~self.mask]
+        ).any()  # Ensure no NaN values in non-masked cells
         return spei
 
     @property
