@@ -93,7 +93,6 @@ class SFINCS:
         area = region.geometry.area.item()
         area = area / 1000000
         rounded_area = math.floor(area / 100) * 100  # Round down to nearest hundred
-        print(rounded_area)
 
         def vectorize(data, nodata, transform, crs, name="value"):
             feats_gen = shapes(data, mask=data != nodata, transform=transform)
@@ -358,7 +357,6 @@ class SFINCS:
         sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
 
         scaled_event["precipitation"] = sfincs_precipitation
-        print(scaled_event)
         return scaled_event
 
     def run(self, event):
@@ -370,7 +368,6 @@ class SFINCS:
                 self.model.files["table"]["hydrodynamics/risk_scaling_factors"]
             )
             scale_factors["return_period"] = 1 / scale_factors["exceedance_probability"]
-            print(scale_factors)
             damages_list = []
             return_periods_list = []
             exceedence_probabilities_list = []
