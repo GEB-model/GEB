@@ -1,6 +1,5 @@
 import numpy as np
 import geopandas as gpd
-import pyproj
 import calendar
 from .general import AgentArray, downscale_volume, AgentBaseClass
 from ..hydrology.landcover import SEALED
@@ -31,36 +30,28 @@ def from_landuse_raster_to_polygon(rasterdata, landuse_category):
     Returns:
     - Geodataframe
     """
-    # Step 1: Extract data and coordinates
-    data = rasterdata["data"].values  # Get the underlying NumPy array
+    data = rasterdata["data"].values
+    data = data.astype(np.uint8)
 
-    #  data = rasterdata.values  # Get the underlying NumPy array
-    data = data.astype(np.uint8)  # Convert to uint8
+    y_coords = rasterdata.coords["y"].values
+    x_coords = rasterdata.coords["x"].values
 
-    y_coords = rasterdata.coords["y"].values  # Get the y-coordinates
-    x_coords = rasterdata.coords["x"].values  # Get the x-coordinates
-
-    # Step 2: Create a transformation from pixel to coordinate space
     transform = rasterio.transform.from_origin(
         x_coords[0],
-        y_coords[0],  # Top-left corner coordinates
-        abs(x_coords[1] - x_coords[0]),  # Pixel width
-        abs(y_coords[1] - y_coords[0]),  # Pixel height
+        y_coords[0],
+        abs(x_coords[1] - x_coords[0]),
+        abs(y_coords[1] - y_coords[0]),
     )
 
-    # Step 3: Create a mask for the specific land use category
-    mask = data == landuse_category  # Mask for the specific category
+    mask = data == landuse_category
 
-    # Step 4: Convert raster data to polygons using the mask
     shapes_gen = shapes(data, mask=mask, transform=transform)
 
-    # Step 5: Collect the polygons for the specified land use category
     polygons = []
     for geom, value in shapes_gen:
         if value == landuse_category:
             polygons.append(shape(geom))
 
-    # Step 6: Create a GeoDataFrame for the polygons
     gdf = gpd.GeoDataFrame(
         {"value": [landuse_category] * len(polygons), "geometry": polygons}
     )

@@ -340,6 +340,10 @@ gcam_electricity_rates:
   path: economics/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
+  meta:
+    source_url: https://github.com/JGCRI/superwell
+    source_version: 1.0
+    unit: USD (2016)
 gadm_level1:
   crs: 4326
   data_type: GeoDataFrame
@@ -549,7 +553,7 @@ ghs_pop_2020_54009_v2023a:
     source_url: https://ghsl.jrc.ec.europa.eu/download.php?ds=pop
   path: /scistor/ivm/data_catalogue/population/GHSL/GHS_POP/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif
 FAO_crop_price:
-  path: crops/FAOSTAT_producer_price_lcu.csv
+  path: crops/FAOSTAT_data_en_9-27-2024.csv
   driver: csv
   data_type: DataFrame
   meta:
@@ -557,7 +561,7 @@ FAO_crop_price:
     source_author: FAO
     source_license: CC-BY-4.0
     source_url: https://www.fao.org/faostat/en/#data/PP
-    source_version: Producer price in LCU 
+    source_version: Producer price in USD per tonne 
   rename:
     Year: year
     Value: price_per_kg
@@ -786,9 +790,19 @@ soilgrids_2017_{variable}:
     variable: ["BDTICM"]
   unit_mult:
     BDTICM_M_250m_ll: 0.01
-GLOBIOM_regions:
+GLOBIOM_regions_59:
   data_type: DataFrame
   driver: excel
   path: GLOBIOM/Region_Country_Mapping.xlsx
   meta:
     source_url: https://www.isric.org/explore/soilgrids
+  kwargs:
+    sheet_name: Region59
+GLOBIOM_regions_37:
+  data_type: DataFrame
+  driver: excel
+  path: GLOBIOM/Region_Country_Mapping.xlsx
+  meta:
+    source_url: https://www.isric.org/explore/soilgrids
+  kwargs:
+    sheet_name: Region37

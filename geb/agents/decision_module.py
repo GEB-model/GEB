@@ -155,7 +155,7 @@ class DecisionModule:
         ## Here all
         y = EU_store
         x = p_all_events
-        EU_do_nothing_array = np.trapezoid(y=y, x=x, axis=0)
+        EU_do_nothing_array = np.trapz(y=y, x=x, axis=0)
 
         # People who already adapted cannot adapt, changed to a condition in the function that calls this, need the SEUT of doing nothing of those that have adapted
         # EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
@@ -223,9 +223,6 @@ class DecisionModule:
             & (adapted == 0)
             & extra_constraint
         )
-
-        # Those who cannot afford it cannot adapt
-        EU_adapt[~unconstrained_mask] = -np.inf
 
         # Iterate only through agents who can afford to adapt
         unconstrained_indices = np.where(unconstrained_mask)[0]
