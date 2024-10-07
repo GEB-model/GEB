@@ -6,7 +6,7 @@ import copy
 import calendar
 from typing import Any, Dict, Tuple, Union
 
-from scipy.stats import genextreme, norm
+from scipy.stats import genextreme
 from scipy.optimize import curve_fit
 
 # from gplearn.genetic import SymbolicRegressor
