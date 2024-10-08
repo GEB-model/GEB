@@ -3027,15 +3027,15 @@ class GEBModel(GridModel):
         """
         import xesmf as xe
 
-        # global_wind_atlas = self.data_catalog.get_rasterdataset(
-        #     "global_wind_atlas", bbox=self.grid.raster.bounds, buffer=10
-        # ).rename({"x": "lon", "y": "lat"})
+        global_wind_atlas = self.data_catalog.get_rasterdataset(
+            "global_wind_atlas", bbox=self.grid.raster.bounds, buffer=10
+        ).rename({"x": "lon", "y": "lat"})
         target = self.grid["areamaps/grid_mask"].rename({"x": "lon", "y": "lat"})
 
-        # regridder = xe.Regridder(global_wind_atlas.copy(), target, "bilinear")
-        # global_wind_atlas_regridded = regridder(
-        #     global_wind_atlas, output_chunks=(-1, -1)
-        # )
+        regridder = xe.Regridder(global_wind_atlas.copy(), target, "bilinear")
+        global_wind_atlas_regridded = regridder(
+            global_wind_atlas, output_chunks=(-1, -1)
+        )
 
         wind_30_min_avg = self.download_isimip(
             product="SecondaryInputData",
@@ -3048,17 +3048,17 @@ class GEBModel(GridModel):
             dim="time"
         )  # some buffer to avoid edge effects / errors in ISIMIP API
         regridder_30_min = xe.Regridder(wind_30_min_avg, target, "bilinear")
-        # wind_30_min_avg_regridded = regridder_30_min(wind_30_min_avg)
+        wind_30_min_avg_regridded = regridder_30_min(wind_30_min_avg)
 
-        # # create diff layer:
-        # # assume wind follows weibull distribution => do log transform
-        # wind_30_min_avg_regridded_log = np.log(wind_30_min_avg_regridded)
+        # create diff layer:
+        # assume wind follows weibull distribution => do log transform
+        wind_30_min_avg_regridded_log = np.log(wind_30_min_avg_regridded)
 
-        # global_wind_atlas_regridded_log = np.log(global_wind_atlas_regridded)
+        global_wind_atlas_regridded_log = np.log(global_wind_atlas_regridded)
 
-        # diff_layer = (
-        #     global_wind_atlas_regridded_log - wind_30_min_avg_regridded_log
-        # )  # to be added to log-transformed daily
+        diff_layer = (
+            global_wind_atlas_regridded_log - wind_30_min_avg_regridded_log
+        )  # to be added to log-transformed daily
 
         wind_30_min = self.download_isimip(
             product="SecondaryInputData",
@@ -3072,8 +3072,8 @@ class GEBModel(GridModel):
         wind_30min_regridded = regridder_30_min(wind_30_min)
         wind_30min_regridded_log = np.log(wind_30min_regridded)
 
-        # wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
-        wind_30min_regridded_corr = np.exp(wind_30min_regridded_log)
+        wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
+        wind_30min_regridded_corr = np.exp(wind_30min_regridded_log_corr)
 
         wind_output_clipped = wind_30min_regridded_corr.raster.clip_bbox(
             self.grid.raster.bounds
