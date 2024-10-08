@@ -25,6 +25,7 @@ import math
 import pandas as pd
 import numpy as np
 from geb.workflows import balance_check
+from geb.HRUs import load_grid
 
 from .routing.subroutines import (
     subcatchment1,
@@ -326,11 +327,41 @@ class LakesReservoirs(object):
             upstream_area_within_waterbodies, waterBodyID
         )
 
+        # in some cases the cell with the highest number of upstream cells
+        # has mulitple occurences in the same lake, this seems to happen
+        # especially for very small lakes with a small drainage area.
+        # In such cases, we take the outflow cell with the lowest elevation.
+        outflow_elevation = load_grid(
+            self.model.files["grid"]["routing/kinematic/outflow_elevation"]
+        )
+        outflow_elevation = self.var.compress(outflow_elevation)
+
         waterbody_outflow_points = np.where(
             self.var.upstream_area_n_cells == upstream_area_within_waterbodies,
             waterBodyID,
             -1,
         )
+
+        number_of_outflow_points_per_waterbody = np.unique(
+            waterbody_outflow_points, return_counts=True
+        )
+        duplicate_outflow_points = number_of_outflow_points_per_waterbody[0][
+            number_of_outflow_points_per_waterbody[1] > 1
+        ]
+        duplicate_outflow_points = duplicate_outflow_points[
+            duplicate_outflow_points != -1
+        ]
+
+        for duplicate_outflow_point in duplicate_outflow_points:
+            minimum_elevation_outflows_idx = np.argmin(
+                outflow_elevation[waterbody_outflow_points == duplicate_outflow_point]
+            )
+            waterbody_outflow_points[
+                np.where(waterbody_outflow_points == duplicate_outflow_point)[0][
+                    minimum_elevation_outflows_idx
+                ]
+            ] = -1
+
         # make sure that each water body has an outflow
         assert np.array_equal(
             np.unique(waterbody_outflow_points), np.unique(waterBodyID)
