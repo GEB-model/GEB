@@ -22,6 +22,7 @@
 from time import time
 from contextlib import contextmanager
 import os
+from pathlib import Path
 import numpy as np
 from numba import njit
 from xmipy import XmiWrapper
@@ -30,6 +31,8 @@ import json
 import hashlib
 import platform
 from pyproj import CRS, Transformer
+
+MODFLOW_VERSION = "6.5.0"
 
 
 @contextmanager
@@ -262,7 +265,6 @@ class ModFlowSimulation:
         sim = flopy.mf6.MFSimulation(
             sim_name=self.name,
             version="mf6",
-            exe_name=os.path.join("modflow", "mf6"),
             sim_ws=os.path.realpath(self.working_directory),
         )
         flopy.mf6.ModflowTdis(sim, nper=ndays, perioddata=[(1.0, 1, 1)] * ndays)
@@ -518,23 +520,31 @@ class ModFlowSimulation:
 
         # Current model version 6.5.0 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.5.0
         if platform.system() == "Windows":
-            libary_name = "windows/libmf6.dll"
+            libary_name = "libmf6.dll"
         elif platform.system() == "Linux":
-            libary_name = "linux/libmf6.so"
+            libary_name = "libmf6.so"
         elif platform.system() == "Darwin":
-            # check for ARM chip
-            if platform.machine() == "arm64":
-                libary_name = "mac_arm/libmf6.dylib"
-            else:
-                libary_name = "mac/libmf6.dylib"
+            libary_name = "libmf6.dylib"
         else:
-            raise ValueError(f"Platform {platform.system()} not recognized.")
+            raise ValueError(f"Platform {platform.system()} not supported.")
 
         with cd(self.working_directory):
-            # modflow requires the real path (no symlinks etc.)
-            library_path = os.path.realpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), libary_name)
-            )
+            # XmiWrapper requires the real path (no symlinks etc.)
+            # include the version in the folder name to allow updating the version
+            # so that the user will automatically get the new version
+            library_folder = (Path(__file__).parent / "bin" / MODFLOW_VERSION).resolve()
+            library_path = library_folder / libary_name
+
+            if not library_path.exists():
+                library_folder.mkdir(exist_ok=True, parents=True)
+
+                flopy.utils.get_modflow(
+                    bindir=str(library_folder),
+                    repo="modflow6",
+                    subset=[libary_name],
+                    release_id=MODFLOW_VERSION,
+                )
+
             assert os.path.exists(library_path)
             try:
                 self.mf6 = XmiWrapper(library_path)

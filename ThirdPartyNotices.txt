@@ -6,7 +6,5 @@ This project incorporates components from the projects listed below.
     License: GNU General Public License v3.0
 - GLOBGM (https://github.com/UU-Hydro/GLOBGM)
     License: GNU General Public License v3.0
-- MODFLOW (https://github.com/MODFLOW-USGS/modflow6)
-    License: CC0 1.0 Universal
 - w5e5_downscale (https://github.com/johanna-malle/w5e5_downscale)
     License: GNU General Public License v3.0
