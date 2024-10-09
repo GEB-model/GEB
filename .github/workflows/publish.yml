@@ -9,7 +9,7 @@ jobs:
     name: Publish release to PyPI
     runs-on: ubuntu-24.04
     environment:
-      name: release
+      name: "release"
       url: https://pypi.org/project/geb/
     permissions:
       id-token: write
