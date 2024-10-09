@@ -166,6 +166,10 @@ class GEBModel(GridModel):
                 self.read_subgrid()
         return self._subgrid
 
+    @subgrid.setter
+    def subgrid(self, value):
+        self._subgrid = value
+
     @property
     def region_subgrid(self):
         """Model static gridded data as xarray.Dataset."""
@@ -175,6 +179,10 @@ class GEBModel(GridModel):
                 self.read_region_subgrid()
         return self._region_subgrid
 
+    @region_subgrid.setter
+    def region_subgrid(self, value):
+        self._region_subgrid = value
+
     @property
     def MERIT_grid(self):
         """Model static gridded data as xarray.Dataset."""
@@ -183,6 +191,10 @@ class GEBModel(GridModel):
             if self._read:
                 self.read_MERIT_grid()
         return self._MERIT_grid
+
+    @MERIT_grid.setter
+    def MERIT_grid(self, value):
+        self._MERIT_grid = value
 
     def setup_grid(
         self,
@@ -1625,21 +1637,20 @@ class GEBModel(GridModel):
                 dtype=np.int32,
                 name="routing/lakesreservoirs/command_areas",
                 crs=self.grid.raster.crs,
-                lazy=True,
             )
+            command_areas[:] = -1
             subcommand_areas = hydromt.raster.full(
                 self.subgrid.raster.coords,
                 nodata=-1,
                 dtype=np.int32,
                 name="routing/lakesreservoirs/subcommand_areas",
                 crs=self.subgrid.raster.crs,
-                lazy=True,
             )
+            subcommand_areas[:] = -1
             self.set_grid(command_areas, name="routing/lakesreservoirs/command_areas")
             self.set_subgrid(
                 subcommand_areas, name="routing/lakesreservoirs/subcommand_areas"
             )
-            waterbodies["relative_area_in_region"] = 1
 
         if custom_reservoir_capacity:
             custom_reservoir_capacity = self.data_catalog.get_dataframe(
@@ -3027,15 +3038,15 @@ class GEBModel(GridModel):
         """
         import xesmf as xe
 
-        # global_wind_atlas = self.data_catalog.get_rasterdataset(
-        #     "global_wind_atlas", bbox=self.grid.raster.bounds, buffer=10
-        # ).rename({"x": "lon", "y": "lat"})
+        global_wind_atlas = self.data_catalog.get_rasterdataset(
+            "global_wind_atlas", bbox=self.grid.raster.bounds, buffer=10
+        ).rename({"x": "lon", "y": "lat"})
         target = self.grid["areamaps/grid_mask"].rename({"x": "lon", "y": "lat"})
 
-        # regridder = xe.Regridder(global_wind_atlas.copy(), target, "bilinear")
-        # global_wind_atlas_regridded = regridder(
-        #     global_wind_atlas, output_chunks=(-1, -1)
-        # )
+        regridder = xe.Regridder(global_wind_atlas.copy(), target, "bilinear")
+        global_wind_atlas_regridded = regridder(
+            global_wind_atlas, output_chunks=(-1, -1)
+        )
 
         wind_30_min_avg = self.download_isimip(
             product="SecondaryInputData",
@@ -3048,17 +3059,17 @@ class GEBModel(GridModel):
             dim="time"
         )  # some buffer to avoid edge effects / errors in ISIMIP API
         regridder_30_min = xe.Regridder(wind_30_min_avg, target, "bilinear")
-        # wind_30_min_avg_regridded = regridder_30_min(wind_30_min_avg)
+        wind_30_min_avg_regridded = regridder_30_min(wind_30_min_avg)
 
-        # # create diff layer:
-        # # assume wind follows weibull distribution => do log transform
-        # wind_30_min_avg_regridded_log = np.log(wind_30_min_avg_regridded)
+        # create diff layer:
+        # assume wind follows weibull distribution => do log transform
+        wind_30_min_avg_regridded_log = np.log(wind_30_min_avg_regridded)
 
-        # global_wind_atlas_regridded_log = np.log(global_wind_atlas_regridded)
+        global_wind_atlas_regridded_log = np.log(global_wind_atlas_regridded)
 
-        # diff_layer = (
-        #     global_wind_atlas_regridded_log - wind_30_min_avg_regridded_log
-        # )  # to be added to log-transformed daily
+        diff_layer = (
+            global_wind_atlas_regridded_log - wind_30_min_avg_regridded_log
+        )  # to be added to log-transformed daily
 
         wind_30_min = self.download_isimip(
             product="SecondaryInputData",
@@ -3072,8 +3083,8 @@ class GEBModel(GridModel):
         wind_30min_regridded = regridder_30_min(wind_30_min)
         wind_30min_regridded_log = np.log(wind_30min_regridded)
 
-        # wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
-        wind_30min_regridded_corr = np.exp(wind_30min_regridded_log)
+        wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
+        wind_30min_regridded_corr = np.exp(wind_30min_regridded_log_corr)
 
         wind_output_clipped = wind_30min_regridded_corr.raster.clip_bbox(
             self.grid.raster.bounds
@@ -6066,21 +6077,21 @@ class GEBModel(GridModel):
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["subgrid"][name] = {"updated": update}
-        self._set_grid(self.subgrid, data, name=name)
+        self.subgrid = self._set_grid(self.subgrid, data, name=name)
         return self.subgrid[name]
 
     def set_region_subgrid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["region_subgrid"][name] = {"updated": update}
-        self._set_grid(self.region_subgrid, data, name=name)
+        self.region_subgrid = self._set_grid(self.region_subgrid, data, name=name)
         return self.region_subgrid[name]
 
     def set_MERIT_grid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["MERIT_grid"][name] = {"updated": update}
-        self._set_grid(self.MERIT_grid, data, name=name)
+        self.MERIT_grid = self._set_grid(self.MERIT_grid, data, name=name)
         return self.MERIT_grid[name]
 
     def set_alternate_root(self, root, mode):
