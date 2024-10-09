@@ -11,7 +11,7 @@ GEB (Geographic Environmental and Behavioural model) aims to simulate both the e
 
 The figure below shows a schematic overview of the model agent-based and hydrological model.
 
-![Schematic model overview of GEB.](/docs/images/schematic_overview.svg "Schematic model overview")
+![Schematic model overview of GEB.](https://raw.githubusercontent.com/GEB-model/GEB/refs/heads/main/docs/images/schematic_overview.svg "Schematic model overview")
 
 ## Cite as
 
@@ -27,7 +27,7 @@ Kalthof, M. W. M. L., de Bruijn, J., de Moel, H., Kreibich, H., and Aerts, J. C.
 
 GEB builds on, couples and extends several models, depicted in the figure below.
 
-![Model components of GEB.](/docs/images/models_overview.svg "Schematic model overview")
+![Model components of GEB.](https://raw.githubusercontent.com/GEB-model/GEB/refs/heads/main/docs/images/models_overview.svg "Schematic model overview")
 
 1. Burek, Peter, et al. "Development of the Community Water Model (CWatM v1.04) A high-resolution hydrological model for global and regional assessment of integrated water resources management." (2019).
 2. Langevin, Christian D., et al. Documentation for the MODFLOW 6 groundwater flow model. No. 6-A55. US Geological Survey, 2017.
