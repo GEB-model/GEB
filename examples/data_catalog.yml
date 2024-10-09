@@ -407,7 +407,7 @@ GDL_regions_v4:
     source_license: https://globaldatalab.org/termsofuse/
 GLOPOP-S:
   data_type: Dataset
-  path: /scistor/ivm/data_catalogue/population/GLOPOP-S/{region}.dat.gz
+  path: /scistor/ivm/data_catalogue/population/synthpop_{region}.dat.gz
 ERA5_geopotential:
   data_type: RasterDataset
   driver: netcdf
@@ -498,6 +498,13 @@ lowder_farm_sizes:
     paper_ref: Lowder Sarah K. et al. 2016
     source_license: CC BY-NC-ND 4.0
     source_url: https://doi.org/10.1016/j.worlddev.2015.10.041
+risk_aversion_global:
+  path: socioeconomic/social/risk_aversion_global.csv
+  driver: csv
+  data_type: DataFrame
+  meta:
+    category: risk preferences
+    source_url:  https://www.jstor.org/stable/24550502
 cwatm_domestic_water_demand_{scenario}_year:
   crs: 4326
   data_type: RasterDataset

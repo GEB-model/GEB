@@ -57,6 +57,7 @@ from .workflows.conversions import (
     M49_to_ISO3,
     SUPERWELL_NAME_TO_ISO3,
     GLOBIOM_NAME_TO_ISO3,
+    COUNTRY_NAME_TO_ISO3,
 )
 from .workflows.forcing import (
     reproject_and_apply_lapse_rate_temperature,
@@ -530,6 +531,10 @@ class GEBModel(GridModel):
             GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
                 GLOBIOM_NAME_TO_ISO3
             )
+            # For my personal branch
+            GLOBIOM_regions.loc[
+                GLOBIOM_regions["Country"] == "Switzerland", "Region37"
+            ] = "EU_MidWest"
             assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
             ISO3_codes_region = self.geoms["areamaps/regions"]["ISO3"].unique()
@@ -4084,122 +4089,8 @@ class GEBModel(GridModel):
                 "Country"
             ].ffill()
 
-            # convert country names to ISO3 codes
-            iso3_codes = {
-                "Albania": "ALB",
-                "Algeria": "DZA",
-                "American Samoa": "ASM",
-                "Argentina": "ARG",
-                "Austria": "AUT",
-                "Bahamas": "BHS",
-                "Barbados": "BRB",
-                "Belgium": "BEL",
-                "Brazil": "BRA",
-                "Bulgaria": "BGR",
-                "Burkina Faso": "BFA",
-                "Chile": "CHL",
-                "Colombia": "COL",
-                "Côte d'Ivoire": "CIV",
-                "Croatia": "HRV",
-                "Cyprus": "CYP",
-                "Czech Republic": "CZE",
-                "Democratic Republic of the Congo": "COD",
-                "Denmark": "DNK",
-                "Dominica": "DMA",
-                "Ecuador": "ECU",
-                "Egypt": "EGY",
-                "Estonia": "EST",
-                "Ethiopia": "ETH",
-                "Fiji": "FJI",
-                "Finland": "FIN",
-                "France": "FRA",
-                "French Polynesia": "PYF",
-                "Georgia": "GEO",
-                "Germany": "DEU",
-                "Greece": "GRC",
-                "Grenada": "GRD",
-                "Guam": "GUM",
-                "Guatemala": "GTM",
-                "Guinea": "GIN",
-                "Honduras": "HND",
-                "India": "IND",
-                "Indonesia": "IDN",
-                "Iran (Islamic Republic of)": "IRN",
-                "Ireland": "IRL",
-                "Italy": "ITA",
-                "Japan": "JPN",
-                "Jamaica": "JAM",
-                "Jordan": "JOR",
-                "Korea, Rep. of": "KOR",
-                "Kyrgyzstan": "KGZ",
-                "Lao People's Democratic Republic": "LAO",
-                "Latvia": "LVA",
-                "Lebanon": "LBN",
-                "Lithuania": "LTU",
-                "Luxembourg": "LUX",
-                "Malta": "MLT",
-                "Morocco": "MAR",
-                "Myanmar": "MMR",
-                "Namibia": "NAM",
-                "Nepal": "NPL",
-                "Netherlands": "NLD",
-                "Nicaragua": "NIC",
-                "Northern Mariana Islands": "MNP",
-                "Norway": "NOR",
-                "Pakistan": "PAK",
-                "Panama": "PAN",
-                "Paraguay": "PRY",
-                "Peru": "PER",
-                "Philippines": "PHL",
-                "Poland": "POL",
-                "Portugal": "PRT",
-                "Puerto Rico": "PRI",
-                "Qatar": "QAT",
-                "Romania": "ROU",
-                "Saint Lucia": "LCA",
-                "Saint Vincent and the Grenadines": "VCT",
-                "Samoa": "WSM",
-                "Senegal": "SEN",
-                "Serbia": "SRB",
-                "Sweden": "SWE",
-                "Switzerland": "CHE",
-                "Thailand": "THA",
-                "Trinidad and Tobago": "TTO",
-                "Turkey": "TUR",
-                "Uganda": "UGA",
-                "United Kingdom": "GBR",
-                "United States of America": "USA",
-                "Uruguay": "URY",
-                "Venezuela (Bolivarian Republic of)": "VEN",
-                "Virgin Islands, United States": "VIR",
-                "Yemen": "YEM",
-                "Cook Islands": "COK",
-                "French Guiana": "GUF",
-                "Guadeloupe": "GLP",
-                "Martinique": "MTQ",
-                "Réunion": "REU",
-                "Canada": "CAN",
-                "China": "CHN",
-                "Guinea Bissau": "GNB",
-                "Hungary": "HUN",
-                "Lesotho": "LSO",
-                "Libya": "LBY",
-                "Malawi": "MWI",
-                "Mozambique": "MOZ",
-                "New Zealand": "NZL",
-                "Slovakia": "SVK",
-                "Slovenia": "SVN",
-                "Spain": "ESP",
-                "St. Kitts & Nevis": "KNA",
-                "Viet Nam": "VNM",
-                "Australia": "AUS",
-                "Djibouti": "DJI",
-                "Mali": "MLI",
-                "Togo": "TGO",
-                "Zambia": "ZMB",
-            }
             farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
-                iso3_codes
+                COUNTRY_NAME_TO_ISO3
             )
             assert (
                 not farm_sizes_per_region["ISO3"].isna().any()
@@ -4415,15 +4306,423 @@ class GEBModel(GridModel):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
+    def setup_household_characteristics(self, maximum_age=85):
+        import gzip
+        from honeybees.library.raster import pixels_to_coords
+
+        n_farmers = self.binary["agents/farmers/id"].size
+        farms = self.subgrid["agents/farmers/farms"]
+
+        # get farmer locations
+        vertical_index = (
+            np.arange(farms.shape[0])
+            .repeat(farms.shape[1])
+            .reshape(farms.shape)[farms != -1]
+        )
+        horizontal_index = np.tile(np.arange(farms.shape[1]), farms.shape[0]).reshape(
+            farms.shape
+        )[farms != -1]
+        farms_flattened = farms.values[farms.values != -1]
+
+        pixels = np.zeros((n_farmers, 2), dtype=np.int32)
+        pixels[:, 0] = np.round(
+            np.bincount(farms_flattened, horizontal_index)
+            / np.bincount(farms_flattened)
+        ).astype(int)
+        pixels[:, 1] = np.round(
+            np.bincount(farms_flattened, vertical_index) / np.bincount(farms_flattened)
+        ).astype(int)
+
+        locations = pixels_to_coords(pixels + 0.5, farms.raster.transform.to_gdal())
+        locations = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(locations[:, 0], locations[:, 1]),
+            crs="EPSG:4326",
+        )  # convert locations to geodataframe
+
+        # GLOPOP-S uses the GDL regions. So we need to get the GDL region for each farmer using their location
+        GDL_regions = self.data_catalog.get_geodataframe(
+            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+        )
+        GDL_region_per_farmer = gpd.sjoin(
+            locations, GDL_regions, how="left", predicate="within"
+        )
+
+        # ensure that each farmer has a region
+        assert GDL_region_per_farmer["GDLcode"].notna().all()
+
+        # Load GLOPOP-S data. This is a binary file and has no proper loading in hydromt. So we use the data catalog to get the path and format the path with the regions and load it with NumPy
+        GLOPOP_S = self.data_catalog.get_source("GLOPOP-S")
+
+        GLOPOP_S_attribute_names = [
+            "HID",
+            "RELATE_HEAD",
+            "INCOME",
+            "WEALTH",
+            "RURAL",
+            "AGE",
+            "GENDER",
+            "EDUC",
+            "HHTYPE",
+            "HHSIZE_CAT",
+            "AGRI_OWNERSHIP",
+            "FLOOR",
+            "WALL",
+            "ROOF",
+            "SOURCE",
+        ]
+
+        # Get list of unique GDL codes from farmer dataframe
+        attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH", "INCOME"]
+
+        for column in attributes_to_include:
+            GDL_region_per_farmer[column] = np.full(
+                len(GDL_region_per_farmer), -1, dtype=np.int32
+            )
+
+        for GDL_region, farmers_GDL_region in GDL_region_per_farmer.groupby("GDLcode"):
+            with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
+                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
+
+            n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
+            GLOPOP_S_region = pd.DataFrame(
+                np.reshape(
+                    GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
+                ).transpose(),
+                columns=GLOPOP_S_attribute_names,
+            )
+
+            # select farmers only
+            GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(
+                "RURAL", axis=1
+            )
+
+            # shuffle GLOPOP-S data to avoid biases in that regard
+            GLOPOP_S_household_IDs = GLOPOP_S_region["HID"].unique()
+            np.random.shuffle(GLOPOP_S_household_IDs)  # shuffle array in-place
+            GLOPOP_S_region = (
+                GLOPOP_S_region.set_index("HID")
+                .loc[GLOPOP_S_household_IDs]
+                .reset_index()
+            )
+
+            # Select a sample of farmers from the database. Because the households were
+            # shuflled there is no need to pick random households, we can just take the first n_farmers.
+            # If there are not enough farmers in the region, we need to upsample the data. In this case
+            # we will just take the same farmers multiple times starting from the top.
+            GLOPOP_S_household_IDs = GLOPOP_S_region["HID"].values
+
+            # first we mask out all consecutive duplicates
+            mask = np.concatenate(
+                ([True], GLOPOP_S_household_IDs[1:] != GLOPOP_S_household_IDs[:-1])
+            )
+            GLOPOP_S_household_IDs = GLOPOP_S_household_IDs[mask]
+
+            GLOPOP_S_region_sampled = []
+            if GLOPOP_S_household_IDs.size < len(farmers_GDL_region):
+                n_repetitions = len(farmers_GDL_region) // GLOPOP_S_household_IDs.size
+                max_household_ID = GLOPOP_S_household_IDs.max()
+                for i in range(n_repetitions):
+                    GLOPOP_S_region_copy = GLOPOP_S_region.copy()
+                    # increase the household ID to avoid duplicate household IDs. Using (i + 1) so that the original household IDs are not changed
+                    # so that they can be used in the final "topping up" below.
+                    GLOPOP_S_region_copy["HID"] = GLOPOP_S_region_copy["HID"] + (
+                        (i + 1) * max_household_ID
+                    )
+                    GLOPOP_S_region_sampled.append(GLOPOP_S_region_copy)
+                requested_farmers = (
+                    len(farmers_GDL_region) % GLOPOP_S_household_IDs.size
+                )
+            else:
+                requested_farmers = len(farmers_GDL_region)
+
+            GLOPOP_S_household_IDs = GLOPOP_S_household_IDs[:requested_farmers]
+            GLOPOP_S_region_sampled.append(
+                GLOPOP_S_region[GLOPOP_S_region["HID"].isin(GLOPOP_S_household_IDs)]
+            )
+
+            GLOPOP_S_region_sampled = pd.concat(
+                GLOPOP_S_region_sampled, ignore_index=True
+            )
+            assert GLOPOP_S_region_sampled["HID"].unique().size == len(
+                farmers_GDL_region
+            )
+
+            households_region = GLOPOP_S_region_sampled.groupby("HID")
+            # select only household heads
+            household_heads = households_region.apply(
+                lambda x: x[x["RELATE_HEAD"] == 1]
+            )
+            assert len(household_heads) == len(farmers_GDL_region)
+
+            # # age
+            # household_heads["AGE_continuous"] = np.full(
+            #     len(household_heads), -1, dtype=np.int32
+            # )
+            age_class_to_age = {
+                1: (0, 16),
+                2: (16, 26),
+                3: (26, 36),
+                4: (36, 46),
+                5: (46, 56),
+                6: (56, 66),
+                7: (66, maximum_age + 1),
+            }  # exclusive
+            for age_class, age_range in age_class_to_age.items():
+                household_heads_age_class = household_heads[
+                    household_heads["AGE"] == age_class
+                ]
+                household_heads.loc[household_heads_age_class.index, "AGE"] = (
+                    np.random.randint(
+                        age_range[0],
+                        age_range[1],
+                        size=len(household_heads_age_class),
+                        dtype=GDL_region_per_farmer["AGE"].dtype,
+                    )
+                )
+            GDL_region_per_farmer.loc[farmers_GDL_region.index, "AGE"] = (
+                household_heads["AGE"].values
+            )
+
+            # education level
+            GDL_region_per_farmer.loc[farmers_GDL_region.index, "EDUC"] = (
+                household_heads["EDUC"].values
+            )
+
+            # household size
+            household_sizes_region = households_region.size().values.astype(np.int32)
+            GDL_region_per_farmer.loc[farmers_GDL_region.index, "HHSIZE_CAT"] = (
+                household_sizes_region
+            )
+
+            # Income
+            GDL_region_per_farmer.loc[farmers_GDL_region.index, "INCOME"] = (
+                household_heads["INCOME"].values
+            )
+
+        # assert none of the household sizes are placeholder value -1
+        assert (GDL_region_per_farmer["HHSIZE_CAT"] != -1).all()
+        assert (GDL_region_per_farmer["AGE"] != -1).all()
+        assert (GDL_region_per_farmer["EDUC"] != -1).all()
+        assert (GDL_region_per_farmer["INCOME"] != -1).all()
+
+        self.set_binary(
+            GDL_region_per_farmer["HHSIZE_CAT"].values,
+            name="agents/farmers/household_size",
+        )
+        self.set_binary(
+            GDL_region_per_farmer["AGE"].values,
+            name="agents/farmers/age_household_head",
+        )
+        self.set_binary(
+            GDL_region_per_farmer["EDUC"].values,
+            name="agents/farmers/education_level",
+        )
+
+        self.set_binary(
+            GDL_region_per_farmer["INCOME"].values,
+            name="agents/farmers/income",
+        )
+
     def setup_farmer_characteristics_simple(
         self,
         irrigation_choice={
             "no": 1.0,
         },
         risk_aversion_mean=0,
-        risk_aversion_standard_deviation=0.387,
+        risk_aversion_standard_deviation=0.3,
         interest_rate=0.05,
-        discount_rate=0.1,
+        discount_rate_mean=0.1,
+        discount_standard_deviation=0.1,
+    ):
+        n_farmers = self.binary["agents/farmers/id"].size
+
+        if irrigation_choice == "random":
+            # randomly sample from irrigation sources
+            irrigation_source = np.random.choice(
+                list(self.dict["agents/farmers/irrigation_sources"].values()),
+                size=n_farmers,
+            )
+        else:
+            assert isinstance(irrigation_choice, dict)
+            # convert irrigation sources to integers based on irrigation sources dictionary
+            # which was set previously
+            irrigation_choice_int = {
+                self.dict["agents/farmers/irrigation_sources"][i]: k
+                for i, k in irrigation_choice.items()
+            }
+            # pick irrigation source based on the probabilities
+            irrigation_source = np.random.choice(
+                list(irrigation_choice_int.keys()),
+                size=n_farmers,
+                p=np.array(list(irrigation_choice_int.values()))
+                / sum(irrigation_choice_int.values()),
+            )
+        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
+
+        if self.files["binary"]["agents/farmers/income"] is None:
+            self.logger.info("Income is none, generating random income")
+            daily_non_farm_income_family = random.choices(
+                [50, 100, 200, 500], k=n_farmers
+            )
+            self.set_binary(
+                daily_non_farm_income_family,
+                name="agents/farmers/daily_non_farm_income_family",
+            )
+
+        if self.files["binary"]["agents/farmers/household_size"] is None:
+            self.logger.info("Household size is none, generating random sizes")
+            household_size = random.choices([1, 2, 3, 4, 5, 6, 7], k=n_farmers)
+            self.set_binary(household_size, name="agents/farmers/household_size")
+
+        daily_consumption_per_capita = random.choices([50, 100, 200, 500], k=n_farmers)
+        self.set_binary(
+            daily_consumption_per_capita,
+            name="agents/farmers/daily_consumption_per_capita",
+        )
+
+        # Risk aversion
+        risk_aversion_global = self.data_catalog.get_dataframe(
+            "risk_aversion_global",
+            variables=["Country", "Gains", "Losses"],
+        ).dropna()
+
+        # Remove preceding and trailing white space from country names
+        risk_aversion_global["Country"] = risk_aversion_global["Country"].str.strip()
+
+        risk_aversion_global["ISO3"] = risk_aversion_global["Country"].map(
+            COUNTRY_NAME_TO_ISO3
+        )
+        assert (
+            not risk_aversion_global["ISO3"].isna().any()
+        ), f"Found {risk_aversion_global['ISO3'].isna().sum()} countries without ISO3 code"
+
+        GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions_37")
+        GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(GLOBIOM_NAME_TO_ISO3)
+        # For my personal branch
+        GLOBIOM_regions.loc[GLOBIOM_regions["Country"] == "Switzerland", "Region37"] = (
+            "EU_MidWest"
+        )
+        assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
+
+        ISO3_codes_region = self.geoms["areamaps/regions"]["ISO3"].unique()
+        GLOBIOM_regions_region = GLOBIOM_regions[
+            GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
+        ]["Region37"].unique()
+        ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
+            GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
+        ]["ISO3"]
+
+        donor_data = {}
+        for ISO3 in ISO3_codes_GLOBIOM_region:
+            region_risk_aversion_data = risk_aversion_global[
+                risk_aversion_global["ISO3"] == ISO3
+            ]
+
+            region_risk_aversion_data = region_risk_aversion_data[
+                ["Gains", "Losses", "ISO3"]
+            ]
+            region_risk_aversion_data.reset_index(drop=True, inplace=True)
+            # Store pivoted data in dictionary with region_id as key
+            donor_data[ISO3] = region_risk_aversion_data
+
+        # Concatenate all regional data into a single DataFrame with MultiIndex
+        donor_data = pd.concat(donor_data, names=["ISO3"])
+
+        # Drop crops with no data at all for these regions
+        donor_data = donor_data.dropna(axis=1, how="all")
+
+        unique_regions = self.geoms["areamaps/regions"]
+
+        data = self.donate_and_receive_crop_prices(
+            donor_data, unique_regions, GLOBIOM_regions
+        )
+
+        # Map to corresponding region
+        data_reset = data.reset_index(level="region_id")
+        data = data_reset.set_index("region_id")
+        region_ids = self.binary["agents/farmers/region_id"]
+
+        # Set gains and losses
+        gains_array = pd.Series(region_ids).map(data["Gains"]).to_numpy()
+        losses_array = pd.Series(region_ids).map(data["Losses"]).to_numpy()
+
+        def normalize(array):
+            return (array - np.min(array)) / (np.max(array) - np.min(array))
+
+        if (
+            self.binary["agents/farmers/education_level"] is not None
+            and self.binary["agents/farmers/age_household_head"] is not None
+        ):
+            # Vary the dataset based on education
+            education_levels = self.binary["agents/farmers/education_level"]
+            age = self.binary["agents/farmers/age_household_head"]
+
+            combined_factor = (0.5 * normalize(education_levels)) + (
+                0.5 * normalize(age)
+            )
+
+            # Generate random noise, positively correlated with education levels and age
+            # (Higher age / education level means more risk averse)
+            gains_noise = np.random.normal(
+                loc=0, scale=combined_factor * risk_aversion_standard_deviation
+            )
+            losses_noise = np.random.normal(
+                loc=0, scale=combined_factor * risk_aversion_standard_deviation
+            )
+            # Add the generated noise to the original gains and losses arrays
+            gains_array_with_noise = np.clip(gains_array + gains_noise, -0.99, 0.99)
+            losses_array_with_noise = np.clip(losses_array + losses_noise, -0.99, 0.99)
+
+        else:
+            # add random noise
+            random_noise = np.random.normal(
+                loc=risk_aversion_mean,
+                scale=risk_aversion_standard_deviation,
+                size=n_farmers,
+            )
+            gains_array_with_noise = np.clip(gains_array + random_noise, -0.99, 0.99)
+            losses_array_with_noise = np.clip(losses_array + random_noise, -0.99, 0.99)
+
+        neutral_risk_aversion = np.mean(
+            [gains_array_with_noise, losses_array_with_noise], axis=0
+        )
+
+        self.set_binary(neutral_risk_aversion, name="agents/farmers/risk_aversion")
+        self.set_binary(
+            gains_array_with_noise, name="agents/farmers/risk_aversion_gains"
+        )
+        self.set_binary(
+            losses_array_with_noise, name="agents/farmers/risk_aversion_losses"
+        )
+
+        # discount rate
+        discount_rate = np.zeros(n_farmers, dtype=np.float32)
+        if (
+            self.binary["agents/farmers/age_household_head"] is not None
+            and self.binary["agents/farmers/income"] is not None
+        ):
+            age = self.binary["agents/farmers/age_household_head"]
+            income = self.binary["agents/farmers/income"]
+
+            combined_factor = (0.5 * normalize(age)) + (0.5 * normalize(income))
+            discount_rate[:] = np.random.normal(
+                loc=discount_rate_mean,
+                scale=combined_factor * discount_standard_deviation,
+                size=n_farmers,
+            )
+        else:
+            discount_rate[:] = np.random.normal(
+                loc=discount_rate_mean,
+                scale=discount_standard_deviation,
+                size=n_farmers,
+            )
+        self.set_binary(discount_rate, name="agents/farmers/discount_rate")
+
+        interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
+        self.set_binary(interest_rate, name="agents/farmers/interest_rate")
+
+    def setup_farmer_crop_calendar(
+        self,
         reduce_crops=False,
         replace_base=False,
     ):
@@ -4691,57 +4990,6 @@ class GEBModel(GridModel):
             np.full_like(is_irrigated, 1, dtype=np.int32),
             name="agents/farmers/crop_calendar_rotation_years",
         )
-
-        if irrigation_choice == "random":
-            # randomly sample from irrigation sources
-            irrigation_source = np.random.choice(
-                list(self.dict["agents/farmers/irrigation_sources"].values()),
-                size=n_farmers,
-            )
-        else:
-            assert isinstance(irrigation_choice, dict)
-            # convert irrigation sources to integers based on irrigation sources dictionary
-            # which was set previously
-            irrigation_choice_int = {
-                self.dict["agents/farmers/irrigation_sources"][i]: k
-                for i, k in irrigation_choice.items()
-            }
-            # pick irrigation source based on the probabilities
-            irrigation_source = np.random.choice(
-                list(irrigation_choice_int.keys()),
-                size=n_farmers,
-                p=np.array(list(irrigation_choice_int.values()))
-                / sum(irrigation_choice_int.values()),
-            )
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-
-        household_size = random.choices([1, 2, 3, 4, 5, 6, 7], k=n_farmers)
-        self.set_binary(household_size, name="agents/farmers/household_size")
-
-        daily_non_farm_income_family = random.choices([50, 100, 200, 500], k=n_farmers)
-        self.set_binary(
-            daily_non_farm_income_family,
-            name="agents/farmers/daily_non_farm_income_family",
-        )
-
-        daily_consumption_per_capita = random.choices([50, 100, 200, 500], k=n_farmers)
-        self.set_binary(
-            daily_consumption_per_capita,
-            name="agents/farmers/daily_consumption_per_capita",
-        )
-
-        risk_aversion = np.random.normal(
-            loc=risk_aversion_mean,
-            scale=risk_aversion_standard_deviation,
-            size=n_farmers,
-        )
-        self.set_binary(risk_aversion, name="agents/farmers/risk_aversion")
-
-        interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
-        self.set_binary(interest_rate, name="agents/farmers/interest_rate")
-
-        discount_rate = np.full(n_farmers, discount_rate, dtype=np.float32)
-        self.set_binary(discount_rate, name="agents/farmers/discount_rate")
 
     def setup_population(self):
         populaton_map = self.data_catalog.get_rasterdataset(
