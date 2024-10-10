@@ -270,8 +270,6 @@ class Households(AgentBaseClass):
             n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
         )
 
-        self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
-
     def flood(self, flood_map, simulation_root, return_period=None):
         if return_period is not None:
             flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
