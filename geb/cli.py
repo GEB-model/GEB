@@ -12,6 +12,7 @@ import faulthandler
 from pathlib import Path
 import importlib
 import warnings
+import tbb
 from numba import config
 
 from honeybees.visualization.ModularVisualization import ModularServer
@@ -30,6 +31,13 @@ faulthandler.enable()
 
 # set threading layer to tbb, this is much faster than other threading layers
 config.THREADING_LAYER = "tbb"
+
+# unset system environment variable for LD_LIBRARY_PATH, so that numba loads the
+# correct shared libraries
+
+os.environ["LD_LIBRARY_PATH"] = str(
+    Path(tbb.__path__[0]).parent.parent.parent / "libtbb.so"
+)
 
 # set environment variable for GEB package directory
 os.environ["GEB_PACKAGE_DIR"] = str(
