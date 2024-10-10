@@ -363,14 +363,14 @@ class LakesReservoirs(object):
         assert np.array_equal(
             np.unique(waterbody_outflow_points), np.unique(waterBodyID)
         )
-        # make sure that each outflow point is only used once
-        assert (
-            np.unique(
+        if __debug__:
+            # make sure that each outflow point is only used once
+            unique_outflow_points = np.unique(
                 waterbody_outflow_points[waterbody_outflow_points != -1],
                 return_counts=True,
-            )[1].max()
-            == 1
-        )
+            )[1]
+            if unique_outflow_points.size > 0:
+                assert unique_outflow_points.max() == 1
 
         return waterbody_outflow_points
 
@@ -518,8 +518,13 @@ class LakesReservoirs(object):
 
         outflow = outflow_lakes + outflow_reservoirs
 
-        outflow_grid = np.take(outflow, self.var.waterbody_outflow_points)
-        outflow_grid[self.var.waterbody_outflow_points == -1] = 0
+        if outflow.size > 0:
+            outflow_grid = np.take(outflow, self.var.waterbody_outflow_points)
+            outflow_grid[self.var.waterbody_outflow_points == -1] = 0
+        else:
+            outflow_grid = np.zeros_like(
+                self.var.waterbody_outflow_points, dtype=outflow.dtype
+            )
 
         # shift outflow 1 cell downstream
         outflow_shifted_downstream = upstream1(
