@@ -66,19 +66,11 @@ class WaterDemand:
             water_body_mapping, reservoir_command_areas, mode="clip"
         )
 
-        self.model.data.grid.leakageC = np.compress(
-            self.model.data.grid.compress_LR,
-            self.model.data.grid.full_compressed(0, dtype=np.float32),
-        )
-
     def get_potential_irrigation_consumption(self, potential_evapotranspiration):
         """Calculate the potential irrigation consumption. Not that consumption
         is not the same as withdrawal. Consumption is the amount of water that
         is actually used by the farmers, while withdrawal is the amount of water
         that is taken from the source. The difference is the return flow."""
-        # Paddy irrigation -> No = 2
-        # Non paddy irrigation -> No = 3
-
         # a function of cropKC (evaporation and transpiration) and available water see Wada et al. 2014 p. 19
         paddy_irrigated_land = np.where(self.var.land_use_type == PADDY_IRRIGATED)
 

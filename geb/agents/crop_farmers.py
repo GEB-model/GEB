@@ -6,7 +6,7 @@ import copy
 import calendar
 from typing import Any, Dict, Tuple, Union
 
-from scipy.stats import genextreme, norm
+from scipy.stats import genextreme
 from scipy.optimize import curve_fit
 
 # from gplearn.genetic import SymbolicRegressor
@@ -370,7 +370,7 @@ def abstract_water(
     available_groundwater_m3: np.ndarray,
     groundwater_depth: np.ndarray,
     available_reservoir_storage_m3: np.ndarray,
-    command_areas: np.ndarray,
+    farmer_command_area: np.ndarray,
     return_fraction: float,
     well_depth: float,
     remaining_irrigation_limit_m3: np.ndarray,
@@ -449,7 +449,7 @@ def abstract_water(
                 if available_channel_storage_m3[grid_cell] > 0:
                     farmer_has_access_to_irrigation_water = True
                     break
-                command_area = command_areas[field]
+                command_area = farmer_command_area[farmer]
                 # -1 means no command area
                 if (
                     command_area != -1
@@ -542,7 +542,7 @@ def abstract_water(
                             assert water_withdrawal_m[field] >= 0
 
                             # command areas
-                            command_area = command_areas[field]
+                            command_area = farmer_command_area[farmer]
                             if command_area != -1:  # -1 means no command area
                                 irrigation_water_demand_field = withdraw_reservoir(
                                     command_area=command_area,
@@ -1661,7 +1661,7 @@ class CropFarmers(AgentBaseClass):
             available_groundwater_m3=available_groundwater_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             groundwater_depth=groundwater_depth,
-            command_areas=command_areas,
+            farmer_command_area=self.farmer_command_area,
             return_fraction=self.model.config["agent_settings"]["farmers"][
                 "return_fraction"
             ],

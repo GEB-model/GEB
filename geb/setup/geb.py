@@ -167,6 +167,10 @@ class GEBModel(GridModel):
                 self.read_subgrid()
         return self._subgrid
 
+    @subgrid.setter
+    def subgrid(self, value):
+        self._subgrid = value
+
     @property
     def region_subgrid(self):
         """Model static gridded data as xarray.Dataset."""
@@ -176,6 +180,10 @@ class GEBModel(GridModel):
                 self.read_region_subgrid()
         return self._region_subgrid
 
+    @region_subgrid.setter
+    def region_subgrid(self, value):
+        self._region_subgrid = value
+
     @property
     def MERIT_grid(self):
         """Model static gridded data as xarray.Dataset."""
@@ -184,6 +192,10 @@ class GEBModel(GridModel):
             if self._read:
                 self.read_MERIT_grid()
         return self._MERIT_grid
+
+    @MERIT_grid.setter
+    def MERIT_grid(self, value):
+        self._MERIT_grid = value
 
     def setup_grid(
         self,
@@ -1630,21 +1642,20 @@ class GEBModel(GridModel):
                 dtype=np.int32,
                 name="routing/lakesreservoirs/command_areas",
                 crs=self.grid.raster.crs,
-                lazy=True,
             )
+            command_areas[:] = -1
             subcommand_areas = hydromt.raster.full(
                 self.subgrid.raster.coords,
                 nodata=-1,
                 dtype=np.int32,
                 name="routing/lakesreservoirs/subcommand_areas",
                 crs=self.subgrid.raster.crs,
-                lazy=True,
             )
+            subcommand_areas[:] = -1
             self.set_grid(command_areas, name="routing/lakesreservoirs/command_areas")
             self.set_subgrid(
                 subcommand_areas, name="routing/lakesreservoirs/subcommand_areas"
             )
-            waterbodies["relative_area_in_region"] = 1
 
         if custom_reservoir_capacity:
             custom_reservoir_capacity = self.data_catalog.get_dataframe(
@@ -6314,21 +6325,21 @@ class GEBModel(GridModel):
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["subgrid"][name] = {"updated": update}
-        self._set_grid(self.subgrid, data, name=name)
+        self.subgrid = self._set_grid(self.subgrid, data, name=name)
         return self.subgrid[name]
 
     def set_region_subgrid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["region_subgrid"][name] = {"updated": update}
-        self._set_grid(self.region_subgrid, data, name=name)
+        self.region_subgrid = self._set_grid(self.region_subgrid, data, name=name)
         return self.region_subgrid[name]
 
     def set_MERIT_grid(
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["MERIT_grid"][name] = {"updated": update}
-        self._set_grid(self.MERIT_grid, data, name=name)
+        self.MERIT_grid = self._set_grid(self.MERIT_grid, data, name=name)
         return self.MERIT_grid[name]
 
     def set_alternate_root(self, root, mode):
