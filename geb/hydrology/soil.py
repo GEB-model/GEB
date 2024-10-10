@@ -1338,7 +1338,7 @@ class Soil(object):
                     capillary_rise_from_groundwater[bioarea],
                     self.var.actual_irrigation_consumption[bioarea],
                     self.var.snowEvap[bioarea],
-                    self.var.interceptEvap[bioarea],
+                    self.var.interception_evaporation[bioarea],
                 ],
                 outfluxes=[
                     runoff[bioarea],

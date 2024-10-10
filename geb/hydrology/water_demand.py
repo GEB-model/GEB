@@ -301,7 +301,7 @@ class WaterDemand:
             irrigation_water_withdrawal_m,
             irrigation_water_consumption_m,
             return_flow_irrigation_m,
-            addtoevapotrans_m,
+            irrigation_loss_to_evaporation_m,
         ) = self.crop_farmers.abstract_water(
             cell_area=(
                 self.var.cellArea.get() if self.model.use_gpu else self.var.cellArea
@@ -330,7 +330,7 @@ class WaterDemand:
                 influxes=[irrigation_water_withdrawal_m],
                 outfluxes=[
                     irrigation_water_consumption_m,
-                    addtoevapotrans_m,
+                    irrigation_loss_to_evaporation_m,
                     return_flow_irrigation_m,
                 ],
                 tollerance=1e-5,
@@ -342,10 +342,12 @@ class WaterDemand:
             self.var.actual_irrigation_consumption = cp.asarray(
                 irrigation_water_consumption_m
             )
-            addtoevapotrans_m = cp.asarray(addtoevapotrans_m)
+            irrigation_loss_to_evaporation_m = cp.asarray(
+                irrigation_loss_to_evaporation_m
+            )
         else:
             self.var.actual_irrigation_consumption = irrigation_water_consumption_m
-            addtoevapotrans_m = addtoevapotrans_m
+            irrigation_loss_to_evaporation_m = irrigation_loss_to_evaporation_m
 
         assert (self.var.actual_irrigation_consumption + 1e-5 >= 0).all()
 
@@ -374,7 +376,7 @@ class WaterDemand:
         # Abstract water from reservoir
         self.model.data.grid.storage -= reservoir_abstraction_m3
 
-        returnFlow = (
+        return_flow = (
             self.model.data.to_grid(
                 HRU_data=return_flow_irrigation_m, fn="weightedmean"
             )
@@ -384,6 +386,17 @@ class WaterDemand:
         )
 
         if __debug__:
+            balance_check(
+                name="water_demand_1",
+                how="cellwise",
+                influxes=[irrigation_water_withdrawal_m],
+                outfluxes=[
+                    irrigation_water_consumption_m,
+                    irrigation_loss_to_evaporation_m,
+                    return_flow_irrigation_m,
+                ],
+                tollerance=1e-6,
+            )
             balance_check(
                 name="water_demand_2",
                 how="sum",
@@ -416,5 +429,6 @@ class WaterDemand:
         return (
             groundwater_abstraction_m3,
             channel_abstraction_m3 / self.model.data.grid.cellArea,
-            returnFlow,
+            return_flow,  # from all sources
+            irrigation_loss_to_evaporation_m,
         )

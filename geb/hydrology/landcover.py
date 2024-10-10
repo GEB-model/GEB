@@ -381,12 +381,13 @@ class LandCover(object):
         (
             groundwater_abstraction_m3,
             channel_abstraction_m,
-            returnFlow,
+            return_flow,  # from all sources
+            irrigation_loss_to_evaporation_m,
         ) = self.model.water_demand.step(potential_evapotranspiration)
 
         timer.new_split("Demand")
 
-        openWaterEvap = self.var.full_compressed(0, dtype=np.float32)
+        open_water_evaporation = self.var.full_compressed(0, dtype=np.float32)
         # Soil for forest, grassland, and irrigated land
         capillar = self.model.data.to_HRU(data=self.model.data.grid.capillar, fn=None)
         del self.model.data.grid.capillar
@@ -395,12 +396,12 @@ class LandCover(object):
             interflow,
             directRunoff,
             groundwater_recharge,
-            openWaterEvap,
+            open_water_evaporation,
             actual_total_transpiration,
             actual_bare_soil_evaporation,
         ) = self.model.soil.step(
             capillar,
-            openWaterEvap,
+            open_water_evaporation,
             potential_transpiration_minus_interception_evaporation,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
@@ -409,7 +410,7 @@ class LandCover(object):
         timer.new_split("Soil")
 
         directRunoff = self.model.sealed_water.step(
-            capillar, openWaterEvap, directRunoff
+            capillar, open_water_evaporation, directRunoff
         )
         assert not (directRunoff < 0).any()
 
@@ -430,16 +431,25 @@ class LandCover(object):
         assert not np.isnan(groundwater_recharge).any()
         assert not np.isnan(groundwater_abstraction_m3).any()
         assert not np.isnan(channel_abstraction_m).any()
-        assert not np.isnan(openWaterEvap).any()
+        assert not np.isnan(open_water_evaporation).any()
 
         if __debug__:
+            total_evapotranspiration = (
+                self.var.actual_evapotranspiration
+                + actual_bare_soil_evaporation
+                + open_water_evaporation
+                + self.var.interception_evaporation
+                + self.var.snowEvap  # ice should be included in the future
+                + irrigation_loss_to_evaporation_m
+            )
+
             balance_check(
                 name="landcover_1",
                 how="cellwise",
                 influxes=[self.var.Rain, self.var.SnowMelt],
                 outfluxes=[
                     self.var.natural_available_water_infiltration,
-                    self.var.interceptEvap,
+                    self.var.interception_evaporation,
                 ],
                 prestorages=[interceptStor_pre],
                 poststorages=[self.var.interceptStor],
@@ -460,7 +470,7 @@ class LandCover(object):
                     groundwater_recharge,
                     actual_total_transpiration,
                     actual_bare_soil_evaporation,
-                    openWaterEvap,
+                    open_water_evaporation,
                 ],
                 prestorages=[w_pre, topwater_pre],
                 poststorages=[
@@ -470,14 +480,14 @@ class LandCover(object):
                 tollerance=1e-6,
             )
 
-            totalstorage = (
+            totalstorage_landcover = (
                 np.sum(self.var.SnowCoverS, axis=0)
                 / self.model.snowfrost.numberSnowLayers
                 + self.var.interceptStor
                 + self.var.w.sum(axis=0)
                 + self.var.topwater
             )
-            totalstorage_pre = (
+            totalstorage_landcover_pre = (
                 self.var.prevSnowCover
                 + w_pre.sum(axis=0)
                 + topwater_pre
@@ -498,12 +508,30 @@ class LandCover(object):
                     groundwater_recharge,
                     actual_total_transpiration,
                     actual_bare_soil_evaporation,
-                    openWaterEvap,
-                    self.var.interceptEvap,
+                    open_water_evaporation,
+                    self.var.interception_evaporation,
                     self.var.snowEvap,
                 ],
-                prestorages=[totalstorage_pre],
-                poststorages=[totalstorage],
+                prestorages=[totalstorage_landcover_pre],
+                poststorages=[totalstorage_landcover],
+                tollerance=1e-6,
+            )
+
+            balance_check(
+                name="landcover_4",
+                how="cellwise",
+                influxes=[
+                    self.var.precipitation_m_day,
+                    capillar,
+                ],
+                outfluxes=[
+                    groundwater_recharge,
+                    directRunoff,
+                    interflow,
+                    total_evapotranspiration,
+                ],
+                prestorages=[totalstorage_landcover_pre],
+                poststorages=[totalstorage_landcover],
                 tollerance=1e-6,
             )
 
@@ -523,6 +551,6 @@ class LandCover(object):
             groundwater_recharge,
             groundwater_abstraction_m3,
             channel_abstraction_m,
-            openWaterEvap,
-            returnFlow,
+            open_water_evaporation,
+            return_flow,
         )
