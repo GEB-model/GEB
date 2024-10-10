@@ -10,6 +10,7 @@ import logging
 import functools
 from pathlib import Path
 import warnings
+import importlib
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
