@@ -31,6 +31,10 @@ faulthandler.enable()
 # set threading layer to tbb, this is much faster than other threading layers
 config.THREADING_LAYER = "tbb"
 
+# unset system environment variable for LD_LIBRARY_PATH, so that numba loads the
+# correct shared libraries
+os.environ["LD_LIBRARY_PATH"] = ""
+
 # set environment variable for GEB package directory
 os.environ["GEB_PACKAGE_DIR"] = str(
     Path(importlib.util.find_spec("geb").origin).parent.parent
