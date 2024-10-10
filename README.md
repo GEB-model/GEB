@@ -17,11 +17,11 @@ The figure below shows a schematic overview of the model agent-based and hydrolo
 
 ### Model framework
 
-de Bruijn, J. A., Smilovic, M., Burek, P., Guillaumot, L., Wada, Y., and Aerts, J. C. J. H.: GEB v0.1: a large-scale agent-based socio-hydrological model – simulating 10 million individual farming households in a fully distributed hydrological model, Geosci. Model Dev., 16, 2437–2454, [https://doi.org/10.5194/gmd-16-2437-2023](https://doi.org/10.5194/gmd-16-2437-2023), 2023.
+> de Bruijn, J. A., Smilovic, M., Burek, P., Guillaumot, L., Wada, Y., and Aerts, J. C. J. H.: GEB v0.1: a large-scale agent-based socio-hydrological model – simulating 10 million individual farming households in a fully distributed hydrological model, Geosci. Model Dev., 16, 2437–2454, [https://doi.org/10.5194/gmd-16-2437-2023](https://doi.org/10.5194/gmd-16-2437-2023), 2023.
 
 ### Applications
 
-Kalthof, M. W. M. L., de Bruijn, J., de Moel, H., Kreibich, H., and Aerts, J. C. J. H.: Adaptive Behavior of Over a Million Individual Farmers Under Consecutive Droughts: A Large-Scale Agent-Based Modeling Analysis in the Bhima Basin, India, EGUsphere preprint, [https://doi.org/10.5194/egusphere-2024-1588](https://doi.org/10.5194/egusphere-2024-1588), 2024.
+> Kalthof, M. W. M. L., de Bruijn, J., de Moel, H., Kreibich, H., and Aerts, J. C. J. H.: Adaptive Behavior of Over a Million Individual Farmers Under Consecutive Droughts: A Large-Scale Agent-Based Modeling Analysis in the Bhima Basin, India, EGUsphere preprint, [https://doi.org/10.5194/egusphere-2024-1588](https://doi.org/10.5194/egusphere-2024-1588), 2024.
 
 ## Building on the shoulders of giants
 
