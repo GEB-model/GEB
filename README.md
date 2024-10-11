@@ -1,6 +1,6 @@
 ## Installation
 
-GEB can be installed using pip
+GEB can be installed using pip, including all dependencies on Windows, Linux and Mac OS X.
 
 ```bash
 pip install geb
