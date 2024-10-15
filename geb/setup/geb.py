@@ -4534,78 +4534,236 @@ class GEBModel(GridModel):
             name="agents/farmers/income",
         )
 
+    def create_preferences(self):
+        # Risk aversion
+        preferences_country_level = self.data_catalog.get_dataframe(
+            "preferences_country",
+            variables=["country", "isocode", "patience", "risktaking"],
+        ).dropna()
+
+        preferences_individual_level = self.data_catalog.get_dataframe(
+            "preferences_individual",
+            variables=["country", "isocode", "patience", "risktaking"],
+        ).dropna()
+
+        def scale_to_range(x, new_min, new_max):
+            x_min = x.min()
+            x_max = x.max()
+            # Avoid division by zero
+            if x_max == x_min:
+                return pd.Series(new_min, index=x.index)
+            scaled_x = (x - x_min) / (x_max - x_min) * (new_max - new_min) + new_min
+            return scaled_x
+
+        # Create 'risktaking_losses'
+        preferences_individual_level["risktaking_losses"] = scale_to_range(
+            preferences_individual_level["risktaking"] * -1,
+            new_min=-0.88,
+            new_max=-0.02,
+        )
+
+        # Create 'risktaking_gains'
+        preferences_individual_level["risktaking_gains"] = scale_to_range(
+            preferences_individual_level["risktaking"] * -1,
+            new_min=0.04,
+            new_max=0.94,
+        )
+
+        # Create 'discount'
+        preferences_individual_level["discount"] = scale_to_range(
+            preferences_individual_level["patience"] * -1,
+            new_min=0.15,
+            new_max=0.73,
+        )
+
+        # Create 'risktaking_losses'
+        preferences_country_level["risktaking_losses"] = scale_to_range(
+            preferences_country_level["risktaking"] * -1,
+            new_min=-0.88,
+            new_max=-0.02,
+        )
+
+        # Create 'risktaking_gains'
+        preferences_country_level["risktaking_gains"] = scale_to_range(
+            preferences_country_level["risktaking"] * -1,
+            new_min=0.04,
+            new_max=0.94,
+        )
+
+        # Create 'discount'
+        preferences_country_level["discount"] = scale_to_range(
+            preferences_country_level["patience"] * -1,
+            new_min=0.15,
+            new_max=0.73,
+        )
+
+        # List of variables for which to calculate the standard deviation
+        variables = ["discount", "risktaking_gains", "risktaking_losses"]
+
+        # Convert the variables to numeric, coercing errors to NaN to handle non-numeric entries
+        for var in variables:
+            preferences_individual_level[var] = pd.to_numeric(
+                preferences_individual_level[var], errors="coerce"
+            )
+
+        # Group by 'isocode' and calculate the standard deviation for each variable
+        std_devs = preferences_individual_level.groupby("isocode")[variables].std()
+
+        # Add a suffix '_std' to the column names to indicate standard deviation
+        std_devs = std_devs.add_suffix("_std").reset_index()
+
+        # Merge the standard deviation data into 'preferences_country_level' on 'isocode'
+        preferences_country_level = preferences_country_level.merge(
+            std_devs, on="isocode", how="left"
+        )
+
+        preferences_country_level = preferences_country_level.drop(
+            ["patience", "risktaking"], axis=1
+        )
+
+        return preferences_country_level
+
+    def setup_farmer_irrigation(
+        self,
+        n_farmers,
+    ):
+        # Import global irrigation data
+        actual_irrigation = "aei"
+        actual_irrigation_data = self.data_catalog.get_rasterdataset(
+            f"global_irrigation_area_{actual_irrigation}",
+            bbox=self.bounds,
+            buffer=2,
+        )
+        fraction_sw_irrigation = "aeisw"
+        fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
+            f"global_irrigation_area_{fraction_sw_irrigation}",
+            bbox=self.bounds,
+            buffer=2,
+        )
+        fraction_gw_irrigation = "aeigw"
+        fraction_gw_irrigation_data = self.data_catalog.get_rasterdataset(
+            f"global_irrigation_area_{fraction_gw_irrigation}",
+            bbox=self.bounds,
+            buffer=2,
+        )
+
+        farmer_region_ids = self.binary["agents/farmers/region_id"]
+        unique_regions = self.geoms["areamaps/regions"]
+
+        # Initialize the irrigation_source array
+        irrigation_source = np.full(n_farmers, -1, dtype=np.int32)
+
+        # Loop over each region and assign irrigation sources
+        for _, region in unique_regions.iterrows():
+            region_id = region["region_id"]
+            region_centroid = region["geometry"].centroid
+            region_coordinates = np.array([[region_centroid.x, region_centroid.y]])
+
+            # Sample the fractions from the maps
+            region_actual_irrigation = (
+                sample_from_map(
+                    actual_irrigation_data.values,
+                    region_coordinates,
+                    actual_irrigation_data.raster.transform.to_gdal(),
+                )[0]
+                / 100
+            )
+
+            region_sw_irrigation = (
+                sample_from_map(
+                    fraction_sw_irrigation_data.values,
+                    region_coordinates,
+                    fraction_sw_irrigation_data.raster.transform.to_gdal(),
+                )[0]
+                / 100
+            )
+
+            region_gw_irrigation = (
+                sample_from_map(
+                    fraction_gw_irrigation_data.values,
+                    region_coordinates,
+                    fraction_gw_irrigation_data.raster.transform.to_gdal(),
+                )[0]
+                / 100
+            )
+
+            # Normalize fractions
+            total_fraction = region_sw_irrigation + region_gw_irrigation
+            if total_fraction > 0:
+                region_sw_irrigation /= total_fraction
+                region_gw_irrigation /= total_fraction
+            else:
+                continue
+
+            # Get the mask for farmers in this region
+            farmer_region_mask = farmer_region_ids == region_id
+            num_farmers_in_region = np.sum(farmer_region_mask)
+
+            # Determine the number of irrigating farmers
+            num_irrigating_farmers = int(
+                round(region_actual_irrigation * num_farmers_in_region)
+            )
+
+            if num_irrigating_farmers > 0:
+                # Indices of farmers in the region
+                farmer_indices_in_region = np.where(farmer_region_mask)[0]
+
+                # Randomly select farmers to be irrigating
+                irrigating_farmers_indices = np.random.choice(
+                    farmer_indices_in_region, size=num_irrigating_farmers, replace=False
+                )
+
+                # Determine the number of surface water irrigating farmers
+                num_sw_farmers = int(
+                    round(region_sw_irrigation * num_irrigating_farmers)
+                )
+                num_sw_farmers = min(num_sw_farmers, num_irrigating_farmers)
+
+                if num_sw_farmers == num_irrigating_farmers:
+                    # All irrigating farmers use surface water
+                    irrigation_source[irrigating_farmers_indices] = 0
+                elif num_sw_farmers > 0:
+                    # Randomly select surface water irrigating farmers
+                    sw_farmers_indices = np.random.choice(
+                        irrigating_farmers_indices, size=num_sw_farmers, replace=False
+                    )
+                    # Assign irrigation_source = 0 for surface water
+                    irrigation_source[sw_farmers_indices] = 0
+
+                    # The remaining irrigating farmers are groundwater irrigators
+                    gw_farmers_indices = np.setdiff1d(
+                        irrigating_farmers_indices, sw_farmers_indices
+                    )
+                    irrigation_source[gw_farmers_indices] = 1
+                else:
+                    # All irrigating farmers use groundwater
+                    irrigation_source[irrigating_farmers_indices] = 1
+
+        # Update the irrigation_source attribute or return it as needed
+        self.binary["agents/farmers/irrigation_source"] = irrigation_source
+
     def setup_farmer_characteristics_simple(
         self,
-        irrigation_choice={
-            "no": 1.0,
-        },
-        risk_aversion_mean=0,
-        risk_aversion_standard_deviation=0.3,
         interest_rate=0.05,
-        discount_rate_mean=0.1,
-        discount_standard_deviation=0.1,
     ):
         n_farmers = self.binary["agents/farmers/id"].size
 
-        if irrigation_choice == "random":
-            # randomly sample from irrigation sources
-            irrigation_source = np.random.choice(
-                list(self.dict["agents/farmers/irrigation_sources"].values()),
-                size=n_farmers,
-            )
-        else:
-            assert isinstance(irrigation_choice, dict)
-            # convert irrigation sources to integers based on irrigation sources dictionary
-            # which was set previously
-            irrigation_choice_int = {
-                self.dict["agents/farmers/irrigation_sources"][i]: k
-                for i, k in irrigation_choice.items()
-            }
-            # pick irrigation source based on the probabilities
-            irrigation_source = np.random.choice(
-                list(irrigation_choice_int.keys()),
-                size=n_farmers,
-                p=np.array(list(irrigation_choice_int.values()))
-                / sum(irrigation_choice_int.values()),
-            )
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
+        self.setup_farmer_irrigation(n_farmers)
 
-        if self.files["binary"]["agents/farmers/income"] is None:
-            self.logger.info("Income is none, generating random income")
-            daily_non_farm_income_family = random.choices(
-                [50, 100, 200, 500], k=n_farmers
-            )
-            self.set_binary(
-                daily_non_farm_income_family,
-                name="agents/farmers/daily_non_farm_income_family",
-            )
-
-        if self.files["binary"]["agents/farmers/household_size"] is None:
-            self.logger.info("Household size is none, generating random sizes")
-            household_size = random.choices([1, 2, 3, 4, 5, 6, 7], k=n_farmers)
-            self.set_binary(household_size, name="agents/farmers/household_size")
-
-        daily_consumption_per_capita = random.choices([50, 100, 200, 500], k=n_farmers)
-        self.set_binary(
-            daily_consumption_per_capita,
-            name="agents/farmers/daily_consumption_per_capita",
+        preferences_global = self.create_preferences()
+        preferences_global.rename(
+            columns={
+                "country": "Country",
+                "isocode": "ISO3",
+                "risktaking_losses": "Losses",
+                "risktaking_gains": "Gains",
+                "discount": "Discount",
+                "discount_std": "Discount_std",
+                "risktaking_losses_std": "Losses_std",
+                "risktaking_gains_std": "Gains_std",
+            },
+            inplace=True,
         )
-
-        # Risk aversion
-        risk_aversion_global = self.data_catalog.get_dataframe(
-            "risk_aversion_global",
-            variables=["Country", "Gains", "Losses"],
-        ).dropna()
-
-        # Remove preceding and trailing white space from country names
-        risk_aversion_global["Country"] = risk_aversion_global["Country"].str.strip()
-
-        risk_aversion_global["ISO3"] = risk_aversion_global["Country"].map(
-            COUNTRY_NAME_TO_ISO3
-        )
-        assert (
-            not risk_aversion_global["ISO3"].isna().any()
-        ), f"Found {risk_aversion_global['ISO3'].isna().sum()} countries without ISO3 code"
 
         GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions_37")
         GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(GLOBIOM_NAME_TO_ISO3)
@@ -4625,12 +4783,21 @@ class GEBModel(GridModel):
 
         donor_data = {}
         for ISO3 in ISO3_codes_GLOBIOM_region:
-            region_risk_aversion_data = risk_aversion_global[
-                risk_aversion_global["ISO3"] == ISO3
+            region_risk_aversion_data = preferences_global[
+                preferences_global["ISO3"] == ISO3
             ]
 
             region_risk_aversion_data = region_risk_aversion_data[
-                ["Gains", "Losses", "ISO3"]
+                [
+                    "Country",
+                    "ISO3",
+                    "Gains",
+                    "Losses",
+                    "Gains_std",
+                    "Losses_std",
+                    "Discount",
+                    "Discount_std",
+                ]
             ]
             region_risk_aversion_data.reset_index(drop=True, inplace=True)
             # Store pivoted data in dictionary with region_id as key
@@ -4655,79 +4822,130 @@ class GEBModel(GridModel):
 
         # Set gains and losses
         gains_array = pd.Series(region_ids).map(data["Gains"]).to_numpy()
+        gains_std = pd.Series(region_ids).map(data["Gains_std"]).to_numpy()
         losses_array = pd.Series(region_ids).map(data["Losses"]).to_numpy()
+        losses_std = pd.Series(region_ids).map(data["Losses_std"]).to_numpy()
+        discount_array = pd.Series(region_ids).map(data["Discount"]).to_numpy()
+        discount_std = pd.Series(region_ids).map(data["Discount_std"]).to_numpy()
+
+        try:
+            income = self.binary["agents/farmers/income"]
+        except KeyError:
+            self.logger.info("Income does not exist, generating random income..")
+            daily_non_farm_income_family = random.choices(
+                [50, 100, 200, 500], k=n_farmers
+            )
+            self.set_binary(
+                daily_non_farm_income_family,
+                name="agents/farmers/income",
+            )
+
+        try:
+            household_size = self.binary["agents/farmers/household_size"]
+        except KeyError:
+            self.logger.info("Household size does not exist, generating random sizes..")
+            household_size = random.choices([1, 2, 3, 4, 5, 6, 7], k=n_farmers)
+            self.set_binary(household_size, name="agents/farmers/household_size")
+
+            daily_consumption_per_capita = random.choices(
+                [50, 100, 200, 500], k=n_farmers
+            )
+            self.set_binary(
+                daily_consumption_per_capita,
+                name="agents/farmers/daily_consumption_per_capita",
+            )
+
+        try:
+            education_levels = self.binary["agents/farmers/education_level"]
+        except KeyError:
+            self.logger.info(
+                "Education level does not exist, generating random levels.."
+            )
+            education_levels = random.choices(
+                [1, 2, 3, 4, 5], k=n_farmers
+            )  # Random levels from 0-4 or your preferred scale
+            self.set_binary(education_levels, name="agents/farmers/education_level")
+
+        try:
+            age = self.binary["agents/farmers/age_household_head"]
+        except KeyError:
+            self.logger.info(
+                "Age of household head does not exist, generating random ages.."
+            )
+            age = random.choices(
+                range(18, 80), k=n_farmers
+            )  # Random ages between 18 and 80
+            self.set_binary(age, name="agents/farmers/age_household_head")
 
         def normalize(array):
             return (array - np.min(array)) / (np.max(array) - np.min(array))
 
-        if (
-            self.binary["agents/farmers/education_level"] is not None
-            and self.binary["agents/farmers/age_household_head"] is not None
-        ):
-            # Vary the dataset based on education
-            education_levels = self.binary["agents/farmers/education_level"]
-            age = self.binary["agents/farmers/age_household_head"]
+        combined_deviation_risk_aversion = ((2 / 6) * normalize(education_levels)) + (
+            (4 / 6) * normalize(age)
+        )
 
-            combined_factor = (0.5 * normalize(education_levels)) + (
-                0.5 * normalize(age)
-            )
+        # Generate random noise, positively correlated with education levels and age
+        # (Higher age / education level means more risk averse)
+        z = np.random.normal(
+            loc=0, scale=1, size=combined_deviation_risk_aversion.shape
+        )
 
-            # Generate random noise, positively correlated with education levels and age
-            # (Higher age / education level means more risk averse)
-            gains_noise = np.random.normal(
-                loc=0, scale=combined_factor * risk_aversion_standard_deviation
-            )
-            losses_noise = np.random.normal(
-                loc=0, scale=combined_factor * risk_aversion_standard_deviation
-            )
-            # Add the generated noise to the original gains and losses arrays
-            gains_array_with_noise = np.clip(gains_array + gains_noise, -0.99, 0.99)
-            losses_array_with_noise = np.clip(losses_array + losses_noise, -0.99, 0.99)
+        # Initial gains_variation proportional to risk aversion
+        gains_variation = combined_deviation_risk_aversion * z
 
-        else:
-            # add random noise
-            random_noise = np.random.normal(
-                loc=risk_aversion_mean,
-                scale=risk_aversion_standard_deviation,
-                size=n_farmers,
-            )
-            gains_array_with_noise = np.clip(gains_array + random_noise, -0.99, 0.99)
-            losses_array_with_noise = np.clip(losses_array + random_noise, -0.99, 0.99)
+        current_std = np.std(gains_variation)
+        gains_variation = gains_variation * (gains_std / current_std)
+
+        # Similarly for losses_variation
+        losses_variation = combined_deviation_risk_aversion * z
+        current_std_losses = np.std(losses_variation)
+        losses_variation = losses_variation * (losses_std / current_std_losses)
+
+        # Add the generated noise to the original gains and losses arrays
+        gains_array_with_variation = np.clip(gains_array + gains_variation, -0.99, 0.99)
+        losses_array_with_variation = np.clip(
+            losses_array + losses_variation, -0.99, 0.99
+        )
+
+        # Calculate intention factor based on age and education
+        # Intention factor scales negatively with age and positively with education level
+        intention_factor = normalize(education_levels) - normalize(age)
+
+        # Adjust the intention factor to center it around a mean of 0.3
+        # The total intention of age, education and neighbor effects can scale to 1
+        intention_factor = intention_factor * 0.333 + 0.333
 
         neutral_risk_aversion = np.mean(
-            [gains_array_with_noise, losses_array_with_noise], axis=0
+            [gains_array_with_variation, losses_array_with_variation], axis=0
         )
 
         self.set_binary(neutral_risk_aversion, name="agents/farmers/risk_aversion")
         self.set_binary(
-            gains_array_with_noise, name="agents/farmers/risk_aversion_gains"
+            gains_array_with_variation, name="agents/farmers/risk_aversion_gains"
         )
         self.set_binary(
-            losses_array_with_noise, name="agents/farmers/risk_aversion_losses"
+            losses_array_with_variation, name="agents/farmers/risk_aversion_losses"
         )
+        self.set_binary(intention_factor, name="agents/farmers/intention_factor")
 
         # discount rate
-        discount_rate = np.zeros(n_farmers, dtype=np.float32)
-        if (
-            self.binary["agents/farmers/age_household_head"] is not None
-            and self.binary["agents/farmers/income"] is not None
-        ):
-            age = self.binary["agents/farmers/age_household_head"]
-            income = self.binary["agents/farmers/income"]
+        discount_rate_variation_factor = ((2 / 6) * normalize(education_levels)) + (
+            (4 / 6) * normalize(age)
+        )
+        discount_rate_variation = discount_rate_variation_factor * z * -1
 
-            combined_factor = (0.5 * normalize(age)) + (0.5 * normalize(income))
-            discount_rate[:] = np.random.normal(
-                loc=discount_rate_mean,
-                scale=combined_factor * discount_standard_deviation,
-                size=n_farmers,
-            )
-        else:
-            discount_rate[:] = np.random.normal(
-                loc=discount_rate_mean,
-                scale=discount_standard_deviation,
-                size=n_farmers,
-            )
-        self.set_binary(discount_rate, name="agents/farmers/discount_rate")
+        # Adjust the variations to have the desired overall standard deviation
+        current_std = np.std(discount_rate_variation)
+        discount_rate_variation = discount_rate_variation * (discount_std / current_std)
+
+        # Apply the variations to the original discount rates and clip the values
+        discount_rate_with_variation = np.clip(
+            discount_array + discount_rate_variation, 0, 2
+        )
+        self.set_binary(
+            discount_rate_with_variation,
+            name="agents/farmers/discount_rate",
+        )
 
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_binary(interest_rate, name="agents/farmers/interest_rate")
@@ -4995,6 +5213,7 @@ class GEBModel(GridModel):
                     crop_calendar_per_farmer, base_crops, resistant_crops
                 )
 
+        self.set_binary(is_irrigated, name="agents/farmers/irrigating_farmers")
         self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         assert crop_calendar_per_farmer[:, :, 3].max() == 0
         self.set_binary(
