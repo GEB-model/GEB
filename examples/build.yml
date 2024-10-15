@@ -67,7 +67,6 @@ setup_farmer_crop_calendar:
 setup_farmer_characteristics_simple:
   interest_rate: 0.05
 
-
 setup_crop_prices:
   crop_prices: FAO_stat
   translate_crop_names:

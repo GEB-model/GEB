@@ -927,13 +927,6 @@ class CropFarmers(AgentBaseClass):
             self.model.files["binary"]["agents/farmers/risk_aversion"]
         )["data"]
 
-        self.interest_rate = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
-        )
-        self.interest_rate[:] = np.load(
-            self.model.files["binary"]["agents/farmers/interest_rate"]
-        )["data"]
-
         self.discount_rate = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
@@ -2209,11 +2202,16 @@ class CropFarmers(AgentBaseClass):
             "loan_duration"
         ]
 
+        # interest_rate = self.get_value_per_farmer_from_region_id(
+        #     self.lending_rate, self.model.current_time
+        # )
+        interest_rate = np.full(self.n, 0.05, dtype=np.float32)
+
         # Compute the annual cost of the loan using the interest rate and loan duration
         annual_cost_microcredit = total_loan * (
-            self.interest_rate[loaning_farmers]
-            * (1 + self.interest_rate[loaning_farmers]) ** loan_duration
-            / ((1 + self.interest_rate[loaning_farmers]) ** loan_duration - 1)
+            interest_rate[loaning_farmers]
+            * (1 + interest_rate[loaning_farmers]) ** loan_duration
+            / ((1 + interest_rate[loaning_farmers]) ** loan_duration - 1)
         )
 
         # Add the amounts to the individual loan slots
@@ -2264,6 +2262,11 @@ class CropFarmers(AgentBaseClass):
             assert cultivation_cost.shape[0] == len(self.model.regions)
             assert cultivation_cost.shape[1] == len(self.crop_ids)
 
+        # interest_rate = self.get_value_per_farmer_from_region_id(
+        #     self.lending_rate, self.model.current_time
+        # )
+        interest_rate = np.full(self.n, 0.05, dtype=np.float32)
+
         plant_map, farmers_selling_land = plant(
             n=self.n,
             day_index=self.model.current_time.timetuple().tm_yday - 1,  # 0-indexed
@@ -2278,7 +2281,7 @@ class CropFarmers(AgentBaseClass):
             field_size_per_farmer=self.field_size_per_farmer.data,
             all_loans_annual_cost=self.all_loans_annual_cost.data,
             loan_tracker=self.loan_tracker.data,
-            interest_rate=self.interest_rate.data,
+            interest_rate=interest_rate,
             farmers_going_out_of_business=False,
         )
         if farmers_selling_land.size > 0:
@@ -2348,7 +2351,7 @@ class CropFarmers(AgentBaseClass):
         """
         current_SPEI_per_farmer = sample_from_map(
             array=self.model.data.grid.spei_uncompressed,
-            coords=self.locations[harvesting_farmers].data,
+            coords=self.locations[harvesting_farmers],
             gt=self.model.data.grid.gt,
         )
 
@@ -3063,7 +3066,6 @@ class CropFarmers(AgentBaseClass):
     def adapt_crops(self) -> None:
         # Fetch loan configuration
         loan_duration = 2
-        adaptation_type = 2
 
         # For now there are no differences in cost, so set the annual cost per farmer for crops as annual costs
         # Update to also be able to include the annual cost of the possible new crop
@@ -3086,7 +3088,7 @@ class CropFarmers(AgentBaseClass):
             profits_no_event_adaptation_option_2,
             new_crop_nr,
             new_farmer_id,
-        ) = self.profits_SEUT(adaptation_type)
+        ) = self.profits_SEUT_crops()
 
         total_annual_costs_m2 = (
             self.all_loans_annual_cost[:, -1, 0] / self.field_size_per_farmer
@@ -3426,10 +3428,15 @@ class CropFarmers(AgentBaseClass):
         # Placeholder
         costs_irrigation_system = 4 * self.field_size_per_farmer
 
+        # interest_rate = self.get_value_per_farmer_from_region_id(
+        #     self.lending_rate, self.model.current_time
+        # )
+        interest_rate = 0.05
+
         annual_cost = costs_irrigation_system * (
-            self.interest_rate
-            * (1 + self.interest_rate) ** loan_duration
-            / ((1 + self.interest_rate) ** loan_duration - 1)
+            interest_rate
+            * (1 + interest_rate) ** loan_duration
+            / ((1 + interest_rate) ** loan_duration - 1)
         )
 
         # Compute the total annual per square meter costs if farmers adapt during this cycle
@@ -3791,7 +3798,8 @@ class CropFarmers(AgentBaseClass):
         # Calculate annuity factor for loan repayment using the annuity formula
         # A = P * [r(1+r)^n] / [(1+r)^n -1], where:
         # A = annual payment, P = principal amount (install_cost), r = interest rate, n = loan duration
-        interest_rate = self.interest_rate
+        interest_rate = 0.05
+
         n = loan_duration
         annuity_factor = (interest_rate * (1 + interest_rate) ** n) / (
             (1 + interest_rate) ** n - 1
@@ -3807,137 +3815,21 @@ class CropFarmers(AgentBaseClass):
     ) -> Union[
         Tuple[np.ndarray, np.ndarray],
         Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-        Tuple[
-            np.ndarray,
-            np.ndarray,
-            np.ndarray,
-            np.ndarray,
-            np.ndarray,
-            np.ndarray,
-            np.ndarray,
-            np.ndarray,
-        ],
     ]:
         """
-        Calculate total profits under different drought probability scenarios, with and without adaptation measures.
-
-        This method computes the profits for agents under various drought probabilities, considering the potential
-        impacts of different adaptation strategies (e.g., installing wells or changing crops). It returns the profits
-        both with and without adaptation, depending on the adaptation type specified.
+        Calculate total profits under different drought probability scenarios, with and without adaptation measures
+        for adaptation types 0 and 1.
 
         Parameters:
             adaptation_type (int): The type of adaptation to consider.
                 - 0: No adaptation.
                 - 1: Adaptation Type 1 (e.g., installing wells).
-                - Other: Other adaptation types (e.g., changing crops).
             adapted (np.ndarray, optional): An array indicating which agents have adapted (relevant for adaptation_type == 1).
 
         Returns:
             Depending on adaptation_type, returns a tuple containing total profits and profits under 'no drought' scenario,
-            possibly including adaptation profits and additional data.
+            possibly including adaptation profits.
         """
-
-        def compute_adaptation_gains(yield_ratios: np.ndarray) -> Dict[str, Any]:
-            """
-            Compute adaptation gains based on the adaptation type.
-
-            Parameters:
-                yield_ratios (np.ndarray): Original yield ratios without adaptation.
-
-            Returns:
-                Dict[str, Any]: Dictionary containing adaptation gains and additional data.
-            """
-            adaptation_data = {}
-            if adaptation_type == 1:
-                # Adaptation Type 1: e.g., installing wells
-                gains_adaptation = self.adaptation_yield_ratio_difference(
-                    adapted, yield_ratios
-                )
-                adaptation_data["gains_adaptation"] = gains_adaptation
-            else:
-                # Other Adaptation Types: e.g., changing crops
-                (
-                    gains_option_1,
-                    gains_option_2,
-                    new_crop_nr,
-                    new_farmer_id,
-                ) = self.crop_yield_ratio_difference(yield_ratios)
-                adaptation_data.update(
-                    {
-                        "gains_option_1": gains_option_1,
-                        "gains_option_2": gains_option_2,
-                        "new_crop_nr": new_crop_nr,
-                        "new_farmer_id": new_farmer_id,
-                    }
-                )
-            return adaptation_data
-
-        def adjust_yield_ratios_with_adaptation(
-            yield_ratios: np.ndarray, adaptation_data: Dict[str, Any]
-        ) -> Dict[str, np.ndarray]:
-            """
-            Adjust yield ratios by adding adaptation gains and clipping values between 0 and 1.
-
-            Parameters:
-                yield_ratios (np.ndarray): Original yield ratios.
-                adaptation_data (Dict[str, Any]): Adaptation gains data.
-
-            Returns:
-                Dict[str, np.ndarray]: Dictionary containing adjusted yield ratios.
-            """
-            adjusted_yield_ratios = {}
-            if adaptation_type == 1:
-                yield_ratios_adaptation = np.clip(
-                    yield_ratios + adaptation_data["gains_adaptation"], 0, 1
-                )
-                adjusted_yield_ratios["yield_ratios_adaptation"] = (
-                    yield_ratios_adaptation
-                )
-            else:
-                yield_ratios_adaptation_option_1 = np.clip(
-                    yield_ratios + adaptation_data["gains_option_1"], 0, 1
-                )
-                yield_ratios_adaptation_option_2 = np.clip(
-                    yield_ratios + adaptation_data["gains_option_2"], 0, 1
-                )
-                adjusted_yield_ratios.update(
-                    {
-                        "yield_ratios_adaptation_option_1": yield_ratios_adaptation_option_1,
-                        "yield_ratios_adaptation_option_2": yield_ratios_adaptation_option_2,
-                    }
-                )
-            return adjusted_yield_ratios
-
-        def compute_total_profits(
-            yield_ratios: np.ndarray, crops_mask: np.ndarray, nan_array: np.ndarray
-        ) -> np.ndarray:
-            """
-            Compute total profits for all agents across different drought scenarios.
-
-            Parameters:
-                yield_ratios (np.ndarray): Yield ratios for agents under different drought scenarios.
-                crops_mask (np.ndarray): Mask indicating valid crop entries.
-                nan_array (np.ndarray): Array filled with NaNs for reference.
-
-            Returns:
-                np.ndarray: Total profits for agents under each drought scenario.
-            """
-            total_profits = np.zeros((self.n, yield_ratios.shape[1]))
-            for col in range(yield_ratios.shape[1]):
-                total_profits[:, col] = self.yield_ratio_to_profit(
-                    yield_ratios[:, col], crops_mask, nan_array
-                )
-            return total_profits
-
-        def format_results(total_profits: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-            """
-            Transpose and slice the total profits matrix, and extract the 'no drought' scenario profits.
-
-            """
-            total_profits = total_profits.T
-            profits_no_event = total_profits[-1, :]
-            total_profits = total_profits[:-1, :]
-            return total_profits, profits_no_event
 
         # Main function logic
         yield_ratios = self.convert_probability_to_yield_ratio()
@@ -3953,66 +3845,147 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Compute profits without adaptation
-        total_profits = compute_total_profits(yield_ratios, crops_mask, nan_array)
-        total_profits, profits_no_event = format_results(total_profits)
+        total_profits = self.compute_total_profits(yield_ratios, crops_mask, nan_array)
+        total_profits, profits_no_event = self.format_results(total_profits)
 
-        # Initialize adaptation data
-        if adaptation_type != 0:
-            adaptation_data = compute_adaptation_gains(yield_ratios)
-            adjusted_yield_ratios = adjust_yield_ratios_with_adaptation(
-                yield_ratios, adaptation_data
+        # Handle adaptation types 0 and 1
+        if adaptation_type == 1:
+            # Adaptation Type 1: e.g., installing wells
+            gains_adaptation = self.adaptation_yield_ratio_difference(
+                adapted, yield_ratios
             )
-
-            if adaptation_type == 1:
-                # Adaptation Type 1
-                total_profits_adaptation = compute_total_profits(
-                    adjusted_yield_ratios["yield_ratios_adaptation"],
-                    crops_mask,
-                    nan_array,
-                )
-                total_profits_adaptation, profits_no_event_adaptation = format_results(
-                    total_profits_adaptation
-                )
-                return (
-                    total_profits,
-                    profits_no_event,
-                    total_profits_adaptation,
-                    profits_no_event_adaptation,
-                )
-            else:
-                # Other Adaptation Types
-                total_profits_adaptation_option_1 = compute_total_profits(
-                    adjusted_yield_ratios["yield_ratios_adaptation_option_1"],
-                    crops_mask,
-                    nan_array,
-                )
-                (
-                    total_profits_adaptation_option_1,
-                    profits_no_event_adaptation_option_1,
-                ) = format_results(total_profits_adaptation_option_1)
-
-                total_profits_adaptation_option_2 = compute_total_profits(
-                    adjusted_yield_ratios["yield_ratios_adaptation_option_2"],
-                    crops_mask,
-                    nan_array,
-                )
-                (
-                    total_profits_adaptation_option_2,
-                    profits_no_event_adaptation_option_2,
-                ) = format_results(total_profits_adaptation_option_2)
-
-                return (
-                    total_profits,
-                    profits_no_event,
-                    total_profits_adaptation_option_1,
-                    profits_no_event_adaptation_option_1,
-                    total_profits_adaptation_option_2,
-                    profits_no_event_adaptation_option_2,
-                    adaptation_data["new_crop_nr"],
-                    adaptation_data["new_farmer_id"],
-                )
+            # Adjust yield ratios with adaptation gains
+            yield_ratios_adaptation = np.clip(yield_ratios + gains_adaptation, 0, 1)
+            # Compute profits with adaptation
+            total_profits_adaptation = self.compute_total_profits(
+                yield_ratios_adaptation, crops_mask, nan_array
+            )
+            total_profits_adaptation, profits_no_event_adaptation = self.format_results(
+                total_profits_adaptation
+            )
+            return (
+                total_profits,
+                profits_no_event,
+                total_profits_adaptation,
+                profits_no_event_adaptation,
+            )
         else:
+            # No adaptation (adaptation_type == 0)
             return total_profits, profits_no_event
+
+    def profits_SEUT_crops(
+        self,
+    ) -> Tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
+        """
+        Calculate total profits under different drought probability scenarios with crop adaptation measures (Adaptation Type 2).
+
+        Returns:
+            Tuple containing profits without adaptation, profits with adaptation options, and additional data.
+        """
+
+        # Main function logic
+        yield_ratios = self.convert_probability_to_yield_ratio()
+
+        # Create a mask for valid crops (exclude non-crop values)
+        crops_mask = (self.crop_calendar[:, :, 0] >= 0) & (
+            self.crop_calendar[:, :, 0] < len(self.crop_data["reference_yield_kg_m2"])
+        )
+
+        # Create an array filled with NaNs for reference data
+        nan_array = np.full_like(
+            self.crop_calendar[:, :, 0], fill_value=np.nan, dtype=float
+        )
+
+        # Compute profits without adaptation
+        total_profits = self.compute_total_profits(yield_ratios, crops_mask, nan_array)
+        total_profits, profits_no_event = self.format_results(total_profits)
+
+        # Adaptation Type 2: e.g., changing crops
+        (
+            gains_option_1,
+            gains_option_2,
+            new_crop_nr,
+            new_farmer_id,
+        ) = self.crop_yield_ratio_difference(yield_ratios)
+
+        # Adjust yield ratios with adaptation gains
+        yield_ratios_adaptation_option_1 = np.clip(yield_ratios + gains_option_1, 0, 1)
+        yield_ratios_adaptation_option_2 = np.clip(yield_ratios + gains_option_2, 0, 1)
+
+        # Compute profits with adaptation options
+        total_profits_adaptation_option_1 = self.compute_total_profits(
+            yield_ratios_adaptation_option_1, crops_mask, nan_array
+        )
+        (
+            total_profits_adaptation_option_1,
+            profits_no_event_adaptation_option_1,
+        ) = self.format_results(total_profits_adaptation_option_1)
+
+        total_profits_adaptation_option_2 = self.compute_total_profits(
+            yield_ratios_adaptation_option_2, crops_mask, nan_array
+        )
+        (
+            total_profits_adaptation_option_2,
+            profits_no_event_adaptation_option_2,
+        ) = self.format_results(total_profits_adaptation_option_2)
+
+        return (
+            total_profits,
+            profits_no_event,
+            total_profits_adaptation_option_1,
+            profits_no_event_adaptation_option_1,
+            total_profits_adaptation_option_2,
+            profits_no_event_adaptation_option_2,
+            new_crop_nr,
+            new_farmer_id,
+        )
+
+    def compute_total_profits(
+        self, yield_ratios: np.ndarray, crops_mask: np.ndarray, nan_array: np.ndarray
+    ) -> np.ndarray:
+        """
+        Compute total profits for all agents across different drought scenarios.
+
+        Parameters:
+            yield_ratios (np.ndarray): Yield ratios for agents under different drought scenarios.
+            crops_mask (np.ndarray): Mask indicating valid crop entries.
+            nan_array (np.ndarray): Array filled with NaNs for reference.
+
+        Returns:
+            np.ndarray: Total profits for agents under each drought scenario.
+        """
+        total_profits = np.zeros((self.n, yield_ratios.shape[1]))
+        for col in range(yield_ratios.shape[1]):
+            total_profits[:, col] = self.yield_ratio_to_profit(
+                yield_ratios[:, col], crops_mask, nan_array
+            )
+        return total_profits
+
+    def format_results(
+        self, total_profits: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Transpose and slice the total profits matrix, and extract the 'no drought' scenario profits.
+
+        Parameters:
+            total_profits (np.ndarray): Total profits matrix.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: Transposed profits and 'no drought' scenario profits.
+        """
+        total_profits = total_profits.T
+        profits_no_event = total_profits[-1, :]
+        total_profits = total_profits[:-1, :]
+        return total_profits, profits_no_event
 
     def convert_probability_to_yield_ratio(self) -> np.ndarray:
         """
@@ -4063,7 +4036,7 @@ class CropFarmers(AgentBaseClass):
         percentiles = [100 * i / N for i in range(1, N)]
         basin_elevation_thresholds = np.percentile(self.elevation.data, percentiles)
 
-        # Use np.digitize to assign group labels
+        # assign group labels
         distribution_array = np.digitize(
             self.elevation.data, bins=basin_elevation_thresholds, right=False
         )
@@ -4078,6 +4051,64 @@ class CropFarmers(AgentBaseClass):
         )
 
         return crop_elevation_group.astype(np.int32)
+
+    # def crop_yield_ratio_difference_test(self, yield_ratios) -> np.ndarray:
+    #     crop_elevation_group = self.create_unique_groups()
+
+    #     unique_crop_groups, group_indices = np.unique(
+    #         crop_elevation_group, axis=0, return_inverse=True
+    #     )
+
+    #     unique_crop_calendars = np.unique(self.crop_calendar[:, :, 0], axis=0)
+
+    #     unique_yield_ratio_gain = np.full(
+    #         (
+    #             len(unique_crop_groups),
+    #             len(self.p_droughts),
+    #             len(unique_crop_calendars),
+    #         ),
+    #         0,
+    #         dtype=np.float32,
+    #     )
+
+    #     id_to_switch_to = np.full(
+    #         (len(unique_crop_groups), 2, len(unique_crop_calendars)),
+    #         -1,
+    #         dtype=np.int32,
+    #     )
+    #     crop_to_switch_to = np.full(
+    #         (len(unique_crop_groups), 2, len(unique_crop_calendars)),
+    #         -1,
+    #         dtype=np.int32,
+    #     )
+
+    #     def find_most_similar_index(target_series, yield_ratios, groups):
+    #         distances = np.linalg.norm(yield_ratios[groups] - target_series, axis=1)
+    #         most_similar_index_within_subset = np.argmin(distances)
+    #         global_indices = np.where(groups)[0]
+    #         return global_indices[most_similar_index_within_subset]
+
+    #     def calculate_yield_ratio_gain(yield_ratios, current_yield_ratio, groups):
+    #         yield_ratio = np.mean(yield_ratios[groups, :], axis=0)
+    #         yield_ratio_gain = yield_ratio - current_yield_ratio
+    #         return yield_ratio_gain
+
+    #     for idx, unique_group in enumerate(unique_crop_groups):
+    #         unique_farmer_groups = (
+    #             crop_elevation_group == unique_group[None, ...]
+    #         ).all(axis=1)
+
+    #         # Identify the adapted counterparts of the current group
+    #         mask = ~np.all(unique_crop_calendars == unique_group[:3], axis=1)
+    #         candidate_crop_rotations = unique_crop_calendars[mask]
+
+    #         # Loop over the counterparts
+    #         for idx, unique_rotation in enumerate(candidate_crop_rotations):
+    #             pass
+
+    #             # unique_farmer_groups_other_option = (
+    #             #     crop_elevation_group == unique_combination_option_1[None, ...]
+    #             # ).all(axis=1)
 
     def crop_yield_ratio_difference(self, yield_ratios) -> np.ndarray:
         """
@@ -4104,7 +4135,12 @@ class CropFarmers(AgentBaseClass):
         )
         # Initialize array to store relative yield ratio improvement for unique groups
         unique_yield_ratio_gain_option_1 = np.full(
-            (len(unique_crop_groups), len(self.p_droughts)), 0, dtype=np.float32
+            (
+                len(unique_crop_groups),
+                len(self.p_droughts),
+            ),
+            0,
+            dtype=np.float32,
         )
         unique_yield_ratio_gain_option_2 = np.full(
             (len(unique_crop_groups), len(self.p_droughts)), 0, dtype=np.float32
