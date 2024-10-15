@@ -104,7 +104,7 @@ class Routing(object):
     QDelta
     act_bigLakeResAbst
     act_smallLakeResAbst
-    returnFlow
+    return_flow
     sumsideflow
     inflowDt
     ====================  ================================================================================  =========
@@ -267,7 +267,7 @@ class Routing(object):
             + self.model.config["parameters"]["lakeEvaFactor"]
         )
 
-    def step(self, openWaterEvap, channel_abstraction_m, returnFlow):
+    def step(self, openWaterEvap, channel_abstraction_m, return_flow):
         """
         Dynamic part of the routing module
 
@@ -368,9 +368,9 @@ class Routing(object):
         # WDAddM3Dt = self.var.act_SurfaceWaterAbstract.copy() #MS CWatM edit Shouldn't this only be from the river abstractions? Currently includes the larger reservoir...
         WDAddMDt = channel_abstraction_m
         # return flow from (m) non irrigation water demand
-        # WDAddM3Dt = WDAddM3Dt - self.var.nonIrrReturnFlowFraction * self.var.act_nonIrrDemand
+        # WDAddM3Dt = WDAddM3Dt - self.var.nonIrrreturn_flowFraction * self.var.act_nonIrrDemand
         WDAddMDt = (
-            WDAddMDt - returnFlow
+            WDAddMDt - return_flow
         )  # Couldn't this be negative? If return flow is mainly coming from gw? Fine, then more water going in.
         WDAddM3Dt = WDAddMDt * self.var.cellArea / self.var.noRoutingSteps
 
@@ -397,7 +397,7 @@ class Routing(object):
             # sideflowChanM3 -= riverbedExchangeDt
 
             sideflowChanM3 -= WDAddM3Dt
-            # minus waterdemand + returnflow
+            # minus waterdemand + return_flow
 
             outflow_to_river_network, waterbody_evaporation = (
                 self.model.lakes_reservoirs.routing(

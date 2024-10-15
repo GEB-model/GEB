@@ -433,16 +433,21 @@ class LandCover(object):
         assert not np.isnan(channel_abstraction_m).any()
         assert not np.isnan(open_water_evaporation).any()
 
-        if __debug__:
-            total_evapotranspiration = (
-                self.var.actual_evapotranspiration
-                + actual_bare_soil_evaporation
-                + open_water_evaporation
-                + self.var.interception_evaporation
-                + self.var.snowEvap  # ice should be included in the future
-                + irrigation_loss_to_evaporation_m
-            )
+        total_evapotranspiration = (
+            self.var.actual_evapotranspiration
+            + actual_bare_soil_evaporation
+            + open_water_evaporation
+            + self.var.interception_evaporation
+            + self.var.snowEvap  # ice should be included in the future
+            + irrigation_loss_to_evaporation_m
+        )
 
+        self.model.data.grid.total_evapotranspiration_m3 = self.model.data.to_grid(
+            HRU_data=self.model.data.HRU.MtoM3(total_evapotranspiration),
+            fn="sum",
+        )
+
+        if __debug__:
             balance_check(
                 name="landcover_1",
                 how="cellwise",
