@@ -578,17 +578,6 @@ class GEBModel(GridModel):
             # Drop crops with no data at all for these regions
             donor_data = donor_data.dropna(axis=1, how="all")
 
-            total_years = donor_data.index.get_level_values("year").unique()
-
-            if project_past_until_year:
-                assert (
-                    total_years[0] > project_past_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
-            if project_future_until_year:
-                assert (
-                    total_years[-1] < project_future_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
-
             # Filter out columns that contain the word 'meat'
             donor_data = donor_data[
                 [
@@ -647,6 +636,17 @@ class GEBModel(GridModel):
             data = self.inter_and_extrapolate_prices(
                 prices_plus_crop_price_inflation, unique_regions
             )
+
+            total_years = data.index.get_level_values("year").unique()
+
+            if project_past_until_year:
+                assert (
+                    total_years[0] > project_past_until_year
+                ), f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
+            if project_future_until_year:
+                assert (
+                    total_years[-1] < project_future_until_year
+                ), f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
 
             if (
                 project_past_until_year is not None
@@ -844,7 +844,7 @@ class GEBModel(GridModel):
                         columns=[donor_data_country.name],
                     )
                     if data_out is None:
-                        data_out = new_data
+                        data_out = new_data.copy()
                     else:
                         data_out = data_out.combine_first(new_data)
                 else:
@@ -860,13 +860,14 @@ class GEBModel(GridModel):
                         columns=[column],
                     )
                     if data_out is None:
-                        data_out = new_data
+                        data_out = new_data.copy()
                     else:
                         data_out = data_out.combine_first(new_data)
 
-        # Drop columns that are all NaN
-        data_out = data_out.dropna(axis=1, how="all")
         data_out = data_out.drop(columns=["ISO3"])
+        data_out = data_out.dropna(axis=1, how="all")
+        data_out = data_out.dropna(axis=0, how="all")
+
         return data_out
 
     def convert_price_using_ppp(
@@ -3767,6 +3768,8 @@ class GEBModel(GridModel):
 
             for _, region in self.geoms["areamaps/regions"].iterrows():
                 region_id = str(region["region_id"])
+                region_id_int = region["region_id"]
+                region_ISO3 = self.geoms["areamaps/regions"].iloc[region_id_int]["ISO3"]
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
 
@@ -3774,11 +3777,17 @@ class GEBModel(GridModel):
                     ppp_conversion_rates["data"][region_id], dtype=float
                 )[years_index_ppp]
 
-                prices.loc[reference_year] = self.convert_price_using_ppp(
-                    initial_price,
-                    source_conversion_rates,
-                    target_conversion_rates,
-                )
+                if price_type == "electricity_cost":
+                    rates_row = electricity_rates[
+                        electricity_rates["ISO3"] == region_ISO3
+                    ]
+                    prices.loc[reference_year] = rates_row.iloc[0]["Rate"]
+                else:
+                    prices.loc[reference_year] = self.convert_price_using_ppp(
+                        initial_price,
+                        source_conversion_rates,
+                        target_conversion_rates,
+                    )
 
                 # Forward calculation from the reference year
                 for year in range(reference_year + 1, end_year + 1):
@@ -4383,7 +4392,7 @@ class GEBModel(GridModel):
         ]
 
         # Get list of unique GDL codes from farmer dataframe
-        attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH", "INCOME"]
+        attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
 
         for column in attributes_to_include:
             GDL_region_per_farmer[column] = np.full(
@@ -4505,16 +4514,10 @@ class GEBModel(GridModel):
                 household_sizes_region
             )
 
-            # Income
-            GDL_region_per_farmer.loc[farmers_GDL_region.index, "INCOME"] = (
-                household_heads["INCOME"].values
-            )
-
         # assert none of the household sizes are placeholder value -1
         assert (GDL_region_per_farmer["HHSIZE_CAT"] != -1).all()
         assert (GDL_region_per_farmer["AGE"] != -1).all()
         assert (GDL_region_per_farmer["EDUC"] != -1).all()
-        assert (GDL_region_per_farmer["INCOME"] != -1).all()
 
         self.set_binary(
             GDL_region_per_farmer["HHSIZE_CAT"].values,
@@ -4527,11 +4530,6 @@ class GEBModel(GridModel):
         self.set_binary(
             GDL_region_per_farmer["EDUC"].values,
             name="agents/farmers/education_level",
-        )
-
-        self.set_binary(
-            GDL_region_per_farmer["INCOME"].values,
-            name="agents/farmers/income",
         )
 
     def create_preferences(self):
