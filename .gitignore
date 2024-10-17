@@ -5,6 +5,7 @@
 .nfs*
 .DS_Store
 workspaces/
+geb/hydrology/groundwater/bin
 tests/output/
 tests/tmp/
 examples/*

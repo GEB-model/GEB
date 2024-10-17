@@ -13,6 +13,7 @@ authors = [
 ]
 dependencies = [
     "cdsapi>=0.7.3",
+    "damagescanner==0.8b1",
     "dask>=2024.6",
     "deap>=1.4.1",
     "flopy>=3.8.0",

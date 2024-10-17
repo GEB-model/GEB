@@ -25,6 +25,7 @@ import math
 import pandas as pd
 import numpy as np
 from geb.workflows import balance_check
+from geb.HRUs import load_grid
 
 from .routing.subroutines import (
     subcatchment1,
@@ -35,6 +36,7 @@ from .routing.subroutines import (
 OFF = 0
 LAKE = 1
 RESERVOIR = 2
+LAKE_CONTROL = 3  # currently modelled as normal lake
 
 
 def laketotal(values, areaclass, nan_class):
@@ -157,23 +159,18 @@ class LakesReservoirs(object):
     def __init__(self, model):
         """
         Initialize water bodies
-
-        water body types:
-        2 = reservoirs (regulated discharge)
-        1 = lakes (weirFormula)
-        0 = non lakes or reservoirs (e.g. wetland)
         """
 
         self.var = model.data.grid
         self.model = model
 
         # load lakes/reservoirs map with a single ID for each lake/reservoir
-        waterBodyID = self.var.load(
+        waterBodyID_unmapped = self.var.load(
             self.model.files["grid"]["routing/lakesreservoirs/lakesResID"]
         )
-        waterBodyID[waterBodyID == OFF] = -1
+        waterBodyID_unmapped[waterBodyID_unmapped == OFF] = -1
 
-        waterbody_outflow_points = self.get_outflows(waterBodyID)
+        waterbody_outflow_points = self.get_outflows(waterBodyID_unmapped)
 
         # dismiss water bodies that are not a subcatchment of an outlet
         # after this, this is the final set of water bodies
@@ -182,26 +179,32 @@ class LakesReservoirs(object):
             waterbody_outflow_points,
             self.var.upstream_area_n_cells,
         )
-        self.var.waterBodyID_original = np.where(waterBodyID == sub, sub, -1)
+        waterBodyID_unmapped[waterBodyID_unmapped != sub] = -1
 
         # we need to re-calculate the outflows, because the ID might have changed due
-        # to the earlier operations
-        waterbody_outflow_points = self.get_outflows(waterBodyID)
-
-        compressed_waterbody_ids = np.compress(
-            waterbody_outflow_points != -1, waterbody_outflow_points
-        )
+        # to the earlier dismissal of water bodies
+        waterbody_outflow_points = self.get_outflows(waterBodyID_unmapped)
 
         self.var.waterBodyID, self.waterbody_mapping = self.map_water_bodies_IDs(
-            compressed_waterbody_ids, self.var.waterBodyID_original
-        )
-        self.water_body_data = self.load_water_body_data(
-            self.waterbody_mapping, self.var.waterBodyID_original
+            waterBodyID_unmapped
         )
 
         # we need to re-calculate the outflows, because the ID might have changed due
         # to the earlier operations. This is the final one as IDs have now been mapped
         self.var.waterbody_outflow_points = self.get_outflows(self.var.waterBodyID)
+
+        # we compress the waterbody_outflow_points, which we can later use to decompress
+        self.var.waterBodyIDC = np.unique(
+            self.var.waterbody_outflow_points[self.var.waterbody_outflow_points != -1]
+        )
+
+        self.water_body_data = self.load_water_body_data(
+            self.waterbody_mapping, waterBodyID_unmapped
+        )
+        # sort the water bodies in the same order as the compressed water body IDs (waterBodyIDC)
+        self.water_body_data = self.water_body_data.sort_index()
+
+        assert np.array_equal(self.water_body_data.index, self.var.waterBodyIDC)
 
         # change ldd: put pits in where lakes are:
         ldd_LR = self.model.data.grid.decompress(
@@ -224,13 +227,11 @@ class LakesReservoirs(object):
             self.model.data.grid,
         )
 
-        # boolean map as mask map for compressing and decompressing
-        self.var.compress_LR = self.var.waterbody_outflow_points != -1
-        self.var.waterBodyIDC = np.compress(
-            self.var.compress_LR, self.var.waterbody_outflow_points
-        )
-
         self.var.waterBodyTypC = self.water_body_data["waterbody_type"].values
+        # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
+        self.var.waterBodyTypC[self.var.waterBodyTypC == LAKE_CONTROL] = LAKE
+
+        assert (np.isin(self.var.waterBodyTypC, [OFF, LAKE, RESERVOIR])).all()
 
         self.reservoir_operators = self.model.agents.reservoir_operators
         self.reservoir_operators.set_reservoir_data(self.water_body_data)
@@ -269,26 +270,21 @@ class LakesReservoirs(object):
             self.var.volume, self.lake_factor, self.var.lake_area, average_discharge
         )
 
-        self.var.prev_lake_inflow = self.var.load_initial(
-            "prev_lake_inflow", default=average_discharge.copy()
-        )
-        self.var.prev_lake_outflow = self.var.load_initial(
-            "prev_lake_outflow", default=self.var.prev_lake_inflow.copy()
-        )
-
-    def map_water_bodies_IDs(self, compressed_waterbody_ids, waterBodyID_original):
-        if compressed_waterbody_ids.size == 0:
-            return np.full_like(waterBodyID_original, -1), np.full(
+    def map_water_bodies_IDs(self, waterBodyID_unmapped):
+        unique_water_bodies = np.unique(waterBodyID_unmapped)
+        unique_water_bodies = unique_water_bodies[unique_water_bodies != -1]
+        if unique_water_bodies.size == 0:
+            return np.full_like(waterBodyID_unmapped, -1), np.full(
                 1, -1, dtype=np.int32
             )
         else:
             water_body_mapping = np.full(
-                compressed_waterbody_ids.max() + 2, -1, dtype=np.int32
+                unique_water_bodies.max() + 2, -1, dtype=np.int32
             )  # make sure that the last entry is also -1, so that -1 maps to -1
-            water_body_mapping[compressed_waterbody_ids] = np.arange(
-                0, compressed_waterbody_ids.size, dtype=np.int32
+            water_body_mapping[unique_water_bodies] = np.arange(
+                0, unique_water_bodies.size, dtype=np.int32
             )
-            return water_body_mapping[waterBodyID_original], water_body_mapping
+            return water_body_mapping[waterBodyID_unmapped], water_body_mapping
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
         water_body_data = pd.read_parquet(
@@ -307,8 +303,6 @@ class LakesReservoirs(object):
             water_body_data["waterbody_id"]
         ]
         water_body_data = water_body_data.set_index("waterbody_id")
-        # sort index to align with waterBodyID
-        water_body_data = water_body_data.sort_index()
         return water_body_data
 
     def get_outflows(self, waterBodyID):
@@ -331,10 +325,53 @@ class LakesReservoirs(object):
             waterBodyID,
             -1,
         )
+
+        number_of_outflow_points_per_waterbody = np.unique(
+            waterbody_outflow_points, return_counts=True
+        )
+        duplicate_outflow_points = number_of_outflow_points_per_waterbody[0][
+            number_of_outflow_points_per_waterbody[1] > 1
+        ]
+        duplicate_outflow_points = duplicate_outflow_points[
+            duplicate_outflow_points != -1
+        ]
+
+        if duplicate_outflow_points.size > 0:
+            # in some cases the cell with the highest number of upstream cells
+            # has mulitple occurences in the same lake, this seems to happen
+            # especially for very small lakes with a small drainage area.
+            # In such cases, we take the outflow cell with the lowest elevation.
+            outflow_elevation = self.var.compress(
+                load_grid(
+                    self.model.files["grid"]["routing/kinematic/outflow_elevation"]
+                )
+            )
+
+            for duplicate_outflow_point in duplicate_outflow_points:
+                minimum_elevation_outflows_idx = np.argmin(
+                    outflow_elevation[
+                        waterbody_outflow_points == duplicate_outflow_point
+                    ]
+                )
+                waterbody_outflow_points[
+                    np.where(waterbody_outflow_points == duplicate_outflow_point)[0][
+                        minimum_elevation_outflows_idx
+                    ]
+                ] = -1
+
         # make sure that each water body has an outflow
         assert np.array_equal(
             np.unique(waterbody_outflow_points), np.unique(waterBodyID)
         )
+        if __debug__:
+            # make sure that each outflow point is only used once
+            unique_outflow_points = np.unique(
+                waterbody_outflow_points[waterbody_outflow_points != -1],
+                return_counts=True,
+            )[1]
+            if unique_outflow_points.size > 0:
+                assert unique_outflow_points.max() == 1
+
         return waterbody_outflow_points
 
     def step(self):
@@ -453,15 +490,6 @@ class LakesReservoirs(object):
         if __debug__:
             prestorage = self.var.storage.copy()
 
-        # collect discharge from above waterbodies
-        dis_LR = upstream1(self.var.downstruct, discharge)
-
-        # only where lakes are and unit convered to [m]
-        dis_LR = (
-            np.where(self.var.waterBodyID != -1, dis_LR, 0.0)
-            * self.model.seconds_per_timestep
-        )
-
         runoff_m3 = runoff * self.var.cellArea / self.var.noRoutingSteps
         runoff_m3 = laketotal(runoff_m3, self.var.waterBodyID, nan_class=-1)
 
@@ -471,6 +499,7 @@ class LakesReservoirs(object):
         assert (runoff_m3 >= 0).all()
         assert (discharge_m3 >= 0).all()
         assert (self.var.total_inflow_from_other_water_bodies >= 0).all()
+
         inflow_m3 = (
             runoff_m3 + discharge_m3 + self.var.total_inflow_from_other_water_bodies
         )
@@ -485,10 +514,17 @@ class LakesReservoirs(object):
         outflow_lakes = self.routing_lakes(inflow_m3)
         outflow_reservoirs = self.routing_reservoirs(inflow_m3)
 
+        assert (outflow_reservoirs[outflow_lakes > 0] == 0).all()
+
         outflow = outflow_lakes + outflow_reservoirs
 
-        outflow_grid = self.var.full_compressed(0, dtype=np.float32)
-        outflow_grid[self.var.compress_LR] = outflow
+        if outflow.size > 0:
+            outflow_grid = np.take(outflow, self.var.waterbody_outflow_points)
+            outflow_grid[self.var.waterbody_outflow_points == -1] = 0
+        else:
+            outflow_grid = np.zeros_like(
+                self.var.waterbody_outflow_points, dtype=outflow.dtype
+            )
 
         # shift outflow 1 cell downstream
         outflow_shifted_downstream = upstream1(

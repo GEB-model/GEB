@@ -8,11 +8,9 @@ from operator import attrgetter
 import yaml
 import logging
 import functools
-import faulthandler
 from pathlib import Path
-import importlib
 import warnings
-from numba import config
+import importlib
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
@@ -25,16 +23,6 @@ from geb.model import GEBModel
 from geb.calibrate import calibrate as geb_calibrate
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.multirun import multi_run as geb_multi_run
-
-faulthandler.enable()
-
-# set threading layer to tbb, this is much faster than other threading layers
-config.THREADING_LAYER = "tbb"
-
-# set environment variable for GEB package directory
-os.environ["GEB_PACKAGE_DIR"] = str(
-    Path(importlib.util.find_spec("geb").origin).parent.parent
-)
 
 
 def multi_level_merge(dict1, dict2):
@@ -249,7 +237,7 @@ def run_model(
         if profiling:
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
-        if "plot" in config["draw"] and config["draw"]["plot"]:
+        if "draw" in config and "plot" in config["draw"] and config["draw"]["plot"]:
             server_elements = server_elements
             +[ChartModule(series) for series in config["draw"]["plot"]]
 

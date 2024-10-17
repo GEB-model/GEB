@@ -7,7 +7,12 @@ on:
 jobs:
   pypi-publish:
     name: Publish release to PyPI
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    environment:
+      name: "release"
+      url: https://pypi.org/project/geb/
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - name: "Set up Python"
@@ -23,4 +28,4 @@ jobs:
         run: uv build
       - name: Publish package distributions to PyPI
         run: |
-          uv publish -t ${{ secrets.PYPI }} --publish-url https://upload.pypi.org/legacy/ dist/*
+          uv publish --trusted-publishing always --publish-url https://upload.pypi.org/legacy/

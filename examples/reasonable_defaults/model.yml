@@ -19,6 +19,8 @@ general:
 hazards:
   floods:
     simulate: false
+  damage:
+    simulate: false
 
 agent_settings:
   market:
@@ -28,6 +30,7 @@ agent_settings:
     ruleset: base
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
+    cultivation_cost_fraction: 0.5
     microcredit:
       interest_rate: 0.2
       loan_duration: 2
@@ -38,7 +41,7 @@ agent_settings:
       size: 10 # nr of neighbors
     expected_utility:
       crop_switching: 
-        ruleset: no-adaptation
+        ruleset: base
       adaptation_sprinkler:
         ruleset: base
         interest_rate: 0.04
@@ -50,7 +53,7 @@ agent_settings:
         loan_duration: 21
         lifespan: 20
         decision_horizon: 20
-        ruleset: no-adaptation
+        ruleset: base
         pump_hours: 3.5
         specific_weight_water: 9800 # (kg/m3*m/s2)
         max_initial_sat_thickness: 50 # m
@@ -85,10 +88,6 @@ agent_settings:
     interest_rate_factor: 1
     well_cost_factor: 1
     drought_threshold_factor: 1
-
-hazards:
-  floods:
-    simulate: false
 
 logging:
   logfile: GEB.log  

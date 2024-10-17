@@ -6,11 +6,11 @@ ODD+D protocol. Based on the protocol by @muller2013describing
 
 ### 1.1.1 What is the purpose of the study?
 
-The purpose of the study is to analyze dynamic drought risk over consecutive droughts. To do so, we use the Geographical, Environmental, and Behavioral model GEB [@debruijn2023geb]. The model includes adaptive behavior of heterogeneous farmer agents that changes in response to varying hydroclimatic and socioeconomic conditions, while in turn also affecting those socio-hydrological conditions. The study is performed in the Bhima basin, India. 
+The purpose of GEB (The Geographical, Environmental and Behavioural model, @debruijn2023geb) is to analyze dynamic drought and flood risk over time and space. It does so by coupling a human adaptation model (agent-based model) with a hydrological model. The model includes adaptive behavior of heterogeneous farmer, household and reservoir agents that changes in response to varying hydroclimatic and socioeconomic conditions, while in turn also affecting those socio-hydrological conditions.
 
 ### 1.1.2 For whom is the model designed?  
 
-The model is designed for scientists and practitioners, particularly those interested in understanding how droughts affect adaptation of individual farmers over time and how that adaptation – in turn – affects droughts. 
+The model is designed for scientists and practitioners. 
 
 ## 1.2 Entities, state variables and scales 
 
@@ -153,7 +153,7 @@ The modelling approach in GEB is based on a quantitative socio-hydrology framewo
 
 ### 2.1.2 On what assumptions is/are the agents’ decision model(s) based?
 
-Agents are boundedly rational and use the subjective expected utility (SEUT) [@savage1954foundations] to choose between actions they can take. They are further influenced by the adaptive choices of their neighbors, or “imitation” (source) and by elements of prospect theory [@kahneman2013prospect; @ribeiro2023hess]. 
+Agents are boundedly rational and use the subjective expected utility (SEUT) [@savage1972foundations] to choose between actions they can take. They are further influenced by the adaptive choices of their neighbors, or “imitation” (source) and by elements of prospect theory [@kahneman2013prospect; @ribeiro2023hess]. 
 
 ### 2.1.3 Why are certain decision models chosen?
 
