@@ -7,7 +7,6 @@ import platform
 import sys
 from pathlib import Path
 from numba import config
-import importlib
 import faulthandler
 
 
@@ -23,8 +22,6 @@ if platform.system() != "Windows":
 config.THREADING_LAYER = "tbb"
 
 # set environment variable for GEB package directory
-os.environ["GEB_PACKAGE_DIR"] = str(
-    Path(importlib.util.find_spec("geb").origin).parent.parent
-)
+os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
 faulthandler.enable()
