@@ -83,13 +83,13 @@ def PET(
         - net_longwave_radation_MJ_m2_day,
         np.float32(0.0),
     )
-    # net absorbed radiation of bare soil surface [MJ_m2_day]
+
+    # net absorbed radiation of water surface
     net_absorbed_radiation_water_MJ_m2_day = np.maximum(
         (np.float32(1) - albedo_water) * rsds_MJ_m2_day
         - net_longwave_radation_MJ_m2_day,
         np.float32(0.0),
     )
-    # net absorbed radiation of water surface
 
     vapour_pressure_deficit = np.maximum(
         saturated_vapour_pressure - actual_vapour_pressure, np.float32(0.0)
