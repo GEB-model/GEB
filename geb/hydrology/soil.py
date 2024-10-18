@@ -1189,6 +1189,46 @@ class Soil(object):
 
         timer = TimingModule("Soil")
 
+        self.model.data.grid.vapour_pressure_deficit_KPa = (
+            self.calculate_vapour_pressure_deficit_kPa(
+                temperature_K=self.model.data.grid.tas,
+                relative_humidity=self.model.data.grid.hurs,
+            )
+        )
+        self.model.data.grid.photosynthetic_photon_flux_density_umol_m2_s = (
+            self.calculate_photosynthetic_photon_flux_density(
+                shortwave_radiation=self.model.data.grid.rsds,
+                xi=0.5,
+            )
+        )
+
+        w_forest = self.var.w.sum(axis=0)
+        w_forest[self.var.land_use_type != FOREST] = np.nan
+        w_forest = self.model.data.to_grid(HRU_data=w_forest, fn="nanmax")
+
+        wwp_forest = self.wwp.sum(axis=0)
+        wwp_forest[self.var.land_use_type != FOREST] = np.nan
+        wwp_forest = self.model.data.to_grid(HRU_data=wwp_forest, fn="nanmax")
+
+        wfc_forest = self.wfc.sum(axis=0)
+        wfc_forest[self.var.land_use_type != FOREST] = np.nan
+        wfc_forest = self.model.data.to_grid(HRU_data=wfc_forest, fn="nanmax")
+
+        soil_height_forest = self.soil_layer_height.sum(axis=0)
+        soil_height_forest[self.var.land_use_type != FOREST] = np.nan
+        soil_height_forest = self.model.data.to_grid(
+            HRU_data=soil_height_forest, fn="nanmax"
+        )
+
+        self.model.data.grid.soil_water_potential_MPa = (
+            self.calculate_soil_water_potential_MPa(
+                soil_moisture=w_forest,
+                soil_moisture_wilting_point=wwp_forest,
+                soil_moisture_field_capacity=wfc_forest,
+                soil_tickness=soil_height_forest,
+            )
+        )
+
         available_water_infiltration = get_available_water_infiltration(
             natural_available_water_infiltration=self.var.natural_available_water_infiltration,
             actual_irrigation_consumption=self.var.actual_irrigation_consumption,

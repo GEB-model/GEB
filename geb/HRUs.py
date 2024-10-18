@@ -98,8 +98,12 @@ def to_grid(data, grid_to_HRU, land_use_ratio, fn="weightedmean"):
             output_data[i] = np.nansum(data[prev_index:cell_index])
         elif fn == "max":
             output_data[i] = np.max(data[prev_index:cell_index])
+        elif fn == "nanmax":
+            output_data[i] = np.nanmax(data[prev_index:cell_index])
         elif fn == "min":
             output_data[i] = np.min(data[prev_index:cell_index])
+        elif fn == "nanmin":
+            output_data[i] = np.nanmin(data[prev_index:cell_index])
         else:
             raise NotImplementedError
         prev_index = cell_index
