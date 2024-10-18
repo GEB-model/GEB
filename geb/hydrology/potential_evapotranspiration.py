@@ -35,7 +35,7 @@ def PET(
     rlds,
     rsds,
     sfcWind,
-    albedo_canopy=np.float32(0.23),
+    albedo_canopy=np.float32(0.13),
     albedo_water=np.float32(0.05),
 ):
     tas_C = tas - np.float32(273.15)
