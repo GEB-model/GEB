@@ -44,16 +44,16 @@ agent_settings:
         ruleset: base
       adaptation_sprinkler:
         ruleset: base
-        interest_rate: 0.04
-        lifespan: 10
-        loan_duration: 11
-        yield_multiplier: 1
-        decision_horizon: 10
+        lifespan: 20
+        loan_duration: 21
+        decision_horizon: 20
+      adaptation_irrigation_expansion:
+        ruleset: base
       adaptation_well:
         loan_duration: 21
         lifespan: 20
         decision_horizon: 20
-        ruleset: base
+        ruleset: no-adaptation
         pump_hours: 3.5
         specific_weight_water: 9800 # (kg/m3*m/s2)
         max_initial_sat_thickness: 50 # m
