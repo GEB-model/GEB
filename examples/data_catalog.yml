@@ -469,7 +469,7 @@ CHELSA-BIOCLIM+_monthly_{variable}_{month}_{year}:
     category: climate
     source_license: CC0 1.0
     source_url: https://www.doi.org/10.16904/envidat.332
-  path: https://os.zhdk.cloud.switch.ch/envicloud/chelsa/chelsa_V2/GLOBAL/monthly/{variable}/CHELSA_{variable}_{month}_{year}_V.2.1.tif
+  path: https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/monthly/{variable}/CHELSA_{variable}_{month}_{year}_V.2.1.tif
 global_wind_atlas:
   crs: 4326
   data_type: RasterDataset

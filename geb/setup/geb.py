@@ -4738,7 +4738,7 @@ class GEBModel(GridModel):
                     irrigation_source[irrigating_farmers_indices] = 1
 
         # Update the irrigation_source attribute or return it as needed
-        self.binary["agents/farmers/irrigation_source"] = irrigation_source
+        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
 
     def setup_farmer_characteristics_simple(
         self,
