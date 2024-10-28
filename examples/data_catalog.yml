@@ -64,6 +64,17 @@ MIRCA2000_cropping_calendar_{irrigated_or_rainfed}:
     source_version: 1.1
   placeholders:
     irrigated_or_rainfed: [irrigated, rainfed]
+MIRCA2000_cropping_calendar_{irrigated_or_rainfed}_{year}:
+  data_type: Dataset
+  path: /scistor/ivm/data_catalogue/agriculture/MIRCA2000/condensed_cropping_calendars_2024/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
+  meta:
+    paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
+    paper_ref: Kebede et al. (2024) (preprint)
+    source_license: CC BY 4.0
+    source_url: https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/
+  placeholders:
+    irrigated_or_rainfed: [irrigated, rainfed]
+    year: ['2000', '2005', '2010', '2015']
 global_irrigation_area_{irrigation_type}:
   data_type: RasterDataset
   driver: raster

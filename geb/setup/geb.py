@@ -4958,6 +4958,7 @@ class GEBModel(GridModel):
         MIRCA_unit_grid = self.data_catalog.get_rasterdataset(
             "MIRCA2000_unit_grid", bbox=self.bounds, buffer=2
         )
+
         crop_calendar = parse_MIRCA2000_crop_calendar(
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
