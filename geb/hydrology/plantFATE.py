@@ -7,14 +7,18 @@ from pypfate import Patch as patch
 
 class Model:
     def __init__(self, param_file, acclim_forcing_file, use_acclim):
+        print(param_file)
+
         self.plantFATE_model = patch(str(param_file))
         self.time_unit_base = self.process_time_units()
         self.tcurrent = 0
-        #
-        # self.use_acclim = use_acclim
-        # if use_acclim:
-        #     self.acclimation_forcing = self.read_acclimation_file(acclim_forcing_file)
-        #     self.use_acclim = use_acclim
+
+        print("created PF model")
+
+        self.use_acclim = use_acclim
+        if use_acclim:
+            self.acclimation_forcing = self.read_acclimation_file(acclim_forcing_file)
+            self.use_acclim = use_acclim
 
     def read_acclimation_file(self, file):
         df = pd.read_csv(file)
@@ -46,9 +50,9 @@ class Model:
     ):
 
         self.plantFATE_model.update_climate(
-            368.9,  # co2 - need to make it better
+            368.9,  # co2
             temperature - 273.15,
-            vapour_pressure_deficit * 1000,
+            vapour_pressure_deficit * 1000, #kPa -> Pa
             photosynthetic_photon_flux_density,
             soil_water_potential,
             net_radiation,
@@ -87,17 +91,23 @@ class Model:
         datestart = datetime(tstart.year, tstart.month, tstart.day)
         datediff = datestart - self.time_unit_base
         datediff = datediff.days - 1
-
-        self.patch.init(datediff, datediff + 1000)
-
+        print("Running first step")
         self.tcurrent = datediff
-        self.patch.update_climate(368.9,
+
+
+        self.plantFATE_model.init(datediff, datediff + 1000)
+
+        print("test 2")
+        self.plantFATE_model.reset_time(datediff)
+
+        print("Running first step - after init")
+        self.plantFATE_model.update_climate(368.9,
                                   temperature,
                                   vapour_pressure_deficit * 1000,
                                   photosynthetic_photon_flux_density,
                                   soil_water_potential,
                                   net_radiation)
-
+        print("finished running first step")
         # if (self.use_acclim):
         #     index_acclim = self.acclimation_forcing.index[
         #         self.acclimation_forcing['date_jul'] == self.tcurrent].tolist()
@@ -118,8 +128,6 @@ class Model:
             topsoil_volumetric_water_content,
             net_radiation
     ):
-
-
         self.tcurrent += 1
 
         (
@@ -141,8 +149,15 @@ class Model:
         soil_specific_depletion_2 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
         soil_specific_depletion_3 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
 
+        # print(transpiration)
+        # print(np.isnan(transpiration))
+        # print(soil_evaporation)
         transpiration = transpiration / 1000  # kg H2O/m2/day to m/day - double check this value
-
+        #
+        # if np.isnan(transpiration):
+        #     transpiration = 0
+        # if np.isnan(soil_evaporation):
+        #     soil_evaporation = 0
         return (
             transpiration,
             soil_evaporation,

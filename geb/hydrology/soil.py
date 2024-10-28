@@ -1058,66 +1058,7 @@ class Soil(object):
             self.var.land_use_type, 3, dtype=np.int32
         )
 
-        def create_ini(yaml, idx, plantFATE_cluster, biodiversity_scenario):
-            out_dir = self.model.simulation_root / "plantFATE" / f"cell_{idx}"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            ini_file = out_dir / "p_daily.ini"
-
-            yaml["> STRINGS"]["outDir"] = out_dir
-            if self.model.spinup is True:
-                original_state_file = (
-                    Path("input")
-                    / "plantFATE_initialization"
-                    / biodiversity_scenario
-                    / f"cluster_{plantFATE_cluster}"
-                    / "pf_saved_state.txt"
-                )
-                assert original_state_file.exists()
-                new_state_file = out_dir / "pf_saved_state_initialization.txt"
-                with open(original_state_file, "r") as original_f:
-                    state = original_f.read()
-                    timetuple = self.model.current_time.timetuple()
-                    year = timetuple.tm_year
-                    day_of_year = timetuple.tm_yday
-                    state = state.replace(
-                        "6 2 0 2000 1 0 0",
-                        f"6 2 0 {year + (day_of_year - 1) / 365} 1 0 0",
-                    )
-                    with open(new_state_file, "w") as new_f:
-                        new_f.write(state)
-
-                yaml["> STRINGS"]["continueFromState"] = new_state_file
-                yaml["> STRINGS"]["continueFromConfig"] = ini_file
-                yaml["> STRINGS"]["saveState"] = True
-                yaml["> STRINGS"]["savedStateFile"] = "pf_saved_state_spinup.txt"
-                yaml["> STRINGS"]["savedConfigFile"] = "pf_saved_config_spinup.txt"
-            else:
-                yaml["> STRINGS"]["continueFromState"] = (
-                    out_dir
-                    / self.model.config["plantFATE"]["> STRINGS"]["exptName"]
-                    / "pf_saved_state_spinup.txt"
-                )
-                yaml["> STRINGS"]["continueFromConfig"] = ini_file
-                yaml["> STRINGS"]["savedStateFile"] = None
-                yaml["> STRINGS"]["saveState"] = False
-                yaml["> STRINGS"]["savedConfigFile"] = None
-
-            with open(ini_file, "w") as f:
-                for section, section_dict in yaml.items():
-                    f.write(section + "\n")
-                    if section_dict is None:
-                        continue
-                    for key, value in section_dict.items():
-                        if value is None:
-                            value = "null"
-                        elif value is False:
-                            value = "no"
-                        elif value is True:
-                            value = "yes"
-                        f.write(key + " " + str(value) + "\n")
-            return ini_file
-
-        if self.model.config["general"]["simulate_forest"]:
+        if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
             plantFATE_cluster = 7
             biodiversity_scenario = "low"
 
@@ -1138,6 +1079,7 @@ class Soil(object):
             self.plantFATE_forest_RUs = np.zeros_like(
                 self.var.land_use_type, dtype=bool
             )
+
             for i, land_use_type_RU in enumerate(self.var.land_use_type):
                 grid_cell = self.var.HRU_to_grid[i]
                 # if land_use_type_RU == 0 and self.var.land_use_ratio[i] > 0.5:
@@ -1146,24 +1088,27 @@ class Soil(object):
                         self.model.plantFATE.append(None)
                     else:
                         self.plantFATE_forest_RUs[i] = True
-
-                        ini_path = create_ini(
-                            self.model.config["plantFATE"],
-                            i,
-                            plantFATE_cluster,
-                            biodiversity_scenario,
-                        )
                         already_has_plantFATE_cell = True
-                        pfModel = plantFATE.Model(ini_path)
-                        pfModel.plantFATE_model.config.parent_dir = "output_parent_dir"
-                        pfModel.plantFATE_model.config.expt_dir = "output_cell_dir"
-                        pfModel.plantFATE_model.config.continueFrom_stateFile = "default_cluster_start_state"
-                        pfModel.plantFATE_model.config.continueFrom_configFile = "default_cluster_start_config_file"
-                        pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
+                        PFconfig_ini = self.model.config["plantFATE"]["default_ini_file"]
+                        if self.model.spinup:
+                            PFconfig_ini = self.model.config["plantFATE"]["spinup_ini_file"]
+                        pfModel = plantFATE.Model(PFconfig_ini, False, None)
+                        pfModel.plantFATE_model.config.parent_dir = str(self.model.simulation_root / "plantFATE")
+                        pfModel.plantFATE_model.config.expt_dir = f"cell_{i}"
+                        pfModel.plantFATE_model.config.out_dir = str(self.model.simulation_root / "plantFATE" / f"cell_{i}")
+
+                        # pfModel.plantFATE_model.config.continueFrom_stateFile = "default_cluster_start_state"
+                        # pfModel.plantFATE_model.config.continueFrom_configFile = "default_cluster_start_config_file"
+                        # pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
                         self.model.plantFATE.append(pfModel)
 
+                        # print("made_plantFATE cell")
                 else:
                     self.model.plantFATE.append(None)
+            # print(len(self.model.plantFATE))
+            # print(self.model.plantFATE[0])
+            # print(self.model.plantFATE[0:10])
+            # print(all(v is None for v in self.model.plantFATE))
 
     def calculate_soil_water_potential_MPa(
         self,
@@ -1334,50 +1279,75 @@ class Soil(object):
         )
         assert actual_total_transpiration.dtype == np.float32
 
-        if self.model.config["general"]["simulate_forest"]:
-            plantFATE_data = {
-                "soil_water_potential": self.calculate_soil_water_potential_MPa(
-                    soil_moisture=self.var.w.sum(axis=0),
-                    soil_moisture_wilting_point=self.wres.mean(axis=0),
-                    soil_moisture_field_capacity=self.wfc.mean(axis=0),
-                    soil_tickness=self.soil_layer_height.sum(axis=0),
-                ),
-                "vapour_pressure_deficit": self.calculate_vapour_pressure_deficit_kPa(
-                    relative_humidity=self.var.hurs,
-                    temperature_K=self.var.tas,
-                ),
-                "photosynthetic_photon_flux_density": self.calculate_photosynthetic_photon_flux_density(
-                    shortwave_radiation=self.var.rsds
-                ),
-                "temperature": self.var.tas - 273.15,  # - 273.15,  # K to C
-                "topsoil_volumetric_water_content": self.calculate_topsoil_volumetric_content(
-                    topsoil_water_content=self.var.w.sum(axis=0), # todo: need to set up for topsoil layer only
-                    topsoil_wilting_point=self.wres.mean(axis=0), # todo: need to set up for topsoil layer only
-                    topsoil_fieldcap=self.wfc.mean(axis=0) # todo: need to set up for topsoil layer only
-                ),
-                "net_radiation": self.calculate_net_radiation(
-                    shortwave_radiation_downwelling=self.var.rsds,
-                    longwave_radiation_net=self.var.rlds,
-                    albedo=0.13 # temporary value for forest
-                )
-            }
-            print(self.model.current_timestep)
-            if self.model.current_timestep == 0:
-                print("First PlantFATE")
-                self.model.plantFATE.first_step(
-                    tstart=0, **plantFATE_data
-                )
-                plantfate_transpiration = 0
-                plantfate_bare_soil_evaporation = 0
-            else:
-                (
-                    plantfate_transpiration,
-                    plantfate_bare_soil_evaporation,
-                    _,
-                    _,
-                    _,
-                ) = self.model.plantFATE.step(**plantFATE_data)
+        plantfate_transpiration = np.zeros_like(
+            self.var.land_use_type
+        )
+        plantfate_bare_soil_evaporation = np.zeros_like(
+            self.var.land_use_type
+        )
 
+        if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
+            idx_pf = 0
+            for i, PF_cell in enumerate(self.plantFATE_forest_RUs):
+                if PF_cell:
+                    # print(self.model.current_timestep)
+                    plantFATE_model = self.model.plantFATE[i]
+                    # print(plantFATE_model)
+
+                    if plantFATE_model is not None:
+                        print(self.var.w[0:len(self.var.w),i])
+                        print(self.wres[0:len(self.wres),i])
+                        print(self.wfc[0:len(self.wfc),i])
+                        print(self.soil_layer_height[0:len(self.soil_layer_height), i])
+                        # print(self.var.w.shape[0])
+                        # print(self.var.w.shape[1])
+                        # print(self.var.w.shape[2])
+                        plantFATE_data = {
+                            "soil_water_potential": self.calculate_soil_water_potential_MPa(
+                                soil_moisture=self.var.w[0:len(self.var.w),i].sum(),
+                                soil_moisture_wilting_point=self.wres[0:len(self.wres),i].mean(),
+                                soil_moisture_field_capacity=self.wfc[0:len(self.wfc),i].mean(),
+                                soil_tickness=self.soil_layer_height[0:len(self.soil_layer_height),i].sum(),
+                            ),
+                            "vapour_pressure_deficit": self.calculate_vapour_pressure_deficit_kPa(
+                                relative_humidity=self.var.hurs[i],
+                                temperature_K=self.var.tas[i],
+                            ),
+                            "photosynthetic_photon_flux_density": self.calculate_photosynthetic_photon_flux_density(
+                                shortwave_radiation=self.var.rsds[i]
+                            ),
+                            "temperature": self.var.tas[i] - 273.15,  # - 273.15,  # K to C
+                            "topsoil_volumetric_water_content": self.calculate_topsoil_volumetric_content(
+                                topsoil_water_content=self.var.w[0, i],
+                                topsoil_wilting_point=self.wres[0, i],
+                                topsoil_fieldcap=self.wfc[0, i]
+                            ),
+                            "net_radiation": self.calculate_net_radiation(
+                                shortwave_radiation_downwelling=self.var.rsds[i],
+                                longwave_radiation_net=self.var.rlds[i],
+                                albedo=0.13  # temporary value for forest
+                            )
+                        }
+                        print(plantFATE_data)
+                        if self.model.current_timestep == 1:
+                            time = self.model.config["general"]["start_time"]
+                            if self.model.spinup:
+                                time = self.model.config["general"]["spinup_time"]
+                            # print(time)
+                            plantFATE_model.first_step(
+                                tstart=time, **plantFATE_data
+                            )
+                        else:
+                            (
+                                plantfate_transpiration[i],
+                                plantfate_bare_soil_evaporation[i],
+                                _,
+                                _,
+                                _,
+                            ) = plantFATE_model.step(
+                                **plantFATE_data
+                            )
+                idx_pf = idx_pf + 1
             actual_total_transpiration += plantfate_transpiration
             actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
             # self.var.w -= plantfate_evapotranspiration_per_soil_layer ## not used for now
