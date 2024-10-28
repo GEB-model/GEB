@@ -1421,10 +1421,6 @@ class CropFarmers(AgentBaseClass):
         self.irrigation_efficiency_total = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
-        # Total irrigation efficiency is the fraction of irrigated field and the efficiency
-        self.irrigation_efficiency_total[:] = (0.5 * self.fraction_irrigated_field) + (
-            0.5 * self.irrigation_efficiency
-        )
 
         self.base_management_yield_ratio = AgentArray(
             n=self.n,
@@ -1772,6 +1768,18 @@ class CropFarmers(AgentBaseClass):
         self.activation_order_by_elevation_ = AgentArray(
             self.activation_order_by_elevation, max_n=self.max_n
         )
+
+        if (
+            not self.config["expected_utility"]["adaptation_irrigation_expansion"][
+                "ruleset"
+            ]
+            == "no-adaptation"
+        ):
+            self.irrigation_efficiency_total[:] = irrigation_fraction(
+                self.irrigation_efficiency, self.fraction_irrigated_field
+            )
+        else:
+            self.irrigation_efficiency_total[:] = self.irrigation_efficiency
 
         if __debug__:
             irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
@@ -3549,15 +3557,18 @@ class CropFarmers(AgentBaseClass):
         # Solely the annual cost of the adaptation
         annual_cost_m2 = annual_cost / self.field_size_per_farmer
 
+        # Create mask for those who have access to irrigation water
+        has_irrigation_access = ~np.all(
+            self.yearly_abstraction_m3_by_farmer[:, 3, :] == 0, axis=1
+        )
+
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # or who's never had access to irrigation water
         expired_adaptations = (
             self.time_adapted[:, adaptation_type] == self.lifespan_irrigation
-        ) | np.all(self.yearly_abstraction_m3_by_farmer[:, 3, :] == 0, axis=1)
+        ) | has_irrigation_access
         self.adapted[expired_adaptations, adaptation_type] = 0
         self.time_adapted[expired_adaptations, adaptation_type] = -1
-
-        extra_constraint = np.full(self.n, 1, dtype=bool)
 
         # To determine the benefit of irrigation, those who have above 90% irrigation efficiency have adapted
         adapted = np.where((self.adapted[:, adaptation_type] == 1), 1, 0)
@@ -3598,7 +3609,7 @@ class CropFarmers(AgentBaseClass):
                 ]["decision_horizon"],
             ),
             "discount_rate": self.discount_rate.data,
-            "extra_constraint": extra_constraint,
+            "extra_constraint": has_irrigation_access,
         }
 
         # Calculate the EU of not adapting and adapting respectively
@@ -3618,10 +3629,6 @@ class CropFarmers(AgentBaseClass):
 
         # Update irrigation efficiency for farmers who adapted
         self.irrigation_efficiency[SEUT_adaptation_decision] = 0.9
-
-        self.irrigation_efficiency_total[:] = irrigation_fraction(
-            self.irrigation_efficiency, self.fraction_irrigated_field
-        )
 
         # Print the percentage of adapted households
         percentage_adapted = round(
@@ -3670,6 +3677,11 @@ class CropFarmers(AgentBaseClass):
 
         annual_cost_m2 = annual_cost / self.field_size_per_farmer
 
+        # Create mask for those who have access to irrigation water
+        has_irrigation_access = np.all(
+            self.yearly_abstraction_m3_by_farmer[:, 3, :] == 0, axis=1
+        )
+
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # or who's never had access to irrigation water
         expired_adaptations = (
@@ -3677,8 +3689,6 @@ class CropFarmers(AgentBaseClass):
         ) | np.all(self.yearly_abstraction_m3_by_farmer[:, 3, :] == 0, axis=1)
         self.adapted[expired_adaptations, adaptation_type] = 0
         self.time_adapted[expired_adaptations, adaptation_type] = -1
-
-        extra_constraint = np.full(self.n, 1, dtype=bool)
 
         adapted = np.where((self.adapted[:, adaptation_type] == 1), 1, 0)
 
@@ -3715,7 +3725,7 @@ class CropFarmers(AgentBaseClass):
                 ]["decision_horizon"],
             ),
             "discount_rate": self.discount_rate.data,
-            "extra_constraint": extra_constraint,
+            "extra_constraint": has_irrigation_access,
         }
 
         # Calculate the EU of not adapting and adapting respectively
@@ -3735,10 +3745,6 @@ class CropFarmers(AgentBaseClass):
 
         # Update irrigation efficiency for farmers who adapted
         self.fraction_irrigated_field[SEUT_adaptation_decision] = 1
-
-        self.irrigation_efficiency_total[:] = irrigation_fraction(
-            self.irrigation_efficiency, self.fraction_irrigated_field
-        )
 
         # Print the percentage of adapted households
         percentage_adapted = round(
@@ -4311,301 +4317,6 @@ class CropFarmers(AgentBaseClass):
 
         return crop_elevation_group.astype(np.int32)
 
-    def crop_yield_ratio_difference_test(self, yield_ratios) -> np.ndarray:
-        crop_elevation_group = self.create_unique_groups()
-
-        unique_crop_groups, group_indices = np.unique(
-            crop_elevation_group, axis=0, return_inverse=True
-        )
-
-        unique_crop_calendars = np.unique(self.crop_calendar[:, :, 0], axis=0)
-
-        unique_yield_ratio_gain = np.full(
-            (
-                len(unique_crop_groups),
-                len(unique_crop_calendars),
-                len(self.p_droughts),
-            ),
-            0,
-            dtype=np.float32,
-        )
-
-        id_to_switch_to = np.full(
-            (len(unique_crop_groups), len(unique_crop_calendars)),
-            -1,
-            dtype=np.int32,
-        )
-        crop_to_switch_to = np.full(
-            (len(unique_crop_groups), len(unique_crop_calendars)),
-            -1,
-            dtype=np.int32,
-        )
-
-        def find_most_similar_index(target_series, yield_ratios, groups):
-            distances = np.linalg.norm(yield_ratios[groups] - target_series, axis=1)
-            most_similar_index_within_subset = np.argmin(distances)
-            global_indices = np.where(groups)[0]
-            return global_indices[most_similar_index_within_subset]
-
-        for group_id, unique_group in enumerate(unique_crop_groups):
-            unique_farmer_groups = (
-                crop_elevation_group == unique_group[None, ...]
-            ).all(axis=1)
-
-            if np.any(unique_farmer_groups):
-                # Identify the adapted counterparts of the current group
-                mask = ~np.all(unique_crop_calendars == unique_group[:3], axis=1)
-                candidate_crop_rotations = unique_crop_calendars[mask]
-
-                # Loop over the counterparts
-                for crop_id, unique_rotation in enumerate(candidate_crop_rotations):
-                    farmer_class = unique_group[-1]
-                    basin_location = unique_group[-2]
-                    unique_group_other_crop = np.concatenate(
-                        (unique_rotation, [basin_location, farmer_class])
-                    )
-                    unique_farmer_groups_other_crop = (
-                        crop_elevation_group == unique_group_other_crop[None, ...]
-                    ).all(axis=1)
-                    if np.any(unique_farmer_groups_other_crop):
-                        current_yield_ratio = np.mean(
-                            yield_ratios[unique_farmer_groups, :], axis=0
-                        )
-                        candidate_yield_ratio = np.mean(
-                            yield_ratios[unique_farmer_groups_other_crop, :], axis=0
-                        )
-
-                        yield_ratio_gain = candidate_yield_ratio - current_yield_ratio
-
-                        crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
-
-                        if np.isnan(yield_ratio_gain).all():
-                            yield_ratio_gain = np.zeros_like(yield_ratio_gain)
-                        else:
-                            id_to_switch_to[group_id, crop_id] = (
-                                find_most_similar_index(
-                                    yield_ratio_gain,
-                                    yield_ratios,
-                                    unique_farmer_groups_other_crop,
-                                )
-                            )
-
-                        unique_yield_ratio_gain[group_id, crop_id, :] = yield_ratio_gain
-
-        gains_adaptation = unique_yield_ratio_gain[group_indices, :, :]
-        new_crop_nr = crop_to_switch_to[group_indices, :]
-        new_farmer_id = id_to_switch_to[group_indices, :]
-
-        return (
-            gains_adaptation,
-            new_crop_nr,
-            new_farmer_id,
-        )
-
-    def crop_yield_ratio_difference(self, yield_ratios) -> np.ndarray:
-        """
-        Calculate the relative yield ratio improvement for farmers adopting a certain adaptation.
-
-        This function determines how much better farmers that have adopted a particular adaptation
-        are doing in terms of their yield ratio as compared to those who haven't.
-
-        Args:
-            adaptation_type: The type of adaptation being considered.
-
-        Returns:
-            An array representing the relative yield ratio improvement for each agent.
-
-        TO DO: vectorize
-        """
-
-        # Make array based on elevation and crop calendar
-        crop_elevation_group = self.create_unique_groups()
-
-        # Get unique groups and group indices
-        unique_crop_groups, group_indices = np.unique(
-            crop_elevation_group, axis=0, return_inverse=True
-        )
-        # Initialize array to store relative yield ratio improvement for unique groups
-        unique_yield_ratio_gain_option_1 = np.full(
-            (
-                len(unique_crop_groups),
-                len(self.p_droughts),
-            ),
-            0,
-            dtype=np.float32,
-        )
-        unique_yield_ratio_gain_option_2 = np.full(
-            (len(unique_crop_groups), len(self.p_droughts)), 0, dtype=np.float32
-        )
-        id_to_switch_to = np.full((len(unique_crop_groups), 2), -1)
-        crop_to_switch_to = np.full((len(unique_crop_groups), 2), -1)
-
-        def get_updated_combinations(unique_combination):
-            """
-            Update combinations based on the value of unique_combination[0].
-
-            Parameters:
-            unique_combination (list): List containing the unique combination values.
-
-            Returns:
-            tuple: Updated combinations (unique_combination_option_1, unique_combination_option_2).
-            """
-            # Define the mapping of initial values to their corresponding options
-            condition_mapping = {
-                0: (26, 27),
-                26: (0, 27),
-                27: (0, 26),
-                1: (28, 29),
-                28: (1, 29),
-                29: (1, 28),
-                2: (30, 31),
-                30: (2, 31),
-                31: (2, 30),
-                7: (32, 33),
-                32: (7, 33),
-                33: (7, 32),
-                9: (34, 35),
-                34: (9, 35),
-                35: (9, 34),
-            }
-
-            # Initialize the options with the original unique_combination values
-            unique_combination_option_1 = unique_combination.copy()
-            unique_combination_option_2 = unique_combination.copy()
-
-            # Check if the initial value is in the mapping
-            if unique_combination[0] in condition_mapping:
-                option_1_value, option_2_value = condition_mapping[
-                    unique_combination[0]
-                ]
-                unique_combination_option_1[0] = option_1_value
-                unique_combination_option_2[0] = option_2_value
-
-            return unique_combination_option_1, unique_combination_option_2
-
-        crops_with_varieties = [0, 26, 27, 1, 28, 29, 2, 30, 31, 7, 32, 33, 9, 34, 35]
-
-        # Loop over each unique group of farmers to determine their average yield ratio
-        for idx, unique_combination in enumerate(unique_crop_groups):
-            if unique_combination[0] in crops_with_varieties:
-                unique_farmer_groups = (
-                    crop_elevation_group == unique_combination[None, ...]
-                ).all(axis=1)
-
-                # Identify the adapted counterpart of the current group
-                unique_combination_option_1 = unique_combination.copy()
-                unique_combination_option_2 = unique_combination.copy()
-
-                unique_combination_option_1, unique_combination_option_2 = (
-                    get_updated_combinations(unique_combination)
-                )
-
-                unique_farmer_groups_option_1 = (
-                    crop_elevation_group == unique_combination_option_1[None, ...]
-                ).all(axis=1)
-
-                unique_farmer_groups_option_2 = (
-                    crop_elevation_group == unique_combination_option_2[None, ...]
-                ).all(axis=1)
-
-                def find_most_similar_index(target_series, yield_ratios, groups):
-                    distances = np.linalg.norm(
-                        yield_ratios[groups] - target_series, axis=1
-                    )
-                    most_similar_index_within_subset = np.argmin(distances)
-                    global_indices = np.where(groups)[0]
-                    return global_indices[most_similar_index_within_subset]
-
-                def calculate_yield_ratio_gain(
-                    yield_ratios, current_yield_ratio, groups
-                ):
-                    yield_ratio = np.mean(yield_ratios[groups, :], axis=0)
-                    yield_ratio_gain = yield_ratio - current_yield_ratio
-                    return yield_ratio_gain
-
-                def process_option(
-                    yield_ratios,
-                    unique_combination_option,
-                    groups,
-                    current_yield_ratio,
-                    crop_to_switch_to,
-                    id_to_switch_to,
-                    option_nr,
-                    idx,
-                ):
-                    yield_ratio_gain = calculate_yield_ratio_gain(
-                        yield_ratios, current_yield_ratio, groups
-                    )
-                    crop_to_switch_to[idx, option_nr] = unique_combination_option[0]
-
-                    if np.isnan(yield_ratio_gain).all():
-                        yield_ratio_gain = np.zeros_like(yield_ratio_gain)
-                    else:
-                        id_to_switch_to[idx, option_nr] = find_most_similar_index(
-                            yield_ratio_gain, yield_ratios, groups
-                        )
-                    return yield_ratio_gain
-
-                # Calculate mean yield ratio over past years for the unadapted group
-                current_yield_ratio = np.mean(
-                    yield_ratios[unique_farmer_groups, :], axis=0
-                )
-
-                if np.isnan(current_yield_ratio).all():
-                    current_yield_ratio = np.zeros_like(current_yield_ratio)
-
-                # Process option 1
-                yield_ratio_gain_relative_option_1 = process_option(
-                    yield_ratios,
-                    unique_combination_option_1,
-                    unique_farmer_groups_option_1,
-                    current_yield_ratio,
-                    crop_to_switch_to,
-                    id_to_switch_to,
-                    0,
-                    idx,
-                )
-
-                # Process option 2
-                yield_ratio_gain_relative_option_2 = process_option(
-                    yield_ratios,
-                    unique_combination_option_2,
-                    unique_farmer_groups_option_2,
-                    current_yield_ratio,
-                    crop_to_switch_to,
-                    id_to_switch_to,
-                    1,
-                    idx,
-                )
-
-                unique_yield_ratio_gain_option_1[idx, :] = (
-                    yield_ratio_gain_relative_option_1
-                )
-                unique_yield_ratio_gain_option_2[idx, :] = (
-                    yield_ratio_gain_relative_option_2
-                )
-
-                assert not (
-                    np.isinf(yield_ratio_gain_relative_option_1).any()
-                    or np.isinf(yield_ratio_gain_relative_option_2).any()
-                ), "gains adaptation value is inf"
-
-            else:
-                pass
-
-        # Convert group-based results into agent-specific results
-        gains_adaptation_option_1 = unique_yield_ratio_gain_option_1[group_indices, :]
-        gains_adaptation_option_2 = unique_yield_ratio_gain_option_2[group_indices, :]
-        new_crop_nr = crop_to_switch_to[group_indices, :]
-        new_farmer_id = id_to_switch_to[group_indices, :]
-
-        return (
-            gains_adaptation_option_1,
-            gains_adaptation_option_2,
-            new_crop_nr,
-            new_farmer_id,
-        )
-
     def adaptation_yield_ratio_difference(
         self, adapted: np.ndarray, yield_ratios
     ) -> np.ndarray:
@@ -5036,7 +4747,7 @@ class CropFarmers(AgentBaseClass):
             ):
                 # Determine the relation between drought probability and yield
                 self.calculate_yield_spei_relation()
-                self.calculate_yield_spei_relation_group()
+                # self.calculate_yield_spei_relation_group()
                 # self.calculate_yield_spei_relation_test_group()
                 timer.new_split("yield-spei relation")
 
