@@ -7,13 +7,9 @@ from pypfate import Patch as patch
 
 class Model:
     def __init__(self, param_file, acclim_forcing_file, use_acclim):
-        print(param_file)
-
         self.plantFATE_model = patch(str(param_file))
         self.time_unit_base = self.process_time_units()
         self.tcurrent = 0
-
-        print("created PF model")
 
         self.use_acclim = use_acclim
         if use_acclim:
@@ -51,8 +47,8 @@ class Model:
 
         self.plantFATE_model.update_climate(
             368.9,  # co2
-            temperature - 273.15,
-            vapour_pressure_deficit * 1000, #kPa -> Pa
+            temperature,
+            vapour_pressure_deficit, #kPa -> Pa
             photosynthetic_photon_flux_density,
             soil_water_potential,
             net_radiation,
@@ -72,7 +68,10 @@ class Model:
         self.plantFATE_model.simulate_to(self.tcurrent)
         trans = self.plantFATE_model.props.fluxes.trans
         potential_soil_evaporation = self.plantFATE_model.props.fluxes.pe_soil
-
+        # print('potential soil evap')
+        # print(potential_soil_evaporation)
+        # print('plantFate transpiration')
+        # print(trans)
         soil_evaporation = potential_soil_evaporation * topsoil_volumetric_water_content
 
         # return transpiration, soil_evaporation, soil_specific_depletion_1, soil_specific_depletion_2, soil_specific_depletion_3
@@ -91,23 +90,24 @@ class Model:
         datestart = datetime(tstart.year, tstart.month, tstart.day)
         datediff = datestart - self.time_unit_base
         datediff = datediff.days - 1
-        print("Running first step")
+        # print("Running first step")
         self.tcurrent = datediff
 
 
         self.plantFATE_model.init(datediff, datediff + 1000)
 
-        print("test 2")
+        # print("test 2")
         self.plantFATE_model.reset_time(datediff)
 
-        print("Running first step - after init")
+        # print("Running first step - after init")
         self.plantFATE_model.update_climate(368.9,
                                   temperature,
-                                  vapour_pressure_deficit * 1000,
+                                  vapour_pressure_deficit,
                                   photosynthetic_photon_flux_density,
                                   soil_water_potential,
                                   net_radiation)
-        print("finished running first step")
+                            # 250)
+        # print("finished running first step")
         # if (self.use_acclim):
         #     index_acclim = self.acclimation_forcing.index[
         #         self.acclimation_forcing['date_jul'] == self.tcurrent].tolist()
@@ -142,6 +142,7 @@ class Model:
             photosynthetic_photon_flux_density,
             temperature,
             net_radiation,
+            # 250,
             topsoil_volumetric_water_content
         )
 

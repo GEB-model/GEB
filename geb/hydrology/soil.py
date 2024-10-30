@@ -516,6 +516,7 @@ def evapotranspirate(
     open_water_evaporation,
     available_water_infiltration,
     mask,
+    mask_evap
 ):
     root_ratios_matrix = np.zeros_like(soil_layer_height)
     root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
@@ -659,7 +660,7 @@ def evapotranspirate(
                 if not mask[i]:
                     actual_total_transpiration[i] += transpiration
 
-        if not mask[i]:
+        if not mask_evap[i]:
             # limit the bare soil evaporation to the available water in the soil
             if not soil_is_frozen[i] and topwater[i] == np.float32(0):
                 # TODO: Minor bug, this should only occur when topwater is above 0
@@ -1058,7 +1059,8 @@ class Soil(object):
             self.var.land_use_type, 3, dtype=np.int32
         )
 
-        if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
+        # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
+        if self.model.config["general"]["simulate_forest"]:
             plantFATE_cluster = 7
             biodiversity_scenario = "low"
 
@@ -1073,6 +1075,8 @@ class Soil(object):
             cell_id = cell_ids_map[py, px]
 
             already_has_plantFATE_cell = False
+            num_plantFATE_cells = 1000
+
             from . import plantFATE
 
             self.model.plantFATE = []
@@ -1082,13 +1086,15 @@ class Soil(object):
 
             for i, land_use_type_RU in enumerate(self.var.land_use_type):
                 grid_cell = self.var.HRU_to_grid[i]
-                # if land_use_type_RU == 0 and self.var.land_use_ratio[i] > 0.5:
-                if land_use_type_RU == FOREST and grid_cell == cell_id:
+                if land_use_type_RU == 0 and self.var.land_use_ratio[i] > 0.5:
+                # if land_use_type_RU == FOREST and grid_cell == cell_id:
+                # if land_use_type_RU == FOREST:
                     if already_has_plantFATE_cell:
                         self.model.plantFATE.append(None)
                     else:
                         self.plantFATE_forest_RUs[i] = True
-                        already_has_plantFATE_cell = True
+                        if len(self.plantFATE_forest_RUs[self.plantFATE_forest_RUs is True]) >= num_plantFATE_cells:
+                            already_has_plantFATE_cell = True
                         PFconfig_ini = self.model.config["plantFATE"]["default_ini_file"]
                         if self.model.spinup:
                             PFconfig_ini = self.model.config["plantFATE"]["spinup_ini_file"]
@@ -1096,7 +1102,7 @@ class Soil(object):
                         pfModel.plantFATE_model.config.parent_dir = str(self.model.simulation_root / "plantFATE")
                         pfModel.plantFATE_model.config.expt_dir = f"cell_{i}"
                         pfModel.plantFATE_model.config.out_dir = str(self.model.simulation_root / "plantFATE" / f"cell_{i}")
-
+                        pfModel.plantFATE_model.config.save_state = False
                         # pfModel.plantFATE_model.config.continueFrom_stateFile = "default_cluster_start_state"
                         # pfModel.plantFATE_model.config.continueFrom_configFile = "default_cluster_start_config_file"
                         # pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
@@ -1105,6 +1111,7 @@ class Soil(object):
                         # print("made_plantFATE cell")
                 else:
                     self.model.plantFATE.append(None)
+
             # print(len(self.model.plantFATE))
             # print(self.model.plantFATE[0])
             # print(self.model.plantFATE[0:10])
@@ -1188,7 +1195,7 @@ class Soil(object):
         return topsoil_volumetric_content
     
     def calculate_net_radiation(self, shortwave_radiation_downwelling, longwave_radiation_net, albedo):
-        net_radiation = shortwave_radiation_downwelling * (1-albedo) - longwave_radiation_net # W/m2
+        net_radiation = shortwave_radiation_downwelling * (1-albedo) + longwave_radiation_net # W/m2
         return net_radiation
 
     def step(
@@ -1246,9 +1253,11 @@ class Soil(object):
         timer.new_split("Capillary rise from groundwater")
 
         mask = self.var.land_use_type >= SEALED
+        mask_evap = self.var.land_use_type >= SEALED
+        # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
         if self.model.config["general"]["simulate_forest"]:
-            mask[self.var.land_use_type == FOREST] = True
-
+            mask[self.plantFATE_forest_RUs] = True
+        # print(len(self.plantFATE_forest_RUs[self.plantFATE_forest_RUs]))
         (
             actual_total_transpiration,
             actual_bare_soil_evaporation,
@@ -1275,7 +1284,9 @@ class Soil(object):
             topwater=self.var.topwater,
             open_water_evaporation=open_water_evaporation,
             available_water_infiltration=available_water_infiltration,
-            mask=self.var.land_use_type < SEALED,
+            mask = mask,
+            # mask=self.var.land_use_type >= SEALED
+            mask_evap = mask_evap
         )
         assert actual_total_transpiration.dtype == np.float32
 
@@ -1285,8 +1296,12 @@ class Soil(object):
         plantfate_bare_soil_evaporation = np.zeros_like(
             self.var.land_use_type
         )
-
-        if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
+        plant_fate_transpiration_by_layer = np.zeros_like(
+            self.var.w
+        )
+        total_water = soil_moisture = self.var.w.sum(axis=0) - self.wres.sum(axis=0)
+        # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
+        if self.model.config["general"]["simulate_forest"]:
             idx_pf = 0
             for i, PF_cell in enumerate(self.plantFATE_forest_RUs):
                 if PF_cell:
@@ -1295,24 +1310,20 @@ class Soil(object):
                     # print(plantFATE_model)
 
                     if plantFATE_model is not None:
-                        print(self.var.w[0:len(self.var.w),i])
-                        print(self.wres[0:len(self.wres),i])
-                        print(self.wfc[0:len(self.wfc),i])
-                        print(self.soil_layer_height[0:len(self.soil_layer_height), i])
                         # print(self.var.w.shape[0])
                         # print(self.var.w.shape[1])
                         # print(self.var.w.shape[2])
                         plantFATE_data = {
                             "soil_water_potential": self.calculate_soil_water_potential_MPa(
                                 soil_moisture=self.var.w[0:len(self.var.w),i].sum(),
-                                soil_moisture_wilting_point=self.wres[0:len(self.wres),i].mean(),
-                                soil_moisture_field_capacity=self.wfc[0:len(self.wfc),i].mean(),
+                                soil_moisture_wilting_point=self.wres[0:len(self.wres),i].sum(),
+                                soil_moisture_field_capacity=self.wfc[0:len(self.wfc),i].sum(),
                                 soil_tickness=self.soil_layer_height[0:len(self.soil_layer_height),i].sum(),
                             ),
                             "vapour_pressure_deficit": self.calculate_vapour_pressure_deficit_kPa(
-                                relative_humidity=self.var.hurs[i],
                                 temperature_K=self.var.tas[i],
-                            ),
+                                relative_humidity=self.var.hurs[i],
+                            ) * 1000, # kPa to Pa
                             "photosynthetic_photon_flux_density": self.calculate_photosynthetic_photon_flux_density(
                                 shortwave_radiation=self.var.rsds[i]
                             ),
@@ -1327,8 +1338,9 @@ class Soil(object):
                                 longwave_radiation_net=self.var.rlds[i],
                                 albedo=0.13  # temporary value for forest
                             )
+                            # "net_radiation": self.model.data.grid.net_absorbed_radiation_vegetation_MJ_m2_day[i]
                         }
-                        print(plantFATE_data)
+                        # print(plantFATE_data)
                         if self.model.current_timestep == 1:
                             time = self.model.config["general"]["start_time"]
                             if self.model.spinup:
@@ -1347,9 +1359,17 @@ class Soil(object):
                             ) = plantFATE_model.step(
                                 **plantFATE_data
                             )
+                            for layer in range(N_SOIL_LAYERS):
+                                plantfate_transpiration_by_layer[layer,i] = plantfate_transpiration[i] * (self.var.w[layer,i] + self.wres[layer,i])/total_water[i]
+                            # print(plantfate_transpiration[i])
+                            # print(plantfate_bare_soil_evaporation[i])
                 idx_pf = idx_pf + 1
             actual_total_transpiration += plantfate_transpiration
-            actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
+
+
+
+        # actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
+            # print(plantfate_bare_soil_evaporation)
             # self.var.w -= plantfate_evapotranspiration_per_soil_layer ## not used for now
 
         timer.new_split("Evapotranspiration")
