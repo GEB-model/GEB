@@ -386,12 +386,12 @@ def parse_MIRCA2000_crop_calendar(data_catalog, MIRCA_units):
 
     MIRCA2000_data = {}
 
-    MIRCA2000_data = parse_MIRCA_file_test(
-        MIRCA2000_data,
-        rainfed_crop_calendar_fp_2000,
-        MIRCA_units,
-        is_irrigated=False,
-    )
+    # MIRCA2000_data = parse_MIRCA_file_test(
+    #     MIRCA2000_data,
+    #     rainfed_crop_calendar_fp_2000,
+    #     MIRCA_units,
+    #     is_irrigated=False,
+    # )
     MIRCA2000_data = parse_MIRCA_file(
         MIRCA2000_data,
         rainfed_crop_calendar_fp,

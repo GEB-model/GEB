@@ -26,11 +26,15 @@ agent_settings:
   market:
     dynamic_market: false
     price_frequency: yearly
+  government:
+    irrigation_limit:
+      limit: 10000  # previous tried 1700
+      per: capita
   farmers:
     ruleset: base
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
-    cultivation_cost_fraction: 0.5
+    cultivation_cost_fraction: 0.1
     microcredit:
       interest_rate: 0.2
       loan_duration: 2
@@ -48,7 +52,7 @@ agent_settings:
         loan_duration: 21
         decision_horizon: 20
       adaptation_irrigation_expansion:
-        ruleset: base
+        ruleset: no-adaptation
       adaptation_well:
         loan_duration: 21
         lifespan: 20
@@ -73,8 +77,8 @@ agent_settings:
         risk_perception:
           base: 1.6
           coef: -2.5
-          max: 4.4118829846402114
-          min: 0.1
+          max: 10
+          min: 0.5
   fix_activation_order: true
   reservoir_operators:
     MinOutflowQ: 0.0

@@ -75,6 +75,20 @@ MIRCA2000_cropping_calendar_{irrigated_or_rainfed}_{year}:
   placeholders:
     irrigated_or_rainfed: [irrigated, rainfed]
     year: ['2000', '2005', '2010', '2015']
+MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
+  data_type: RasterDataset
+  driver: raster
+  path: /scistor/ivm/data_catalogue/agriculture/MIRCA2000_Annual_Harvested_Area_Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{ir_or_rf}.tif
+  meta:
+    paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
+    paper_ref: Kebede et al. (2024) (preprint)
+    source_license: CC BY 4.0
+    source_url: https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/
+  placeholders:
+    year: ['2000', '2005', '2010', '2015']
+    resolution: ['5-arcminute', '30-arcminute']
+    crop: ['Barley', 'Cassava', 'Cocoa', 'Coffee', 'Cotton', 'Fodder', 'Groundnuts', 'Maize', 'Millet', 'Oil_palm', 'Others_annual', 'Others_perennial', 'Potatoes', 'Pulses', 'Rapeseed', 'Rice', 'Rye', 'Sorghum', 'Soybeans', 'Sugar_beet', 'Sugar_cane', 'Sunflower', 'Wheat']
+    ir_or_rf: [ir, rf]
 global_irrigation_area_{irrigation_type}:
   data_type: RasterDataset
   driver: raster

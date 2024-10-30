@@ -2843,13 +2843,13 @@ class CropFarmers(AgentBaseClass):
         import os
         import matplotlib
 
-        matplotlib.use("Agg")  # Use the 'Agg' backend for non-interactive plotting
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from scipy.optimize import curve_fit
         import numpy as np
 
         # Create unique groups based on agent properties
-        crop_elevation_group = self.create_unique_groups()
+        crop_elevation_group = self.create_unique_groups(10)
         unique_crop_combinations, group_indices = np.unique(
             crop_elevation_group, axis=0, return_inverse=True
         )
@@ -3173,17 +3173,15 @@ class CropFarmers(AgentBaseClass):
             crop_elevation_group, axis=0, return_inverse=True
         )
 
-        # Mask out empty columns
-        mask_columns = np.any(self.yearly_yield_ratio != 0, axis=0) & np.any(
-            self.yearly_SPEI_probability != 0, axis=0
+        # Mask out empty rows (agents) where data is zero or NaN
+        mask_agents = np.any(self.yearly_yield_ratio != 0, axis=1) & np.any(
+            self.yearly_SPEI_probability != 0, axis=1
         )
 
-        masked_yearly_yield_ratio = self.yearly_yield_ratio[:, mask_columns]
-        masked_SPEI_probability = self.yearly_SPEI_probability[:, mask_columns]
-        masked_SPEI_probability_log = np.log10(masked_SPEI_probability)
-
-        # Number of groups
-        n_groups = unique_crop_combinations.shape[0]
+        # Apply the mask to data
+        masked_yearly_yield_ratio = self.yearly_yield_ratio[mask_agents, :]
+        masked_SPEI_probability = self.yearly_SPEI_probability[mask_agents, :]
+        group_indices = group_indices[mask_agents]
 
         # Number of groups
         n_groups = unique_crop_combinations.shape[0]
@@ -3194,38 +3192,44 @@ class CropFarmers(AgentBaseClass):
         r_squared_array = np.zeros(n_groups)
 
         for group_idx in range(n_groups):
-            col_indices = np.where(group_indices == group_idx)[0]
+            agent_indices = np.where(group_indices == group_idx)[0]
 
             # Get data for the group
-            y_data = masked_yearly_yield_ratio[col_indices, :]
-            X_data_log = masked_SPEI_probability_log[col_indices, :]
-            X_data_prob = masked_SPEI_probability[col_indices, :]
+            y_data = masked_yearly_yield_ratio[agent_indices, :]
+            X_data = masked_SPEI_probability[agent_indices, :]
 
-            # Remove values where the probability is > 1
-            mask = X_data_prob >= 1
+            # Remove invalid values where SPEI probability >= 1 or yield <= 0
+            mask = (X_data >= 1) | (y_data <= 0)
             y_data[mask] = np.nan
-            X_data_log[mask] = np.nan
+            X_data[mask] = np.nan
 
-            # Compute mean over columns (axis=1)
-            y_group = np.nanmean(y_data, axis=1)
-            X_group = np.nanmean(X_data_log, axis=1)
+            # Compute mean over agents (axis=0 corresponds to years)
+            y_group = np.nanmean(y_data, axis=0)  # shape (num_years,)
+            X_group = np.nanmean(X_data, axis=0)  # shape (num_years,)
 
-            # Remove any years with NaN values
-            valid_indices = ~np.isnan(y_group) & ~np.isnan(X_group)
-            y_group = y_group[valid_indices]
-            X_group = X_group[valid_indices]
+            # Remove any entries with NaN values
+            valid_indices = (~np.isnan(y_group)) & (~np.isnan(X_group)) & (y_group > 0)
+            y_group_valid = y_group[valid_indices]
+            X_group_valid = X_group[valid_indices]
 
-            if len(X_group) >= 2:
-                # Prepare matrices
-                X_matrix = np.vstack([X_group, np.ones(len(X_group))]).T
-                # Perform linear regression
-                coefficients = np.linalg.lstsq(X_matrix, y_group, rcond=None)[0]
-                a, b = coefficients
+            if len(X_group_valid) >= 2:
+                # Take the natural logarithm of y_group_valid
+                ln_y_group = np.log(y_group_valid)
+
+                # Prepare matrices for linear regression
+                X_matrix = np.vstack([X_group_valid, np.ones(len(X_group_valid))]).T
+
+                # Perform linear regression on ln(y) = b * X + ln(a)
+                coefficients = np.linalg.lstsq(X_matrix, ln_y_group, rcond=None)[0]
+                b, ln_a = coefficients
+                a = np.exp(ln_a)
+
+                # Calculate predicted y values
+                y_pred = a * np.exp(b * X_group_valid)
 
                 # Calculate R²
-                y_pred = a * X_group + b
-                ss_res = np.sum((y_group - y_pred) ** 2)
-                ss_tot = np.sum((y_group - np.mean(y_group)) ** 2)
+                ss_res = np.sum((y_group_valid - y_pred) ** 2)
+                ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
                 r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
             else:
                 # Not enough data points
@@ -3239,10 +3243,14 @@ class CropFarmers(AgentBaseClass):
         farmer_yield_probability_relation = np.column_stack(
             (a_array[group_indices], b_array[group_indices])
         )
+        self.farmer_yield_probability_relation = farmer_yield_probability_relation
 
         # Print median R²
         valid_r2 = r_squared_array[~np.isnan(r_squared_array)]
-        print("Median R²:", np.median(valid_r2) if len(valid_r2) > 0 else "N/A")
+        print(
+            "Median R² for exponential model:",
+            np.median(valid_r2) if len(valid_r2) > 0 else "N/A",
+        )
 
     def adapt_crops(self) -> None:
         # Fetch loan configuration
@@ -4747,8 +4755,8 @@ class CropFarmers(AgentBaseClass):
             ):
                 # Determine the relation between drought probability and yield
                 self.calculate_yield_spei_relation()
-                # self.calculate_yield_spei_relation_group()
-                # self.calculate_yield_spei_relation_test_group()
+                self.calculate_yield_spei_relation_group()
+                self.calculate_yield_spei_relation_test_group()
                 timer.new_split("yield-spei relation")
 
                 # These adaptations can only be done if there is a yield-probability relation

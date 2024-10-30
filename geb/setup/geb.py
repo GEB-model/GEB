@@ -1357,7 +1357,10 @@ class GEBModel(GridModel):
         upper_left_x = self.grid.get_index("x")[0] - x_step / 2
 
         ymin = np.isclose(
-            MERIT_ul.get_index("y"), upper_left_y, atol=MERIT.rio.resolution()[1] / 100
+            MERIT_ul.get_index("y"),
+            upper_left_y,
+            atol=abs(MERIT.rio.resolution()[1] / 100),
+            rtol=0,
         )
         assert (
             ymin.sum() == 1
@@ -1365,7 +1368,10 @@ class GEBModel(GridModel):
         ymin = ymin.argmax()
         ymax = ymin + self.grid.y.size * scaling
         xmin = np.isclose(
-            MERIT_ul.get_index("x"), upper_left_x, atol=MERIT.rio.resolution()[0] / 100
+            MERIT_ul.get_index("x"),
+            upper_left_x,
+            atol=abs(MERIT.rio.resolution()[0] / 100),
+            rtol=0,
         )
         assert (
             xmin.sum() == 1
@@ -4028,6 +4034,143 @@ class GEBModel(GridModel):
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
+    def determine_crop_area_fractions(self, resolution="5-arcminute"):
+        output_folder = "plot/mirca_crops"
+        os.makedirs(output_folder, exist_ok=True)
+
+        crop_dict = {
+            "Wheat": 0,
+            "Maize": 1,
+            "Rice": 2,
+            "Barley": 3,
+            "Rye": 4,
+            "Millet": 5,
+            "Sorghum": 6,
+            "Soybeans": 7,
+            "Sunflower": 8,
+            "Potatoes": 9,
+            "Cassava": 10,
+            "Sugar_cane": 11,
+            "Sugar_beet": 12,
+            "Oil_palm": 13,
+            "Rapeseed": 14,
+            "Groundnuts": 15,
+            "Pulses": 16,
+            "Cotton": 20,
+            "Cocoa": 21,
+            "Coffee": 22,
+            "Others_perennial": 23,
+            "Fodder": 24,
+            "Others_annual": 25,
+        }
+
+        crops = [
+            "Wheat",  # 0
+            "Maize",  # 1
+            "Rice",  # 2
+            "Barley",  # 3
+            "Rye",  # 4
+            "Millet",  # 5
+            "Sorghum",  # 6
+            "Soybeans",  # 7
+            "Sunflower",  # 8
+            "Potatoes",  # 9
+            "Cassava",  # 10
+            "Sugar_cane",  # 11
+            "Sugar_beet",  # 12
+            "Oil_palm",  # 13
+            "Rapeseed",  # 14
+            "Groundnuts",  # 15
+            "Others_perennial",  # 23
+            "Fodder",  # 24
+            "Others_annual",  # 25
+        ]
+
+        years = ["2000", "2005", "2010", "2015"]
+        irrigation_types = ["ir", "rf"]
+
+        # Initialize a dictionary to store datasets
+        crop_data = {}
+
+        for year in years:
+            crop_data[year] = {}
+            for crop in crops:
+                crop_data[year][crop] = {}
+                for irrigation in irrigation_types:
+                    dataset_name = f"MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
+
+                    crop_map = self.data_catalog.get_rasterdataset(
+                        dataset_name,
+                        bbox=self.bounds,
+                        buffer=2,
+                    )
+                    crop_data[year][crop][irrigation] = crop_map.assign_coords(
+                        x=np.round(crop_map.coords["x"].values, decimals=6),
+                        y=np.round(crop_map.coords["y"].values, decimals=6),
+                    )
+
+            # Initialize variables for total calculations
+            total_cropped_area = None
+            total_crop_areas = {}
+
+            # Calculate total crop areas and total cropped area
+            for crop in crops:
+                irrigated = crop_data[year][crop]["ir"]
+                rainfed = crop_data[year][crop]["rf"]
+
+                total_crop = irrigated + rainfed
+                total_crop_areas[crop] = total_crop
+
+                if total_cropped_area is None:
+                    total_cropped_area = total_crop.copy()
+                else:
+                    total_cropped_area += total_crop
+
+            # Calculate the fraction of each crop to the total cropped area
+            save_dir_crop_area = (
+                Path(self.root).parent
+                / "preprocessing"
+                / "crops"
+                / "MIRCA2000"
+                / f"{year}"
+                / "crop_area_fractions"
+            )
+            save_dir_crop_area.mkdir(parents=True, exist_ok=True)
+
+            for crop in crops:
+                fraction = total_crop_areas[crop] / total_cropped_area
+
+                if not fraction.rio.crs:
+                    fraction = fraction.rio.write_crs("EPSG:4326", inplace=True)
+                output_filename = save_dir_crop_area / f"{crop}_area_fraction.tif"
+                fraction.rio.to_raster(output_filename)
+
+            save_dir_crop_irr_fraction = (
+                Path(self.root).parent
+                / "preprocessing"
+                / "crops"
+                / "MIRCA2000"
+                / f"{year}"
+                / "crop_irr_fractions"
+            )
+            save_dir_crop_irr_fraction.mkdir(parents=True, exist_ok=True)
+
+            # Calculate irrigated fractions for each crop
+            for crop in crops:
+                irrigated = crop_data[year][crop]["ir"].compute()
+                rainfed = crop_data[year][crop]["rf"].compute()
+                total_crop = total_crop_areas[crop]
+                irrigated_fraction = irrigated / total_crop
+
+                if not irrigated_fraction.rio.crs:
+                    irrigated_fraction = irrigated_fraction.rio.write_crs(
+                        "EPSG:4326", inplace=True
+                    )
+                output_filename = (
+                    save_dir_crop_irr_fraction / f"{crop}_irrigated_fraction.tif"
+                )
+                irrigated_fraction.rio.to_raster(output_filename)
+
     def setup_create_farms_simple(
         self,
         region_id_column="region_id",
@@ -4964,9 +5107,68 @@ class GEBModel(GridModel):
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
 
+        farmer_locations = get_farm_locations(
+            self.subgrid["agents/farmers/farms"], method="centroid"
+        )
+
+        def load_crop_fractions(root_path, crops, years):
+            import rioxarray
+
+            data_dir = Path(root_path).parent / "preprocessing" / "crops" / "MIRCA2000"
+            area_fraction_das = []
+            irrigated_fraction_das = []
+
+            for year in years:
+                for crop in crops:
+                    area_fraction_file = (
+                        data_dir
+                        / f"{year}"
+                        / "crop_area_fractions"
+                        / f"{crop}_area_fraction.tif"
+                    )
+                    irrigated_fraction_file = (
+                        data_dir
+                        / f"{year}"
+                        / "crop_irr_fractions"
+                        / f"{crop}_irrigated_fraction_{year}.tif"
+                    )
+
+                    area_fraction_da = rioxarray.open_rasterio(
+                        area_fraction_file
+                    ).squeeze("band", drop=True)
+                    irrigated_fraction_da = rioxarray.open_rasterio(
+                        irrigated_fraction_file
+                    ).squeeze("band", drop=True)
+
+                    # Add 'crop' and 'year' as coordinates
+                    area_fraction_da = area_fraction_da.assign_coords(
+                        crop=crop, year=year
+                    )
+                    irrigated_fraction_da = irrigated_fraction_da.assign_coords(
+                        crop=crop, year=year
+                    )
+
+                    area_fraction_das.append(area_fraction_da)
+                    irrigated_fraction_das.append(irrigated_fraction_da)
+
+            # Concatenate and organize DataArrays
+            area_fraction_dataset = (
+                xr.concat(area_fraction_das, dim="crop_year")
+                .set_index(crop_year=["crop", "year"])
+                .unstack("crop_year")
+            )
+            irrigated_fraction_dataset = (
+                xr.concat(irrigated_fraction_das, dim="crop_year")
+                .set_index(crop_year=["crop", "year"])
+                .unstack("crop_year")
+            )
+
+            # Calculate rainfed fractions
+            rainfed_fraction_dataset = 1 - irrigated_fraction_dataset
+
         farmer_mirca_units = sample_from_map(
             MIRCA_unit_grid.values,
-            get_farm_locations(self.subgrid["agents/farmers/farms"], method="centroid"),
+            farmer_locations,
             MIRCA_unit_grid.raster.transform.to_gdal(),
         )
 
@@ -5030,9 +5232,9 @@ class GEBModel(GridModel):
             RAPESEED = 14
             GROUNDNUTS = 15
             # PULSES = 16
-            CITRUS = 17
-            DATE_PALM = 18
-            GRAPES = 19
+            # CITRUS = 17
+            # # DATE_PALM = 18
+            # # GRAPES = 19
             # COTTON = 20
             COCOA = 21
             COFFEE = 22
@@ -5142,8 +5344,8 @@ class GEBModel(GridModel):
                 )
 
                 # Change other annual / misc to one
-                most_common_check = [GROUNDNUTS, CITRUS, COCOA, COFFEE, OTHERS_ANNUAL]
-                replaced_value = [GROUNDNUTS, CITRUS, COCOA, COFFEE, OTHERS_ANNUAL]
+                most_common_check = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
+                replaced_value = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
                 crop_calendar_per_farmer = replace_crop(
                     crop_calendar_per_farmer, most_common_check, replaced_value
                 )
@@ -5170,8 +5372,8 @@ class GEBModel(GridModel):
                 )
 
                 # Change perennial to one
-                most_common_check = [OIL_PALM, GRAPES, DATE_PALM, OTHERS_PERENNIAL]
-                replaced_value = [OIL_PALM, GRAPES, DATE_PALM, OTHERS_PERENNIAL]
+                most_common_check = [OIL_PALM, OTHERS_PERENNIAL]
+                replaced_value = [OIL_PALM, OTHERS_PERENNIAL]
                 crop_calendar_per_farmer = replace_crop(
                     crop_calendar_per_farmer, most_common_check, replaced_value
                 )
