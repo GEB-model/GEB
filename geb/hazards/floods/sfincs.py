@@ -11,7 +11,8 @@ from shapely.geometry import Point
 from rasterio.features import shapes
 import math
 import matplotlib.pyplot as plt
-
+from pyproj import CRS
+from geb.hydrology.landcover import SEALED, OPEN_WATER
 
 try:
     from geb_hydrodynamics import (
@@ -33,6 +34,7 @@ class SFINCS:
         self.n_timesteps = n_timesteps
 
         self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
+        self.soil_moisture_per_timestep = deque(maxlen=self.n_timesteps)
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
@@ -159,10 +161,15 @@ class SFINCS:
         detailed_region = detailed_region.to_crs(4326)
         return detailed_region
 
-    def setup(self, event, config_fn="sfincs.yml", force_overwrite=False):
+    def setup(self, event, config_fn="sfincs.yml"):
         build_parameters = {}
 
-        force_overwrite = True
+        if "set_force_overwrite" in self.model.config["hazards"]["floods"]:
+            set_force_overwrite = self.model.config["hazards"]["floods"][
+                "set_force_overwrite"
+            ]
+        else:
+            set_force_overwrite = True
 
         if "basin_id" in event:
             build_parameters["basin_id"] = event["basin_id"]
@@ -206,7 +213,7 @@ class SFINCS:
             }
         )
         if (
-            force_overwrite
+            set_force_overwrite
             or not (self.sfincs_model_root(event_name) / "sfincs.inp").exists()
         ):
             build_sfincs(**build_parameters)
@@ -216,6 +223,7 @@ class SFINCS:
 
     def set_forcing(self, event, start_time):
         if self.model.config["general"]["simulate_hydrology"]:
+            # load and process discharge grid
             n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
             substeps = self.discharge_per_timestep[0].shape[0]
             discharge_grid = self.model.data.grid.decompress(
@@ -250,6 +258,37 @@ class SFINCS:
                 dims=["time", "y", "x"],
                 name="discharge",
             )
+
+            # load and process initial soil moisture grid
+
+            self.model.data.HRU.w[:, self.model.data.HRU.land_use_type == SEALED] = 0
+            self.model.data.HRU.w[
+                :, self.model.data.HRU.land_use_type == OPEN_WATER
+            ] = 0
+
+            initial_soil_moisture_grid = self.model.data.HRU.w[:2].sum(axis=0)
+            initial_soil_moisture_grid = self.model.data.HRU.decompress(
+                initial_soil_moisture_grid
+            )
+
+            initial_soil_moisture_xr = xr.Dataset(
+                {"initial_soil_moisture": (["y", "x"], initial_soil_moisture_grid)},
+                coords={
+                    "y": self.model.data.HRU.lat,
+                    "x": self.model.data.HRU.lon,
+                },
+            )
+
+        # self.model.data.HRU.w[:2] # top two layers of the soil
+        # top_two_layers = self.model.data.HRU.w[:2].sum(axis=0)
+        # self.model.data.HRU.decompress(top_two_layers)
+        # geotransformation = self.model.data.HRU.gt
+        # self.model.soil.ws
+        # self.model.soil.ksat
+        # self.model.soil.soil_layer_height
+
+        # self.model.data.HRU.decompress(self.model.data.HRU.w)
+
         else:
             substeps = 24  # when setting 0 it doesn't matter so much how many substeps. 24 is a reasonable default.
             n_timesteps = (event["end_time"] - event["start_time"]).days
@@ -276,13 +315,16 @@ class SFINCS:
 
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
 
-        from pyproj import CRS
+        # assign a CRS and select SFINCS time period
 
-        # Convert the WKT string to a pyproj CRS object
-        crs_obj = CRS.from_wkt(self.model.data.grid.crs)
+        crs_obj = CRS.from_wkt(
+            self.model.data.grid.crs
+        )  # Convert the WKT string to a pyproj CRS object
 
         # Now you can safely call to_proj4() on the CRS object
         discharge_grid.raster.set_crs(crs_obj.to_proj4())
+        initial_soil_moisture_grid.raster.set_crs(crs_obj.to_proj4())
+
         tstart = start_time
         tend = discharge_grid.time[-1] + pd.Timedelta(
             self.model.timestep_length / substeps
@@ -313,6 +355,7 @@ class SFINCS:
                 "tend": self.to_sfincs_datetime(tend.dt).item(),
             },
             discharge_grid=discharge_grid,
+            initial_soil_moisture_grid=initial_soil_moisture_grid,
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
@@ -323,7 +366,7 @@ class SFINCS:
         return None
 
     def run_single_event(self, event, start_time, return_period=None):
-        self.setup(event, force_overwrite=True)
+        self.setup(event)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         event_name = self.get_event_name(event)
@@ -417,4 +460,5 @@ class SFINCS:
     def save_discharge(self):
         self.discharge_per_timestep.append(
             self.model.data.grid.discharge_substep
+            # here the initial soil moisture also needs too be saved. Only the first day of the flood event.
         )  # this is a deque, so it will automatically remove the oldest discharge

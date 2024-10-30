@@ -21,6 +21,15 @@ except (ModuleNotFoundError, ImportError):
 
 
 def load_grid(filepath, layer=1, return_transform_and_crs=False):
+    """
+    a: The pixel width (resolution) in the x-direction (x_diff).
+    b: The row rotation (usually 0 for north-up images).
+    c: The x-coordinate of the center of the upper-left pixel (x[:][0] - x_diff / 2).
+    d: The column rotation (usually 0 for north-up images).
+    e: The pixel height (resolution) in the y-direction (y_diff).
+    f: The y-coordinate of the center of the upper-left pixel (ds.y[:][0] - y_diff / 2).
+    """
+
     if filepath.suffix == ".tif":
         warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
         with rasterio.open(filepath) as src:
@@ -499,6 +508,19 @@ class HRUs(BaseVariables):
             self.scaling, axis=1
         )
         self.cell_size = self.data.grid.cell_size / self.scaling
+
+        # get lats and lons for subgrid
+        self.lon = np.linspace(
+            self.gt[0] + self.cell_size / 2,
+            self.gt[0] + self.cell_size * submask_width - self.cell_size / 2,
+            submask_width,
+        )
+        self.lat = np.linspace(
+            self.gt[3] + self.cell_size / 2,
+            self.gt[3] + self.cell_size * submask_height - self.cell_size / 2,
+            submask_height,
+        )
+
         if self.model.load_initial_data:
             self.land_use_type = np.load(
                 os.path.join(self.data.get_save_state_path(), "HRU.land_use_type.npz")
