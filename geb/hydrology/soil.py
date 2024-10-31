@@ -1226,8 +1226,12 @@ class Soil(object):
                 farmers_with_land_converted_to_forest
             )[farmers_with_land_converted_to_forest != -1]
 
-            self.model.agents.crop_farmers.remove_agents(
+            HRUs_removed_farmers = self.model.agents.crop_farmers.remove_agents(
                 farmers_with_land_converted_to_forest, new_land_use_type=FOREST
+            )
+
+            new_forest_HRUs = np.unique(
+                np.concatenate([new_forest_HRUs, HRUs_removed_farmers])
             )
 
         bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
