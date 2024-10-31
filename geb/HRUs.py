@@ -220,31 +220,31 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        mask, transform, self.crs = load_grid(
+        mask, self.transform, self.crs = load_grid(
             self.model.files["grid"]["areamaps/grid_mask"],
             return_transform_and_crs=True,
         )
         self.mask = mask.astype(bool)
-        self.gt = transform.to_gdal()
+        self.gt = self.transform.to_gdal()
         self.bounds = (
-            transform.c,
-            transform.f + transform.e * mask.shape[0],
-            transform.c + transform.a * mask.shape[1],
-            transform.f,
+            self.transform.c,
+            self.transform.f + self.transform.e * mask.shape[0],
+            self.transform.c + self.transform.a * mask.shape[1],
+            self.transform.f,
         )
         self.lon = np.linspace(
-            transform.c + transform.a / 2,
-            transform.c + transform.a * mask.shape[1] - transform.a / 2,
+            self.transform.c + self.transform.a / 2,
+            self.transform.c + self.transform.a * mask.shape[1] - self.transform.a / 2,
             mask.shape[1],
         )
         self.lat = np.linspace(
-            transform.f + transform.e / 2,
-            transform.f + transform.e * mask.shape[0] - transform.e / 2,
+            self.transform.f + self.transform.e / 2,
+            self.transform.f + self.transform.e * mask.shape[0] - self.transform.e / 2,
             mask.shape[0],
         )
 
-        assert math.isclose(transform.a, -transform.e)
-        self.cell_size = transform.a
+        assert math.isclose(self.transform.a, -self.transform.e)
+        self.cell_size = self.transform.a
 
         self.cell_area_uncompressed = load_grid(
             self.model.files["grid"]["areamaps/cell_area"]
@@ -507,14 +507,10 @@ class HRUs(BaseVariables):
 
         self.scaling = submask_height // self.data.grid.shape[0]
         assert submask_width // self.data.grid.shape[1] == self.scaling
-        self.gt = (
-            self.data.grid.gt[0],
-            self.data.grid.gt[1] / self.scaling,
-            self.data.grid.gt[2],
-            self.data.grid.gt[3],
-            self.data.grid.gt[4],
-            self.data.grid.gt[5] / self.scaling,
-        )
+
+        self.transform = self.data.grid.transform * Affine.scale(1 / self.scaling)
+
+        self.gt = self.transform.to_gdal()
 
         self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(
             self.scaling, axis=1
@@ -800,6 +796,8 @@ class HRUs(BaseVariables):
             HRU_array = HRU_array.get()
         if np.issubdtype(HRU_array.dtype, np.integer):
             nanvalue = -1
+        elif np.issubdtype(HRU_array.dtype, bool):
+            nanvalue = False
         else:
             nanvalue = np.nan
         outarray = HRU_array[self.unmerged_HRU_indices]

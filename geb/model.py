@@ -84,12 +84,13 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         config: dict,
         files: dict,
         spinup: bool = False,
+        crs=4326,
         use_gpu: bool = False,
         gpu_device=0,
         timing=False,
-        crs=4326,
         mode="w",
     ):
+        self.crs = crs
         self.timing = timing
         assert mode in ("w", "r")
         self.mode = mode
