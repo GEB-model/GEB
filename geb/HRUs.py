@@ -516,6 +516,19 @@ class HRUs(BaseVariables):
             self.scaling, axis=1
         )
         self.cell_size = self.data.grid.cell_size / self.scaling
+
+        # get lats and lons for subgrid
+        self.lon = np.linspace(
+            self.gt[0] + self.cell_size / 2,
+            self.gt[0] + self.cell_size * submask_width - self.cell_size / 2,
+            submask_width,
+        )
+        self.lat = np.linspace(
+            self.gt[3] + self.cell_size / 2,
+            self.gt[3] + self.cell_size * submask_height - self.cell_size / 2,
+            submask_height,
+        )
+
         if self.model.load_initial_data:
             self.land_use_type = np.load(
                 os.path.join(self.data.get_save_state_path(), "HRU.land_use_type.npz")
