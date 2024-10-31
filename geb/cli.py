@@ -316,11 +316,7 @@ def click_build_options(build_config="build.yml"):
             "-d",
             type=str,
             multiple=True,
-            default=[
-                Path(os.environ.get("GEB_PACKAGE_DIR"))
-                / "examples"
-                / "data_catalog.yml"
-            ],
+            default=[Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
             help="""A list of paths to the data library YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
         )
         @click.option(

@@ -1775,6 +1775,7 @@ class GEBModel(GridModel):
         minimum_thickness_confined_layer=50,
         maximum_thickness_confined_layer=1000,
         intial_heads_source="GLOBGM",
+        force_one_layer=False,
     ):
         """
         Sets up the MODFLOW grid for GEB. This code is adopted from the GLOBGM
@@ -1829,7 +1830,7 @@ class GEBModel(GridModel):
         confining_layer = self.snap_to_grid(confining_layer, self.grid)
         assert confining_layer.shape == self.grid.raster.shape
 
-        if not (confining_layer == 0).all():  # two-layer-model
+        if not (confining_layer == 0).all() and not force_one_layer:  # two-layer-model
             two_layers = True
         else:
             two_layers = False
@@ -1942,10 +1943,6 @@ class GEBModel(GridModel):
             head_upper_layer = self.snap_to_grid(head_upper_layer, self.grid)
             head_upper_layer = head_upper_layer - dem_globgm + dem
             assert head_upper_layer.shape == self.grid.raster.shape
-
-            # assert concistency of datasets. If one layer, this layer should be all nan
-            if not two_layers:
-                assert np.isnan(head_upper_layer).all()
 
             head_lower_layer = self.data_catalog.get_rasterdataset(
                 "head_lower_globgm", bbox=self.bounds, buffer=0
