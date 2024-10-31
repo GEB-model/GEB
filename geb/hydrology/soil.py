@@ -1183,6 +1183,53 @@ class Soil(object):
             w_pre = self.var.w.copy()
             topwater_pre = self.var.topwater.copy()
 
+        if not self.model.spinup and self.model.current_timestep == 1:
+            import geopandas as gpd
+            from rasterio.features import rasterize
+            from shapely.geometry import shape
+
+            forest = gpd.read_file("data/junnar_potential_CFR.gpkg")
+            forest = rasterize(
+                [(shape(geom), 1) for geom in forest.geometry],
+                out_shape=self.model.data.HRU.shape,
+                transform=self.model.data.HRU.transform,
+                fill=False,
+                dtype="uint8",  # bool is not supported, so we use uint8 and convert to bool
+            ).astype(bool)
+            # do not create forests outside the study area
+            forest[self.model.data.HRU.mask] = False
+            # only create forests in grassland or agricultural areas
+            forest[
+                ~np.isin(
+                    self.model.data.HRU.decompress(self.var.land_use_type),
+                    [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
+                )
+            ] = False
+
+            import matplotlib.pyplot as plt
+
+            plt.imshow(forest)
+            plt.savefig("forest.png")
+
+            new_forest_HRUs = np.unique(
+                self.model.data.HRU.unmerged_HRU_indices[forest]
+            )
+
+            # set the land use type to forest
+            self.var.land_use_type[new_forest_HRUs] = FOREST
+
+            # get the farmers corresponding to the new forest HRUs
+            farmers_with_land_converted_to_forest = np.unique(
+                self.model.data.HRU.land_owners[new_forest_HRUs]
+            )
+            farmers_with_land_converted_to_forest = (
+                farmers_with_land_converted_to_forest
+            )[farmers_with_land_converted_to_forest != -1]
+
+            self.model.agents.crop_farmers.remove_agents(
+                farmers_with_land_converted_to_forest, new_land_use_type=FOREST
+            )
+
         bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
 
         interflow = self.var.full_compressed(0, dtype=np.float32)
