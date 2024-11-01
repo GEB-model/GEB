@@ -82,6 +82,50 @@ logger = logging.getLogger(__name__)
 compressor = Blosc(cname="lz4", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
 
+def create_grid_cell_id_array(area_fraction_da):
+    # Get the sizes of the spatial dimensions
+    ny, nx = area_fraction_da.sizes["y"], area_fraction_da.sizes["x"]
+
+    # Create an array of sequential integers from 0 to ny*nx - 1
+    grid_ids = np.arange(ny * nx).reshape(ny, nx)
+
+    # Create a DataArray with the same coordinates and dimensions as your spatial grid
+    grid_id_da = xr.DataArray(
+        grid_ids,
+        coords={
+            "y": area_fraction_da.coords["y"],
+            "x": area_fraction_da.coords["x"],
+        },
+        dims=["y", "x"],
+    )
+
+    return grid_id_da
+
+
+def get_neighbor_cell_ids(cell_id, nx, ny):
+    row = cell_id // nx
+    col = cell_id % nx
+
+    neighbor_offsets = [
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+    ]
+    neighbor_cell_ids = []
+    for dr, dc in neighbor_offsets:
+        r = row + dr
+        c = col + dc
+        if 0 <= r < ny and 0 <= c < nx:
+            neighbor_id = r * nx + c
+            neighbor_cell_ids.append(neighbor_id)
+    return neighbor_cell_ids
+
+
 @contextmanager
 def suppress_logging_warning(logger):
     """
@@ -4038,32 +4082,6 @@ class GEBModel(GridModel):
         output_folder = "plot/mirca_crops"
         os.makedirs(output_folder, exist_ok=True)
 
-        crop_dict = {
-            "Wheat": 0,
-            "Maize": 1,
-            "Rice": 2,
-            "Barley": 3,
-            "Rye": 4,
-            "Millet": 5,
-            "Sorghum": 6,
-            "Soybeans": 7,
-            "Sunflower": 8,
-            "Potatoes": 9,
-            "Cassava": 10,
-            "Sugar_cane": 11,
-            "Sugar_beet": 12,
-            "Oil_palm": 13,
-            "Rapeseed": 14,
-            "Groundnuts": 15,
-            "Pulses": 16,
-            "Cotton": 20,
-            "Cocoa": 21,
-            "Coffee": 22,
-            "Others_perennial": 23,
-            "Fodder": 24,
-            "Others_annual": 25,
-        }
-
         crops = [
             "Wheat",  # 0
             "Maize",  # 1
@@ -4083,11 +4101,15 @@ class GEBModel(GridModel):
             "Groundnuts",  # 15
             "Others_perennial",  # 23
             "Fodder",  # 24
-            "Others_annual",  # 25
+            "Others_annual",  # 25,
         ]
 
         years = ["2000", "2005", "2010", "2015"]
         irrigation_types = ["ir", "rf"]
+
+        # Initialize lists to collect DataArrays across years
+        fraction_da_list = []
+        irrigated_fraction_da_list = []
 
         # Initialize a dictionary to store datasets
         crop_data = {}
@@ -4104,6 +4126,8 @@ class GEBModel(GridModel):
                         bbox=self.bounds,
                         buffer=2,
                     )
+                    crop_map = crop_map.fillna(0)
+
                     crop_data[year][crop][irrigation] = crop_map.assign_coords(
                         x=np.round(crop_map.coords["x"].values, decimals=6),
                         y=np.round(crop_map.coords["y"].values, decimals=6),
@@ -4126,50 +4150,67 @@ class GEBModel(GridModel):
                 else:
                     total_cropped_area += total_crop
 
-            # Calculate the fraction of each crop to the total cropped area
-            save_dir_crop_area = (
-                Path(self.root).parent
-                / "preprocessing"
-                / "crops"
-                / "MIRCA2000"
-                / f"{year}"
-                / "crop_area_fractions"
-            )
-            save_dir_crop_area.mkdir(parents=True, exist_ok=True)
+            # Initialize lists to collect DataArrays for this year
+            fraction_list = []
+            irrigated_fraction_list = []
 
+            # Calculate the fraction of each crop to the total cropped area
             for crop in crops:
                 fraction = total_crop_areas[crop] / total_cropped_area
 
-                if not fraction.rio.crs:
-                    fraction = fraction.rio.write_crs("EPSG:4326", inplace=True)
-                output_filename = save_dir_crop_area / f"{crop}_area_fraction.tif"
-                fraction.rio.to_raster(output_filename)
+                # Assign 'crop' as a coordinate
+                fraction = fraction.assign_coords(crop=crop)
 
-            save_dir_crop_irr_fraction = (
-                Path(self.root).parent
-                / "preprocessing"
-                / "crops"
-                / "MIRCA2000"
-                / f"{year}"
-                / "crop_irr_fractions"
-            )
-            save_dir_crop_irr_fraction.mkdir(parents=True, exist_ok=True)
+                # Append to the list
+                fraction_list.append(fraction)
 
-            # Calculate irrigated fractions for each crop
+            # Concatenate the list of fractions into a single DataArray along the 'crop' dimension
+            fraction_da = xr.concat(fraction_list, dim="crop")
+
+            # Assign the 'year' coordinate and expand dimensions to include 'year'
+            fraction_da = fraction_da.assign_coords(year=year).expand_dims(dim="year")
+
+            # Append to the list of all years
+            fraction_da_list.append(fraction_da)
+
+            # Calculate irrigated fractions for each crop and collect them
             for crop in crops:
                 irrigated = crop_data[year][crop]["ir"].compute()
-                rainfed = crop_data[year][crop]["rf"].compute()
                 total_crop = total_crop_areas[crop]
                 irrigated_fraction = irrigated / total_crop
 
-                if not irrigated_fraction.rio.crs:
-                    irrigated_fraction = irrigated_fraction.rio.write_crs(
-                        "EPSG:4326", inplace=True
-                    )
-                output_filename = (
-                    save_dir_crop_irr_fraction / f"{crop}_irrigated_fraction.tif"
-                )
-                irrigated_fraction.rio.to_raster(output_filename)
+                # Assign 'crop' as a coordinate
+                irrigated_fraction = irrigated_fraction.assign_coords(crop=crop)
+
+                # Append to the list
+                irrigated_fraction_list.append(irrigated_fraction)
+
+            # Concatenate the list of irrigated fractions into a single DataArray along the 'crop' dimension
+            irrigated_fraction_da = xr.concat(irrigated_fraction_list, dim="crop")
+
+            # Assign the 'year' coordinate and expand dimensions to include 'year'
+            irrigated_fraction_da = irrigated_fraction_da.assign_coords(
+                year=year
+            ).expand_dims(dim="year")
+
+            # Append to the list of all years
+            irrigated_fraction_da_list.append(irrigated_fraction_da)
+
+        # After processing all years, concatenate along the 'year' dimension
+        all_years_fraction_da = xr.concat(fraction_da_list, dim="year")
+        all_years_irrigated_fraction_da = xr.concat(
+            irrigated_fraction_da_list, dim="year"
+        )
+
+        # Save the concatenated DataArrays as NetCDF files
+        save_dir = Path(self.root).parent / "preprocessing" / "crops" / "MIRCA2000"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        output_filename = save_dir / "crop_area_fraction_all_years.nc"
+        all_years_fraction_da.to_netcdf(output_filename)
+
+        output_filename = save_dir / "crop_irrigated_fraction_all_years.nc"
+        all_years_irrigated_fraction_da.to_netcdf(output_filename)
 
     def setup_create_farms_simple(
         self,
@@ -4764,132 +4805,11 @@ class GEBModel(GridModel):
 
         return preferences_country_level
 
-    def setup_farmer_irrigation(
-        self,
-        n_farmers,
-    ):
-        # Import global irrigation data
-        actual_irrigation = "aei"
-        actual_irrigation_data = self.data_catalog.get_rasterdataset(
-            f"global_irrigation_area_{actual_irrigation}",
-            bbox=self.bounds,
-            buffer=2,
-        )
-        fraction_sw_irrigation = "aeisw"
-        fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
-            f"global_irrigation_area_{fraction_sw_irrigation}",
-            bbox=self.bounds,
-            buffer=2,
-        )
-        fraction_gw_irrigation = "aeigw"
-        fraction_gw_irrigation_data = self.data_catalog.get_rasterdataset(
-            f"global_irrigation_area_{fraction_gw_irrigation}",
-            bbox=self.bounds,
-            buffer=2,
-        )
-
-        farmer_region_ids = self.binary["agents/farmers/region_id"]
-        unique_regions = self.geoms["areamaps/regions"]
-
-        # Initialize the irrigation_source array
-        irrigation_source = np.full(n_farmers, -1, dtype=np.int32)
-
-        # Loop over each region and assign irrigation sources
-        for _, region in unique_regions.iterrows():
-            region_id = region["region_id"]
-            region_centroid = region["geometry"].centroid
-            region_coordinates = np.array([[region_centroid.x, region_centroid.y]])
-
-            # Sample the fractions from the maps
-            region_actual_irrigation = (
-                sample_from_map(
-                    actual_irrigation_data.values,
-                    region_coordinates,
-                    actual_irrigation_data.raster.transform.to_gdal(),
-                )[0]
-                / 100
-            )
-
-            region_sw_irrigation = (
-                sample_from_map(
-                    fraction_sw_irrigation_data.values,
-                    region_coordinates,
-                    fraction_sw_irrigation_data.raster.transform.to_gdal(),
-                )[0]
-                / 100
-            )
-
-            region_gw_irrigation = (
-                sample_from_map(
-                    fraction_gw_irrigation_data.values,
-                    region_coordinates,
-                    fraction_gw_irrigation_data.raster.transform.to_gdal(),
-                )[0]
-                / 100
-            )
-
-            # Normalize fractions
-            total_fraction = region_sw_irrigation + region_gw_irrigation
-            if total_fraction > 0:
-                region_sw_irrigation /= total_fraction
-                region_gw_irrigation /= total_fraction
-            else:
-                continue
-
-            # Get the mask for farmers in this region
-            farmer_region_mask = farmer_region_ids == region_id
-            num_farmers_in_region = np.sum(farmer_region_mask)
-
-            # Determine the number of irrigating farmers
-            num_irrigating_farmers = int(
-                round(region_actual_irrigation * num_farmers_in_region)
-            )
-
-            if num_irrigating_farmers > 0:
-                # Indices of farmers in the region
-                farmer_indices_in_region = np.where(farmer_region_mask)[0]
-
-                # Randomly select farmers to be irrigating
-                irrigating_farmers_indices = np.random.choice(
-                    farmer_indices_in_region, size=num_irrigating_farmers, replace=False
-                )
-
-                # Determine the number of surface water irrigating farmers
-                num_sw_farmers = int(
-                    round(region_sw_irrigation * num_irrigating_farmers)
-                )
-                num_sw_farmers = min(num_sw_farmers, num_irrigating_farmers)
-
-                if num_sw_farmers == num_irrigating_farmers:
-                    # All irrigating farmers use surface water
-                    irrigation_source[irrigating_farmers_indices] = 0
-                elif num_sw_farmers > 0:
-                    # Randomly select surface water irrigating farmers
-                    sw_farmers_indices = np.random.choice(
-                        irrigating_farmers_indices, size=num_sw_farmers, replace=False
-                    )
-                    # Assign irrigation_source = 0 for surface water
-                    irrigation_source[sw_farmers_indices] = 0
-
-                    # The remaining irrigating farmers are groundwater irrigators
-                    gw_farmers_indices = np.setdiff1d(
-                        irrigating_farmers_indices, sw_farmers_indices
-                    )
-                    irrigation_source[gw_farmers_indices] = 1
-                else:
-                    # All irrigating farmers use groundwater
-                    irrigation_source[irrigating_farmers_indices] = 1
-
-        # Update the irrigation_source attribute or return it as needed
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-
     def setup_farmer_characteristics_simple(
         self,
         interest_rate=0.05,
     ):
         n_farmers = self.binary["agents/farmers/id"].size
-
-        self.setup_farmer_irrigation(n_farmers)
 
         preferences_global = self.create_preferences()
         preferences_global.rename(
@@ -5093,6 +5013,7 @@ class GEBModel(GridModel):
 
     def setup_farmer_crop_calendar(
         self,
+        year=2000,
         reduce_crops=False,
         replace_base=False,
     ):
@@ -5111,73 +5032,18 @@ class GEBModel(GridModel):
             self.subgrid["agents/farmers/farms"], method="centroid"
         )
 
-        def load_crop_fractions(root_path, crops, years):
-            import rioxarray
-
-            data_dir = Path(root_path).parent / "preprocessing" / "crops" / "MIRCA2000"
-            area_fraction_das = []
-            irrigated_fraction_das = []
-
-            for year in years:
-                for crop in crops:
-                    area_fraction_file = (
-                        data_dir
-                        / f"{year}"
-                        / "crop_area_fractions"
-                        / f"{crop}_area_fraction.tif"
-                    )
-                    irrigated_fraction_file = (
-                        data_dir
-                        / f"{year}"
-                        / "crop_irr_fractions"
-                        / f"{crop}_irrigated_fraction_{year}.tif"
-                    )
-
-                    area_fraction_da = rioxarray.open_rasterio(
-                        area_fraction_file
-                    ).squeeze("band", drop=True)
-                    irrigated_fraction_da = rioxarray.open_rasterio(
-                        irrigated_fraction_file
-                    ).squeeze("band", drop=True)
-
-                    # Add 'crop' and 'year' as coordinates
-                    area_fraction_da = area_fraction_da.assign_coords(
-                        crop=crop, year=year
-                    )
-                    irrigated_fraction_da = irrigated_fraction_da.assign_coords(
-                        crop=crop, year=year
-                    )
-
-                    area_fraction_das.append(area_fraction_da)
-                    irrigated_fraction_das.append(irrigated_fraction_da)
-
-            # Concatenate and organize DataArrays
-            area_fraction_dataset = (
-                xr.concat(area_fraction_das, dim="crop_year")
-                .set_index(crop_year=["crop", "year"])
-                .unstack("crop_year")
-            )
-            irrigated_fraction_dataset = (
-                xr.concat(irrigated_fraction_das, dim="crop_year")
-                .set_index(crop_year=["crop", "year"])
-                .unstack("crop_year")
-            )
-
-            # Calculate rainfed fractions
-            rainfed_fraction_dataset = 1 - irrigated_fraction_dataset
-
         farmer_mirca_units = sample_from_map(
             MIRCA_unit_grid.values,
             farmer_locations,
             MIRCA_unit_grid.raster.transform.to_gdal(),
         )
 
-        # initialize the is_irrigated as -1 for all farmers
-        is_irrigated = np.full(n_farmers, -1, dtype=np.int32)
+        farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(year)
+        self.setup_farmer_irrigation_source(is_irrigated)
 
         crop_calendar_per_farmer = np.zeros((n_farmers, 3, 4), dtype=np.int32)
         for mirca_unit in np.unique(farmer_mirca_units):
-            n_farmers_mirca_unit = (farmer_mirca_units == mirca_unit).sum()
+            farmers_in_unit = np.where(farmer_mirca_units == mirca_unit)[0]
 
             area_per_crop_rotation = []
             cropping_calenders_crop_rotation = []
@@ -5196,23 +5062,58 @@ class GEBModel(GridModel):
                 cropping_calenders_crop_rotation
             )
 
-            # select n crop rotations weighted by the area for each crop rotation
-            farmer_crop_rotations_idx = np.random.choice(
-                np.arange(len(area_per_crop_rotation)),
-                size=n_farmers_mirca_unit,
-                replace=True,
-                p=area_per_crop_rotation / area_per_crop_rotation.sum(),
-            )
-            crop_calendar_per_farmer_mirca_unit = cropping_calenders_crop_rotation[
-                farmer_crop_rotations_idx
-            ]
-            is_irrigated[farmer_mirca_units == mirca_unit] = (
-                crop_calendar_per_farmer_mirca_unit[:, :, 1] == 1
-            ).any(axis=1)
+            crops_in_unit = np.unique(farmer_crops[farmers_in_unit])
+            for crop_id in crops_in_unit:
+                # Find rotations that include this crop
+                rotations_with_crop_idx = []
+                for idx, rotation in enumerate(cropping_calenders_crop_rotation):
+                    # Get crop IDs in the rotation, excluding -1 entries
+                    crop_ids_in_rotation = rotation[:, 0]
+                    crop_ids_in_rotation = crop_ids_in_rotation[
+                        crop_ids_in_rotation != -1
+                    ]
+                    if crop_id in crop_ids_in_rotation:
+                        rotations_with_crop_idx.append(idx)
 
-            crop_calendar_per_farmer[farmer_mirca_units == mirca_unit] = (
-                crop_calendar_per_farmer_mirca_unit[:, :, [0, 2, 3, 4]]
-            )
+                if not rotations_with_crop_idx:
+                    print(
+                        f"No rotations found for crop ID {crop_id} in mirca unit {mirca_unit}"
+                    )
+                    continue
+
+                # Get the area fractions and rotations for these indices
+                areas_with_crop = area_per_crop_rotation[rotations_with_crop_idx]
+                rotations_with_crop = cropping_calenders_crop_rotation[
+                    rotations_with_crop_idx
+                ]
+
+                # Normalize the area fractions
+                total_area_for_crop = areas_with_crop.sum()
+                fractions = areas_with_crop / total_area_for_crop
+
+                # Get farmers with this crop in the mirca_unit
+                farmers_with_crop_in_unit = farmers_in_unit[
+                    farmer_crops[farmers_in_unit] == crop_id
+                ]
+
+                # Assign crop rotations to these farmers
+                assigned_rotation_indices = np.random.choice(
+                    np.arange(len(rotations_with_crop)),
+                    size=len(farmers_with_crop_in_unit),
+                    replace=True,
+                    p=fractions,
+                )
+
+                # Assign the crop calendars to the farmers
+                for farmer_idx, rotation_idx in zip(
+                    farmers_with_crop_in_unit, assigned_rotation_indices
+                ):
+                    assigned_rotation = rotations_with_crop[rotation_idx]
+                    # Assign to farmer's crop calendar, taking columns [0, 2, 3, 4]
+                    # Columns: [crop_id, planting_date, harvest_date, additional_attribute]
+                    crop_calendar_per_farmer[farmer_idx] = assigned_rotation[
+                        :, [0, 2, 3, 4]
+                    ]
 
             # Define constants for crop IDs
             WHEAT = 0
@@ -5414,13 +5315,288 @@ class GEBModel(GridModel):
                     crop_calendar_per_farmer, base_crops, resistant_crops
                 )
 
-        self.set_binary(is_irrigated, name="agents/farmers/irrigating_farmers")
         self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         assert crop_calendar_per_farmer[:, :, 3].max() == 0
         self.set_binary(
             np.full_like(is_irrigated, 1, dtype=np.int32),
             name="agents/farmers/crop_calendar_rotation_years",
         )
+
+    def assign_crops_irrigation_farmers(self, year=2000):
+        # Define the directory and file paths
+        data_dir = Path(self.root).parent / "preprocessing" / "crops" / "MIRCA2000"
+        crop_area_file = data_dir / "crop_area_fraction_all_years.nc"
+        crop_irr_fraction_file = data_dir / "crop_irrigated_fraction_all_years.nc"
+
+        # Load the DataArrays
+        all_years_fraction_da = xr.open_dataarray(crop_area_file)
+        all_years_irrigated_fraction_da = xr.open_dataarray(crop_irr_fraction_file)
+
+        farmer_locations = get_farm_locations(
+            self.subgrid["agents/farmers/farms"], method="centroid"
+        )
+
+        crop_dict = {
+            "Wheat": 0,
+            "Maize": 1,
+            "Rice": 2,
+            "Barley": 3,
+            "Rye": 4,
+            "Millet": 5,
+            "Sorghum": 6,
+            "Soybeans": 7,
+            "Sunflower": 8,
+            "Potatoes": 9,
+            "Cassava": 10,
+            "Sugar_cane": 11,
+            "Sugar_beet": 12,
+            "Oil_palm": 13,
+            "Rapeseed": 14,
+            "Groundnuts": 15,
+            "Pulses": 16,
+            "Cotton": 20,
+            "Cocoa": 21,
+            "Coffee": 22,
+            "Others_perennial": 23,
+            "Fodder": 24,
+            "Others_annual": 25,
+        }
+
+        area_fraction_2000 = all_years_fraction_da.sel(year=str(year))
+        irrigated_fraction_2000 = all_years_irrigated_fraction_da.sel(year=str(year))
+        # Fill nas as there is no diff between 0 or na in code and can cause issues
+        area_fraction_2000 = area_fraction_2000.fillna(0)
+        irrigated_fraction_2000 = irrigated_fraction_2000.fillna(0)
+
+        crops_in_dataarray = area_fraction_2000.coords["crop"].values
+
+        grid_id_da = create_grid_cell_id_array(all_years_fraction_da)
+
+        ny, nx = area_fraction_2000.sizes["y"], area_fraction_2000.sizes["x"]
+
+        n_cells = grid_id_da.max().item()
+
+        farmer_cells = sample_from_map(
+            grid_id_da.values,
+            farmer_locations,
+            grid_id_da.raster.transform.to_gdal(),
+        )
+
+        crop_area_fractions = sample_from_map(
+            area_fraction_2000.values,
+            farmer_locations,
+            area_fraction_2000.raster.transform.to_gdal(),
+        )
+        crop_irrigated_fractions = sample_from_map(
+            irrigated_fraction_2000.values,
+            farmer_locations,
+            irrigated_fraction_2000.raster.transform.to_gdal(),
+        )
+
+        n_farmers = self.binary["agents/farmers/id"].size
+
+        # Prepare empty crop arrays
+        farmer_crops = np.full(n_farmers, -1, dtype=np.int32)
+        farmer_irrigated = np.full(n_farmers, 0, dtype=np.bool_)
+
+        for i in range(n_cells):
+            farmers_cell_mask = farmer_cells == i
+            nr_farmers_cell = np.count_nonzero(farmers_cell_mask)
+            if nr_farmers_cell == 0:
+                continue
+            crop_area_fraction = crop_area_fractions[farmer_cells == i][0]
+            crop_irrigated_fraction = crop_irrigated_fractions[farmer_cells == i][0]
+
+            if crop_area_fraction.sum() == 0:
+                # Find neighboring cells with valid data
+                neighbor_ids = get_neighbor_cell_ids(i, nx, ny)
+                found_valid_neighbor = False
+
+                for neighbor_id in neighbor_ids:
+                    if neighbor_id not in np.unique(farmer_cells):
+                        continue
+
+                    neighbor_crop_area_fraction = crop_area_fractions[
+                        farmer_cells == neighbor_id
+                    ][0]
+                    if not neighbor_crop_area_fraction.sum() == 0:
+                        # Found valid neighbor
+                        crop_area_fraction = neighbor_crop_area_fraction
+                        crop_irrigated_fraction = crop_irrigated_fractions[
+                            farmer_cells == neighbor_id
+                        ][0]
+                        found_valid_neighbor = True
+                        break
+                if not found_valid_neighbor:
+                    # No valid neighboring cells found, handle accordingly
+                    print(f"No valid data found for cell {i} and its neighbors.")
+                    continue  # Skip this cell
+
+            farmer_indices_in_cell = np.where(farmers_cell_mask)[0]
+
+            # ensure fractions sum to 1
+            area_per_crop_rotation = crop_area_fraction / crop_area_fraction.sum()
+
+            farmer_crop_rotations_idx = np.random.choice(
+                np.arange(len(area_per_crop_rotation)),
+                size=len(farmer_indices_in_cell),
+                replace=True,
+                p=area_per_crop_rotation,
+            )
+
+            # Map sampled indices to crop names using crops_in_dataarray
+            farmer_crop_names = crops_in_dataarray[farmer_crop_rotations_idx]
+            # Map crop names to integer codes using crop_dict
+            farmer_crop_codes = [
+                crop_dict[crop_name] for crop_name in farmer_crop_names
+            ]
+            # assign to farmers
+            farmer_crops[farmer_indices_in_cell] = farmer_crop_codes
+
+            # Determine irrigating farmers
+            chosen_crops = np.unique(farmer_crop_rotations_idx)
+
+            for c in chosen_crops:
+                # Indices of farmers in the cell assigned to crop c
+                farmers_with_crop_c_in_cell = np.where(farmer_crop_rotations_idx == c)[
+                    0
+                ]
+                N_c = len(farmers_with_crop_c_in_cell)
+                f_c = crop_irrigated_fraction[c]
+                if np.isnan(f_c) or f_c <= 0:
+                    continue  # No irrigation for this crop
+                N_irrigated = int(round(N_c * f_c))
+                if N_irrigated > 0:
+                    # Randomly select N_irrigated farmers from the N_c farmers
+                    irrigated_indices_in_cell = np.random.choice(
+                        farmers_with_crop_c_in_cell, size=N_irrigated, replace=False
+                    )
+                    # Get the overall farmer indices
+                    overall_farmer_indices = farmer_indices_in_cell[
+                        irrigated_indices_in_cell
+                    ]
+                    # Set irrigation status to True for these farmers
+                    farmer_irrigated[overall_farmer_indices] = True
+
+        assert not (
+            farmer_crops == -1
+        ).any(), "Error: some farmers have no crops assigned"
+
+        return farmer_crops, farmer_irrigated
+
+    def setup_farmer_irrigation_source(self, irrigating_farmers):
+        fraction_sw_irrigation = "aeisw"
+        fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
+            f"global_irrigation_area_{fraction_sw_irrigation}",
+            bbox=self.bounds,
+            buffer=2,
+        )
+        fraction_gw_irrigation = "aeigw"
+        fraction_gw_irrigation_data = self.data_catalog.get_rasterdataset(
+            f"global_irrigation_area_{fraction_gw_irrigation}",
+            bbox=self.bounds,
+            buffer=2,
+        )
+
+        farmer_locations = get_farm_locations(
+            self.subgrid["agents/farmers/farms"], method="centroid"
+        )
+
+        # Determine which farmers are irrigating
+        grid_id_da = create_grid_cell_id_array(fraction_sw_irrigation_data)
+        ny, nx = (
+            fraction_sw_irrigation_data.sizes["y"],
+            fraction_sw_irrigation_data.sizes["x"],
+        )
+
+        n_cells = grid_id_da.max().item()
+        n_farmers = self.binary["agents/farmers/id"].size
+
+        farmer_cells = sample_from_map(
+            grid_id_da.values,
+            farmer_locations,
+            grid_id_da.raster.transform.to_gdal(),
+        )
+        fraction_sw_irrigation_farmers = sample_from_map(
+            fraction_sw_irrigation_data.values,
+            farmer_locations,
+            fraction_sw_irrigation_data.raster.transform.to_gdal(),
+        )
+        fraction_gw_irrigation_farmers = sample_from_map(
+            fraction_gw_irrigation_data.values,
+            farmer_locations,
+            fraction_gw_irrigation_data.raster.transform.to_gdal(),
+        )
+
+        # Initialize the irrigation_source array
+        irrigation_source = np.full(n_farmers, -1, dtype=np.int32)
+
+        for i in range(n_cells):
+            farmers_cell_mask = farmer_cells == i  # Boolean mask for farmers in cell i
+            farmers_cell_indices = np.where(farmers_cell_mask)[0]  # Absolute indices
+
+            irrigating_farmers_mask = irrigating_farmers[farmers_cell_mask]
+            num_irrigating_farmers = np.sum(irrigating_farmers_mask)
+
+            if num_irrigating_farmers > 0:
+                fraction_sw = fraction_sw_irrigation_farmers[farmers_cell_mask][0]
+                fraction_gw = fraction_gw_irrigation_farmers[farmers_cell_mask][0]
+
+                # Normalize fractions
+                total_fraction = fraction_sw + fraction_gw
+
+                # Handle edge cases if there are irrigating farmers but no data on sw/gw
+                if total_fraction == 0:
+                    # Find neighboring cells with valid data
+                    neighbor_ids = get_neighbor_cell_ids(i, nx, ny)
+                    found_valid_neighbor = False
+
+                    for neighbor_id in neighbor_ids:
+                        if neighbor_id not in np.unique(farmer_cells):
+                            continue
+
+                        neighbor_mask = farmer_cells == neighbor_id
+                        fraction_sw_neighbor = fraction_sw_irrigation_farmers[
+                            neighbor_mask
+                        ][0]
+                        fraction_gw_neighbor = fraction_gw_irrigation_farmers[
+                            neighbor_mask
+                        ][0]
+                        neighbor_total_fraction = (
+                            fraction_sw_neighbor + fraction_gw_neighbor
+                        )
+
+                        if neighbor_total_fraction > 0:
+                            # Found valid neighbor
+                            fraction_sw = fraction_sw_neighbor
+                            fraction_gw = fraction_gw_neighbor
+                            total_fraction = neighbor_total_fraction
+
+                            found_valid_neighbor = True
+                            break
+                    if not found_valid_neighbor:
+                        # No valid neighboring cells found, handle accordingly
+                        print(f"No valid data found for cell {i} and its neighbors.")
+                        continue  # Skip this cell
+
+                # Normalize fractions
+                probabilities = np.array([fraction_sw, fraction_gw], dtype=np.float64)
+                probabilities_sum = probabilities.sum()
+                probabilities /= probabilities_sum
+
+                # Indices of irrigating farmers in the region (absolute indices)
+                farmer_indices_in_region = farmers_cell_indices[irrigating_farmers_mask]
+
+                # Assign irrigation sources using np.random.choice
+                irrigation_source[farmer_indices_in_region] = np.random.choice(
+                    [0, 1],
+                    size=len(farmer_indices_in_region),
+                    p=probabilities,
+                )
+
+        # Update the irrigation_source attribute or return it as needed
+        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
+        self.set_binary(irrigating_farmers, name="agents/farmers/irrigating_farmers")
 
     def setup_population(self):
         populaton_map = self.data_catalog.get_rasterdataset(
