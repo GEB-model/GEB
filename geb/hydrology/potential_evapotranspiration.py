@@ -22,6 +22,8 @@
 import numpy as np
 from numba import njit
 
+from .landcover import FOREST
+
 
 @njit(cache=True, parallel=True)
 def PET(
@@ -33,7 +35,7 @@ def PET(
     rlds,
     rsds,
     sfcWind,
-    albedo_canopy=np.float32(0.23),
+    albedo_canopy=np.float32(0.13),
     albedo_water=np.float32(0.05),
 ):
     tas_C = tas - np.float32(273.15)
@@ -73,24 +75,21 @@ def PET(
     rlds_MJ_m2_day = rlds * np.float32(0.0864)  # 86400 * 1E-6
     net_longwave_radation_MJ_m2_day = rlus_MJ_m2_day - rlds_MJ_m2_day
 
-    # ************************************************************
-    # ***** NET ABSORBED RADIATION *******************************
-    # ************************************************************
-
     rsds_MJ_m2_day = rsds * np.float32(0.0864)  # 86400 * 1E-6
-    # net absorbed radiation of reference vegetation canopy [mm/d]
-    RNA = np.maximum(
+
+    # net absorbed radiation of reference vegetation canopy [MJ_m2_day]
+    net_absorbed_radiation_vegetation_MJ_m2_day = np.maximum(
         (np.float32(1) - albedo_canopy) * rsds_MJ_m2_day
         - net_longwave_radation_MJ_m2_day,
         np.float32(0.0),
     )
-    # net absorbed radiation of bare soil surface
-    RNAWater = np.maximum(
+
+    # net absorbed radiation of water surface
+    net_absorbed_radiation_water_MJ_m2_day = np.maximum(
         (np.float32(1) - albedo_water) * rsds_MJ_m2_day
         - net_longwave_radation_MJ_m2_day,
         np.float32(0.0),
     )
-    # net absorbed radiation of water surface
 
     vapour_pressure_deficit = np.maximum(
         saturated_vapour_pressure - actual_vapour_pressure, np.float32(0.0)
@@ -119,9 +118,17 @@ def PET(
     # latent heat of vaporization [MJ/kg]
     LatHeatVap = np.float32(2.501) - np.float32(0.002361) * tas_C
     # the 0.408 constant is replace by 1/LatHeatVap
-    RNAN = RNA / LatHeatVap * slope_of_saturated_vapour_pressure_curve / denominator
+    RNAN = (
+        net_absorbed_radiation_vegetation_MJ_m2_day
+        / LatHeatVap
+        * slope_of_saturated_vapour_pressure_curve
+        / denominator
+    )
     RNANWater = (
-        RNAWater / LatHeatVap * slope_of_saturated_vapour_pressure_curve / denominator
+        net_absorbed_radiation_water_MJ_m2_day
+        / LatHeatVap
+        * slope_of_saturated_vapour_pressure_curve
+        / denominator
     )
 
     EA = (
@@ -143,7 +150,7 @@ def PET(
 
     EWRef = (RNANWater + EA) * np.float32(0.001)
 
-    return ETRef, EWRef
+    return ETRef, EWRef, net_absorbed_radiation_vegetation_MJ_m2_day
 
 
 class PotentialEvapotranspiration(object):
@@ -195,7 +202,11 @@ class PotentialEvapotranspiration(object):
         Dynamic part of the potential evaporation module
         Based on Penman Monteith - FAO 56
         """
-        self.var.ETRef, self.var.EWRef = PET(
+        (
+            self.var.ETRef,
+            self.var.EWRef,
+            net_absorbed_radiation_vegetation_MJ_m2_day,
+        ) = PET(
             tas=self.var.tas,
             tasmin=self.var.tasmin,
             tasmax=self.var.tasmax,
@@ -204,6 +215,15 @@ class PotentialEvapotranspiration(object):
             rlds=self.var.rlds,
             rsds=self.var.rsds,
             sfcWind=self.var.sfcWind,
+        )
+
+        net_absorbed_radiation_vegetation_MJ_m2_day[
+            self.var.land_use_type != FOREST
+        ] = np.nan
+        self.model.data.grid.net_absorbed_radiation_vegetation_MJ_m2_day = (
+            self.model.data.to_grid(
+                HRU_data=net_absorbed_radiation_vegetation_MJ_m2_day, fn="nanmax"
+            )
         )
 
         assert self.var.ETRef.dtype == np.float32

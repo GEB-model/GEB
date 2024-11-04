@@ -1218,11 +1218,102 @@ class Soil(object):
             w_pre = self.var.w.copy()
             topwater_pre = self.var.topwater.copy()
 
+        if not self.model.spinup and self.model.current_timestep == 1:
+            import geopandas as gpd
+            from rasterio.features import rasterize
+            from shapely.geometry import shape
+
+            forest = gpd.read_file("data/junnar_potential_CFR.gpkg")
+            forest = rasterize(
+                [(shape(geom), 1) for geom in forest.geometry],
+                out_shape=self.model.data.HRU.shape,
+                transform=self.model.data.HRU.transform,
+                fill=False,
+                dtype="uint8",  # bool is not supported, so we use uint8 and convert to bool
+            ).astype(bool)
+            # do not create forests outside the study area
+            forest[self.model.data.HRU.mask] = False
+            # only create forests in grassland or agricultural areas
+            forest[
+                ~np.isin(
+                    self.model.data.HRU.decompress(self.var.land_use_type),
+                    [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
+                )
+            ] = False
+
+            import matplotlib.pyplot as plt
+
+            plt.imshow(forest)
+            plt.savefig("forest.png")
+
+            new_forest_HRUs = np.unique(
+                self.model.data.HRU.unmerged_HRU_indices[forest]
+            )
+
+            # set the land use type to forest
+            self.var.land_use_type[new_forest_HRUs] = FOREST
+
+            # get the farmers corresponding to the new forest HRUs
+            farmers_with_land_converted_to_forest = np.unique(
+                self.model.data.HRU.land_owners[new_forest_HRUs]
+            )
+            farmers_with_land_converted_to_forest = (
+                farmers_with_land_converted_to_forest
+            )[farmers_with_land_converted_to_forest != -1]
+
+            HRUs_removed_farmers = self.model.agents.crop_farmers.remove_agents(
+                farmers_with_land_converted_to_forest, new_land_use_type=FOREST
+            )
+
+            new_forest_HRUs = np.unique(
+                np.concatenate([new_forest_HRUs, HRUs_removed_farmers])
+            )
+
         bioarea = np.where(self.var.land_use_type < SEALED)[0].astype(np.int32)
 
         interflow = self.var.full_compressed(0, dtype=np.float32)
 
         timer = TimingModule("Soil")
+
+        self.model.data.grid.vapour_pressure_deficit_KPa = (
+            self.calculate_vapour_pressure_deficit_kPa(
+                temperature_K=self.model.data.grid.tas,
+                relative_humidity=self.model.data.grid.hurs,
+            )
+        )
+        self.model.data.grid.photosynthetic_photon_flux_density_umol_m2_s = (
+            self.calculate_photosynthetic_photon_flux_density(
+                shortwave_radiation=self.model.data.grid.rsds,
+                xi=0.5,
+            )
+        )
+
+        w_forest = self.var.w.sum(axis=0)
+        w_forest[self.var.land_use_type != FOREST] = np.nan
+        w_forest = self.model.data.to_grid(HRU_data=w_forest, fn="nanmax")
+
+        wwp_forest = self.wwp.sum(axis=0)
+        wwp_forest[self.var.land_use_type != FOREST] = np.nan
+        wwp_forest = self.model.data.to_grid(HRU_data=wwp_forest, fn="nanmax")
+
+        wfc_forest = self.wfc.sum(axis=0)
+        wfc_forest[self.var.land_use_type != FOREST] = np.nan
+        wfc_forest = self.model.data.to_grid(HRU_data=wfc_forest, fn="nanmax")
+
+        soil_height_forest = self.soil_layer_height.sum(axis=0)
+        soil_height_forest[self.var.land_use_type != FOREST] = np.nan
+        soil_height_forest = self.model.data.to_grid(
+            HRU_data=soil_height_forest, fn="nanmax"
+        )
+
+        self.model.data.grid.soil_water_potential_MPa = (
+            self.calculate_soil_water_potential_MPa(
+                soil_moisture=w_forest,
+                soil_moisture_wilting_point=wwp_forest,
+                soil_moisture_field_capacity=wfc_forest,
+                soil_tickness=soil_height_forest,
+            )
+        )
 
         available_water_infiltration = get_available_water_infiltration(
             natural_available_water_infiltration=self.var.natural_available_water_infiltration,
