@@ -359,10 +359,12 @@ def abstract_water(
     field_indices_by_farmer: np.ndarray,
     field_indices: np.ndarray,
     irrigation_efficiency: np.ndarray,
+    fraction_irrigated_field: np.ndarray,
     surface_irrigated: np.ndarray,
     well_irrigated: np.ndarray,
     cell_area: np.ndarray,
     HRU_to_grid: np.ndarray,
+    nearest_river_grid_cell: np.ndarray,
     crop_map: np.ndarray,
     field_is_paddy_irrigated: np.ndarray,
     paddy_level: np.ndarray,
@@ -446,13 +448,14 @@ def abstract_water(
         # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
         for field in farmer_fields:
             grid_cell = HRU_to_grid[field]
+            grid_cell_nearest = nearest_river_grid_cell[field]
 
             if well_irrigated[farmer]:
                 if groundwater_depth[grid_cell] < well_depth[farmer]:
                     farmer_has_access_to_irrigation_water = True
                     break
             elif surface_irrigated[farmer]:
-                if available_channel_storage_m3[grid_cell] > 0:
+                if available_channel_storage_m3[grid_cell_nearest] > 0:
                     farmer_has_access_to_irrigation_water = True
                     break
                 command_area = farmer_command_area[farmer]
@@ -468,6 +471,7 @@ def abstract_water(
         # If farmer doesn't have access to irrigation water, skip the irrigation abstraction
         if farmer_has_access_to_irrigation_water:
             irrigation_efficiency_farmer = irrigation_efficiency[farmer]
+            fraction_irrigated_field_farmer = fraction_irrigated_field[farmer]
 
             # Calculate the potential irrigation consumption for the farmer
             if field_is_paddy_irrigated[farmer_fields][0]:
@@ -497,9 +501,12 @@ def abstract_water(
                     0.0,
                 )
                 # limit the irrigation consumption to the potential infiltration capacity
-                potential_irrigation_consumption_m = np.minimum(
-                    potential_irrigation_consumption_m,
-                    potential_infiltration_capacity[farmer_fields],
+                potential_irrigation_consumption_m = (
+                    np.minimum(
+                        potential_irrigation_consumption_m,
+                        potential_infiltration_capacity[farmer_fields],
+                    )
+                    * fraction_irrigated_field_farmer
                 )
 
             assert (potential_irrigation_consumption_m >= 0).all()
@@ -511,7 +518,7 @@ def abstract_water(
             if potential_irrigation_consumption_farmer_m3 > 0.0:
                 # if irrigation limit is active, reduce the irrigation demand
                 if not np.isnan(remaining_irrigation_limit_m3[farmer]):
-                    adjust_irrigation_to_limit(
+                    potential_irrigation_consumption_m = adjust_irrigation_to_limit(
                         farmer=farmer,
                         day_index=day_index,
                         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
@@ -522,6 +529,9 @@ def abstract_water(
                         potential_irrigation_consumption_m=potential_irrigation_consumption_m,
                         potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
                     )
+                    potential_irrigation_consumption_farmer_m3 = (
+                        potential_irrigation_consumption_m * cell_area[farmer_fields]
+                    ).sum()
 
                 # loop through all farmers fields and apply irrigation
                 for field_idx, field in enumerate(farmer_fields):
@@ -535,7 +545,7 @@ def abstract_water(
                         if surface_irrigated[farmer]:
                             irrigation_water_demand_field = withdraw_channel(
                                 available_channel_storage_m3=available_channel_storage_m3,
-                                grid_cell=grid_cell,
+                                grid_cell=grid_cell_nearest,
                                 cell_area=cell_area,
                                 field=field,
                                 farmer=farmer,
@@ -1132,7 +1142,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Initiate adaptation status.
-        # 0 = not adapted, 1 adapted. Column 0 = no cost adaptation, 1 = well, 2 = sprinkler, 3 = irr. field expansion
+        # 0 = not adapted, 1 adapted. Column 0 = no cost adaptation, 1 = well, 2 = irr efficiency, 3 = irr. field expansion
         self.adapted = AgentArray(
             n=self.n,
             max_n=self.max_n,
@@ -1142,7 +1152,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
         # the time each agent has been paying off their loan
-        # 0 = no cost adaptation, 1 = well, 2 = sprinkler, 3 = irr. field expansion  -1 if they do not have adaptations
+        # 0 = no cost adaptation, 1 = well, 2 = irr efficiency, 3 = irr. field expansion  -1 if they do not have adaptations
         self.time_adapted = AgentArray(
             n=self.n,
             max_n=self.max_n,
@@ -1391,7 +1401,7 @@ class CropFarmers(AgentBaseClass):
         )
         rng = np.random.default_rng(42)
         self.irrigation_efficiency[irrigation_mask] = rng.choice(
-            [0.50, 0.90], size=irrigation_mask.sum()
+            [0.50, 0.90], size=irrigation_mask.sum(), p=[0.2, 0.8]
         )
         self.adapted[:, 2][self.irrigation_efficiency >= 0.90] = 1
         rng_drip = np.random.default_rng(70)
@@ -1416,10 +1426,6 @@ class CropFarmers(AgentBaseClass):
             1,
             self.lifespan_irrigation,
             np.sum(self.adapted[:, 3] == 1),
-        )
-
-        self.irrigation_efficiency_total = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
 
         self.base_management_yield_ratio = AgentArray(
@@ -1769,18 +1775,6 @@ class CropFarmers(AgentBaseClass):
             self.activation_order_by_elevation, max_n=self.max_n
         )
 
-        if (
-            not self.config["expected_utility"]["adaptation_irrigation_expansion"][
-                "ruleset"
-            ]
-            == "no-adaptation"
-        ):
-            self.irrigation_efficiency_total[:] = irrigation_fraction(
-                self.irrigation_efficiency, self.fraction_irrigated_field
-            )
-        else:
-            self.irrigation_efficiency_total[:] = self.irrigation_efficiency
-
         if __debug__:
             irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
@@ -1800,7 +1794,8 @@ class CropFarmers(AgentBaseClass):
             self.activation_order_by_elevation,
             self.field_indices_by_farmer.data,
             self.field_indices,
-            self.irrigation_efficiency_total.data,
+            self.irrigation_efficiency.data,
+            self.fraction_irrigated_field.data,
             surface_irrigated=np.isin(
                 self.irrigation_source,
                 np.array(
@@ -1819,6 +1814,7 @@ class CropFarmers(AgentBaseClass):
             ),
             cell_area=cell_area,
             HRU_to_grid=self.model.data.HRU.HRU_to_grid,
+            nearest_river_grid_cell=self.model.data.HRU.nearest_river_grid_cell,
             crop_map=self.var.crop_map,
             field_is_paddy_irrigated=self.field_is_paddy_irrigated,
             paddy_level=paddy_level,
@@ -3168,7 +3164,7 @@ class CropFarmers(AgentBaseClass):
 
     def calculate_yield_spei_relation_group(self):
         # Create unique groups
-        crop_elevation_group = self.create_unique_groups()
+        crop_elevation_group = self.create_unique_groups(10)
         unique_crop_combinations, group_indices = np.unique(
             crop_elevation_group, axis=0, return_inverse=True
         )
@@ -3545,7 +3541,7 @@ class CropFarmers(AgentBaseClass):
 
         # Placeholder
         # 0.5 because they first decide to irrigate half their field
-        costs_irrigation_system = 4 * self.field_size_per_farmer * 0.5
+        costs_irrigation_system = 1 * self.field_size_per_farmer * 0.5
 
         # interest_rate = self.get_value_per_farmer_from_region_id(
         #     self.lending_rate, self.model.current_time
@@ -3589,10 +3585,14 @@ class CropFarmers(AgentBaseClass):
         (
             total_profits,
             profits_no_event,
-        ) = self.profits_SEUT(0, adapted)
+            total_profits_adaptation,
+            profits_no_event_adaptation,
+        ) = self.profits_SEUT(adaptation_type, adapted)
 
-        total_profits_adaptation = total_profits + energy_diff + water_diff
-        profits_no_event_adaptation = profits_no_event + energy_diff + water_diff
+        total_profits_adaptation = total_profits_adaptation + energy_diff + water_diff
+        profits_no_event_adaptation = (
+            profits_no_event_adaptation + energy_diff + water_diff
+        )
 
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params = {
@@ -3700,15 +3700,12 @@ class CropFarmers(AgentBaseClass):
 
         adapted = np.where((self.adapted[:, adaptation_type] == 1), 1, 0)
 
-        # Calculate base profits
         (
             total_profits,
             profits_no_event,
-        ) = self.profits_SEUT(0, adapted)
-
-        # Assume double income due to expansion of field
-        total_profits_adaptation = total_profits * 2
-        profits_no_event_adaptation = profits_no_event * 2
+            total_profits_adaptation,
+            profits_no_event_adaptation,
+        ) = self.profits_SEUT(adaptation_type, adapted)
 
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params = {
@@ -4098,7 +4095,7 @@ class CropFarmers(AgentBaseClass):
         total_profits, profits_no_event = self.format_results(total_profits)
 
         # Handle adaptation types 0 and 1
-        if adaptation_type == 1:
+        if adaptation_type != 0:
             # Adaptation Type 1: e.g., installing wells
             gains_adaptation = self.adaptation_yield_ratio_difference(
                 adapted, yield_ratios
@@ -4279,16 +4276,28 @@ class CropFarmers(AgentBaseClass):
             a = params[:, 0]
             b = params[:, 1]
             x = probability[:, np.newaxis]
-
             return a * np.log10(x) + b
 
-        yield_ratios = logarithmic_function(
+        def exponential_function(probability, params):
+            # Extract parameters
+            a = params[:, 0]  # Shape: (num_agents,)
+            b = params[:, 1]  # Shape: (num_agents,)
+            x = probability  # Shape: (num_events,)
+
+            # Reshape arrays for broadcasting
+            a = a[:, np.newaxis]  # Shape: (num_agents, 1)
+            b = b[:, np.newaxis]  # Shape: (num_agents, 1)
+            x = x[np.newaxis, :]  # Shape: (1, num_events)
+
+            # Compute the exponential function
+            return a * np.exp(b * x)  # Shape: (num_agents, num_events)
+
+        yield_ratios = exponential_function(
             1 / self.p_droughts, self.farmer_yield_probability_relation
-        ).T
+        )
 
         # Adjust the yield ratios to lie between 0 and 1
-        yield_ratios[yield_ratios < 0] = 0  # Ensure non-negative yield ratios
-        yield_ratios[yield_ratios > 1] = 1  # Cap the yield ratios at 1
+        yield_ratios = np.clip(yield_ratios, 0, 1)
 
         # Store the results in a global variable
         self.yield_ratios_drought_event = yield_ratios[:]
@@ -4754,9 +4763,9 @@ class CropFarmers(AgentBaseClass):
                 and not self.config["ruleset"] == "no-adaptation"
             ):
                 # Determine the relation between drought probability and yield
-                self.calculate_yield_spei_relation()
+                # self.calculate_yield_spei_relation()
                 self.calculate_yield_spei_relation_group()
-                self.calculate_yield_spei_relation_test_group()
+                # self.calculate_yield_spei_relation_test_group()
                 timer.new_split("yield-spei relation")
 
                 # These adaptations can only be done if there is a yield-probability relation

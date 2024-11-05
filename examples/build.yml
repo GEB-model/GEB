@@ -59,10 +59,13 @@ setup_household_characteristics:
 
 setup_crops_from_source:
   source: MIRCA2000
+  
+determine_crop_area_fractions:
 
 setup_farmer_crop_calendar:
+  year: 2000
   reduce_crops: true
-  replace_base: true
+  replace_base: false
 
 setup_farmer_characteristics_simple:
   interest_rate: 0.05

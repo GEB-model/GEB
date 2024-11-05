@@ -13,11 +13,31 @@ import zarr
 import numpy as np
 import zarr.convenience
 from geb.workflows import AsyncForcingReader
+from scipy.spatial import cKDTree
 
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
+
+
+def determine_nearest_river_cell(river_grid, HRU_to_grid):
+    threshold = 15
+    valid_mask = river_grid != -9999
+
+    valid_indices = np.argwhere(valid_mask)
+    valid_values = river_grid[valid_mask]
+
+    above_threshold_mask = valid_values > threshold
+    above_threshold_indices = valid_indices[above_threshold_mask]
+    above_threshold_indices_in_valid = np.flatnonzero(above_threshold_mask)
+
+    tree = cKDTree(above_threshold_indices)
+    distances, indices_in_above = tree.query(valid_indices)
+
+    nearest_indices_in_valid = above_threshold_indices_in_valid[indices_in_above]
+
+    return nearest_indices_in_valid[HRU_to_grid]
 
 
 def load_grid(filepath, layer=1, return_transform_and_crs=False):
@@ -537,6 +557,11 @@ class HRUs(BaseVariables):
                     self.data.get_save_state_path(), "HRU.unmerged_HRU_indices.npz"
                 )
             )["data"]
+            self.nearest_river_grid_cell = np.load(
+                os.path.join(
+                    self.data.get_save_state_path(), "HRU.nearest_river_grid_cell.npz"
+                )
+            )["data"]
         else:
             (
                 self.land_use_type,
@@ -546,12 +571,22 @@ class HRUs(BaseVariables):
                 self.grid_to_HRU,
                 self.unmerged_HRU_indices,
             ) = self.create_HRUs()
+
+            river_grid = load_grid(
+                self.model.files["grid"]["routing/kinematic/upstream_area"]
+            )
+
+            self.nearest_river_grid_cell = determine_nearest_river_cell(
+                river_grid, self.HRU_to_grid
+            )
+
             self.register_initial_data("HRU.land_use_type")
             self.register_initial_data("HRU.land_use_ratio")
             self.register_initial_data("HRU.land_owners")
             self.register_initial_data("HRU.HRU_to_grid")
             self.register_initial_data("HRU.grid_to_HRU")
             self.register_initial_data("HRU.unmerged_HRU_indices")
+            self.register_initial_data("HRU.nearest_river_grid_cell")
         if self.model.use_gpu:
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
