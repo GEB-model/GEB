@@ -13,6 +13,7 @@ import math
 import matplotlib.pyplot as plt
 from pyproj import CRS
 from geb.hydrology.landcover import SEALED, OPEN_WATER
+import itertools
 
 try:
     from geb_hydrodynamics import (
@@ -28,13 +29,13 @@ except ModuleNotFoundError:
 
 
 class SFINCS:
-    def __init__(self, model, config, n_timesteps=10):
+    def __init__(self, model, config, max_number_of_timesteps=10):
         self.model = model
         self.config = config
-        self.n_timesteps = n_timesteps
+        self.max_number_of_timesteps = max_number_of_timesteps
 
-        self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
-        self.soil_moisture_per_timestep = deque(maxlen=self.n_timesteps)
+        self.discharge_per_timestep = deque(maxlen=self.max_number_of_timesteps)
+        self.soil_moisture_per_timestep = deque(maxlen=self.max_number_of_timesteps)
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
@@ -224,33 +225,30 @@ class SFINCS:
     def set_forcing(self, event, start_time):
         if self.model.config["general"]["simulate_hydrology"]:
             # load and process discharge grid
-            n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
             substeps = self.discharge_per_timestep[0].shape[0]
+            number_of_timesteps = (event["end_time"] - event["start_time"]).days
             discharge_grid = self.model.data.grid.decompress(
-                np.vstack(self.discharge_per_timestep)
+                np.vstack(
+                    list(
+                        itertools.islice(
+                            self.discharge_per_timestep,  # deque at every time step of the model.
+                            (len(self.discharge_per_timestep) - number_of_timesteps),
+                            len(self.discharge_per_timestep),
+                        )
+                    )
+                    # self.discharge_per_timestep[-number_of_timesteps:-1] --> jens suggestion, but couldnt slice on deque
+                )  # in case discharge_per_timestep is longer than flood event
             )
 
-            # when SFINCS starts with high values, this leads to numerical instabilities. Therefore, we first start with very low discharge and then build up slowly to timestep 0
-            # TODO: Check if this is a right approach
-            discharge_grid = np.vstack(
-                [
-                    np.full_like(discharge_grid[:substeps, :, :], fill_value=np.nan),
-                    discharge_grid,
-                ]
-            )  # prepend zeros
-            for i in range(substeps - 1, -1, -1):
-                discharge_grid[i] = discharge_grid[i + 1] * 0.3
             # convert the discharge grid to an xarray DataArray
             discharge_grid = xr.DataArray(
                 data=discharge_grid,
                 coords={
                     "time": pd.date_range(
-                        end=self.model.current_time
-                        - self.model.timestep_length / substeps,
-                        periods=(n_timesteps + 1)
-                        * substeps,  # +1 because we prepend the discharge above
-                        freq=self.model.timestep_length / substeps,
-                        inclusive="right",
+                        start=event["start_time"],
+                        end=event["end_time"],
+                        periods=discharge_grid.shape[0],
+                        # inclusive="right",
                     ),
                     "y": self.model.data.grid.lat,
                     "x": self.model.data.grid.lon,
@@ -259,20 +257,15 @@ class SFINCS:
                 name="discharge",
             )
 
-            # load and process initial soil moisture grid
-
-            self.model.data.HRU.w[:, self.model.data.HRU.land_use_type == SEALED] = 0
-            self.model.data.HRU.w[
-                :, self.model.data.HRU.land_use_type == OPEN_WATER
-            ] = 0
-
-            initial_soil_moisture_grid = self.model.data.HRU.w[:2].sum(axis=0)
-            initial_soil_moisture_grid = self.model.data.HRU.decompress(
-                initial_soil_moisture_grid
-            )
-
-            initial_soil_moisture_xr = xr.Dataset(
-                {"initial_soil_moisture": (["y", "x"], initial_soil_moisture_grid)},
+            initial_soil_moisture_grid = xr.Dataset(
+                {
+                    "initial_soil_moisture": (
+                        ["y", "x"],
+                        self.soil_moisture_per_timestep[
+                            0
+                        ],  # take first time step of soil moisture
+                    )
+                },  # deque
                 coords={
                     "y": self.model.data.HRU.lat,
                     "x": self.model.data.HRU.lon,
@@ -291,10 +284,10 @@ class SFINCS:
 
         else:
             substeps = 24  # when setting 0 it doesn't matter so much how many substeps. 24 is a reasonable default.
-            n_timesteps = (event["end_time"] - event["start_time"]).days
+            max_number_of_timesteps = (event["end_time"] - event["start_time"]).days
             time = pd.date_range(
                 end=self.model.current_time - self.model.timestep_length / substeps,
-                periods=(n_timesteps + 1)
+                periods=(max_number_of_timesteps + 1)
                 * substeps,  # +1 because we prepend the discharge above
                 freq=self.model.timestep_length / substeps,
                 inclusive="right",
@@ -457,8 +450,20 @@ class SFINCS:
         )
         return damages
 
-    def save_discharge(self):
+    def save_discharge(
+        self,
+    ):  # is used in driver.py on every timestep. This is saving the CWATM model output for use in SFINCS (driver.py)
         self.discharge_per_timestep.append(
-            self.model.data.grid.discharge_substep
-            # here the initial soil moisture also needs too be saved. Only the first day of the flood event.
+            self.model.data.grid.discharge_substep  # this is a hourly discharge
         )  # this is a deque, so it will automatically remove the oldest discharge
+
+    def save_soil_moisture(self):  # is used in driver.py on every timestep
+        # load and process initial soil moisture grid
+        self.model.data.HRU.w[:, self.model.data.HRU.land_use_type == SEALED] = 0
+        self.model.data.HRU.w[:, self.model.data.HRU.land_use_type == OPEN_WATER] = 0
+        initial_soil_moisture_grid = self.model.data.HRU.w[:2].sum(axis=0)
+        initial_soil_moisture_grid = self.model.data.HRU.decompress(
+            initial_soil_moisture_grid
+        )  # move down
+
+        self.soil_moisture_per_timestep.append(initial_soil_moisture_grid)
