@@ -1401,7 +1401,7 @@ class CropFarmers(AgentBaseClass):
         )
         rng = np.random.default_rng(42)
         self.irrigation_efficiency[irrigation_mask] = rng.choice(
-            [0.50, 0.90], size=irrigation_mask.sum(), p=[0.2, 0.8]
+            [0.50, 0.70, 0.90], size=irrigation_mask.sum(), p=[0.8, 0.15, 0.05]
         )
         self.adapted[:, 2][self.irrigation_efficiency >= 0.90] = 1
         rng_drip = np.random.default_rng(70)
@@ -3164,7 +3164,7 @@ class CropFarmers(AgentBaseClass):
 
     def calculate_yield_spei_relation_group(self):
         # Create unique groups
-        crop_elevation_group = self.create_unique_groups(10)
+        crop_elevation_group = self.create_unique_groups(1)
         unique_crop_combinations, group_indices = np.unique(
             crop_elevation_group, axis=0, return_inverse=True
         )
@@ -3242,7 +3242,7 @@ class CropFarmers(AgentBaseClass):
         self.farmer_yield_probability_relation = farmer_yield_probability_relation
 
         # Print median R²
-        valid_r2 = r_squared_array[~np.isnan(r_squared_array)]
+        valid_r2 = r_squared_array[~np.isnan(r_squared_array)][group_indices]
         print(
             "Median R² for exponential model:",
             np.median(valid_r2) if len(valid_r2) > 0 else "N/A",
