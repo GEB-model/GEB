@@ -259,6 +259,95 @@ def get_observed_yield_ratios(run_directory, config):
 
 	return summed_series
 
+def get_observed_water_use(calibration_config):
+    # Read the data
+    fp = os.path.join(calibration_config['observed_data'], 'water_use', 'murray_water_use.csv')
+    data_df = pd.read_csv(fp)
+    data_df['Value'] = pd.to_numeric(data_df['Value'], errors='coerce')
+    
+    # Define irrigation types
+    irrigation_types = ['surface_irrigation', 'drip_or_trickle_irrigation', 'sprinkler_irrigation']
+    
+    # Calculate total irrigation and fractions for each Year and Region
+    irrigation_df = data_df[data_df['Description'].isin(irrigation_types)]
+    irrigation_pivot = irrigation_df.pivot_table(
+        index=['Year', 'Region'],
+        columns='Description',
+        values='Value',
+        aggfunc='first'
+    )
+    
+    # Calculate total irrigation
+    irrigation_pivot['total_irrigation'] = irrigation_pivot[irrigation_types].sum(axis=1)
+    
+    # Calculate fractions
+    for irr_type in irrigation_types:
+        irrigation_pivot['fraction_' + irr_type] = (
+            irrigation_pivot[irr_type] / irrigation_pivot['total_irrigation']
+        )
+    
+    # Melt fractions back into long format
+    fraction_cols = ['fraction_' + irr_type for irr_type in irrigation_types]
+    fraction_df = irrigation_pivot[fraction_cols].reset_index().melt(
+        id_vars=['Year', 'Region'],
+        value_vars=fraction_cols,
+        var_name='Description',
+        value_name='Value'
+    )
+    
+    # Combine fractions with original data
+    combined_data_df = pd.concat([data_df, fraction_df[['Year', 'Region', 'Description', 'Value']]], ignore_index=True)
+    
+    # Proceed with ratio-based estimation
+    pivot_df = combined_data_df.pivot_table(
+        index=['Year', 'Description'],
+        columns='Region',
+        values='Value',
+        aggfunc='first'
+    )
+    # Do not reset the index here to keep 'Year' and 'Description' as MultiIndex
+    
+    # Define target and reference regions
+    reference_regions = {
+        'murray': 'NSW',
+        'goulburn_broken': 'VICT',
+        'north_central': 'VICT',
+        'north_east': 'VICT'
+    }
+    
+    for target_region, ref_region in reference_regions.items():
+        if target_region in pivot_df.columns and ref_region in pivot_df.columns:
+            # Calculate the ratio
+            pivot_df['Ratio'] = pivot_df[target_region] / pivot_df[ref_region]
+            # Calculate the average ratio for each Description
+            ratio_by_description = pivot_df.groupby(level='Description')['Ratio'].mean()
+            # Map the average ratio back
+            pivot_df['Avg_Ratio'] = pivot_df.index.get_level_values('Description').map(ratio_by_description)
+            # Estimate missing target region values
+            pivot_df['Estimated'] = pivot_df[ref_region] * pivot_df['Avg_Ratio']
+            # Fill in missing values
+            pivot_df[target_region] = pivot_df[target_region].fillna(pivot_df['Estimated'])
+            # Drop helper columns
+            pivot_df = pivot_df.drop(columns=['Ratio', 'Avg_Ratio', 'Estimated'])
+    
+    # Ensure fractions sum to 1
+    fraction_descriptions = ['fraction_' + irr_type for irr_type in irrigation_types]
+    fractions_df = pivot_df.loc[pivot_df.index.get_level_values('Description').isin(fraction_descriptions)].copy()
+    # Replace NaN with 0 for fractions
+    fractions_df = fractions_df.fillna(0)
+    # Sum fractions for each Year and Region
+    fractions_sum = fractions_df.groupby(level=['Year']).sum()
+    # Normalize fractions
+    fractions_normalized = fractions_df.div(fractions_sum)
+    # Update pivot_df with normalized fractions
+    pivot_df.update(fractions_normalized)
+	
+    fp_new = os.path.join(calibration_config['observed_data'], 'water_use', 'murray_water_use_final.csv')
+    pivot_df.to_csv(fp_new)
+    
+    return pivot_df
+    
+
 @handle_ctrl_c
 def run_model(individual, config, gauges, observed_streamflow):
 	"""
@@ -458,6 +547,9 @@ def calibrate(config, working_directory):
 	lambda_ = calibration_config['DEAP']['lambda_']
 	config['calibration']['scenario'] = calibration_config['scenario']
 
+	# Load irrigation water use data
+	get_observed_water_use(calibration_config)
+
 	# Load observed streamflow
 	gauges = [tuple(gauge) for gauge in config['general']['gauges']]
 	observed_streamflow = {}
@@ -469,6 +561,7 @@ def calibrate(config, working_directory):
 		observed_streamflow[gauge] = observed_streamflow[gauge].dropna()
 		observed_streamflow[gauge].name = 'observed'
 		assert (observed_streamflow[gauge] >= 0).all()
+
 
 	# with open(os.path.join(config['general']['input_folder'], 'agents', 'farmers' ,'attributes', 'irrigation_sources.json')) as f:
 	# 	irrigation_source_key = json.load(f)
