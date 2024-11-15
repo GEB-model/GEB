@@ -102,27 +102,20 @@ def create_grid_cell_id_array(area_fraction_da):
     return grid_id_da
 
 
-def get_neighbor_cell_ids(cell_id, nx, ny):
+def get_neighbor_cell_ids(cell_id, nx, ny, radius=1):
     row = cell_id // nx
     col = cell_id % nx
 
-    neighbor_offsets = [
-        (-1, -1),
-        (-1, 0),
-        (-1, 1),
-        (0, -1),
-        (0, 1),
-        (1, -1),
-        (1, 0),
-        (1, 1),
-    ]
     neighbor_cell_ids = []
-    for dr, dc in neighbor_offsets:
-        r = row + dr
-        c = col + dc
-        if 0 <= r < ny and 0 <= c < nx:
-            neighbor_id = r * nx + c
-            neighbor_cell_ids.append(neighbor_id)
+    for dr in range(-radius, radius + 1):
+        for dc in range(-radius, radius + 1):
+            if dr == 0 and dc == 0:
+                continue  # Skip the cell itself
+            r = row + dr
+            c = col + dc
+            if 0 <= r < ny and 0 <= c < nx:
+                neighbor_id = r * nx + c
+                neighbor_cell_ids.append(neighbor_id)
     return neighbor_cell_ids
 
 
@@ -4355,14 +4348,15 @@ class GEBModel(GridModel):
                     len(region_farm_sizes) == 2
                 ), f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
 
+                # Extract holdings and agricultural area data
                 region_n_holdings = (
                     region_farm_sizes.loc[
                         region_farm_sizes["Holdings/ agricultural area"] == "Holdings"
                     ]
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
-                    .replace("..", "0")
-                    .astype(np.int64)
+                    .replace("..", np.nan)
+                    .astype(float)
                 )
                 agricultural_area_db_ha = (
                     region_farm_sizes.loc[
@@ -4371,11 +4365,84 @@ class GEBModel(GridModel):
                     ]
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
-                    .replace("..", "0")
-                    .astype(np.int64)
+                    .replace("..", np.nan)
+                    .astype(float)
                 )
-                agricultural_area_db = agricultural_area_db_ha * 10000
+
+                # Calculate average sizes for each bin
+                average_sizes = {}
+                for bin_name in agricultural_area_db_ha.index:
+                    bin_name = bin_name.strip()
+                    if bin_name.startswith("<"):
+                        # For '< 1 Ha', average is 0.5 Ha
+                        average_size = 0.5
+                    elif bin_name.startswith(">"):
+                        # For '> 1000 Ha', assume average is 1500 Ha
+                        average_size = 1500
+                    else:
+                        # For ranges like '5 - 10 Ha', calculate the midpoint
+                        try:
+                            min_size, max_size = bin_name.replace("Ha", "").split("-")
+                            min_size = float(min_size.strip())
+                            max_size = float(max_size.strip())
+                            average_size = (min_size + max_size) / 2
+                        except ValueError:
+                            # Default average size if parsing fails
+                            average_size = 1
+                    average_sizes[bin_name] = average_size
+
+                # Convert average sizes to a pandas Series
+                average_sizes_series = pd.Series(average_sizes)
+
+                # Handle cases where entries are zero or missing
+                agricultural_area_db_ha_zero_or_nan = (
+                    agricultural_area_db_ha.isnull() | (agricultural_area_db_ha == 0)
+                )
+                region_n_holdings_zero_or_nan = region_n_holdings.isnull() | (
+                    region_n_holdings == 0
+                )
+
+                if agricultural_area_db_ha_zero_or_nan.all():
+                    # All entries in agricultural_area_db_ha are zero or NaN
+                    if not region_n_holdings_zero_or_nan.all():
+                        # Calculate agricultural_area_db_ha using average sizes and region_n_holdings
+                        region_n_holdings = region_n_holdings.fillna(1).replace(0, 1)
+                        agricultural_area_db_ha = (
+                            average_sizes_series * region_n_holdings
+                        )
+                    else:
+                        raise ValueError(
+                            "Cannot calculate agricultural_area_db_ha: both datasets are zero or missing."
+                        )
+                elif region_n_holdings_zero_or_nan.all():
+                    # All entries in region_n_holdings are zero or NaN
+                    if not agricultural_area_db_ha_zero_or_nan.all():
+                        # Calculate region_n_holdings using agricultural_area_db_ha and average sizes
+                        agricultural_area_db_ha = agricultural_area_db_ha.fillna(
+                            1
+                        ).replace(0, 1)
+                        region_n_holdings = (
+                            agricultural_area_db_ha / average_sizes_series
+                        )
+                    else:
+                        raise ValueError(
+                            "Cannot calculate region_n_holdings: both datasets are zero or missing."
+                        )
+                else:
+                    # Replace zeros and NaNs in both datasets to avoid division by zero
+                    region_n_holdings = region_n_holdings.fillna(1).replace(0, 1)
+                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(1).replace(
+                        0, 1
+                    )
+
+                # Calculate total agricultural area in square meters
+                agricultural_area_db = (
+                    agricultural_area_db_ha * 10000
+                )  # Convert Ha to m^2
+
+                # Calculate region farm sizes
                 region_farm_sizes = agricultural_area_db / region_n_holdings
+
             else:
                 region_farm_sizes = farm_sizes_per_region.loc[(state, district, tehsil)]
                 region_n_holdings = n_farms_per_region.loc[(state, district, tehsil)]
@@ -4428,7 +4495,7 @@ class GEBModel(GridModel):
                     continue
 
                 number_of_agents_size_class = round(
-                    region_n_holdings[size_class].compute().item()
+                    region_n_holdings[size_class].item()
                 )
                 # if there is agricultural land, but there are no agents rounded down, we assume there is one agent
                 if (
@@ -5272,9 +5339,9 @@ class GEBModel(GridModel):
                     crop_calendar_per_farmer, most_common_check, replaced_value
                 )
 
-                # Change perennial to one
+                # Change perennial to annual, otherwise counted double in esa dataset
                 most_common_check = [OIL_PALM, OTHERS_PERENNIAL]
-                replaced_value = [OIL_PALM, OTHERS_PERENNIAL]
+                replaced_value = [OTHERS_ANNUAL]
                 crop_calendar_per_farmer = replace_crop(
                     crop_calendar_per_farmer, most_common_check, replaced_value
                 )
@@ -5408,28 +5475,34 @@ class GEBModel(GridModel):
             crop_irrigated_fraction = crop_irrigated_fractions[farmer_cells == i][0]
 
             if crop_area_fraction.sum() == 0:
-                # Find neighboring cells with valid data
-                neighbor_ids = get_neighbor_cell_ids(i, nx, ny)
+                # Expand the search radius until valid data is found
                 found_valid_neighbor = False
+                max_radius = max(nx, ny)  # Maximum possible radius
+                radius = 1
+                while not found_valid_neighbor and radius <= max_radius:
+                    neighbor_ids = get_neighbor_cell_ids(i, nx, ny, radius)
+                    for neighbor_id in neighbor_ids:
+                        if neighbor_id not in farmer_cells:
+                            continue
 
-                for neighbor_id in neighbor_ids:
-                    if neighbor_id not in np.unique(farmer_cells):
-                        continue
-
-                    neighbor_crop_area_fraction = crop_area_fractions[
-                        farmer_cells == neighbor_id
-                    ][0]
-                    if not neighbor_crop_area_fraction.sum() == 0:
-                        # Found valid neighbor
-                        crop_area_fraction = neighbor_crop_area_fraction
-                        crop_irrigated_fraction = crop_irrigated_fractions[
+                        neighbor_crop_area_fraction = crop_area_fractions[
                             farmer_cells == neighbor_id
                         ][0]
-                        found_valid_neighbor = True
-                        break
+                        if neighbor_crop_area_fraction.sum() != 0:
+                            # Found valid neighbor
+                            crop_area_fraction = neighbor_crop_area_fraction
+                            crop_irrigated_fraction = crop_irrigated_fractions[
+                                farmer_cells == neighbor_id
+                            ][0]
+                            found_valid_neighbor = True
+                            break
+                    if not found_valid_neighbor:
+                        radius += 1  # Increase the search radius
                 if not found_valid_neighbor:
-                    # No valid neighboring cells found, handle accordingly
-                    print(f"No valid data found for cell {i} and its neighbors.")
+                    # No valid data found even after expanding radius
+                    print(
+                        f"No valid data found for cell {i} after searching up to radius {radius - 1}."
+                    )
                     continue  # Skip this cell
 
             farmer_indices_in_cell = np.where(farmers_cell_mask)[0]
@@ -6401,7 +6474,15 @@ class GEBModel(GridModel):
             time_chunksize=1e99,  # no chunking
         )
 
-    def _write_grid(self, grid, var, files, is_updated):
+    def _write_grid(
+        self,
+        grid,
+        var,
+        files,
+        is_updated,
+        y_chunksize=XY_CHUNKSIZE,
+        x_chunksize=XY_CHUNKSIZE,
+    ):
         if is_updated[var]["updated"]:
             self.logger.info(f"Writing {var}")
             filename = var + ".zarr.zip"
@@ -6416,9 +6497,58 @@ class GEBModel(GridModel):
             # zarr cannot handle / in variable names
             grid.name = "data"
             assert hasattr(grid, "spatial_ref")
-            grid.to_zarr(filepath, mode="w")
 
-            # also export to tif for easier visualization
+            # Rechunk data variable if needed
+            if grid.chunks is None:
+                # Grid is not chunked, specify chunks and chunk the grid
+                chunksizes = {
+                    "y": min(grid.y.size, y_chunksize),
+                    "x": min(grid.x.size, x_chunksize),
+                }
+                chunks_tuple = tuple(
+                    (
+                        chunksizes[dim]
+                        if dim in chunksizes
+                        else max(getattr(grid, dim).size, 1)
+                    )
+                    for dim in grid.dims
+                )
+                grid = grid.chunk(chunks_tuple)
+                data_chunks = chunks_tuple
+            else:
+                # Grid is already chunked; use existing chunks
+                data_chunks = tuple(
+                    s[0] if len(set(s)) == 1 else s for s in grid.chunks
+                )
+
+            # Build the encoding dictionary for the data variable
+            encoding = {
+                grid.name: {
+                    "compressor": compressor,
+                    # Only specify chunks if the grid was not already chunked
+                    **({"chunks": data_chunks} if grid.chunks is None else {}),
+                }
+            }
+
+            # **Compute coordinate variables to avoid chunking issues**
+            for coord in grid.coords:
+                coord_da = grid.coords[coord]
+                if coord_da.ndim > 0 and coord_da.chunks is not None:
+                    # Option 1: Rechunk the coordinate variable to match data variable
+                    # grid.coords[coord] = coord_da.rechunk(data_chunks[-coord_da.ndim:])
+                    # Option 2: Compute the coordinate variable (since it's small)
+                    grid.coords[coord] = coord_da.compute()
+                # Include coordinate in encoding without specifying chunks
+                encoding[coord] = {}
+
+            # Now write to Zarr
+            grid.to_zarr(
+                filepath,
+                mode="w",
+                encoding=encoding,
+            )
+
+            # Also export to TIFF for easier visualization
             grid.rio.to_raster(filepath.with_suffix(".tif"))
 
     def write_grid(self):
