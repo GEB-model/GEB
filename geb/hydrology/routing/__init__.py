@@ -128,6 +128,7 @@ class Routing(object):
             self.model.files["grid"]["routing/kinematic/ldd"],
             compress=False,
         )
+        ldd[ldd == 255] = 0
 
         (
             self.var.lddCompress,

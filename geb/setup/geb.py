@@ -30,6 +30,8 @@ from contextlib import contextmanager
 from calendar import monthrange
 from numcodecs import Blosc
 
+import pyflwdir
+
 from hydromt.models.model_grid import GridModel
 from hydromt.data_catalog import DataCatalog
 from hydromt.data_adapter import (
@@ -200,8 +202,9 @@ class GEBModel(GridModel):
         self,
         region: dict,
         sub_grid_factor: int,
-        hydrography_fn: str,
-        basin_index_fn: str,
+        hydrography_fn=None,
+        basin_index_fn=None,
+        resolution_arcsec=30,
     ) -> xr.DataArray:
         """Creates a 2D regular grid or reads an existing grid.
         An 2D regular grid will be created from a geometry (geom_fn) or bbox. If an existing
@@ -219,28 +222,40 @@ class GEBModel(GridModel):
             Region must be of kind [basin, subbasin].
         sub_grid_factor : int
             GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
-        hydrography_fn : str
-            Name of data source for hydrography data.
-        basin_index_fn : str
-            Name of data source with basin (bounding box) geometries associated with
-            the 'basins' layer of `hydrography_fn`.
         """
+        assert hydrography_fn is None, "Please remove this parameter"
+        assert basin_index_fn is None, "Please remove this parameter"
+
+        assert (
+            resolution_arcsec % 3 == 0
+        ), "resolution_arcsec must be a multiple of 3 to align with MERIT"
 
         assert (
             sub_grid_factor >= 10
         ), "sub_grid_factor must be larger than 10, because this is the resolution of the MERIT high-res DEM"
         assert sub_grid_factor % 10 == 0, "sub_grid_factor must be a multiple of 10"
 
-        hydrography = self.data_catalog.get_rasterdataset(hydrography_fn)
-        hydrography.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
-        hydrography.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
+        hydrography = self.data_catalog.get_rasterdataset(
+            "merit_hydro", provider=self.data_provider
+        )
 
         self.logger.info("Preparing 2D grid.")
         kind, region = hydromt.workflows.parse_region(region, logger=self.logger)
         if kind in ["basin", "subbasin"]:
             # get basin geometry
+            max_bounds = region["max_bounds"]
+            region.pop("max_bounds")
             geom, xy = hydromt.workflows.get_basin_geometry(
-                ds=hydrography, kind=kind, logger=self.logger, **region
+                ds=hydrography,
+                kind=kind,
+                logger=self.logger,
+                bounds=[
+                    max_bounds["xmin"],
+                    max_bounds["ymin"],
+                    max_bounds["xmax"],
+                    max_bounds["ymax"],
+                ],
+                **region,
             )
             region.update(xy=xy)
         elif "geom" in region:
@@ -262,45 +277,86 @@ class GEBModel(GridModel):
         # Add region and grid to model
         self.set_geoms(geom, name="region")
 
-        hydrography = hydrography.raster.clip_geom(geom, mask=True)
-
-        ldd = hydrography["flwdir"].raster.reclassify(
-            reclass_table=pd.DataFrame(
-                index=[
-                    0,
-                    1,
-                    2,
-                    4,
-                    8,
-                    16,
-                    32,
-                    64,
-                    128,
-                    hydrography["flwdir"].raster.nodata,
-                ],
-                data={"ldd": [5, 6, 3, 2, 1, 4, 7, 8, 9, 0]},
-            ),
-            method="exact",
-        )["ldd"]
-
-        self.set_grid(ldd, name="routing/kinematic/ldd")
-        self.set_grid(hydrography["uparea"], name="routing/kinematic/upstream_area")
-        self.set_grid(hydrography["elevtn"], name="routing/kinematic/outflow_elevation")
-        self.set_grid(
-            xr.where(
-                hydrography["rivlen_ds"] != -9999,
-                hydrography["rivlen_ds"],
-                np.nan,
-                keep_attrs=True,
-            ),
-            name="routing/kinematic/channel_length",
+        hydrography = hydrography.raster.clip_geom(
+            geom,
+            align=resolution_arcsec
+            / 60
+            / 60,  # align grid to resolution of model grid. Conversion is to convert from arcsec to degrees
+            mask=True,
         )
-        self.set_grid(hydrography["rivslp"], name="routing/kinematic/channel_slope")
 
-        # hydrography['mask'].raster.set_nodata(-1)
-        self.set_grid((~hydrography["mask"]).astype(np.int8), name="areamaps/grid_mask")
+        flow_raster = pyflwdir.from_array(
+            hydrography["flwdir"].values,
+            ftype="d8",
+            transform=hydrography.rio.transform(),
+            latlon=True,  # hydrography is specified in latlon
+        )
 
-        mask = self.grid["areamaps/grid_mask"]
+        scale_factor = resolution_arcsec // 3
+        self.set_dict(
+            {"hydrography_scale_factor": scale_factor}, name="hydrography_scale_factor"
+        )
+
+        # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
+        flow_raster_upscaled, idxs_out = flow_raster.upscale(
+            scale_factor=scale_factor,
+            method="ihu",
+        )
+        flow_raster_upscaled.repair_loops()
+
+        elevation_high_res = hydrography["elv"].coarsen(
+            x=scale_factor, y=scale_factor, boundary="exact", coord_func="mean"
+        )
+
+        # elevation
+        elevation = elevation_high_res.mean()
+        self.set_grid(elevation, name="landsurface/topo/elevation")
+
+        elevation_std = elevation_high_res.std()
+        self.set_grid(elevation_std, name="landsurface/topo/elevation_STD")
+
+        # outflow elevation
+        outflow_elevation = elevation_high_res.min()
+        self.set_grid(outflow_elevation, name="routing/kinematic/outflow_elevation")
+
+        # flow direction
+        ldd = xr.full_like(outflow_elevation, 255, dtype=np.uint8)
+        ldd.raster.set_nodata(255)
+        ldd.data = flow_raster_upscaled.to_array(ftype="ldd")
+        self.set_grid(ldd, name="routing/kinematic/ldd")
+
+        # upstream area
+        upstream_area = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        upstream_area.raster.set_nodata(np.nan)
+        upstream_area_data = flow_raster_upscaled.upstream_area(unit="m2").astype(
+            np.float32
+        )
+        upstream_area_data[upstream_area_data == -9999.0] = np.nan
+        upstream_area.data = upstream_area_data
+        self.set_grid(upstream_area, name="routing/kinematic/upstream_area")
+
+        # channel length
+        channel_length = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        channel_length.raster.set_nodata(np.nan)
+        channel_length_data = flow_raster.subgrid_rivlen(idxs_out, unit="m")
+        channel_length_data[channel_length_data == -9999.0] = np.nan
+        channel_length.data = channel_length_data
+        self.set_grid(channel_length, name="routing/kinematic/channel_length")
+
+        # river slope
+        river_slope = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        river_slope.raster.set_nodata(np.nan)
+        river_slope_data = flow_raster.subgrid_rivslp(idxs_out, hydrography["elv"])
+        river_slope_data[river_slope_data == -9999.0] = np.nan
+        river_slope.data = river_slope_data
+        self.set_grid(
+            river_slope,
+            name="routing/kinematic/channel_slope",
+        )
+
+        mask = (ldd == ldd.raster.nodata).astype(np.int8)
+        mask.raster.set_nodata(-1)
+        self.set_grid(mask, name="areamaps/grid_mask")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
 
@@ -619,7 +675,10 @@ class GEBModel(GridModel):
                 d["name"] for d in self.dict["crops/crop_data"]["data"].values()
             ]
             for crop_name in all_crop_names_model:
-                if crop_name in translate_crop_names:
+                if (
+                    translate_crop_names is not None
+                    and crop_name in translate_crop_names
+                ):
                     sub_crops = [
                         crop
                         for crop in translate_crop_names[crop_name]
@@ -903,9 +962,25 @@ class GEBModel(GridModel):
             changes = np.nanmean(
                 region_data[1:].to_numpy() / region_data[:-1].to_numpy(), axis=1
             )
-            changes = np.insert(changes, 0, np.nan)
 
+            changes = np.insert(changes, 0, np.nan)
             costs.at[region_id, "_crop_price_inflation"] = changes
+
+            years_with_no_crop_inflation_data = costs.loc[
+                region_id, "_crop_price_inflation"
+            ]
+            region_inflation_rates = self.dict["economics/inflation_rates"]["data"][
+                str(region["region_id"])
+            ]
+
+            for year, crop_inflation_rate in years_with_no_crop_inflation_data.items():
+                if np.isnan(crop_inflation_rate):
+                    year_inflation_rate = region_inflation_rates[
+                        self.dict["economics/inflation_rates"]["time"].index(str(year))
+                    ]
+                    costs.at[(region_id, year), "_crop_price_inflation"] = (
+                        year_inflation_rate
+                    )
 
         return costs
 
@@ -1293,111 +1368,7 @@ class GEBModel(GridModel):
         self.set_grid(channel_ratio, channel_ratio.name)
 
     def setup_elevation(self) -> None:
-        """
-        Sets up the standard deviation of elevation for the model.
-
-        Notes
-        -----
-        This method sets up the standard deviation of elevation for the model by retrieving high-resolution elevation data
-        from the MERIT dataset and calculating the standard deviation of elevation for each cell in the grid.
-
-        MERIT data has a half cell offset. Therefore, this function first corrects for this offset.  It then selects the
-        high-resolution elevation data from the MERIT dataset using the grid coordinates of the model, and calculates the
-        standard deviation of elevation for each cell in the grid using the `np.std()` function.
-
-        The resulting standard deviation of elevation is then set as the `landsurface/topo/elevation_STD` attribute of
-        the grid using the `set_grid()` method.
-        """
-        self.logger.info("Setting up elevation standard deviation")
-        MERIT = self.data_catalog.get_rasterdataset(
-            "merit_hydro",
-            variables=["elv"],
-            provider=self.data_provider,
-            bbox=self.grid.raster.bounds,
-            buffer=50,
-        ).compute()  # Why is compute needed here?
-        # In some MERIT datasets, there is a half degree offset in MERIT data. We can detect this by checking the offset relative to the resolution.
-        # This offset should be 0.5. If the offset instead is close to 0 or 1, then we need to correct for this offset.
-        center_offset = (
-            MERIT.coords["x"][0] % MERIT.rio.resolution()[0]
-        ) / MERIT.rio.resolution()[0]
-        # check whether offset is close to 0.5
-        if not np.isclose(center_offset, 0.5, atol=MERIT.rio.resolution()[0] / 100):
-            assert np.isclose(
-                center_offset, 0, atol=MERIT.rio.resolution()[0] / 100
-            ) or np.isclose(
-                center_offset, 1, atol=MERIT.rio.resolution()[0] / 100
-            ), "Could not detect offset in MERIT data"
-            MERIT = MERIT.assign_coords(
-                x=MERIT.coords["x"] + MERIT.rio.resolution()[0] / 2,
-                y=MERIT.coords["y"] - MERIT.rio.resolution()[1] / 2,
-            )
-            center_offset = (
-                MERIT.coords["x"][0] % MERIT.rio.resolution()[0]
-            ) / MERIT.rio.resolution()[0]
-
-        # we are going to match the upper left corners. So create a MERIT grid with the upper left corners as coordinates
-        MERIT_ul = MERIT.assign_coords(
-            x=MERIT.coords["x"] - MERIT.rio.resolution()[0] / 2,
-            y=MERIT.coords["y"] - MERIT.rio.resolution()[1] / 2,
-        )
-
-        scaling = 10
-
-        # find the upper left corner of the grid cells in self.grid
-        y_step = self.grid.get_index("y")[1] - self.grid.get_index("y")[0]
-        x_step = self.grid.get_index("x")[1] - self.grid.get_index("x")[0]
-        upper_left_y = self.grid.get_index("y")[0] - y_step / 2
-        upper_left_x = self.grid.get_index("x")[0] - x_step / 2
-
-        ymin = np.isclose(
-            MERIT_ul.get_index("y"), upper_left_y, atol=MERIT.rio.resolution()[1] / 100
-        )
-        assert (
-            ymin.sum() == 1
-        ), "Could not find the upper left corner of the grid cell in MERIT data"
-        ymin = ymin.argmax()
-        ymax = ymin + self.grid.y.size * scaling
-        xmin = np.isclose(
-            MERIT_ul.get_index("x"), upper_left_x, atol=MERIT.rio.resolution()[0] / 100
-        )
-        assert (
-            xmin.sum() == 1
-        ), "Could not find the upper left corner of the grid cell in MERIT data"
-        xmin = xmin.argmax()
-        xmax = xmin + self.grid.x.size * scaling
-
-        # select data from MERIT using the grid coordinates
-        high_res_elevation_data = MERIT.isel(y=slice(ymin, ymax), x=slice(xmin, xmax))
-        self.set_MERIT_grid(
-            MERIT.isel(y=slice(ymin - 1, ymax + 1), x=slice(xmin - 1, xmax + 1)),
-            name="landsurface/topo/subgrid_elevation",
-        )
-
-        elevation_per_cell = high_res_elevation_data.values.reshape(
-            high_res_elevation_data.shape[0] // scaling, scaling, -1, scaling
-        ).swapaxes(1, 2)
-
-        elevation = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="landsurface/topo/elevation",
-            lazy=True,
-            crs=self.crs,
-        )
-        elevation.data = np.mean(elevation_per_cell, axis=(2, 3))
-        self.set_grid(elevation, elevation.name)
-
-        standard_deviation = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="landsurface/topo/elevation_STD",
-            lazy=True,
-        )
-        standard_deviation.data = np.std(elevation_per_cell, axis=(2, 3))
-        self.set_grid(standard_deviation, standard_deviation.name)
+        raise ValueError("setup_elevation not needed anymore, please remove")
 
     def setup_soil_parameters(self) -> None:
         """
@@ -1924,28 +1895,34 @@ class GEBModel(GridModel):
                 self.data_catalog.get_rasterdataset(
                     "dem_globgm",
                     geom=self.region,
-                    buffer=0,
+                    buffer=1,
                     variables=["dem_average"],
                 )
                 .rename({"lon": "x", "lat": "y"})
                 .compute()
             )
-            dem_globgm = self.snap_to_grid(dem_globgm, self.grid)
-            assert dem_globgm.shape == self.grid.raster.shape
 
             dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
 
             # heads
             head_upper_layer = self.data_catalog.get_rasterdataset(
-                "head_upper_globgm", bbox=self.bounds, buffer=0
+                "head_upper_globgm",
+                bbox=self.bounds,
+                buffer=0,
             ).compute()
+
+            dem_globgm = dem_globgm.raster.reproject_like(self.grid, method="nearest")
+            assert dem_globgm.shape == self.grid.raster.shape
+
             head_upper_layer = head_upper_layer.raster.mask_nodata()
             head_upper_layer = self.snap_to_grid(head_upper_layer, self.grid)
             head_upper_layer = head_upper_layer - dem_globgm + dem
             assert head_upper_layer.shape == self.grid.raster.shape
 
             head_lower_layer = self.data_catalog.get_rasterdataset(
-                "head_lower_globgm", bbox=self.bounds, buffer=0
+                "head_lower_globgm",
+                bbox=self.bounds,
+                buffer=0,
             ).compute()
             head_lower_layer = head_lower_layer.raster.mask_nodata()
             head_lower_layer = self.snap_to_grid(head_lower_layer, self.grid).compute()
@@ -3312,7 +3289,7 @@ class GEBModel(GridModel):
         pad_maxy = max(regions_bounds[3], mask_bounds[3]) + abs(resolution_y) / 2.0
 
         # TODO: Is there a better way to do this?
-        padded_subgrid, region_subgrid_slice = pad_xy(
+        region_subgrid, region_subgrid_slice = pad_xy(
             self.subgrid["areamaps/sub_grid_mask"].rio,
             pad_minx,
             pad_miny,
@@ -3321,9 +3298,9 @@ class GEBModel(GridModel):
             return_slice=True,
             constant_values=1,
         )
-        padded_subgrid.raster.set_crs(self.subgrid.raster.crs)
-        padded_subgrid.raster.set_nodata(-1)
-        self.set_region_subgrid(padded_subgrid, name="areamaps/region_mask")
+        region_subgrid.raster.set_crs(self.subgrid.raster.crs)
+        region_subgrid.raster.set_nodata(-1)
+        self.set_region_subgrid(region_subgrid, name="areamaps/region_mask")
 
         land_use = self.data_catalog.get_rasterdataset(
             land_cover,
@@ -3331,7 +3308,7 @@ class GEBModel(GridModel):
             buffer=200,  # 2 km buffer
         )
         reprojected_land_use = land_use.raster.reproject_like(
-            padded_subgrid, method="nearest"
+            region_subgrid, method="nearest"
         )
 
         region_raster = reprojected_land_use.raster.rasterize(
@@ -3341,58 +3318,22 @@ class GEBModel(GridModel):
         )
         self.set_region_subgrid(region_raster, name="areamaps/region_subgrid")
 
-        padded_cell_area = self.grid["areamaps/cell_area"].rio.pad_box(*regions_bounds)
-        # calculate the cell area for the grid for the entire region
-        region_cell_area = calculate_cell_area(
-            padded_cell_area.raster.transform, padded_cell_area.shape
-        )
+        region_subgrid_cell_area = xr.full_like(region_subgrid, np.nan)
 
-        # create subgrid for entire region
-        region_cell_area_subgrid = hydromt.raster.full_from_transform(
-            padded_cell_area.raster.transform * Affine.scale(1 / self.subgrid_factor),
-            (
-                padded_cell_area.raster.shape[0] * self.subgrid_factor,
-                padded_cell_area.raster.shape[1] * self.subgrid_factor,
-            ),
-            nodata=np.nan,
-            dtype=padded_cell_area.dtype,
-            crs=padded_cell_area.raster.crs,
-            name="areamaps/sub_grid_mask",
-            lazy=False,
-        )
-
-        # calculate the cell area for the subgrid for the entire region
-        region_cell_area_subgrid.data = (
-            repeat_grid(region_cell_area, self.subgrid_factor) / self.subgrid_factor**2
-        )
-
-        # create new subgrid for the region without padding
-        region_cell_area_subgrid_clipped_to_region = hydromt.raster.full(
-            region_raster.raster.coords,
-            nodata=np.nan,
-            dtype=padded_cell_area.dtype,
-            name="areamaps/sub_grid_mask_region",
-            crs=region_raster.raster.crs,
-            lazy=False,
-        )
-
-        # remove padding from region subgrid
-        region_cell_area_subgrid_clipped_to_region.data = (
-            region_cell_area_subgrid.raster.clip_bbox(
-                (pad_minx, pad_miny, pad_maxx, pad_maxy)
-            )
+        region_subgrid_cell_area.data = calculate_cell_area(
+            region_subgrid_cell_area.raster.transform, region_subgrid_cell_area.shape
         )
 
         # set the cell area for the region subgrid
         self.set_region_subgrid(
-            region_cell_area_subgrid_clipped_to_region,
+            region_subgrid_cell_area,
             name="areamaps/region_cell_area_subgrid",
         )
 
         MERIT = self.data_catalog.get_rasterdataset(
             "merit_hydro",
             variables=["upg"],
-            bbox=padded_subgrid.rio.bounds(),
+            bbox=region_subgrid.rio.bounds(),
             buffer=300,  # 3 km buffer
             provider=self.data_provider,
         )
@@ -3745,6 +3686,7 @@ class GEBModel(GridModel):
         electricity_rates["ISO3"] = electricity_rates["Country"].map(
             SUPERWELL_NAME_TO_ISO3
         )
+        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
         # Create a dictionary to store the various types of prices with their initial reference year values
         price_types = {
             "why_10": WHY_10,
@@ -3767,7 +3709,9 @@ class GEBModel(GridModel):
                 )[years_index_ppp]
 
                 prices.loc[reference_year] = self.convert_price_using_ppp(
-                    initial_price,
+                    initial_price[region["ISO3"]]
+                    if isinstance(initial_price, dict)
+                    else initial_price,
                     source_conversion_rates,
                     target_conversion_rates,
                 )
@@ -4229,6 +4173,7 @@ class GEBModel(GridModel):
             if data_source == "lowder":
                 country_ISO3 = region[country_iso3_column]
                 if farm_size_donor_countries:
+                    assert isinstance(farm_size_donor_countries, dict)
                     country_ISO3 = farm_size_donor_countries.get(
                         country_ISO3, country_ISO3
                     )
@@ -6103,3 +6048,7 @@ class GEBModel(GridModel):
         subgrid_factor = self.subgrid.dims["x"] // self.grid.dims["x"]
         assert subgrid_factor == self.subgrid.dims["y"] // self.grid.dims["y"]
         return subgrid_factor
+
+    @property
+    def hydrography_scale_factor(self):
+        return self.dict["hydrography_scale_factor"]["hydrography_scale_factor"]

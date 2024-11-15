@@ -423,13 +423,16 @@ def build(
     if "basin" in region:
         region_config = {
             "basin": region["basin"],
+            "max_bounds": region['max_bounds']
         }
     elif "pour_point" in region:
         pour_point = region["pour_point"]
         region_config = {
             "subbasin": [[pour_point[0]], [pour_point[1]]],
+            "max_bounds": region['max_bounds']
         }
     elif "geometry" in region:
+        raise NotImplementedError("Max bounds needs to be implemented")
         region_config = {
             "geom": region["geometry"],
         }
