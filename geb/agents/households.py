@@ -2,15 +2,16 @@ import numpy as np
 import geopandas as gpd
 import calendar
 from .general import AgentArray, downscale_volume, AgentBaseClass
-from ..hydrology.landcover import SEALED
+from ..hydrology.landcover import (
+    SEALED,
+    FOREST,
+)
 import pandas as pd
 from os.path import join
 from damagescanner.core import object_scanner
 import json
-import xarray as xr
 import rioxarray
 from rasterio.features import shapes
-import rasterio
 from shapely.geometry import shape
 
 try:
@@ -19,7 +20,7 @@ except (ModuleNotFoundError, ImportError):
     pass
 
 
-def from_landuse_raster_to_polygon(rasterdata, landuse_category):
+def from_landuse_raster_to_polygon(mask, transform, crs):
     """
     Convert raster data into separate GeoDataFrames for specified land use values.
 
@@ -30,32 +31,14 @@ def from_landuse_raster_to_polygon(rasterdata, landuse_category):
     Returns:
     - Geodataframe
     """
-    data = rasterdata["data"].values
-    data = data.astype(np.uint8)
 
-    y_coords = rasterdata.coords["y"].values
-    x_coords = rasterdata.coords["x"].values
-
-    transform = rasterio.transform.from_origin(
-        x_coords[0],
-        y_coords[0],
-        abs(x_coords[1] - x_coords[0]),
-        abs(y_coords[1] - y_coords[0]),
-    )
-
-    mask = data == landuse_category
-
-    shapes_gen = shapes(data, mask=mask, transform=transform)
+    shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
 
     polygons = []
-    for geom, value in shapes_gen:
-        if value == landuse_category:
-            polygons.append(shape(geom))
+    for geom, _ in shapes_gen:
+        polygons.append(shape(geom))
 
-    gdf = gpd.GeoDataFrame(
-        {"value": [landuse_category] * len(polygons), "geometry": polygons}
-    )
-    gdf.set_crs(epsg=4326, inplace=True)
+    gdf = gpd.GeoDataFrame({"geometry": polygons}, crs=crs)
 
     return gdf
 
@@ -81,15 +64,18 @@ class Households(AgentBaseClass):
         self.rail["object_type"] = "rail"
 
         # Load landuse and make turn into polygons
-        self.landuse = xr.open_zarr(
-            self.model.files["region_subgrid"][
-                "landsurface/full_region_cultivated_land"
-            ]
+        self.forest = from_landuse_raster_to_polygon(
+            self.model.data.HRU.decompress(self.model.data.HRU.land_use_type == FOREST),
+            self.model.data.HRU.transform,
+            self.model.crs,
         )
-        self.forest = from_landuse_raster_to_polygon(self.landuse, 0)
         self.forest["object_type"] = "forest"
 
-        self.agriculture = from_landuse_raster_to_polygon(self.landuse, 1)
+        self.agriculture = from_landuse_raster_to_polygon(
+            self.model.data.HRU.decompress(self.model.data.HRU.land_owners != -1),
+            self.model.data.HRU.transform,
+            self.model.crs,
+        )
         self.agriculture["object_type"] = "agriculture"
 
         # Load maximum damages
@@ -270,8 +256,6 @@ class Households(AgentBaseClass):
             n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
         )
 
-        self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
-
     def flood(self, flood_map, simulation_root, return_period=None):
         if return_period is not None:
             flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
@@ -332,7 +316,7 @@ class Households(AgentBaseClass):
         print(f"damages to rail are: {total_damages_rail}")
 
         total_flood_damages = (
-            +total_damage_structure
+            total_damage_structure
             + total_damages_content
             + total_damages_roads
             + total_damages_rail

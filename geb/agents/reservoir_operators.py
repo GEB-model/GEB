@@ -152,3 +152,7 @@ class ReservoirOperators(AgentBaseClass):
 
     def step(self) -> None:
         return None
+
+    @property
+    def storage(self):
+        return self.model.data.grid.storage

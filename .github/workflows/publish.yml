@@ -7,7 +7,7 @@ on:
 jobs:
   pypi-publish:
     name: Publish release to PyPI
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     environment:
       name: "release"
       url: https://pypi.org/project/geb/
