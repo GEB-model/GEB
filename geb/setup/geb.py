@@ -315,6 +315,10 @@ class GEBModel(GridModel):
         elevation_std = elevation_high_res.std()
         self.set_grid(elevation_std, name="landsurface/topo/elevation_STD")
 
+        self.set_MERIT_grid(
+            hydrography["elv"], name="landsurface/topo/subgrid_elevation"
+        )
+
         # outflow elevation
         outflow_elevation = elevation_high_res.min()
         self.set_grid(outflow_elevation, name="routing/kinematic/outflow_elevation")
@@ -1775,13 +1779,11 @@ class GEBModel(GridModel):
             self.data_catalog.get_rasterdataset(
                 "total_groundwater_thickness_globgm",
                 bbox=self.bounds,
-                buffer=0,
+                buffer=2,
             )
             .rename({"lon": "x", "lat": "y"})
             .compute()
         )
-        total_thickness = self.snap_to_grid(total_thickness, self.grid)
-        assert total_thickness.shape == self.grid.raster.shape
 
         total_thickness = np.clip(
             total_thickness,
@@ -1793,13 +1795,11 @@ class GEBModel(GridModel):
             self.data_catalog.get_rasterdataset(
                 "thickness_confining_layer_globgm",
                 bbox=self.bounds,
-                buffer=0,
+                buffer=2,
             )
             .rename({"lon": "x", "lat": "y"})
             .compute()
         )
-        confining_layer = self.snap_to_grid(confining_layer, self.grid)
-        assert confining_layer.shape == self.grid.raster.shape
 
         if not (confining_layer == 0).all() and not force_one_layer:  # two-layer-model
             two_layers = True
@@ -1812,42 +1812,65 @@ class GEBModel(GridModel):
                 total_thickness, confining_layer + minimum_thickness_confined_layer
             )
             # thickness of layer 2 is based on the predefined confiningLayerThickness
-            bottom_top_layer = aquifer_top_elevation - confining_layer
+            relative_bottom_top_layer = -confining_layer
             # make sure that the minimum thickness of layer 2 is at least 0.1 m
-            thickness_top_layer = np.maximum(
-                0.1, aquifer_top_elevation - bottom_top_layer
-            )
-            bottom_top_layer = aquifer_top_elevation - thickness_top_layer
+            thickness_top_layer = np.maximum(0.1, -relative_bottom_top_layer)
+            relative_bottom_top_layer = -thickness_top_layer
             # thickness of layer 1 is at least 5.0 m
             thickness_bottom_layer = np.maximum(
                 5.0, total_thickness - thickness_top_layer
             )
-            bottom_bottom_layer = bottom_top_layer - thickness_bottom_layer
+            relative_bottom_bottom_layer = (
+                relative_bottom_top_layer - thickness_bottom_layer
+            )
 
-            layer_boundary_elevation = xr.concat(
-                [aquifer_top_elevation, bottom_top_layer, bottom_bottom_layer],
+            relative_layer_boundary_elevation = xr.concat(
+                [
+                    xr.full_like(relative_bottom_bottom_layer, 0),
+                    relative_bottom_top_layer,
+                    relative_bottom_bottom_layer,
+                ],
                 dim="boundary",
                 compat="equals",
             ).compute()
         else:
-            layer_boundary_elevation = xr.concat(
-                [aquifer_top_elevation, aquifer_top_elevation - total_thickness],
+            relative_bottom_bottom_layer = -total_thickness
+            relative_layer_boundary_elevation = xr.concat(
+                [
+                    xr.full_like(relative_bottom_bottom_layer, 0),
+                    relative_bottom_bottom_layer,
+                ],
                 dim="boundary",
                 compat="equals",
             ).compute()
+
+        layer_boundary_elevation = (
+            relative_layer_boundary_elevation.raster.reproject_like(
+                aquifer_top_elevation, method="bilinear"
+            )
+        ) + aquifer_top_elevation
 
         self.set_grid(
             layer_boundary_elevation, name="groundwater/layer_boundary_elevation"
         )
 
         # load hydraulic conductivity
-        hydraulic_conductivity = self.data_catalog.get_rasterdataset(
-            "hydraulic_conductivity_globgm",
-            bbox=self.bounds,
-            buffer=0,
-        ).rename({"lon": "x", "lat": "y"})
-        hydraulic_conductivity = self.snap_to_grid(hydraulic_conductivity, self.grid)
-        assert hydraulic_conductivity.shape == self.grid.raster.shape
+        hydraulic_conductivity = (
+            self.data_catalog.get_rasterdataset(
+                "hydraulic_conductivity_globgm",
+                bbox=self.bounds,
+                buffer=2,
+            )
+            .rename({"lon": "x", "lat": "y"})
+            .compute()
+        )
+
+        # because
+        hydraulic_conductivity_log = np.log(hydraulic_conductivity)
+        hydraulic_conductivity_log = hydraulic_conductivity_log.raster.reproject_like(
+            aquifer_top_elevation, method="bilinear"
+        )
+        hydraulic_conductivity = np.exp(hydraulic_conductivity_log)
 
         if two_layers:
             hydraulic_conductivity = xr.concat(
@@ -1863,10 +1886,11 @@ class GEBModel(GridModel):
         specific_yield = self.data_catalog.get_rasterdataset(
             "specific_yield_aquifer_globgm",
             bbox=self.bounds,
-            buffer=0,
+            buffer=2,
         ).rename({"lon": "x", "lat": "y"})
-        specific_yield = self.snap_to_grid(specific_yield, self.grid)
-        assert specific_yield.shape == self.grid.raster.shape
+        specific_yield = specific_yield.raster.reproject_like(
+            aquifer_top_elevation, method="bilinear"
+        )
 
         if two_layers:
             specific_yield = xr.concat(
@@ -1885,22 +1909,32 @@ class GEBModel(GridModel):
 
         why_map.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         why_map.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
-        why_interpolated = self.interpolate(why_map, "nearest").compute()
+        why_interpolated = why_map.raster.reproject_like(
+            aquifer_top_elevation, method="bilinear"
+        )
 
         self.set_grid(why_interpolated, name="groundwater/why_map")
 
         if intial_heads_source == "GLOBGM":
-            # load digital elevation model that was used for globgm
+            # the GLOBGM DEM has a slight offset, which we fix here before loading it
+            dem_globgm = self.data_catalog.get_rasterdataset(
+                "dem_globgm",
+                variables=["dem_average"],
+            )
+            dem_globgm = dem_globgm.assign_coords(
+                lon=self.data_catalog.get_rasterdataset("head_upper_globgm").x.values,
+                lat=self.data_catalog.get_rasterdataset("head_upper_globgm").y.values,
+            )
+
+            # loading the globgm with fixed coordinates
             dem_globgm = (
                 self.data_catalog.get_rasterdataset(
-                    "dem_globgm",
-                    geom=self.region,
-                    buffer=1,
-                    variables=["dem_average"],
+                    dem_globgm, geom=self.region, variables=["dem_average"], buffer=2
                 )
                 .rename({"lon": "x", "lat": "y"})
                 .compute()
             )
+            # load digital elevation model that was used for globgm
 
             dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
 
@@ -1908,32 +1942,34 @@ class GEBModel(GridModel):
             head_upper_layer = self.data_catalog.get_rasterdataset(
                 "head_upper_globgm",
                 bbox=self.bounds,
-                buffer=0,
+                buffer=2,
             ).compute()
 
-            dem_globgm = dem_globgm.raster.reproject_like(self.grid, method="nearest")
-            assert dem_globgm.shape == self.grid.raster.shape
-
             head_upper_layer = head_upper_layer.raster.mask_nodata()
-            head_upper_layer = self.snap_to_grid(head_upper_layer, self.grid)
-            head_upper_layer = head_upper_layer - dem_globgm + dem
-            assert head_upper_layer.shape == self.grid.raster.shape
+            relative_head_upper_layer = head_upper_layer - dem_globgm
+            relative_head_upper_layer = relative_head_upper_layer.raster.reproject_like(
+                aquifer_top_elevation, method="bilinear"
+            )
+            head_upper_layer = dem + relative_head_upper_layer
 
             head_lower_layer = self.data_catalog.get_rasterdataset(
                 "head_lower_globgm",
                 bbox=self.bounds,
-                buffer=0,
+                buffer=2,
             ).compute()
             head_lower_layer = head_lower_layer.raster.mask_nodata()
-            head_lower_layer = self.snap_to_grid(head_lower_layer, self.grid).compute()
-            head_lower_layer = (head_lower_layer - dem_globgm + dem).compute()
-            # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
-            head_lower_layer = xr.where(
-                head_lower_layer < layer_boundary_elevation[-1],
-                layer_boundary_elevation[-1],
-                head_lower_layer,
+            relative_head_lower_layer = head_lower_layer - dem_globgm
+            relative_head_lower_layer = relative_head_lower_layer.raster.reproject_like(
+                aquifer_top_elevation, method="bilinear"
             )
-            assert head_lower_layer.shape == self.grid.raster.shape
+            # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
+            relative_head_lower_layer = xr.where(
+                relative_head_lower_layer
+                < layer_boundary_elevation.isel(boundary=-1) - dem,
+                layer_boundary_elevation.isel(boundary=-1) - dem,
+                relative_head_lower_layer,
+            )
+            head_lower_layer = dem + relative_head_lower_layer
 
             if two_layers:
                 # combine upper and lower layer head in one dataarray
