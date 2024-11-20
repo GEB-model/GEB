@@ -63,21 +63,6 @@ class Households(AgentBaseClass):
         self.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
-        # Load landuse and make turn into polygons
-        self.forest = from_landuse_raster_to_polygon(
-            self.model.data.HRU.decompress(self.model.data.HRU.land_use_type == FOREST),
-            self.model.data.HRU.transform,
-            self.model.crs,
-        )
-        self.forest["object_type"] = "forest"
-
-        self.agriculture = from_landuse_raster_to_polygon(
-            self.model.data.HRU.decompress(self.model.data.HRU.land_owners != -1),
-            self.model.data.HRU.transform,
-            self.model.crs,
-        )
-        self.agriculture["object_type"] = "agriculture"
-
         # Load maximum damages
         with open(
             model.files["dict"][
@@ -152,7 +137,6 @@ class Households(AgentBaseClass):
         ) as f:
             self.max_dam_forest = json.load(f)
         self.max_dam_forest = float(self.max_dam_forest["maximum_damage"])
-        self.forest["maximum_damage"] = self.max_dam_forest
 
         with open(
             model.files["dict"][
@@ -162,7 +146,6 @@ class Households(AgentBaseClass):
         ) as f:
             self.max_dam_agriculture = json.load(f)
         self.max_dam_agriculture = float(self.max_dam_agriculture["maximum_damage"])
-        self.agriculture["maximum_damage"] = self.max_dam_agriculture
 
         # Load vulnerability curves
         self.road_curves = []
@@ -265,14 +248,33 @@ class Households(AgentBaseClass):
         print(f"using this flood map: {flood_path}")
         flood_map = rioxarray.open_rasterio(flood_path)
 
+        self.agriculture = from_landuse_raster_to_polygon(
+            self.model.data.HRU.decompress(self.model.data.HRU.land_owners != -1),
+            self.model.data.HRU.transform,
+            self.model.crs,
+        )
+        self.agriculture["object_type"] = "agriculture"
+        self.agriculture["maximum_damage"] = self.max_dam_agriculture
+
         self.agriculture = self.agriculture.to_crs(flood_map.rio.crs)
+
         damages_agriculture = object_scanner(
             objects=self.agriculture, hazard=flood_map, curves=self.agriculture_curve
         )
         total_damages_agriculture = damages_agriculture.sum()
         print(f"damages to agriculture are: {total_damages_agriculture}")
 
+        # Load landuse and make turn into polygons
+        self.forest = from_landuse_raster_to_polygon(
+            self.model.data.HRU.decompress(self.model.data.HRU.land_use_type == FOREST),
+            self.model.data.HRU.transform,
+            self.model.crs,
+        )
+        self.forest["object_type"] = "forest"
+        self.forest["maximum_damage"] = self.max_dam_forest
+
         self.forest = self.forest.to_crs(flood_map.rio.crs)
+
         damages_forest = object_scanner(
             objects=self.forest, hazard=flood_map, curves=self.forest_curve
         )
