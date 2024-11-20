@@ -212,20 +212,24 @@ def run_model(
     }
 
     if not gui:
+        if profiling:
+            profile = cProfile.Profile()
+            profile.enable()
+
         with GEBModel(**model_params) as model:
-            if profiling:
-                with cProfile.Profile() as pr:
-                    model.run()
-                with open("profiling_stats.cprof", "w") as stream:
-                    stats = Stats(pr, stream=stream)
-                    stats.strip_dirs()
-                    stats.sort_stats("cumtime")
-                    stats.dump_stats(".prof_stats")
-                    stats.print_stats()
-                pr.dump_stats("profile.prof")
-            else:
-                model.run()
+            model.run()
             model.report()
+
+        if profiling:
+            profile.disable()
+            with open("profiling_stats.cprof", "w") as stream:
+                stats = Stats(profile, stream=stream)
+                stats.strip_dirs()
+                stats.sort_stats("cumtime")
+                stats.dump_stats(".prof_stats")
+                stats.print_stats()
+            profile.dump_stats("profile.prof")
+
     else:
         # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
         # the event loop started for reading data, unless we use nest_asyncio.
