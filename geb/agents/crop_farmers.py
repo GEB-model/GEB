@@ -505,7 +505,7 @@ def abstract_water(
             if potential_irrigation_consumption_farmer_m3 > 0.0:
                 # if irrigation limit is active, reduce the irrigation demand
                 if not np.isnan(remaining_irrigation_limit_m3[farmer]):
-                    adjust_irrigation_to_limit(
+                    potential_irrigation_consumption_farmer_m3 = adjust_irrigation_to_limit(
                         farmer=farmer,
                         day_index=day_index,
                         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
