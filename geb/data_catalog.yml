@@ -174,20 +174,6 @@ gcn250:
     source_license: CC BY 4.0
     source_url: https://doi.org/10.6084/m9.figshare.7756202.v1
     source_version: v1
-merit_hydro_30sec:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: topography
-    paper_doi: 10.5281/zenodo.5166932
-    paper_ref: Eilander et al. (2020)
-    source_license: ODC-By 1.0
-    source_url: https://zenodo.org/record/5166932#.YVbxJ5pByUk
-    source_version: 1.0
-  path: merit_hydro_30sec/{variable}.tif
-  rename:
-    basids: basins
 merit_hydro_index:
   crs: 4326
   data_type: GeoDataFrame
