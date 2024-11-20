@@ -477,9 +477,9 @@ class LandCover(object):
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
                 ],
-                prestorages=[w_pre, topwater_pre],
+                prestorages=[w_pre.sum(axis=0), topwater_pre],
                 poststorages=[
-                    self.var.w,
+                    self.var.w.sum(axis=0),
                     self.var.topwater,
                 ],
                 tollerance=1e-6,
