@@ -229,11 +229,7 @@ class GEBModel(GridModel):
         assert (
             resolution_arcsec % 3 == 0
         ), "resolution_arcsec must be a multiple of 3 to align with MERIT"
-
-        assert (
-            sub_grid_factor >= 10
-        ), "sub_grid_factor must be larger than 10, because this is the resolution of the MERIT high-res DEM"
-        assert sub_grid_factor % 10 == 0, "sub_grid_factor must be a multiple of 10"
+        assert sub_grid_factor >= 2
 
         hydrography = self.data_catalog.get_rasterdataset(
             "merit_hydro", provider=self.data_provider
