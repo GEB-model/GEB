@@ -128,6 +128,11 @@ class Routing(object):
             self.model.files["grid"]["routing/kinematic/ldd"],
             compress=False,
         )
+        # in previous versions of GEB we followed the CWatM specification, where masked data
+        # was set at 0. We now use the official LDD specification where masked data is 255
+        # (max value of uint8). To still support old versions we set these values of 255 to
+        # 0 for now. When all models have been updated, this can be removed and the
+        # subroutines can be updated accordingly.
         ldd[ldd == 255] = 0
 
         (
@@ -162,6 +167,7 @@ class Routing(object):
             self.var.load(self.model.files["grid"]["routing/kinematic/mannings"])
             * self.model.config["parameters"]["manningsN"]
         )
+        assert (self.var.chanMan > 0).all()
         # Channel gradient (fraction, dy/dx)
         minimum_channel_gradient = 0.0001
         self.var.chanGrad = np.maximum(

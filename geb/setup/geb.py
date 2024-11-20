@@ -284,9 +284,11 @@ class GEBModel(GridModel):
             / 60,  # align grid to resolution of model grid. Conversion is to convert from arcsec to degrees
             mask=True,
         )
+        flwdir = hydrography["flwdir"].values
+        flwdir[hydrography.mask is False] = 255
 
         flow_raster = pyflwdir.from_array(
-            hydrography["flwdir"].values,
+            flwdir,
             ftype="d8",
             transform=hydrography.rio.transform(),
             latlon=True,  # hydrography is specified in latlon
@@ -304,15 +306,19 @@ class GEBModel(GridModel):
         )
         flow_raster_upscaled.repair_loops()
 
-        elevation_high_res = hydrography["elv"].coarsen(
-            x=scale_factor, y=scale_factor, boundary="exact", coord_func="mean"
+        elevation_coarsened = (
+            hydrography["elv"]
+            .raster.mask_nodata()
+            .coarsen(
+                x=scale_factor, y=scale_factor, boundary="exact", coord_func="mean"
+            )
         )
 
         # elevation
-        elevation = elevation_high_res.mean()
+        elevation = elevation_coarsened.mean()
         self.set_grid(elevation, name="landsurface/topo/elevation")
 
-        elevation_std = elevation_high_res.std()
+        elevation_std = elevation_coarsened.std()
         self.set_grid(elevation_std, name="landsurface/topo/elevation_STD")
 
         self.set_MERIT_grid(
@@ -320,7 +326,7 @@ class GEBModel(GridModel):
         )
 
         # outflow elevation
-        outflow_elevation = elevation_high_res.min()
+        outflow_elevation = elevation_coarsened.min()
         self.set_grid(outflow_elevation, name="routing/kinematic/outflow_elevation")
 
         # flow direction
@@ -342,7 +348,9 @@ class GEBModel(GridModel):
         # channel length
         channel_length = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
         channel_length.raster.set_nodata(np.nan)
-        channel_length_data = flow_raster.subgrid_rivlen(idxs_out, unit="m")
+        channel_length_data = flow_raster.subgrid_rivlen(
+            idxs_out, unit="m", direction="down"
+        )
         channel_length_data[channel_length_data == -9999.0] = np.nan
         channel_length.data = channel_length_data
         self.set_grid(channel_length, name="routing/kinematic/channel_length")
@@ -358,8 +366,7 @@ class GEBModel(GridModel):
             name="routing/kinematic/channel_slope",
         )
 
-        mask = (ldd == ldd.raster.nodata).astype(np.int8)
-        mask.raster.set_nodata(-1)
+        mask = ldd == ldd.raster.nodata
         self.set_grid(mask, name="areamaps/grid_mask")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
@@ -1306,7 +1313,7 @@ class GEBModel(GridModel):
         self.logger.info("Setting up channel depth")
         assert (
             (self.grid["routing/kinematic/upstream_area"] > 0)
-            | ~self.grid["areamaps/grid_mask"]
+            | self.grid["areamaps/grid_mask"]
         ).all()
         channel_depth_data = 0.27 * self.grid["routing/kinematic/upstream_area"] ** 0.26
         channel_depth = hydromt.raster.full(
@@ -1348,8 +1355,11 @@ class GEBModel(GridModel):
         """
         self.logger.info("Setting up channel ratio")
         assert (
-            (self.grid["routing/kinematic/channel_length"] > 0)
-            | ~self.grid["areamaps/grid_mask"]
+            (self.grid["routing/kinematic/channel_length"] > 0)  # inside mask
+            | self.grid["areamaps/grid_mask"]  # or is masked
+            | (
+                self.grid["routing/kinematic/ldd"] == 5
+            )  # or there is a pit in the river network
         ).all()
         channel_area = (
             self.grid["routing/kinematic/channel_width"]
@@ -3335,6 +3345,7 @@ class GEBModel(GridModel):
             constant_values=1,
         )
         region_subgrid.raster.set_crs(self.subgrid.raster.crs)
+        region_subgrid = region_subgrid.astype(np.int8)
         region_subgrid.raster.set_nodata(-1)
         self.set_region_subgrid(region_subgrid, name="areamaps/region_mask")
 
@@ -5552,6 +5563,12 @@ class GEBModel(GridModel):
             assert hasattr(grid, "spatial_ref")
             grid.to_zarr(filepath, mode="w")
 
+            # rasterio does not support boolean data, which is why
+            # we convert it to uint8 before writing. These files are
+            # only used for displaying purposes so they do not affect the
+            # actual model (re-)building
+            if grid.dtype == bool:
+                grid = grid.astype(np.uint8)
             # also export to tif for easier visualization
             grid.rio.to_raster(filepath.with_suffix(".tif"))
 

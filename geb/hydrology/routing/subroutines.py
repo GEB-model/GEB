@@ -317,7 +317,9 @@ def repairLdd1(ldd):
 
 @njit(cache=True)
 def dirID(lddorder, ldd):
-    out_array = np.full_like(ldd, -1)  # Initialize out_array with -1, same shape as ldd
+    out_array = np.full_like(
+        ldd, -1, dtype=np.int32
+    )  # Initialize out_array with -1, same shape as ldd
     dirX = np.array([0, -1, 0, 1, -1, 0, 1, -1, 0, 1], dtype=np.int32)
     dirY = np.array([0, 1, 1, 1, 0, 0, 0, -1, -1, -1], dtype=np.int32)
 
