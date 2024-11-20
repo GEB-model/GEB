@@ -44,7 +44,7 @@ class SnowFrost(object):
     Rain                  Precipitation less snow                                                           m
     SnowMelt              total snow melt from all layers                                                   m
     SnowCover             snow cover (sum over all layers)                                                  m
-    ElevationStD
+    elevation_std
     Precipitation         Precipitation (input for the model)                                               m
     DtDay                 seconds in a timestep (default=86400)                                             s
     numberSnowLayersFloa
@@ -79,7 +79,7 @@ class SnowFrost(object):
     **Functions**
     """
 
-    def __init__(self, model, ElevationStD):
+    def __init__(self, model, elevation_std):
         """
         Initial part of the snow and frost module
 
@@ -96,7 +96,6 @@ class SnowFrost(object):
 
         # Difference between (average) air temperature at average elevation of
         # pixel and centers of upper- and lower elevation zones [deg C]
-        # ElevationStD:   Standard Deviation of the DEM
         # 0.9674:    Quantile of the normal distribution: u(0,833)=0.9674 to split the pixel in 3 equal parts.
         # for different number of layers
         #  Number: 2 ,3, 4, 5, 6, 7, ,8, 9, 10
@@ -150,7 +149,7 @@ class SnowFrost(object):
         self.var.deltaInvNorm = dn[self.numberSnowLayers]
 
         TemperatureLapseRate = 0.0065
-        self.var.DeltaTSnow = ElevationStD * TemperatureLapseRate
+        self.var.DeltaTSnow = elevation_std * TemperatureLapseRate
 
         self.var.SnowDayDegrees = 0.9856
         # day of the year to degrees: 360/365.25 = 0.9856
