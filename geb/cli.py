@@ -525,8 +525,14 @@ def evaluate():
     default=".",
     help="Working directory for model.",
 )
+@click.option(
+    "--name",
+    "-n",
+    default="model",
+    help="Working directory for model.",
+)
 @main.command()
-def share(working_directory):
+def share(working_directory, name):
     """Share model."""
 
     os.chdir(working_directory)
@@ -538,7 +544,7 @@ def share(working_directory):
     folders = ["input"]
     files = ["model.yml", "build.yml"]
     optional_files = ["sfincs.yml", "update.yml", "data_catalog.yml"]
-    with zipfile.ZipFile("model.zip", "w") as zipf:
+    with zipfile.ZipFile(f"{name}.zip", "w") as zipf:
         total_files = (
             sum(
                 [
@@ -555,21 +561,22 @@ def share(working_directory):
                 for filename in filenames:
                     zipf.write(os.path.join(root, filename))
                     progress += 1  # Increment progress counter
-                    if not progress % 100:
-                        print(
-                            f"Exporting file {progress}/{total_files}"
-                        )  # Print progress
+                    print(
+                        f"Exporting file {progress}/{total_files}", end="\r"
+                    )  # Print progress
         for file in files:
             zipf.write(file)
             progress += 1  # Increment progress counter
-            if not progress % 100:
-                print(f"Exporting file {progress}/{total_files}")  # Print progress
+            print(
+                f"Exporting file {progress}/{total_files}", end="\r"
+            )  # Print progress
         for file in optional_files:
             if os.path.exists(file):
                 zipf.write(file)
             progress += 1  # Increment progress counter
-            if not progress % 100:
-                print(f"Exporting file {progress}/{total_files}")  # Print progress
+            print(
+                f"Exporting file {progress}/{total_files}", end="\r"
+            )  # Print progress
         print(f"Exporting file {progress}/{total_files}")
         print("Done!")
 
