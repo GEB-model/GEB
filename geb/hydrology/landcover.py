@@ -493,7 +493,8 @@ class LandCover(object):
                 + self.var.topwater
             )
             totalstorage_landcover_pre = (
-                self.var.prevSnowCover
+                np.sum(self.var.prevSnowCover, axis=0)
+                / self.model.snowfrost.numberSnowLayers
                 + w_pre.sum(axis=0)
                 + topwater_pre
                 + interceptStor_pre

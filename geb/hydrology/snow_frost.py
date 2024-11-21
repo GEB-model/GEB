@@ -22,6 +22,8 @@
 import numpy as np
 import math
 
+from geb.workflows import balance_check
+
 
 class SnowFrost(object):
     """
@@ -216,7 +218,7 @@ class SnowFrost(object):
             calculate sinus shape function for the southern hemisspere
         """
         if __debug__:
-            self.var.prevSnowCover = np.sum(self.var.SnowCoverS, axis=0)
+            self.var.prevSnowCover = self.var.SnowCoverS.copy()
 
         day_of_year = self.model.current_time.timetuple().tm_yday
         SeasSnowMeltCoef = (
@@ -311,22 +313,43 @@ class SnowFrost(object):
                     self.var.frost_indexS[i] + frost_indexChangeRate, 0
                 )
 
-        Snow /= self.numberSnowLayers
+        self.var.Snow = Snow / self.numberSnowLayers
         self.var.Rain /= self.numberSnowLayers
         self.var.SnowMelt /= self.numberSnowLayers
-        # all in pixel
 
-        # DEBUG Snow
-        # if __debug__:
-        #     self.var.waterbalance_module.waterBalanceCheck(
-        #         [Snow],  # In
-        #         [self.var.SnowMelt],  # Out
-        #         [self.var.prevSnowCover],   # prev storage
-        #         [np.sum(self.var.SnowCoverS, axis=0) / self.numberSnowLayers],
-        #         "Snow1", False)
+        if __debug__:
+            balance_check(
+                name="snow_1",
+                how="cellwise",
+                influxes=[self.var.Snow],
+                outfluxes=[self.var.SnowMelt],
+                prestorages=[
+                    np.sum(self.var.prevSnowCover, axis=0) / self.numberSnowLayers
+                ],
+                poststorages=[
+                    np.sum(self.var.SnowCoverS, axis=0) / self.numberSnowLayers
+                ],
+                tollerance=1e-7,
+            )
+            balance_check(
+                name="snow_2",
+                how="cellwise",
+                influxes=[self.var.precipitation_m_day],
+                outfluxes=[self.var.Snow, self.var.Rain],
+                tollerance=1e-7,
+            )
 
-        # ---------------------------------------------------------------------------------
-        # Dynamic part of frost index
+        # Calculation of the frost index
+        # frost index in soil [degree days] based on Molnau and Bissel (1983, A Continuous Frozen Ground Index for Flood
+        # Forecasting. In: Maidment, Handbook of Hydrology, p. 7.28, 7.55)
+        # if Tavg is above zero, frost_index will stay 0
+        # if Tavg is negative, frost_index will increase with 1 per degree C per day
+        # Exponent of 0.04 (instead of 0.4 in HoH): conversion [cm] to [mm]!  -> from cm to m HERE -> 100 * 0.4
+        # maximum snowlayer = 1.0 m
+        # Division by SnowDensity because SnowDepth is expressed as equivalent water depth(always less than depth of snow pack)
+        # SnowWaterEquivalent taken as 0.45
+        # Afrost, (daily decay coefficient) is taken as 0.97 (Handbook of Hydrology, p. 7.28)
+        # Kfrost, (snow depth reduction coefficient) is taken as 0.57 [1/cm], (HH, p. 7.28) -> from Molnau taken as 0.5 for t> 0 and 0.08 for T<0
         Kfrost = np.where(tas_C < 0, 0.08, 0.5).astype(tas_C.dtype)
         frost_indexChangeRate = -(
             1 - self.var.Afrost
@@ -344,13 +367,3 @@ class SnowFrost(object):
         self.var.frost_index = np.maximum(
             self.var.frost_index + frost_indexChangeRate, 0
         )
-        # frost index in soil [degree days] based on Molnau and Bissel (1983, A Continuous Frozen Ground Index for Flood
-        # Forecasting. In: Maidment, Handbook of Hydrology, p. 7.28, 7.55)
-        # if Tavg is above zero, frost_index will stay 0
-        # if Tavg is negative, frost_index will increase with 1 per degree C per day
-        # Exponent of 0.04 (instead of 0.4 in HoH): conversion [cm] to [mm]!  -> from cm to m HERE -> 100 * 0.4
-        # maximum snowlayer = 1.0 m
-        # Division by SnowDensity because SnowDepth is expressed as equivalent water depth(always less than depth of snow pack)
-        # SnowWaterEquivalent taken as 0.45
-        # Afrost, (daily decay coefficient) is taken as 0.97 (Handbook of Hydrology, p. 7.28)
-        # Kfrost, (snow depth reduction coefficient) is taken as 0.57 [1/cm], (HH, p. 7.28) -> from Molnau taken as 0.5 for t> 0 and 0.08 for T<0

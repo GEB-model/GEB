@@ -34,7 +34,7 @@ from .landcover import (
 )
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=True, inline="always")
 def get_soil_water_potential(
     theta,
     thetar,
@@ -84,7 +84,7 @@ def get_soil_water_potential(
     return capillary_suction
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=True, inline="always")
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
@@ -116,7 +116,7 @@ def get_soil_moisture_at_pressure(
     return theta
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=True, inline="always")
 def get_aeration_stress_threshold(
     ws, soil_layer_height, crop_aeration_stress_threshold
 ):
@@ -127,7 +127,7 @@ def get_aeration_stress_threshold(
     ) * soil_layer_height
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=True, inline="always")
 def get_aeration_stress_factor(
     aeration_days_counter, crop_lag_aeration_days, ws, w, aeration_stress_threshold
 ):
@@ -139,7 +139,7 @@ def get_aeration_stress_factor(
     return aeration_stress_factor
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(p, wfc, wwp):
     """
     "The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -165,7 +165,7 @@ def get_maximum_water_content(wfc, wwp):
 
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
-    crop_group_number, potential_evapotranspiration, fastmath=True
+    crop_group_number, potential_evapotranspiration
 ):
     """
     Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
@@ -195,7 +195,7 @@ def get_fraction_easily_available_soil_water(
 
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water_single(
-    crop_group_number, potential_evapotranspiration, fastmath=True
+    crop_group_number, potential_evapotranspiration
 ):
     """
     Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
@@ -254,7 +254,7 @@ def get_total_transpiration_factor(
     return transpiration_factor_total
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=True, inline="always")
 def get_transpiration_factor_single(w, wwp, wcrit):
     nominator = w - wwp
     denominator = wcrit - wwp
@@ -271,7 +271,7 @@ def get_transpiration_factor_single(w, wwp, wcrit):
     return factor
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=True, inline="always")
 def get_root_ratios(
     root_depth,
     soil_layer_height,
@@ -284,7 +284,7 @@ def get_root_ratios(
     return root_ratios
 
 
-@njit(inline="always", fastmath=True)
+@njit(inline="always")
 def set_root_ratios_single(root_depth, soil_layer_height, root_ratios):
     remaining_root_depth = root_depth
     for layer in range(N_SOIL_LAYERS):
@@ -308,7 +308,7 @@ def get_crop_group_number(
     return crop_group_map
 
 
-@njit(cache=True, fastmath=True)
+@njit(cache=True)
 def get_unsaturated_hydraulic_conductivity(
     w,
     wres,
@@ -347,7 +347,7 @@ def get_unsaturated_hydraulic_conductivity(
 PERCOLATION_SUBSTEPS = np.int32(3)
 
 
-@njit(cache=True, parallel=True, fastmath=True)
+@njit(cache=True, parallel=True)
 def get_available_water_infiltration(
     natural_available_water_infiltration,
     actual_irrigation_consumption,
@@ -393,7 +393,7 @@ def get_available_water_infiltration(
     return available_water_infiltration
 
 
-@njit(cache=True, parallel=True, fastmath=True)
+@njit(cache=True, parallel=True)
 def rise_from_groundwater(
     w,
     ws,
@@ -425,7 +425,7 @@ def rise_from_groundwater(
     return runoff_from_groundwater
 
 
-@njit(cache=True, parallel=True, fastmath=True)
+@njit(cache=True, parallel=True)
 def evapotranspirate(
     wwp,
     wfc,
@@ -621,9 +621,11 @@ def evapotranspirate(
     )
 
 
-@njit(cache=True, parallel=True, fastmath=True)
+# Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
+@njit(cache=True, parallel=True, fastmath=False)
 def vertical_water_transport(
     available_water_infiltration,
+    capillary_rise_from_groundwater,
     ws,
     wres,
     saturated_hydraulic_conductivity,
@@ -631,7 +633,6 @@ def vertical_water_transport(
     bubbling_pressure_cm,
     land_use_type,
     frost_index,
-    capillary_rise_from_groundwater,
     arno_beta,
     preferential_flow_constant,
     w,
@@ -670,6 +671,8 @@ def vertical_water_transport(
         (N_SOIL_LAYERS, w.shape[1]), dtype=np.float32
     )  # Fluxes between layers
     delta_z = (soil_layer_height[:-1, :] + soil_layer_height[1:, :]) / 2
+
+    is_bioarea = land_use_type < SEALED
 
     for i in prange(land_use_type.size):
         # Infiltration and preferential flow
@@ -778,7 +781,6 @@ def vertical_water_transport(
             )
 
     groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
-    is_bioarea = land_use_type < SEALED
 
     for i in prange(land_use_type.size):
         # Compute fluxes between layers using Darcy's law
@@ -1264,6 +1266,7 @@ class Soil(object):
                 _,
             ) = vertical_water_transport(
                 available_water_infiltration / n_substeps,
+                capillary_rise_from_groundwater / n_substeps,
                 self.ws,
                 self.wres,
                 self.ksat / n_substeps,
@@ -1271,7 +1274,6 @@ class Soil(object):
                 self.bubbling_pressure_cm,
                 self.var.land_use_type,
                 self.var.frost_index,
-                capillary_rise_from_groundwater,
                 self.var.arnoBeta,
                 self.preferential_flow_constant,
                 self.var.w,
