@@ -244,7 +244,7 @@ class LakesReservoirs(object):
 
         self.var.total_inflow_from_other_water_bodies = self.var.load_initial(
             "total_inflow_from_other_water_bodies",
-            default=np.zeros_like(self.var.volume, dtype=np.float32),
+            default=lambda: np.zeros_like(self.var.volume, dtype=np.float32),
         )
 
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
@@ -264,7 +264,7 @@ class LakesReservoirs(object):
         )
 
         self.var.storage = self.var.load_initial(
-            "storage", default=self.var.volume.copy()
+            "storage", default=lambda: self.var.volume.copy()
         )
         self.var.outflow_height = estimate_outflow_height(
             self.var.volume, self.lake_factor, self.var.lake_area, average_discharge

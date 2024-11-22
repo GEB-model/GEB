@@ -172,14 +172,15 @@ class SnowFrost(object):
 
         # initialize snowcovers as many as snow layers -> read them as SnowCover1 , SnowCover2 ...
         # SnowCover1 is the highest zone
-        SnowCoverS = np.tile(
-            self.model.data.to_HRU(
-                data=self.model.data.grid.full_compressed(0, dtype=np.float32), fn=None
-            ),
-            (self.numberSnowLayers, 1),
-        )
         self.var.SnowCoverS = self.model.data.HRU.load_initial(
-            "SnowCoverS", default=SnowCoverS
+            "SnowCoverS",
+            default=lambda: np.tile(
+                self.model.data.to_HRU(
+                    data=self.model.data.grid.full_compressed(0, dtype=np.float32),
+                    fn=None,
+                ),
+                (self.numberSnowLayers, 1),
+            ),
         )
 
         # Pixel-average initial snow cover: average of values in 3 elevation
@@ -194,7 +195,7 @@ class SnowFrost(object):
 
         self.var.frost_index = self.model.data.HRU.load_initial(
             "frost_index",
-            default=self.model.data.HRU.full_compressed(0, dtype=np.float32),
+            default=lambda: self.model.data.HRU.full_compressed(0, dtype=np.float32),
         )
 
         self.var.extfrost_index = False

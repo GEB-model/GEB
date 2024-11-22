@@ -840,8 +840,7 @@ def vertical_water_transport(
             w[sink, i] = min(w[sink, i], ws[sink, i])
             w[source, i] = max(w[source, i], wres[source, i])
 
-        if is_bioarea[i]:
-            groundwater_recharge[i] = net_fluxes[-1, i] + preferential_flow[i]
+        groundwater_recharge[i] = net_fluxes[-1, i] + preferential_flow[i]
 
     return preferential_flow, direct_runoff, groundwater_recharge, net_fluxes
 
@@ -920,13 +919,18 @@ class Soil(object):
         self.wres = thetar * self.soil_layer_height
 
         # initial soil water storage between field capacity and wilting point
+        # set soil moisture to nan where land use is not bioarea
         self.var.w = self.model.data.HRU.load_initial(
             "w",
-            default=(self.wfc + self.wwp) / 2,
+            default=lambda: np.where(
+                self.var.land_use_type[np.newaxis, :] < SEALED,
+                (self.wfc + self.wwp) / 2,
+                np.nan,
+            ),
         )
         # for paddy irrigation flooded paddy fields
         self.var.topwater = self.model.data.HRU.load_initial(
-            "topwater", default=self.var.full_compressed(0, dtype=np.float32)
+            "topwater", default=lambda: self.var.full_compressed(0, dtype=np.float32)
         )
 
         lambda_pore_size_distribution = self.model.data.grid.load(
@@ -984,7 +988,7 @@ class Soil(object):
 
         self.var.aeration_days_counter = self.var.load_initial(
             "aeration_days_counter",
-            default=np.full(
+            default=lambda: np.full(
                 (N_SOIL_LAYERS, self.var.compressed_size), 0, dtype=np.int32
             ),
         )
@@ -1283,7 +1287,7 @@ class Soil(object):
 
             preferential_flow += preferential_flow_substep
             direct_runoff += direct_runoff_substep
-            groundwater_recharge += groundwater_recharge_substep
+            groundwater_recharge[bioarea] += groundwater_recharge_substep[bioarea]
 
         assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
         assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()

@@ -70,7 +70,7 @@ class Interception(object):
 
         self.var.interceptStor = self.model.data.HRU.load_initial(
             "interceptStor",
-            default=self.model.data.HRU.full_compressed(0, dtype=np.float32),
+            default=lambda: self.model.data.HRU.full_compressed(0, dtype=np.float32),
         )
 
         minimum_intercept_capacity = {
