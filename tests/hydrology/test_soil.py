@@ -490,32 +490,30 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     plot_soil_layers(axes[0], soil_layer_height, w, wres, ws)
 
-    preferential_flow, direct_runoff, groundwater_recharge, net_fluxes = (
-        vertical_water_transport(
-            available_water_infiltration=available_water_infiltration,
-            capillary_rise_from_groundwater=np.full_like(
-                available_water_infiltration, capillary_rise_from_groundwater
-            ),
-            ws=ws,
-            wres=wres,
-            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-            lambda_=lambda_,
-            bubbling_pressure_cm=bubbling_pressure_cm,
-            land_use_type=land_use_type,
-            frost_index=frost_index,
-            arno_beta=arno_beta,
-            preferential_flow_constant=preferential_flow_constant,
-            w=w,
-            topwater=topwater,
-            soil_layer_height=soil_layer_height,
-        )
+    preferential_flow, direct_runoff, groundwater_recharge = vertical_water_transport(
+        available_water_infiltration=available_water_infiltration,
+        capillary_rise_from_groundwater=np.full_like(
+            available_water_infiltration, capillary_rise_from_groundwater
+        ),
+        ws=ws,
+        wres=wres,
+        saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+        lambda_=lambda_,
+        bubbling_pressure_cm=bubbling_pressure_cm,
+        land_use_type=land_use_type,
+        frost_index=frost_index,
+        arno_beta=arno_beta,
+        preferential_flow_constant=preferential_flow_constant,
+        w=w,
+        topwater=topwater,
+        soil_layer_height=soil_layer_height,
     )
 
-    plot_soil_layers(axes[1], soil_layer_height, w, wres, ws, net_fluxes)
+    plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
 
     # available_water_infiltration.fill(0)
     for _ in range(1000):
-        preferential_flow, direct_runoff, groundwater_recharge, net_fluxes = (
+        preferential_flow, direct_runoff, groundwater_recharge = (
             vertical_water_transport(
                 available_water_infiltration=available_water_infiltration,
                 capillary_rise_from_groundwater=np.full_like(
@@ -536,7 +534,7 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
             )
         )
 
-    plot_soil_layers(axes[2], soil_layer_height, w, wres, ws, net_fluxes)
+    plot_soil_layers(axes[2], soil_layer_height, w, wres, ws)
 
     plt.savefig(
         output_folder_soil
