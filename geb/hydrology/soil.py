@@ -787,7 +787,7 @@ def vertical_water_transport(
             )
 
             # Determine the positive flux and source/sink layers without if statements
-            positive_flux = np.abs(flux)
+            positive_flux = abs(flux)
             flux_direction = flux >= 0  # 1 if flux >= 0, 0 if flux < 0
             source = layer + (
                 1 - flux_direction
@@ -1192,8 +1192,6 @@ class Soil(object):
             topwater=self.var.topwater,
             open_water_evaporation=open_water_evaporation,
         )
-
-        print(np.nanmean(self.var.w, axis=1))
 
         timer.new_split("Available infiltration")
 
