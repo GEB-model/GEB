@@ -427,9 +427,11 @@ def plot_soil_layers(ax, soil_thickness, w, wres, ws, fluxes=None):
 def test_vertical_water_transport(capillary_rise_from_groundwater):
     ncols = 11
 
-    soil_thickness = np.array([[0.05, 0.10, 0.15, 0.30, 0.40, 1.00]], dtype=np.float32)
+    soil_layer_height = np.array(
+        [[0.05, 0.10, 0.15, 0.30, 0.40, 1.00]], dtype=np.float32
+    )
     # soil_thickness = np.array([[0.4, 0.4, 0.4, 0.4, 0.4, 0.4]])
-    soil_thickness = np.vstack([soil_thickness] * ncols).T
+    soil_layer_height = np.vstack([soil_layer_height] * ncols).T
 
     available_water_infiltration = np.full(ncols, 0.005, dtype=np.float32)
     land_use_type = np.full_like(available_water_infiltration, 0.1, dtype=np.int32)
@@ -440,86 +442,96 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
     preferential_flow_constant = 4.5
     topwater = np.zeros_like(available_water_infiltration)
 
-    geb.hydrology.soil.N_SOIL_LAYERS = soil_thickness.shape[0]
+    geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
     geb.hydrology.soil.FROST_INDEX_THRESHOLD = 0
 
-    theta_fc = np.full_like(soil_thickness, 0.4)
-    theta_s = np.full_like(soil_thickness, 0.5)
-    theta_res = np.full_like(soil_thickness, 0.1)
+    theta_fc = np.full_like(soil_layer_height, 0.4)
+    theta_s = np.full_like(soil_layer_height, 0.5)
+    theta_res = np.full_like(soil_layer_height, 0.1)
 
-    saturated_hydraulic_conductivity = np.full_like(soil_thickness, 0.1)
-    lambda_ = np.full_like(soil_thickness, 0.9)
-    bubbling_pressure_cm = np.full_like(soil_thickness, 40)
+    saturated_hydraulic_conductivity = np.full_like(soil_layer_height, 0.1)
+    lambda_ = np.full_like(soil_layer_height, 0.9)
+    bubbling_pressure_cm = np.full_like(soil_layer_height, 40)
 
-    wres = theta_res * soil_thickness
-    ws = theta_s * soil_thickness
+    wres = theta_res * soil_layer_height
+    ws = theta_s * soil_layer_height
 
-    theta = np.full_like(soil_thickness, 0)
+    theta = np.full_like(soil_layer_height, 0)
     theta[:, 0] = theta_res[:, 0]
     theta[:, 1] = theta_s[:, 1]
     theta[:, 2] = theta_fc[:, 2]
     theta[:, 3] = 0.2
-    theta[:, 4] = np.linspace(theta_res[0, 4], theta_s[0, 4], soil_thickness.shape[0])
-    theta[:, 5] = np.linspace(theta_s[0, 5], theta_res[0, 5], soil_thickness.shape[0])
-    theta[:, 6] = np.linspace(theta_fc[0, 6], theta_res[0, 6], soil_thickness.shape[0])
-    theta[:, 7] = np.linspace(theta_fc[0, 7], theta_s[0, 7], soil_thickness.shape[0])
-    theta[:, 8] = np.linspace(theta_res[0, 8], theta_fc[0, 8], soil_thickness.shape[0])
-    theta[:, 9] = np.linspace(theta_s[0, 9], theta_fc[0, 9], soil_thickness.shape[0])
+    theta[:, 4] = np.linspace(
+        theta_res[0, 4], theta_s[0, 4], soil_layer_height.shape[0]
+    )
+    theta[:, 5] = np.linspace(
+        theta_s[0, 5], theta_res[0, 5], soil_layer_height.shape[0]
+    )
+    theta[:, 6] = np.linspace(
+        theta_fc[0, 6], theta_res[0, 6], soil_layer_height.shape[0]
+    )
+    theta[:, 7] = np.linspace(theta_fc[0, 7], theta_s[0, 7], soil_layer_height.shape[0])
+    theta[:, 8] = np.linspace(
+        theta_res[0, 8], theta_fc[0, 8], soil_layer_height.shape[0]
+    )
+    theta[:, 9] = np.linspace(theta_s[0, 9], theta_fc[0, 9], soil_layer_height.shape[0])
     theta[:, 10] = theta_res[:, 10]
     theta[-1, 10] = theta_s[-1, 10]
 
-    w = theta * soil_thickness
+    w = theta * soil_layer_height
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), dpi=300)
     fig.tight_layout()
 
-    plot_soil_layers(axes[0], soil_thickness, w, wres, ws)
+    plot_soil_layers(axes[0], soil_layer_height, w, wres, ws)
 
     preferential_flow, direct_runoff, groundwater_recharge, net_fluxes = (
         vertical_water_transport(
-            available_water_infiltration,
-            ws,
-            wres,
-            saturated_hydraulic_conductivity,
-            lambda_,
-            bubbling_pressure_cm,
-            land_use_type,
-            frost_index,
-            np.full_like(available_water_infiltration, capillary_rise_from_groundwater),
-            arno_beta,
-            preferential_flow_constant,
-            w,
-            topwater,
-            soil_thickness,
+            available_water_infiltration=available_water_infiltration,
+            capillary_rise_from_groundwater=np.full_like(
+                available_water_infiltration, capillary_rise_from_groundwater
+            ),
+            ws=ws,
+            wres=wres,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            lambda_=lambda_,
+            bubbling_pressure_cm=bubbling_pressure_cm,
+            land_use_type=land_use_type,
+            frost_index=frost_index,
+            arno_beta=arno_beta,
+            preferential_flow_constant=preferential_flow_constant,
+            w=w,
+            topwater=topwater,
+            soil_layer_height=soil_layer_height,
         )
     )
 
-    plot_soil_layers(axes[1], soil_thickness, w, wres, ws, net_fluxes)
+    plot_soil_layers(axes[1], soil_layer_height, w, wres, ws, net_fluxes)
 
     # available_water_infiltration.fill(0)
     for _ in range(1000):
         preferential_flow, direct_runoff, groundwater_recharge, net_fluxes = (
             vertical_water_transport(
-                available_water_infiltration,
-                ws,
-                wres,
-                saturated_hydraulic_conductivity,
-                lambda_,
-                bubbling_pressure_cm,
-                land_use_type,
-                frost_index,
-                np.full_like(
+                available_water_infiltration=available_water_infiltration,
+                capillary_rise_from_groundwater=np.full_like(
                     available_water_infiltration, capillary_rise_from_groundwater
                 ),
-                arno_beta,
-                preferential_flow_constant,
-                w,
-                topwater,
-                soil_thickness,
+                ws=ws,
+                wres=wres,
+                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+                lambda_=lambda_,
+                bubbling_pressure_cm=bubbling_pressure_cm,
+                land_use_type=land_use_type,
+                frost_index=frost_index,
+                arno_beta=arno_beta,
+                preferential_flow_constant=preferential_flow_constant,
+                w=w,
+                topwater=topwater,
+                soil_layer_height=soil_layer_height,
             )
         )
 
-    plot_soil_layers(axes[2], soil_thickness, w, wres, ws, net_fluxes)
+    plot_soil_layers(axes[2], soil_layer_height, w, wres, ws, net_fluxes)
 
     plt.savefig(
         output_folder_soil

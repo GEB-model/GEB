@@ -308,7 +308,7 @@ def get_crop_group_number(
     return crop_group_map
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def get_unsaturated_hydraulic_conductivity(
     w,
     wres,
@@ -323,12 +323,8 @@ def get_unsaturated_hydraulic_conductivity(
     See https://archive.org/details/watershedmanagem0000unse_d4j9/page/295/mode/1up?view=theater (p. 295)
     """
     effective_saturation = (w - wres) / (ws - wres)
-    if effective_saturation < np.float32(0):
-        effective_saturation = np.float32(0)
-    elif effective_saturation > np.float32(1):
-        effective_saturation = np.float32(1)
-
-    effective_saturation = max(minimum_effective_saturation, effective_saturation)
+    effective_saturation = max(effective_saturation, minimum_effective_saturation)
+    effective_saturation = min(effective_saturation, np.float32(1))
 
     n = lambda_ + np.float32(1)
     m = np.float32(1) - np.float32(1) / n
@@ -672,8 +668,6 @@ def vertical_water_transport(
     )  # Fluxes between layers
     delta_z = (soil_layer_height[:-1, :] + soil_layer_height[1:, :]) / 2
 
-    is_bioarea = land_use_type < SEALED
-
     for i in prange(land_use_type.size):
         # Infiltration and preferential flow
         # Estimate the infiltration capacity
@@ -784,61 +778,58 @@ def vertical_water_transport(
 
     for i in prange(land_use_type.size):
         # Compute fluxes between layers using Darcy's law
-        for layer in range(N_SOIL_LAYERS):  # From top (0) to bottom (N_SOIL_LAYERS)
-            if layer == N_SOIL_LAYERS - 1:
-                # If there is capillary rise from groundwater, there will be no
-                # percolation to the groundwater. A potential capillary rise from
-                # the groundwater is already accounted for in rise_from_groundwater
-                if capillary_rise_from_groundwater[i] > np.float32(0):
-                    flux = np.float32(0)
-                else:
-                    # Else we assume that the bottom layer is draining under gravity
-                    # i.e., assuming homogeneous soil water potential below
-                    # bottom layer all the way to groundwater
-                    flux = K_unsat[layer, i]  # Assume draining under gravity
-                    available_water_source = w[layer, i] - wres[layer, i]
-                    flux = min(flux, available_water_source)
-                    w[layer, i] -= flux
-            else:
-                # Taking the mean of the hydraulic conductivities
-                # by using the geometric mean of the conductivities we put a bit more
-                # weight on the lower layer with lower conductivity
-                K_unsat_avg = np.sqrt(K_unsat[layer + 1, i] * K_unsat[layer, i])
+        for layer in range(
+            N_SOIL_LAYERS - 1
+        ):  # From top (0) to bottom (N_SOIL_LAYERS - 1)
+            # Compute the geometric mean of the conductivities
+            K_unsat_avg = np.sqrt(K_unsat[layer + 1, i] * K_unsat[layer, i])
 
-                # Compute flux using Darcy's law
-                flux = -K_unsat_avg * (
-                    (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i]
-                    - np.float32(1)
-                )
+            # Compute flux using Darcy's law. The -1 accounts for gravity.
+            flux = -K_unsat_avg * (
+                (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i] - np.float32(1)
+            )
 
-                if flux >= 0:  # Downward flux (percolation)
-                    positive_flux = flux
-                    source = layer
-                    sink = layer + 1
-                else:  # Upward flux (capillary rise)
-                    positive_flux = -flux
-                    source = layer + 1
-                    sink = layer
+            # Determine the positive flux and source/sink layers without if statements
+            positive_flux = np.abs(flux)
+            flux_direction = flux >= 0  # 1 if flux >= 0, 0 if flux < 0
+            source = layer + (
+                1 - flux_direction
+            )  # layer if flux >= 0, layer + 1 if flux < 0
+            sink = layer + flux_direction  # layer + 1 if flux >= 0, layer if flux < 0
 
-                # Limit flux by available water in source and storage capacity of sink
-                remaining_storage_capacity_sink = ws[sink, i] - w[sink, i]
-                available_water_source = w[source, i] - wres[source, i]
-                positive_flux = min(
-                    positive_flux,
-                    remaining_storage_capacity_sink,
-                    available_water_source,
-                )
+            # Limit flux by available water in source and storage capacity of sink
+            remaining_storage_capacity_sink = ws[sink, i] - w[sink, i]
+            available_water_source = w[source, i] - wres[source, i]
+            limited_flux = min(
+                positive_flux, remaining_storage_capacity_sink, available_water_source
+            )
 
-                w[source, i] -= positive_flux
-                w[sink, i] += positive_flux
+            # Update water content in source and sink layers
+            w[source, i] -= limited_flux
+            w[sink, i] += limited_flux
 
-            net_fluxes[layer, i] = flux
-
-            # Due to numerical errors, the water content in the sink layer can exceed the storage capacity
-            # and the source layer can fall below the residual water storage. Thus cap these to the
-            # storage capacity and residual water storage, respectively
+            # Ensure water content stays within physical bounds
             w[sink, i] = min(w[sink, i], ws[sink, i])
             w[source, i] = max(w[source, i], wres[source, i])
+
+            # Record net flux for the current layer
+            net_fluxes[layer, i] = flux
+
+        # for the last layer, we assume that the bottom layer is draining under gravity
+        layer = N_SOIL_LAYERS - 1
+
+        # Else we assume that the bottom layer is draining under gravity
+        # i.e., assuming homogeneous soil water potential below
+        # bottom layer all the way to groundwater
+        # Assume draining under gravity. If there is capillary rise from groundwater, there will be no
+        # percolation to the groundwater. A potential capillary rise from
+        # the groundwater is already accounted for in rise_from_groundwater
+        flux = K_unsat[layer, i] * (capillary_rise_from_groundwater[i] <= np.float32(0))
+        available_water_source = w[layer, i] - wres[layer, i]
+        flux = min(flux, available_water_source)
+        w[layer, i] -= flux
+        w[layer, i] = max(w[layer, i], wres[layer, i])
+        net_fluxes[layer, i] = flux
 
         groundwater_recharge[i] = net_fluxes[-1, i] + preferential_flow[i]
 
@@ -1375,6 +1366,9 @@ class Soil(object):
         timer.new_split("Finalizing")
         if self.model.timing:
             print(timer)
+
+        if self.model.current_timestep == 100:
+            exit()
 
         return (
             interflow,
