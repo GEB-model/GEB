@@ -14,10 +14,9 @@ from geb.hydrology.soil import (
     get_total_transpiration_factor,
     get_aeration_stress_threshold,
     get_aeration_stress_factor,
-    get_unsaturated_hydraulic_conductivity,
+    get_unsaturated_hydraulic_conductivity_and_soil_water_potential,
     get_soil_moisture_at_pressure,
     vertical_water_transport,
-    get_soil_water_potential,
 )
 
 output_folder_soil = output_folder / "soil"
@@ -55,23 +54,25 @@ def test_get_soil_moisture_at_pressure():
 
 def test_get_soil_water_potential():
     assert not np.isnan(
-        get_soil_water_potential(
-            theta=0.068,
-            thetar=0.016,
-            thetas=0.067,
+        get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
+            w=0.068,
+            wres=0.016,
+            ws=0.067,
             lambda_=0.202,
             bubbling_pressure_cm=0.007,
-        )
+            saturated_hydraulic_conductivity=1.0,
+        )[1]
     )
 
     assert (
-        get_soil_water_potential(
-            theta=0.015,
-            thetar=0.016,
-            thetas=0.067,
+        get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
+            w=0.015,
+            wres=0.016,
+            ws=0.067,
             lambda_=0.202,
             bubbling_pressure_cm=40,
-        )
+            saturated_hydraulic_conductivity=1.0,
+        )[1]
         != np.inf
     )
 
@@ -93,13 +94,16 @@ def test_soil_moisture_potential_inverse(pf_value):
     )
 
     # Step 2: Calculate capillary suction from theta
-    capillary_suction_calculated = get_soil_water_potential(
-        theta,
-        thetar,
-        thetas,
-        lambda_,
-        bubbling_pressure_cm,
-        minimum_effective_saturation=0,
+    capillary_suction_calculated = (
+        get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
+            w=theta,
+            wres=thetar,
+            ws=thetas,
+            lambda_=lambda_,
+            saturated_hydraulic_conductivity=1.0,
+            bubbling_pressure_cm=bubbling_pressure_cm,
+            minimum_effective_saturation=0,
+        )[1]
     )
 
     # Allow a small tolerance due to numerical approximations
@@ -331,8 +335,8 @@ def test_get_unsaturated_hydraulic_conductivity():
     for lambda_ in lambdas_:
         unsaturated_hydraulic_conductivity = np.zeros_like(w)
         for i in range(w.size):
-            unsaturated_hydraulic_conductivity[i] = (
-                get_unsaturated_hydraulic_conductivity(
+            unsaturated_hydraulic_conductivity[i], _ = (
+                get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
                     w=w[i],
                     wres=wres[i],
                     ws=ws[i],
@@ -340,6 +344,7 @@ def test_get_unsaturated_hydraulic_conductivity():
                     saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
                         i
                     ],
+                    bubbling_pressure_cm=np.full_like(wres, 40.0),
                 )
             )
 

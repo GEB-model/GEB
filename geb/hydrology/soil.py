@@ -310,12 +310,13 @@ def get_crop_group_number(
 
 
 @njit(cache=True, inline="always")
-def get_unsaturated_hydraulic_conductivity(
+def get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
     w,
     wres,
     ws,
     lambda_,
     saturated_hydraulic_conductivity,
+    bubbling_pressure_cm,
     minimum_effective_saturation=np.float32(0.0),
 ):
     """Calculate the unsaturated hydraulic conductivity for array slices.
@@ -342,8 +343,19 @@ def get_unsaturated_hydraulic_conductivity(
         np.float32(1)
         - (np.float32(1) - effective_saturation ** (np.float32(1) / m)) ** m
     ) ** 2
+    unsaturated_hydraulic_conductivity = term1 * term2
 
-    return term1 * term2
+    alpha = np.float32(1) / bubbling_pressure_cm
+
+    # Compute capillary pressure head (phi)
+    phi = ((effective_saturation) ** (-np.float32(1) / m) - np.float32(1)) ** (
+        np.float32(1) / n
+    ) / alpha  # Positive value
+
+    # Soil water potential (negative value for suction)
+    capillary_suction = -phi
+
+    return unsaturated_hydraulic_conductivity, capillary_suction
 
 
 PERCOLATION_SUBSTEPS = np.int32(3)
@@ -639,26 +651,20 @@ def get_soil_water_flow_parameters(
     minimum_effective_saturation = np.float32(0.01)
 
     for i in prange(land_use_type.size):
-        # Compute unsaturated hydraulic conductivity. Here it is important that some flow is always possible.
-        # Therefore we use a minimum effective saturation to ensure that some flow is always possible.
-        # This is something that could be better paremeterized, especially when looking at flood-drought
-        K_unsat[:, i] = get_unsaturated_hydraulic_conductivity(
-            w=w[:, i],
-            wres=wres[:, i],
-            ws=ws[:, i],
-            lambda_=lambda_[:, i],
-            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[:, i],
-            minimum_effective_saturation=minimum_effective_saturation,  # this could be better defined when looking at flood-drought interactions
-        )
-
-        # Compute soil water potential
-        psi[:, i] = get_soil_water_potential(
-            theta=w[:, i],
-            thetar=wres[:, i],
-            thetas=ws[:, i],
-            lambda_=lambda_[:, i],
-            bubbling_pressure_cm=bubbling_pressure_cm[:, i],
-            minimum_effective_saturation=minimum_effective_saturation,  # this could be better defined when looking at flood-drought interactions
+        # Compute unsaturated hydraulic conductivity and soil water potential. Here it is important that
+        # some flow is always possible. Therefore we use a minimum effective saturation to ensure that
+        # some flow is always possible. This is something that could be better paremeterized,
+        # especially when looking at flood-drought
+        K_unsat[:, i], psi[:, i] = (
+            get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
+                w=w[:, i],
+                wres=wres[:, i],
+                ws=ws[:, i],
+                lambda_=lambda_[:, i],
+                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[:, i],
+                bubbling_pressure_cm=bubbling_pressure_cm[:, i],
+                minimum_effective_saturation=minimum_effective_saturation,  # this could be better defined when looking at flood-drought interactions
+            )
         )
     return psi, K_unsat
 
