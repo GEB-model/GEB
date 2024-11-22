@@ -1202,10 +1202,6 @@ class Soil(object):
 
         timer.new_split("Available infiltration")
 
-        print(np.nanmean(self.var.w, axis=1))
-        if self.model.current_timestep == 100:
-            exit()
-
         assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
         assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
 
