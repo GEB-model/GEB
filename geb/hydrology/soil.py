@@ -44,11 +44,8 @@ def get_soil_water_potential(
     minimum_effective_saturation=np.float32(0.01),
 ):
     """
-    Calculates the soil water potential (capillary suction) using the van Genuchten model.
-
-    Note that theta, thetar and thetas can also be given as the height of the water column
-    in the soil layer as w, wres and ws since only there relative size is used. Of course
-    consistency is key.
+    Calculates the soil water potential (capillary suction) using the van Genuchten model
+    for array slices.
 
     Parameters
     ----------
@@ -62,6 +59,8 @@ def get_soil_water_potential(
         The van Genuchten parameter lambda (1/m)
     bubbling_pressure_cm : np.ndarray
         The bubbling pressure (cm)
+    minimum_effective_saturation : float, optional
+        The minimum effective saturation to avoid division by zero (default: 0.01)
     """
     # van Genuchten parameters
     alpha = np.float32(1) / bubbling_pressure_cm
@@ -70,8 +69,10 @@ def get_soil_water_potential(
 
     # Effective saturation
     effective_saturation = (theta - thetar) / (thetas - thetar)
-    effective_saturation = max(minimum_effective_saturation, effective_saturation)
-    effective_saturation = min(np.float32(1), effective_saturation)
+    effective_saturation = np.maximum(
+        effective_saturation, minimum_effective_saturation
+    )
+    effective_saturation = np.minimum(effective_saturation, np.float32(1))
 
     # Compute capillary pressure head (phi)
     phi = ((effective_saturation) ** (-np.float32(1) / m) - np.float32(1)) ** (
@@ -317,27 +318,32 @@ def get_unsaturated_hydraulic_conductivity(
     saturated_hydraulic_conductivity,
     minimum_effective_saturation=np.float32(0.0),
 ):
-    """This function calculates the unsaturated hydraulic conductivity based on the soil moisture content
-    following van Genuchten (1980) and Mualem (1976)
+    """Calculate the unsaturated hydraulic conductivity for array slices.
+
+    This function operates on slices of arrays for efficient computation
+    following van Genuchten (1980) and Mualem (1976).
 
     See https://archive.org/details/watershedmanagem0000unse_d4j9/page/295/mode/1up?view=theater (p. 295)
     """
+    # Compute effective saturation
     effective_saturation = (w - wres) / (ws - wres)
-    effective_saturation = max(effective_saturation, minimum_effective_saturation)
-    effective_saturation = min(effective_saturation, np.float32(1))
+    effective_saturation = np.maximum(
+        effective_saturation, minimum_effective_saturation
+    )
+    effective_saturation = np.minimum(effective_saturation, np.float32(1))
 
+    # Compute parameters n and m
     n = lambda_ + np.float32(1)
     m = np.float32(1) - np.float32(1) / n
 
-    return (
-        saturated_hydraulic_conductivity
-        * np.sqrt(effective_saturation)
-        * (
-            np.float32(1)
-            - (np.float32(1) - effective_saturation ** (np.float32(1) / m)) ** m
-        )
-        ** 2
-    )
+    # Compute unsaturated hydraulic conductivity
+    term1 = saturated_hydraulic_conductivity * np.sqrt(effective_saturation)
+    term2 = (
+        np.float32(1)
+        - (np.float32(1) - effective_saturation ** (np.float32(1) / m)) ** m
+    ) ** 2
+
+    return term1 * term2
 
 
 PERCOLATION_SUBSTEPS = np.int32(3)
@@ -617,6 +623,46 @@ def evapotranspirate(
     )
 
 
+@njit(cache=True, parallel=True)
+def get_soil_water_flow_parameters(
+    w,
+    wres,
+    ws,
+    lambda_,
+    saturated_hydraulic_conductivity,
+    bubbling_pressure_cm,
+    land_use_type,
+):
+    psi = np.empty_like(w)
+    K_unsat = np.empty_like(w)
+
+    minimum_effective_saturation = np.float32(0.01)
+
+    for i in prange(land_use_type.size):
+        # Compute unsaturated hydraulic conductivity. Here it is important that some flow is always possible.
+        # Therefore we use a minimum effective saturation to ensure that some flow is always possible.
+        # This is something that could be better paremeterized, especially when looking at flood-drought
+        K_unsat[:, i] = get_unsaturated_hydraulic_conductivity(
+            w=w[:, i],
+            wres=wres[:, i],
+            ws=ws[:, i],
+            lambda_=lambda_[:, i],
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[:, i],
+            minimum_effective_saturation=minimum_effective_saturation,  # this could be better defined when looking at flood-drought interactions
+        )
+
+        # Compute soil water potential
+        psi[:, i] = get_soil_water_potential(
+            theta=w[:, i],
+            thetar=wres[:, i],
+            thetas=ws[:, i],
+            lambda_=lambda_[:, i],
+            bubbling_pressure_cm=bubbling_pressure_cm[:, i],
+            minimum_effective_saturation=minimum_effective_saturation,  # this could be better defined when looking at flood-drought interactions
+        )
+    return psi, K_unsat
+
+
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
 @njit(cache=True, parallel=True, fastmath=False)
 def vertical_water_transport(
@@ -737,39 +783,15 @@ def vertical_water_transport(
         # Add infiltration flux at the soil surface
         net_fluxes[0, i] = infiltration
 
-    psi = np.zeros_like(net_fluxes)
-    K_unsat = np.zeros_like(net_fluxes)
-
-    for i in prange(land_use_type.size):
-        # Compute unsaturated hydraulic conductivity and soil water potential
-        for layer in range(N_SOIL_LAYERS):
-            # Compute unsaturated hydraulic conductivity. Here it is important that some flow is always possible.
-            # Therefore we use a minimum effective saturation to ensure that some flow is always possible.
-            # This is something that could be better paremeterized, especially when looking at flood-drought
-            K_unsat[layer, i] = get_unsaturated_hydraulic_conductivity(
-                w=w[layer, i],
-                wres=wres[layer, i],
-                ws=ws[layer, i],
-                lambda_=lambda_[layer, i],
-                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
-                    layer, i
-                ],
-                minimum_effective_saturation=np.float32(
-                    0.01
-                ),  # this could be better defined when looking at flood-drought interactions
-            )
-
-            # Compute soil water potential
-            psi[layer, i] = get_soil_water_potential(
-                theta=w[layer, i],
-                thetar=wres[layer, i],
-                thetas=ws[layer, i],
-                lambda_=lambda_[layer, i],
-                bubbling_pressure_cm=bubbling_pressure_cm[layer, i],
-                minimum_effective_saturation=np.float32(
-                    0.01
-                ),  # this could be better defined when looking at flood-drought interactions
-            )
+    psi, K_unsat = get_soil_water_flow_parameters(
+        w,
+        wres,
+        ws,
+        lambda_,
+        saturated_hydraulic_conductivity,
+        bubbling_pressure_cm,
+        land_use_type,
+    )
 
     groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
 
