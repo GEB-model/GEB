@@ -1364,9 +1364,6 @@ class Soil(object):
         if self.model.timing:
             print(timer)
 
-        if self.model.current_timestep == 100:
-            exit()
-
         return (
             interflow,
             direct_runoff,
