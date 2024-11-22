@@ -706,13 +706,10 @@ def vertical_water_transport(
             )
 
         # If the soil is frozen, no infiltration occurs
-        if soil_is_frozen[i]:
-            infiltration = np.float32(0)
-        else:
-            infiltration = min(
-                potential_infiltration,
-                available_water_infiltration[i] - preferential_flow[i],
-            )
+        infiltration = min(
+            potential_infiltration * ~soil_is_frozen[i],
+            available_water_infiltration[i] - preferential_flow[i],
+        )
 
         # add infiltration to the soil
         w[0, i] += infiltration
@@ -1195,6 +1192,8 @@ class Soil(object):
             topwater=self.var.topwater,
             open_water_evaporation=open_water_evaporation,
         )
+
+        print(np.nanmean(self.var.w, axis=1))
 
         timer.new_split("Available infiltration")
 
