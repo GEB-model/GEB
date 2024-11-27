@@ -34,6 +34,17 @@ def multi_level_merge(dict1, dict2):
     return dict1
 
 
+class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
+    def construct_mapping(self, node, deep=False):
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in mapping:
+                raise ValueError(f"Duplicate key found: {key}")
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
+
 def parse_config(config_path, current_directory=None):
     """Parse config."""
     if current_directory is None:
@@ -43,7 +54,8 @@ def parse_config(config_path, current_directory=None):
         config = config_path
     else:
         config = yaml.load(
-            open(current_directory / config_path, "r"), Loader=yaml.FullLoader
+            open(current_directory / config_path, "r"),
+            Loader=DetectDuplicateKeysYamlLoader,
         )
         current_directory = current_directory / Path(config_path).parent
 
