@@ -57,13 +57,20 @@ class Artists(honeybeesArtists):
         #     color = '#0000ff'
         #     r = 3
         # else:
-        r = 0.5
+        r = 1
+        if agents.irrigation_source[idx] == 0:
+            color = "#9900cc"
+        elif agents.irrigation_source[idx] == 1:
+            color = "#3366ff"
+        else:
+            color = "#ff3300"
+
         return {
             "type": "shape",
             "shape": "circle",
             "r": r,
             "filled": True,
-            "color": "#ff0000",
+            "color": color,
         }
 
     def draw_tehsil(self, properties):

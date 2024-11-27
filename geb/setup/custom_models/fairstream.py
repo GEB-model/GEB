@@ -1,4 +1,4 @@
-from ..geb import GEBModel as GEBModel
+from ..geb import GEBModel
 
 import numpy as np
 import geopandas as gpd
@@ -19,6 +19,8 @@ from pgmpy.factors.discrete import State
 from pgmpy.estimators import HillClimbSearch
 
 from scipy.stats import chi2_contingency
+
+from ..workflows.general import repeat_grid
 
 
 class Survey:
@@ -641,6 +643,16 @@ class fairSTREAMModel(GEBModel):
             name="agents/farmers/education_level",
         )
 
+    def get_farm_size(self):
+        farms = self.subgrid["agents/farmers/farms"]
+        farm_ids, farm_size_n_cells = np.unique(farms, return_counts=True)
+        farm_size_n_cells = farm_size_n_cells[farm_ids != -1]
+        farm_ids = farm_ids[farm_ids != -1]
+
+        mean_cell_size = self.subgrid["areamaps/sub_cell_area"].mean()
+        farm_size_m2 = farm_size_n_cells * mean_cell_size.item()
+        return farm_size_m2
+
     def setup_farmer_cropping(
         self,
         well_irrigated_ratio,
@@ -650,25 +662,73 @@ class fairSTREAMModel(GEBModel):
         n_farmers = self.binary["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
-        # process irrigation sources
+        # Set all farmers within command areas to canal irrigation
         irrigation_sources = self.dict["agents/farmers/irrigation_sources"]
         irrigation_source = np.full(n_farmers, irrigation_sources["no"], dtype=np.int32)
 
-        if "routing/lakesreservoirs/subcommand_areas" in self.subgrid:
-            command_areas = self.subgrid["routing/lakesreservoirs/subcommand_areas"]
-            canal_irrigated_farms = np.unique(farms.where(command_areas != -1, -1))
-            canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
-            irrigation_source[canal_irrigated_farms] = irrigation_sources["canal"]
+        command_areas = self.subgrid["routing/lakesreservoirs/subcommand_areas"]
+        canal_irrigated_farms = np.unique(farms.where(command_areas != -1, -1))
+        canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
+        irrigation_source[canal_irrigated_farms] = irrigation_sources["canal"]
 
-        well_irrigated_farms = np.random.choice(
-            [0, 1],
-            size=n_farmers,
-            replace=True,
-            p=[1 - well_irrigated_ratio, well_irrigated_ratio],
-        ).astype(bool)
-        irrigation_source[
-            (well_irrigated_farms) & (irrigation_source == irrigation_sources["no"])
-        ] = irrigation_sources["well"]
+        # Set all farmers within cells with rivers to canal irrigation
+
+        def get_rivers(da, axis, **kwargs):
+            from geb.hydrology.landcover import OPEN_WATER
+
+            return np.any(da == OPEN_WATER, axis=axis)
+
+        grid_cells_with_river = (
+            self.subgrid["landsurface/land_use_classes"]
+            .coarsen(
+                x=self.subgrid_scale_factor,
+                y=self.subgrid_scale_factor,
+            )
+            .reduce(get_rivers)
+        )
+        subgrid_cells_with_river = repeat_grid(
+            grid_cells_with_river.values, self.subgrid_scale_factor
+        )
+
+        canal_irrigated_farms = np.unique(farms.where(subgrid_cells_with_river, -1))
+        canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
+        irrigation_source[canal_irrigated_farms] = irrigation_sources["canal"]
+
+        groundwater_depth = self.grid["landsurface/topo/elevation"] - self.grid[
+            "groundwater/heads"
+        ].sel(layer="upper")
+        groundwater_depth_subgrid = repeat_grid(
+            groundwater_depth.values, self.subgrid_scale_factor
+        )
+
+        farm_sizes = self.get_farm_size()
+        assert farm_sizes.size == n_farmers
+
+        irrigated_area = (
+            (irrigation_source == irrigation_sources["canal"]) * farm_sizes
+        ).sum()
+
+        target_irrigated_area_ratio = 0.7
+
+        remaining_irrigated_area = (
+            farm_sizes.sum() * target_irrigated_area_ratio - irrigated_area
+        )
+
+        farmer_well_probability = np.random.random(n_farmers)
+        farmer_well_probability[irrigation_source == irrigation_sources["canal"]] = 0
+
+        ordered_well_indices = np.arange(n_farmers)[
+            np.argsort(farmer_well_probability)[::-1]
+        ]
+        cumulative_farm_area = np.cumsum(farm_sizes[ordered_well_indices])
+        farmers_with_well = ordered_well_indices[
+            cumulative_farm_area <= remaining_irrigated_area
+        ]
+        irrigation_source[farmers_with_well] = irrigation_sources["well"]
+
+        irrigated_area = (
+            (irrigation_source != irrigation_sources["no"]) * farm_sizes
+        ).sum()
 
         self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
 

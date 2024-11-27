@@ -291,9 +291,6 @@ class GEBModel(GridModel):
         )
 
         scale_factor = resolution_arcsec // 3
-        self.set_dict(
-            {"hydrography_scale_factor": scale_factor}, name="hydrography_scale_factor"
-        )
 
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
         flow_raster_upscaled, idxs_out = flow_raster.upscale(
@@ -6099,5 +6096,13 @@ class GEBModel(GridModel):
         return subgrid_factor
 
     @property
-    def hydrography_scale_factor(self):
-        return self.dict["hydrography_scale_factor"]["hydrography_scale_factor"]
+    def subgrid_scale_factor(self):
+        subgrid_shape = self.subgrid["areamaps/sub_grid_mask"].shape
+        grid_shape = self.grid["areamaps/grid_mask"].shape
+
+        assert subgrid_shape[0] % grid_shape[0] == 0
+        assert subgrid_shape[1] % grid_shape[1] == 0
+
+        scale_factor = subgrid_shape[0] // grid_shape[0]
+        assert scale_factor == subgrid_shape[1] // grid_shape[1]
+        return scale_factor
