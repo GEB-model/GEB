@@ -4954,7 +4954,8 @@ class GEBModel(GridModel):
         discount_std = pd.Series(region_ids).map(data["Discount_std"]).to_numpy()
 
         try:
-            income = self.binary["agents/farmers/income"]
+            # income = self.binary["agents/farmers/income"]
+            pass
         except KeyError:
             self.logger.info("Income does not exist, generating random income..")
             daily_non_farm_income_family = random.choices(

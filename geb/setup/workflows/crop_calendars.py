@@ -1,8 +1,6 @@
 import numpy as np
 from datetime import date
 import calendar
-import pandas as pd
-import csv
 
 
 def get_day_index(date):

@@ -63,7 +63,7 @@ def get_observed_well_ratio(config):
 	# get overlapping areas of observed_irrigation_sources and region_mask
 	observed_irrigation_sources['area_in_region_mask'] = (gpd.overlay(observed_irrigation_sources, region_mask, how='intersection').area / observed_irrigation_sources.area.values).values
 
-	ANALYSIS_THRESHOLD = 0.5
+	# ANALYSIS_THRESHOLD = 0.5
 
 	# observed_irrigation_sources = observed_irrigation_sources[observed_irrigation_sources['area_in_region_mask'] > ANALYSIS_THRESHOLD]
 	observed_irrigation_sources = observed_irrigation_sources.join(simulated_subdistricts['region_id'])
@@ -102,13 +102,13 @@ def multi_set(dict_obj, value, *attrs):
 	d = dict_obj
 	for attr in attrs[:-1]:
 		d = d[attr]
-	if not attrs[-1] in d:
+	if attrs[-1] not in d:
 		raise KeyError(f"Key {attrs} does not exist in config file.")
 	d[attrs[-1]] = value
 
 def get_irrigation_wells_score(run_directory, individual, config):
 	regions = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'region_id', '20110101T000000.npz'))['data']
-	field_size = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'field_size', '20110101T000000.npz'))['data']
+	# field_size = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'field_size', '20110101T000000.npz'))['data']
 	irrigation_source = np.load(os.path.join(run_directory, config['calibration']['scenario'], 'irrigation_source', '20110101T000000.npz'))['data']
 	
 	with open(os.path.join(config['general']['input_folder'], 'agents', 'farmers' , 'irrigation_sources.json')) as f:
