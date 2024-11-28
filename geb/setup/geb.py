@@ -3745,6 +3745,93 @@ class GEBModel(GridModel):
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"economics/{price_type}")
 
+    def setup_irrigation_prices_by_reference_year(
+        self,
+        operation_surface: float,
+        operation_sprinkler: float,
+        operation_drip: float,
+        capital_cost_surface: float,
+        capital_cost_sprinkler: float,
+        capital_cost_drip: float,
+        reference_year: int,
+        start_year: int,
+        end_year: int,
+    ):
+        """
+        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+
+        Parameters
+        ----------
+        well_price : float
+            The price of a well in the reference year.
+        upkeep_price_per_m2 : float
+            The upkeep price per square meter of a well in the reference year.
+        reference_year : int
+            The reference year for the well prices and upkeep prices.
+        start_year : int
+            The start year for the well prices and upkeep prices.
+        end_year : int
+            The end year for the well prices and upkeep prices.
+
+        Notes
+        -----
+        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
+        retrieves the inflation rates data from the `economics/inflation_rates` dictionary. It then creates dictionaries to
+        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
+        data dimension.
+
+        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+        resulting prices are stored in the dictionaries with the region ID as the key.
+
+        The resulting well prices and upkeep prices data are set as dictionary with names of the form
+        'economics/well_prices' and 'economics/upkeep_prices_well_per_m2', respectively.
+        """
+        self.logger.info("Setting up well prices by reference year")
+
+        # Retrieve the inflation rates data
+        inflation_rates = self.dict["economics/inflation_rates"]
+        regions = list(inflation_rates["data"].keys())
+
+        # Create a dictionary to store the various types of prices with their initial reference year values
+        price_types = {
+            "operation_cost_surface": operation_surface,
+            "operation_cost_sprinkler": operation_sprinkler,
+            "operation_cost_drip": operation_drip,
+            "capital_cost_surface": capital_cost_surface,
+            "capital_cost_sprinkler": capital_cost_sprinkler,
+            "capital_cost_drip": capital_cost_drip,
+        }
+
+        # Iterate over each price type and calculate the prices across years for each region
+        for price_type, initial_price in price_types.items():
+            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
+
+            for region in regions:
+                prices = pd.Series(index=range(start_year, end_year + 1))
+                prices.loc[reference_year] = initial_price
+
+                # Forward calculation from the reference year
+                for year in range(reference_year + 1, end_year + 1):
+                    prices.loc[year] = (
+                        prices[year - 1]
+                        * inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year))
+                        ]
+                    )
+                # Backward calculation from the reference year
+                for year in range(reference_year - 1, start_year - 1, -1):
+                    prices.loc[year] = (
+                        prices[year + 1]
+                        / inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year + 1))
+                        ]
+                    )
+
+                prices_dict["data"][region] = prices.tolist()
+
+            # Set the calculated prices in the appropriate dictionary
+            self.set_dict(prices_dict, name=f"economics/{price_type}")
+
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,

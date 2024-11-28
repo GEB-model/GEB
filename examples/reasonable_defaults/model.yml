@@ -48,7 +48,8 @@ agent_settings:
         ruleset: base
       adaptation_sprinkler:
         ruleset: base
-        lifespan: 20
+        lifespan_base: 25
+        lifespan_sprink_drip: 15
         loan_duration: 21
         decision_horizon: 20
       adaptation_irrigation_expansion:

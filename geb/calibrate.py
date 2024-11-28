@@ -15,6 +15,7 @@ Modified by Peter Burek and Jens de Bruijn
 """
 import os
 import shutil
+import time
 import array
 import random
 import string
@@ -352,203 +353,223 @@ def get_observed_water_use(calibration_config):
 
 @handle_ctrl_c
 def run_model(individual, config, gauges, observed_streamflow):
-    """
-    This function takes an individual from the population and runs the model with the corresponding parameters.
-    It first checks if the run directory already exists and whether the model was run before.
-    If the directory exists and the model was run before, it skips running the model.
-    Otherwise, it runs the model and saves the results to the run directory.
-    """
+	"""
+	This function takes an individual from the population and runs the model with the corresponding parameters.
+	It first checks if the run directory already exists and whether the model was run before.
+	If the directory exists and the model was run before, it skips running the model.
+	Otherwise, it runs the model and saves the results to the run directory.
+	"""
 
-    os.makedirs(config['calibration']['path'], exist_ok=True)
-    runs_path = os.path.join(config['calibration']['path'], 'runs')
-    os.makedirs(runs_path, exist_ok=True)
-    logs_path = os.path.join(config['calibration']['path'], 'logs')
-    os.makedirs(logs_path, exist_ok=True)
-    
-    # Define the directory where the model run will be stored
-    run_directory = os.path.join(runs_path, individual.label)
+	os.makedirs(config['calibration']['path'], exist_ok=True)
+	runs_path = os.path.join(config['calibration']['path'], 'runs')
+	os.makedirs(runs_path, exist_ok=True)
+	logs_path = os.path.join(config['calibration']['path'], 'logs')
+	os.makedirs(logs_path, exist_ok=True)
+	
+	# Define the directory where the model run will be stored
+	run_directory = os.path.join(runs_path, individual.label)
 
-    # Paths to the completion indicator files
-    spinup_done_path = os.path.join(run_directory, 'spinup_done.txt')
-    run_done_path = os.path.join(run_directory, 'done.txt')
+	# Paths to the completion indicator files
+	spinup_done_path = os.path.join(run_directory, 'spinup_done.txt')
+	run_done_path = os.path.join(run_directory, 'done.txt')
 
-    # Check if the run directory already exists and if the model was run before
-    if os.path.isdir(run_directory):
-        if os.path.exists(run_done_path):
-            # Model has been run before; skip running
-            runmodel = False
-        else:
-            # Model has not been completed; we may need to run "run" or "spinup"
-            runmodel = True
-    else:
-        # Run directory doesn't exist; we'll need to run both "spinup" and "run"
-        runmodel = True
+	# Check if the run directory already exists and if the model was run before
+	if os.path.isdir(run_directory):
+		if os.path.exists(run_done_path):
+			# Model has been run before; skip running
+			runmodel = False
+		else:
+			# Model has not been completed; we may need to run "run" or "spinup"
+			runmodel = True
+	else:
+		# Run directory doesn't exist; we'll need to run both "spinup" and "run"
+		runmodel = True
 
-    # Determine if "spinup" has already been completed
-    spinup_completed = os.path.exists(spinup_done_path)
+	# Determine if "spinup" has already been completed
+	spinup_completed = os.path.exists(spinup_done_path)
 
-    if runmodel:
-        # Convert the individual's parameter ratios to the corresponding parameter values
-        individual_parameter_ratio = individual.tolist()
-        # Assert that all parameter ratios are between 0 and 1
-        assert (np.array(individual_parameter_ratio) >= 0).all() and (np.array(individual_parameter_ratio) <= 1).all()
-        
-        # Create a dictionary of the individual's parameters
-        individual_parameters = {}
-        for i, parameter_data in enumerate(config['calibration']['parameters'].values()):
-            individual_parameters[parameter_data['variable']] = \
-                parameter_data['min'] + individual_parameter_ratio[i] * (parameter_data['max'] - parameter_data['min'])
-        
-        while True:
-            # Create the run directory if it doesn't exist
-            os.makedirs(run_directory, exist_ok=True)
-            template = deepcopy(config)
-            
-            template['general']['report_folder'] = run_directory
-            template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial')
+	if runmodel:
+		# Convert the individual's parameter ratios to the corresponding parameter values
+		individual_parameter_ratio = individual.tolist()
+		# Assert that all parameter ratios are between 0 and 1
+		assert (np.array(individual_parameter_ratio) >= 0).all() and (np.array(individual_parameter_ratio) <= 1).all()
+		
+		# Create a dictionary of the individual's parameters
+		individual_parameters = {}
+		for i, parameter_data in enumerate(config['calibration']['parameters'].values()):
+			individual_parameters[parameter_data['variable']] = \
+				parameter_data['min'] + individual_parameter_ratio[i] * (parameter_data['max'] - parameter_data['min'])
+		
+		while True:
+			# Create the run directory if it doesn't exist
+			os.makedirs(run_directory, exist_ok=True)
+			template = deepcopy(config)
+			
+			template['general']['report_folder'] = run_directory
+			template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial')
 
-            # Update the template configuration with individual parameters
-            template['general']['spinup_time'] = config['calibration']['spinup_time']
-            template['general']['start_time'] = config['calibration']['start_time']
-            template['general']['end_time'] = config['calibration']['end_time']
+			# Update the template configuration with individual parameters
+			template['general']['spinup_time'] = config['calibration']['spinup_time']
+			template['general']['start_time'] = config['calibration']['start_time']
+			template['general']['end_time'] = config['calibration']['end_time']
 
-            template['report'] = {}
-            template['report_cwatm'] = {}
-            
-            template.update(config['calibration']['target_variables'])
+			template['report'] = {}
+			template['report_cwatm'] = {}
+			
+			template.update(config['calibration']['target_variables'])
 
-            # Loop through individual parameters and set them in the template
-            for parameter, value in individual_parameters.items():
-                multi_set(template, value, *parameter.split('.'))
+			# Loop through individual parameters and set them in the template
+			for parameter, value in individual_parameters.items():
+				multi_set(template, value, *parameter.split('.'))
 
-            # Write the initial configuration file
-            config_path = os.path.join(run_directory, 'config.yml')
-            with open(config_path, 'w') as f:
-                yaml.dump(template, f)
+			# Write the initial configuration file
+			config_path = os.path.join(run_directory, 'config.yml')
+			with open(config_path, 'w') as f:
+				yaml.dump(template, f)
 
-            # Acquire lock to check and set GPU usage
-            lock.acquire()
-            if current_gpu_use_count.value < n_gpu_spots:
-                use_gpu = int(current_gpu_use_count.value / config['calibration']['DEAP']['models_per_gpu'])
-                current_gpu_use_count.value += 1
-                print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
-            else:
-                use_gpu = False
-                print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
-            lock.release()
+			# Acquire lock to check and set GPU usage
+			lock.acquire()
+			if current_gpu_use_count.value < n_gpu_spots:
+				use_gpu = int(current_gpu_use_count.value / config['calibration']['DEAP']['models_per_gpu'])
+				current_gpu_use_count.value += 1
+				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
+			else:
+				use_gpu = False
+				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
+			lock.release()
 
-            def run_model_scenario(run_command):
-                # Build the command to run the script, including the use of a GPU if specified
-                command = [sys.executable, os.path.join(os.environ.get('GEB_PACKAGE_DIR'), 'geb', 'cli.py'), run_command, '--config', config_path]
+			def run_model_scenario(run_command):
+				# Build the command to run the script, including the use of a GPU if specified
+				conda_env_name = 'geb_p2'
+				cli_py_path = os.path.join(os.environ.get('GEB_PACKAGE_DIR'), 'geb', 'cli.py')
+				conda_activate = os.path.join('/scistor/ivm/mka483/miniconda3', 'bin', 'activate')
 				
-                if use_gpu is not False:
-                    command.extend(["--GPU", "--gpu_device", str(use_gpu)])
-                print("Executing command:", command, flush=True)
+				command = f'source {conda_activate} {conda_env_name} && {sys.executable} {cli_py_path} {run_command} --config {config_path}'
+				# command = [sys.executable, '--verbose', os.path.join(os.environ.get('GEB_PACKAGE_DIR'), 'geb', 'cli.py'), run_command, '--config', config_path]
+				
+				if use_gpu is not False:
+					command.extend(["--GPU", "--gpu_device", str(use_gpu)])
+				print("Executing command:", command, flush=True)
 
-                # Run the command and capture the output and errors
-                p = Popen(command, stdout=PIPE, stderr=PIPE)
-                output, errors = p.communicate()
+				max_retries = 10000
+				retries = 0
 
-                # Check the return code of the command and handle accordingly
-                if p.returncode == 0:  # Model has run successfully
-                    with open(os.path.join(logs_path, f"log_{run_command}_{individual.label}.txt"), 'w') as f:
-                        content = "OUTPUT:\n" + output.decode() + "\nERRORS:\n" + errors.decode()
-                        f.write(content)
-                    # Optionally remove unnecessary files here
-                elif p.returncode == 1:  # Model has failed
-                    with open(os.path.join(logs_path, f"log_{run_command}_{individual.label}_{''.join(random.choice(string.ascii_lowercase) for x in range(10))}.txt"), 'w') as f:
-                        content = "OUTPUT:\n" + output.decode() + "\nERRORS:\n" + errors.decode()
-                        f.write(content)
-                    # Handle failure without deleting spinup data
-                else:
-                    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    log_filename = os.path.join(logs_path, f"log_error_{run_command}_{individual.label}.txt")
-                    with open(log_filename, 'w') as f:
-                        content = (
-                            f"Timestamp: {timestamp}\n"
-                            f"Process ID: {os.getpid()}\n"
-                            f"Command: {' '.join(command)}\n\n"
-                            f"OUTPUT:\n{output.decode()}\n"
-                            f"ERRORS:\n{errors.decode()}\n"
-                            f"Traceback:\n{traceback.format_exc()}"
-                        )
-                        f.write(content)
-                    raise ValueError(f"Return code was {p.returncode}. See log file {log_filename} for details.")
-                
-                return p.returncode
+				while retries <= max_retries:
+					# Run the command and capture the output and errors
+					# p = Popen(command, stdout=PIPE, stderr=PIPE)
+					p = Popen(command, stdout=PIPE, stderr=PIPE, shell=True, executable='/bin/bash')
+					output, errors = p.communicate()
 
-            # Run "spinup" if it hasn't been completed yet
-            if not spinup_completed:
-                # Set export_inital_on_spinup to True for the spinup run
-                template['general']['export_inital_on_spinup'] = True
-                with open(config_path, 'w') as f:
-                    yaml.dump(template, f)
+					# Check the return code of the command and handle accordingly
+					if p.returncode == 0:  # Model has run successfully
+						with open(os.path.join(logs_path, f"log_{run_command}_{individual.label}.txt"), 'w') as f:
+							content = "OUTPUT:\n" + output.decode() + "\nERRORS:\n" + errors.decode()
+							f.write(content)
+						# Optionally remove unnecessary files here
+						return p.returncode  # Success, exit the function
+					elif p.returncode == 1:  # Model has failed
+						with open(os.path.join(logs_path, f"log_{run_command}_{individual.label}_{''.join(random.choice(string.ascii_lowercase) for x in range(10))}.txt"), 'w') as f:
+							content = "OUTPUT:\n" + output.decode() + "\nERRORS:\n" + errors.decode()
+							f.write(content)
+						# Handle failure without deleting spinup data
+						return p.returncode  # Failure, exit the function
+					elif p.returncode == 2:  # Specific return code to retry
+						retries += 1
+						if retries > max_retries:
+							break  # Exit the retry loop
+						print(f"Return code 2 received. Retrying {retries}/{max_retries}...", flush=True)
+						time.sleep(1)
+						continue  # Retry the command
+					else:
+						timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+						log_filename = os.path.join(logs_path, f"log_error_{run_command}_{individual.label}.txt")
+						with open(log_filename, 'w') as f:
+							content = (
+								f"Timestamp: {timestamp}\n"
+								f"Process ID: {os.getpid()}\n"
+								f"Command: {' '.join(command)}\n\n"
+								f"OUTPUT:\n{output.decode()}\n"
+								f"ERRORS:\n{errors.decode()}\n"
+								f"Traceback:\n{traceback.format_exc()}"
+							)
+							f.write(content)
+						raise ValueError(f"Return code was {p.returncode}. See log file {log_filename} for details.")
+				
+				# If retries exhausted, raise an error
+				raise ValueError(f"Return code 2 received {max_retries} times. See log file for details.")
 
-                return_code = run_model_scenario("spinup")
-                if return_code == 0:
-                    # After successful spinup, write 'spinup_done.txt'
-                    with open(spinup_done_path, 'w') as f:
-                        f.write('spinup done')
-                    spinup_completed = True
-                    # Adjust 'config.yml' for the "run" step
-                    with open(config_path, 'r') as f:
-                        template = yaml.safe_load(f)
-                    template['general']['import_inital'] = True
-                    if 'export_inital_on_spinup' in template['general']:
-                        del template['general']['export_inital_on_spinup']
-                    with open(config_path, 'w') as f:
-                        yaml.dump(template, f)
-                else:
-                    # Spinup failed; release GPU and exit
-                    if use_gpu is not False:
-                        lock.acquire()
-                        current_gpu_use_count.value -= 1
-                        lock.release()
-                        print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
-                    break  # Exit the loop and return
-            else:
-                # Spinup already completed; adjust 'config.yml' if necessary
-                if not os.path.exists(config_path):
-                    # Recreate 'config.yml' with appropriate settings
-                    with open(config_path, 'r') as f:
-                        template = yaml.safe_load(f)
-                    template['general']['import_inital'] = True
-                    if 'export_inital_on_spinup' in template['general']:
-                        del template['general']['export_inital_on_spinup']
-                    with open(config_path, 'w') as f:
-                        yaml.dump(template, f)
+			# Run "spinup" if it hasn't been completed yet
+			if not spinup_completed:
+				# Set export_inital_on_spinup to True for the spinup run
+				template['general']['export_inital_on_spinup'] = True
+				with open(config_path, 'w') as f:
+					yaml.dump(template, f)
 
-            # Now, run the "run" scenario
-            return_code = run_model_scenario("run")
-            if return_code == 0:
-                # Run completed successfully; release GPU and write 'done.txt'
-                if use_gpu is not False:
-                    lock.acquire()
-                    current_gpu_use_count.value -= 1
-                    lock.release()
-                    print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
-                with open(run_done_path, 'w') as f:
-                    f.write('done')
-                break  # Exit the loop
-            else:
-                # "run" failed; release GPU and exit
-                if use_gpu is not False:
-                    lock.acquire()
-                    current_gpu_use_count.value -= 1
-                    lock.release()
-                    print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
-                break  # Exit the loop
+				return_code = run_model_scenario("spinup")
+				if return_code == 0:
+					# After successful spinup, write 'spinup_done.txt'
+					with open(spinup_done_path, 'w') as f:
+						f.write('spinup done')
+					spinup_completed = True
+					# Adjust 'config.yml' for the "run" step
+					with open(config_path, 'r') as f:
+						template = yaml.safe_load(f)
+					template['general']['import_inital'] = True
+					if 'export_inital_on_spinup' in template['general']:
+						del template['general']['export_inital_on_spinup']
+					with open(config_path, 'w') as f:
+						yaml.dump(template, f)
+				else:
+					# Spinup failed; release GPU and exit
+					if use_gpu is not False:
+						lock.acquire()
+						current_gpu_use_count.value -= 1
+						lock.release()
+						print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
+					break  # Exit the loop and return
+			else:
+				# Spinup already completed; adjust 'config.yml' if necessary
+				if not os.path.exists(config_path):
+					# Recreate 'config.yml' with appropriate settings
+					with open(config_path, 'r') as f:
+						template = yaml.safe_load(f)
+					template['general']['import_inital'] = True
+					if 'export_inital_on_spinup' in template['general']:
+						del template['general']['export_inital_on_spinup']
+					with open(config_path, 'w') as f:
+						yaml.dump(template, f)
 
-    # Proceed to compute the scores using the results
-    scores = []
-    for score in config['calibration']['calibration_targets']:
-        if score == 'KGE_discharge':
-            scores.append(get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow))
-        if score == 'irrigation_wells':
-            scores.append(get_irrigation_wells_score(run_directory, individual, config))
-        if score == 'KGE_yield_ratio':
-            scores.append(get_KGE_yield_ratio(run_directory, individual, config))
-    return tuple(scores)
+			# Now, run the "run" scenario
+			return_code = run_model_scenario("run")
+			if return_code == 0:
+				# Run completed successfully; release GPU and write 'done.txt'
+				if use_gpu is not False:
+					lock.acquire()
+					current_gpu_use_count.value -= 1
+					lock.release()
+					print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
+				with open(run_done_path, 'w') as f:
+					f.write('done')
+				break  # Exit the loop
+			else:
+				# "run" failed; release GPU and exit
+				if use_gpu is not False:
+					lock.acquire()
+					current_gpu_use_count.value -= 1
+					lock.release()
+					print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
+				break  # Exit the loop
+
+	# Proceed to compute the scores using the results
+	scores = []
+	for score in config['calibration']['calibration_targets']:
+		if score == 'KGE_discharge':
+			scores.append(get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow))
+		if score == 'irrigation_wells':
+			scores.append(get_irrigation_wells_score(run_directory, individual, config))
+		if score == 'KGE_yield_ratio':
+			scores.append(get_KGE_yield_ratio(run_directory, individual, config))
+	return tuple(scores)
 
 
 def is_first_run(label):
@@ -727,7 +748,7 @@ def calibrate(config, working_directory):
 	# Check if multiprocessing should be used
 	if use_multiprocessing is True:
 		# Get the number of CPU cores available for the pool
-		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK') or 15)
+		pool_size = int(os.getenv('SLURM_CPUS_PER_TASK') or 6)
 		print(f'Pool size: {pool_size}')
 		# Ignore the interrupt signal
 		signal.signal(signal.SIGINT, signal.SIG_IGN)
