@@ -3787,8 +3787,6 @@ class GEBModel(GridModel):
 
             for _, region in self.geoms["areamaps/regions"].iterrows():
                 region_id = str(region["region_id"])
-                region_id_int = region["region_id"]
-                region_ISO3 = self.geoms["areamaps/regions"].iloc[region_id_int]["ISO3"]
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
 
