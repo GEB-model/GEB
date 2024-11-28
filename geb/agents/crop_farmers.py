@@ -4,7 +4,7 @@ from datetime import datetime
 import json
 import copy
 import calendar
-from typing import Any, Dict, Tuple, Union
+from typing import Tuple, Union
 
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
@@ -66,10 +66,6 @@ def shift_and_reset_matrix(matrix: np.ndarray) -> None:
     """
     matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
     matrix[:, 0] = 0  # Reset the first column to 0
-
-
-def irrigation_fraction(efficiency, field_fraction):
-    return efficiency / (2 * field_fraction)
 
 
 @njit(cache=True, inline="always")
@@ -1415,18 +1411,8 @@ class CropFarmers(AgentBaseClass):
         self.fraction_irrigated_field = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
-        rng_2 = np.random.default_rng(60)
-        self.fraction_irrigated_field[irrigation_mask] = rng_2.choice(
-            [0.50, 1], size=irrigation_mask.sum()
-        )
+        self.fraction_irrigated_field[:] = 1
         self.adapted[:, 3][self.fraction_irrigated_field >= 1] = 1
-
-        rng_expanse = np.random.default_rng(17)
-        self.time_adapted[self.adapted[:, 3] == 1, 3] = rng_expanse.uniform(
-            1,
-            self.lifespan_irrigation,
-            np.sum(self.adapted[:, 3] == 1),
-        )
 
         self.base_management_yield_ratio = AgentArray(
             n=self.n,
@@ -1884,7 +1870,7 @@ class CropFarmers(AgentBaseClass):
             balance_check(
                 name="water withdrawal_2",
                 how="sum",
-                influxes=(
+                outfluxes=(
                     self.channel_abstraction_m3_by_farmer[
                         ~np.isnan(self.remaining_irrigation_limit_m3)
                     ],
@@ -3378,7 +3364,9 @@ class CropFarmers(AgentBaseClass):
         assert not np.any(new_crop_nr_final == -1)
 
         # Switch their crops and update their yield-SPEI relation
-        self.crop_calendar[SEUT_adaptation_decision, 0, 0] = new_crop_nr_final
+        self.crop_calendar[SEUT_adaptation_decision, :, :] = self.crop_calendar[
+            new_id_final, :, :
+        ]
 
         # Update yield-SPEI relation
         self.yearly_yield_ratio[SEUT_adaptation_decision, :] = self.yearly_yield_ratio[
