@@ -210,9 +210,31 @@ class BaseVariables:
         return array / self.cellArea
 
     def register_initial_data(self, name: str) -> None:
+        """Register initial data."""
         self.data.initial_conditions.append(name)
 
-    def load_initial(self, name, default=0.0, gpu=False):
+    def load_initial(self, name, default, gpu=False):
+        """Load initial data from disk when variable is set, otherwise use default value.
+
+        Args:
+            name: Name of variable.
+            default: Default value. This must be a callable function or lambda.
+            gpu: Whether to use GPU.
+
+        Returns:
+            data: Loaded data.
+
+        Raises:
+            AssertionError: If default is not a callable function or lambda.
+
+        Examples:
+            >>> def default():
+            ...     return np.zeros(self.data.grid.shape)
+            >>> self.var.load_initial("name", default=default)
+
+            >>> self.var.load_initial("name", default=lambda: np.zeros(self.data.grid.shape))
+        """
+        assert callable(default), "default must be a callable function or lambda"
         if self.model.load_initial_data:
             fp = os.path.join(self.data.get_save_state_path(), f"{name}.npz")
             if gpu:
@@ -221,7 +243,7 @@ class BaseVariables:
                 return np.load(fp)["data"]
         else:
             self.register_initial_data(name)
-            return default
+            return default()
 
 
 class Grid(BaseVariables):
@@ -364,7 +386,7 @@ class Grid(BaseVariables):
             data = self.data.grid.compress(data)
         return data
 
-    def load_initial(self, name, default=0.0):
+    def load_initial(self, name, default):
         return super().load_initial("grid." + name, default=default)
 
     def load_forcing_ds(self, name):
@@ -877,7 +899,7 @@ class HRUs(BaseVariables):
         if show:
             plt.show()
 
-    def load_initial(self, name, default=0.0, gpu=None):
+    def load_initial(self, name, default, gpu=None):
         if gpu is None:
             gpu = self.model.use_gpu
         return super().load_initial("HRU." + name, default=default, gpu=gpu)
@@ -935,7 +957,7 @@ class Modflow(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def load_initial(self, name, default=0.0):
+    def load_initial(self, name, default):
         return super().load_initial("modflow." + name, default=default)
 
 

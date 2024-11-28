@@ -387,7 +387,6 @@ class LandCover(object):
 
         timer.new_split("Demand")
 
-        open_water_evaporation = self.var.full_compressed(0, dtype=np.float32)
         # Soil for forest, grassland, and irrigated land
         capillar = self.model.data.to_HRU(data=self.model.data.grid.capillar, fn=None)
         del self.model.data.grid.capillar
@@ -401,7 +400,6 @@ class LandCover(object):
             actual_bare_soil_evaporation,
         ) = self.model.soil.step(
             capillar,
-            open_water_evaporation,
             potential_transpiration_minus_interception_evaporation,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
@@ -477,9 +475,9 @@ class LandCover(object):
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
                 ],
-                prestorages=[w_pre, topwater_pre],
+                prestorages=[w_pre.sum(axis=0), topwater_pre],
                 poststorages=[
-                    self.var.w,
+                    self.var.w.sum(axis=0),
                     self.var.topwater,
                 ],
                 tollerance=1e-6,
@@ -493,7 +491,8 @@ class LandCover(object):
                 + self.var.topwater
             )
             totalstorage_landcover_pre = (
-                self.var.prevSnowCover
+                np.sum(self.var.prevSnowCover, axis=0)
+                / self.model.snowfrost.numberSnowLayers
                 + w_pre.sum(axis=0)
                 + topwater_pre
                 + interceptStor_pre
