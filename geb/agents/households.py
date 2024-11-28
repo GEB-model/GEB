@@ -409,7 +409,7 @@ class Households(AgentBaseClass):
         return self.current_water_demand, self.current_efficiency
 
     def step(self) -> None:
-        self.risk_perception *= self.risk_perception
+        # self.risk_perception *= self.risk_perception
         return None
 
     @property

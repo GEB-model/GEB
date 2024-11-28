@@ -320,6 +320,15 @@ class LakesReservoirs(object):
             upstream_area_within_waterbodies, waterBodyID
         )
 
+        # in some cases the cell with the highest number of upstream cells
+        # has mulitple occurences in the same lake, this seems to happen
+        # especially for very small lakes with a small drainage area.
+        # In such cases, we take the outflow cell with the lowest elevation.
+        outflow_elevation = load_grid(
+            self.model.files["grid"]["routing/kinematic/outflow_elevation"]
+        )
+        outflow_elevation = self.var.compress(outflow_elevation)
+
         waterbody_outflow_points = np.where(
             self.var.upstream_area_n_cells == upstream_area_within_waterbodies,
             waterBodyID,

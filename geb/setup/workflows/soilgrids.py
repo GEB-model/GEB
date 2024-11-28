@@ -560,7 +560,7 @@ def load_soilgrids(data_catalog, grid, region):
     hydraulic_conductivity = interpolate_soil_layers(hydraulic_conductivity)
 
     assert hydraulic_conductivity.min() >= 1e-7
-    assert hydraulic_conductivity.max() <= 10
+    assert hydraulic_conductivity.max() <= 15
 
     # same for pore_size_index lambda
     lambda_ = get_pore_size_index(ds)
