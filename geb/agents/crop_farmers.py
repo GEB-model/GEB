@@ -1890,7 +1890,7 @@ class CropFarmers(AgentBaseClass):
         return yield_ratio
 
     def decompress(self, array):
-        if np.issubsctype(array, np.floating):
+        if np.issubdtype(array, np.floating):
             nofieldvalue = np.nan
         else:
             nofieldvalue = -1
