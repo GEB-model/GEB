@@ -13,6 +13,7 @@ authors = [
 ]
 dependencies = [
     "cdsapi>=0.7.4",
+    "cfgrib>=0.9.14",
     "damagescanner==0.8b1",
     "dask>=2024.6",
     "deap>=1.4.1",
@@ -21,6 +22,7 @@ dependencies = [
     "honeybees>=1.0.4",
     "hydromt==0.10.0",
     "hydromt-sfincs>=1.1.0",
+    "intel-cmplr-lib-rt",
     "isimip-client>=1.0.1",
     "matplotlib>=3.9.2",
     "numba>=0.60.0",

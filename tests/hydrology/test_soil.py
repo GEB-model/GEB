@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import pytest
+from time import time
 
 import matplotlib.pyplot as plt
 
@@ -14,7 +15,7 @@ from geb.hydrology.soil import (
     get_total_transpiration_factor,
     get_aeration_stress_threshold,
     get_aeration_stress_factor,
-    get_unsaturated_hydraulic_conductivity_and_soil_water_potential,
+    get_soil_water_flow_parameters,
     get_soil_moisture_at_pressure,
     vertical_water_transport,
 )
@@ -24,13 +25,13 @@ output_folder_soil.mkdir(exist_ok=True)
 
 
 def test_get_soil_moisture_at_pressure():
-    capillary_suction = np.linspace(-1, -20000, 10000)
+    capillary_suction = np.linspace(-1, -20000, 10000, dtype=np.float32).reshape(1, -1)
 
     soils = ["sand", "silt", "clay"]
-    bubbling_pressure_cms = np.array([20, 40, 150], dtype=float)
-    thetass = np.array([0.4, 0.45, 0.50])
-    thetars = np.array([0.075, 0.15, 0.25])
-    lambda_s = np.array([2.5, 1.45, 1.2])
+    bubbling_pressure_cms = np.array([20, 40, 150], dtype=np.float32)
+    thetass = np.array([0.4, 0.45, 0.50], dtype=np.float32)
+    thetars = np.array([0.075, 0.15, 0.25], dtype=np.float32)
+    lambda_s = np.array([2.5, 1.45, 1.2], dtype=np.float32)
 
     fig, ax = plt.subplots()
     for i in range(len(soils)):
@@ -40,9 +41,13 @@ def test_get_soil_moisture_at_pressure():
         lambda_ = lambda_s[i]
 
         soil_moisture_at_pressure = get_soil_moisture_at_pressure(
-            capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
+            capillary_suction,
+            np.full_like(capillary_suction, bubbling_pressure_cm),
+            np.full_like(capillary_suction, thetas),
+            np.full_like(capillary_suction, thetar),
+            np.full_like(capillary_suction, lambda_),
         )
-        ax.plot(-capillary_suction, soil_moisture_at_pressure, label=soils[i])
+        ax.plot(-capillary_suction[0], soil_moisture_at_pressure[0], label=soils[i])
 
     ax.set_xlabel("|Capillary suction (cm)|")
     ax.set_ylabel("Soil moisture content")
@@ -52,26 +57,26 @@ def test_get_soil_moisture_at_pressure():
     plt.savefig(output_folder / "soil_moisture_at_pressure.png")
 
 
-def test_get_soil_water_potential():
+def test_get_soil_water_flow_parameters_potential():
     assert not np.isnan(
-        get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
-            w=0.068,
-            wres=0.016,
-            ws=0.067,
-            lambda_=0.202,
-            bubbling_pressure_cm=0.007,
-            saturated_hydraulic_conductivity=1.0,
+        get_soil_water_flow_parameters(
+            w=np.array([0.068], dtype=np.float32),
+            wres=np.array([0.016], dtype=np.float32),
+            ws=np.array([0.067], dtype=np.float32),
+            lambda_=np.array([0.202], dtype=np.float32),
+            bubbling_pressure_cm=np.array([0.007], dtype=np.float32),
+            saturated_hydraulic_conductivity=np.array([1.0], dtype=np.float32),
         )[1]
     )
 
     assert (
-        get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
-            w=0.015,
-            wres=0.016,
-            ws=0.067,
-            lambda_=0.202,
-            bubbling_pressure_cm=40,
-            saturated_hydraulic_conductivity=1.0,
+        get_soil_water_flow_parameters(
+            w=np.array([0.015], dtype=np.float32),
+            wres=np.array([0.016], dtype=np.float32),
+            ws=np.array([0.067], dtype=np.float32),
+            lambda_=np.array([0.202], dtype=np.float32),
+            bubbling_pressure_cm=np.array([40], dtype=np.float32),
+            saturated_hydraulic_conductivity=np.array([1.0], dtype=np.float32),
         )[1]
         != np.inf
     )
@@ -80,13 +85,15 @@ def test_get_soil_water_potential():
 @pytest.mark.parametrize("pf_value", [2.0, 4.2])
 def test_soil_moisture_potential_inverse(pf_value):
     # Convert pF value to capillary suction in cm (h)
-    capillary_suction = -(10**pf_value)  # Negative value for suction
+    capillary_suction = np.array(
+        [-(10**pf_value)], dtype=np.float32
+    )  # Negative value for suction
 
     # Define soil parameters for the test
-    thetas = 0.45  # Saturated water content (volumetric)
-    thetar = 0.05  # Residual water content (volumetric)
-    lambda_ = 0.5  # Pore-size distribution index
-    bubbling_pressure_cm = 10.0  # Bubbling pressure in cm
+    thetas = np.array([0.45], dtype=np.float32)  # Saturated water content (volumetric)
+    thetar = np.array([0.05], dtype=np.float32)  # Residual water content (volumetric)
+    lambda_ = np.array([0.5], dtype=np.float32)  # Pore-size distribution index
+    bubbling_pressure_cm = np.array([10.0], dtype=np.float32)  # Bubbling pressure in cm
 
     # Step 1: Calculate theta from capillary suction
     theta = get_soil_moisture_at_pressure(
@@ -94,17 +101,14 @@ def test_soil_moisture_potential_inverse(pf_value):
     )
 
     # Step 2: Calculate capillary suction from theta
-    capillary_suction_calculated = (
-        get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
-            w=theta,
-            wres=thetar,
-            ws=thetas,
-            lambda_=lambda_,
-            saturated_hydraulic_conductivity=1.0,
-            bubbling_pressure_cm=bubbling_pressure_cm,
-            minimum_effective_saturation=0,
-        )[1]
-    )
+    capillary_suction_calculated = get_soil_water_flow_parameters(
+        w=theta,
+        wres=thetar,
+        ws=thetas,
+        lambda_=lambda_,
+        saturated_hydraulic_conductivity=np.array([1.0], dtype=np.float32),
+        bubbling_pressure_cm=bubbling_pressure_cm,
+    )[0]
 
     # Allow a small tolerance due to numerical approximations
     tolerance = 1e-2 * abs(capillary_suction)  # 1% of the suction value
@@ -321,53 +325,85 @@ def test_get_aeration_stress_factor():
 
 
 def test_get_unsaturated_hydraulic_conductivity():
-    wres = np.full(1000, 0.1)
+    wres = np.full(1_000_000, 0.1, dtype=np.float32)
     ws = np.full_like(wres, 0.4)
 
-    w = np.linspace(0, ws[-1], wres.size)
+    w = np.linspace(0, ws[-1], wres.size, dtype=np.float32)
 
-    lambdas_ = np.arange(0.1, 0.6, 0.1)
+    lambdas_ = np.arange(0.1, 0.6, 0.1, dtype=np.float32)
     # we take 1 so that we the outcome is the relative hydraulic conductivity
     saturated_hydraulic_conductivity = np.full_like(wres, 1.0)
 
-    fig, ax = plt.subplots()
+    fig, (ax0, ax1) = plt.subplots(1, 2)
 
     for lambda_ in lambdas_:
-        unsaturated_hydraulic_conductivity = np.zeros_like(w)
-        for i in range(w.size):
-            unsaturated_hydraulic_conductivity[i], _ = (
-                get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
-                    w=w[i],
-                    wres=wres[i],
-                    ws=ws[i],
-                    lambda_=lambda_,
-                    saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
-                        i
-                    ],
-                    bubbling_pressure_cm=np.full_like(wres, 40.0),
-                )
+        unsaturated_hydraulic_conductivity, soil_water_potential = (
+            get_soil_water_flow_parameters(
+                w=w,
+                wres=wres,
+                ws=ws,
+                lambda_=np.full_like(wres, lambda_),
+                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+                bubbling_pressure_cm=np.full_like(wres, 40.0),
             )
+        )
 
         relative_water_content = w / ws
         log_unsaturated_hydraulic_conductivity = np.full_like(
             unsaturated_hydraulic_conductivity, np.nan
         )
-        ax.plot(
-            relative_water_content,
+        plot_every_n = 100
+        ax0.plot(
+            relative_water_content[::plot_every_n],
             np.log10(
                 unsaturated_hydraulic_conductivity,
                 out=log_unsaturated_hydraulic_conductivity,
                 where=unsaturated_hydraulic_conductivity > 0,
-            ),
+            )[::plot_every_n],
+            label=round(lambda_, 1),
+        )
+        ax1.plot(
+            relative_water_content[::plot_every_n],
+            soil_water_potential[::plot_every_n],
             label=round(lambda_, 1),
         )
 
-    ax.set_xlim(0, 1)
-    ax.set_ylim(-15, 0)
-    ax.set_xlabel("Soil moisture content")
-    ax.set_ylabel("Unsaturated hydraulic conductivity")
+    with open(
+        output_folder_soil / "get_soil_water_flow_parameters.txt",
+        "w",
+    ) as f:
+        f.write(
+            get_soil_water_flow_parameters.inspect_asm(
+                get_soil_water_flow_parameters.signatures[0]
+            )
+        )
 
-    ax.legend()
+    start_time = time()
+    for i in range(10):
+        get_soil_water_flow_parameters(
+            w=w,
+            wres=wres,
+            ws=ws,
+            lambda_=np.full_like(wres, lambda_),
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            bubbling_pressure_cm=np.full_like(wres, 40.0),
+        )
+    end_time = time()
+    print(f"took {end_time - start_time:.6f} seconds")
+
+    ax0.set_xlim(0, 1)
+    ax0.set_ylim(-15, 0)
+    ax0.set_xlabel("Soil moisture content")
+    ax0.set_ylabel("Unsaturated hydraulic conductivity")
+
+    ax0.legend()
+
+    ax1.set_xlim(0, 1)
+    ax1.set_ylim(-15_000, 0)
+    ax1.set_xlabel("Soil moisture content")
+    ax1.set_ylabel("Soil water potential")
+
+    ax1.legend()
 
     plt.savefig(output_folder / "unsaturated_hydraulic_conductivity.png")
 
@@ -509,14 +545,14 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
         soil_layer_height=soil_layer_height,
     )
 
-    with open(output_folder_soil / "vertical_water_transport_compiled.txt", "w") as f:
-        f.write(
-            vertical_water_transport.inspect_asm(vertical_water_transport.signatures[0])
-        )
+    # with open(output_folder_soil / "vertical_water_transport_compiled.txt", "w") as f:
+    #     f.write(
+    #         vertical_water_transport.inspect_asm(vertical_water_transport.signatures[0])
+    #     )
 
     plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
 
-    # available_water_infiltration.fill(0)
+    available_water_infiltration.fill(0)
     for _ in range(1000):
         preferential_flow, direct_runoff, groundwater_recharge = (
             vertical_water_transport(
