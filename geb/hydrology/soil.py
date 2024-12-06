@@ -237,7 +237,7 @@ def get_root_ratios(
     return root_ratios
 
 
-@njit(inline="always")
+@njit(cache=True, inline="always")
 def set_root_ratios_single(root_depth, soil_layer_height, root_ratios):
     remaining_root_depth = root_depth
     for layer in range(N_SOIL_LAYERS):
@@ -548,6 +548,7 @@ def evapotranspirate(
     parallel=True,
     fastmath=False,
     inline="always",
+    cache=True,
 )
 def get_soil_water_flow_parameters(
     w,
@@ -602,7 +603,7 @@ def get_soil_water_flow_parameters(
 
 
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
-@njit(cache=True, parallel=True, fastmath=True)
+@njit(cache=True, parallel=True, fastmath=False)
 def vertical_water_transport(
     available_water_infiltration,
     capillary_rise_from_groundwater,
