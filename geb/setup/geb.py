@@ -14,7 +14,6 @@ import shutil
 import tempfile
 import json
 from urllib.parse import urlparse
-import concurrent.futures
 from hydromt.exceptions import NoDataException
 import numpy as np
 import pandas as pd
