@@ -545,10 +545,10 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
         soil_layer_height=soil_layer_height,
     )
 
-    with open(output_folder_soil / "vertical_water_transport_compiled.txt", "w") as f:
-        f.write(
-            vertical_water_transport.inspect_asm(vertical_water_transport.signatures[0])
-        )
+    # with open(output_folder_soil / "vertical_water_transport_compiled.txt", "w") as f:
+    #     f.write(
+    #         vertical_water_transport.inspect_asm(vertical_water_transport.signatures[0])
+    #     )
 
     plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
 
