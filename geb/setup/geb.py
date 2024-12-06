@@ -63,6 +63,8 @@ from .workflows.conversions import (
 from .workflows.forcing import (
     reproject_and_apply_lapse_rate_temperature,
     reproject_and_apply_lapse_rate_pressure,
+    download_ERA5,
+    open_ERA5,
 )
 
 XY_CHUNKSIZE = 350
@@ -2101,8 +2103,28 @@ class GEBModel(GridModel):
             # concurrent.futures.wait(futures)
             mask = self.grid["areamaps/grid_mask"]
 
-            pr_hourly = self.download_ERA(
-                "total_precipitation", starttime, endtime, method="accumulation"
+            files = download_ERA5(
+                folder=Path(self.root).parent / "preprocessing" / "climate" / "ERA5",
+                variables=[
+                    "total_precipitation",
+                    "surface_solar_radiation_downwards",
+                    "surface_thermal_radiation_downwards",
+                    "2m_temperature",
+                    "2m_dewpoint_temperature",
+                    "surface_pressure",
+                    "10m_u_component_of_wind",
+                    "10m_v_component_of_wind",
+                ],
+                starttime=starttime,
+                endtime=endtime,
+                bounds=mask.raster.bounds,
+                logger=self.logger,
+            )
+
+            pr_hourly = open_ERA5(
+                files,
+                "tp",  # total_precipitation
+                xy_chunksize=XY_CHUNKSIZE,
             )
             pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
             pr_hourly.attrs = {
@@ -2119,11 +2141,10 @@ class GEBModel(GridModel):
             pr.name = "pr"
             self.set_forcing(pr, name="climate/pr")
 
-            hourly_rsds = self.download_ERA(
-                "surface_solar_radiation_downwards",
-                starttime,
-                endtime,
-                method="accumulation",
+            hourly_rsds = open_ERA5(
+                files,
+                "ssrd",  # surface_solar_radiation_downwards
+                xy_chunksize=XY_CHUNKSIZE,
             )
             rsds = hourly_rsds.resample(time="D").sum() / (
                 24 * 3600
@@ -2138,11 +2159,10 @@ class GEBModel(GridModel):
             rsds.name = "rsds"
             self.set_forcing(rsds, name="climate/rsds")
 
-            hourly_rlds = self.download_ERA(
-                "surface_thermal_radiation_downwards",
-                starttime,
-                endtime,
-                method="accumulation",
+            hourly_rlds = open_ERA5(
+                files,
+                "strd",  # surface_thermal_radiation_downwards
+                xy_chunksize=XY_CHUNKSIZE,
             )
             rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
             rlds.attrs = {
@@ -2154,9 +2174,7 @@ class GEBModel(GridModel):
             rlds.name = "rlds"
             self.set_forcing(rlds, name="climate/rlds")
 
-            hourly_tas = self.download_ERA(
-                "2m_temperature", starttime, endtime, method="raw"
-            )
+            hourly_tas = open_ERA5(files, "t2m", xy_chunksize=XY_CHUNKSIZE)
 
             DEM = self.data_catalog.get_rasterdataset(
                 "fabdem",
@@ -2196,8 +2214,10 @@ class GEBModel(GridModel):
             tasmin.name = "tasmin"
             self.set_forcing(tasmin, name="climate/tasmin")
 
-            dew_point_tas = self.download_ERA(
-                "2m_dewpoint_temperature", starttime, endtime, method="raw"
+            dew_point_tas = open_ERA5(
+                files,
+                "d2m",
+                xy_chunksize=XY_CHUNKSIZE,
             )
             dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
                 dew_point_tas, DEM, mask
@@ -2230,9 +2250,7 @@ class GEBModel(GridModel):
             relative_humidity.name = "hurs"
             self.set_forcing(relative_humidity, name="climate/hurs")
 
-            pressure = self.download_ERA(
-                "surface_pressure", starttime, endtime, method="raw"
-            )
+            pressure = open_ERA5(files, "sp", xy_chunksize=XY_CHUNKSIZE)
             pressure = reproject_and_apply_lapse_rate_pressure(pressure, DEM, mask)
             pressure.attrs = {
                 "standard_name": "surface_air_pressure",
@@ -2243,13 +2261,17 @@ class GEBModel(GridModel):
             pressure.name = "ps"
             self.set_forcing(pressure, name="climate/ps")
 
-            u_wind = self.download_ERA(
-                "10m_u_component_of_wind", starttime, endtime, method="raw"
+            u_wind = open_ERA5(
+                files,
+                "u10",
+                xy_chunksize=XY_CHUNKSIZE,
             )
             u_wind = u_wind.resample(time="D").mean()
 
-            v_wind = self.download_ERA(
-                "10m_v_component_of_wind", starttime, endtime, method="raw"
+            v_wind = open_ERA5(
+                files,
+                "v10",
+                xy_chunksize=XY_CHUNKSIZE,
             )
             v_wind = v_wind.resample(time="D").mean()
             wind_speed = np.sqrt(u_wind**2 + v_wind**2)
@@ -2267,214 +2289,12 @@ class GEBModel(GridModel):
         else:
             raise ValueError(f"Unknown data source: {data_source}")
 
-    def download_ERA(
-        self, variable, starttime: date, endtime: date, method: str, download_only=False
-    ):
-        # https://cds.climate.copernicus.eu/cdsapp#!/software/app-c3s-daily-era5-statistics?tab=appcode
-        # https://earthscience.stackexchange.com/questions/24156/era5-single-level-calculate-relative-humidity
-        import cdsapi
-
-        """
-        Download hourly ERA5 data for a specified time frame and bounding box.
-
-        Parameters:
-        start_date (str): Start date in 'YYYY-MM-DD' format.
-        end_date (str): End date in 'YYYY-MM-DD' format.
-
-        """
-
-        download_path = Path(self.root).parent / "preprocessing" / "climate" / "ERA5"
-        download_path.mkdir(parents=True, exist_ok=True)
-
-        def download(start_and_end_year):
-            start_year, end_year = start_and_end_year
-            output_fn = download_path / f"{variable}_{start_year}_{end_year}.nc"
-            if output_fn.exists():
-                self.logger.info(f"ERA5 data already downloaded to {output_fn}")
-            else:
-                (xmin, ymin, xmax, ymax) = self.bounds
-
-                # add buffer to bounding box. Resolution is 0.1 degrees, so add 0.1 degrees to each side
-                xmin -= 0.1
-                ymin -= 0.1
-                xmax += 0.1
-                ymax += 0.1
-
-                max_retries = 10
-                retries = 0
-                while retries < max_retries:
-                    try:
-                        request = {
-                            "product_type": "reanalysis",
-                            "format": "netcdf",
-                            "variable": [
-                                variable,
-                            ],
-                            "date": f"{start_year}-01-01/{end_year}-12-31",
-                            "time": [
-                                "00:00",
-                                "01:00",
-                                "02:00",
-                                "03:00",
-                                "04:00",
-                                "05:00",
-                                "06:00",
-                                "07:00",
-                                "08:00",
-                                "09:00",
-                                "10:00",
-                                "11:00",
-                                "12:00",
-                                "13:00",
-                                "14:00",
-                                "15:00",
-                                "16:00",
-                                "17:00",
-                                "18:00",
-                                "19:00",
-                                "20:00",
-                                "21:00",
-                                "22:00",
-                                "23:00",
-                            ],
-                            "area": (
-                                float(ymax),
-                                float(xmin),
-                                float(ymin),
-                                float(xmax),
-                            ),  # North, West, South, East
-                        }
-                        cdsapi.Client().retrieve(
-                            "reanalysis-era5-land",
-                            request,
-                            output_fn,
-                        )
-                        break
-                    except Exception as e:
-                        print(
-                            f"Download failed. Retrying... ({retries+1}/{max_retries})"
-                        )
-                        print(e)
-                        print(request)
-                        retries += 1
-                if retries == max_retries:
-                    raise Exception("Download failed after maximum retries.")
-            return output_fn
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            multiple_years = 5
-
-            range_start = starttime.year - starttime.year % 5
-            range_end = endtime.year - endtime.year % 5 + 5
-            years = []
-            for year in range(range_start, range_end, multiple_years):
-                years.append(
-                    (
-                        max(year, starttime.year),
-                        min(year + multiple_years - 1, endtime.year),
-                    )
-                )
-            files = list(executor.map(download, years))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            month_starts = pd.date_range(starttime, endtime, freq="MS").date.tolist()
+            files = list(executor.map(download, month_starts))
 
         if download_only:
             return
-
-        ds = xr.open_mfdataset(
-            files,
-            # chunks={
-            #     "valid_time": 1,
-            #     "latitude": XY_CHUNKSIZE,
-            #     "longitude": XY_CHUNKSIZE,
-            # },
-            compat="equals",  # all values and dimensions must be the same,
-            combine_attrs="drop_conflicts",  # drop conflicting attributes
-        ).rio.set_crs(4326)
-
-        assert "valid_time" in ds.dims
-        assert "latitude" in ds.dims
-        assert "longitude" in ds.dims
-
-        # rename valid_time to time
-        ds = ds.rename({"valid_time": "time"})
-
-        # remove first time step.
-        # This is an accumulation from the previous day and thus cannot be calculated
-        ds = ds.isel(time=slice(1, None))
-        ds = ds.chunk({"time": 24, "latitude": XY_CHUNKSIZE, "longitude": XY_CHUNKSIZE})
-        # the ERA5 grid is sometimes not exactly regular. The offset is very minor
-        # therefore we snap the grid to a regular grid, to save huge computational time
-        # for a infenitesimal loss in accuracy
-        ds = ds.assign_coords(
-            latitude=np.linspace(
-                ds["latitude"][0].item(),
-                ds["latitude"][-1].item(),
-                ds["latitude"].size,
-                endpoint=True,
-            ),
-            longitude=np.linspace(
-                ds["longitude"][0].item(),
-                ds["longitude"][-1].item(),
-                ds["longitude"].size,
-                endpoint=True,
-            ),
-        )
-        # assert that time is monotonically increasing with a constant step size
-        assert (
-            ds.time.diff("time").astype(np.int64)
-            == (ds.time[1] - ds.time[0]).astype(np.int64)
-        ).all()
-        ds.raster.set_crs(4326)
-        # the last few months of data may come from ERA5T (expver 5) instead of ERA5 (expver 1)
-        # if so, combine that dimension
-        if "expver" in ds.dims:
-            ds = ds.sel(expver=1).combine_first(ds.sel(expver=5))
-
-        # assert there is only one data variable
-        assert len(ds.data_vars) == 1
-
-        # select the variable and rename longitude and latitude variable
-        ds = ds[list(ds.data_vars)[0]].rename({"longitude": "x", "latitude": "y"})
-
-        if method == "accumulation":
-
-            def xr_ERA5_accumulation_to_hourly(ds, dim):
-                # Identify the axis number for the given dimension
-                assert ds.time.dt.hour[0] == 1, "First time step must be at 1 UTC"
-                # All chunksizes must be divisible by 24, except the last one
-                assert all(
-                    chunksize % 24 == 0 for chunksize in ds.chunksizes["time"][:-1]
-                )
-
-                def diff_with_prepend(data, dim):
-                    # Assert dimension is a multiple of 24
-                    # As the first hour is an accumulation from the first hour of the day, prepend a 0
-                    # to the data array before taking the diff. In this way, the output is also 24 hours
-                    return np.diff(data, prepend=0, axis=dim)
-
-                # Apply the custom diff function using apply_ufunc
-                return xr.apply_ufunc(
-                    diff_with_prepend,  # The function to apply
-                    ds,  # The DataArray or Dataset to which the function will be applied
-                    kwargs={
-                        "dim": ds.get_axis_num(dim)
-                    },  # Additional arguments for the function
-                    dask="parallelized",  # Enable parallelized computation
-                    output_dtypes=[ds.dtype],  # Specify the output data type
-                )
-
-            # The accumulations in the short forecasts of ERA5-Land (with hourly steps from 01 to 24) are treated
-            # the same as those in ERA-Interim or ERA-Interim/Land, i.e., they are accumulated from the beginning
-            # of the forecast to the end of the forecast step. For example, runoff at day=D, step=12 will provide
-            # runoff accumulated from day=D, time=0 to day=D, time=12. The maximum accumulation is over 24 hours,
-            # i.e., from day=D, time=0 to day=D+1,time=0 (step=24).
-            # forecasts are the difference between the current and previous time step
-            hourly = xr_ERA5_accumulation_to_hourly(ds, "time")
-        elif method == "raw":
-            hourly = ds
-        else:
-            raise NotImplementedError
-
-        return hourly
 
     def snap_to_grid(self, ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
         # make sure all datasets have more or less the same coordinates
