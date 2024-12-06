@@ -2289,13 +2289,6 @@ class GEBModel(GridModel):
         else:
             raise ValueError(f"Unknown data source: {data_source}")
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            month_starts = pd.date_range(starttime, endtime, freq="MS").date.tolist()
-            files = list(executor.map(download, month_starts))
-
-        if download_only:
-            return
-
     def snap_to_grid(self, ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
         # make sure all datasets have more or less the same coordinates
         assert np.isclose(

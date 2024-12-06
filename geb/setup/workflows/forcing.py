@@ -224,6 +224,8 @@ def open_ERA5(files, variable, xy_chunksize):
     # This is an accumulation from the previous day and thus cannot be calculated
     ds = ds.isel(time=slice(1, None))
     ds = ds.chunk({"time": 24, "latitude": xy_chunksize, "longitude": xy_chunksize})
+    # reorder dimensitons in the order of time, latitude, longitude
+    ds = ds.transpose("time", "latitude", "longitude")
     # the ERA5 grid is sometimes not exactly regular. The offset is very minor
     # therefore we snap the grid to a regular grid, to save huge computational time
     # for a infenitesimal loss in accuracy
@@ -277,6 +279,7 @@ def open_ERA5(files, variable, xy_chunksize):
                 },  # Additional arguments for the function
                 dask="parallelized",  # Enable parallelized computation
                 output_dtypes=[ds.dtype],  # Specify the output data type
+                keep_attrs=True,  # Keep the attributes of the input DataArray or Dataset
             )
 
         # The accumulations in the short forecasts of ERA5-Land (with hourly steps from 01 to 24) are treated
