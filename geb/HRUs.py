@@ -33,6 +33,7 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
     elif filepath.suffixes == [".zarr", ".zip"]:
         ds = zarr.convenience.open_group(filepath)
         data = ds["data"][:]
+        data = data.astype(np.float32) if data.dtype == np.float64 else data
         if return_transform_and_crs:
             x = ds.x[:]
             y = ds.y[:]

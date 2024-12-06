@@ -22,7 +22,7 @@
 import numpy as np
 from pathlib import Path
 from geb.workflows import TimingModule, balance_check
-from numba import njit, prange
+from numba import njit, prange, float32
 
 
 from .landcover import (
@@ -34,58 +34,10 @@ from .landcover import (
 )
 
 
-@njit(cache=True, inline="always")
-def get_soil_water_potential(
-    theta,
-    thetar,
-    thetas,
-    lambda_,
-    bubbling_pressure_cm,
-    minimum_effective_saturation=np.float32(0.01),
-):
-    """
-    Calculates the soil water potential (capillary suction) using the van Genuchten model
-    for array slices.
-
-    Parameters
-    ----------
-    theta : np.ndarray
-        The soil moisture content (m³/m³)
-    thetar : np.ndarray
-        The residual soil moisture content (m³/m³)
-    thetas : np.ndarray
-        The saturated soil moisture content (m³/m³)
-    lambda_ : np.ndarray
-        The van Genuchten parameter lambda (1/m)
-    bubbling_pressure_cm : np.ndarray
-        The bubbling pressure (cm)
-    minimum_effective_saturation : float, optional
-        The minimum effective saturation to avoid division by zero (default: 0.01)
-    """
-    # van Genuchten parameters
-    alpha = np.float32(1) / bubbling_pressure_cm
-    n = lambda_ + np.float32(1)
-    m = np.float32(1) - np.float32(1) / n
-
-    # Effective saturation
-    effective_saturation = (theta - thetar) / (thetas - thetar)
-    effective_saturation = np.maximum(
-        effective_saturation, minimum_effective_saturation
-    )
-    effective_saturation = np.minimum(effective_saturation, np.float32(1))
-
-    # Compute capillary pressure head (phi)
-    phi = ((effective_saturation) ** (-np.float32(1) / m) - np.float32(1)) ** (
-        np.float32(1) / n
-    ) / alpha  # Positive value
-
-    # Soil water potential (negative value for suction)
-    capillary_suction = -phi
-
-    return capillary_suction
-
-
-@njit(cache=True, inline="always")
+@njit(
+    cache=True,
+    inline="always",
+)
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
@@ -307,55 +259,6 @@ def get_crop_group_number(
     natural_land = np.isin(land_use_type, (FOREST, GRASSLAND_LIKE))
     crop_group_map[natural_land] = natural_crop_groups[natural_land]
     return crop_group_map
-
-
-@njit(cache=True, inline="always")
-def get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
-    w,
-    wres,
-    ws,
-    lambda_,
-    saturated_hydraulic_conductivity,
-    bubbling_pressure_cm,
-    minimum_effective_saturation=np.float32(0.0),
-):
-    """Calculate the unsaturated hydraulic conductivity for array slices.
-
-    This function operates on slices of arrays for efficient computation
-    following van Genuchten (1980) and Mualem (1976).
-
-    See https://archive.org/details/watershedmanagem0000unse_d4j9/page/295/mode/1up?view=theater (p. 295)
-    """
-    # Compute effective saturation
-    effective_saturation = (w - wres) / (ws - wres)
-    effective_saturation = np.maximum(
-        effective_saturation, minimum_effective_saturation
-    )
-    effective_saturation = np.minimum(effective_saturation, np.float32(1))
-
-    # Compute parameters n and m
-    n = lambda_ + np.float32(1)
-    m = np.float32(1) - np.float32(1) / n
-
-    # Compute unsaturated hydraulic conductivity
-    term1 = saturated_hydraulic_conductivity * np.sqrt(effective_saturation)
-    term2 = (
-        np.float32(1)
-        - (np.float32(1) - effective_saturation ** (np.float32(1) / m)) ** m
-    ) ** 2
-    unsaturated_hydraulic_conductivity = term1 * term2
-
-    alpha = np.float32(1) / bubbling_pressure_cm
-
-    # Compute capillary pressure head (phi)
-    phi = ((effective_saturation) ** (-np.float32(1) / m) - np.float32(1)) ** (
-        np.float32(1) / n
-    ) / alpha  # Positive value
-
-    # Soil water potential (negative value for suction)
-    capillary_suction = -phi
-
-    return unsaturated_hydraulic_conductivity, capillary_suction
 
 
 PERCOLATION_SUBSTEPS = np.int32(3)
@@ -633,7 +536,19 @@ def evapotranspirate(
     )
 
 
-@njit(cache=True, parallel=True)
+@njit(
+    (
+        float32[:],
+        float32[:],
+        float32[:],
+        float32[:],
+        float32[:],
+        float32[:],
+    ),
+    parallel=True,
+    fastmath=False,
+    inline="always",
+)
 def get_soil_water_flow_parameters(
     w,
     wres,
@@ -645,29 +560,49 @@ def get_soil_water_flow_parameters(
     psi = np.empty_like(w)
     K_unsat = np.empty_like(w)
 
-    minimum_effective_saturation = np.float32(0.01)
-
-    for i in prange(w.shape[1]):
+    for i in prange(w.shape[0]):
         # Compute unsaturated hydraulic conductivity and soil water potential. Here it is important that
         # some flow is always possible. Therefore we use a minimum effective saturation to ensure that
         # some flow is always possible. This is something that could be better paremeterized,
         # especially when looking at flood-drought
-        K_unsat[:, i], psi[:, i] = (
-            get_unsaturated_hydraulic_conductivity_and_soil_water_potential(
-                w=w[:, i],
-                wres=wres[:, i],
-                ws=ws[:, i],
-                lambda_=lambda_[:, i],
-                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[:, i],
-                bubbling_pressure_cm=bubbling_pressure_cm[:, i],
-                minimum_effective_saturation=minimum_effective_saturation,  # this could be better defined when looking at flood-drought interactions
+
+        # Compute effective saturation
+        effective_saturation = (w[i] - wres[i]) / (ws[i] - wres[i])
+        effective_saturation = np.maximum(effective_saturation, np.float32(0.01))
+        effective_saturation = np.minimum(effective_saturation, np.float32(1))
+
+        # Compute parameters n and m
+        n = lambda_[i] + np.float32(1)
+        m = np.float32(1) - np.float32(1) / n
+
+        # Compute unsaturated hydraulic conductivity
+        term1 = saturated_hydraulic_conductivity[i] * np.sqrt(effective_saturation)
+        term2 = (
+            np.float32(1)
+            - np.power(
+                (np.float32(1) - np.power(effective_saturation, (np.float32(1) / m))),
+                m,
             )
-        )
+        ) ** 2
+
+        K_unsat[i] = term1 * term2
+
+        alpha = np.float32(1) / bubbling_pressure_cm[i]
+
+        # Compute capillary pressure head (phi)
+        phi_power_term = np.power(effective_saturation, (-np.float32(1) / m))
+        phi = (
+            np.power(phi_power_term - np.float32(1), (np.float32(1) / n)) / alpha
+        )  # Positive value
+
+        # Soil water potential (negative value for suction)
+        psi[i] = -phi
+
     return psi, K_unsat
 
 
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
-@njit(cache=True, parallel=True, fastmath=False)
+@njit(cache=True, parallel=True, fastmath=True)
 def vertical_water_transport(
     available_water_infiltration,
     capillary_rise_from_groundwater,
@@ -784,13 +719,15 @@ def vertical_water_transport(
             )
 
     psi, K_unsat = get_soil_water_flow_parameters(
-        w,
-        wres,
-        ws,
-        lambda_,
-        saturated_hydraulic_conductivity,
-        bubbling_pressure_cm,
+        w.ravel(),
+        wres.ravel(),
+        ws.ravel(),
+        lambda_.ravel(),
+        saturated_hydraulic_conductivity.ravel(),
+        bubbling_pressure_cm.ravel(),
     )
+    psi = psi.reshape((N_SOIL_LAYERS, land_use_type.size))
+    K_unsat = K_unsat.reshape((N_SOIL_LAYERS, land_use_type.size))
 
     groundwater_recharge = np.zeros_like(land_use_type, dtype=np.float32)
 
@@ -898,24 +835,24 @@ class Soil(object):
         lambda_pore_size_distribution = self.model.data.grid.load(
             self.model.files["grid"]["soil/lambda"], layer=None
         )
-        lambda_pore_size_distribution = self.model.data.to_HRU(
+        self.lambda_pore_size_distribution = self.model.data.to_HRU(
             data=lambda_pore_size_distribution, fn=None
         )
 
         thetafc = get_soil_moisture_at_pressure(
-            -100,  # assuming field capacity is at -100 cm (pF 2)
+            np.float32(-100.0),  # assuming field capacity is at -100 cm (pF 2)
             self.bubbling_pressure_cm,
             thetas,
             thetar,
-            lambda_pore_size_distribution,
+            self.lambda_pore_size_distribution,
         )
 
         thetawp = get_soil_moisture_at_pressure(
-            -(10**4.2),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
+            np.float32(-(10**4.2)),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
             self.bubbling_pressure_cm,
             thetas,
             thetar,
-            lambda_pore_size_distribution,
+            self.lambda_pore_size_distribution,
         )
 
         self.ws = thetas * self.soil_layer_height
@@ -938,12 +875,6 @@ class Soil(object):
             "topwater", default=lambda: self.var.full_compressed(0, dtype=np.float32)
         )
 
-        lambda_pore_size_distribution = self.model.data.grid.load(
-            self.model.files["grid"]["soil/lambda"], layer=None
-        )
-        self.lambda_pore_size_distribution = self.model.data.to_HRU(
-            data=lambda_pore_size_distribution, fn=None
-        )
         ksat = self.model.data.grid.load(
             self.model.files["grid"]["soil/hydraulic_conductivity"], layer=None
         )
