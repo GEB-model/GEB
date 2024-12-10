@@ -4954,6 +4954,7 @@ class GEBModel(GridModel):
         year=2000,
         reduce_crops=False,
         replace_base=False,
+        export=False,
     ):
         n_farmers = self.binary["agents/farmers/id"].size
 
@@ -4977,7 +4978,7 @@ class GEBModel(GridModel):
         )
 
         farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(year)
-        self.setup_farmer_irrigation_source(is_irrigated)
+        self.setup_farmer_irrigation_source(is_irrigated, year, export)
 
         crop_calendar_per_farmer = np.zeros((n_farmers, 3, 4), dtype=np.int32)
         for mirca_unit in np.unique(farmer_mirca_units):
@@ -5253,12 +5254,29 @@ class GEBModel(GridModel):
                     crop_calendar_per_farmer, base_crops, resistant_crops
                 )
 
-        self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         assert crop_calendar_per_farmer[:, :, 3].max() == 0
-        self.set_binary(
-            np.full_like(is_irrigated, 1, dtype=np.int32),
-            name="agents/farmers/crop_calendar_rotation_years",
-        )
+
+        if export:
+            names_data = {
+                "crop_calendar": crop_calendar_per_farmer,
+            }
+            for name, data in names_data:
+                fn = os.path.join(name + ".npz")
+                self.logger.debug(f"Writing file {fn}")
+                self.files["binary"][name] = fn
+                self.is_updated["binary"][name]["filename"] = fn
+                self.logger.debug(f"Writing file {fn}")
+                fp = Path(self.root, fn)
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(fp, data=data)
+        else:
+            self.set_binary(
+                crop_calendar_per_farmer, name="agents/farmers/crop_calendar"
+            )
+            self.set_binary(
+                np.full_like(is_irrigated, 1, dtype=np.int32),
+                name="agents/farmers/crop_calendar_rotation_years",
+            )
 
     def assign_crops_irrigation_farmers(self, year=2000):
         # Define the directory and file paths
@@ -5428,7 +5446,7 @@ class GEBModel(GridModel):
 
         return farmer_crops, farmer_irrigated
 
-    def setup_farmer_irrigation_source(self, irrigating_farmers):
+    def setup_farmer_irrigation_source(self, irrigating_farmers, year, export):
         fraction_sw_irrigation = "aeisw"
         fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
             f"global_irrigation_area_{fraction_sw_irrigation}",
@@ -5538,9 +5556,25 @@ class GEBModel(GridModel):
                     p=probabilities,
                 )
 
-        # Update the irrigation_source attribute or return it as needed
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-        self.set_binary(irrigating_farmers, name="agents/farmers/irrigating_farmers")
+        if export:
+            names_data = {
+                "irrigation_source": irrigation_source,
+                "irrigating_farmers": irrigating_farmers,
+            }
+            for name, data in names_data:
+                fn = os.path.join(name + f"_{year}" + ".npz")
+                self.logger.debug(f"Writing file {fn}")
+                self.files["binary"][name] = fn
+                self.is_updated["binary"][name]["filename"] = fn
+                self.logger.debug(f"Writing file {fn}")
+                fp = Path(self.root, fn)
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(fp, data=data)
+        else:
+            self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
+            self.set_binary(
+                irrigating_farmers, name="agents/farmers/irrigating_farmers"
+            )
 
     def setup_population(self):
         populaton_map = self.data_catalog.get_rasterdataset(
