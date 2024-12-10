@@ -351,5 +351,6 @@ setup_forcing:
   endtime: 2023-12-31
 
 setup_SPEI:
+  window: 7
   calibration_period_start: 2000-01-01
   calibration_period_end: 2020-12-31

@@ -2509,7 +2509,7 @@ class CropFarmers(AgentBaseClass):
             region_ids_per_farmer=self.region_id.data,
             field_indices_by_farmer=self.field_indices_by_farmer.data,
             field_indices=self.field_indices,
-            field_size_per_farmer=self.field_size_per_farmer.data,
+            field_size_per_farmer=self.field_size_per_farmer,
             all_loans_annual_cost=self.all_loans_annual_cost.data,
             loan_tracker=self.loan_tracker.data,
             interest_rate=interest_rate,

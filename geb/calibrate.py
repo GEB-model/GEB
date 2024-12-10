@@ -147,7 +147,7 @@ def get_KGE_discharge(run_directory, individual, config, gauges, observed_stream
 
 	def get_streamflows(gauge, observed_streamflow):
 		# Get the path of the simulated streamflow file
-		Qsim_tss = os.path.join(run_directory, config['calibration']['scenario'], f"{gauge[0]}, {gauge[1]}.csv")
+		Qsim_tss = os.path.join(run_directory, config['calibration']['scenario'], f"{gauge[0]} {gauge[1]}.csv")
 		# os.path.join(run_directory, 'base/discharge.csv')
 		
 		# Check if the simulated streamflow file exists
@@ -161,7 +161,7 @@ def get_KGE_discharge(run_directory, individual, config, gauges, observed_stream
 		# parse the dates in the index
 		# simulated_streamflow.index = pd.date_range(config['calibration']['start_time'] + timedelta(days=1), config['calibration']['end_time'])
 
-		simulated_streamflow_gauge = simulated_streamflow[', '.join(map(str, gauge))]
+		simulated_streamflow_gauge = simulated_streamflow[' '.join(map(str, gauge))]
 		simulated_streamflow_gauge.name = 'simulated'
 		observed_streamflow_gauge = observed_streamflow[gauge]
 		observed_streamflow_gauge.name = 'observed'
@@ -638,9 +638,7 @@ def calibrate(config, working_directory):
 		# Drop the first two rows (header rows)
 		df = df.drop([0, 1]).reset_index(drop=True)
 		# Parse the 'Date' column to datetime
-		df['Date'] = pd.to_datetime(
-			df['Date'], format='%H:%M:%S %d/%m/%Y', errors='coerce'
-		)
+		df['Date'] = pd.to_datetime(df['Date'], errors='coerce', infer_datetime_format=True)
 		# Drop rows with missing or invalid dates
 		df = df.dropna(subset=['Date'])
 		# Convert 'Discharge (ML/Day)' to numeric
