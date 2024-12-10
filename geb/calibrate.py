@@ -14,7 +14,6 @@ Thanks Hylke for making it available for use and modification
 Modified by Peter Burek and Jens de Bruijn
 """
 import os
-import shutil
 import time
 import array
 import random

@@ -4810,7 +4810,7 @@ class CropFarmers(AgentBaseClass):
         self.water_abstraction_sum()
 
         ## yearly actions
-        if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+        if self.model.current_time.month == 7 and self.model.current_time.day == 1:
             # Set yearly yield ratio based on the difference between saved actual and potential profit
             self.yearly_yield_ratio = (
                 self.yearly_profits / self.yearly_potential_profits
