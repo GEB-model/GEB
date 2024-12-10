@@ -8,11 +8,9 @@ from operator import attrgetter
 import yaml
 import logging
 import functools
-import faulthandler
 from pathlib import Path
-import importlib
 import warnings
-from numba import config
+import importlib
 
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
@@ -26,16 +24,6 @@ from geb.calibrate import calibrate as geb_calibrate
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.multirun import multi_run as geb_multi_run
 
-faulthandler.enable()
-
-# set threading layer to tbb, this is much faster than other threading layers
-config.THREADING_LAYER = "tbb"
-
-# set environment variable for GEB package directory
-os.environ["GEB_PACKAGE_DIR"] = str(
-    Path(importlib.util.find_spec("geb").origin).parent.parent
-)
-
 
 def multi_level_merge(dict1, dict2):
     for key, value in dict2.items():
@@ -44,6 +32,17 @@ def multi_level_merge(dict1, dict2):
         else:
             dict1[key] = value
     return dict1
+
+
+class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
+    def construct_mapping(self, node, deep=False):
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in mapping:
+                raise ValueError(f"Duplicate key found: {key}")
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
 
 
 def parse_config(config_path, current_directory=None):
@@ -55,7 +54,8 @@ def parse_config(config_path, current_directory=None):
         config = config_path
     else:
         config = yaml.load(
-            open(current_directory / config_path, "r"), Loader=yaml.FullLoader
+            open(current_directory / config_path, "r"),
+            Loader=DetectDuplicateKeysYamlLoader,
         )
         current_directory = current_directory / Path(config_path).parent
 
@@ -224,20 +224,24 @@ def run_model(
     }
 
     if not gui:
+        if profiling:
+            profile = cProfile.Profile()
+            profile.enable()
+
         with GEBModel(**model_params) as model:
-            if profiling:
-                with cProfile.Profile() as pr:
-                    model.run()
-                with open("profiling_stats.cprof", "w") as stream:
-                    stats = Stats(pr, stream=stream)
-                    stats.strip_dirs()
-                    stats.sort_stats("cumtime")
-                    stats.dump_stats(".prof_stats")
-                    stats.print_stats()
-                pr.dump_stats("profile.prof")
-            else:
-                model.run()
+            model.run()
             model.report()
+
+        if profiling:
+            profile.disable()
+            with open("profiling_stats.cprof", "w") as stream:
+                stats = Stats(profile, stream=stream)
+                stats.strip_dirs()
+                stats.sort_stats("cumtime")
+                stats.dump_stats(".prof_stats")
+                stats.print_stats()
+            profile.dump_stats("profile.prof")
+
     else:
         # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
         # the event loop started for reading data, unless we use nest_asyncio.
@@ -328,11 +332,7 @@ def click_build_options(build_config="build.yml"):
             "-d",
             type=str,
             multiple=True,
-            default=[
-                Path(os.environ.get("GEB_PACKAGE_DIR"))
-                / "examples"
-                / "data_catalog.yml"
-            ],
+            default=[Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
             help="""A list of paths to the data library YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
         )
         @click.option(
@@ -437,15 +437,15 @@ def build(
 
     region = config["general"]["region"]
     if "basin" in region:
-        region_config = {
-            "basin": region["basin"],
-        }
+        region_config = {"basin": region["basin"], "max_bounds": region["max_bounds"]}
     elif "pour_point" in region:
         pour_point = region["pour_point"]
         region_config = {
             "subbasin": [[pour_point[0]], [pour_point[1]]],
+            "max_bounds": region["max_bounds"],
         }
     elif "geometry" in region:
+        raise NotImplementedError("Max bounds needs to be implemented")
         region_config = {
             "geom": region["geometry"],
         }
@@ -537,8 +537,14 @@ def evaluate():
     default=".",
     help="Working directory for model.",
 )
+@click.option(
+    "--name",
+    "-n",
+    default="model",
+    help="Working directory for model.",
+)
 @main.command()
-def share(working_directory):
+def share(working_directory, name):
     """Share model."""
 
     os.chdir(working_directory)
@@ -550,7 +556,7 @@ def share(working_directory):
     folders = ["input"]
     files = ["model.yml", "build.yml"]
     optional_files = ["sfincs.yml", "update.yml", "data_catalog.yml"]
-    with zipfile.ZipFile("model.zip", "w") as zipf:
+    with zipfile.ZipFile(f"{name}.zip", "w") as zipf:
         total_files = (
             sum(
                 [
@@ -567,21 +573,22 @@ def share(working_directory):
                 for filename in filenames:
                     zipf.write(os.path.join(root, filename))
                     progress += 1  # Increment progress counter
-                    if not progress % 100:
-                        print(
-                            f"Exporting file {progress}/{total_files}"
-                        )  # Print progress
+                    print(
+                        f"Exporting file {progress}/{total_files}", end="\r"
+                    )  # Print progress
         for file in files:
             zipf.write(file)
             progress += 1  # Increment progress counter
-            if not progress % 100:
-                print(f"Exporting file {progress}/{total_files}")  # Print progress
+            print(
+                f"Exporting file {progress}/{total_files}", end="\r"
+            )  # Print progress
         for file in optional_files:
             if os.path.exists(file):
                 zipf.write(file)
             progress += 1  # Increment progress counter
-            if not progress % 100:
-                print(f"Exporting file {progress}/{total_files}")  # Print progress
+            print(
+                f"Exporting file {progress}/{total_files}", end="\r"
+            )  # Print progress
         print(f"Exporting file {progress}/{total_files}")
         print("Done!")
 

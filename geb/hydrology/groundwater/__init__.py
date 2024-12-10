@@ -82,7 +82,7 @@ class GroundWater:
 
         self.var.heads = self.model.data.grid.load_initial(
             "heads",
-            default=get_initial_head(),
+            default=get_initial_head,
         )
 
         self.modflow = ModFlowSimulation(
@@ -100,7 +100,7 @@ class GroundWater:
         )
 
         self.var.capillar = self.var.load_initial(
-            "capillar", default=self.var.full_compressed(0, dtype=np.float32)
+            "capillar", default=lambda: self.var.full_compressed(0, dtype=np.float32)
         )
 
     def step(self, groundwater_recharge, groundwater_abstraction_m3):

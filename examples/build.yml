@@ -22,8 +22,6 @@ setup_channel_depth:
 
 setup_channel_ratio:
 
-setup_elevation:
-
 setup_soil_parameters:
 
 setup_land_use_parameters:
@@ -354,3 +352,35 @@ setup_SPEI:
   window: 7
   calibration_period_start: 2000-01-01
   calibration_period_end: 2020-12-31
+
+setup_well_prices_by_reference_year_global:
+  WHY_10: 82.0209974 # $/m
+  WHY_20: 164 # $/m
+  WHY_30: 50 # $/m
+  reference_year: 2017
+  start_year: 1960
+  end_year: 2020
+
+setup_irrigation_sources:
+  irrigation_sources:
+    "no": -1
+    canal: 0
+    well: 1
+
+setup_create_farms_simple:
+  data_source: lowder
+
+setup_farmer_characteristics_simple:
+  risk_aversion_mean: 2
+  risk_aversion_standard_deviation: 1
+  discount_rate: 0.05
+  interest_rate: 0.05
+  reduce_crops: true
+
+setup_population:
+
+setup_assets:
+  feature_types:
+  - buildings
+  - roads
+  - rails

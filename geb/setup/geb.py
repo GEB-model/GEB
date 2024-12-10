@@ -14,7 +14,6 @@ import shutil
 import tempfile
 import json
 from urllib.parse import urlparse
-import concurrent.futures
 from hydromt.exceptions import NoDataException
 import numpy as np
 import pandas as pd
@@ -29,6 +28,8 @@ from dateutil.relativedelta import relativedelta
 from contextlib import contextmanager
 from calendar import monthrange
 from numcodecs import Blosc
+
+import pyflwdir
 
 from hydromt.models.model_grid import GridModel
 from hydromt.data_catalog import DataCatalog
@@ -62,6 +63,8 @@ from .workflows.conversions import (
 from .workflows.forcing import (
     reproject_and_apply_lapse_rate_temperature,
     reproject_and_apply_lapse_rate_pressure,
+    download_ERA5,
+    open_ERA5,
 )
 
 XY_CHUNKSIZE = 350
@@ -238,8 +241,9 @@ class GEBModel(GridModel):
         self,
         region: dict,
         sub_grid_factor: int,
-        hydrography_fn: str,
-        basin_index_fn: str,
+        hydrography_fn=None,
+        basin_index_fn=None,
+        resolution_arcsec=30,
     ) -> xr.DataArray:
         """Creates a 2D regular grid or reads an existing grid.
         An 2D regular grid will be created from a geometry (geom_fn) or bbox. If an existing
@@ -257,28 +261,36 @@ class GEBModel(GridModel):
             Region must be of kind [basin, subbasin].
         sub_grid_factor : int
             GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
-        hydrography_fn : str
-            Name of data source for hydrography data.
-        basin_index_fn : str
-            Name of data source with basin (bounding box) geometries associated with
-            the 'basins' layer of `hydrography_fn`.
         """
+        assert hydrography_fn is None, "Please remove this parameter"
+        assert basin_index_fn is None, "Please remove this parameter"
 
         assert (
-            sub_grid_factor >= 10
-        ), "sub_grid_factor must be larger than 10, because this is the resolution of the MERIT high-res DEM"
-        assert sub_grid_factor % 10 == 0, "sub_grid_factor must be a multiple of 10"
+            resolution_arcsec % 3 == 0
+        ), "resolution_arcsec must be a multiple of 3 to align with MERIT"
+        assert sub_grid_factor >= 2
 
-        hydrography = self.data_catalog.get_rasterdataset(hydrography_fn)
-        hydrography.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
-        hydrography.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
+        hydrography = self.data_catalog.get_rasterdataset(
+            "merit_hydro", provider=self.data_provider
+        )
 
         self.logger.info("Preparing 2D grid.")
         kind, region = hydromt.workflows.parse_region(region, logger=self.logger)
         if kind in ["basin", "subbasin"]:
             # get basin geometry
+            max_bounds = region["max_bounds"]
+            region.pop("max_bounds")
             geom, xy = hydromt.workflows.get_basin_geometry(
-                ds=hydrography, kind=kind, logger=self.logger, **region
+                ds=hydrography,
+                kind=kind,
+                logger=self.logger,
+                bounds=[
+                    max_bounds["xmin"],
+                    max_bounds["ymin"],
+                    max_bounds["xmax"],
+                    max_bounds["ymax"],
+                ],
+                **region,
             )
             region.update(xy=xy)
         elif "geom" in region:
@@ -300,45 +312,97 @@ class GEBModel(GridModel):
         # Add region and grid to model
         self.set_geoms(geom, name="region")
 
-        hydrography = hydrography.raster.clip_geom(geom, mask=True)
-
-        ldd = hydrography["flwdir"].raster.reclassify(
-            reclass_table=pd.DataFrame(
-                index=[
-                    0,
-                    1,
-                    2,
-                    4,
-                    8,
-                    16,
-                    32,
-                    64,
-                    128,
-                    hydrography["flwdir"].raster.nodata,
-                ],
-                data={"ldd": [5, 6, 3, 2, 1, 4, 7, 8, 9, 0]},
-            ),
-            method="exact",
-        )["ldd"]
-
-        self.set_grid(ldd, name="routing/kinematic/ldd")
-        self.set_grid(hydrography["uparea"], name="routing/kinematic/upstream_area")
-        self.set_grid(hydrography["elevtn"], name="routing/kinematic/outflow_elevation")
-        self.set_grid(
-            xr.where(
-                hydrography["rivlen_ds"] != -9999,
-                hydrography["rivlen_ds"],
-                np.nan,
-                keep_attrs=True,
-            ),
-            name="routing/kinematic/channel_length",
+        hydrography = hydrography.raster.clip_geom(
+            geom,
+            align=resolution_arcsec
+            / 60
+            / 60,  # align grid to resolution of model grid. Conversion is to convert from arcsec to degrees
+            mask=True,
         )
-        self.set_grid(hydrography["rivslp"], name="routing/kinematic/channel_slope")
+        flwdir = hydrography["flwdir"].values
+        flwdir[hydrography.mask is False] = 255
 
-        # hydrography['mask'].raster.set_nodata(-1)
-        self.set_grid((~hydrography["mask"]).astype(np.int8), name="areamaps/grid_mask")
+        flow_raster = pyflwdir.from_array(
+            flwdir,
+            ftype="d8",
+            transform=hydrography.rio.transform(),
+            latlon=True,  # hydrography is specified in latlon
+        )
 
-        mask = self.grid["areamaps/grid_mask"]
+        scale_factor = resolution_arcsec // 3
+        self.set_dict(
+            {"hydrography_scale_factor": scale_factor}, name="hydrography_scale_factor"
+        )
+
+        # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
+        flow_raster_upscaled, idxs_out = flow_raster.upscale(
+            scale_factor=scale_factor,
+            method="ihu",
+        )
+        flow_raster_upscaled.repair_loops()
+
+        elevation_coarsened = (
+            hydrography["elv"]
+            .raster.mask_nodata()
+            .coarsen(
+                x=scale_factor, y=scale_factor, boundary="exact", coord_func="mean"
+            )
+        )
+
+        # elevation
+        elevation = elevation_coarsened.mean()
+        self.set_grid(elevation, name="landsurface/topo/elevation")
+
+        elevation_std = elevation_coarsened.std()
+        self.set_grid(elevation_std, name="landsurface/topo/elevation_STD")
+
+        self.set_MERIT_grid(
+            hydrography["elv"], name="landsurface/topo/subgrid_elevation"
+        )
+
+        # outflow elevation
+        outflow_elevation = elevation_coarsened.min()
+        self.set_grid(outflow_elevation, name="routing/kinematic/outflow_elevation")
+
+        # flow direction
+        ldd = xr.full_like(outflow_elevation, 255, dtype=np.uint8)
+        ldd.raster.set_nodata(255)
+        ldd.data = flow_raster_upscaled.to_array(ftype="ldd")
+        self.set_grid(ldd, name="routing/kinematic/ldd")
+
+        # upstream area
+        upstream_area = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        upstream_area.raster.set_nodata(np.nan)
+        upstream_area_data = flow_raster_upscaled.upstream_area(unit="m2").astype(
+            np.float32
+        )
+        upstream_area_data[upstream_area_data == -9999.0] = np.nan
+        upstream_area.data = upstream_area_data
+        self.set_grid(upstream_area, name="routing/kinematic/upstream_area")
+
+        # channel length
+        channel_length = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        channel_length.raster.set_nodata(np.nan)
+        channel_length_data = flow_raster.subgrid_rivlen(
+            idxs_out, unit="m", direction="down"
+        )
+        channel_length_data[channel_length_data == -9999.0] = np.nan
+        channel_length.data = channel_length_data
+        self.set_grid(channel_length, name="routing/kinematic/channel_length")
+
+        # river slope
+        river_slope = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        river_slope.raster.set_nodata(np.nan)
+        river_slope_data = flow_raster.subgrid_rivslp(idxs_out, hydrography["elv"])
+        river_slope_data[river_slope_data == -9999.0] = np.nan
+        river_slope.data = river_slope_data
+        self.set_grid(
+            river_slope,
+            name="routing/kinematic/channel_slope",
+        )
+
+        mask = ldd == ldd.raster.nodata
+        self.set_grid(mask, name="areamaps/grid_mask")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
 
@@ -650,7 +714,10 @@ class GEBModel(GridModel):
                 d["name"] for d in self.dict["crops/crop_data"]["data"].values()
             ]
             for crop_name in all_crop_names_model:
-                if crop_name in translate_crop_names:
+                if (
+                    translate_crop_names is not None
+                    and crop_name in translate_crop_names
+                ):
                     sub_crops = [
                         crop
                         for crop in translate_crop_names[crop_name]
@@ -946,9 +1013,25 @@ class GEBModel(GridModel):
             changes = np.nanmean(
                 region_data[1:].to_numpy() / region_data[:-1].to_numpy(), axis=1
             )
-            changes = np.insert(changes, 0, np.nan)
 
+            changes = np.insert(changes, 0, np.nan)
             costs.at[region_id, "_crop_price_inflation"] = changes
+
+            years_with_no_crop_inflation_data = costs.loc[
+                region_id, "_crop_price_inflation"
+            ]
+            region_inflation_rates = self.dict["economics/inflation_rates"]["data"][
+                str(region["region_id"])
+            ]
+
+            for year, crop_inflation_rate in years_with_no_crop_inflation_data.items():
+                if np.isnan(crop_inflation_rate):
+                    year_inflation_rate = region_inflation_rates[
+                        self.dict["economics/inflation_rates"]["time"].index(str(year))
+                    ]
+                    costs.at[(region_id, year), "_crop_price_inflation"] = (
+                        year_inflation_rate
+                    )
 
         return costs
 
@@ -1270,7 +1353,7 @@ class GEBModel(GridModel):
         self.logger.info("Setting up channel depth")
         assert (
             (self.grid["routing/kinematic/upstream_area"] > 0)
-            | ~self.grid["areamaps/grid_mask"]
+            | self.grid["areamaps/grid_mask"]
         ).all()
         channel_depth_data = 0.27 * self.grid["routing/kinematic/upstream_area"] ** 0.26
         channel_depth = hydromt.raster.full(
@@ -1312,8 +1395,11 @@ class GEBModel(GridModel):
         """
         self.logger.info("Setting up channel ratio")
         assert (
-            (self.grid["routing/kinematic/channel_length"] > 0)
-            | ~self.grid["areamaps/grid_mask"]
+            (self.grid["routing/kinematic/channel_length"] > 0)  # inside mask
+            | self.grid["areamaps/grid_mask"]  # or is masked
+            | (
+                self.grid["routing/kinematic/ldd"] == 5
+            )  # or there is a pit in the river network
         ).all()
         channel_area = (
             self.grid["routing/kinematic/channel_width"]
@@ -1336,117 +1422,7 @@ class GEBModel(GridModel):
         self.set_grid(channel_ratio, channel_ratio.name)
 
     def setup_elevation(self) -> None:
-        """
-        Sets up the standard deviation of elevation for the model.
-
-        Notes
-        -----
-        This method sets up the standard deviation of elevation for the model by retrieving high-resolution elevation data
-        from the MERIT dataset and calculating the standard deviation of elevation for each cell in the grid.
-
-        MERIT data has a half cell offset. Therefore, this function first corrects for this offset.  It then selects the
-        high-resolution elevation data from the MERIT dataset using the grid coordinates of the model, and calculates the
-        standard deviation of elevation for each cell in the grid using the `np.std()` function.
-
-        The resulting standard deviation of elevation is then set as the `landsurface/topo/elevation_STD` attribute of
-        the grid using the `set_grid()` method.
-        """
-        self.logger.info("Setting up elevation standard deviation")
-        MERIT = self.data_catalog.get_rasterdataset(
-            "merit_hydro",
-            variables=["elv"],
-            provider=self.data_provider,
-            bbox=self.grid.raster.bounds,
-            buffer=50,
-        ).compute()  # Why is compute needed here?
-        # In some MERIT datasets, there is a half degree offset in MERIT data. We can detect this by checking the offset relative to the resolution.
-        # This offset should be 0.5. If the offset instead is close to 0 or 1, then we need to correct for this offset.
-        center_offset = (
-            MERIT.coords["x"][0] % MERIT.rio.resolution()[0]
-        ) / MERIT.rio.resolution()[0]
-        # check whether offset is close to 0.5
-        if not np.isclose(center_offset, 0.5, atol=MERIT.rio.resolution()[0] / 100):
-            assert np.isclose(
-                center_offset, 0, atol=MERIT.rio.resolution()[0] / 100
-            ) or np.isclose(
-                center_offset, 1, atol=MERIT.rio.resolution()[0] / 100
-            ), "Could not detect offset in MERIT data"
-            MERIT = MERIT.assign_coords(
-                x=MERIT.coords["x"] + MERIT.rio.resolution()[0] / 2,
-                y=MERIT.coords["y"] - MERIT.rio.resolution()[1] / 2,
-            )
-            center_offset = (
-                MERIT.coords["x"][0] % MERIT.rio.resolution()[0]
-            ) / MERIT.rio.resolution()[0]
-
-        # we are going to match the upper left corners. So create a MERIT grid with the upper left corners as coordinates
-        MERIT_ul = MERIT.assign_coords(
-            x=MERIT.coords["x"] - MERIT.rio.resolution()[0] / 2,
-            y=MERIT.coords["y"] - MERIT.rio.resolution()[1] / 2,
-        )
-
-        scaling = 10
-
-        # find the upper left corner of the grid cells in self.grid
-        y_step = self.grid.get_index("y")[1] - self.grid.get_index("y")[0]
-        x_step = self.grid.get_index("x")[1] - self.grid.get_index("x")[0]
-        upper_left_y = self.grid.get_index("y")[0] - y_step / 2
-        upper_left_x = self.grid.get_index("x")[0] - x_step / 2
-
-        ymin = np.isclose(
-            MERIT_ul.get_index("y"),
-            upper_left_y,
-            atol=abs(MERIT.rio.resolution()[1] / 100),
-            rtol=0,
-        )
-        assert (
-            ymin.sum() == 1
-        ), "Could not find the upper left corner of the grid cell in MERIT data"
-        ymin = ymin.argmax()
-        ymax = ymin + self.grid.y.size * scaling
-        xmin = np.isclose(
-            MERIT_ul.get_index("x"),
-            upper_left_x,
-            atol=abs(MERIT.rio.resolution()[0] / 100),
-            rtol=0,
-        )
-        assert (
-            xmin.sum() == 1
-        ), "Could not find the upper left corner of the grid cell in MERIT data"
-        xmin = xmin.argmax()
-        xmax = xmin + self.grid.x.size * scaling
-
-        # select data from MERIT using the grid coordinates
-        high_res_elevation_data = MERIT.isel(y=slice(ymin, ymax), x=slice(xmin, xmax))
-        self.set_MERIT_grid(
-            MERIT.isel(y=slice(ymin - 1, ymax + 1), x=slice(xmin - 1, xmax + 1)),
-            name="landsurface/topo/subgrid_elevation",
-        )
-
-        elevation_per_cell = high_res_elevation_data.values.reshape(
-            high_res_elevation_data.shape[0] // scaling, scaling, -1, scaling
-        ).swapaxes(1, 2)
-
-        elevation = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="landsurface/topo/elevation",
-            lazy=True,
-            crs=self.crs,
-        )
-        elevation.data = np.mean(elevation_per_cell, axis=(2, 3))
-        self.set_grid(elevation, elevation.name)
-
-        standard_deviation = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="landsurface/topo/elevation_STD",
-            lazy=True,
-        )
-        standard_deviation.data = np.std(elevation_per_cell, axis=(2, 3))
-        self.set_grid(standard_deviation, standard_deviation.name)
+        raise ValueError("setup_elevation not needed anymore, please remove")
 
     def setup_soil_parameters(self) -> None:
         """
@@ -1824,6 +1800,7 @@ class GEBModel(GridModel):
         minimum_thickness_confined_layer=50,
         maximum_thickness_confined_layer=1000,
         intial_heads_source="GLOBGM",
+        force_one_layer=False,
     ):
         """
         Sets up the MODFLOW grid for GEB. This code is adopted from the GLOBGM
@@ -1852,13 +1829,11 @@ class GEBModel(GridModel):
             self.data_catalog.get_rasterdataset(
                 "total_groundwater_thickness_globgm",
                 bbox=self.bounds,
-                buffer=0,
+                buffer=2,
             )
             .rename({"lon": "x", "lat": "y"})
             .compute()
         )
-        total_thickness = self.snap_to_grid(total_thickness, self.grid)
-        assert total_thickness.shape == self.grid.raster.shape
 
         total_thickness = np.clip(
             total_thickness,
@@ -1870,15 +1845,13 @@ class GEBModel(GridModel):
             self.data_catalog.get_rasterdataset(
                 "thickness_confining_layer_globgm",
                 bbox=self.bounds,
-                buffer=0,
+                buffer=2,
             )
             .rename({"lon": "x", "lat": "y"})
             .compute()
         )
-        confining_layer = self.snap_to_grid(confining_layer, self.grid)
-        assert confining_layer.shape == self.grid.raster.shape
 
-        if not (confining_layer == 0).all():  # two-layer-model
+        if not (confining_layer == 0).all() and not force_one_layer:  # two-layer-model
             two_layers = True
         else:
             two_layers = False
@@ -1889,42 +1862,65 @@ class GEBModel(GridModel):
                 total_thickness, confining_layer + minimum_thickness_confined_layer
             )
             # thickness of layer 2 is based on the predefined confiningLayerThickness
-            bottom_top_layer = aquifer_top_elevation - confining_layer
+            relative_bottom_top_layer = -confining_layer
             # make sure that the minimum thickness of layer 2 is at least 0.1 m
-            thickness_top_layer = np.maximum(
-                0.1, aquifer_top_elevation - bottom_top_layer
-            )
-            bottom_top_layer = aquifer_top_elevation - thickness_top_layer
+            thickness_top_layer = np.maximum(0.1, -relative_bottom_top_layer)
+            relative_bottom_top_layer = -thickness_top_layer
             # thickness of layer 1 is at least 5.0 m
             thickness_bottom_layer = np.maximum(
                 5.0, total_thickness - thickness_top_layer
             )
-            bottom_bottom_layer = bottom_top_layer - thickness_bottom_layer
+            relative_bottom_bottom_layer = (
+                relative_bottom_top_layer - thickness_bottom_layer
+            )
 
-            layer_boundary_elevation = xr.concat(
-                [aquifer_top_elevation, bottom_top_layer, bottom_bottom_layer],
+            relative_layer_boundary_elevation = xr.concat(
+                [
+                    xr.full_like(relative_bottom_bottom_layer, 0),
+                    relative_bottom_top_layer,
+                    relative_bottom_bottom_layer,
+                ],
                 dim="boundary",
                 compat="equals",
             ).compute()
         else:
-            layer_boundary_elevation = xr.concat(
-                [aquifer_top_elevation, aquifer_top_elevation - total_thickness],
+            relative_bottom_bottom_layer = -total_thickness
+            relative_layer_boundary_elevation = xr.concat(
+                [
+                    xr.full_like(relative_bottom_bottom_layer, 0),
+                    relative_bottom_bottom_layer,
+                ],
                 dim="boundary",
                 compat="equals",
             ).compute()
+
+        layer_boundary_elevation = (
+            relative_layer_boundary_elevation.raster.reproject_like(
+                aquifer_top_elevation, method="bilinear"
+            )
+        ) + aquifer_top_elevation
 
         self.set_grid(
             layer_boundary_elevation, name="groundwater/layer_boundary_elevation"
         )
 
         # load hydraulic conductivity
-        hydraulic_conductivity = self.data_catalog.get_rasterdataset(
-            "hydraulic_conductivity_globgm",
-            bbox=self.bounds,
-            buffer=0,
-        ).rename({"lon": "x", "lat": "y"})
-        hydraulic_conductivity = self.snap_to_grid(hydraulic_conductivity, self.grid)
-        assert hydraulic_conductivity.shape == self.grid.raster.shape
+        hydraulic_conductivity = (
+            self.data_catalog.get_rasterdataset(
+                "hydraulic_conductivity_globgm",
+                bbox=self.bounds,
+                buffer=2,
+            )
+            .rename({"lon": "x", "lat": "y"})
+            .compute()
+        )
+
+        # because
+        hydraulic_conductivity_log = np.log(hydraulic_conductivity)
+        hydraulic_conductivity_log = hydraulic_conductivity_log.raster.reproject_like(
+            aquifer_top_elevation, method="bilinear"
+        )
+        hydraulic_conductivity = np.exp(hydraulic_conductivity_log)
 
         if two_layers:
             hydraulic_conductivity = xr.concat(
@@ -1940,10 +1936,11 @@ class GEBModel(GridModel):
         specific_yield = self.data_catalog.get_rasterdataset(
             "specific_yield_aquifer_globgm",
             bbox=self.bounds,
-            buffer=0,
+            buffer=2,
         ).rename({"lon": "x", "lat": "y"})
-        specific_yield = self.snap_to_grid(specific_yield, self.grid)
-        assert specific_yield.shape == self.grid.raster.shape
+        specific_yield = specific_yield.raster.reproject_like(
+            aquifer_top_elevation, method="bilinear"
+        )
 
         if two_layers:
             specific_yield = xr.concat(
@@ -1962,53 +1959,67 @@ class GEBModel(GridModel):
 
         why_map.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         why_map.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
-        why_interpolated = self.interpolate(why_map, "nearest").compute()
+        why_interpolated = why_map.raster.reproject_like(
+            aquifer_top_elevation, method="bilinear"
+        )
 
         self.set_grid(why_interpolated, name="groundwater/why_map")
 
         if intial_heads_source == "GLOBGM":
-            # load digital elevation model that was used for globgm
+            # the GLOBGM DEM has a slight offset, which we fix here before loading it
+            dem_globgm = self.data_catalog.get_rasterdataset(
+                "dem_globgm",
+                variables=["dem_average"],
+            )
+            dem_globgm = dem_globgm.assign_coords(
+                lon=self.data_catalog.get_rasterdataset("head_upper_globgm").x.values,
+                lat=self.data_catalog.get_rasterdataset("head_upper_globgm").y.values,
+            )
+
+            # loading the globgm with fixed coordinates
             dem_globgm = (
                 self.data_catalog.get_rasterdataset(
-                    "dem_globgm",
-                    geom=self.region,
-                    buffer=0,
-                    variables=["dem_average"],
+                    dem_globgm, geom=self.region, variables=["dem_average"], buffer=2
                 )
                 .rename({"lon": "x", "lat": "y"})
                 .compute()
             )
-            dem_globgm = self.snap_to_grid(dem_globgm, self.grid)
-            assert dem_globgm.shape == self.grid.raster.shape
+            # load digital elevation model that was used for globgm
 
             dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
 
             # heads
             head_upper_layer = self.data_catalog.get_rasterdataset(
-                "head_upper_globgm", bbox=self.bounds, buffer=0
+                "head_upper_globgm",
+                bbox=self.bounds,
+                buffer=2,
             ).compute()
-            head_upper_layer = head_upper_layer.raster.mask_nodata()
-            head_upper_layer = self.snap_to_grid(head_upper_layer, self.grid)
-            head_upper_layer = head_upper_layer - dem_globgm + dem
-            assert head_upper_layer.shape == self.grid.raster.shape
 
-            # assert concistency of datasets. If one layer, this layer should be all nan
-            if not two_layers:
-                assert np.isnan(head_upper_layer).all()
+            head_upper_layer = head_upper_layer.raster.mask_nodata()
+            relative_head_upper_layer = head_upper_layer - dem_globgm
+            relative_head_upper_layer = relative_head_upper_layer.raster.reproject_like(
+                aquifer_top_elevation, method="bilinear"
+            )
+            head_upper_layer = dem + relative_head_upper_layer
 
             head_lower_layer = self.data_catalog.get_rasterdataset(
-                "head_lower_globgm", bbox=self.bounds, buffer=0
+                "head_lower_globgm",
+                bbox=self.bounds,
+                buffer=2,
             ).compute()
             head_lower_layer = head_lower_layer.raster.mask_nodata()
-            head_lower_layer = self.snap_to_grid(head_lower_layer, self.grid).compute()
-            head_lower_layer = (head_lower_layer - dem_globgm + dem).compute()
-            # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
-            head_lower_layer = xr.where(
-                head_lower_layer < layer_boundary_elevation[-1],
-                layer_boundary_elevation[-1],
-                head_lower_layer,
+            relative_head_lower_layer = head_lower_layer - dem_globgm
+            relative_head_lower_layer = relative_head_lower_layer.raster.reproject_like(
+                aquifer_top_elevation, method="bilinear"
             )
-            assert head_lower_layer.shape == self.grid.raster.shape
+            # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
+            relative_head_lower_layer = xr.where(
+                relative_head_lower_layer
+                < layer_boundary_elevation.isel(boundary=-1) - dem,
+                layer_boundary_elevation.isel(boundary=-1) - dem,
+                relative_head_lower_layer,
+            )
+            head_lower_layer = dem + relative_head_lower_layer
 
             if two_layers:
                 # combine upper and lower layer head in one dataarray
@@ -2134,8 +2145,28 @@ class GEBModel(GridModel):
             # concurrent.futures.wait(futures)
             mask = self.grid["areamaps/grid_mask"]
 
-            pr_hourly = self.download_ERA(
-                "total_precipitation", starttime, endtime, method="accumulation"
+            files = download_ERA5(
+                folder=Path(self.root).parent / "preprocessing" / "climate" / "ERA5",
+                variables=[
+                    "total_precipitation",
+                    "surface_solar_radiation_downwards",
+                    "surface_thermal_radiation_downwards",
+                    "2m_temperature",
+                    "2m_dewpoint_temperature",
+                    "surface_pressure",
+                    "10m_u_component_of_wind",
+                    "10m_v_component_of_wind",
+                ],
+                starttime=starttime,
+                endtime=endtime,
+                bounds=mask.raster.bounds,
+                logger=self.logger,
+            )
+
+            pr_hourly = open_ERA5(
+                files,
+                "tp",  # total_precipitation
+                xy_chunksize=XY_CHUNKSIZE,
             )
             pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
             pr_hourly.attrs = {
@@ -2152,11 +2183,10 @@ class GEBModel(GridModel):
             pr.name = "pr"
             self.set_forcing(pr, name="climate/pr")
 
-            hourly_rsds = self.download_ERA(
-                "surface_solar_radiation_downwards",
-                starttime,
-                endtime,
-                method="accumulation",
+            hourly_rsds = open_ERA5(
+                files,
+                "ssrd",  # surface_solar_radiation_downwards
+                xy_chunksize=XY_CHUNKSIZE,
             )
             rsds = hourly_rsds.resample(time="D").sum() / (
                 24 * 3600
@@ -2171,11 +2201,10 @@ class GEBModel(GridModel):
             rsds.name = "rsds"
             self.set_forcing(rsds, name="climate/rsds")
 
-            hourly_rlds = self.download_ERA(
-                "surface_thermal_radiation_downwards",
-                starttime,
-                endtime,
-                method="accumulation",
+            hourly_rlds = open_ERA5(
+                files,
+                "strd",  # surface_thermal_radiation_downwards
+                xy_chunksize=XY_CHUNKSIZE,
             )
             rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
             rlds.attrs = {
@@ -2187,9 +2216,7 @@ class GEBModel(GridModel):
             rlds.name = "rlds"
             self.set_forcing(rlds, name="climate/rlds")
 
-            hourly_tas = self.download_ERA(
-                "2m_temperature", starttime, endtime, method="raw"
-            )
+            hourly_tas = open_ERA5(files, "t2m", xy_chunksize=XY_CHUNKSIZE)
 
             DEM = self.data_catalog.get_rasterdataset(
                 "fabdem",
@@ -2229,8 +2256,10 @@ class GEBModel(GridModel):
             tasmin.name = "tasmin"
             self.set_forcing(tasmin, name="climate/tasmin")
 
-            dew_point_tas = self.download_ERA(
-                "2m_dewpoint_temperature", starttime, endtime, method="raw"
+            dew_point_tas = open_ERA5(
+                files,
+                "d2m",
+                xy_chunksize=XY_CHUNKSIZE,
             )
             dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
                 dew_point_tas, DEM, mask
@@ -2263,9 +2292,7 @@ class GEBModel(GridModel):
             relative_humidity.name = "hurs"
             self.set_forcing(relative_humidity, name="climate/hurs")
 
-            pressure = self.download_ERA(
-                "surface_pressure", starttime, endtime, method="raw"
-            )
+            pressure = open_ERA5(files, "sp", xy_chunksize=XY_CHUNKSIZE)
             pressure = reproject_and_apply_lapse_rate_pressure(pressure, DEM, mask)
             pressure.attrs = {
                 "standard_name": "surface_air_pressure",
@@ -2276,13 +2303,17 @@ class GEBModel(GridModel):
             pressure.name = "ps"
             self.set_forcing(pressure, name="climate/ps")
 
-            u_wind = self.download_ERA(
-                "10m_u_component_of_wind", starttime, endtime, method="raw"
+            u_wind = open_ERA5(
+                files,
+                "u10",
+                xy_chunksize=XY_CHUNKSIZE,
             )
             u_wind = u_wind.resample(time="D").mean()
 
-            v_wind = self.download_ERA(
-                "10m_v_component_of_wind", starttime, endtime, method="raw"
+            v_wind = open_ERA5(
+                files,
+                "v10",
+                xy_chunksize=XY_CHUNKSIZE,
             )
             v_wind = v_wind.resample(time="D").mean()
             wind_speed = np.sqrt(u_wind**2 + v_wind**2)
@@ -2299,215 +2330,6 @@ class GEBModel(GridModel):
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
             raise ValueError(f"Unknown data source: {data_source}")
-
-    def download_ERA(
-        self, variable, starttime: date, endtime: date, method: str, download_only=False
-    ):
-        # https://cds.climate.copernicus.eu/cdsapp#!/software/app-c3s-daily-era5-statistics?tab=appcode
-        # https://earthscience.stackexchange.com/questions/24156/era5-single-level-calculate-relative-humidity
-        import cdsapi
-
-        """
-        Download hourly ERA5 data for a specified time frame and bounding box.
-
-        Parameters:
-        start_date (str): Start date in 'YYYY-MM-DD' format.
-        end_date (str): End date in 'YYYY-MM-DD' format.
-
-        """
-
-        download_path = Path(self.root).parent / "preprocessing" / "climate" / "ERA5"
-        download_path.mkdir(parents=True, exist_ok=True)
-
-        def download(start_and_end_year):
-            start_year, end_year = start_and_end_year
-            output_fn = download_path / f"{variable}_{start_year}_{end_year}.nc"
-            if output_fn.exists():
-                self.logger.info(f"ERA5 data already downloaded to {output_fn}")
-            else:
-                (xmin, ymin, xmax, ymax) = self.bounds
-
-                # add buffer to bounding box. Resolution is 0.1 degrees, so add 0.1 degrees to each side
-                xmin -= 0.1
-                ymin -= 0.1
-                xmax += 0.1
-                ymax += 0.1
-
-                max_retries = 10
-                retries = 0
-                while retries < max_retries:
-                    try:
-                        request = {
-                            "product_type": "reanalysis",
-                            "format": "netcdf",
-                            "variable": [
-                                variable,
-                            ],
-                            "date": f"{start_year}-01-01/{end_year}-12-31",
-                            "time": [
-                                "00:00",
-                                "01:00",
-                                "02:00",
-                                "03:00",
-                                "04:00",
-                                "05:00",
-                                "06:00",
-                                "07:00",
-                                "08:00",
-                                "09:00",
-                                "10:00",
-                                "11:00",
-                                "12:00",
-                                "13:00",
-                                "14:00",
-                                "15:00",
-                                "16:00",
-                                "17:00",
-                                "18:00",
-                                "19:00",
-                                "20:00",
-                                "21:00",
-                                "22:00",
-                                "23:00",
-                            ],
-                            "area": (
-                                float(ymax),
-                                float(xmin),
-                                float(ymin),
-                                float(xmax),
-                            ),  # North, West, South, East
-                        }
-                        cdsapi.Client().retrieve(
-                            "reanalysis-era5-land",
-                            request,
-                            output_fn,
-                        )
-                        break
-                    except Exception as e:
-                        print(
-                            f"Download failed. Retrying... ({retries+1}/{max_retries})"
-                        )
-                        print(e)
-                        print(request)
-                        retries += 1
-                if retries == max_retries:
-                    raise Exception("Download failed after maximum retries.")
-            return output_fn
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            multiple_years = 5
-
-            range_start = starttime.year - starttime.year % 5
-            range_end = endtime.year - endtime.year % 5 + 5
-            years = []
-            for year in range(range_start, range_end, multiple_years):
-                years.append(
-                    (
-                        max(year, starttime.year),
-                        min(year + multiple_years - 1, endtime.year),
-                    )
-                )
-            files = list(executor.map(download, years))
-
-        if download_only:
-            return
-
-        ds = xr.open_mfdataset(
-            files,
-            # chunks={
-            #     "valid_time": 1,
-            #     "latitude": XY_CHUNKSIZE,
-            #     "longitude": XY_CHUNKSIZE,
-            # },
-            compat="equals",  # all values and dimensions must be the same,
-            combine_attrs="drop_conflicts",  # drop conflicting attributes
-        ).rio.set_crs(4326)
-
-        assert "valid_time" in ds.dims
-        assert "latitude" in ds.dims
-        assert "longitude" in ds.dims
-
-        # rename valid_time to time
-        ds = ds.rename({"valid_time": "time"})
-
-        # remove first time step.
-        # This is an accumulation from the previous day and thus cannot be calculated
-        ds = ds.isel(time=slice(1, None))
-        ds = ds.chunk({"time": 24, "latitude": XY_CHUNKSIZE, "longitude": XY_CHUNKSIZE})
-        # the ERA5 grid is sometimes not exactly regular. The offset is very minor
-        # therefore we snap the grid to a regular grid, to save huge computational time
-        # for a infenitesimal loss in accuracy
-        ds = ds.assign_coords(
-            latitude=np.linspace(
-                ds["latitude"][0].item(),
-                ds["latitude"][-1].item(),
-                ds["latitude"].size,
-                endpoint=True,
-            ),
-            longitude=np.linspace(
-                ds["longitude"][0].item(),
-                ds["longitude"][-1].item(),
-                ds["longitude"].size,
-                endpoint=True,
-            ),
-        )
-        # assert that time is monotonically increasing with a constant step size
-        assert (
-            ds.time.diff("time").astype(np.int64)
-            == (ds.time[1] - ds.time[0]).astype(np.int64)
-        ).all()
-        ds.raster.set_crs(4326)
-        # the last few months of data may come from ERA5T (expver 5) instead of ERA5 (expver 1)
-        # if so, combine that dimension
-        if "expver" in ds.dims:
-            ds = ds.sel(expver=1).combine_first(ds.sel(expver=5))
-
-        # assert there is only one data variable
-        assert len(ds.data_vars) == 1
-
-        # select the variable and rename longitude and latitude variable
-        ds = ds[list(ds.data_vars)[0]].rename({"longitude": "x", "latitude": "y"})
-
-        if method == "accumulation":
-
-            def xr_ERA5_accumulation_to_hourly(ds, dim):
-                # Identify the axis number for the given dimension
-                assert ds.time.dt.hour[0] == 1, "First time step must be at 1 UTC"
-                # All chunksizes must be divisible by 24, except the last one
-                assert all(
-                    chunksize % 24 == 0 for chunksize in ds.chunksizes["time"][:-1]
-                )
-
-                def diff_with_prepend(data, dim):
-                    # Assert dimension is a multiple of 24
-                    # As the first hour is an accumulation from the first hour of the day, prepend a 0
-                    # to the data array before taking the diff. In this way, the output is also 24 hours
-                    return np.diff(data, prepend=0, axis=dim)
-
-                # Apply the custom diff function using apply_ufunc
-                return xr.apply_ufunc(
-                    diff_with_prepend,  # The function to apply
-                    ds,  # The DataArray or Dataset to which the function will be applied
-                    kwargs={
-                        "dim": ds.get_axis_num(dim)
-                    },  # Additional arguments for the function
-                    dask="parallelized",  # Enable parallelized computation
-                    output_dtypes=[ds.dtype],  # Specify the output data type
-                )
-
-            # The accumulations in the short forecasts of ERA5-Land (with hourly steps from 01 to 24) are treated
-            # the same as those in ERA-Interim or ERA-Interim/Land, i.e., they are accumulated from the beginning
-            # of the forecast to the end of the forecast step. For example, runoff at day=D, step=12 will provide
-            # runoff accumulated from day=D, time=0 to day=D, time=12. The maximum accumulation is over 24 hours,
-            # i.e., from day=D, time=0 to day=D+1,time=0 (step=24).
-            # forecasts are the difference between the current and previous time step
-            hourly = xr_ERA5_accumulation_to_hourly(ds, "time")
-        elif method == "raw":
-            hourly = ds
-        else:
-            raise NotImplementedError
-
-        return hourly
 
     def snap_to_grid(self, ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
         # make sure all datasets have more or less the same coordinates
@@ -3364,7 +3186,7 @@ class GEBModel(GridModel):
         pad_maxy = max(regions_bounds[3], mask_bounds[3]) + abs(resolution_y) / 2.0
 
         # TODO: Is there a better way to do this?
-        padded_subgrid, region_subgrid_slice = pad_xy(
+        region_subgrid, region_subgrid_slice = pad_xy(
             self.subgrid["areamaps/sub_grid_mask"].rio,
             pad_minx,
             pad_miny,
@@ -3373,9 +3195,10 @@ class GEBModel(GridModel):
             return_slice=True,
             constant_values=1,
         )
-        padded_subgrid.raster.set_crs(self.subgrid.raster.crs)
-        padded_subgrid.raster.set_nodata(-1)
-        self.set_region_subgrid(padded_subgrid, name="areamaps/region_mask")
+        region_subgrid.raster.set_crs(self.subgrid.raster.crs)
+        region_subgrid = region_subgrid.astype(np.int8)
+        region_subgrid.raster.set_nodata(-1)
+        self.set_region_subgrid(region_subgrid, name="areamaps/region_mask")
 
         land_use = self.data_catalog.get_rasterdataset(
             land_cover,
@@ -3383,7 +3206,7 @@ class GEBModel(GridModel):
             buffer=200,  # 2 km buffer
         )
         reprojected_land_use = land_use.raster.reproject_like(
-            padded_subgrid, method="nearest"
+            region_subgrid, method="nearest"
         )
 
         region_raster = reprojected_land_use.raster.rasterize(
@@ -3393,58 +3216,22 @@ class GEBModel(GridModel):
         )
         self.set_region_subgrid(region_raster, name="areamaps/region_subgrid")
 
-        padded_cell_area = self.grid["areamaps/cell_area"].rio.pad_box(*regions_bounds)
-        # calculate the cell area for the grid for the entire region
-        region_cell_area = calculate_cell_area(
-            padded_cell_area.raster.transform, padded_cell_area.shape
-        )
+        region_subgrid_cell_area = xr.full_like(region_subgrid, np.nan)
 
-        # create subgrid for entire region
-        region_cell_area_subgrid = hydromt.raster.full_from_transform(
-            padded_cell_area.raster.transform * Affine.scale(1 / self.subgrid_factor),
-            (
-                padded_cell_area.raster.shape[0] * self.subgrid_factor,
-                padded_cell_area.raster.shape[1] * self.subgrid_factor,
-            ),
-            nodata=np.nan,
-            dtype=padded_cell_area.dtype,
-            crs=padded_cell_area.raster.crs,
-            name="areamaps/sub_grid_mask",
-            lazy=False,
-        )
-
-        # calculate the cell area for the subgrid for the entire region
-        region_cell_area_subgrid.data = (
-            repeat_grid(region_cell_area, self.subgrid_factor) / self.subgrid_factor**2
-        )
-
-        # create new subgrid for the region without padding
-        region_cell_area_subgrid_clipped_to_region = hydromt.raster.full(
-            region_raster.raster.coords,
-            nodata=np.nan,
-            dtype=padded_cell_area.dtype,
-            name="areamaps/sub_grid_mask_region",
-            crs=region_raster.raster.crs,
-            lazy=False,
-        )
-
-        # remove padding from region subgrid
-        region_cell_area_subgrid_clipped_to_region.data = (
-            region_cell_area_subgrid.raster.clip_bbox(
-                (pad_minx, pad_miny, pad_maxx, pad_maxy)
-            )
+        region_subgrid_cell_area.data = calculate_cell_area(
+            region_subgrid_cell_area.raster.transform, region_subgrid_cell_area.shape
         )
 
         # set the cell area for the region subgrid
         self.set_region_subgrid(
-            region_cell_area_subgrid_clipped_to_region,
+            region_subgrid_cell_area,
             name="areamaps/region_cell_area_subgrid",
         )
 
         MERIT = self.data_catalog.get_rasterdataset(
             "merit_hydro",
             variables=["upg"],
-            bbox=padded_subgrid.rio.bounds(),
+            bbox=region_subgrid.rio.bounds(),
             buffer=300,  # 3 km buffer
             provider=self.data_provider,
         )
@@ -3884,6 +3671,7 @@ class GEBModel(GridModel):
         electricity_rates["ISO3"] = electricity_rates["Country"].map(
             SUPERWELL_NAME_TO_ISO3
         )
+        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
         # Create a dictionary to store the various types of prices with their initial reference year values
         price_types = {
             "why_10": WHY_10,
@@ -3898,8 +3686,6 @@ class GEBModel(GridModel):
 
             for _, region in self.geoms["areamaps/regions"].iterrows():
                 region_id = str(region["region_id"])
-                region_id_int = region["region_id"]
-                region_ISO3 = self.geoms["areamaps/regions"].iloc[region_id_int]["ISO3"]
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
 
@@ -3907,17 +3693,13 @@ class GEBModel(GridModel):
                     ppp_conversion_rates["data"][region_id], dtype=float
                 )[years_index_ppp]
 
-                if price_type == "electricity_cost":
-                    rates_row = electricity_rates[
-                        electricity_rates["ISO3"] == region_ISO3
-                    ]
-                    prices.loc[reference_year] = rates_row.iloc[0]["Rate"]
-                else:
-                    prices.loc[reference_year] = self.convert_price_using_ppp(
-                        initial_price,
-                        source_conversion_rates,
-                        target_conversion_rates,
-                    )
+                prices.loc[reference_year] = self.convert_price_using_ppp(
+                    initial_price[region["ISO3"]]
+                    if isinstance(initial_price, dict)
+                    else initial_price,
+                    source_conversion_rates,
+                    target_conversion_rates,
+                )
 
                 # Forward calculation from the reference year
                 for year in range(reference_year + 1, end_year + 1):
@@ -4396,6 +4178,7 @@ class GEBModel(GridModel):
             if data_source == "lowder":
                 country_ISO3 = region[country_iso3_column]
                 if farm_size_donor_countries:
+                    assert isinstance(farm_size_donor_countries, dict)
                     country_ISO3 = farm_size_donor_countries.get(
                         country_ISO3, country_ISO3
                     )
@@ -5044,7 +4827,8 @@ class GEBModel(GridModel):
         discount_std = pd.Series(region_ids).map(data["Discount_std"]).to_numpy()
 
         try:
-            income = self.binary["agents/farmers/income"]
+            # income = self.binary["agents/farmers/income"]
+            pass
         except KeyError:
             self.logger.info("Income does not exist, generating random income..")
             daily_non_farm_income_family = random.choices(
@@ -6635,7 +6419,13 @@ class GEBModel(GridModel):
                 encoding=encoding,
             )
 
-            # Also export to TIFF for easier visualization
+            # rasterio does not support boolean data, which is why
+            # we convert it to uint8 before writing. These files are
+            # only used for displaying purposes so they do not affect the
+            # actual model (re-)building
+            if grid.dtype == bool:
+                grid = grid.astype(np.uint8)
+            # also export to tif for easier visualization
             grid.rio.to_raster(filepath.with_suffix(".tif"))
 
     def write_grid(self):
@@ -7167,3 +6957,7 @@ class GEBModel(GridModel):
         subgrid_factor = self.subgrid.dims["x"] // self.grid.dims["x"]
         assert subgrid_factor == self.subgrid.dims["y"] // self.grid.dims["y"]
         return subgrid_factor
+
+    @property
+    def hydrography_scale_factor(self):
+        return self.dict["hydrography_scale_factor"]["hydrography_scale_factor"]

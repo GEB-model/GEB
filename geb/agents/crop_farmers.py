@@ -4,7 +4,7 @@ from datetime import datetime
 import json
 import copy
 import calendar
-from typing import Any, Dict, Tuple, Union
+from typing import Tuple, Union
 
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
@@ -1046,25 +1046,27 @@ class CropFarmers(AgentBaseClass):
 
         self.var.actual_evapotranspiration_crop_life = self.var.load_initial(
             "actual_evapotranspiration_crop_life",
-            default=self.var.full_compressed(0, dtype=np.float32, gpu=False),
+            default=lambda: self.var.full_compressed(0, dtype=np.float32, gpu=False),
             gpu=False,
         )
         self.var.potential_evapotranspiration_crop_life = self.var.load_initial(
             "potential_evapotranspiration_crop_life",
-            default=self.var.full_compressed(0, dtype=np.float32, gpu=False),
+            default=lambda: self.var.full_compressed(0, dtype=np.float32, gpu=False),
             gpu=False,
         )
         self.var.crop_map = self.var.load_initial(
-            "crop_map", default=np.full_like(self.var.land_owners, -1), gpu=False
+            "crop_map",
+            default=lambda: np.full_like(self.var.land_owners, -1),
+            gpu=False,
         )
         self.var.crop_age_days_map = self.var.load_initial(
             "crop_age_days_map",
-            default=np.full_like(self.var.land_owners, -1),
+            default=lambda: np.full_like(self.var.land_owners, -1),
             gpu=False,
         )
         self.var.crop_harvest_age_days = self.var.load_initial(
             "crop_harvest_age_days",
-            default=np.full_like(self.var.land_owners, -1),
+            default=lambda: np.full_like(self.var.land_owners, -1),
             gpu=False,
         )
 
@@ -2107,7 +2109,7 @@ class CropFarmers(AgentBaseClass):
         return yield_ratio
 
     def decompress(self, array):
-        if np.issubsctype(array, np.floating):
+        if np.issubdtype(array, np.floating):
             nofieldvalue = np.nan
         else:
             nofieldvalue = -1

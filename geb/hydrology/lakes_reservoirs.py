@@ -244,7 +244,7 @@ class LakesReservoirs(object):
 
         self.var.total_inflow_from_other_water_bodies = self.var.load_initial(
             "total_inflow_from_other_water_bodies",
-            default=np.zeros_like(self.var.volume, dtype=np.float32),
+            default=lambda: np.zeros_like(self.var.volume, dtype=np.float32),
         )
 
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
@@ -264,7 +264,7 @@ class LakesReservoirs(object):
         )
 
         self.var.storage = self.var.load_initial(
-            "storage", default=self.var.volume.copy()
+            "storage", default=lambda: self.var.volume.copy()
         )
         self.var.outflow_height = estimate_outflow_height(
             self.var.volume, self.lake_factor, self.var.lake_area, average_discharge
@@ -372,14 +372,14 @@ class LakesReservoirs(object):
         assert np.array_equal(
             np.unique(waterbody_outflow_points), np.unique(waterBodyID)
         )
-        # make sure that each outflow point is only used once
-        assert (
-            np.unique(
+        if __debug__:
+            # make sure that each outflow point is only used once
+            unique_outflow_points = np.unique(
                 waterbody_outflow_points[waterbody_outflow_points != -1],
                 return_counts=True,
-            )[1].max()
-            == 1
-        )
+            )[1]
+            if unique_outflow_points.size > 0:
+                assert unique_outflow_points.max() == 1
 
         return waterbody_outflow_points
 
@@ -527,8 +527,13 @@ class LakesReservoirs(object):
 
         outflow = outflow_lakes + outflow_reservoirs
 
-        outflow_grid = np.take(outflow, self.var.waterbody_outflow_points)
-        outflow_grid[self.var.waterbody_outflow_points == -1] = 0
+        if outflow.size > 0:
+            outflow_grid = np.take(outflow, self.var.waterbody_outflow_points)
+            outflow_grid[self.var.waterbody_outflow_points == -1] = 0
+        else:
+            outflow_grid = np.zeros_like(
+                self.var.waterbody_outflow_points, dtype=outflow.dtype
+            )
 
         # shift outflow 1 cell downstream
         outflow_shifted_downstream = upstream1(

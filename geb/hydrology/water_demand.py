@@ -254,14 +254,15 @@ class WaterDemand:
         domestic_water_demand_m3 = self.model.data.grid.MtoM3(domestic_water_demand)
         del domestic_water_demand
 
-        domestic_withdrawal_m3 = self.withdraw(
+        self.model.data.grid.domestic_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, domestic_water_demand_m3
         )  # withdraw from surface water
-        domestic_withdrawal_m3 += self.withdraw(
+        self.model.data.grid.domestic_withdrawal_m3 += self.withdraw(
             available_groundwater_m3, domestic_water_demand_m3
         )  # withdraw from groundwater
         domestic_return_flow_m = self.model.data.grid.M3toM(
-            domestic_withdrawal_m3 * (1 - domestic_water_efficiency)
+            self.model.data.grid.domestic_withdrawal_m3
+            * (1 - domestic_water_efficiency)
         )
 
         # 2. industry (surface + ground)
@@ -271,14 +272,15 @@ class WaterDemand:
         industry_water_demand_m3 = self.model.data.grid.MtoM3(industry_water_demand)
         del industry_water_demand
 
-        industry_withdrawal_m3 = self.withdraw(
+        self.model.data.grid.industry_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, industry_water_demand_m3
         )  # withdraw from surface water
-        industry_withdrawal_m3 += self.withdraw(
+        self.model.data.grid.industry_withdrawal_m3 += self.withdraw(
             available_groundwater_m3, industry_water_demand_m3
         )  # withdraw from groundwater
         industry_return_flow_m = self.model.data.grid.M3toM(
-            industry_withdrawal_m3 * (1 - industry_water_efficiency)
+            self.model.data.grid.industry_withdrawal_m3
+            * (1 - industry_water_efficiency)
         )
 
         # 3. livestock (surface)
@@ -288,11 +290,12 @@ class WaterDemand:
         livestock_water_demand_m3 = self.model.data.grid.MtoM3(livestock_water_demand)
         del livestock_water_demand
 
-        livestock_withdrawal_m3 = self.withdraw(
+        self.model.data.grid.livestock_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, livestock_water_demand_m3
         )  # withdraw from surface water
         livestock_return_flow_m = self.model.data.grid.M3toM(
-            livestock_withdrawal_m3 * (1 - livestock_water_efficiency)
+            self.model.data.grid.livestock_withdrawal_m3
+            * (1 - livestock_water_efficiency)
         )
         timer.new_split("Water withdrawal")
 
@@ -301,7 +304,7 @@ class WaterDemand:
             irrigation_water_withdrawal_m,
             irrigation_water_consumption_m,
             return_flow_irrigation_m,
-            addtoevapotrans_m,
+            irrigation_loss_to_evaporation_m,
         ) = self.crop_farmers.abstract_water(
             cell_area=(
                 self.var.cellArea.get() if self.model.use_gpu else self.var.cellArea
@@ -330,7 +333,7 @@ class WaterDemand:
                 influxes=[irrigation_water_withdrawal_m],
                 outfluxes=[
                     irrigation_water_consumption_m,
-                    addtoevapotrans_m,
+                    irrigation_loss_to_evaporation_m,
                     return_flow_irrigation_m,
                 ],
                 tollerance=1e-5,
@@ -342,12 +345,18 @@ class WaterDemand:
             self.var.actual_irrigation_consumption = cp.asarray(
                 irrigation_water_consumption_m
             )
-            addtoevapotrans_m = cp.asarray(addtoevapotrans_m)
+            irrigation_loss_to_evaporation_m = cp.asarray(
+                irrigation_loss_to_evaporation_m
+            )
         else:
             self.var.actual_irrigation_consumption = irrigation_water_consumption_m
-            addtoevapotrans_m = addtoevapotrans_m
+            irrigation_loss_to_evaporation_m = irrigation_loss_to_evaporation_m
 
         assert (self.var.actual_irrigation_consumption + 1e-5 >= 0).all()
+
+        self.model.data.grid.irrigation_consumption_m3 = self.model.data.to_grid(
+            HRU_data=self.var.MtoM3(self.var.actual_irrigation_consumption), fn="sum"
+        )
 
         groundwater_abstraction_m3 = (
             available_groundwater_m3_pre - available_groundwater_m3
@@ -374,7 +383,7 @@ class WaterDemand:
         # Abstract water from reservoir
         self.model.data.grid.storage -= reservoir_abstraction_m3
 
-        returnFlow = (
+        return_flow = (
             self.model.data.to_grid(
                 HRU_data=return_flow_irrigation_m, fn="weightedmean"
             )
@@ -385,13 +394,24 @@ class WaterDemand:
 
         if __debug__:
             balance_check(
+                name="water_demand_1",
+                how="cellwise",
+                influxes=[irrigation_water_withdrawal_m],
+                outfluxes=[
+                    irrigation_water_consumption_m,
+                    irrigation_loss_to_evaporation_m,
+                    return_flow_irrigation_m,
+                ],
+                tollerance=1e-6,
+            )
+            balance_check(
                 name="water_demand_2",
                 how="sum",
                 influxes=[],
                 outfluxes=[
-                    domestic_withdrawal_m3,
-                    industry_withdrawal_m3,
-                    livestock_withdrawal_m3,
+                    self.model.data.grid.domestic_withdrawal_m3,
+                    self.model.data.grid.industry_withdrawal_m3,
+                    self.model.data.grid.livestock_withdrawal_m3,
                     (
                         irrigation_water_withdrawal_m * self.var.cellArea.get()
                         if self.model.use_gpu
@@ -416,5 +436,6 @@ class WaterDemand:
         return (
             groundwater_abstraction_m3,
             channel_abstraction_m3 / self.model.data.grid.cellArea,
-            returnFlow,
+            return_flow,  # from all sources, re-added in routing
+            irrigation_loss_to_evaporation_m,
         )
