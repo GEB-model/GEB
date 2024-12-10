@@ -53,20 +53,20 @@ setup_irrigation_sources:
 
 setup_create_farms_simple:
 
+setup_household_characteristics:
+
 setup_crops_from_source:
   source: MIRCA2000
+  
+determine_crop_area_fractions:
+
+setup_farmer_crop_calendar:
+  year: 2000
+  reduce_crops: true
+  replace_base: false
 
 setup_farmer_characteristics_simple:
-  risk_aversion_mean: 2
-  risk_aversion_standard_deviation: 1
-  discount_rate: 0.05
   interest_rate: 0.05
-  irrigation_choice:
-    canal: 80
-    well: 20
-
-setup_cultivation_costs:
-  cultivation_costs: 0
 
 setup_crop_prices:
   crop_prices: FAO_stat

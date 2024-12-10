@@ -58,6 +58,7 @@ from .workflows.conversions import (
     M49_to_ISO3,
     SUPERWELL_NAME_TO_ISO3,
     GLOBIOM_NAME_TO_ISO3,
+    COUNTRY_NAME_TO_ISO3,
 )
 from .workflows.forcing import (
     reproject_and_apply_lapse_rate_temperature,
@@ -82,6 +83,43 @@ logger = logging.getLogger(__name__)
 # Define the compressor using Blosc (e.g., Zstandard compression)
 
 compressor = Blosc(cname="lz4", clevel=3, shuffle=Blosc.BITSHUFFLE)
+
+
+def create_grid_cell_id_array(area_fraction_da):
+    # Get the sizes of the spatial dimensions
+    ny, nx = area_fraction_da.sizes["y"], area_fraction_da.sizes["x"]
+
+    # Create an array of sequential integers from 0 to ny*nx - 1
+    grid_ids = np.arange(ny * nx).reshape(ny, nx)
+
+    # Create a DataArray with the same coordinates and dimensions as your spatial grid
+    grid_id_da = xr.DataArray(
+        grid_ids,
+        coords={
+            "y": area_fraction_da.coords["y"],
+            "x": area_fraction_da.coords["x"],
+        },
+        dims=["y", "x"],
+    )
+
+    return grid_id_da
+
+
+def get_neighbor_cell_ids(cell_id, nx, ny, radius=1):
+    row = cell_id // nx
+    col = cell_id % nx
+
+    neighbor_cell_ids = []
+    for dr in range(-radius, radius + 1):
+        for dc in range(-radius, radius + 1):
+            if dr == 0 and dc == 0:
+                continue  # Skip the cell itself
+            r = row + dr
+            c = col + dc
+            if 0 <= r < ny and 0 <= c < nx:
+                neighbor_id = r * nx + c
+                neighbor_cell_ids.append(neighbor_id)
+    return neighbor_cell_ids
 
 
 @contextmanager
@@ -606,6 +644,10 @@ class GEBModel(GridModel):
             GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
                 GLOBIOM_NAME_TO_ISO3
             )
+            # For my personal branch
+            GLOBIOM_regions.loc[
+                GLOBIOM_regions["Country"] == "Switzerland", "Region37"
+            ] = "EU_MidWest"
             assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
             ISO3_codes_region = self.geoms["areamaps/regions"]["ISO3"].unique()
@@ -636,17 +678,6 @@ class GEBModel(GridModel):
 
             # Drop crops with no data at all for these regions
             donor_data = donor_data.dropna(axis=1, how="all")
-
-            total_years = donor_data.index.get_level_values("year").unique()
-
-            if project_past_until_year:
-                assert (
-                    total_years[0] > project_past_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
-            if project_future_until_year:
-                assert (
-                    total_years[-1] < project_future_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
 
             # Filter out columns that contain the word 'meat'
             donor_data = donor_data[
@@ -709,6 +740,17 @@ class GEBModel(GridModel):
             data = self.inter_and_extrapolate_prices(
                 prices_plus_crop_price_inflation, unique_regions
             )
+
+            total_years = data.index.get_level_values("year").unique()
+
+            if project_past_until_year:
+                assert (
+                    total_years[0] > project_past_until_year
+                ), f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
+            if project_future_until_year:
+                assert (
+                    total_years[-1] < project_future_until_year
+                ), f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
 
             if (
                 project_past_until_year is not None
@@ -906,7 +948,7 @@ class GEBModel(GridModel):
                         columns=[donor_data_country.name],
                     )
                     if data_out is None:
-                        data_out = new_data
+                        data_out = new_data.copy()
                     else:
                         data_out = data_out.combine_first(new_data)
                 else:
@@ -922,13 +964,14 @@ class GEBModel(GridModel):
                         columns=[column],
                     )
                     if data_out is None:
-                        data_out = new_data
+                        data_out = new_data.copy()
                     else:
                         data_out = data_out.combine_first(new_data)
 
-        # Drop columns that are all NaN
-        data_out = data_out.dropna(axis=1, how="all")
         data_out = data_out.drop(columns=["ISO3"])
+        data_out = data_out.dropna(axis=1, how="all")
+        data_out = data_out.dropna(axis=0, how="all")
+
         return data_out
 
     def convert_price_using_ppp(
@@ -3810,6 +3853,140 @@ class GEBModel(GridModel):
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
+    def determine_crop_area_fractions(self, resolution="5-arcminute"):
+        output_folder = "plot/mirca_crops"
+        os.makedirs(output_folder, exist_ok=True)
+
+        crops = [
+            "Wheat",  # 0
+            "Maize",  # 1
+            "Rice",  # 2
+            "Barley",  # 3
+            "Rye",  # 4
+            "Millet",  # 5
+            "Sorghum",  # 6
+            "Soybeans",  # 7
+            "Sunflower",  # 8
+            "Potatoes",  # 9
+            "Cassava",  # 10
+            "Sugar_cane",  # 11
+            "Sugar_beet",  # 12
+            "Oil_palm",  # 13
+            "Rapeseed",  # 14
+            "Groundnuts",  # 15
+            "Others_perennial",  # 23
+            "Fodder",  # 24
+            "Others_annual",  # 25,
+        ]
+
+        years = ["2000", "2005", "2010", "2015"]
+        irrigation_types = ["ir", "rf"]
+
+        # Initialize lists to collect DataArrays across years
+        fraction_da_list = []
+        irrigated_fraction_da_list = []
+
+        # Initialize a dictionary to store datasets
+        crop_data = {}
+
+        for year in years:
+            crop_data[year] = {}
+            for crop in crops:
+                crop_data[year][crop] = {}
+                for irrigation in irrigation_types:
+                    dataset_name = f"MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
+
+                    crop_map = self.data_catalog.get_rasterdataset(
+                        dataset_name,
+                        bbox=self.bounds,
+                        buffer=2,
+                    )
+                    crop_map = crop_map.fillna(0)
+
+                    crop_data[year][crop][irrigation] = crop_map.assign_coords(
+                        x=np.round(crop_map.coords["x"].values, decimals=6),
+                        y=np.round(crop_map.coords["y"].values, decimals=6),
+                    )
+
+            # Initialize variables for total calculations
+            total_cropped_area = None
+            total_crop_areas = {}
+
+            # Calculate total crop areas and total cropped area
+            for crop in crops:
+                irrigated = crop_data[year][crop]["ir"]
+                rainfed = crop_data[year][crop]["rf"]
+
+                total_crop = irrigated + rainfed
+                total_crop_areas[crop] = total_crop
+
+                if total_cropped_area is None:
+                    total_cropped_area = total_crop.copy()
+                else:
+                    total_cropped_area += total_crop
+
+            # Initialize lists to collect DataArrays for this year
+            fraction_list = []
+            irrigated_fraction_list = []
+
+            # Calculate the fraction of each crop to the total cropped area
+            for crop in crops:
+                fraction = total_crop_areas[crop] / total_cropped_area
+
+                # Assign 'crop' as a coordinate
+                fraction = fraction.assign_coords(crop=crop)
+
+                # Append to the list
+                fraction_list.append(fraction)
+
+            # Concatenate the list of fractions into a single DataArray along the 'crop' dimension
+            fraction_da = xr.concat(fraction_list, dim="crop")
+
+            # Assign the 'year' coordinate and expand dimensions to include 'year'
+            fraction_da = fraction_da.assign_coords(year=year).expand_dims(dim="year")
+
+            # Append to the list of all years
+            fraction_da_list.append(fraction_da)
+
+            # Calculate irrigated fractions for each crop and collect them
+            for crop in crops:
+                irrigated = crop_data[year][crop]["ir"].compute()
+                total_crop = total_crop_areas[crop]
+                irrigated_fraction = irrigated / total_crop
+
+                # Assign 'crop' as a coordinate
+                irrigated_fraction = irrigated_fraction.assign_coords(crop=crop)
+
+                # Append to the list
+                irrigated_fraction_list.append(irrigated_fraction)
+
+            # Concatenate the list of irrigated fractions into a single DataArray along the 'crop' dimension
+            irrigated_fraction_da = xr.concat(irrigated_fraction_list, dim="crop")
+
+            # Assign the 'year' coordinate and expand dimensions to include 'year'
+            irrigated_fraction_da = irrigated_fraction_da.assign_coords(
+                year=year
+            ).expand_dims(dim="year")
+
+            # Append to the list of all years
+            irrigated_fraction_da_list.append(irrigated_fraction_da)
+
+        # After processing all years, concatenate along the 'year' dimension
+        all_years_fraction_da = xr.concat(fraction_da_list, dim="year")
+        all_years_irrigated_fraction_da = xr.concat(
+            irrigated_fraction_da_list, dim="year"
+        )
+
+        # Save the concatenated DataArrays as NetCDF files
+        save_dir = Path(self.root).parent / "preprocessing" / "crops" / "MIRCA2000"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        output_filename = save_dir / "crop_area_fraction_all_years.nc"
+        all_years_fraction_da.to_netcdf(output_filename)
+
+        output_filename = save_dir / "crop_irrigated_fraction_all_years.nc"
+        all_years_irrigated_fraction_da.to_netcdf(output_filename)
+
     def setup_create_farms_simple(
         self,
         region_id_column="region_id",
@@ -3891,122 +4068,8 @@ class GEBModel(GridModel):
                 "Country"
             ].ffill()
 
-            # convert country names to ISO3 codes
-            iso3_codes = {
-                "Albania": "ALB",
-                "Algeria": "DZA",
-                "American Samoa": "ASM",
-                "Argentina": "ARG",
-                "Austria": "AUT",
-                "Bahamas": "BHS",
-                "Barbados": "BRB",
-                "Belgium": "BEL",
-                "Brazil": "BRA",
-                "Bulgaria": "BGR",
-                "Burkina Faso": "BFA",
-                "Chile": "CHL",
-                "Colombia": "COL",
-                "Côte d'Ivoire": "CIV",
-                "Croatia": "HRV",
-                "Cyprus": "CYP",
-                "Czech Republic": "CZE",
-                "Democratic Republic of the Congo": "COD",
-                "Denmark": "DNK",
-                "Dominica": "DMA",
-                "Ecuador": "ECU",
-                "Egypt": "EGY",
-                "Estonia": "EST",
-                "Ethiopia": "ETH",
-                "Fiji": "FJI",
-                "Finland": "FIN",
-                "France": "FRA",
-                "French Polynesia": "PYF",
-                "Georgia": "GEO",
-                "Germany": "DEU",
-                "Greece": "GRC",
-                "Grenada": "GRD",
-                "Guam": "GUM",
-                "Guatemala": "GTM",
-                "Guinea": "GIN",
-                "Honduras": "HND",
-                "India": "IND",
-                "Indonesia": "IDN",
-                "Iran (Islamic Republic of)": "IRN",
-                "Ireland": "IRL",
-                "Italy": "ITA",
-                "Japan": "JPN",
-                "Jamaica": "JAM",
-                "Jordan": "JOR",
-                "Korea, Rep. of": "KOR",
-                "Kyrgyzstan": "KGZ",
-                "Lao People's Democratic Republic": "LAO",
-                "Latvia": "LVA",
-                "Lebanon": "LBN",
-                "Lithuania": "LTU",
-                "Luxembourg": "LUX",
-                "Malta": "MLT",
-                "Morocco": "MAR",
-                "Myanmar": "MMR",
-                "Namibia": "NAM",
-                "Nepal": "NPL",
-                "Netherlands": "NLD",
-                "Nicaragua": "NIC",
-                "Northern Mariana Islands": "MNP",
-                "Norway": "NOR",
-                "Pakistan": "PAK",
-                "Panama": "PAN",
-                "Paraguay": "PRY",
-                "Peru": "PER",
-                "Philippines": "PHL",
-                "Poland": "POL",
-                "Portugal": "PRT",
-                "Puerto Rico": "PRI",
-                "Qatar": "QAT",
-                "Romania": "ROU",
-                "Saint Lucia": "LCA",
-                "Saint Vincent and the Grenadines": "VCT",
-                "Samoa": "WSM",
-                "Senegal": "SEN",
-                "Serbia": "SRB",
-                "Sweden": "SWE",
-                "Switzerland": "CHE",
-                "Thailand": "THA",
-                "Trinidad and Tobago": "TTO",
-                "Turkey": "TUR",
-                "Uganda": "UGA",
-                "United Kingdom": "GBR",
-                "United States of America": "USA",
-                "Uruguay": "URY",
-                "Venezuela (Bolivarian Republic of)": "VEN",
-                "Virgin Islands, United States": "VIR",
-                "Yemen": "YEM",
-                "Cook Islands": "COK",
-                "French Guiana": "GUF",
-                "Guadeloupe": "GLP",
-                "Martinique": "MTQ",
-                "Réunion": "REU",
-                "Canada": "CAN",
-                "China": "CHN",
-                "Guinea Bissau": "GNB",
-                "Hungary": "HUN",
-                "Lesotho": "LSO",
-                "Libya": "LBY",
-                "Malawi": "MWI",
-                "Mozambique": "MOZ",
-                "New Zealand": "NZL",
-                "Slovakia": "SVK",
-                "Slovenia": "SVN",
-                "Spain": "ESP",
-                "St. Kitts & Nevis": "KNA",
-                "Viet Nam": "VNM",
-                "Australia": "AUS",
-                "Djibouti": "DJI",
-                "Mali": "MLI",
-                "Togo": "TGO",
-                "Zambia": "ZMB",
-            }
             farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
-                iso3_codes
+                COUNTRY_NAME_TO_ISO3
             )
             assert (
                 not farm_sizes_per_region["ISO3"].isna().any()
@@ -4068,14 +4131,15 @@ class GEBModel(GridModel):
                     len(region_farm_sizes) == 2
                 ), f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
 
+                # Extract holdings and agricultural area data
                 region_n_holdings = (
                     region_farm_sizes.loc[
                         region_farm_sizes["Holdings/ agricultural area"] == "Holdings"
                     ]
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
-                    .replace("..", "0")
-                    .astype(np.int64)
+                    .replace("..", np.nan)
+                    .astype(float)
                 )
                 agricultural_area_db_ha = (
                     region_farm_sizes.loc[
@@ -4084,11 +4148,84 @@ class GEBModel(GridModel):
                     ]
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
-                    .replace("..", "0")
-                    .astype(np.int64)
+                    .replace("..", np.nan)
+                    .astype(float)
                 )
-                agricultural_area_db = agricultural_area_db_ha * 10000
+
+                # Calculate average sizes for each bin
+                average_sizes = {}
+                for bin_name in agricultural_area_db_ha.index:
+                    bin_name = bin_name.strip()
+                    if bin_name.startswith("<"):
+                        # For '< 1 Ha', average is 0.5 Ha
+                        average_size = 0.5
+                    elif bin_name.startswith(">"):
+                        # For '> 1000 Ha', assume average is 1500 Ha
+                        average_size = 1500
+                    else:
+                        # For ranges like '5 - 10 Ha', calculate the midpoint
+                        try:
+                            min_size, max_size = bin_name.replace("Ha", "").split("-")
+                            min_size = float(min_size.strip())
+                            max_size = float(max_size.strip())
+                            average_size = (min_size + max_size) / 2
+                        except ValueError:
+                            # Default average size if parsing fails
+                            average_size = 1
+                    average_sizes[bin_name] = average_size
+
+                # Convert average sizes to a pandas Series
+                average_sizes_series = pd.Series(average_sizes)
+
+                # Handle cases where entries are zero or missing
+                agricultural_area_db_ha_zero_or_nan = (
+                    agricultural_area_db_ha.isnull() | (agricultural_area_db_ha == 0)
+                )
+                region_n_holdings_zero_or_nan = region_n_holdings.isnull() | (
+                    region_n_holdings == 0
+                )
+
+                if agricultural_area_db_ha_zero_or_nan.all():
+                    # All entries in agricultural_area_db_ha are zero or NaN
+                    if not region_n_holdings_zero_or_nan.all():
+                        # Calculate agricultural_area_db_ha using average sizes and region_n_holdings
+                        region_n_holdings = region_n_holdings.fillna(1).replace(0, 1)
+                        agricultural_area_db_ha = (
+                            average_sizes_series * region_n_holdings
+                        )
+                    else:
+                        raise ValueError(
+                            "Cannot calculate agricultural_area_db_ha: both datasets are zero or missing."
+                        )
+                elif region_n_holdings_zero_or_nan.all():
+                    # All entries in region_n_holdings are zero or NaN
+                    if not agricultural_area_db_ha_zero_or_nan.all():
+                        # Calculate region_n_holdings using agricultural_area_db_ha and average sizes
+                        agricultural_area_db_ha = agricultural_area_db_ha.fillna(
+                            1
+                        ).replace(0, 1)
+                        region_n_holdings = (
+                            agricultural_area_db_ha / average_sizes_series
+                        )
+                    else:
+                        raise ValueError(
+                            "Cannot calculate region_n_holdings: both datasets are zero or missing."
+                        )
+                else:
+                    # Replace zeros and NaNs in both datasets to avoid division by zero
+                    region_n_holdings = region_n_holdings.fillna(1).replace(0, 1)
+                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(1).replace(
+                        0, 1
+                    )
+
+                # Calculate total agricultural area in square meters
+                agricultural_area_db = (
+                    agricultural_area_db_ha * 10000
+                )  # Convert Ha to m^2
+
+                # Calculate region farm sizes
                 region_farm_sizes = agricultural_area_db / region_n_holdings
+
             else:
                 region_farm_sizes = farm_sizes_per_region.loc[(state, district, tehsil)]
                 region_n_holdings = n_farms_per_region.loc[(state, district, tehsil)]
@@ -4141,7 +4278,7 @@ class GEBModel(GridModel):
                     continue
 
                 number_of_agents_size_class = round(
-                    region_n_holdings[size_class].compute().item()
+                    region_n_holdings[size_class].item()
                 )
                 # if there is agricultural land, but there are no agents rounded down, we assume there is one agent
                 if (
@@ -4223,15 +4360,511 @@ class GEBModel(GridModel):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
+    def setup_household_characteristics(self, maximum_age=85):
+        import gzip
+        from honeybees.library.raster import pixels_to_coords
+
+        n_farmers = self.binary["agents/farmers/id"].size
+        farms = self.subgrid["agents/farmers/farms"]
+
+        # get farmer locations
+        vertical_index = (
+            np.arange(farms.shape[0])
+            .repeat(farms.shape[1])
+            .reshape(farms.shape)[farms != -1]
+        )
+        horizontal_index = np.tile(np.arange(farms.shape[1]), farms.shape[0]).reshape(
+            farms.shape
+        )[farms != -1]
+        farms_flattened = farms.values[farms.values != -1]
+
+        pixels = np.zeros((n_farmers, 2), dtype=np.int32)
+        pixels[:, 0] = np.round(
+            np.bincount(farms_flattened, horizontal_index)
+            / np.bincount(farms_flattened)
+        ).astype(int)
+        pixels[:, 1] = np.round(
+            np.bincount(farms_flattened, vertical_index) / np.bincount(farms_flattened)
+        ).astype(int)
+
+        locations = pixels_to_coords(pixels + 0.5, farms.raster.transform.to_gdal())
+        locations = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(locations[:, 0], locations[:, 1]),
+            crs="EPSG:4326",
+        )  # convert locations to geodataframe
+
+        # GLOPOP-S uses the GDL regions. So we need to get the GDL region for each farmer using their location
+        GDL_regions = self.data_catalog.get_geodataframe(
+            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+        )
+        GDL_region_per_farmer = gpd.sjoin(
+            locations, GDL_regions, how="left", predicate="within"
+        )
+
+        # ensure that each farmer has a region
+        assert GDL_region_per_farmer["GDLcode"].notna().all()
+
+        # Load GLOPOP-S data. This is a binary file and has no proper loading in hydromt. So we use the data catalog to get the path and format the path with the regions and load it with NumPy
+        GLOPOP_S = self.data_catalog.get_source("GLOPOP-S")
+
+        GLOPOP_S_attribute_names = [
+            "HID",
+            "RELATE_HEAD",
+            "INCOME",
+            "WEALTH",
+            "RURAL",
+            "AGE",
+            "GENDER",
+            "EDUC",
+            "HHTYPE",
+            "HHSIZE_CAT",
+            "AGRI_OWNERSHIP",
+            "FLOOR",
+            "WALL",
+            "ROOF",
+            "SOURCE",
+        ]
+
+        # Get list of unique GDL codes from farmer dataframe
+        attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
+
+        for column in attributes_to_include:
+            GDL_region_per_farmer[column] = np.full(
+                len(GDL_region_per_farmer), -1, dtype=np.int32
+            )
+
+        for GDL_region, farmers_GDL_region in GDL_region_per_farmer.groupby("GDLcode"):
+            with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
+                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
+
+            n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
+            GLOPOP_S_region = pd.DataFrame(
+                np.reshape(
+                    GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
+                ).transpose(),
+                columns=GLOPOP_S_attribute_names,
+            )
+
+            # select farmers only
+            GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(
+                "RURAL", axis=1
+            )
+
+            # shuffle GLOPOP-S data to avoid biases in that regard
+            GLOPOP_S_household_IDs = GLOPOP_S_region["HID"].unique()
+            np.random.shuffle(GLOPOP_S_household_IDs)  # shuffle array in-place
+            GLOPOP_S_region = (
+                GLOPOP_S_region.set_index("HID")
+                .loc[GLOPOP_S_household_IDs]
+                .reset_index()
+            )
+
+            # Select a sample of farmers from the database. Because the households were
+            # shuflled there is no need to pick random households, we can just take the first n_farmers.
+            # If there are not enough farmers in the region, we need to upsample the data. In this case
+            # we will just take the same farmers multiple times starting from the top.
+            GLOPOP_S_household_IDs = GLOPOP_S_region["HID"].values
+
+            # first we mask out all consecutive duplicates
+            mask = np.concatenate(
+                ([True], GLOPOP_S_household_IDs[1:] != GLOPOP_S_household_IDs[:-1])
+            )
+            GLOPOP_S_household_IDs = GLOPOP_S_household_IDs[mask]
+
+            GLOPOP_S_region_sampled = []
+            if GLOPOP_S_household_IDs.size < len(farmers_GDL_region):
+                n_repetitions = len(farmers_GDL_region) // GLOPOP_S_household_IDs.size
+                max_household_ID = GLOPOP_S_household_IDs.max()
+                for i in range(n_repetitions):
+                    GLOPOP_S_region_copy = GLOPOP_S_region.copy()
+                    # increase the household ID to avoid duplicate household IDs. Using (i + 1) so that the original household IDs are not changed
+                    # so that they can be used in the final "topping up" below.
+                    GLOPOP_S_region_copy["HID"] = GLOPOP_S_region_copy["HID"] + (
+                        (i + 1) * max_household_ID
+                    )
+                    GLOPOP_S_region_sampled.append(GLOPOP_S_region_copy)
+                requested_farmers = (
+                    len(farmers_GDL_region) % GLOPOP_S_household_IDs.size
+                )
+            else:
+                requested_farmers = len(farmers_GDL_region)
+
+            GLOPOP_S_household_IDs = GLOPOP_S_household_IDs[:requested_farmers]
+            GLOPOP_S_region_sampled.append(
+                GLOPOP_S_region[GLOPOP_S_region["HID"].isin(GLOPOP_S_household_IDs)]
+            )
+
+            GLOPOP_S_region_sampled = pd.concat(
+                GLOPOP_S_region_sampled, ignore_index=True
+            )
+            assert GLOPOP_S_region_sampled["HID"].unique().size == len(
+                farmers_GDL_region
+            )
+
+            households_region = GLOPOP_S_region_sampled.groupby("HID")
+            # select only household heads
+            household_heads = households_region.apply(
+                lambda x: x[x["RELATE_HEAD"] == 1]
+            )
+            assert len(household_heads) == len(farmers_GDL_region)
+
+            # # age
+            # household_heads["AGE_continuous"] = np.full(
+            #     len(household_heads), -1, dtype=np.int32
+            # )
+            age_class_to_age = {
+                1: (0, 16),
+                2: (16, 26),
+                3: (26, 36),
+                4: (36, 46),
+                5: (46, 56),
+                6: (56, 66),
+                7: (66, maximum_age + 1),
+            }  # exclusive
+            for age_class, age_range in age_class_to_age.items():
+                household_heads_age_class = household_heads[
+                    household_heads["AGE"] == age_class
+                ]
+                household_heads.loc[household_heads_age_class.index, "AGE"] = (
+                    np.random.randint(
+                        age_range[0],
+                        age_range[1],
+                        size=len(household_heads_age_class),
+                        dtype=GDL_region_per_farmer["AGE"].dtype,
+                    )
+                )
+            GDL_region_per_farmer.loc[farmers_GDL_region.index, "AGE"] = (
+                household_heads["AGE"].values
+            )
+
+            # education level
+            GDL_region_per_farmer.loc[farmers_GDL_region.index, "EDUC"] = (
+                household_heads["EDUC"].values
+            )
+
+            # household size
+            household_sizes_region = households_region.size().values.astype(np.int32)
+            GDL_region_per_farmer.loc[farmers_GDL_region.index, "HHSIZE_CAT"] = (
+                household_sizes_region
+            )
+
+        # assert none of the household sizes are placeholder value -1
+        assert (GDL_region_per_farmer["HHSIZE_CAT"] != -1).all()
+        assert (GDL_region_per_farmer["AGE"] != -1).all()
+        assert (GDL_region_per_farmer["EDUC"] != -1).all()
+
+        self.set_binary(
+            GDL_region_per_farmer["HHSIZE_CAT"].values,
+            name="agents/farmers/household_size",
+        )
+        self.set_binary(
+            GDL_region_per_farmer["AGE"].values,
+            name="agents/farmers/age_household_head",
+        )
+        self.set_binary(
+            GDL_region_per_farmer["EDUC"].values,
+            name="agents/farmers/education_level",
+        )
+
+    def create_preferences(self):
+        # Risk aversion
+        preferences_country_level = self.data_catalog.get_dataframe(
+            "preferences_country",
+            variables=["country", "isocode", "patience", "risktaking"],
+        ).dropna()
+
+        preferences_individual_level = self.data_catalog.get_dataframe(
+            "preferences_individual",
+            variables=["country", "isocode", "patience", "risktaking"],
+        ).dropna()
+
+        def scale_to_range(x, new_min, new_max):
+            x_min = x.min()
+            x_max = x.max()
+            # Avoid division by zero
+            if x_max == x_min:
+                return pd.Series(new_min, index=x.index)
+            scaled_x = (x - x_min) / (x_max - x_min) * (new_max - new_min) + new_min
+            return scaled_x
+
+        # Create 'risktaking_losses'
+        preferences_individual_level["risktaking_losses"] = scale_to_range(
+            preferences_individual_level["risktaking"] * -1,
+            new_min=-0.88,
+            new_max=-0.02,
+        )
+
+        # Create 'risktaking_gains'
+        preferences_individual_level["risktaking_gains"] = scale_to_range(
+            preferences_individual_level["risktaking"] * -1,
+            new_min=0.04,
+            new_max=0.94,
+        )
+
+        # Create 'discount'
+        preferences_individual_level["discount"] = scale_to_range(
+            preferences_individual_level["patience"] * -1,
+            new_min=0.15,
+            new_max=0.73,
+        )
+
+        # Create 'risktaking_losses'
+        preferences_country_level["risktaking_losses"] = scale_to_range(
+            preferences_country_level["risktaking"] * -1,
+            new_min=-0.88,
+            new_max=-0.02,
+        )
+
+        # Create 'risktaking_gains'
+        preferences_country_level["risktaking_gains"] = scale_to_range(
+            preferences_country_level["risktaking"] * -1,
+            new_min=0.04,
+            new_max=0.94,
+        )
+
+        # Create 'discount'
+        preferences_country_level["discount"] = scale_to_range(
+            preferences_country_level["patience"] * -1,
+            new_min=0.15,
+            new_max=0.73,
+        )
+
+        # List of variables for which to calculate the standard deviation
+        variables = ["discount", "risktaking_gains", "risktaking_losses"]
+
+        # Convert the variables to numeric, coercing errors to NaN to handle non-numeric entries
+        for var in variables:
+            preferences_individual_level[var] = pd.to_numeric(
+                preferences_individual_level[var], errors="coerce"
+            )
+
+        # Group by 'isocode' and calculate the standard deviation for each variable
+        std_devs = preferences_individual_level.groupby("isocode")[variables].std()
+
+        # Add a suffix '_std' to the column names to indicate standard deviation
+        std_devs = std_devs.add_suffix("_std").reset_index()
+
+        # Merge the standard deviation data into 'preferences_country_level' on 'isocode'
+        preferences_country_level = preferences_country_level.merge(
+            std_devs, on="isocode", how="left"
+        )
+
+        preferences_country_level = preferences_country_level.drop(
+            ["patience", "risktaking"], axis=1
+        )
+
+        return preferences_country_level
+
     def setup_farmer_characteristics_simple(
         self,
-        irrigation_choice={
-            "no": 1.0,
-        },
-        risk_aversion_mean=0,
-        risk_aversion_standard_deviation=0.387,
         interest_rate=0.05,
-        discount_rate=0.1,
+    ):
+        n_farmers = self.binary["agents/farmers/id"].size
+
+        preferences_global = self.create_preferences()
+        preferences_global.rename(
+            columns={
+                "country": "Country",
+                "isocode": "ISO3",
+                "risktaking_losses": "Losses",
+                "risktaking_gains": "Gains",
+                "discount": "Discount",
+                "discount_std": "Discount_std",
+                "risktaking_losses_std": "Losses_std",
+                "risktaking_gains_std": "Gains_std",
+            },
+            inplace=True,
+        )
+
+        GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions_37")
+        GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(GLOBIOM_NAME_TO_ISO3)
+        # For my personal branch
+        GLOBIOM_regions.loc[GLOBIOM_regions["Country"] == "Switzerland", "Region37"] = (
+            "EU_MidWest"
+        )
+        assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
+
+        ISO3_codes_region = self.geoms["areamaps/regions"]["ISO3"].unique()
+        GLOBIOM_regions_region = GLOBIOM_regions[
+            GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
+        ]["Region37"].unique()
+        ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
+            GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
+        ]["ISO3"]
+
+        donor_data = {}
+        for ISO3 in ISO3_codes_GLOBIOM_region:
+            region_risk_aversion_data = preferences_global[
+                preferences_global["ISO3"] == ISO3
+            ]
+
+            region_risk_aversion_data = region_risk_aversion_data[
+                [
+                    "Country",
+                    "ISO3",
+                    "Gains",
+                    "Losses",
+                    "Gains_std",
+                    "Losses_std",
+                    "Discount",
+                    "Discount_std",
+                ]
+            ]
+            region_risk_aversion_data.reset_index(drop=True, inplace=True)
+            # Store pivoted data in dictionary with region_id as key
+            donor_data[ISO3] = region_risk_aversion_data
+
+        # Concatenate all regional data into a single DataFrame with MultiIndex
+        donor_data = pd.concat(donor_data, names=["ISO3"])
+
+        # Drop crops with no data at all for these regions
+        donor_data = donor_data.dropna(axis=1, how="all")
+
+        unique_regions = self.geoms["areamaps/regions"]
+
+        data = self.donate_and_receive_crop_prices(
+            donor_data, unique_regions, GLOBIOM_regions
+        )
+
+        # Map to corresponding region
+        data_reset = data.reset_index(level="region_id")
+        data = data_reset.set_index("region_id")
+        region_ids = self.binary["agents/farmers/region_id"]
+
+        # Set gains and losses
+        gains_array = pd.Series(region_ids).map(data["Gains"]).to_numpy()
+        gains_std = pd.Series(region_ids).map(data["Gains_std"]).to_numpy()
+        losses_array = pd.Series(region_ids).map(data["Losses"]).to_numpy()
+        losses_std = pd.Series(region_ids).map(data["Losses_std"]).to_numpy()
+        discount_array = pd.Series(region_ids).map(data["Discount"]).to_numpy()
+        discount_std = pd.Series(region_ids).map(data["Discount_std"]).to_numpy()
+
+        try:
+            # income = self.binary["agents/farmers/income"]
+            pass
+        except KeyError:
+            self.logger.info("Income does not exist, generating random income..")
+            daily_non_farm_income_family = random.choices(
+                [50, 100, 200, 500], k=n_farmers
+            )
+            self.set_binary(
+                daily_non_farm_income_family,
+                name="agents/farmers/income",
+            )
+
+        try:
+            household_size = self.binary["agents/farmers/household_size"]
+        except KeyError:
+            self.logger.info("Household size does not exist, generating random sizes..")
+            household_size = random.choices([1, 2, 3, 4, 5, 6, 7], k=n_farmers)
+            self.set_binary(household_size, name="agents/farmers/household_size")
+
+            daily_consumption_per_capita = random.choices(
+                [50, 100, 200, 500], k=n_farmers
+            )
+            self.set_binary(
+                daily_consumption_per_capita,
+                name="agents/farmers/daily_consumption_per_capita",
+            )
+
+        try:
+            education_levels = self.binary["agents/farmers/education_level"]
+        except KeyError:
+            self.logger.info(
+                "Education level does not exist, generating random levels.."
+            )
+            education_levels = random.choices(
+                [1, 2, 3, 4, 5], k=n_farmers
+            )  # Random levels from 0-4 or your preferred scale
+            self.set_binary(education_levels, name="agents/farmers/education_level")
+
+        try:
+            age = self.binary["agents/farmers/age_household_head"]
+        except KeyError:
+            self.logger.info(
+                "Age of household head does not exist, generating random ages.."
+            )
+            age = random.choices(
+                range(18, 80), k=n_farmers
+            )  # Random ages between 18 and 80
+            self.set_binary(age, name="agents/farmers/age_household_head")
+
+        def normalize(array):
+            return (array - np.min(array)) / (np.max(array) - np.min(array))
+
+        combined_deviation_risk_aversion = ((2 / 6) * normalize(education_levels)) + (
+            (4 / 6) * normalize(age)
+        )
+
+        # Generate random noise, positively correlated with education levels and age
+        # (Higher age / education level means more risk averse)
+        z = np.random.normal(
+            loc=0, scale=1, size=combined_deviation_risk_aversion.shape
+        )
+
+        # Initial gains_variation proportional to risk aversion
+        gains_variation = combined_deviation_risk_aversion * z
+
+        current_std = np.std(gains_variation)
+        gains_variation = gains_variation * (gains_std / current_std)
+
+        # Similarly for losses_variation
+        losses_variation = combined_deviation_risk_aversion * z
+        current_std_losses = np.std(losses_variation)
+        losses_variation = losses_variation * (losses_std / current_std_losses)
+
+        # Add the generated noise to the original gains and losses arrays
+        gains_array_with_variation = np.clip(gains_array + gains_variation, -0.99, 0.99)
+        losses_array_with_variation = np.clip(
+            losses_array + losses_variation, -0.99, 0.99
+        )
+
+        # Calculate intention factor based on age and education
+        # Intention factor scales negatively with age and positively with education level
+        intention_factor = normalize(education_levels) - normalize(age)
+
+        # Adjust the intention factor to center it around a mean of 0.3
+        # The total intention of age, education and neighbor effects can scale to 1
+        intention_factor = intention_factor * 0.333 + 0.333
+
+        neutral_risk_aversion = np.mean(
+            [gains_array_with_variation, losses_array_with_variation], axis=0
+        )
+
+        self.set_binary(neutral_risk_aversion, name="agents/farmers/risk_aversion")
+        self.set_binary(
+            gains_array_with_variation, name="agents/farmers/risk_aversion_gains"
+        )
+        self.set_binary(
+            losses_array_with_variation, name="agents/farmers/risk_aversion_losses"
+        )
+        self.set_binary(intention_factor, name="agents/farmers/intention_factor")
+
+        # discount rate
+        discount_rate_variation_factor = ((2 / 6) * normalize(education_levels)) + (
+            (4 / 6) * normalize(age)
+        )
+        discount_rate_variation = discount_rate_variation_factor * z * -1
+
+        # Adjust the variations to have the desired overall standard deviation
+        current_std = np.std(discount_rate_variation)
+        discount_rate_variation = discount_rate_variation * (discount_std / current_std)
+
+        # Apply the variations to the original discount rates and clip the values
+        discount_rate_with_variation = np.clip(
+            discount_array + discount_rate_variation, 0, 2
+        )
+        self.set_binary(
+            discount_rate_with_variation,
+            name="agents/farmers/discount_rate",
+        )
+
+        interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
+        self.set_binary(interest_rate, name="agents/farmers/interest_rate")
+
+    def setup_farmer_crop_calendar(
+        self,
+        year=2000,
         reduce_crops=False,
         replace_base=False,
     ):
@@ -4240,23 +4873,28 @@ class GEBModel(GridModel):
         MIRCA_unit_grid = self.data_catalog.get_rasterdataset(
             "MIRCA2000_unit_grid", bbox=self.bounds, buffer=2
         )
+
         crop_calendar = parse_MIRCA2000_crop_calendar(
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
 
+        farmer_locations = get_farm_locations(
+            self.subgrid["agents/farmers/farms"], method="centroid"
+        )
+
         farmer_mirca_units = sample_from_map(
             MIRCA_unit_grid.values,
-            get_farm_locations(self.subgrid["agents/farmers/farms"], method="centroid"),
+            farmer_locations,
             MIRCA_unit_grid.raster.transform.to_gdal(),
         )
 
-        # initialize the is_irrigated as -1 for all farmers
-        is_irrigated = np.full(n_farmers, -1, dtype=np.int32)
+        farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(year)
+        self.setup_farmer_irrigation_source(is_irrigated)
 
         crop_calendar_per_farmer = np.zeros((n_farmers, 3, 4), dtype=np.int32)
         for mirca_unit in np.unique(farmer_mirca_units):
-            n_farmers_mirca_unit = (farmer_mirca_units == mirca_unit).sum()
+            farmers_in_unit = np.where(farmer_mirca_units == mirca_unit)[0]
 
             area_per_crop_rotation = []
             cropping_calenders_crop_rotation = []
@@ -4275,23 +4913,58 @@ class GEBModel(GridModel):
                 cropping_calenders_crop_rotation
             )
 
-            # select n crop rotations weighted by the area for each crop rotation
-            farmer_crop_rotations_idx = np.random.choice(
-                np.arange(len(area_per_crop_rotation)),
-                size=n_farmers_mirca_unit,
-                replace=True,
-                p=area_per_crop_rotation / area_per_crop_rotation.sum(),
-            )
-            crop_calendar_per_farmer_mirca_unit = cropping_calenders_crop_rotation[
-                farmer_crop_rotations_idx
-            ]
-            is_irrigated[farmer_mirca_units == mirca_unit] = (
-                crop_calendar_per_farmer_mirca_unit[:, :, 1] == 1
-            ).any(axis=1)
+            crops_in_unit = np.unique(farmer_crops[farmers_in_unit])
+            for crop_id in crops_in_unit:
+                # Find rotations that include this crop
+                rotations_with_crop_idx = []
+                for idx, rotation in enumerate(cropping_calenders_crop_rotation):
+                    # Get crop IDs in the rotation, excluding -1 entries
+                    crop_ids_in_rotation = rotation[:, 0]
+                    crop_ids_in_rotation = crop_ids_in_rotation[
+                        crop_ids_in_rotation != -1
+                    ]
+                    if crop_id in crop_ids_in_rotation:
+                        rotations_with_crop_idx.append(idx)
 
-            crop_calendar_per_farmer[farmer_mirca_units == mirca_unit] = (
-                crop_calendar_per_farmer_mirca_unit[:, :, [0, 2, 3, 4]]
-            )
+                if not rotations_with_crop_idx:
+                    print(
+                        f"No rotations found for crop ID {crop_id} in mirca unit {mirca_unit}"
+                    )
+                    continue
+
+                # Get the area fractions and rotations for these indices
+                areas_with_crop = area_per_crop_rotation[rotations_with_crop_idx]
+                rotations_with_crop = cropping_calenders_crop_rotation[
+                    rotations_with_crop_idx
+                ]
+
+                # Normalize the area fractions
+                total_area_for_crop = areas_with_crop.sum()
+                fractions = areas_with_crop / total_area_for_crop
+
+                # Get farmers with this crop in the mirca_unit
+                farmers_with_crop_in_unit = farmers_in_unit[
+                    farmer_crops[farmers_in_unit] == crop_id
+                ]
+
+                # Assign crop rotations to these farmers
+                assigned_rotation_indices = np.random.choice(
+                    np.arange(len(rotations_with_crop)),
+                    size=len(farmers_with_crop_in_unit),
+                    replace=True,
+                    p=fractions,
+                )
+
+                # Assign the crop calendars to the farmers
+                for farmer_idx, rotation_idx in zip(
+                    farmers_with_crop_in_unit, assigned_rotation_indices
+                ):
+                    assigned_rotation = rotations_with_crop[rotation_idx]
+                    # Assign to farmer's crop calendar, taking columns [0, 2, 3, 4]
+                    # Columns: [crop_id, planting_date, harvest_date, additional_attribute]
+                    crop_calendar_per_farmer[farmer_idx] = assigned_rotation[
+                        :, [0, 2, 3, 4]
+                    ]
 
             # Define constants for crop IDs
             WHEAT = 0
@@ -4311,9 +4984,9 @@ class GEBModel(GridModel):
             RAPESEED = 14
             GROUNDNUTS = 15
             # PULSES = 16
-            CITRUS = 17
-            DATE_PALM = 18
-            GRAPES = 19
+            # CITRUS = 17
+            # # DATE_PALM = 18
+            # # GRAPES = 19
             # COTTON = 20
             COCOA = 21
             COFFEE = 22
@@ -4423,8 +5096,8 @@ class GEBModel(GridModel):
                 )
 
                 # Change other annual / misc to one
-                most_common_check = [GROUNDNUTS, CITRUS, COCOA, COFFEE, OTHERS_ANNUAL]
-                replaced_value = [GROUNDNUTS, CITRUS, COCOA, COFFEE, OTHERS_ANNUAL]
+                most_common_check = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
+                replaced_value = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
                 crop_calendar_per_farmer = replace_crop(
                     crop_calendar_per_farmer, most_common_check, replaced_value
                 )
@@ -4450,9 +5123,9 @@ class GEBModel(GridModel):
                     crop_calendar_per_farmer, most_common_check, replaced_value
                 )
 
-                # Change perennial to one
-                most_common_check = [OIL_PALM, GRAPES, DATE_PALM, OTHERS_PERENNIAL]
-                replaced_value = [OIL_PALM, GRAPES, DATE_PALM, OTHERS_PERENNIAL]
+                # Change perennial to annual, otherwise counted double in esa dataset
+                most_common_check = [OIL_PALM, OTHERS_PERENNIAL]
+                replaced_value = [OTHERS_ANNUAL]
                 crop_calendar_per_farmer = replace_crop(
                     crop_calendar_per_farmer, most_common_check, replaced_value
                 )
@@ -4500,56 +5173,287 @@ class GEBModel(GridModel):
             name="agents/farmers/crop_calendar_rotation_years",
         )
 
-        if irrigation_choice == "random":
-            # randomly sample from irrigation sources
-            irrigation_source = np.random.choice(
-                list(self.dict["agents/farmers/irrigation_sources"].values()),
-                size=n_farmers,
+    def assign_crops_irrigation_farmers(self, year=2000):
+        # Define the directory and file paths
+        data_dir = Path(self.root).parent / "preprocessing" / "crops" / "MIRCA2000"
+        crop_area_file = data_dir / "crop_area_fraction_all_years.nc"
+        crop_irr_fraction_file = data_dir / "crop_irrigated_fraction_all_years.nc"
+
+        # Load the DataArrays
+        all_years_fraction_da = xr.open_dataarray(crop_area_file)
+        all_years_irrigated_fraction_da = xr.open_dataarray(crop_irr_fraction_file)
+
+        farmer_locations = get_farm_locations(
+            self.subgrid["agents/farmers/farms"], method="centroid"
+        )
+
+        crop_dict = {
+            "Wheat": 0,
+            "Maize": 1,
+            "Rice": 2,
+            "Barley": 3,
+            "Rye": 4,
+            "Millet": 5,
+            "Sorghum": 6,
+            "Soybeans": 7,
+            "Sunflower": 8,
+            "Potatoes": 9,
+            "Cassava": 10,
+            "Sugar_cane": 11,
+            "Sugar_beet": 12,
+            "Oil_palm": 13,
+            "Rapeseed": 14,
+            "Groundnuts": 15,
+            "Pulses": 16,
+            "Cotton": 20,
+            "Cocoa": 21,
+            "Coffee": 22,
+            "Others_perennial": 23,
+            "Fodder": 24,
+            "Others_annual": 25,
+        }
+
+        area_fraction_2000 = all_years_fraction_da.sel(year=str(year))
+        irrigated_fraction_2000 = all_years_irrigated_fraction_da.sel(year=str(year))
+        # Fill nas as there is no diff between 0 or na in code and can cause issues
+        area_fraction_2000 = area_fraction_2000.fillna(0)
+        irrigated_fraction_2000 = irrigated_fraction_2000.fillna(0)
+
+        crops_in_dataarray = area_fraction_2000.coords["crop"].values
+
+        grid_id_da = create_grid_cell_id_array(all_years_fraction_da)
+
+        ny, nx = area_fraction_2000.sizes["y"], area_fraction_2000.sizes["x"]
+
+        n_cells = grid_id_da.max().item()
+
+        farmer_cells = sample_from_map(
+            grid_id_da.values,
+            farmer_locations,
+            grid_id_da.raster.transform.to_gdal(),
+        )
+
+        crop_area_fractions = sample_from_map(
+            area_fraction_2000.values,
+            farmer_locations,
+            area_fraction_2000.raster.transform.to_gdal(),
+        )
+        crop_irrigated_fractions = sample_from_map(
+            irrigated_fraction_2000.values,
+            farmer_locations,
+            irrigated_fraction_2000.raster.transform.to_gdal(),
+        )
+
+        n_farmers = self.binary["agents/farmers/id"].size
+
+        # Prepare empty crop arrays
+        farmer_crops = np.full(n_farmers, -1, dtype=np.int32)
+        farmer_irrigated = np.full(n_farmers, 0, dtype=np.bool_)
+
+        for i in range(n_cells):
+            farmers_cell_mask = farmer_cells == i
+            nr_farmers_cell = np.count_nonzero(farmers_cell_mask)
+            if nr_farmers_cell == 0:
+                continue
+            crop_area_fraction = crop_area_fractions[farmer_cells == i][0]
+            crop_irrigated_fraction = crop_irrigated_fractions[farmer_cells == i][0]
+
+            if crop_area_fraction.sum() == 0:
+                # Expand the search radius until valid data is found
+                found_valid_neighbor = False
+                max_radius = max(nx, ny)  # Maximum possible radius
+                radius = 1
+                while not found_valid_neighbor and radius <= max_radius:
+                    neighbor_ids = get_neighbor_cell_ids(i, nx, ny, radius)
+                    for neighbor_id in neighbor_ids:
+                        if neighbor_id not in farmer_cells:
+                            continue
+
+                        neighbor_crop_area_fraction = crop_area_fractions[
+                            farmer_cells == neighbor_id
+                        ][0]
+                        if neighbor_crop_area_fraction.sum() != 0:
+                            # Found valid neighbor
+                            crop_area_fraction = neighbor_crop_area_fraction
+                            crop_irrigated_fraction = crop_irrigated_fractions[
+                                farmer_cells == neighbor_id
+                            ][0]
+                            found_valid_neighbor = True
+                            break
+                    if not found_valid_neighbor:
+                        radius += 1  # Increase the search radius
+                if not found_valid_neighbor:
+                    # No valid data found even after expanding radius
+                    print(
+                        f"No valid data found for cell {i} after searching up to radius {radius - 1}."
+                    )
+                    continue  # Skip this cell
+
+            farmer_indices_in_cell = np.where(farmers_cell_mask)[0]
+
+            # ensure fractions sum to 1
+            area_per_crop_rotation = crop_area_fraction / crop_area_fraction.sum()
+
+            farmer_crop_rotations_idx = np.random.choice(
+                np.arange(len(area_per_crop_rotation)),
+                size=len(farmer_indices_in_cell),
+                replace=True,
+                p=area_per_crop_rotation,
             )
-        else:
-            assert isinstance(irrigation_choice, dict)
-            # convert irrigation sources to integers based on irrigation sources dictionary
-            # which was set previously
-            irrigation_choice_int = {
-                self.dict["agents/farmers/irrigation_sources"][i]: k
-                for i, k in irrigation_choice.items()
-            }
-            # pick irrigation source based on the probabilities
-            irrigation_source = np.random.choice(
-                list(irrigation_choice_int.keys()),
-                size=n_farmers,
-                p=np.array(list(irrigation_choice_int.values()))
-                / sum(irrigation_choice_int.values()),
-            )
+
+            # Map sampled indices to crop names using crops_in_dataarray
+            farmer_crop_names = crops_in_dataarray[farmer_crop_rotations_idx]
+            # Map crop names to integer codes using crop_dict
+            farmer_crop_codes = [
+                crop_dict[crop_name] for crop_name in farmer_crop_names
+            ]
+            # assign to farmers
+            farmer_crops[farmer_indices_in_cell] = farmer_crop_codes
+
+            # Determine irrigating farmers
+            chosen_crops = np.unique(farmer_crop_rotations_idx)
+
+            for c in chosen_crops:
+                # Indices of farmers in the cell assigned to crop c
+                farmers_with_crop_c_in_cell = np.where(farmer_crop_rotations_idx == c)[
+                    0
+                ]
+                N_c = len(farmers_with_crop_c_in_cell)
+                f_c = crop_irrigated_fraction[c]
+                if np.isnan(f_c) or f_c <= 0:
+                    continue  # No irrigation for this crop
+                N_irrigated = int(round(N_c * f_c))
+                if N_irrigated > 0:
+                    # Randomly select N_irrigated farmers from the N_c farmers
+                    irrigated_indices_in_cell = np.random.choice(
+                        farmers_with_crop_c_in_cell, size=N_irrigated, replace=False
+                    )
+                    # Get the overall farmer indices
+                    overall_farmer_indices = farmer_indices_in_cell[
+                        irrigated_indices_in_cell
+                    ]
+                    # Set irrigation status to True for these farmers
+                    farmer_irrigated[overall_farmer_indices] = True
+
+        assert not (
+            farmer_crops == -1
+        ).any(), "Error: some farmers have no crops assigned"
+
+        return farmer_crops, farmer_irrigated
+
+    def setup_farmer_irrigation_source(self, irrigating_farmers):
+        fraction_sw_irrigation = "aeisw"
+        fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
+            f"global_irrigation_area_{fraction_sw_irrigation}",
+            bbox=self.bounds,
+            buffer=2,
+        )
+        fraction_gw_irrigation = "aeigw"
+        fraction_gw_irrigation_data = self.data_catalog.get_rasterdataset(
+            f"global_irrigation_area_{fraction_gw_irrigation}",
+            bbox=self.bounds,
+            buffer=2,
+        )
+
+        farmer_locations = get_farm_locations(
+            self.subgrid["agents/farmers/farms"], method="centroid"
+        )
+
+        # Determine which farmers are irrigating
+        grid_id_da = create_grid_cell_id_array(fraction_sw_irrigation_data)
+        ny, nx = (
+            fraction_sw_irrigation_data.sizes["y"],
+            fraction_sw_irrigation_data.sizes["x"],
+        )
+
+        n_cells = grid_id_da.max().item()
+        n_farmers = self.binary["agents/farmers/id"].size
+
+        farmer_cells = sample_from_map(
+            grid_id_da.values,
+            farmer_locations,
+            grid_id_da.raster.transform.to_gdal(),
+        )
+        fraction_sw_irrigation_farmers = sample_from_map(
+            fraction_sw_irrigation_data.values,
+            farmer_locations,
+            fraction_sw_irrigation_data.raster.transform.to_gdal(),
+        )
+        fraction_gw_irrigation_farmers = sample_from_map(
+            fraction_gw_irrigation_data.values,
+            farmer_locations,
+            fraction_gw_irrigation_data.raster.transform.to_gdal(),
+        )
+
+        # Initialize the irrigation_source array
+        irrigation_source = np.full(n_farmers, -1, dtype=np.int32)
+
+        for i in range(n_cells):
+            farmers_cell_mask = farmer_cells == i  # Boolean mask for farmers in cell i
+            farmers_cell_indices = np.where(farmers_cell_mask)[0]  # Absolute indices
+
+            irrigating_farmers_mask = irrigating_farmers[farmers_cell_mask]
+            num_irrigating_farmers = np.sum(irrigating_farmers_mask)
+
+            if num_irrigating_farmers > 0:
+                fraction_sw = fraction_sw_irrigation_farmers[farmers_cell_mask][0]
+                fraction_gw = fraction_gw_irrigation_farmers[farmers_cell_mask][0]
+
+                # Normalize fractions
+                total_fraction = fraction_sw + fraction_gw
+
+                # Handle edge cases if there are irrigating farmers but no data on sw/gw
+                if total_fraction == 0:
+                    # Find neighboring cells with valid data
+                    neighbor_ids = get_neighbor_cell_ids(i, nx, ny)
+                    found_valid_neighbor = False
+
+                    for neighbor_id in neighbor_ids:
+                        if neighbor_id not in np.unique(farmer_cells):
+                            continue
+
+                        neighbor_mask = farmer_cells == neighbor_id
+                        fraction_sw_neighbor = fraction_sw_irrigation_farmers[
+                            neighbor_mask
+                        ][0]
+                        fraction_gw_neighbor = fraction_gw_irrigation_farmers[
+                            neighbor_mask
+                        ][0]
+                        neighbor_total_fraction = (
+                            fraction_sw_neighbor + fraction_gw_neighbor
+                        )
+
+                        if neighbor_total_fraction > 0:
+                            # Found valid neighbor
+                            fraction_sw = fraction_sw_neighbor
+                            fraction_gw = fraction_gw_neighbor
+                            total_fraction = neighbor_total_fraction
+
+                            found_valid_neighbor = True
+                            break
+                    if not found_valid_neighbor:
+                        # No valid neighboring cells found, handle accordingly
+                        print(f"No valid data found for cell {i} and its neighbors.")
+                        continue  # Skip this cell
+
+                # Normalize fractions
+                probabilities = np.array([fraction_sw, fraction_gw], dtype=np.float64)
+                probabilities_sum = probabilities.sum()
+                probabilities /= probabilities_sum
+
+                # Indices of irrigating farmers in the region (absolute indices)
+                farmer_indices_in_region = farmers_cell_indices[irrigating_farmers_mask]
+
+                # Assign irrigation sources using np.random.choice
+                irrigation_source[farmer_indices_in_region] = np.random.choice(
+                    [0, 1],
+                    size=len(farmer_indices_in_region),
+                    p=probabilities,
+                )
+
+        # Update the irrigation_source attribute or return it as needed
         self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-
-        household_size = random.choices([1, 2, 3, 4, 5, 6, 7], k=n_farmers)
-        self.set_binary(household_size, name="agents/farmers/household_size")
-
-        daily_non_farm_income_family = random.choices([50, 100, 200, 500], k=n_farmers)
-        self.set_binary(
-            daily_non_farm_income_family,
-            name="agents/farmers/daily_non_farm_income_family",
-        )
-
-        daily_consumption_per_capita = random.choices([50, 100, 200, 500], k=n_farmers)
-        self.set_binary(
-            daily_consumption_per_capita,
-            name="agents/farmers/daily_consumption_per_capita",
-        )
-
-        risk_aversion = np.random.normal(
-            loc=risk_aversion_mean,
-            scale=risk_aversion_standard_deviation,
-            size=n_farmers,
-        )
-        self.set_binary(risk_aversion, name="agents/farmers/risk_aversion")
-
-        interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
-        self.set_binary(interest_rate, name="agents/farmers/interest_rate")
-
-        discount_rate = np.full(n_farmers, discount_rate, dtype=np.float32)
-        self.set_binary(discount_rate, name="agents/farmers/discount_rate")
+        self.set_binary(irrigating_farmers, name="agents/farmers/irrigating_farmers")
 
     def setup_population(self):
         populaton_map = self.data_catalog.get_rasterdataset(
@@ -5354,7 +6258,15 @@ class GEBModel(GridModel):
             time_chunksize=1e99,  # no chunking
         )
 
-    def _write_grid(self, grid, var, files, is_updated):
+    def _write_grid(
+        self,
+        grid,
+        var,
+        files,
+        is_updated,
+        y_chunksize=XY_CHUNKSIZE,
+        x_chunksize=XY_CHUNKSIZE,
+    ):
         if is_updated[var]["updated"]:
             self.logger.info(f"Writing {var}")
             filename = var + ".zarr.zip"
@@ -5369,7 +6281,56 @@ class GEBModel(GridModel):
             # zarr cannot handle / in variable names
             grid.name = "data"
             assert hasattr(grid, "spatial_ref")
-            grid.to_zarr(filepath, mode="w")
+
+            # Rechunk data variable if needed
+            if grid.chunks is None:
+                # Grid is not chunked, specify chunks and chunk the grid
+                chunksizes = {
+                    "y": min(grid.y.size, y_chunksize),
+                    "x": min(grid.x.size, x_chunksize),
+                }
+                chunks_tuple = tuple(
+                    (
+                        chunksizes[dim]
+                        if dim in chunksizes
+                        else max(getattr(grid, dim).size, 1)
+                    )
+                    for dim in grid.dims
+                )
+                grid = grid.chunk(chunks_tuple)
+                data_chunks = chunks_tuple
+            else:
+                # Grid is already chunked; use existing chunks
+                data_chunks = tuple(
+                    s[0] if len(set(s)) == 1 else s for s in grid.chunks
+                )
+
+            # Build the encoding dictionary for the data variable
+            encoding = {
+                grid.name: {
+                    "compressor": compressor,
+                    # Only specify chunks if the grid was not already chunked
+                    **({"chunks": data_chunks} if grid.chunks is None else {}),
+                }
+            }
+
+            # **Compute coordinate variables to avoid chunking issues**
+            for coord in grid.coords:
+                coord_da = grid.coords[coord]
+                if coord_da.ndim > 0 and coord_da.chunks is not None:
+                    # Option 1: Rechunk the coordinate variable to match data variable
+                    # grid.coords[coord] = coord_da.rechunk(data_chunks[-coord_da.ndim:])
+                    # Option 2: Compute the coordinate variable (since it's small)
+                    grid.coords[coord] = coord_da.compute()
+                # Include coordinate in encoding without specifying chunks
+                encoding[coord] = {}
+
+            # Now write to Zarr
+            grid.to_zarr(
+                filepath,
+                mode="w",
+                encoding=encoding,
+            )
 
             # rasterio does not support boolean data, which is why
             # we convert it to uint8 before writing. These files are
