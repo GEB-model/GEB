@@ -13,6 +13,7 @@ import zarr
 import numpy as np
 import zarr.convenience
 from geb.workflows import AsyncForcingReader
+from scipy.spatial import cKDTree
 
 try:
     import cupy as cp
@@ -20,16 +21,26 @@ except (ModuleNotFoundError, ImportError):
     pass
 
 
-def load_grid(filepath, layer=1, return_transform_and_crs=False):
-    """
-    a: The pixel width (resolution) in the x-direction (x_diff).
-    b: The row rotation (usually 0 for north-up images).
-    c: The x-coordinate of the center of the upper-left pixel (x[:][0] - x_diff / 2).
-    d: The column rotation (usually 0 for north-up images).
-    e: The pixel height (resolution) in the y-direction (y_diff).
-    f: The y-coordinate of the center of the upper-left pixel (ds.y[:][0] - y_diff / 2).
-    """
+def determine_nearest_river_cell(river_grid, HRU_to_grid):
+    threshold = 15
+    valid_mask = river_grid != -9999
 
+    valid_indices = np.argwhere(valid_mask)
+    valid_values = river_grid[valid_mask]
+
+    above_threshold_mask = valid_values > threshold
+    above_threshold_indices = valid_indices[above_threshold_mask]
+    above_threshold_indices_in_valid = np.flatnonzero(above_threshold_mask)
+
+    tree = cKDTree(above_threshold_indices)
+    distances, indices_in_above = tree.query(valid_indices)
+
+    nearest_indices_in_valid = above_threshold_indices_in_valid[indices_in_above]
+
+    return nearest_indices_in_valid[HRU_to_grid]
+
+
+def load_grid(filepath, layer=1, return_transform_and_crs=False):
     if filepath.suffix == ".tif":
         warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
         with rasterio.open(filepath) as src:
@@ -42,6 +53,7 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
     elif filepath.suffixes == [".zarr", ".zip"]:
         ds = zarr.convenience.open_group(filepath)
         data = ds["data"][:]
+        data = data.astype(np.float32) if data.dtype == np.float64 else data
         if return_transform_and_crs:
             x = ds.x[:]
             y = ds.y[:]
@@ -199,9 +211,31 @@ class BaseVariables:
         return array / self.cellArea
 
     def register_initial_data(self, name: str) -> None:
+        """Register initial data."""
         self.data.initial_conditions.append(name)
 
-    def load_initial(self, name, default=0.0, gpu=False):
+    def load_initial(self, name, default, gpu=False):
+        """Load initial data from disk when variable is set, otherwise use default value.
+
+        Args:
+            name: Name of variable.
+            default: Default value. This must be a callable function or lambda.
+            gpu: Whether to use GPU.
+
+        Returns:
+            data: Loaded data.
+
+        Raises:
+            AssertionError: If default is not a callable function or lambda.
+
+        Examples:
+            >>> def default():
+            ...     return np.zeros(self.data.grid.shape)
+            >>> self.var.load_initial("name", default=default)
+
+            >>> self.var.load_initial("name", default=lambda: np.zeros(self.data.grid.shape))
+        """
+        assert callable(default), "default must be a callable function or lambda"
         if self.model.load_initial_data:
             fp = os.path.join(self.data.get_save_state_path(), f"{name}.npz")
             if gpu:
@@ -210,7 +244,7 @@ class BaseVariables:
                 return np.load(fp)["data"]
         else:
             self.register_initial_data(name)
-            return default
+            return default()
 
 
 class Grid(BaseVariables):
@@ -225,31 +259,31 @@ class Grid(BaseVariables):
         self.data = data
         self.model = model
         self.scaling = 1
-        mask, transform, self.crs = load_grid(
+        mask, self.transform, self.crs = load_grid(
             self.model.files["grid"]["areamaps/grid_mask"],
             return_transform_and_crs=True,
         )
         self.mask = mask.astype(bool)
-        self.gt = transform.to_gdal()
+        self.gt = self.transform.to_gdal()
         self.bounds = (
-            transform.c,
-            transform.f + transform.e * mask.shape[0],
-            transform.c + transform.a * mask.shape[1],
-            transform.f,
+            self.transform.c,
+            self.transform.f + self.transform.e * mask.shape[0],
+            self.transform.c + self.transform.a * mask.shape[1],
+            self.transform.f,
         )
         self.lon = np.linspace(
-            transform.c + transform.a / 2,
-            transform.c + transform.a * mask.shape[1] - transform.a / 2,
+            self.transform.c + self.transform.a / 2,
+            self.transform.c + self.transform.a * mask.shape[1] - self.transform.a / 2,
             mask.shape[1],
         )
         self.lat = np.linspace(
-            transform.f + transform.e / 2,
-            transform.f + transform.e * mask.shape[0] - transform.e / 2,
+            self.transform.f + self.transform.e / 2,
+            self.transform.f + self.transform.e * mask.shape[0] - self.transform.e / 2,
             mask.shape[0],
         )
 
-        assert math.isclose(transform.a, -transform.e)
-        self.cell_size = transform.a
+        assert math.isclose(self.transform.a, -self.transform.e)
+        self.cell_size = self.transform.a
 
         self.cell_area_uncompressed = load_grid(
             self.model.files["grid"]["areamaps/cell_area"]
@@ -353,7 +387,7 @@ class Grid(BaseVariables):
             data = self.data.grid.compress(data)
         return data
 
-    def load_initial(self, name, default=0.0):
+    def load_initial(self, name, default):
         return super().load_initial("grid." + name, default=default)
 
     def load_forcing_ds(self, name):
@@ -451,8 +485,25 @@ class Grid(BaseVariables):
     def spei_uncompressed(self):
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("spei")
-        spei = self.load_forcing(self.spei_ds, self.model.current_time, compress=False)
-        assert not np.isnan(spei[~self.mask]).any()  # no nan values in non-masked cells
+
+        current_time = self.model.current_time
+
+        # Determine the nearest first day of the month
+        if current_time.day <= 15:
+            spei_time = current_time.replace(day=1)
+        else:
+            # Move to the first day of the next month
+            if current_time.month == 12:
+                spei_time = current_time.replace(
+                    year=current_time.year + 1, month=1, day=1
+                )
+            else:
+                spei_time = current_time.replace(month=current_time.month + 1, day=1)
+
+        spei = self.load_forcing(self.spei_ds, spei_time, compress=False)
+        assert not np.isnan(
+            spei[~self.mask]
+        ).any()  # Ensure no NaN values in non-masked cells
         return spei
 
     @property
@@ -495,14 +546,10 @@ class HRUs(BaseVariables):
 
         self.scaling = submask_height // self.data.grid.shape[0]
         assert submask_width // self.data.grid.shape[1] == self.scaling
-        self.gt = (
-            self.data.grid.gt[0],
-            self.data.grid.gt[1] / self.scaling,
-            self.data.grid.gt[2],
-            self.data.grid.gt[3],
-            self.data.grid.gt[4],
-            self.data.grid.gt[5] / self.scaling,
-        )
+
+        self.transform = self.data.grid.transform * Affine.scale(1 / self.scaling)
+
+        self.gt = self.transform.to_gdal()
 
         self.mask = self.data.grid.mask.repeat(self.scaling, axis=0).repeat(
             self.scaling, axis=1
@@ -516,8 +563,8 @@ class HRUs(BaseVariables):
             submask_width,
         )
         self.lat = np.linspace(
-            self.gt[3] + self.cell_size * submask_height - self.cell_size / 2,
             self.gt[3] + self.cell_size / 2,
+            self.gt[3] + self.cell_size * submask_height - self.cell_size / 2,
             submask_height,
         )
 
@@ -542,6 +589,11 @@ class HRUs(BaseVariables):
                     self.data.get_save_state_path(), "HRU.unmerged_HRU_indices.npz"
                 )
             )["data"]
+            self.nearest_river_grid_cell = np.load(
+                os.path.join(
+                    self.data.get_save_state_path(), "HRU.nearest_river_grid_cell.npz"
+                )
+            )["data"]
         else:
             (
                 self.land_use_type,
@@ -551,12 +603,22 @@ class HRUs(BaseVariables):
                 self.grid_to_HRU,
                 self.unmerged_HRU_indices,
             ) = self.create_HRUs()
+
+            river_grid = load_grid(
+                self.model.files["grid"]["routing/kinematic/upstream_area"]
+            )
+
+            self.nearest_river_grid_cell = determine_nearest_river_cell(
+                river_grid, self.HRU_to_grid
+            )
+
             self.register_initial_data("HRU.land_use_type")
             self.register_initial_data("HRU.land_use_ratio")
             self.register_initial_data("HRU.land_owners")
             self.register_initial_data("HRU.HRU_to_grid")
             self.register_initial_data("HRU.grid_to_HRU")
             self.register_initial_data("HRU.unmerged_HRU_indices")
+            self.register_initial_data("HRU.nearest_river_grid_cell")
         if self.model.use_gpu:
             self.land_use_type = cp.array(self.land_use_type)
         BaseVariables.__init__(self)
@@ -788,6 +850,8 @@ class HRUs(BaseVariables):
             HRU_array = HRU_array.get()
         if np.issubdtype(HRU_array.dtype, np.integer):
             nanvalue = -1
+        elif np.issubdtype(HRU_array.dtype, bool):
+            nanvalue = False
         else:
             nanvalue = np.nan
         outarray = HRU_array[self.unmerged_HRU_indices]
@@ -836,7 +900,7 @@ class HRUs(BaseVariables):
         if show:
             plt.show()
 
-    def load_initial(self, name, default=0.0, gpu=None):
+    def load_initial(self, name, default, gpu=None):
         if gpu is None:
             gpu = self.model.use_gpu
         return super().load_initial("HRU." + name, default=default, gpu=gpu)
@@ -894,7 +958,7 @@ class Modflow(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def load_initial(self, name, default=0.0):
+    def load_initial(self, name, default):
         return super().load_initial("modflow." + name, default=default)
 
 
