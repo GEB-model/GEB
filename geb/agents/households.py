@@ -1,20 +1,46 @@
 import numpy as np
 import geopandas as gpd
-import pyproj
 import calendar
 from .general import AgentArray, downscale_volume, AgentBaseClass
-from ..hydrology.landcover import SEALED
+from ..hydrology.landcover import (
+    SEALED,
+    FOREST,
+)
 import pandas as pd
 from os.path import join
+from damagescanner.core import object_scanner
 import json
-
-# from damagescanner.core import RasterScanner
-# from damagescanner.core import VectorScanner
+import rioxarray
+from rasterio.features import shapes
+from shapely.geometry import shape
 
 try:
     import cupy as cp
 except (ModuleNotFoundError, ImportError):
     pass
+
+
+def from_landuse_raster_to_polygon(mask, transform, crs):
+    """
+    Convert raster data into separate GeoDataFrames for specified land use values.
+
+    Parameters:
+    - landuse: An xarray DataArray or similar with land use data and 'x' and 'y' coordinates.
+    - values_to_extract: List of integer values to extract (e.g., [0, 1] for forest and agriculture).
+
+    Returns:
+    - Geodataframe
+    """
+
+    shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
+
+    polygons = []
+    for geom, _ in shapes_gen:
+        polygons.append(shape(geom))
+
+    gdf = gpd.GeoDataFrame({"geometry": polygons}, crs=crs)
+
+    return gdf
 
 
 class Households(AgentBaseClass):
@@ -23,35 +49,19 @@ class Households(AgentBaseClass):
         self.agents = agents
         self.reduncancy = reduncancy
 
-        # Load exposure data
+        # Load buildings
         self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
+        self.buildings["object_type"] = "building_structure"
+        self.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
+        self.buildings_centroid["object_type"] = "building_content"
+
+        # Load roads
         self.roads = gpd.read_file(self.model.files["geoms"]["assets/roads"])
+        self.roads = self.roads.rename(columns={"highway": "object_type"})
+
+        # Load rail
         self.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
-        self.landuse = self.model.files["region_subgrid"][
-            "landsurface/full_region_cultivated_land"
-        ]
-
-        # Processing of exposure data
-        all_buildings_geul_polygons = self.buildings[
-            self.buildings != "Point"
-        ]  # Only use polygons in analysis
-        all_buildings_geul_polygons.loc[:, "landuse"] = "building"  # Add column
-        all_buildings_geul_polygons.reset_index(drop=True, inplace=True)
-        reproject_buildings = all_buildings_geul_polygons.to_crs(32631)  # Change CRS
-        reproject_buildings["area"] = reproject_buildings[
-            "geometry"
-        ].area  # calculate the area for all buildings
-        self.selected_buildings = reproject_buildings[
-            reproject_buildings["area"] > 18
-        ]  # Bouwbesluit: only allowed to live in buildings larger than 18 m2 https://rijksoverheid.bouwbesluit.com/Inhoud/docs/wet/bb2012/hfd4?tableid=docs/wet/bb2012[35]/hfd4/afd4-1/par4-1-1
-        self.selected_buildings.reset_index(drop=True, inplace=True)
-        self.roads = self.roads.to_crs(32631)
-        self.rail = self.rail.to_crs(32631)
-
-        # Only take the center point for each building
-        self.centroid_gdf = gpd.GeoDataFrame(geometry=self.selected_buildings.centroid)
-        self.centroid_gdf.loc[:, "landuse"] = "building"
-        self.centroid_gdf.reset_index(drop=True, inplace=True)
+        self.rail["object_type"] = "rail"
 
         # Load maximum damages
         with open(
@@ -61,9 +71,10 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.max_dam_buildings_structure = json.load(f)
-        self.max_dam_buildings_structure["building"] = (
-            self.max_dam_buildings_structure.pop("maximum_damage")
+        self.max_dam_buildings_structure = float(
+            self.max_dam_buildings_structure["maximum_damage"]
         )
+        self.buildings["maximum_damage"] = self.max_dam_buildings_structure
 
         with open(
             model.files["dict"][
@@ -72,15 +83,17 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.max_dam_buildings_content = json.load(f)
-        self.max_dam_buildings_content["building"] = self.max_dam_buildings_content.pop(
-            "maximum_damage"
+        self.max_dam_buildings_content = float(
+            self.max_dam_buildings_content["maximum_damage"]
         )
+        self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
 
         with open(
             model.files["dict"]["damage_parameters/flood/rail/main/maximum_damage"], "r"
         ) as f:
             self.max_dam_rail = json.load(f)
-        self.max_dam_rail["rail"] = self.max_dam_rail.pop("maximum_damage")
+        self.max_dam_rail = float(self.max_dam_rail["maximum_damage"])
+        self.rail["maximum_damage"] = self.max_dam_rail
 
         self.max_dam_road = {}
         road_types = [
@@ -114,6 +127,8 @@ class Households(AgentBaseClass):
                 max_damage = json.load(f)
             self.max_dam_road[road_type] = max_damage["maximum_damage"]
 
+        self.roads["maximum_damage"] = self.roads["object_type"].map(self.max_dam_road)
+
         with open(
             model.files["dict"][
                 "damage_parameters/flood/land_use/forest/maximum_damage"
@@ -121,7 +136,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.max_dam_forest = json.load(f)
-        self.max_dam_forest["0"] = self.max_dam_forest.pop("maximum_damage")
+        self.max_dam_forest = float(self.max_dam_forest["maximum_damage"])
 
         with open(
             model.files["dict"][
@@ -130,19 +145,9 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.max_dam_agriculture = json.load(f)
-        self.max_dam_agriculture["1"] = self.max_dam_agriculture.pop("maximum_damage")
+        self.max_dam_agriculture = float(self.max_dam_agriculture["maximum_damage"])
 
-        self.max_dam_landuse = {**self.max_dam_forest, **self.max_dam_agriculture}
-        self.max_dam_landuse = pd.DataFrame.from_dict(
-            self.max_dam_landuse, orient="index", columns=["maximum_damage"]
-        )
-        self.max_dam_landuse["landuse"] = [
-            "0",
-            "1",
-        ]
-        self.max_dam_landuse = self.max_dam_landuse[["landuse", "maximum_damage"]]
-
-        # Here we load in all vulnerability curves
+        # Load vulnerability curves
         self.road_curves = []
         road_types = [
             ("residential", "damage_parameters/flood/road/residential/curve"),
@@ -169,21 +174,21 @@ class Households(AgentBaseClass):
 
             self.road_curves.append(df[[road_type]])
         self.road_curves = pd.concat([severity_column] + self.road_curves, axis=1)
+        self.road_curves.set_index("severity", inplace=True)
 
         self.forest_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/land_use/forest/curve"]
         )
-        self.forest_curve.rename(columns={"damage_ratio": "0"}, inplace=True)
-
+        self.forest_curve.set_index("severity", inplace=True)
+        self.forest_curve = self.forest_curve.rename(columns={"damage_ratio": "forest"})
         self.agriculture_curve = pd.read_parquet(
             self.model.files["table"][
                 "damage_parameters/flood/land_use/agriculture/curve"
             ]
         )
-        self.agriculture_curve.rename(columns={"damage_ratio": "1"}, inplace=True)
-
-        self.curves_landuse = pd.merge(
-            self.forest_curve, self.agriculture_curve, on="severity"
+        self.agriculture_curve.set_index("severity", inplace=True)
+        self.agriculture_curve = self.agriculture_curve.rename(
+            columns={"damage_ratio": "agriculture"}
         )
 
         self.buildings_structure_curve = pd.read_parquet(
@@ -191,21 +196,24 @@ class Households(AgentBaseClass):
                 "damage_parameters/flood/buildings/structure/curve"
             ]
         )
-        self.buildings_structure_curve.rename(
-            columns={"damage_ratio": "building"}, inplace=True
+        self.buildings_structure_curve.set_index("severity", inplace=True)
+        self.buildings_structure_curve = self.buildings_structure_curve.rename(
+            columns={"damage_ratio": "building_structure"}
         )
 
         self.buildings_content_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
         )
-        self.buildings_content_curve.rename(
-            columns={"damage_ratio": "building"}, inplace=True
+        self.buildings_content_curve.set_index("severity", inplace=True)
+        self.buildings_content_curve = self.buildings_content_curve.rename(
+            columns={"damage_ratio": "building_content"}
         )
 
         self.rail_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
         )
-        self.rail_curve.rename(columns={"damage_ratio": "rail"}, inplace=True)
+        self.rail_curve.set_index("severity", inplace=True)
+        self.rail_curve = self.rail_curve.rename(columns={"damage_ratio": "rail"})
 
         super().__init__()
 
@@ -231,147 +239,93 @@ class Households(AgentBaseClass):
             n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
         )
 
-        self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
-
     def flood(self, flood_map, simulation_root, return_period=None):
-        self.flood_depth.fill(0)  # Reset flood depth for all households
-
-        import matplotlib.pyplot as plt
-
-        plt.figure()
-
-        flood_map.plot()
-        plt.savefig("flood.png")
-
-        transformer = pyproj.Transformer.from_crs(
-            4326, flood_map.raster.crs, always_xy=True
-        )
-        x, y = transformer.transform(self.locations[:, 0], self.locations[:, 1])
-
-        forward_transform = flood_map.raster.transform
-        backward_transform = ~forward_transform
-
-        pixel_x, pixel_y = backward_transform * (x, y)
-        pixel_x = pixel_x.astype(int)  # TODO: Should I add 0.5?
-        pixel_y = pixel_y.astype(int)  # TODO: Should I add 0.5?
-
-        # Create a mask that includes only the pixels inside the grid
-        mask = (
-            (pixel_x >= 0)
-            & (pixel_x < flood_map.shape[1])
-            & (pixel_y >= 0)
-            & (pixel_y < flood_map.shape[0])
-        )
-
-        flood_depth_per_household = flood_map.values[pixel_y[mask], pixel_x[mask]]
-        self.flood_depth[mask] = flood_depth_per_household > 0
-
-        self.risk_perception[(self.flood_depth > 0)] *= 10
-
-        print("mean risk perception", self.risk_perception.mean())
-
         if return_period is not None:
-            flood_map = join(simulation_root, f"hmax RP {int(return_period)}.tif")
+            flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
         else:
-            flood_map = join(simulation_root, "hmax.tif")
-        # print(f"using this flood map: {flood_map}")
+            flood_path = join(simulation_root, "hmax.tif")
 
-        #     loss_landuse = RasterScanner(landuse_file=self.landuse,
-        #                                   hazard_file=flood_map,
-        #                                   curve_path=self.curves_landuse,maxdam_path=self.max_dam_landuse, lu_crs=4326, haz_crs=32631, dtype=np.int32, save=True, scenario_name='raster')
+        print(f"using this flood map: {flood_path}")
+        flood_map = rioxarray.open_rasterio(flood_path)
 
-        #     print(loss_landuse)
+        self.agriculture = from_landuse_raster_to_polygon(
+            self.model.data.HRU.decompress(self.model.data.HRU.land_owners != -1),
+            self.model.data.HRU.transform,
+            self.model.crs,
+        )
+        self.agriculture["object_type"] = "agriculture"
+        self.agriculture["maximum_damage"] = self.max_dam_agriculture
 
-        #     damages_buildings_structure = VectorScanner(exposure_file=self.selected_buildings,
-        #               hazard_file=flood_map,
-        #               curve_path=self.buildings_structure_curve,
-        #               maxdam_path = self.max_dam_buildings_structure,
-        #               cell_size = 20,
-        #               exp_crs= 32631,
-        #               haz_crs= 32631,
-        #               object_col='landuse',
-        #               hazard_col="hmax",
-        #               lat_col="xc",
-        #               lon_col="yc",
-        #               centimeters=False,
-        #               save=False,
-        #               plot=False,
-        #               grouped=False,
-        #               scenario_name = 'building_structure2'
-        #               )
+        self.agriculture = self.agriculture.to_crs(flood_map.rio.crs)
 
-        #     #print(damages_buildings_structure)
-        #     total_damage_structure = damages_buildings_structure['damage'].sum()
-        #     print(f"building structure damage is: {total_damage_structure}")
+        damages_agriculture = object_scanner(
+            objects=self.agriculture, hazard=flood_map, curves=self.agriculture_curve
+        )
+        total_damages_agriculture = damages_agriculture.sum()
+        print(f"damages to agriculture are: {total_damages_agriculture}")
 
-        #     damages_buildings_content = VectorScanner(exposure_file=self.centroid_gdf,
-        #               hazard_file=flood_map,
-        #               curve_path=self.buildings_content_curve,
-        #               maxdam_path = self.max_dam_buildings_content,
-        #               cell_size = 20,
-        #               exp_crs=32631,
-        #               haz_crs=32631,
-        #               object_col='landuse',
-        #               hazard_col='hmax',
-        #               lat_col="xc",
-        #               lon_col="yc",
-        #               centimeters=False,
-        #               save=False,
-        #               plot=False,
-        #               grouped=False,
-        #               scenario_name = 'building_contents2'
-        #              )
-        #    # print(damages_buildings_contents)
-        #     total_damages_content = damages_buildings_content['damage'].sum()
-        #     print(f"building content damage is: { total_damages_content}")
+        # Load landuse and make turn into polygons
+        self.forest = from_landuse_raster_to_polygon(
+            self.model.data.HRU.decompress(self.model.data.HRU.land_use_type == FOREST),
+            self.model.data.HRU.transform,
+            self.model.crs,
+        )
+        self.forest["object_type"] = "forest"
+        self.forest["maximum_damage"] = self.max_dam_forest
 
-        #     total_damages_buildings = total_damage_structure + total_damages_content
-        #     print(f"total damage to buildings is: { total_damages_buildings} ")
+        self.forest = self.forest.to_crs(flood_map.rio.crs)
 
-        #     damages_roads = VectorScanner(exposure_file=self.roads,
-        #               hazard_file=flood_map,
-        #               curve_path=self.road_curves,
-        #               maxdam_path = self.max_dam_road,
-        #               cell_size = 20,
-        #               exp_crs=32631,
-        #               haz_crs=32631,
-        #               object_col='highway',
-        #               hazard_col='hmax',
-        #               lat_col="xc",
-        #               lon_col="yc",
-        #               centimeters=False,
-        #               save=False,
-        #               plot=False,
-        #               grouped=False,
-        #               scenario_name = 'roads'
-        #              )
+        damages_forest = object_scanner(
+            objects=self.forest, hazard=flood_map, curves=self.forest_curve
+        )
+        total_damages_forest = damages_forest.sum()
+        print(f"damages to forest are: {total_damages_forest}")
 
-        #     total_damages_roads = damages_roads['damage'].sum()
-        #     print(f"damages to roads: {total_damages_roads} ")
+        self.buildings = self.buildings.to_crs(flood_map.rio.crs)
+        damages_buildings_structure = object_scanner(
+            objects=self.buildings,
+            hazard=flood_map,
+            curves=self.buildings_structure_curve,
+        )
+        total_damage_structure = damages_buildings_structure.sum()
+        print(f"damages to building structure are: {total_damage_structure}")
 
-        # damages_rail = VectorScanner(exposure_file=self.rail,
-        #           hazard_file=flood_map,
-        #           curve_path=self.rail_curve,
-        #           maxdam_path = self.max_dam_rail,
-        #           cell_size = 20,
-        #           exp_crs=32631,
-        #           haz_crs=32631,
-        #           object_col='railway',
-        #           hazard_col='hmax',
-        #           lat_col="xc",
-        #           lon_col="yc",
-        #           centimeters=False,
-        #           save=False,
-        #           plot=False,
-        #           grouped=False,
-        #           scenario_name = 'rail'
-        #          )
-        # total_damages_rail = damages_rail['damage'].sum()
-        # print(f"damage to rail is: {total_damages_rail}")
+        self.buildings_centroid = self.buildings_centroid.to_crs(flood_map.rio.crs)
+        damages_buildings_content = object_scanner(
+            objects=self.buildings_centroid,
+            hazard=flood_map,
+            curves=self.buildings_content_curve,
+        )
+        total_damages_content = damages_buildings_content.sum()
+        print(f"damages to building content are: { total_damages_content}")
 
-        # total_flood_damages = loss_landuse["damages"].sum() + total_damage_structure + total_damages_content + total_damages_roads +total_damages_rail
-        # print(f"the total flood damages are: {total_flood_damages}")
-        total_flood_damages = 0
+        self.roads = self.roads.to_crs(flood_map.rio.crs)
+        damages_roads = object_scanner(
+            objects=self.roads,
+            hazard=flood_map,
+            curves=self.road_curves,
+        )
+        total_damages_roads = damages_roads.sum()
+        print(f"damages to roads are: {total_damages_roads} ")
+
+        self.rail = self.rail.to_crs(flood_map.rio.crs)
+        damages_rail = object_scanner(
+            objects=self.rail,
+            hazard=flood_map,
+            curves=self.rail_curve,
+        )
+        total_damages_rail = damages_rail.sum()
+        print(f"damages to rail are: {total_damages_rail}")
+
+        total_flood_damages = (
+            total_damage_structure
+            + total_damages_content
+            + total_damages_roads
+            + total_damages_rail
+            + total_damages_forest
+            + total_damages_agriculture
+        )
+        print(f"the total flood damages are: {total_flood_damages}")
 
         return total_flood_damages
 
@@ -455,7 +409,7 @@ class Households(AgentBaseClass):
         return self.current_water_demand, self.current_efficiency
 
     def step(self) -> None:
-        self.risk_perception *= self.risk_perception
+        # self.risk_perception *= self.risk_perception
         return None
 
     @property

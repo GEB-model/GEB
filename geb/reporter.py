@@ -122,6 +122,7 @@ class hydrology_reporter(ABMReporter):
                                 "standard_name": "time",
                                 "units": "seconds since 1970-01-01T00:00:00",
                                 "calendar": "gregorian",
+                                "_ARRAY_DIMENSIONS": ["time"],
                             }
                         )
 
@@ -131,7 +132,11 @@ class hydrology_reporter(ABMReporter):
                             dtype="float32",
                         )
                         zarr_group["y"].attrs.update(
-                            {"standard_name": "latitude", "units": "degrees_north"}
+                            {
+                                "standard_name": "latitude",
+                                "units": "degrees_north",
+                                "_ARRAY_DIMENSIONS": ["y"],
+                            }
                         )
 
                         zarr_group.create_dataset(
@@ -140,7 +145,11 @@ class hydrology_reporter(ABMReporter):
                             dtype="float32",
                         )
                         zarr_group["x"].attrs.update(
-                            {"standard_name": "longitude", "units": "degrees_east"}
+                            {
+                                "standard_name": "longitude",
+                                "units": "degrees_east",
+                                "_ARRAY_DIMENSIONS": ["x"],
+                            }
                         )
 
                         zarr_data = zarr_group.create_dataset(
@@ -166,6 +175,7 @@ class hydrology_reporter(ABMReporter):
                                 "coordinates": "time y x",
                                 "units": "unknown",
                                 "long_name": name,
+                                "_ARRAY_DIMENSIONS": ["time", "y", "x"],
                             }
                         )
 
@@ -243,8 +253,11 @@ class hydrology_reporter(ABMReporter):
                 f"Export format must be specified for {name} in config file (npy/npz/csv/xlsx/zarr)."
             )
         if conf["format"] == "zarr":
-            if np.isin(
-                np.datetime64(self.model.current_time), self.variables[name].time
+            if (
+                np.isin(
+                    np.datetime64(self.model.current_time), self.variables[name].time
+                )
+                and value is not None
             ):
                 time_index = np.where(
                     self.variables[name].time[:]

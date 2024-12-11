@@ -170,8 +170,18 @@ class Market(AgentBaseClass):
         ):
             return self.get_modelled_crop_prices()
         else:
-            index = self._crop_prices[0].get(self.model.current_time)
-            return self._crop_prices[1][index]
+            if self._crop_prices[0] is None:
+                print("WARNING: Using static crop prices")
+                return np.full(
+                    (
+                        len(self.cumulative_inflation_per_region),
+                        len(self.agents.crop_farmers.crop_ids),
+                    ),
+                    self._crop_prices[1],
+                )
+            else:
+                index = self._crop_prices[0].get(self.model.current_time)
+                return self._crop_prices[1][index]
 
     @property
     def year_index(self) -> int:
