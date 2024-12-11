@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from pyproj import CRS
 from geb.hydrology.landcover import SEALED, OPEN_WATER
 import itertools
+from os.path import join
 
 try:
     from geb_hydrodynamics import (
@@ -32,10 +33,18 @@ class SFINCS:
     def __init__(self, model, config, max_number_of_timesteps=10):
         self.model = model
         self.config = config
-        self.max_number_of_timesteps = max_number_of_timesteps
+        self.max_number_of_timesteps = (
+            max_number_of_timesteps  # this equals the longest flood event in days
+        )
 
-        self.discharge_per_timestep = deque(maxlen=self.max_number_of_timesteps)
+        self.discharge_per_timestep = deque(
+            maxlen=self.max_number_of_timesteps
+        )  # these are deques in which the last value is the last timestep of the flood event, but with a first value that can be before the first timestep of the event (if this flood event is shorter than the longest event)
         self.soil_moisture_per_timestep = deque(maxlen=self.max_number_of_timesteps)
+        self.max_water_storage_per_timestep = deque(maxlen=self.max_number_of_timesteps)
+        self.saturated_hydraulic_conductivity_per_timestep = deque(
+            maxlen=self.max_number_of_timesteps
+        )
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
@@ -225,14 +234,21 @@ class SFINCS:
     def set_forcing(self, event, start_time):
         if self.model.config["general"]["simulate_hydrology"]:
             # load and process discharge grid
-            substeps = self.discharge_per_timestep[0].shape[0]
-            number_of_timesteps = (event["end_time"] - event["start_time"]).days
+            substeps = self.discharge_per_timestep[0].shape[0]  # hourly substeps
+            number_of_timesteps = (
+                event["end_time"] - event["start_time"]
+            ).days  # number of days in the flood event
+
+            first_timestep_of_event = (
+                len(self.discharge_per_timestep) - number_of_timesteps
+            )  # necessary to find the first timestep, as the discharge_per_timestep deque has a length of the longest flood event.
+
             discharge_grid = self.model.data.grid.decompress(
                 np.vstack(
                     list(
                         itertools.islice(
                             self.discharge_per_timestep,  # deque at every time step of the model.
-                            (len(self.discharge_per_timestep) - number_of_timesteps),
+                            first_timestep_of_event,
                             len(self.discharge_per_timestep),
                         )
                     )
@@ -247,7 +263,7 @@ class SFINCS:
                     "time": pd.date_range(
                         start=event["start_time"],
                         end=event["end_time"],
-                        periods=discharge_grid.shape[0],
+                        periods=discharge_grid.shape[0],  # the substeps
                         # inclusive="right",
                     ),
                     "y": self.model.data.grid.lat,
@@ -261,9 +277,41 @@ class SFINCS:
                 {
                     "initial_soil_moisture": (
                         ["y", "x"],
-                        self.soil_moisture_per_timestep[
-                            0
-                        ],  # take first time step of soil moisture
+                        self.model.data.HRU.decompress(
+                            self.soil_moisture_per_timestep[first_timestep_of_event]
+                        ),  # take first time step of soil moisture
+                    )
+                },  # deque
+                coords={
+                    "y": self.model.data.HRU.lat,
+                    "x": self.model.data.HRU.lon,
+                },
+            )
+
+            max_water_storage_grid = xr.Dataset(
+                {
+                    "max_water_storage": (
+                        ["y", "x"],
+                        self.model.data.HRU.decompress(
+                            self.max_water_storage_per_timestep[first_timestep_of_event]
+                        ),  # take first time step of soil moisture
+                    )
+                },  # deque
+                coords={
+                    "y": self.model.data.HRU.lat,
+                    "x": self.model.data.HRU.lon,
+                },
+            )
+
+            saturated_hydraulic_conductivity_grid = xr.Dataset(
+                {
+                    "saturated_hydraulic_conductivity": (
+                        ["y", "x"],
+                        self.model.data.HRU.decompress(
+                            self.saturated_hydraulic_conductivity_per_timestep[
+                                first_timestep_of_event
+                            ]
+                        ),  # take first time step of soil moisture
                     )
                 },  # deque
                 coords={
@@ -308,15 +356,23 @@ class SFINCS:
 
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
 
-        # assign a CRS and select SFINCS time period
+        ######################## assignment of CRS to the grids ########################
 
         crs_obj = CRS.from_wkt(
             self.model.data.grid.crs
         )  # Convert the WKT string to a pyproj CRS object
 
         # Now you can safely call to_proj4() on the CRS object
-        discharge_grid.raster.set_crs(crs_obj.to_proj4())
-        initial_soil_moisture_grid.raster.set_crs(crs_obj.to_proj4())
+        discharge_grid.raster.set_crs(crs_obj.to_proj4())  # for discharge
+        initial_soil_moisture_grid.raster.set_crs(
+            crs_obj.to_proj4()
+        )  # for soil moisture
+        saturated_hydraulic_conductivity_grid.raster.set_crs(
+            crs_obj.to_proj4()
+        )  # for saturated hydraulic conductivity
+        max_water_storage_grid.raster.set_crs(
+            crs_obj.to_proj4()
+        )  # for max water storage
 
         tstart = start_time
         tend = discharge_grid.time[-1] + pd.Timedelta(
@@ -349,6 +405,8 @@ class SFINCS:
             },
             discharge_grid=discharge_grid,
             initial_soil_moisture_grid=initial_soil_moisture_grid,
+            max_water_storage_grid=max_water_storage_grid,
+            saturated_hydraulic_conductivity_grid=saturated_hydraulic_conductivity_grid,
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
@@ -359,6 +417,7 @@ class SFINCS:
         return None
 
     def run_single_event(self, event, start_time, return_period=None):
+        ############################ Run Sfincs simulation ############################
         self.setup(event)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
@@ -367,11 +426,55 @@ class SFINCS:
             simulation_root=self.sfincs_simulation_root(event_name),
             model_root=self.sfincs_model_root(event_name),
         )
+
+        ############################## plotting of flood map (hmax) ############################
+
+        ## load and save flood map
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
             return_period=return_period,
         )  # xc, yc is for x and y in rotated grid`DD`
+
+        # set the path to the simulation root
+        simulation_root = self.sfincs_simulation_root(event_name)
+        self.sfincs_simulation_root(event_name)
+
+        mod = SfincsModel(
+            simulation_root,
+            mode="r",
+        )
+
+        # plot basemap
+        fig, ax = mod.plot_basemap(
+            fn_out=None,
+            variable="",  # no variable to plot, only basemap
+            #    plot_bounds=False,
+            plot_geoms=True,
+            bmap="osm",
+            zoomlevel=12,
+            figsize=(11, 7),
+        )
+
+        # plot flood map
+        cbar_kwargs = {"shrink": 0.6, "anchor": (0, 0)}
+        flood_map.plot(
+            x="xc",
+            y="yc",
+            ax=ax,
+            vmin=0,
+            vmax=10.0,
+            cmap=plt.cm.viridis,
+            cbar_kwargs=cbar_kwargs,
+        )
+
+        ax.set_title("SFINCS maximum water depth")
+
+        # save flood map
+
+        plt.savefig(join(simulation_root, "floodmap.png"))
+
+        # damage
         damages = self.flood(
             flood_map=flood_map,
             simulation_root=self.sfincs_simulation_root(event_name),
@@ -462,8 +565,22 @@ class SFINCS:
         self.model.data.HRU.w[:, self.model.data.HRU.land_use_type == SEALED] = 0
         self.model.data.HRU.w[:, self.model.data.HRU.land_use_type == OPEN_WATER] = 0
         initial_soil_moisture_grid = self.model.data.HRU.w[:2].sum(axis=0)
-        initial_soil_moisture_grid = self.model.data.HRU.decompress(
-            initial_soil_moisture_grid
-        )  # move down
 
         self.soil_moisture_per_timestep.append(initial_soil_moisture_grid)
+
+    def save_max_soil_moisture(self):
+        # smax
+
+        self.model.soil.ws[:, self.model.data.HRU.land_use_type == SEALED] = 0
+        self.model.soil.ws[:, self.model.data.HRU.land_use_type == OPEN_WATER] = 0
+        max_water_storage_grid = self.model.soil.ws[:2].sum(axis=0)
+        self.max_water_storage_per_timestep.append(max_water_storage_grid)
+
+    def save_ksat(self):
+        # ksat
+        self.model.soil.ksat[:, self.model.data.HRU.land_use_type == SEALED] = 0
+        self.model.soil.ksat[:, self.model.data.HRU.land_use_type == OPEN_WATER] = 0
+        saturated_hydraulic_conductivity_grid = self.model.soil.ksat[:2].sum(axis=0)
+        self.saturated_hydraulic_conductivity_per_timestep.append(
+            saturated_hydraulic_conductivity_grid
+        )

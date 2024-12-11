@@ -18,6 +18,8 @@ class HazardDriver:
             if self.config["general"]["simulate_hydrology"]:
                 self.sfincs.save_discharge()
                 self.sfincs.save_soil_moisture()
+                self.sfincs.save_max_soil_moisture()
+                self.sfincs.save_ksat()
 
             for event in self.config["hazards"]["floods"]["events"]:
                 assert type(self.current_time.date()) is type(event["end_time"])

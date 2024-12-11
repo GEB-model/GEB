@@ -516,8 +516,8 @@ class HRUs(BaseVariables):
             submask_width,
         )
         self.lat = np.linspace(
-            self.gt[3] + self.cell_size / 2,
             self.gt[3] + self.cell_size * submask_height - self.cell_size / 2,
+            self.gt[3] + self.cell_size / 2,
             submask_height,
         )
 
