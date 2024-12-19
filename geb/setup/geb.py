@@ -282,6 +282,7 @@ class GEBModel(GridModel):
             region.pop("max_bounds")
             geom, xy = hydromt.workflows.get_basin_geometry(
                 ds=hydrography,
+                flwdir_name='dir',
                 kind=kind,
                 logger=self.logger,
                 bounds=[
@@ -305,8 +306,11 @@ class GEBModel(GridModel):
                 f"Region for grid must of kind [basin, subbasin], kind {kind} not understood."
             )
 
+        # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
+        # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+        # usable between 86°S and 86°N.
         self.logger.info(
-            f"Approximate basin size in km2: {round(geom.to_crs(epsg=3857).area.sum() / 1e6, 2)}"
+            f"Approximate basin size in km2: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)}"
         )
 
         # Add region and grid to model
@@ -319,7 +323,7 @@ class GEBModel(GridModel):
             / 60,  # align grid to resolution of model grid. Conversion is to convert from arcsec to degrees
             mask=True,
         )
-        flwdir = hydrography["flwdir"].values
+        flwdir = hydrography["dir"].values
         flwdir[hydrography.mask is False] = 255
 
         flow_raster = pyflwdir.from_array(
@@ -3050,6 +3054,9 @@ class GEBModel(GridModel):
             water_budget = xr.open_zarr(tmp_water_budget_file.name, chunks={})[
                 "water_budget"
             ]
+            # xclim fails when dparams is present, thus remove it
+            if "dparams" in water_budget.coords:
+                water_budget = water_budget.drop("dparams")
 
             # Compute the SPEI
             SPEI = xci.standardized_precipitation_evapotranspiration_index(
@@ -3087,8 +3094,6 @@ class GEBModel(GridModel):
                 self.set_forcing(SPEI, name="climate/spei")
 
                 self.logger.info("calculating GEV parameters...")
-
-                # negative_SPEI = SPEI.where(SPEI < 0)
 
                 # Group the data by year and find the maximum monthly sum for each year
                 SPEI_yearly_min = SPEI.groupby("time.year").min(dim="time", skipna=True)
