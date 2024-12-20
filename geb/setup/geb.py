@@ -331,7 +331,7 @@ class GEBModel(GridModel):
             ftype="d8",
             transform=hydrography.rio.transform(),
             latlon=True,  # hydrography is specified in latlon
-            mask=hydrography.mask  # this mask is True within study area
+            mask=hydrography.mask,  # this mask is True within study area
         )
 
         scale_factor = resolution_arcsec // 3
@@ -4408,8 +4408,8 @@ class GEBModel(GridModel):
             locations, GDL_regions, how="left", predicate="within"
         )
 
-        GDL_region_per_farmer.to_file('GDL.gpkg')
-        locations.to_file('locatons.gpkg')
+        GDL_region_per_farmer.to_file("GDL.gpkg")
+        locations.to_file("locatons.gpkg")
 
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
