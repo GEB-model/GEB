@@ -282,7 +282,7 @@ class GEBModel(GridModel):
             region.pop("max_bounds")
             geom, xy = hydromt.workflows.get_basin_geometry(
                 ds=hydrography,
-                flwdir_name='dir',
+                flwdir_name="dir",
                 kind=kind,
                 logger=self.logger,
                 bounds=[
@@ -324,13 +324,14 @@ class GEBModel(GridModel):
             mask=True,
         )
         flwdir = hydrography["dir"].values
-        flwdir[hydrography.mask is False] = 255
+        assert flwdir.dtype == np.uint8
 
         flow_raster = pyflwdir.from_array(
             flwdir,
             ftype="d8",
             transform=hydrography.rio.transform(),
             latlon=True,  # hydrography is specified in latlon
+            mask=hydrography.mask  # this mask is True within study area
         )
 
         scale_factor = resolution_arcsec // 3
@@ -405,7 +406,9 @@ class GEBModel(GridModel):
             name="routing/kinematic/channel_slope",
         )
 
-        mask = ldd == ldd.raster.nodata
+        mask = xr.full_like(outflow_elevation, False, dtype=bool)
+        # we use the inverted mask, that is True outside the study area
+        mask.data = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
         self.set_grid(mask, name="areamaps/grid_mask")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
@@ -422,7 +425,6 @@ class GEBModel(GridModel):
             name="areamaps/sub_grid_mask",
             lazy=True,
         )
-        submask.raster.set_nodata(None)
         submask.data = repeat_grid(mask.data, sub_grid_factor)
 
         assert bounds_are_within(submask.raster.bounds, mask.raster.bounds)
@@ -4406,6 +4408,9 @@ class GEBModel(GridModel):
             locations, GDL_regions, how="left", predicate="within"
         )
 
+        GDL_region_per_farmer.to_file('GDL.gpkg')
+        locations.to_file('locatons.gpkg')
+
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
 
@@ -6302,7 +6307,7 @@ class GEBModel(GridModel):
                     )
                     for dim in grid.dims
                 )
-                grid = grid.chunk(chunks_tuple)
+                grid = grid.chunk(chunksizes)
                 data_chunks = chunks_tuple
             else:
                 # Grid is already chunked; use existing chunks
@@ -6343,6 +6348,7 @@ class GEBModel(GridModel):
             # actual model (re-)building
             if grid.dtype == bool:
                 grid = grid.astype(np.uint8)
+                grid = grid.rio.set_nodata(255)
             # also export to tif for easier visualization
             grid.rio.to_raster(filepath.with_suffix(".tif"))
 
