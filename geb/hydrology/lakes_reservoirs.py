@@ -357,22 +357,27 @@ class LakesReservoirs(object):
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:
+                duplicate_outflow_points_indices = np.where(
+                    waterbody_outflow_points == duplicate_outflow_point
+                )[0]
                 minimum_elevation_outflows_idx = np.argmin(
-                    outflow_elevation[
-                        waterbody_outflow_points == duplicate_outflow_point
+                    outflow_elevation[duplicate_outflow_points_indices]
+                )
+                non_minimum_elevation_outflows_indices = (
+                    duplicate_outflow_points_indices[
+                        (
+                            np.arange(duplicate_outflow_points_indices.size)
+                            != minimum_elevation_outflows_idx
+                        )
                     ]
                 )
-                waterbody_outflow_points[
-                    np.where(waterbody_outflow_points == duplicate_outflow_point)[0][
-                        minimum_elevation_outflows_idx
-                    ]
-                ] = -1
+                waterbody_outflow_points[non_minimum_elevation_outflows_indices] = -1
 
-        # make sure that each water body has an outflow
-        assert np.array_equal(
-            np.unique(waterbody_outflow_points), np.unique(waterBodyID)
-        )
         if __debug__:
+            # make sure that each water body has an outflow
+            assert np.array_equal(
+                np.unique(waterbody_outflow_points), np.unique(waterBodyID)
+            )
             # make sure that each outflow point is only used once
             unique_outflow_points = np.unique(
                 waterbody_outflow_points[waterbody_outflow_points != -1],
