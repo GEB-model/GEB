@@ -30,7 +30,12 @@ class LiveStockFarmers(AgentBaseClass):
         AgentBaseClass.__init__(self)
 
         water_demand, efficiency = self.update_water_demand()
+
+        self.additional_water_allocation = np.zeros_like(water_demand, dtype=np.float32)
         self.current_water_demand = water_demand
+        self.total_water_demand = (
+            self.current_water_demand + self.additional_water_allocation
+        )
         self.current_efficiency = efficiency
 
     def initiate(self) -> None:
@@ -86,13 +91,19 @@ class LiveStockFarmers(AgentBaseClass):
         ):
             water_demand, efficiency = self.update_water_demand()
             self.current_water_demand = water_demand
+            self.total_water_demand = self.current_water_demand
             self.current_efficiency = efficiency
 
         assert (self.model.current_time - self.last_water_demand_update).days < 366, (
             "Water demand has not been updated for over a year. "
             "Please check the livestock water demand datasets."
         )
-        return self.current_water_demand, self.current_efficiency
+        if self.model.current_time.day == 1:
+            self.total_water_demand = (
+                self.current_water_demand + self.additional_water_allocation
+            )
+
+        return self.total_water_demand, self.current_efficiency
 
     def step(self) -> None:
         """This function is run each timestep."""

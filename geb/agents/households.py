@@ -48,7 +48,12 @@ class Households(AgentBaseClass):
         self.model = model
         self.agents = agents
         self.reduncancy = reduncancy
-
+        self.config = (
+            self.model.config["agent_settings"]["households"]
+            if "households" in self.model.config["agent_settings"]
+            else {}
+        )
+        self.calibration_factor = self.config["calibration_factor"]
         # Load buildings
         self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
         self.buildings["object_type"] = "building_structure"
@@ -345,7 +350,7 @@ class Households(AgentBaseClass):
             ).domestic_water_demand
             * 1_000_000
             / days_in_year
-        )
+        ) * self.calibration_factor
         water_demand = downscale_volume(
             self.model.domestic_water_demand_ds.rio.transform().to_gdal(),
             self.model.data.grid.gt,

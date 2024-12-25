@@ -26,6 +26,7 @@ class Industry(AgentBaseClass):
             if "town_managers" in self.model.config["agent_settings"]
             else {}
         )
+        self.calibration_factor = self.config["calibration_factor"]
 
         AgentBaseClass.__init__(self)
 
@@ -49,7 +50,7 @@ class Industry(AgentBaseClass):
             ).industry_water_demand
             * 1_000_000
             / days_in_year
-        )
+        ) * self.calibration_factor
         water_demand = downscale_volume(
             self.model.industry_water_demand_ds.rio.transform().to_gdal(),
             self.model.data.grid.gt,

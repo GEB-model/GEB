@@ -228,6 +228,7 @@ class LakesReservoirs(object):
         )
 
         self.var.waterBodyTypC = self.water_body_data["waterbody_type"].values
+        self.var.waterBodyOrigID = self.water_body_data["original_waterbody_id"].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
         self.var.waterBodyTypC[self.var.waterBodyTypC == LAKE_CONTROL] = LAKE
 
@@ -298,10 +299,12 @@ class LakesReservoirs(object):
         water_body_data = water_body_data[
             water_body_data["waterbody_id"].isin(waterbody_original_ids_compressed)
         ]
-        # map the waterbody ids to the new ids
+        # map the waterbody ids to the new ids, save old ids
+        water_body_data["original_waterbody_id"] = water_body_data["waterbody_id"]
         water_body_data["waterbody_id"] = waterbody_mapping[
             water_body_data["waterbody_id"]
         ]
+
         water_body_data = water_body_data.set_index("waterbody_id")
         return water_body_data
 

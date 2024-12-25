@@ -8,6 +8,9 @@ from typing import Tuple, Union
 
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
+import joblib
+from pathlib import Path
+import os
 
 # from gplearn.genetic import SymbolicRegressor
 from geb.workflows import TimingModule
@@ -66,6 +69,66 @@ def shift_and_reset_matrix(matrix: np.ndarray) -> None:
     """
     matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
     matrix[:, 0] = 0  # Reset the first column to 0
+
+
+def rolling_mean_2d(array, window):
+    return np.apply_along_axis(
+        lambda x: np.concatenate(
+            (
+                np.convolve(x, np.ones(window) / window, mode="valid"),
+                np.full(window - 1, np.nan),
+            )
+        ),
+        axis=-1,
+        arr=array,
+    )
+
+
+def ema_2d(array, span=60):
+    """
+    Compute the exponential moving average (EMA) along the last axis (axis=-1) for a 2D array.
+    This replicates the behavior of Pandas' .ewm(span=span, adjust=False).mean() for each 1D slice.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        2D NumPy array of shape (M, N), where we want to compute an EMA along each row.
+    span : int
+        The EMA span, analogous to `span` in Pandas' ewm. The effective smoothing factor alpha
+        is given by alpha = 2 / (span + 1).
+
+    Returns
+    -------
+    ema_array : np.ndarray
+        2D NumPy array of the same shape as `array`, where each row has been replaced
+        by its exponential moving average along the last axis.
+    """
+
+    # Calculate alpha using Pandas' ewm(span=...).mean() convention:
+    # alpha = 2 / (span + 1)
+    alpha = 2.0 / (span + 1)
+
+    def ema_1d(x):
+        """
+        Compute EMA for a 1D array x using iterative approach:
+        ema[i] = alpha * x[i] + (1 - alpha) * ema[i-1].
+        """
+        out = np.zeros_like(x, dtype=float)
+        if len(x) == 0:
+            return out
+
+        # Initialize first value directly
+        out[0] = x[0]
+
+        # Iteratively compute EMA
+        for i in range(1, len(x)):
+            out[i] = alpha * x[i] + (1 - alpha) * out[i - 1]
+
+        return out
+
+    # Apply ema_1d along the last axis of the 2D array
+    ema_array = np.apply_along_axis(ema_1d, axis=-1, arr=array)
+    return ema_array
 
 
 @njit(cache=True, inline="always")
@@ -1004,9 +1067,16 @@ class CropFarmers(AgentBaseClass):
         self.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1])
 
         # Set water costs
-        self.water_costs_m3_channel = 0.08
-        self.water_costs_m3_reservoir = 0.08
-        self.water_costs_m3_groundwater = 0.08
+        self.reservoir_fraction = np.float32(1.0)
+        self.current_reservoir_volume_fraction = np.float32(1.0)
+        self.discharge_fraction = np.float32(1.0)
+        self.current_discharge = np.float32(1.0)
+        self.water_price = np.float32(1.0)
+        self.area_SPEI = np.float32(1.0)
+
+        export_path = Path("calibration_data/water_use")
+        model_file_rf = export_path / "randomforest_model.joblib"
+        self.rf_model = joblib.load(model_file_rf)
 
         # Irr efficiency variables
         self.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
@@ -1030,6 +1100,14 @@ class CropFarmers(AgentBaseClass):
         self.subdistrict_map = load_grid(
             self.model.files["region_subgrid"]["areamaps/region_subgrid"]
         )
+        region_mask = load_grid(
+            self.model.files["region_subgrid"]["areamaps/region_mask"]
+        )
+        self.HRU_regions_map = np.zeros_like(self.model.data.HRU.mask, dtype=np.int8)
+        self.HRU_regions_map[~self.model.data.HRU.mask] = self.subdistrict_map[
+            region_mask == 0
+        ]
+        self.HRU_regions_map = self.model.data.HRU.compress(self.HRU_regions_map)
 
         self.crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"
@@ -1070,6 +1148,43 @@ class CropFarmers(AgentBaseClass):
             gpu=False,
         )
 
+        # For test purposes
+        self.alpha = 60
+        jingelic = "jingelic"
+
+        if jingelic in os.getcwd():
+            self.gauges = [
+                tuple(gauge) for gauge in self.model.config["general"]["gauges"]
+            ]
+        else:
+            self.gauges = [(143.3458, -34.8458), (147.229, -36.405), (147.711, -35.929)]
+
+        self.reservoirs = [
+            reservoir[0] for reservoir in self.model.config["general"]["reservoirs"]
+        ]
+
+        self.var.discharge_monthly = self.var.load_initial(
+            "discharge_monthly",
+            default=lambda: np.full(
+                (len(self.gauges), self.alpha), 0, dtype=np.float32
+            ),
+            gpu=False,
+        )
+        self.var.reservoir_monthly = self.var.load_initial(
+            "reservoir_monthly",
+            default=lambda: np.full(
+                (len(self.reservoirs), self.alpha),
+                0,
+                dtype=np.float32,
+            ),
+            gpu=False,
+        )
+        self.var.discharge_daily = self.var.load_initial(
+            "discharge_daily",
+            default=lambda: np.full((len(self.gauges), 31), 0, dtype=np.float32),
+            gpu=False,
+        )
+
         # Calibration factors
         self.intention_factor_neighbor = self.model.config["agent_settings"]["farmers"][
             "social_network"
@@ -1083,6 +1198,22 @@ class CropFarmers(AgentBaseClass):
         self.price_adjustment_drip = self.model.config["agent_settings"]["calibration"][
             "price_adjustment_drip"
         ]
+
+        self.price_to_allocation_factor_vic_a = self.model.config["agent_settings"][
+            "calibration"
+        ]["allocation_water_price_transfer_vic_a"]
+
+        self.price_to_allocation_factor_vic_b = self.model.config["agent_settings"][
+            "calibration"
+        ]["allocation_water_price_transfer_vic_b"]
+
+        self.price_to_allocation_factor_nsw_a = self.model.config["agent_settings"][
+            "calibration"
+        ]["allocation_water_price_transfer_nsw_a"]
+
+        self.price_to_allocation_factor_nsw_b = self.model.config["agent_settings"][
+            "calibration"
+        ]["allocation_water_price_transfer_nsw_b"]
 
         super().__init__()
 
@@ -1696,10 +1827,10 @@ class CropFarmers(AgentBaseClass):
             # Multiply the cultivation_costs_array by the factors along the last axis
             cultivation_costs_array *= factors
         else:
-            adjusted_cultivation_costs_array = (
+            cultivation_costs_array = (
                 cultivation_costs_array * cultivation_cost_fraction
             )
-        self.cultivation_costs = (date_index, adjusted_cultivation_costs_array)
+        self.cultivation_costs = (date_index, cultivation_costs_array)
 
     @property
     def activation_order_by_elevation(self):
@@ -1748,6 +1879,186 @@ class CropFarmers(AgentBaseClass):
     @property
     def is_in_command_area(self):
         return self.farmer_command_area != -1
+
+    @property
+    def determine_water_price(self):
+        # Determine parameters for current reservoirs
+        reservoir_mask = np.isin(self.model.data.grid.waterBodyOrigID, self.reservoirs)
+        self.current_reservoir_volume = self.model.data.grid.storage[reservoir_mask]
+        shift_and_update(self.var.reservoir_monthly, self.current_reservoir_volume)
+        rolling_5yr_res = rolling_mean_2d(self.var.reservoir_monthly, self.alpha)[:, 0]
+        self.reservoir_fraction = self.current_reservoir_volume / rolling_5yr_res
+
+        # Tally discharge of this month and compare this months to 5 year average
+        self.current_discharge = self.var.discharge_daily.sum(axis=1)
+        shift_and_update(self.var.discharge_monthly, self.current_discharge)
+        rolling_5yr_dis = ema_2d(self.var.discharge_monthly, span=60)[:, 0]
+        self.discharge_fraction = self.current_discharge / rolling_5yr_dis
+
+        self.var.discharge_daily[:] = 0  # Reset past months discharge
+
+        # SPEI
+        self.area_SPEI = np.mean(
+            self.model.data.grid.spei_uncompressed[self.model.data.grid.mask]
+        )
+
+        # Prediction model order needs to be same as when created
+        prediction_data = np.array(
+            [
+                rolling_5yr_dis[0],  # "discharge_5yr_mean_143.3458_-34.8458"
+                rolling_5yr_dis[1],  # "discharge_5yr_mean_147.229_-36.405"
+                rolling_5yr_dis[2],  # "discharge_5yr_mean_147.711_-35.929"
+                self.area_SPEI,  # "area_SPEI"
+            ]
+        )
+
+        # # Convert to float32 as done during training
+        X_new = np.float32(prediction_data).reshape(1, -1)
+
+        # ### Machine learning model
+        self.water_price = self.rf_model.predict(X_new)  #
+
+        return self.water_price  # USD / ML
+
+    @property
+    def determine_water_price_jingelic(self):
+        # Tally discharge of this month and compare this months to 5 year average
+        self.current_discharge = self.var.discharge_daily.sum(axis=1)
+        shift_and_update(self.var.discharge_monthly, self.current_discharge)
+        rolling_5yr_dis = rolling_mean_2d(self.var.discharge_monthly, self.alpha)[:, 0]
+        self.discharge_fraction = self.current_discharge / rolling_5yr_dis
+
+        self.var.discharge_daily[:] = 0  # Reset past months discharge
+
+        # SPEI
+        self.area_SPEI = np.mean(
+            self.model.data.grid.spei_uncompressed[self.model.data.grid.mask]
+        )
+
+        # Prediction model order needs to be same as when created
+        prediction_data = np.array(
+            [
+                self.current_discharge[0],  # "monthly_discharge_147.711_-35.929"
+                rolling_5yr_dis[0],  # "discharge_5yr_mean_147.711_-35.929"
+                self.discharge_fraction[0],  # "discharge_fraction_147.711_-35.929"
+                self.area_SPEI,  # "area_SPEI"
+            ]
+        )
+
+        # # Convert to float32 as done during training
+        X_new = np.float32(prediction_data).reshape(1, -1)
+
+        # ### Machine learning model
+        self.water_price = self.rf_model.predict(X_new)
+
+        return self.water_price  # $ / ML
+
+    @property
+    def determine_allocation(self):
+        # Convert from price to allocation by diversion = a * exp(b * price)
+        allocation_vic = (
+            self.price_to_allocation_factor_vic_a
+            * np.exp(self.price_to_allocation_factor_vic_b * self.water_price)
+            * 1_000_000
+        )  # m3 / Month
+        allocation_nsw = (
+            self.price_to_allocation_factor_nsw_a
+            * np.exp(self.price_to_allocation_factor_nsw_b * self.water_price)
+            * 1_000_000
+        )  # m3 / Month
+
+        aus_region_HRUs = np.where(
+            self.model.regions["NAME_1"].values[self.HRU_regions_map]
+            == "New South Wales",
+            1,
+            0,
+        )  # Vict is 0, NSW is 1
+
+        # Demand is in days, multiply to get monthly data
+        num_days = calendar.monthrange(
+            self.model.current_time.year, self.model.current_time.month
+        )[1]
+
+        industry_demand_m3 = self.model.data.HRU.MtoM3(
+            self.agents.industry.current_water_demand
+        )
+        industry_demand_vic = (
+            np.sum(industry_demand_m3[aus_region_HRUs == 0]) * num_days
+        )
+        industry_demand_nsw = (
+            np.sum(industry_demand_m3[aus_region_HRUs == 1]) * num_days
+        )
+        urban_demand_m3 = self.model.data.HRU.MtoM3(
+            self.agents.households.current_water_demand
+        )
+        urban_demand_vic = np.sum(urban_demand_m3[aus_region_HRUs == 0]) * num_days
+        urban_demand_nsw = np.sum(urban_demand_m3[aus_region_HRUs == 1]) * num_days
+
+        # Subtract urban, industry and pasture (?) needs
+        allocation_vic -= urban_demand_vic + industry_demand_vic
+        allocation_nsw -= urban_demand_nsw + industry_demand_nsw
+
+        # Ensure allocations are not negative
+        allocation_vic = max(allocation_vic, 0)
+        allocation_nsw = max(allocation_nsw, 0)
+
+        # Divide between livestock and crop farmers
+        vic_crop_to_livestock_factor = 0.33  # 67% went to pastures, 33% to crops
+        nsw_crop_to_livestock_factor = 0.75  # 25% went to pastures, 75% to crops
+
+        crop_allocation_vic = allocation_vic * vic_crop_to_livestock_factor
+        crop_allocation_nsw = allocation_nsw * nsw_crop_to_livestock_factor
+
+        # Give remainder of allocation to livestock farmers
+        livestock_demand_m3 = (
+            self.model.data.HRU.MtoM3(
+                self.agents.livestock_farmers.current_water_demand
+            )
+            * num_days
+        )  # monthly existing demand in m3
+        livestock_demand_vic = livestock_demand_m3[aus_region_HRUs == 0]
+        livestock_demand_nsw = livestock_demand_m3[aus_region_HRUs == 1]
+
+        # Also subtract the current livestock demand from allocation to prevent double counting
+        pasture_allocation_vic = (
+            max(allocation_vic - crop_allocation_vic - np.sum(livestock_demand_vic), 0)
+            / num_days
+        )  # daily water demand in m3
+        pasture_allocation_nsw = (
+            max(allocation_nsw - crop_allocation_nsw - np.sum(livestock_demand_nsw), 0)
+            / num_days
+        )  # daily water demand in m3
+
+        # Divide over cells with values
+        mask_vic_positive = (aus_region_HRUs == 0) & (livestock_demand_m3 > 0)
+        mask_nsw_positive = (aus_region_HRUs == 1) & (livestock_demand_m3 > 0)
+
+        additional_water_allocation = np.zeros_like(livestock_demand_m3)
+
+        allocation_per_cell_vic = pasture_allocation_vic / np.sum(mask_vic_positive)
+        allocation_per_cell_nsw = pasture_allocation_nsw / np.sum(mask_nsw_positive)
+
+        additional_water_allocation[mask_vic_positive] = allocation_per_cell_vic
+        additional_water_allocation[mask_nsw_positive] = allocation_per_cell_nsw
+
+        self.agents.livestock_farmers.additional_water_allocation = (
+            self.model.data.HRU.M3toM(additional_water_allocation)
+        )  # daily water demand in m
+
+        return crop_allocation_vic, crop_allocation_nsw
+
+    def save_discharge_daily(self):
+        # Retrieve gauges
+        gauges = np.array(self.gauges)
+
+        shift_and_update(
+            self.var.discharge_daily,
+            sample_from_map(
+                array=self.model.data.grid.decompress(self.model.data.grid.discharge),
+                coords=gauges,
+                gt=self.model.data.grid.gt,
+            ),
+        )
 
     def save_water_deficit(self, discount_factor=0.8):
         water_deficit_day_m3 = (
@@ -2605,7 +2916,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     def save_yearly_spei(self):
-        assert self.model.current_time.month == 1
+        assert self.model.current_time.month == 7
 
         # calculate the SPEI probability using GEV parameters
         SPEI_probability = genextreme.sf(
@@ -2670,7 +2981,6 @@ class CropFarmers(AgentBaseClass):
         self.yearly_potential_profits[:, 0] += potential_profit / cum_inflation
 
     def calculate_yield_spei_relation_test_solo(self):
-        import os
         import matplotlib
 
         matplotlib.use("Agg")  # Use the 'Agg' backend for non-interactive plotting
@@ -2892,7 +3202,6 @@ class CropFarmers(AgentBaseClass):
             print(f"Median R² for {model}: {median_r2}")
 
     def calculate_yield_spei_relation_test_group(self):
-        import os
         import matplotlib
 
         matplotlib.use("Agg")
@@ -3926,6 +4235,8 @@ class CropFarmers(AgentBaseClass):
             * self.price_adjustment_drip
         )
 
+        water_cost_m3 = self.water_price / 1000
+
         # Initialize energy and water costs arrays
         energy_costs = np.zeros(self.n, dtype=np.float32)
         water_costs = np.zeros(self.n, dtype=np.float32)
@@ -4018,18 +4329,14 @@ class CropFarmers(AgentBaseClass):
         energy_costs[mask_groundwater] = energy * energy_cost_rate
 
         # Compute water costs for agents using channel water (LCU/year)
-        water_costs[mask_channel] = (
-            average_extraction[mask_channel] * self.water_costs_m3_channel
-        )
+        water_costs[mask_channel] = average_extraction[mask_channel] * water_cost_m3
 
         # Compute water costs for agents using reservoir water (LCU/year)
-        water_costs[mask_reservoir] = (
-            average_extraction[mask_reservoir] * self.water_costs_m3_reservoir
-        )
+        water_costs[mask_reservoir] = average_extraction[mask_reservoir] * water_cost_m3
 
         # Compute water costs for agents using groundwater (LCU/year)
         water_costs[mask_groundwater] = (
-            average_extraction[mask_groundwater] * self.water_costs_m3_groundwater
+            average_extraction[mask_groundwater] * water_cost_m3
         )
 
         # Compute energy costs for surface water irrigating farmers based on irrigation method
@@ -4808,6 +5115,20 @@ class CropFarmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.water_abstraction_sum()
+        self.save_discharge_daily()
+
+        if self.model.current_time.day == 1:
+            jingelic = "jingelic"
+            if jingelic in os.getcwd():
+                self.water_price = self.determine_water_price.copy()  # $ / ML
+                self.crop_allocation_vic, self.crop_allocation_nsw = (
+                    self.determine_allocation
+                )
+            else:
+                self.water_price = self.determine_water_price.copy()  # $ / ML
+                self.crop_allocation_vic, self.crop_allocation_nsw = (
+                    self.determine_allocation
+                )
 
         ## yearly actions
         if self.model.current_time.month == 7 and self.model.current_time.day == 1:
