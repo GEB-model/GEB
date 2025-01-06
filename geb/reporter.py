@@ -364,8 +364,8 @@ class hydrology_reporter(ABMReporter):
     def report(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
-            if isinstance(values, zarr.hierarchy.Group):
-                pass
+            if self.model.config["report_hydrology"][name]["format"] == "zarr":
+                continue
             else:
                 if isinstance(values[0], Iterable):
                     df = pd.DataFrame.from_dict(
