@@ -5492,24 +5492,51 @@ class GEBModel(GridModel):
     def setup_damage_parameters(self, parameters):
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
-                for component, asset_compontents in asset_parameters.items():
-                    curve = pd.DataFrame(
-                        asset_compontents["curve"], columns=["severity", "damage_ratio"]
-                    )
+                for component, component_parameters in asset_parameters.items():
+                    if asset_type == "buildings":
+                        for (
+                            subcomponent,
+                            subcomponent_parameters,
+                        ) in component_parameters.items():
+                            curve = pd.DataFrame(
+                                subcomponent_parameters["curve"],
+                                columns=["severity", "damage_ratio"],
+                            )
 
-                    self.set_table(
-                        curve,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
-                    )
+                            self.set_table(
+                                curve,
+                                name=f"damage_parameters/{hazard}/{asset_type}/{component}/{subcomponent}/curve",
+                            )
 
-                    maximum_damage = {
-                        "maximum_damage": asset_compontents["maximum_damage"]
-                    }
+                            maximum_damage = {
+                                "maximum_damage": subcomponent_parameters[
+                                    "maximum_damage"
+                                ]
+                            }
 
-                    self.set_dict(
-                        maximum_damage,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
-                    )
+                            self.set_dict(
+                                maximum_damage,
+                                name=f"damage_parameters/{hazard}/{asset_type}/{component}/{subcomponent}/maximum_damage",
+                            )
+                    else:
+                        curve = pd.DataFrame(
+                            component_parameters["curve"],
+                            columns=["severity", "damage_ratio"],
+                        )
+
+                        self.set_table(
+                            curve,
+                            name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
+                        )
+
+                        maximum_damage = {
+                            "maximum_damage": component_parameters["maximum_damage"]
+                        }
+
+                        self.set_dict(
+                            maximum_damage,
+                            name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
+                        )
 
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors

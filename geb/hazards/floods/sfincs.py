@@ -10,7 +10,8 @@ import hydromt
 from shapely.geometry import Point
 from rasterio.features import shapes
 import math
-import matplotlib.pyplot as plt
+import yaml
+import ruamel.yaml
 
 
 try:
@@ -154,7 +155,7 @@ class SFINCS:
         detailed_region = extract_middle_basin(
             catchment_outline
         )  # We're only interested in the basin which is in the middle
-        detailed_region.to_file("detailed_region.gpkg", driver="GPKG")
+        # detailed_region.to_file("detailed_region.gpkg", driver="GPKG")
         detailed_region = detailed_region.to_crs(4326)
         return detailed_region
 
@@ -188,6 +189,30 @@ class SFINCS:
             and self.model.config["general"]["simulate_coastal_floods"]
         ):
             build_parameters["simulate_coastal_floods"] = True
+
+        if (
+            self.model.config["hazards"]
+            .get("floods", {})
+            .get("include_new_waterbuffers")
+            is True
+        ):
+            print("Running SFINCS with new waterbuffers")
+            waterbuffer_locations = gpd.read_file(
+                self.model.files["geoms"]["new_buffer_locations"]
+            )
+            build_parameters["waterbuffer_locations"] = waterbuffer_locations
+
+        elif (
+            self.model.config["hazards"]
+            .get("floods", {})
+            .get("include_existing_waterbuffers")
+            is True
+        ):
+            print("Running SFINCS with existing waterbuffer locations")
+            waterbuffer_locations = gpd.read_file(
+                self.model.files["geoms"]["existing_buffer_locations"]
+            )
+            build_parameters["waterbuffer_locations"] = waterbuffer_locations
 
         detailed_region = self.get_detailed_catchment_outline(
             region_file=self.model.files["geoms"]["region"]
@@ -311,7 +336,7 @@ class SFINCS:
                 "tstart": self.to_sfincs_datetime(tstart),
                 "tend": self.to_sfincs_datetime(tend.dt).item(),
             },
-            discharge_grid=discharge_grid,
+            # discharge_grid=discharge_grid,
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
@@ -334,9 +359,10 @@ class SFINCS:
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
             return_period=return_period,
-        )  # xc, yc is for x and y in rotated grid`DD`
+        )
         damages = self.flood(
             flood_map=flood_map,
+            model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
             return_period=return_period,
         )
@@ -355,7 +381,6 @@ class SFINCS:
             4326
         )  # TODO: Remove when this is added to hydromt_sfincs
         sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
-
         scaled_event["precipitation"] = sfincs_precipitation
         return scaled_event
 
@@ -386,25 +411,20 @@ class SFINCS:
             print(return_periods_list)
             print(exceedence_probabilities_list)
 
-            plt.plot(return_periods_list, damages_list)
-            plt.xlabel("Return period")
-            plt.ylabel("Flood damages [euro]")
-            plt.title("Damages per return period")
-            plt.show()
-
             inverted_damage_list = damages_list[::-1]
             inverted_exceedence_probabilities_list = exceedence_probabilities_list[::-1]
 
             expected_annual_damage = np.trapz(
                 y=inverted_damage_list, x=inverted_exceedence_probabilities_list
             )  # np.trapezoid or np.trapz -> depends on np version
-            print(f"exptected annual damage is: {expected_annual_damage}")
+            print(f"expected annual damage is: {expected_annual_damage}")
 
         else:
             self.run_single_event(event, start_time)
 
-    def flood(self, simulation_root, flood_map, return_period=None):
+    def flood(self, model_root, simulation_root, flood_map, return_period=None):
         damages = self.model.agents.households.flood(
+            model_root=model_root,
             simulation_root=simulation_root,
             flood_map=flood_map,
             return_period=return_period,

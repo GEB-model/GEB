@@ -65,7 +65,11 @@ class Households(AgentBaseClass):
         self.model = model
         self.agents = agents
         self.reduncancy = reduncancy
-
+        self.config = (
+            self.model.config["agent_settings"]["households"]
+            if "households" in self.model.config["agent_settings"]
+            else {}
+        )
         # Load buildings
         self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
         self.buildings["object_type"] = "building_structure"
@@ -83,7 +87,7 @@ class Households(AgentBaseClass):
         # Load landuse and make turn into polygons
         self.landuse = xr.open_zarr(
             self.model.files["region_subgrid"][
-                "landsurface/full_region_cultivated_land"
+                "landsurface/full_region_land_use_classes"
             ]
         )
         self.forest = from_landuse_raster_to_polygon(self.landuse, 0)
@@ -93,30 +97,6 @@ class Households(AgentBaseClass):
         self.agriculture["object_type"] = "agriculture"
 
         # Load maximum damages
-        with open(
-            model.files["dict"][
-                "damage_parameters/flood/buildings/structure/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.max_dam_buildings_structure = json.load(f)
-        self.max_dam_buildings_structure = float(
-            self.max_dam_buildings_structure["maximum_damage"]
-        )
-        self.buildings["maximum_damage"] = self.max_dam_buildings_structure
-
-        with open(
-            model.files["dict"][
-                "damage_parameters/flood/buildings/content/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.max_dam_buildings_content = json.load(f)
-        self.max_dam_buildings_content = float(
-            self.max_dam_buildings_content["maximum_damage"]
-        )
-        self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
-
         with open(
             model.files["dict"]["damage_parameters/flood/rail/main/maximum_damage"], "r"
         ) as f:
@@ -222,23 +202,144 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "agriculture"}
         )
 
-        self.buildings_structure_curve = pd.read_parquet(
-            self.model.files["table"][
-                "damage_parameters/flood/buildings/structure/curve"
-            ]
-        )
-        self.buildings_structure_curve.set_index("severity", inplace=True)
-        self.buildings_structure_curve = self.buildings_structure_curve.rename(
-            columns={"damage_ratio": "building_structure"}
-        )
+        # Get vulnerability curves based on adaptation scenario
+        if self.config.get("measure") not in ["dry_proofing", "wet_proofing"]:
+            print("were going for the normal curves ")
+            self.buildings_structure_curve = pd.read_parquet(
+                self.model.files["table"][
+                    "damage_parameters/flood/buildings/normal/structure/curve"
+                ]
+            )
+            self.buildings_structure_curve.set_index("severity", inplace=True)
+            self.buildings_structure_curve = self.buildings_structure_curve.rename(
+                columns={"damage_ratio": "building_structure"}
+            )
 
-        self.buildings_content_curve = pd.read_parquet(
-            self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
-        )
-        self.buildings_content_curve.set_index("severity", inplace=True)
-        self.buildings_content_curve = self.buildings_content_curve.rename(
-            columns={"damage_ratio": "building_content"}
-        )
+            self.buildings_content_curve = pd.read_parquet(
+                self.model.files["table"][
+                    "damage_parameters/flood/buildings/normal/content/curve"
+                ]
+            )
+            self.buildings_content_curve.set_index("severity", inplace=True)
+            self.buildings_content_curve = self.buildings_content_curve.rename(
+                columns={"damage_ratio": "building_content"}
+            )
+            with open(
+                model.files["dict"][
+                    "damage_parameters/flood/buildings/normal/structure/maximum_damage"
+                ],
+                "r",
+            ) as f:
+                self.max_dam_buildings_structure = json.load(f)
+            self.max_dam_buildings_structure = float(
+                self.max_dam_buildings_structure["maximum_damage"]
+            )
+            self.buildings["maximum_damage"] = self.max_dam_buildings_structure
+            with open(
+                model.files["dict"][
+                    "damage_parameters/flood/buildings/normal/content/maximum_damage"
+                ],
+                "r",
+            ) as f:
+                self.max_dam_buildings_content = json.load(f)
+            self.max_dam_buildings_content = float(
+                self.max_dam_buildings_content["maximum_damage"]
+            )
+            self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
+
+        if self.config.get("measure") == "dry_proofing":
+            print("turning on dryproofing")
+            self.buildings_structure_curve = pd.read_parquet(
+                self.model.files["table"][
+                    "damage_parameters/flood/buildings/dry_proofing/structure/curve"
+                ]
+            )
+            self.buildings_structure_curve.set_index("severity", inplace=True)
+            self.buildings_structure_curve = self.buildings_structure_curve.rename(
+                columns={"damage_ratio": "building_structure"}
+            )
+
+            self.buildings_content_curve = pd.read_parquet(
+                self.model.files["table"][
+                    "damage_parameters/flood/buildings/dry_proofing/content/curve"
+                ]
+            )
+            self.buildings_content_curve.set_index("severity", inplace=True)
+            self.buildings_content_curve = self.buildings_content_curve.rename(
+                columns={"damage_ratio": "building_content"}
+            )
+            print(self.buildings_structure_curve)
+            print(self.buildings_content_curve)
+            with open(
+                model.files["dict"][
+                    "damage_parameters/flood/buildings/dry_proofing/structure/maximum_damage"
+                ],
+                "r",
+            ) as f:
+                self.max_dam_buildings_structure = json.load(f)
+            self.max_dam_buildings_structure = float(
+                self.max_dam_buildings_structure["maximum_damage"]
+            )
+            self.buildings["maximum_damage"] = self.max_dam_buildings_structure
+            with open(
+                model.files["dict"][
+                    "damage_parameters/flood/buildings/dry_proofing/content/maximum_damage"
+                ],
+                "r",
+            ) as f:
+                self.max_dam_buildings_content = json.load(f)
+            self.max_dam_buildings_content = float(
+                self.max_dam_buildings_content["maximum_damage"]
+            )
+            self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
+        if self.config.get("measure") == "wet_proofing":
+            print("turning on wetproofing")
+            self.buildings_structure_curve = pd.read_parquet(
+                self.model.files["table"][
+                    "damage_parameters/flood/buildings/wet_proofing/structure/curve"
+                ]
+            )
+            self.buildings_structure_curve.set_index("severity", inplace=True)
+            self.buildings_structure_curve = self.buildings_structure_curve.rename(
+                columns={"damage_ratio": "building_structure"}
+            )
+            print("builing structure curve")
+            print(self.buildings_structure_curve)
+
+            self.buildings_content_curve = pd.read_parquet(
+                self.model.files["table"][
+                    "damage_parameters/flood/buildings/wet_proofing/content/curve"
+                ]
+            )
+            self.buildings_content_curve.set_index("severity", inplace=True)
+            self.buildings_content_curve = self.buildings_content_curve.rename(
+                columns={"damage_ratio": "building_content"}
+            )
+
+            print("building content curve")
+            print(self.buildings_content_curve)
+            with open(
+                model.files["dict"][
+                    "damage_parameters/flood/buildings/wet_proofing/structure/maximum_damage"
+                ],
+                "r",
+            ) as f:
+                self.max_dam_buildings_structure = json.load(f)
+            self.max_dam_buildings_structure = float(
+                self.max_dam_buildings_structure["maximum_damage"]
+            )
+            self.buildings["maximum_damage"] = self.max_dam_buildings_structure
+            with open(
+                model.files["dict"][
+                    "damage_parameters/flood/buildings/wet_proofing/content/maximum_damage"
+                ],
+                "r",
+            ) as f:
+                self.max_dam_buildings_content = json.load(f)
+            self.max_dam_buildings_content = float(
+                self.max_dam_buildings_content["maximum_damage"]
+            )
+            self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
 
         self.rail_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
@@ -270,7 +371,7 @@ class Households(AgentBaseClass):
             n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
         )
 
-    def flood(self, flood_map, simulation_root, return_period=None):
+    def flood(self, flood_map, model_root, simulation_root, return_period=None):
         if return_period is not None:
             flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
         else:
@@ -279,58 +380,167 @@ class Households(AgentBaseClass):
         print(f"using this flood map: {flood_path}")
         flood_map = rioxarray.open_rasterio(flood_path)
 
-        self.agriculture = self.agriculture.to_crs(flood_map.rio.crs)
-        damages_agriculture = object_scanner(
-            objects=self.agriculture, hazard=flood_map, curves=self.agriculture_curve
+        # Remove rivers from flood map
+        rivers_path = join(model_root, "rivers.gpkg")
+        rivers = gpd.read_file(rivers_path)
+        rivers.set_crs(epsg=4326, inplace=True)
+        rivers_projected = rivers.to_crs(flood_map.rio.crs)
+        rivers_projected["geometry"] = rivers_projected.buffer(
+            rivers_projected["rivwth"] / 2
         )
-        total_damages_agriculture = damages_agriculture.sum()
-        print(f"damages to agriculture are: {total_damages_agriculture}")
-
-        self.forest = self.forest.to_crs(flood_map.rio.crs)
-        damages_forest = object_scanner(
-            objects=self.forest, hazard=flood_map, curves=self.forest_curve
+        rivers_mask = flood_map.raster.geometry_mask(
+            gdf=rivers_projected, all_touched=True
         )
-        total_damages_forest = damages_forest.sum()
-        print(f"damages to forest are: {total_damages_forest}")
+        flood_map = flood_map.where(~rivers_mask)
+        flood_map = flood_map.fillna(0)
+        flood_map = flood_map.where(flood_map != 0, np.nan)
 
-        self.buildings = self.buildings.to_crs(flood_map.rio.crs)
-        damages_buildings_structure = object_scanner(
-            objects=self.buildings,
-            hazard=flood_map,
-            curves=self.buildings_structure_curve,
+        # Clip the flood map to the region for which we want to know the damages
+        region_path = "/scistor/ivm/vbl220/PhD/damages_region.gpkg"
+        region = gpd.read_file(region_path)
+        region_projected = region.to_crs(flood_map.rio.crs)
+        flood_map_clipped = flood_map.rio.clip(
+            region_projected.geometry, region_projected.crs
         )
-        total_damage_structure = damages_buildings_structure.sum()
-        print(f"damages to building structure are: {total_damage_structure}")
 
-        self.buildings_centroid = self.buildings_centroid.to_crs(flood_map.rio.crs)
-        damages_buildings_content = object_scanner(
-            objects=self.buildings_centroid,
-            hazard=flood_map,
-            curves=self.buildings_content_curve,
+        # If scenario is water buffer, no damages within the buffer, so clip out location of water buffers
+        # if self.model.config["hazards"]["floods"]["measure"] == "waterbuffers":
+        #     # waterbuffer_locations = gpd.read_file(
+        #     #     "/scistor/ivm/vbl220/PhD/waterbuffer_more_info.gpkg"
+        #     # )
+        #     waterbuffer_locations = gpd.read_file(
+        #         "/scistor/ivm/vbl220/PhD/large_water_buffer.gpkg"
+        #     )
+        #     waterbuffer_locations_reprojected = waterbuffer_locations.to_crs(
+        #         flood_map.rio.crs
+        #     )
+        #     flood_map_clipped = flood_map_clipped.rio.clip(
+        #         waterbuffer_locations_reprojected.geometry,
+        #         waterbuffer_locations_reprojected.crs,
+        #         invert=True,
+        #     )
+
+        def compute_damages_by_country(assets, curve, category_name):
+            assets = assets.to_crs(flood_map_clipped.rio.crs)
+
+            # Check for multiple geometry types
+            geometry_types = assets.geometry.geom_type.unique()
+            print(f"Geometry types in {category_name}: {geometry_types}")
+
+            if "MultiPolygon" in geometry_types:
+                assets = assets.explode(index_parts=False).reset_index(drop=True)
+
+            # If only one geometry type, proceed normally
+            if len(geometry_types) == 1:
+                damages = object_scanner(
+                    objects=assets, hazard=flood_map_clipped, curves=curve
+                )
+                assets["damages"] = damages
+                total_damages = damages.sum()
+                print(f"damages to {category_name} are: {total_damages}")
+
+                split_assets = gpd.overlay(
+                    assets,
+                    gdf_filtered_countries,
+                    how="intersection",
+                    keep_geom_type=True,
+                )
+                unmatched_assets = split_assets[split_assets["COUNTRY"].isnull()]
+
+                for country in selection_countries:
+                    country_assets = split_assets[split_assets["COUNTRY"] == country]
+                    if not country_assets.empty:
+                        country_assets = country_assets.to_crs(
+                            flood_map_clipped.rio.crs
+                        )
+                        country_damages = object_scanner(
+                            objects=country_assets,
+                            hazard=flood_map_clipped,
+                            curves=curve,
+                        ).sum()
+                        print(
+                            f"damages to {category_name} ({country}): {country_damages}"
+                        )
+
+                return total_damages
+
+            # If multiple geometry types, split and process each separately
+            if len(geometry_types) > 1:
+                total_damages = 0
+                for geom_type in geometry_types:
+                    print(f"Processing geometry type: {geom_type}")
+                    subset = assets[assets.geometry.geom_type == geom_type]
+
+                    # Process subset as usual
+                    damages = object_scanner(
+                        objects=subset, hazard=flood_map_clipped, curves=curve
+                    )
+                    subset_damages = damages.sum()
+                    total_damages += subset_damages
+                    print(
+                        f"damages to {category_name} ({geom_type}) are: {subset_damages}"
+                    )
+
+                    # Perform overlay for this subset
+                    split_assets = gpd.overlay(
+                        subset, gdf_filtered_countries, how="intersection"
+                    )
+                    unmatched_assets = split_assets[split_assets["COUNTRY"].isnull()]
+                    print(f"Unmatched assets for {geom_type}: {unmatched_assets}")
+
+                    for country in selection_countries:
+                        country_assets = split_assets[
+                            split_assets["COUNTRY"] == country
+                        ]
+                        if not country_assets.empty:
+                            country_assets = country_assets.to_crs(
+                                flood_map_clipped.rio.crs
+                            )
+                            country_damages = object_scanner(
+                                objects=country_assets,
+                                hazard=flood_map_clipped,
+                                curves=curve,
+                            ).sum()
+                            print(
+                                f"damages to {category_name} ({country}, {geom_type}): {country_damages}"
+                            )
+                print(
+                    f"Total damages to {category_name} (all geometry types): {total_damages}"
+                )
+                return total_damages
+
+        # Filter countries
+        all_countries = gpd.read_file("/scistor/ivm/vbl220/PhD/Europe_merged.shp")
+        selection_countries = ["Netherlands", "Belgium", "Germany"]
+        gdf_filtered_countries = all_countries[
+            all_countries["COUNTRY"].isin(selection_countries)
+        ]
+        if self.buildings.crs != flood_map.rio.crs:
+            gdf_filtered_countries = gdf_filtered_countries.to_crs(flood_map.rio.crs)
+
+        # Compute damages for each category
+        total_damages_agriculture = compute_damages_by_country(
+            self.agriculture, self.agriculture_curve, "agriculture"
         )
-        total_damages_content = damages_buildings_content.sum()
-        print(f"damages to building content are: { total_damages_content}")
-
-        self.roads = self.roads.to_crs(flood_map.rio.crs)
-        damages_roads = object_scanner(
-            objects=self.roads,
-            hazard=flood_map,
-            curves=self.road_curves,
+        total_damages_forest = compute_damages_by_country(
+            self.forest, self.forest_curve, "forest"
         )
-        total_damages_roads = damages_roads.sum()
-        print(f"damages to roads are: {total_damages_roads} ")
-
-        self.rail = self.rail.to_crs(flood_map.rio.crs)
-        damages_rail = object_scanner(
-            objects=self.rail,
-            hazard=flood_map,
-            curves=self.rail_curve,
+        total_damage_structure = compute_damages_by_country(
+            self.buildings, self.buildings_structure_curve, "building structure"
         )
-        total_damages_rail = damages_rail.sum()
-        print(f"damages to rail are: {total_damages_rail}")
+        total_damages_content = compute_damages_by_country(
+            self.buildings_centroid, self.buildings_content_curve, "building content"
+        )
+        total_damages_roads = compute_damages_by_country(
+            self.roads, self.road_curves, "roads"
+        )
+        total_damages_rail = compute_damages_by_country(
+            self.rail, self.rail_curve, "rail"
+        )
 
+        # Calculate total flood damages
         total_flood_damages = (
-            +total_damage_structure
+            total_damage_structure
             + total_damages_content
             + total_damages_roads
             + total_damages_rail
@@ -338,7 +548,6 @@ class Households(AgentBaseClass):
             + total_damages_agriculture
         )
         print(f"the total flood damages are: {total_flood_damages}")
-
         return total_flood_damages
 
     def update_water_demand(self):
