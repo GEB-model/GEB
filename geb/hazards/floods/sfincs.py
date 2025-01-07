@@ -166,7 +166,7 @@ class SFINCS:
         force_overwrite = True
 
         if "basin_id" in event:
-            build_parameters["basin_id"] = event["basin_id"]
+            # build_parameters["basin_id"] = event["basin_id"]
             event_name = self.get_event_name(event)
         elif "region" in event:
             # if event["region"] is None:
