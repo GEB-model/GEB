@@ -346,8 +346,13 @@ class Households(AgentBaseClass):
             * 1_000_000
             / days_in_year
         )
+        water_demand = water_demand.rio.set_crs(4326).rio.reproject(
+            4326,
+            shape=self.model.data.grid.shape,
+            transform=self.model.data.grid.transform,
+        )
         water_demand = downscale_volume(
-            self.model.domestic_water_demand_ds.rio.transform().to_gdal(),
+            water_demand.rio.transform().to_gdal(),
             self.model.data.grid.gt,
             water_demand.values,
             self.model.data.grid.mask,
@@ -366,8 +371,13 @@ class Households(AgentBaseClass):
             * 1_000_000
             / days_in_year
         )
+        water_consumption = water_consumption.rio.set_crs(4326).rio.reproject(
+            4326,
+            shape=self.model.data.grid.shape,
+            transform=self.model.data.grid.transform,
+        )
         water_consumption = downscale_volume(
-            self.model.domestic_water_consumption_ds.rio.transform().to_gdal(),
+            water_consumption.rio.transform().to_gdal(),
             self.model.data.grid.gt,
             water_consumption.values,
             self.model.data.grid.mask,

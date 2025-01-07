@@ -13,6 +13,7 @@ fabdem:
 geul_dem:
   data_type: RasterDataset
   driver: raster
+  crs: 28992
   meta:
     category: topography
   path: project_data/geul/Geul_Filled_DEM_EPSG28992.tif

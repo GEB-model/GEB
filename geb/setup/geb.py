@@ -282,6 +282,7 @@ class GEBModel(GridModel):
             region.pop("max_bounds")
             geom, xy = hydromt.workflows.get_basin_geometry(
                 ds=hydrography,
+                flwdir_name="dir",
                 kind=kind,
                 logger=self.logger,
                 bounds=[
@@ -305,8 +306,11 @@ class GEBModel(GridModel):
                 f"Region for grid must of kind [basin, subbasin], kind {kind} not understood."
             )
 
+        # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
+        # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+        # usable between 86°S and 86°N.
         self.logger.info(
-            f"Approximate basin size in km2: {round(geom.to_crs(epsg=3857).area.sum() / 1e6, 2)}"
+            f"Approximate basin size in km2: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)}"
         )
 
         # Add region and grid to model
@@ -319,14 +323,15 @@ class GEBModel(GridModel):
             / 60,  # align grid to resolution of model grid. Conversion is to convert from arcsec to degrees
             mask=True,
         )
-        flwdir = hydrography["flwdir"].values
-        flwdir[hydrography.mask is False] = 255
+        flwdir = hydrography["dir"].values
+        assert flwdir.dtype == np.uint8
 
         flow_raster = pyflwdir.from_array(
             flwdir,
             ftype="d8",
             transform=hydrography.rio.transform(),
             latlon=True,  # hydrography is specified in latlon
+            mask=hydrography.mask,  # this mask is True within study area
         )
 
         scale_factor = resolution_arcsec // 3
@@ -401,7 +406,9 @@ class GEBModel(GridModel):
             name="routing/kinematic/channel_slope",
         )
 
-        mask = ldd == ldd.raster.nodata
+        mask = xr.full_like(outflow_elevation, False, dtype=bool)
+        # we use the inverted mask, that is True outside the study area
+        mask.data = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
         self.set_grid(mask, name="areamaps/grid_mask")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
@@ -418,7 +425,6 @@ class GEBModel(GridModel):
             name="areamaps/sub_grid_mask",
             lazy=True,
         )
-        submask.raster.set_nodata(None)
         submask.data = repeat_grid(mask.data, sub_grid_factor)
 
         assert bounds_are_within(submask.raster.bounds, mask.raster.bounds)
@@ -3050,6 +3056,9 @@ class GEBModel(GridModel):
             water_budget = xr.open_zarr(tmp_water_budget_file.name, chunks={})[
                 "water_budget"
             ]
+            # xclim fails when dparams is present, thus remove it
+            if "dparams" in water_budget.coords:
+                water_budget = water_budget.drop("dparams")
 
             # Compute the SPEI
             SPEI = xci.standardized_precipitation_evapotranspiration_index(
@@ -3087,8 +3096,6 @@ class GEBModel(GridModel):
                 self.set_forcing(SPEI, name="climate/spei")
 
                 self.logger.info("calculating GEV parameters...")
-
-                # negative_SPEI = SPEI.where(SPEI < 0)
 
                 # Group the data by year and find the maximum monthly sum for each year
                 SPEI_yearly_min = SPEI.groupby("time.year").min(dim="time", skipna=True)
@@ -4400,6 +4407,9 @@ class GEBModel(GridModel):
         GDL_region_per_farmer = gpd.sjoin(
             locations, GDL_regions, how="left", predicate="within"
         )
+
+        GDL_region_per_farmer.to_file("GDL.gpkg")
+        locations.to_file("locatons.gpkg")
 
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
@@ -6297,7 +6307,7 @@ class GEBModel(GridModel):
                     )
                     for dim in grid.dims
                 )
-                grid = grid.chunk(chunks_tuple)
+                grid = grid.chunk(chunksizes)
                 data_chunks = chunks_tuple
             else:
                 # Grid is already chunked; use existing chunks
@@ -6338,6 +6348,7 @@ class GEBModel(GridModel):
             # actual model (re-)building
             if grid.dtype == bool:
                 grid = grid.astype(np.uint8)
+                grid = grid.rio.set_nodata(255)
             # also export to tif for easier visualization
             grid.rio.to_raster(filepath.with_suffix(".tif"))
 
