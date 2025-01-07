@@ -167,7 +167,6 @@ class SFINCS:
         build_parameters = {}
 
         if "basin_id" in event:
-            build_parameters["basin_id"] = event["basin_id"]
             event_name = self.get_event_name(event)
         elif "region" in event:
             if event["region"] is None:
@@ -201,9 +200,13 @@ class SFINCS:
                 "config_fn": str(config_fn),
                 "model_root": self.sfincs_model_root(event_name),
                 "data_catalogs": self.data_catalogs,
-                "mask": detailed_region,
-                "river_method": "detailed",
+                "region": detailed_region,
+                "river_method": "default",
                 "depth_calculation": "power_law",
+                "discharge_ds": self.discharge_spinup_ds,
+                "discharge_name": "discharge_daily",
+                "uparea_ds": self.uparea_ds,
+                "uparea_name": "data",
             }
         )
         if (
@@ -363,26 +366,18 @@ class SFINCS:
         return scaled_event
 
     def get_return_period_maps(self, config_fn="sfincs.yml", force_overwrite=True):
-        discharge_path = self.model.config["report_hydrology"]["discharge_daily"][
-            "path"
-        ]
-
         # close the zarr store
         self.model.reporter.variables["discharge_daily"].close()
 
         model_root = self.sfincs_model_root("entire_region")
-        discharge_grid = xr.open_dataset(discharge_path, engine="zarr")
-        uparea_ds = xr.open_dataset(
-            self.model.files["grid"]["routing/kinematic/upstream_area"], engine="zarr"
-        )
         if force_overwrite or not (model_root / "sfincs.inp").exists():
             build_sfincs(
                 config_fn=str(config_fn),
                 model_root=model_root,
                 data_catalogs=self.data_catalogs,
                 region=gpd.read_file(self.model.files["geoms"]["region"]),
-                discharge_ds=discharge_grid,
-                uparea_ds=uparea_ds,
+                discharge_ds=self.discharge_spinup_ds,
+                uparea_ds=self.uparea_ds,
                 uparea_name="data",
                 discharge_name="discharge_daily",
                 river_method="default",
@@ -391,9 +386,9 @@ class SFINCS:
             )
         estimate_discharge_for_return_periods(
             model_root,
-            discharge_grid=discharge_grid,
+            discharge_ds=self.discharge_ds,
             data_catalogs=self.data_catalogs,
-            discharge_grid_varname="discharge_daily",
+            discharge_ds_varname="discharge_daily",
         )
         run_sfincs_for_return_periods(
             model_root=model_root, return_periods=[2, 100, 1000]
@@ -401,7 +396,7 @@ class SFINCS:
 
         # and re-open afterwards
         self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
-            discharge_path, mode="a"
+            self.model.config["report_hydrology"]["discharge_daily"]["path"], mode="a"
         )
 
     def run(self, event):
@@ -460,3 +455,15 @@ class SFINCS:
         self.discharge_per_timestep.append(
             self.model.data.grid.discharge_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
+
+    @property
+    def discharge_spinup_ds(self):
+        discharge_path = self.model.config["report_hydrology"]["discharge_daily"][
+            "path"
+        ].replace(self.model.run_name, "spinup")
+        return xr.open_dataset(discharge_path, engine="zarr")
+
+    @property
+    def uparea_ds(self):
+        uparea_path = self.model.files["grid"]["routing/kinematic/upstream_area"]
+        return xr.open_dataset(uparea_path, engine="zarr")

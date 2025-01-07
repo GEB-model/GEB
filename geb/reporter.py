@@ -130,7 +130,7 @@ class hydrology_reporter(ABMReporter):
                         zarr_group.create_dataset(
                             "y",
                             data=self.model.data.grid.lat,
-                            dtype="float32",
+                            dtype="float64",
                         )
                         zarr_group["y"].attrs.update(
                             {
@@ -143,7 +143,7 @@ class hydrology_reporter(ABMReporter):
                         zarr_group.create_dataset(
                             "x",
                             data=self.model.data.grid.lon,
-                            dtype="float32",
+                            dtype="float64",
                         )
                         zarr_group["x"].attrs.update(
                             {
