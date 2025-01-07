@@ -10,9 +10,6 @@ import hydromt
 from shapely.geometry import Point
 from rasterio.features import shapes
 import math
-import yaml
-import ruamel.yaml
-
 
 try:
     from geb_hydrodynamics import (
