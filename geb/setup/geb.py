@@ -6021,45 +6021,6 @@ class GEBModel(GridModel):
             ),  # hydromt likes absolute paths
         )
 
-        # glofas discharge
-        glofas_discharge = self.data_catalog.get_rasterdataset(
-            "glofas_4_0_discharge_yearly",
-            bbox=bounds,
-            buffer=1,
-            variables=["discharge"],
-        )
-        glofas_discharge = glofas_discharge.rename({"latitude": "y", "longitude": "x"})
-        glofas_discharge.name = "discharge_yearly"
-        self.set_forcing(glofas_discharge, name="hydrodynamics/discharge_yearly")
-
-        hydrodynamics_data_catalog.add_source(
-            "glofas_discharge_Yearly_Resampled_Global",
-            RasterDatasetAdapter(
-                path=Path(self.root) / "hydrodynamics" / "discharge_yearly.zarr.zip",
-                meta=self.data_catalog.get_source("glofas_4_0_discharge_yearly").meta,
-                driver="zarr",
-            ),  # hydromt likes absolute paths
-        )
-
-        glofas_uparea = self.data_catalog.get_rasterdataset(
-            "glofas_uparea",
-            bbox=bounds,
-            buffer=1,
-            variables=["uparea"],
-        )
-        glofas_uparea = glofas_uparea.rename({"latitude": "y", "longitude": "x"})
-        glofas_uparea.name = "uparea"
-        self.set_forcing(glofas_uparea, name="hydrodynamics/uparea")
-
-        hydrodynamics_data_catalog.add_source(
-            "glofas_uparea",
-            RasterDatasetAdapter(
-                path=Path(self.root) / "hydrodynamics" / "uparea.zarr.zip",
-                meta=self.data_catalog.get_source("glofas_uparea").meta,
-                driver="zarr",
-            ),  # hydromt likes absolute paths
-        )
-
         # river centerlines
         river_centerlines = self.data_catalog.get_geodataframe(
             "river_centerlines_MERIT_Basins",
