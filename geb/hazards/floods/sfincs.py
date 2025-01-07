@@ -12,16 +12,20 @@ from rasterio.features import shapes
 import math
 
 try:
-    from geb_hydrodynamics import (
-        build_sfincs,
-        update_sfincs_model_forcing,
-        run_sfincs_simulation,
-        read_flood_map,
-    )
+    from geb_hydrodynamics.build_model import build_sfincs
 except ModuleNotFoundError:
     raise ModuleNotFoundError(
         "The 'GEB-hydrodynamics' package is not installed. Please install it by running 'pip install geb-hydrodynamics'."
     )
+from geb_hydrodynamics.sfincs_utils import run_sfincs_simulation
+from geb_hydrodynamics.update_model_forcing import update_sfincs_model_forcing
+from geb_hydrodynamics.run_sfincs_for_return_periods import (
+    run_sfincs_for_return_periods,
+)
+from geb_hydrodynamics.postprocess_model import read_flood_map
+from geb_hydrodynamics.estimate_discharge_for_return_periods import (
+    estimate_discharge_for_return_periods,
+)
 
 
 class SFINCS:
@@ -165,16 +169,16 @@ class SFINCS:
             build_parameters["basin_id"] = event["basin_id"]
             event_name = self.get_event_name(event)
         elif "region" in event:
-            if event["region"] is None:
-                model_bbox = self.model.data.grid.bounds
-                build_parameters["bbox"] = (
-                    model_bbox[0] + 0.1,
-                    model_bbox[1] + 0.1,
-                    model_bbox[2] - 0.1,
-                    model_bbox[3] - 0.1,
-                )
-            else:
-                raise NotImplementedError
+            # if event["region"] is None:
+            #     model_bbox = self.model.data.grid.bounds
+            #     build_parameters["bbox"] = (
+            #         model_bbox[0] + 0.1,
+            #         model_bbox[1] + 0.1,
+            #         model_bbox[2] - 0.1,
+            #         model_bbox[3] - 0.1,
+            #     )
+            # else:
+            #     raise NotImplementedError
             event_name = self.get_event_name(event)
         else:
             raise ValueError(
@@ -220,9 +224,9 @@ class SFINCS:
                 "config_fn": str(config_fn),
                 "model_root": self.sfincs_model_root(event_name),
                 "data_catalogs": self.data_catalogs,
-                "mask": detailed_region,
-                "method": "precipitation",
-                "rivers": "detailed",
+                "region": detailed_region,
+                # "method": "precipitation",
+                "river_method": "detailed",
                 "depth_calculation": "power_law",
             }
         )
@@ -333,7 +337,7 @@ class SFINCS:
                 "tstart": self.to_sfincs_datetime(tstart),
                 "tend": self.to_sfincs_datetime(tend.dt).item(),
             },
-            # discharge_grid=discharge_grid,
+            forcing_method="precipitation",
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
