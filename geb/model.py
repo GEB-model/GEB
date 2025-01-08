@@ -16,6 +16,7 @@ from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from honeybees.model import Model as ABM_Model
 
+from geb.store import StoreArray, Store
 from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
@@ -56,7 +57,6 @@ class ABM(ABM_Model):
 
         self.area = Area(self, study_area)
         self.agents = Agents(self)
-        self.artists = Artists(self)
 
         # This variable is required for the batch runner. To stop the model
         # if some condition is met set running to False.
@@ -101,6 +101,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             cp.cuda.Device(gpu_device).use()
 
         self.config = self.setup_config(config)
+        self.store = Store(self)
 
         if "simulate_hydrology" not in self.config["general"]:
             self.config["general"]["simulate_hydrology"] = True
@@ -199,24 +200,29 @@ class GEBModel(HazardDriver, ABM, Hydrology):
 
             self.reporter = Reporter(self)
 
-            np.savez_compressed(
-                Path(self.reporter.abm_reporter.export_folder, "land_owners.npz"),
-                data=self.data.HRU.land_owners,
-            )
-            np.savez_compressed(
-                Path(
-                    self.reporter.abm_reporter.export_folder, "unmerged_HRU_indices.npz"
-                ),
-                data=self.data.HRU.unmerged_HRU_indices,
-            )
-            np.savez_compressed(
-                Path(self.reporter.abm_reporter.export_folder, "scaling.npz"),
-                data=self.data.HRU.scaling,
-            )
-            np.savez_compressed(
-                Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
-                data=self.agents.crop_farmers.activation_order_by_elevation,
-            )
+            # np.savez_compressed(
+            #     Path(self.reporter.abm_reporter.export_folder, "land_owners.npz"),
+            #     data=self.data.HRU.land_owners,
+            # )
+            # np.savez_compressed(
+            #     Path(
+            #         self.reporter.abm_reporter.export_folder, "unmerged_HRU_indices.npz"
+            #     ),
+            #     data=self.data.HRU.unmerged_HRU_indices,
+            # )
+            # np.savez_compressed(
+            #     Path(self.reporter.abm_reporter.export_folder, "scaling.npz"),
+            #     data=self.data.HRU.scaling,
+            # )
+            # np.savez_compressed(
+            #     Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
+            #     data=self.agents.crop_farmers.activation_order_by_elevation,
+            # )
+
+        if self.load_initial_data:
+            self.store.load()
+
+        self.artists = Artists(self)
 
     def step(self, step_size: Union[int, str] = 1) -> None:
         """
@@ -251,7 +257,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
 
         if self.save_initial_data:
             self.data.save_state()
-            self.agents.save_state()
+            self.store.save()
 
         print("Model run finished")
 

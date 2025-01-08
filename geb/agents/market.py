@@ -47,7 +47,7 @@ class Market(AgentBaseClass):
                     region_inflation
                 )
 
-    def initiate(self) -> None:
+    def spinup(self) -> None:
         n_crops = len(self.agents.crop_farmers.crop_ids.keys())
         n_years = (
             self.model.config["general"]["end_time"].year
@@ -69,10 +69,6 @@ class Market(AgentBaseClass):
             extra_dims=(n_years,),
             extra_dims_names=("years",),
         )
-
-    def restart(self):
-        if "dynamic_market" in self.config and self.config["dynamic_market"] is True:
-            self.estimate_price_model()
 
     def estimate_price_model(self) -> None:
         self.parameters = np.full((self.production.shape[0], 2), np.nan)
@@ -139,15 +135,15 @@ class Market(AgentBaseClass):
         if self.model.current_day_of_year == 1:
             self.production[:, self.year_index] = 0
             self.total_farmer_profit[:, self.year_index] = 0
-        mask = self.agents.crop_farmers.harvested_crop != -1
+        mask = self.agents.crop_farmers.bucket.harvested_crop != -1
         # TODO: This does not yet diffentiate per region
         yield_per_crop = np.bincount(
-            self.agents.crop_farmers.harvested_crop[mask],
-            weights=self.agents.crop_farmers.actual_yield_per_farmer[mask],
+            self.agents.crop_farmers.bucket.harvested_crop[mask],
+            weights=self.agents.crop_farmers.bucket.actual_yield_per_farmer[mask],
             minlength=self.production.shape[0],
         )
         profit_per_crop = np.bincount(
-            self.agents.crop_farmers.harvested_crop[mask],
+            self.agents.crop_farmers.bucket.harvested_crop[mask],
             weights=self.agents.crop_farmers.profit_farmer[mask],
             minlength=self.production.shape[0],
         )

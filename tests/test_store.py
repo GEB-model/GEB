@@ -1,13 +1,15 @@
 import pytest
+import os
 import numpy as np
 
-from geb.agents.general import AgentArray
+from geb.store import StoreArray
+from .testconfig import tmp_folder
 
 
 def test_agent_array():
     # Test initialization with max_n
-    a = AgentArray(np.array([1, 2, 3]), max_n=10)
-    a_ = AgentArray(dtype=np.int64, n=3, max_n=10)
+    a = StoreArray(np.array([1, 2, 3]), max_n=10)
+    a_ = StoreArray(dtype=np.int64, n=3, max_n=10)
     a_[:3] = np.array([1, 2, 3])
     assert np.array_equal(a, a_)
 
@@ -218,7 +220,7 @@ def test_agent_array():
 
 @pytest.fixture
 def array():
-    return AgentArray(np.array([1, 2, 3, 4, 5]), max_n=10)
+    return StoreArray(np.array([1, 2, 3, 4, 5]), max_n=10)
 
 
 def test_add_ufunc(array):
@@ -249,6 +251,17 @@ def test_power_ufunc(array):
 def test_reduce_ufunc(array):
     result = np.add.reduce(array)
     assert result == 15
+
+
+def test_save_and_restore(array):
+    array.save(tmp_folder / "test.npz")
+    array2 = StoreArray.load(tmp_folder / "test.npz")
+    assert np.array_equal(array, array2)
+    # test for equality of class attributes
+    assert array.max_n == array2.max_n
+    assert array.n == array2.n
+    assert (array.extra_dims_names == array2.extra_dims_names).all()
+    os.remove(tmp_folder / "test.npz")
 
 
 if __name__ == "__main__":

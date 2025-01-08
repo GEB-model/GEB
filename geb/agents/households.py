@@ -221,7 +221,7 @@ class Households(AgentBaseClass):
         self.current_water_demand = water_demand
         self.current_efficiency = efficiency
 
-    def initiate(self) -> None:
+    def spinup(self) -> None:
         locations = np.load(self.model.files["binary"]["agents/households/locations"])[
             "data"
         ]

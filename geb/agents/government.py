@@ -22,7 +22,7 @@ class Government(AgentBaseClass):
 
         AgentBaseClass.__init__(self)
 
-    def initiate(self) -> None:
+    def spinup(self) -> None:
         pass
 
     def provide_subsidies(self) -> None:
@@ -47,11 +47,12 @@ class Government(AgentBaseClass):
             return None
         irrigation_limit = self.config["irrigation_limit"]
         if irrigation_limit["per"] == "capita":
-            self.agents.crop_farmers.irrigation_limit_m3[:] = (
-                self.agents.crop_farmers.household_size * irrigation_limit["limit"]
+            self.agents.crop_farmers.bucket.irrigation_limit_m3[:] = (
+                self.agents.crop_farmers.bucket.household_size
+                * irrigation_limit["limit"]
             )
         elif irrigation_limit["per"] == "area":  # limit per m2 of field
-            self.agents.crop_farmers.irrigation_limit_m3[:] = (
+            self.agents.crop_farmers.bucket.irrigation_limit_m3[:] = (
                 self.agents.crop_farmers.field_size_per_farmer
                 * irrigation_limit["limit"]
             )

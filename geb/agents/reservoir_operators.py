@@ -61,7 +61,7 @@ class ReservoirOperators(AgentBaseClass):
         AgentBaseClass.__init__(self)
         super().__init__()
 
-    def initiate(self):
+    def spinup(self):
         pass
 
     def set_reservoir_data(self, water_body_data):

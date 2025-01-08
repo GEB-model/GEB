@@ -33,7 +33,7 @@ class LiveStockFarmers(AgentBaseClass):
         self.current_water_demand = water_demand
         self.current_efficiency = efficiency
 
-    def initiate(self) -> None:
+    def spinup(self) -> None:
         pass
 
     def update_water_demand(self):
