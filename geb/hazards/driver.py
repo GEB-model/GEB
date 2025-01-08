@@ -10,13 +10,16 @@ class HazardDriver:
             ]
             longest_flood_event = max(flood_event_lengths).days
             self.sfincs = SFINCS(
-                self, config=self.config, n_timesteps=longest_flood_event
+                self, config=self.config, max_number_of_timesteps=longest_flood_event
             )
 
     def step(self, step_size):
         if self.config["hazards"]["floods"]["simulate"]:
             if self.config["general"]["simulate_hydrology"]:
                 self.sfincs.save_discharge()
+                self.sfincs.save_soil_moisture()
+                self.sfincs.save_max_soil_moisture()
+                self.sfincs.save_ksat()
 
             for event in self.config["hazards"]["floods"]["events"]:
                 assert type(self.current_time.date()) is type(event["end_time"])
