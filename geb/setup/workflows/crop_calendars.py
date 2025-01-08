@@ -173,6 +173,7 @@ def parse_MIRCA2000_crop_calendar(data_catalog, MIRCA_units):
     ).path
 
     MIRCA2000_data = {}
+
     MIRCA2000_data = parse_MIRCA_file(
         MIRCA2000_data,
         rainfed_crop_calendar_fp,

@@ -1,14 +1,16 @@
 """GEB simulates the environment, the individual behaviour of people, households and organizations - including their interactions - at small and large scale."""
 
-__version__ = "1.0.0b3"
+__version__ = "1.0.0b4"
 
 import os
 import platform
 import sys
 from pathlib import Path
 from numba import config
-import importlib
 import faulthandler
+
+os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
+# os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
 
 
 if platform.system() != "Windows":
@@ -23,8 +25,6 @@ if platform.system() != "Windows":
 config.THREADING_LAYER = "tbb"
 
 # set environment variable for GEB package directory
-os.environ["GEB_PACKAGE_DIR"] = str(
-    Path(importlib.util.find_spec("geb").origin).parent.parent
-)
+os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
 faulthandler.enable()

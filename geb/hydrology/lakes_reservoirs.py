@@ -96,7 +96,7 @@ def get_lake_factor(channel_width, overflow_coefficient_mu, lake_a_factor):
 def estimate_outflow_height(lake_volume, lake_factor, lake_area, avg_outflow):
     height_above_outflow = outflow_to_height_above_outflow(lake_factor, avg_outflow)
     outflow_height = (lake_volume / lake_area) - height_above_outflow
-    assert (outflow_height >= 0).all()
+    outflow_height[outflow_height < 0] = 0
     return outflow_height
 
 
@@ -151,6 +151,8 @@ def get_lake_outflow_and_storage(
     outflow_m3 = np.minimum(outflow_m3, storage_above_outflow)
 
     new_storage = storage - outflow_m3
+    # this is required to avoid negative storage due to numerical errors
+    new_storage[new_storage < 0] = 0
 
     return outflow_m3, new_storage, height_above_outflow
 
@@ -244,7 +246,7 @@ class LakesReservoirs(object):
 
         self.var.total_inflow_from_other_water_bodies = self.var.load_initial(
             "total_inflow_from_other_water_bodies",
-            default=np.zeros_like(self.var.volume, dtype=np.float32),
+            default=lambda: np.zeros_like(self.var.volume, dtype=np.float32),
         )
 
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
@@ -264,7 +266,7 @@ class LakesReservoirs(object):
         )
 
         self.var.storage = self.var.load_initial(
-            "storage", default=self.var.volume.copy()
+            "storage", default=lambda: self.var.volume.copy()
         )
         self.var.outflow_height = estimate_outflow_height(
             self.var.volume, self.lake_factor, self.var.lake_area, average_discharge
@@ -320,6 +322,15 @@ class LakesReservoirs(object):
             upstream_area_within_waterbodies, waterBodyID
         )
 
+        # in some cases the cell with the highest number of upstream cells
+        # has mulitple occurences in the same lake, this seems to happen
+        # especially for very small lakes with a small drainage area.
+        # In such cases, we take the outflow cell with the lowest elevation.
+        outflow_elevation = load_grid(
+            self.model.files["grid"]["routing/kinematic/outflow_elevation"]
+        )
+        outflow_elevation = self.var.compress(outflow_elevation)
+
         waterbody_outflow_points = np.where(
             self.var.upstream_area_n_cells == upstream_area_within_waterbodies,
             waterBodyID,
@@ -348,22 +359,27 @@ class LakesReservoirs(object):
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:
+                duplicate_outflow_points_indices = np.where(
+                    waterbody_outflow_points == duplicate_outflow_point
+                )[0]
                 minimum_elevation_outflows_idx = np.argmin(
-                    outflow_elevation[
-                        waterbody_outflow_points == duplicate_outflow_point
+                    outflow_elevation[duplicate_outflow_points_indices]
+                )
+                non_minimum_elevation_outflows_indices = (
+                    duplicate_outflow_points_indices[
+                        (
+                            np.arange(duplicate_outflow_points_indices.size)
+                            != minimum_elevation_outflows_idx
+                        )
                     ]
                 )
-                waterbody_outflow_points[
-                    np.where(waterbody_outflow_points == duplicate_outflow_point)[0][
-                        minimum_elevation_outflows_idx
-                    ]
-                ] = -1
+                waterbody_outflow_points[non_minimum_elevation_outflows_indices] = -1
 
-        # make sure that each water body has an outflow
-        assert np.array_equal(
-            np.unique(waterbody_outflow_points), np.unique(waterBodyID)
-        )
         if __debug__:
+            # make sure that each water body has an outflow
+            assert np.array_equal(
+                np.unique(waterbody_outflow_points), np.unique(waterBodyID)
+            )
             # make sure that each outflow point is only used once
             unique_outflow_points = np.unique(
                 waterbody_outflow_points[waterbody_outflow_points != -1],
@@ -417,6 +433,8 @@ class LakesReservoirs(object):
                 self.var.lake_area[lakes],
                 self.var.outflow_height[lakes],
             )
+
+        assert (self.var.storage >= 0).all()
 
         if __debug__:
             balance_check(

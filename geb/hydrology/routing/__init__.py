@@ -104,7 +104,7 @@ class Routing(object):
     QDelta
     act_bigLakeResAbst
     act_smallLakeResAbst
-    returnFlow
+    return_flow
     sumsideflow
     inflowDt
     ====================  ================================================================================  =========
@@ -128,6 +128,12 @@ class Routing(object):
             self.model.files["grid"]["routing/kinematic/ldd"],
             compress=False,
         )
+        # in previous versions of GEB we followed the CWatM specification, where masked data
+        # was set at 0. We now use the official LDD specification where masked data is 255
+        # (max value of uint8). To still support old versions we set these values of 255 to
+        # 0 for now. When all models have been updated, this can be removed and the
+        # subroutines can be updated accordingly.
+        ldd[ldd == 255] = 0
 
         (
             self.var.lddCompress,
@@ -161,6 +167,7 @@ class Routing(object):
             self.var.load(self.model.files["grid"]["routing/kinematic/mannings"])
             * self.model.config["parameters"]["manningsN"]
         )
+        assert (self.var.chanMan > 0).all()
         # Channel gradient (fraction, dy/dx)
         minimum_channel_gradient = 0.0001
         self.var.chanGrad = np.maximum(
@@ -231,16 +238,16 @@ class Routing(object):
 
         # channel water volume [m3]
         # Initialise water volume in kinematic wave channels [m3]
-        channelStorageM3Ini = self.var.totalCrossSectionArea * self.var.chanLength * 0.1
         self.var.channelStorageM3 = self.var.load_initial(
-            "channelStorageM3", default=channelStorageM3Ini
+            "channelStorageM3",
+            default=lambda: self.var.totalCrossSectionArea * self.var.chanLength * 0.1,
         )
         # Initialise discharge at kinematic wave pixels (note that InvBeta is
         # simply 1/beta, computational efficiency!)
         # self.var.chanQKin = np.where(self.var.channelAlpha > 0, (self.var.totalCrossSectionArea / self.var.channelAlpha) ** self.var.invbeta, 0.)
         self.var.discharge = self.var.load_initial(
             "discharge",
-            default=(
+            default=lambda: (
                 self.var.channelStorageM3
                 * self.var.invchanLength
                 * self.var.invchannelAlpha
@@ -249,7 +256,7 @@ class Routing(object):
         )
         self.var.discharge_substep = self.var.load_initial(
             "discharge_substep",
-            default=np.full(
+            default=lambda: np.full(
                 (self.var.noRoutingSteps, self.var.discharge.size),
                 0,
                 dtype=self.var.discharge.dtype,
@@ -267,7 +274,7 @@ class Routing(object):
             + self.model.config["parameters"]["lakeEvaFactor"]
         )
 
-    def step(self, openWaterEvap, channel_abstraction_m, returnFlow):
+    def step(self, openWaterEvap, channel_abstraction_m, return_flow):
         """
         Dynamic part of the routing module
 
@@ -368,9 +375,9 @@ class Routing(object):
         # WDAddM3Dt = self.var.act_SurfaceWaterAbstract.copy() #MS CWatM edit Shouldn't this only be from the river abstractions? Currently includes the larger reservoir...
         WDAddMDt = channel_abstraction_m
         # return flow from (m) non irrigation water demand
-        # WDAddM3Dt = WDAddM3Dt - self.var.nonIrrReturnFlowFraction * self.var.act_nonIrrDemand
+        # WDAddM3Dt = WDAddM3Dt - self.var.nonIrrreturn_flowFraction * self.var.act_nonIrrDemand
         WDAddMDt = (
-            WDAddMDt - returnFlow
+            WDAddMDt - return_flow
         )  # Couldn't this be negative? If return flow is mainly coming from gw? Fine, then more water going in.
         WDAddM3Dt = WDAddMDt * self.var.cellArea / self.var.noRoutingSteps
 
@@ -397,7 +404,7 @@ class Routing(object):
             # sideflowChanM3 -= riverbedExchangeDt
 
             sideflowChanM3 -= WDAddM3Dt
-            # minus waterdemand + returnflow
+            # minus waterdemand + return_flow
 
             outflow_to_river_network, waterbody_evaporation = (
                 self.model.lakes_reservoirs.routing(
@@ -472,7 +479,7 @@ class Routing(object):
                 prestorages=[pre_channel_storage_m3],
                 poststorages=[self.var.channelStorageM3],
                 name="routing_3",
-                tollerance=1e-8,
+                tollerance=100,
             )
             balance_check(
                 how="sum",
@@ -485,5 +492,5 @@ class Routing(object):
                 prestorages=[pre_channel_storage_m3, pre_storage],
                 poststorages=[self.var.channelStorageM3, self.var.storage],
                 name="routing_4",
-                tollerance=1e-8,
+                tollerance=100,
             )

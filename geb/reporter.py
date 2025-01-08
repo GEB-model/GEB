@@ -49,7 +49,7 @@ class hydrology_reporter(ABMReporter):
                             "single_file" in config and config["single_file"] is True
                         ), "Only single_file=True is supported for zarr format."
                         zarr_path = Path(self.export_folder, name + ".zarr.zip")
-                        config["absolute_path"] = str(zarr_path)
+                        config["path"] = str(zarr_path)
                         if zarr_path.exists():
                             zarr_path.unlink()
                         if "time_ranges" not in config:
@@ -109,7 +109,8 @@ class hydrology_reporter(ABMReporter):
                                     f"WARNING: None of the time ranges for {name} are in the simulation period."
                                 )
 
-                        zarr_group = zarr.open_group(zarr_path, mode="w")
+                        zarr_store = zarr.ZipStore(zarr_path)
+                        zarr_group = zarr.open_group(zarr_store, mode="w")
 
                         zarr_group.create_dataset(
                             "time",
@@ -122,25 +123,34 @@ class hydrology_reporter(ABMReporter):
                                 "standard_name": "time",
                                 "units": "seconds since 1970-01-01T00:00:00",
                                 "calendar": "gregorian",
+                                "_ARRAY_DIMENSIONS": ["time"],
                             }
                         )
 
                         zarr_group.create_dataset(
                             "y",
                             data=self.model.data.grid.lat,
-                            dtype="float32",
+                            dtype="float64",
                         )
                         zarr_group["y"].attrs.update(
-                            {"standard_name": "latitude", "units": "degrees_north"}
+                            {
+                                "standard_name": "latitude",
+                                "units": "degrees_north",
+                                "_ARRAY_DIMENSIONS": ["y"],
+                            }
                         )
 
                         zarr_group.create_dataset(
                             "x",
                             data=self.model.data.grid.lon,
-                            dtype="float32",
+                            dtype="float64",
                         )
                         zarr_group["x"].attrs.update(
-                            {"standard_name": "longitude", "units": "degrees_east"}
+                            {
+                                "standard_name": "longitude",
+                                "units": "degrees_east",
+                                "_ARRAY_DIMENSIONS": ["x"],
+                            }
                         )
 
                         zarr_data = zarr_group.create_dataset(
@@ -166,6 +176,7 @@ class hydrology_reporter(ABMReporter):
                                 "coordinates": "time y x",
                                 "units": "unknown",
                                 "long_name": name,
+                                "_ARRAY_DIMENSIONS": ["time", "y", "x"],
                             }
                         )
 
@@ -174,7 +185,7 @@ class hydrology_reporter(ABMReporter):
                             crs = crs.to_string()
                         zarr_group.attrs["crs"] = crs
 
-                        self.variables[name] = zarr_group
+                        self.variables[name] = zarr_store
 
                     else:
                         self.variables[name] = []
@@ -243,19 +254,20 @@ class hydrology_reporter(ABMReporter):
                 f"Export format must be specified for {name} in config file (npy/npz/csv/xlsx/zarr)."
             )
         if conf["format"] == "zarr":
-            if np.isin(
-                np.datetime64(self.model.current_time), self.variables[name].time
+            zarr_group = zarr.open_group(self.variables[name])
+            if (
+                np.isin(np.datetime64(self.model.current_time), zarr_group.time)
+                and value is not None
             ):
                 time_index = np.where(
-                    self.variables[name].time[:]
-                    == np.datetime64(self.model.current_time)
+                    zarr_group.time[:] == np.datetime64(self.model.current_time)
                 )[0].item()
                 if "substeps" in conf:
                     time_index_start = np.where(time_index)[0][0]
                     time_index_end = time_index_start + conf["substeps"]
-                    self.variables[name][time_index_start:time_index_end, ...] = value
+                    zarr_group[name][time_index_start:time_index_end, ...] = value
                 else:
-                    self.variables[name][name][time_index, ...] = value
+                    zarr_group[name][time_index, ...] = value
         else:
             folder = os.path.join(self.export_folder, name)
             os.makedirs(folder, exist_ok=True)
@@ -352,8 +364,8 @@ class hydrology_reporter(ABMReporter):
     def report(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
-            if isinstance(values, zarr.hierarchy.Group):
-                pass
+            if self.model.config["report_hydrology"][name]["format"] == "zarr":
+                continue
             else:
                 if isinstance(values[0], Iterable):
                     df = pd.DataFrame.from_dict(

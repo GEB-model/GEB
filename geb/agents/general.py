@@ -328,8 +328,8 @@ def downscale_volume(
     downscale_invmask = ~downscale_mask
     assert xratio > 0
     assert yratio > 0
-    assert xoffset > 0
-    assert yoffset > 0
+    assert xoffset >= 0
+    assert yoffset >= 0
     ysize, xsize = data.shape
     yvarsize, xvarsize = mask.shape
     downscaled_array = np.zeros(HRU_land_size.size, dtype=np.float32)

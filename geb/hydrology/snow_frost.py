@@ -22,6 +22,8 @@
 import numpy as np
 import math
 
+from geb.workflows import balance_check
+
 
 class SnowFrost(object):
     """
@@ -44,7 +46,7 @@ class SnowFrost(object):
     Rain                  Precipitation less snow                                                           m
     SnowMelt              total snow melt from all layers                                                   m
     SnowCover             snow cover (sum over all layers)                                                  m
-    ElevationStD
+    elevation_std
     Precipitation         Precipitation (input for the model)                                               m
     DtDay                 seconds in a timestep (default=86400)                                             s
     numberSnowLayersFloa
@@ -79,7 +81,7 @@ class SnowFrost(object):
     **Functions**
     """
 
-    def __init__(self, model, ElevationStD):
+    def __init__(self, model, elevation_std):
         """
         Initial part of the snow and frost module
 
@@ -96,7 +98,6 @@ class SnowFrost(object):
 
         # Difference between (average) air temperature at average elevation of
         # pixel and centers of upper- and lower elevation zones [deg C]
-        # ElevationStD:   Standard Deviation of the DEM
         # 0.9674:    Quantile of the normal distribution: u(0,833)=0.9674 to split the pixel in 3 equal parts.
         # for different number of layers
         #  Number: 2 ,3, 4, 5, 6, 7, ,8, 9, 10
@@ -150,7 +151,7 @@ class SnowFrost(object):
         self.var.deltaInvNorm = dn[self.numberSnowLayers]
 
         TemperatureLapseRate = 0.0065
-        self.var.DeltaTSnow = ElevationStD * TemperatureLapseRate
+        self.var.DeltaTSnow = elevation_std * TemperatureLapseRate
 
         self.var.SnowDayDegrees = 0.9856
         # day of the year to degrees: 360/365.25 = 0.9856
@@ -171,14 +172,15 @@ class SnowFrost(object):
 
         # initialize snowcovers as many as snow layers -> read them as SnowCover1 , SnowCover2 ...
         # SnowCover1 is the highest zone
-        SnowCoverS = np.tile(
-            self.model.data.to_HRU(
-                data=self.model.data.grid.full_compressed(0, dtype=np.float32), fn=None
-            ),
-            (self.numberSnowLayers, 1),
-        )
         self.var.SnowCoverS = self.model.data.HRU.load_initial(
-            "SnowCoverS", default=SnowCoverS
+            "SnowCoverS",
+            default=lambda: np.tile(
+                self.model.data.to_HRU(
+                    data=self.model.data.grid.full_compressed(0, dtype=np.float32),
+                    fn=None,
+                ),
+                (self.numberSnowLayers, 1),
+            ),
         )
 
         # Pixel-average initial snow cover: average of values in 3 elevation
@@ -193,7 +195,7 @@ class SnowFrost(object):
 
         self.var.frost_index = self.model.data.HRU.load_initial(
             "frost_index",
-            default=self.model.data.HRU.full_compressed(0, dtype=np.float32),
+            default=lambda: self.model.data.HRU.full_compressed(0, dtype=np.float32),
         )
 
         self.var.extfrost_index = False
@@ -217,7 +219,7 @@ class SnowFrost(object):
             calculate sinus shape function for the southern hemisspere
         """
         if __debug__:
-            self.var.prevSnowCover = np.sum(self.var.SnowCoverS, axis=0)
+            self.var.prevSnowCover = self.var.SnowCoverS.copy()
 
         day_of_year = self.model.current_time.timetuple().tm_yday
         SeasSnowMeltCoef = (
@@ -312,22 +314,43 @@ class SnowFrost(object):
                     self.var.frost_indexS[i] + frost_indexChangeRate, 0
                 )
 
-        Snow /= self.numberSnowLayers
+        self.var.Snow = Snow / self.numberSnowLayers
         self.var.Rain /= self.numberSnowLayers
         self.var.SnowMelt /= self.numberSnowLayers
-        # all in pixel
 
-        # DEBUG Snow
-        # if __debug__:
-        #     self.var.waterbalance_module.waterBalanceCheck(
-        #         [Snow],  # In
-        #         [self.var.SnowMelt],  # Out
-        #         [self.var.prevSnowCover],   # prev storage
-        #         [np.sum(self.var.SnowCoverS, axis=0) / self.numberSnowLayers],
-        #         "Snow1", False)
+        if __debug__:
+            balance_check(
+                name="snow_1",
+                how="cellwise",
+                influxes=[self.var.Snow],
+                outfluxes=[self.var.SnowMelt],
+                prestorages=[
+                    np.sum(self.var.prevSnowCover, axis=0) / self.numberSnowLayers
+                ],
+                poststorages=[
+                    np.sum(self.var.SnowCoverS, axis=0) / self.numberSnowLayers
+                ],
+                tollerance=1e-7,
+            )
+            balance_check(
+                name="snow_2",
+                how="cellwise",
+                influxes=[self.var.precipitation_m_day],
+                outfluxes=[self.var.Snow, self.var.Rain],
+                tollerance=1e-7,
+            )
 
-        # ---------------------------------------------------------------------------------
-        # Dynamic part of frost index
+        # Calculation of the frost index
+        # frost index in soil [degree days] based on Molnau and Bissel (1983, A Continuous Frozen Ground Index for Flood
+        # Forecasting. In: Maidment, Handbook of Hydrology, p. 7.28, 7.55)
+        # if Tavg is above zero, frost_index will stay 0
+        # if Tavg is negative, frost_index will increase with 1 per degree C per day
+        # Exponent of 0.04 (instead of 0.4 in HoH): conversion [cm] to [mm]!  -> from cm to m HERE -> 100 * 0.4
+        # maximum snowlayer = 1.0 m
+        # Division by SnowDensity because SnowDepth is expressed as equivalent water depth(always less than depth of snow pack)
+        # SnowWaterEquivalent taken as 0.45
+        # Afrost, (daily decay coefficient) is taken as 0.97 (Handbook of Hydrology, p. 7.28)
+        # Kfrost, (snow depth reduction coefficient) is taken as 0.57 [1/cm], (HH, p. 7.28) -> from Molnau taken as 0.5 for t> 0 and 0.08 for T<0
         Kfrost = np.where(tas_C < 0, 0.08, 0.5).astype(tas_C.dtype)
         frost_indexChangeRate = -(
             1 - self.var.Afrost
@@ -345,13 +368,3 @@ class SnowFrost(object):
         self.var.frost_index = np.maximum(
             self.var.frost_index + frost_indexChangeRate, 0
         )
-        # frost index in soil [degree days] based on Molnau and Bissel (1983, A Continuous Frozen Ground Index for Flood
-        # Forecasting. In: Maidment, Handbook of Hydrology, p. 7.28, 7.55)
-        # if Tavg is above zero, frost_index will stay 0
-        # if Tavg is negative, frost_index will increase with 1 per degree C per day
-        # Exponent of 0.04 (instead of 0.4 in HoH): conversion [cm] to [mm]!  -> from cm to m HERE -> 100 * 0.4
-        # maximum snowlayer = 1.0 m
-        # Division by SnowDensity because SnowDepth is expressed as equivalent water depth(always less than depth of snow pack)
-        # SnowWaterEquivalent taken as 0.45
-        # Afrost, (daily decay coefficient) is taken as 0.97 (Handbook of Hydrology, p. 7.28)
-        # Kfrost, (snow depth reduction coefficient) is taken as 0.57 [1/cm], (HH, p. 7.28) -> from Molnau taken as 0.5 for t> 0 and 0.08 for T<0
