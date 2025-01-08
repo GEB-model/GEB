@@ -370,11 +370,7 @@ setup_create_farms_simple:
   data_source: lowder
 
 setup_farmer_characteristics_simple:
-  risk_aversion_mean: 2
-  risk_aversion_standard_deviation: 1
-  discount_rate: 0.05
   interest_rate: 0.05
-  reduce_crops: true
 
 setup_population:
 

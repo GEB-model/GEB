@@ -96,7 +96,7 @@ def get_lake_factor(channel_width, overflow_coefficient_mu, lake_a_factor):
 def estimate_outflow_height(lake_volume, lake_factor, lake_area, avg_outflow):
     height_above_outflow = outflow_to_height_above_outflow(lake_factor, avg_outflow)
     outflow_height = (lake_volume / lake_area) - height_above_outflow
-    assert (outflow_height >= 0).all()
+    outflow_height[outflow_height < 0] = 0
     return outflow_height
 
 
@@ -151,6 +151,8 @@ def get_lake_outflow_and_storage(
     outflow_m3 = np.minimum(outflow_m3, storage_above_outflow)
 
     new_storage = storage - outflow_m3
+    # this is required to avoid negative storage due to numerical errors
+    new_storage[new_storage < 0] = 0
 
     return outflow_m3, new_storage, height_above_outflow
 
@@ -431,6 +433,8 @@ class LakesReservoirs(object):
                 self.var.lake_area[lakes],
                 self.var.outflow_height[lakes],
             )
+
+        assert (self.var.storage >= 0).all()
 
         if __debug__:
             balance_check(
