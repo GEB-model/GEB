@@ -1,10 +1,13 @@
 from pathlib import Path
 from operator import attrgetter
+import json
+from datetime import datetime
+import pandas as pd
 
 import numpy as np
 
 
-class StoreArray:
+class DynamicArray:
     __slots__ = ["_data", "_n", "_extra_dims_names"]
 
     def __init__(
@@ -31,6 +34,7 @@ class StoreArray:
             assert n is None, "n cannot be given if input_array is given"
             # assert dtype is not object
             assert input_array.dtype != object, "dtype cannot be object"
+            input_array = np.asarray(input_array)
             n = input_array.shape[0]
             if max_n:
                 if input_array.ndim == 1:
@@ -97,20 +101,20 @@ class StoreArray:
             return
 
     def __array__(self, dtype=None):
-        return np.asarray(self._data, dtype=dtype)
+        return np.asarray(self._data[: self.n], dtype=dtype)
 
     def __array_interface__(self):
         return self._data.__array_interface__()
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         modified_inputs = tuple(
-            input_.data if isinstance(input_, StoreArray) else input_
+            input_.data if isinstance(input_, DynamicArray) else input_
             for input_ in inputs
         )
         result = self._data.__array_ufunc__(ufunc, method, *modified_inputs, **kwargs)
         if method == "reduce":
             return result
-        elif not isinstance(inputs[0], StoreArray):
+        elif not isinstance(inputs[0], DynamicArray):
             return result
         else:
             return self.__class__(result, max_n=self._data.shape[0])
@@ -118,10 +122,11 @@ class StoreArray:
     def __array_function__(self, func, types, args, kwargs):
         # Explicitly call __array_function__ of the underlying NumPy array
         modified_args = tuple(
-            arg.data if isinstance(arg, StoreArray) else arg for arg in args
+            arg.data if isinstance(arg, DynamicArray) else arg for arg in args
         )
         modified_types = tuple(
-            type(arg.data) if isinstance(arg, StoreArray) else type(arg) for arg in args
+            type(arg.data) if isinstance(arg, DynamicArray) else type(arg)
+            for arg in args
         )
         return self._data.__array_function__(
             func, modified_types, modified_args, kwargs
@@ -134,7 +139,7 @@ class StoreArray:
         return self.data.__getitem__(key)
 
     def __repr__(self):
-        return "StoreArray(" + self.data.__str__() + ")"
+        return "DynamicArray(" + self.data.__str__() + ")"
 
     def __str__(self):
         return self.data.__str__()
@@ -178,7 +183,7 @@ class StoreArray:
         return self.data.__sizeof__()
 
     def _perform_operation(self, other, operation: str, inplace: bool = False):
-        if isinstance(other, StoreArray):
+        if isinstance(other, DynamicArray):
             other = other._data[: other._n]
         fn = getattr(self.data, operation)
         if other is None:
@@ -256,7 +261,7 @@ class StoreArray:
         return self._perform_operation(other, "__pow__", inplace=True)
 
     def _compare(self, value: object, operation: str) -> bool:
-        if isinstance(value, StoreArray):
+        if isinstance(value, DynamicArray):
             return self.__class__(
                 getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
             )
@@ -316,18 +321,42 @@ class Bucket:
         pass
 
     def __setattr__(self, name, value):
-        assert isinstance(value, (StoreArray, int, float, np.ndarray))
+        assert isinstance(
+            value,
+            (
+                DynamicArray,
+                int,
+                float,
+                np.ndarray,
+                list,
+                pd.DataFrame,
+                str,
+                dict,
+                datetime,
+            ),
+        )
         super().__setattr__(name, value)
 
     def save(self, path):
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
-            if isinstance(value, StoreArray):
+            if isinstance(value, DynamicArray):
                 value.save(path / name)
             elif isinstance(value, np.ndarray):
                 np.savez_compressed(
                     (path / name).with_suffix(".array.npz"), value=value
                 )
+            elif isinstance(value, pd.DataFrame):
+                value.to_parquet((path / name).with_suffix(".parquet"))
+            elif isinstance(value, (list, dict)):
+                with open((path / name).with_suffix(".json"), "w") as f:
+                    json.dump(value, f)
+            elif isinstance(value, str):
+                with open((path / name).with_suffix(".txt"), "w") as f:
+                    f.write(value)
+            elif isinstance(value, datetime):
+                with open((path / name).with_suffix(".datetime"), "w") as f:
+                    f.write(value.isoformat())
             else:
                 np.save((path / name).with_suffix(".npy"), value)
 
@@ -337,7 +366,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.name.removesuffix("".join(filename.suffixes)),
-                    StoreArray.load(filename),
+                    DynamicArray.load(filename),
                 )
             elif filename.suffixes == [".array", ".npz"]:
                 setattr(
@@ -345,6 +374,25 @@ class Bucket:
                     filename.name.removesuffix("".join(filename.suffixes)),
                     np.load(filename)["value"],
                 )
+            elif filename.suffix == ".parquet":
+                setattr(
+                    self,
+                    filename.stem,
+                    pd.read_parquet(filename),
+                )
+            elif filename.suffix == ".txt":
+                with open(filename, "r") as f:
+                    setattr(self, filename.stem, f.read())
+            elif filename.suffix == ".datetime":
+                with open(filename, "r") as f:
+                    setattr(
+                        self,
+                        filename.stem,
+                        datetime.fromisoformat(f.read()),
+                    )
+            elif filename.suffix == ".json":
+                with open(filename, "r") as f:
+                    setattr(self, filename.stem, json.load(f))
             else:
                 setattr(self, filename.stem, np.load(filename).item())
 
@@ -356,11 +404,7 @@ class Store:
         self.model = model
         self.buckets = {}
 
-    def get_name(self, cls):
-        return cls.__class__.__module__.replace("geb.", "")
-
-    def create_bucket(self, cls):
-        name = self.get_name(cls)
+    def create_bucket(self, name):
         assert name not in self.buckets
         bucket = Bucket()
         self.buckets[name] = bucket
@@ -376,9 +420,6 @@ class Store:
 
     def load(self):
         for bucket_folder in self.path.iterdir():
-            print("remove this")
-            if bucket_folder.stem == "grid":
-                continue
             bucket = Bucket().load(bucket_folder)
 
             self.buckets[bucket_folder.name] = bucket

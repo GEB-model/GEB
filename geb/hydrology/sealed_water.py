@@ -50,7 +50,7 @@ class SealedWater(object):
     """
 
     def __init__(self, model):
-        self.var = model.data.HRU
+        self.HRU = model.data.HRU
         self.model = model
 
     def step(self, capillar, openWaterEvap, directRunoff):
@@ -63,21 +63,24 @@ class SealedWater(object):
         :param No: number of land cover type: forest = 0, grassland = 1 ...
         """
 
-        mult = self.var.full_compressed(0, dtype=np.float32)
-        mult[self.var.land_use_type == OPEN_WATER] = 1
-        mult[self.var.land_use_type == SEALED] = 0.2
+        mult = self.HRU.full_compressed(0, dtype=np.float32)
+        mult[self.HRU.bucket.land_use_type == OPEN_WATER] = 1
+        mult[self.HRU.bucket.land_use_type == SEALED] = 0.2
 
         sealed_area = np.where(
-            (self.var.land_use_type == SEALED) | self.var.land_use_type == OPEN_WATER
+            (self.HRU.bucket.land_use_type == SEALED) | self.HRU.bucket.land_use_type
+            == OPEN_WATER
         )
 
         assert (capillar[sealed_area] >= 0).all()
 
-        openWaterEvap[sealed_area] = mult[sealed_area] * self.var.EWRef[sealed_area]
+        openWaterEvap[sealed_area] = (
+            mult[sealed_area] * self.HRU.bucket.EWRef[sealed_area]
+        )
 
         # as there is no interception on sealed areas, the available water is the sum of the natural available water and the capillar rise
         directRunoff[sealed_area] = (
-            self.var.natural_available_water_infiltration[sealed_area]
+            self.HRU.bucket.natural_available_water_infiltration[sealed_area]
             + capillar[sealed_area]
         )
         # limit the evaporation to the available water
@@ -92,8 +95,9 @@ class SealedWater(object):
         assert (directRunoff[sealed_area] >= 0).all()
 
         # open water evaporation is directly substracted from the river, lakes, reservoir
-        self.var.actual_evapotranspiration[sealed_area] = (
-            self.var.actual_evapotranspiration[sealed_area] + openWaterEvap[sealed_area]
+        self.HRU.bucket.actual_evapotranspiration[sealed_area] = (
+            self.HRU.bucket.actual_evapotranspiration[sealed_area]
+            + openWaterEvap[sealed_area]
         )
 
         if __debug__:
@@ -101,7 +105,7 @@ class SealedWater(object):
                 name="sealed_water",
                 how="cellwise",
                 influxes=[
-                    self.var.natural_available_water_infiltration[sealed_area],
+                    self.HRU.bucket.natural_available_water_infiltration[sealed_area],
                     capillar[sealed_area],
                 ],
                 outfluxes=[

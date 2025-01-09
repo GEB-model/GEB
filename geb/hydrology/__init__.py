@@ -53,22 +53,17 @@ class Hydrology:
         self.useSmallLakes = False
         self.crop_factor_calibration_factor = 1
 
-        elevation_std = self.data.grid.load(
-            self.files["grid"]["landsurface/topo/elevation_STD"]
-        )
-        elevation_std = self.data.to_HRU(data=elevation_std, fn=None)
-
         self.potential_evapotranspiration = PotentialEvapotranspiration(self)
-        self.snowfrost = SnowFrost(self, elevation_std)
+        self.snowfrost = SnowFrost(self)
         self.landcover = LandCover(self)
-        self.soil = Soil(self, elevation_std)
+        self.soil = Soil(self)
         self.evaporation = Evaporation(self)
         self.groundwater = GroundWater(self)
         self.interception = Interception(self)
         self.sealed_water = SealedWater(self)
         self.runoff_concentration = RunoffConcentration(self)
         self.lakes_res_small = SmallLakesReservoirs(self)
-        self.routing_kinematic = Routing(self)
+        self.routing = Routing(self)
         self.lakes_reservoirs = LakesReservoirs(self)
         self.water_demand = WaterDemand(self)
 
@@ -117,7 +112,7 @@ class Hydrology:
         self.lakes_res_small.step()
         timer.new_split("Small waterbodies")
 
-        self.routing_kinematic.step(openWaterEvap, channel_abstraction, returnFlow)
+        self.routing.step(openWaterEvap, channel_abstraction, returnFlow)
         timer.new_split("Routing")
 
         if self.timing:

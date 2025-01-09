@@ -23,7 +23,7 @@ class Government(AgentBaseClass):
         AgentBaseClass.__init__(self)
 
     def spinup(self) -> None:
-        pass
+        self.bucket = self.model.store.create_bucket("agents.government")
 
     def provide_subsidies(self) -> None:
         if "subsidies" not in self.config:

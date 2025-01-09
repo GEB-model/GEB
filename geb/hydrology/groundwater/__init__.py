@@ -26,7 +26,8 @@ from geb.workflows import balance_check
 
 class GroundWater:
     def __init__(self, model):
-        self.var = model.data.grid
+        self.HRU = model.data.HRU
+        self.grid = model.data.grid
         self.model = model
 
         # load hydraulic conductivity (md-1)
@@ -55,12 +56,12 @@ class GroundWater:
 
         assert hydraulic_conductivity.shape == specific_yield.shape
 
-        self.var.channel_ratio = self.var.load(
+        self.grid.bucket.channel_ratio = self.grid.load(
             self.model.files["grid"]["routing/kinematic/channel_ratio"]
         )
 
-        self.var.leakageriver_factor = 0.001  # in m/day
-        self.var.leakagelake_factor = 0.001  # in m/day
+        self.grid.bucket.leakageriver_factor = 0.001  # in m/day
+        self.grid.bucket.leakagelake_factor = 0.001  # in m/day
 
         self.initial_water_table_depth = 2
 
@@ -80,10 +81,7 @@ class GroundWater:
             )
             return heads
 
-        self.var.heads = self.model.data.grid.load_initial(
-            "heads",
-            default=get_initial_head,
-        )
+        self.grid.bucket.heads = get_initial_head()
 
         self.modflow = ModFlowSimulation(
             self.model,
@@ -94,14 +92,12 @@ class GroundWater:
             specific_yield=specific_yield,
             layer_boundary_elevation=layer_boundary_elevation,
             basin_mask=self.model.data.grid.mask,
-            heads=self.var.heads,
+            heads=self.grid.bucket.heads,
             hydraulic_conductivity=hydraulic_conductivity,
             verbose=False,
         )
 
-        self.var.capillar = self.var.load_initial(
-            "capillar", default=lambda: self.var.full_compressed(0, dtype=np.float32)
-        )
+        self.grid.bucket.capillar = self.grid.full_compressed(0, dtype=np.float32)
 
     def step(self, groundwater_recharge, groundwater_abstraction_m3):
         assert (groundwater_abstraction_m3 + 1e-7 >= 0).all()
@@ -131,11 +127,15 @@ class GroundWater:
             tollerance=100,  # 100 m3
         )
 
-        groundwater_drainage = self.modflow.drainage_m3 / self.var.cellArea
+        groundwater_drainage = self.modflow.drainage_m3 / self.grid.bucket.cellArea
 
-        self.var.capillar = groundwater_drainage * (1 - self.var.channel_ratio)
-        self.var.baseflow = groundwater_drainage * self.var.channel_ratio
-        self.var.heads = self.modflow.heads
+        self.grid.bucket.capillar = groundwater_drainage * (
+            1 - self.grid.bucket.channel_ratio
+        )
+        self.grid.bucket.baseflow = (
+            groundwater_drainage * self.grid.bucket.channel_ratio
+        )
+        self.grid.bucket.heads = self.modflow.heads
 
         # capriseindex is 1 where capilary rise occurs
         self.model.data.HRU.capriseindex = self.model.data.to_HRU(

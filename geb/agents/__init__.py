@@ -38,14 +38,6 @@ class Agents:
             self.market,
         ]
 
-        if not self.model.load_initial_data:
-            self.spinup()
-
-    def spinup(self) -> None:
-        """Initiate all agents."""
-        for agent_type in self.agents:
-            agent_type.spinup()
-
     def step(self) -> None:
         """This function is called every timestep and activates the agents in order of NGO, government and then farmers."""
         for agent_type in self.agents:

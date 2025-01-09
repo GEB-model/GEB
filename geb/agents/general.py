@@ -400,33 +400,6 @@ class AgentBaseClass(HoneybeesAgentBaseClass):
             )  # max value of uint32, consider replacing with uint64
             return max_n
 
-    def get_save_state_path(self, folder, mkdir=False):
-        folder = Path(self.model.initial_conditions_folder, folder)
-        if mkdir:
-            folder.mkdir(parents=True, exist_ok=True)
-        return folder
-
-    def save_state(self, folder: str):
-        save_state_path = self.get_save_state_path(folder, mkdir=True)
-        with open(save_state_path / "state.txt", "w") as f:
-            for attribute, value in self.agent_arrays.items():
-                f.write(f"{attribute}\n")
-                fp = save_state_path / f"{attribute}.npz"
-                np.savez_compressed(fp, data=value.data)
-
-    def restore_state(self, folder: str):
-        save_state_path = self.get_save_state_path(folder)
-        with open(save_state_path / "state.txt", "r") as f:
-            for line in f:
-                attribute = line.strip()
-                fp = save_state_path / f"{attribute}.npz"
-                values = np.load(fp)["data"]
-                if not hasattr(self, "max_n"):
-                    self.max_n = self.get_max_n(values.shape[0])
-                values = AgentArray(values, max_n=self.max_n)
-
-                setattr(self, attribute, values)
-
     @property
     def agent_arrays(self):
         agent_arrays = {

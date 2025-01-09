@@ -1,7 +1,8 @@
 import numpy as np
 import geopandas as gpd
 import calendar
-from .general import AgentArray, downscale_volume, AgentBaseClass
+from .general import downscale_volume, AgentBaseClass
+from ..store import DynamicArray
 from ..hydrology.landcover import (
     SEALED,
     FOREST,
@@ -46,8 +47,16 @@ def from_landuse_raster_to_polygon(mask, transform, crs):
 class Households(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
+        self.HRU = model.data.HRU
+        self.grid = model.data.grid
         self.agents = agents
         self.reduncancy = reduncancy
+
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        self.bucket = self.model.store.create_bucket("agents.households")
 
         # Load buildings
         self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
@@ -65,7 +74,7 @@ class Households(AgentBaseClass):
 
         # Load maximum damages
         with open(
-            model.files["dict"][
+            self.model.files["dict"][
                 "damage_parameters/flood/buildings/structure/maximum_damage"
             ],
             "r",
@@ -77,7 +86,7 @@ class Households(AgentBaseClass):
         self.buildings["maximum_damage"] = self.max_dam_buildings_structure
 
         with open(
-            model.files["dict"][
+            self.model.files["dict"][
                 "damage_parameters/flood/buildings/content/maximum_damage"
             ],
             "r",
@@ -89,7 +98,10 @@ class Households(AgentBaseClass):
         self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
 
         with open(
-            model.files["dict"]["damage_parameters/flood/rail/main/maximum_damage"], "r"
+            self.model.files["dict"][
+                "damage_parameters/flood/rail/main/maximum_damage"
+            ],
+            "r",
         ) as f:
             self.max_dam_rail = json.load(f)
         self.max_dam_rail = float(self.max_dam_rail["maximum_damage"])
@@ -123,14 +135,14 @@ class Households(AgentBaseClass):
         ]
 
         for road_type, path in road_types:
-            with open(model.files["dict"][path], "r") as f:
+            with open(self.model.files["dict"][path], "r") as f:
                 max_damage = json.load(f)
             self.max_dam_road[road_type] = max_damage["maximum_damage"]
 
         self.roads["maximum_damage"] = self.roads["object_type"].map(self.max_dam_road)
 
         with open(
-            model.files["dict"][
+            self.model.files["dict"][
                 "damage_parameters/flood/land_use/forest/maximum_damage"
             ],
             "r",
@@ -139,7 +151,7 @@ class Households(AgentBaseClass):
         self.max_dam_forest = float(self.max_dam_forest["maximum_damage"])
 
         with open(
-            model.files["dict"][
+            self.model.files["dict"][
                 "damage_parameters/flood/land_use/agriculture/maximum_damage"
             ],
             "r",
@@ -218,26 +230,18 @@ class Households(AgentBaseClass):
         super().__init__()
 
         water_demand, efficiency = self.update_water_demand()
-        self.current_water_demand = water_demand
-        self.current_efficiency = efficiency
+        self.bucket.current_water_demand = water_demand
+        self.bucket.current_efficiency = efficiency
 
-    def spinup(self) -> None:
         locations = np.load(self.model.files["binary"]["agents/households/locations"])[
             "data"
         ]
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
 
-        self.locations = AgentArray(locations, max_n=self.max_n)
+        self.bucket.locations = DynamicArray(locations, max_n=self.max_n)
 
         sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
-        self.sizes = AgentArray(sizes, max_n=self.max_n)
-
-        self.flood_depth = AgentArray(
-            n=self.n, max_n=self.max_n, fill_value=0, dtype=np.float32
-        )
-        self.risk_perception = AgentArray(
-            n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
-        )
+        self.bucket.sizes = DynamicArray(sizes, max_n=self.max_n)
 
     def flood(self, flood_map, simulation_root, return_period=None):
         if return_period is not None:
@@ -335,7 +339,7 @@ class Households(AgentBaseClass):
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """
-        downscale_mask = self.model.data.HRU.land_use_type != SEALED
+        downscale_mask = self.HRU.bucket.land_use_type != SEALED
         if self.model.use_gpu:
             downscale_mask = downscale_mask.get()
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
@@ -358,7 +362,7 @@ class Households(AgentBaseClass):
             self.model.data.grid.mask,
             self.model.data.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.land_use_ratio,
+            self.model.data.HRU.bucket.land_use_ratio,
         )
         if self.model.use_gpu:
             water_demand = cp.array(water_demand)
@@ -383,7 +387,7 @@ class Households(AgentBaseClass):
             self.model.data.grid.mask,
             self.model.data.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.land_use_ratio,
+            self.model.data.HRU.bucket.land_use_ratio,
         )
         if self.model.use_gpu:
             water_consumption = cp.array(water_consumption)
@@ -400,7 +404,7 @@ class Households(AgentBaseClass):
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()
-        self.last_water_demand_update = self.model.current_time
+        self.bucket.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
 
     def water_demand(self):
@@ -409,17 +413,18 @@ class Households(AgentBaseClass):
             in self.model.domestic_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
-            self.current_water_demand = water_demand
-            self.current_efficiency = efficiency
+            self.bucket.current_water_demand = water_demand
+            self.bucket.current_efficiency = efficiency
 
-        assert (self.model.current_time - self.last_water_demand_update).days < 366, (
+        assert (
+            self.model.current_time - self.bucket.last_water_demand_update
+        ).days < 366, (
             "Water demand has not been updated for over a year. "
             "Please check the household water demand datasets."
         )
-        return self.current_water_demand, self.current_efficiency
+        return self.bucket.current_water_demand, self.bucket.current_efficiency
 
     def step(self) -> None:
-        # self.risk_perception *= self.risk_perception
         return None
 
     @property

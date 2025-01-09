@@ -16,7 +16,7 @@ from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from honeybees.model import Model as ABM_Model
 
-from geb.store import StoreArray, Store
+from geb.store import DynamicArray, Store
 from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
@@ -254,10 +254,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         """Run the model for the entire period, and export water table in case of spinup scenario."""
         for _ in range(self.n_timesteps):
             self.step()
-
-        if self.save_initial_data:
-            self.data.save_state()
-            self.store.save()
+        self.store.save()
 
         print("Model run finished")
 

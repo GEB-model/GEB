@@ -789,7 +789,7 @@ def vertical_water_transport(
 
 
 class Soil(object):
-    def __init__(self, model, elevation_std):
+    def __init__(self, model):
         """
 
         Notes:
@@ -797,24 +797,23 @@ class Soil(object):
         which states that connection to the stream is the exception rather than the rule
         A better implementation would be to consider travel distance. But this remains a topic for future work.
         """
-        self.var = model.data.HRU
+        self.HRU = model.data.HRU
+        self.grid = model.data.grid
         self.model = model
+        if self.model.spinup:
+            self.spinup()
 
-        self.soil_layer_height = self.model.data.grid.load(
+    def spinup(self):
+        self.bucket = self.model.store.create_bucket("soil")
+        soil_layer_height = self.model.data.grid.load(
             self.model.files["grid"]["soil/soil_layer_height"],
             layer=None,
         )
-        self.soil_layer_height = self.model.data.to_HRU(
-            data=self.soil_layer_height, fn=None
+        self.HRU.bucket.soil_layer_height = self.model.data.to_HRU(
+            data=soil_layer_height, fn=None
         )
 
-        # set number of soil layers as global variable for numba
-        global N_SOIL_LAYERS
-        N_SOIL_LAYERS = self.soil_layer_height.shape[0]
-
-        # set the frost index threshold as global variable for numba
-        global FROST_INDEX_THRESHOLD
-        FROST_INDEX_THRESHOLD = np.float32(self.var.frost_indexThreshold)
+        self.set_global_variables()
 
         # θ saturation, field capacity, wilting point and residual moisture content
         thetas = self.model.data.grid.load(
@@ -829,76 +828,77 @@ class Soil(object):
         bubbling_pressure_cm = self.model.data.grid.load(
             self.model.files["grid"]["soil/bubbling_pressure_cm"], layer=None
         )
-        self.bubbling_pressure_cm = self.model.data.to_HRU(
+        self.HRU.bucket.bubbling_pressure_cm = self.model.data.to_HRU(
             data=bubbling_pressure_cm, fn=None
         )
 
         lambda_pore_size_distribution = self.model.data.grid.load(
             self.model.files["grid"]["soil/lambda"], layer=None
         )
-        self.lambda_pore_size_distribution = self.model.data.to_HRU(
+        self.HRU.bucket.lambda_pore_size_distribution = self.model.data.to_HRU(
             data=lambda_pore_size_distribution, fn=None
         )
 
         thetafc = get_soil_moisture_at_pressure(
             np.float32(-100.0),  # assuming field capacity is at -100 cm (pF 2)
-            self.bubbling_pressure_cm,
+            self.HRU.bucket.bubbling_pressure_cm,
             thetas,
             thetar,
-            self.lambda_pore_size_distribution,
+            self.HRU.bucket.lambda_pore_size_distribution,
         )
 
         thetawp = get_soil_moisture_at_pressure(
             np.float32(-(10**4.2)),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
-            self.bubbling_pressure_cm,
+            self.HRU.bucket.bubbling_pressure_cm,
             thetas,
             thetar,
-            self.lambda_pore_size_distribution,
+            self.HRU.bucket.lambda_pore_size_distribution,
         )
 
-        self.ws = thetas * self.soil_layer_height
-        self.wfc = thetafc * self.soil_layer_height
-        self.wwp = thetawp * self.soil_layer_height
-        self.wres = thetar * self.soil_layer_height
+        self.HRU.bucket.ws = thetas * self.HRU.bucket.soil_layer_height
+        self.HRU.bucket.wfc = thetafc * self.HRU.bucket.soil_layer_height
+        self.HRU.bucket.wwp = thetawp * self.HRU.bucket.soil_layer_height
+        self.HRU.bucket.wres = thetar * self.HRU.bucket.soil_layer_height
 
         # initial soil water storage between field capacity and wilting point
         # set soil moisture to nan where land use is not bioarea
-        self.var.w = self.model.data.HRU.load_initial(
-            "w",
-            default=lambda: np.where(
-                self.var.land_use_type[np.newaxis, :] < SEALED,
-                (self.wfc + self.wwp) / 2,
-                np.nan,
-            ),
+        self.HRU.bucket.w = np.where(
+            self.HRU.bucket.land_use_type[np.newaxis, :] < SEALED,
+            (self.HRU.bucket.wfc + self.HRU.bucket.wwp) / 2,
+            np.nan,
         )
         # for paddy irrigation flooded paddy fields
-        self.var.topwater = self.model.data.HRU.load_initial(
-            "topwater", default=lambda: self.var.full_compressed(0, dtype=np.float32)
-        )
+        self.HRU.bucket.topwater = self.HRU.full_compressed(0, dtype=np.float32)
 
         ksat = self.model.data.grid.load(
             self.model.files["grid"]["soil/hydraulic_conductivity"], layer=None
         )
-        self.ksat = self.model.data.to_HRU(data=ksat, fn=None)
+        self.HRU.bucket.ksat = self.model.data.to_HRU(data=ksat, fn=None)
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        self.natural_crop_groups = self.model.data.grid.load(
+        natural_crop_groups = self.model.data.grid.load(
             self.model.files["grid"]["soil/cropgrp"]
         )
-        self.natural_crop_groups = self.model.data.to_HRU(data=self.natural_crop_groups)
+        self.HRU.bucket.natural_crop_groups = self.model.data.to_HRU(
+            data=natural_crop_groups
+        )
 
         # ------------ Preferential Flow constant ------------------------------------------
-        self.preferential_flow_constant = np.float32(
+        self.bucket.preferential_flow_constant = float(
             self.model.config["parameters"]["preferentialFlowConstant"]
         )
 
-        self.var.arnoBeta = self.var.full_compressed(np.nan, dtype=np.float32)
+        self.HRU.bucket.arnoBeta = self.HRU.full_compressed(np.nan, dtype=np.float32)
 
         # Improved Arno's scheme parameters: Hageman and Gates 2003
         # arnoBeta defines the shape of soil water capacity distribution curve as a function of  topographic variability
         # b = max( (oh - o0)/(oh + omax), 0.01)
         # oh: the standard deviation of orography, o0: minimum std dev, omax: max std dev
+        elevation_std = self.grid.load(
+            self.model.files["grid"]["landsurface/topo/elevation_STD"]
+        )
+        elevation_std = self.model.data.to_HRU(data=elevation_std, fn=None)
         arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)
 
         arnoBetaOro += self.model.config["parameters"][
@@ -914,23 +914,20 @@ class Soil(object):
         }
 
         for cover, arno_beta in arnobeta_cover_types.items():
-            land_use_indices = np.where(self.var.land_use_type == cover)[0]
+            land_use_indices = np.where(self.HRU.bucket.land_use_type == cover)[0]
 
-            self.var.arnoBeta[land_use_indices] = (arnoBetaOro + arno_beta)[
+            self.HRU.bucket.arnoBeta[land_use_indices] = (arnoBetaOro + arno_beta)[
                 land_use_indices
             ]
-            self.var.arnoBeta[land_use_indices] = np.minimum(
-                1.2, np.maximum(0.01, self.var.arnoBeta[land_use_indices])
+            self.HRU.bucket.arnoBeta[land_use_indices] = np.minimum(
+                1.2, np.maximum(0.01, self.HRU.bucket.arnoBeta[land_use_indices])
             )
 
-        self.var.aeration_days_counter = self.var.load_initial(
-            "aeration_days_counter",
-            default=lambda: np.full(
-                (N_SOIL_LAYERS, self.var.compressed_size), 0, dtype=np.int32
-            ),
+        self.HRU.bucket.aeration_days_counter = np.full_like(
+            self.HRU.bucket.ws, 0, dtype=np.int32
         )
-        self.crop_lag_aeration_days = np.full_like(
-            self.var.land_use_type, 3, dtype=np.int32
+        self.HRU.bucket.crop_lag_aeration_days = np.full_like(
+            self.HRU.bucket.land_use_type, 3, dtype=np.int32
         )
 
         def create_ini(yaml, idx, plantFATE_cluster, biodiversity_scenario):
@@ -1011,11 +1008,11 @@ class Soil(object):
 
             self.model.plantFATE = []
             self.plantFATE_forest_RUs = np.zeros_like(
-                self.var.land_use_type, dtype=bool
+                self.HRU.bucket.land_use_type, dtype=bool
             )
-            for i, land_use_type_RU in enumerate(self.var.land_use_type):
-                grid_cell = self.var.HRU_to_grid[i]
-                # if land_use_type_RU == 0 and self.var.land_use_ratio[i] > 0.5:
+            for i, land_use_type_RU in enumerate(self.HRU.bucket.land_use_type):
+                grid_cell = self.HRU.bucket.HRU_to_grid[i]
+                # if land_use_type_RU == 0 and self.HRU.bucket.land_use_ratio[i] > 0.5:
                 if land_use_type_RU == FOREST and grid_cell == cell_id:
                     if already_has_plantFATE_cell:
                         self.model.plantFATE.append(None)
@@ -1097,6 +1094,15 @@ class Soil(object):
         )  #  W/m2 -> umol/m2/s
         return photosynthetic_photon_flux_density
 
+    def set_global_variables(self):
+        # set number of soil layers as global variable for numba
+        global N_SOIL_LAYERS
+        N_SOIL_LAYERS = self.HRU.bucket.soil_layer_height.shape[0]
+
+        # set the frost index threshold as global variable for numba
+        global FROST_INDEX_THRESHOLD
+        FROST_INDEX_THRESHOLD = np.float32(self.HRU.bucket.frost_indexThreshold)
+
     def step(
         self,
         capillary_rise_from_groundwater,
@@ -1113,40 +1119,43 @@ class Soil(object):
         """
         timer = TimingModule("Soil")
 
+        if self.model.current_timestep == 1 and not self.model.spinup:
+            self.set_global_variables()
+
         if __debug__:
-            w_pre = self.var.w.copy()
-            topwater_pre = self.var.topwater.copy()
+            w_pre = self.HRU.bucket.w.copy()
+            topwater_pre = self.HRU.bucket.topwater.copy()
 
-        bioarea = self.var.land_use_type < SEALED
+        bioarea = self.HRU.bucket.land_use_type < SEALED
 
-        interflow = self.var.full_compressed(0, dtype=np.float32)
+        interflow = self.HRU.full_compressed(0, dtype=np.float32)
 
         available_water_infiltration, open_water_evaporation = (
             get_available_water_infiltration(
-                natural_available_water_infiltration=self.var.natural_available_water_infiltration,
-                actual_irrigation_consumption=self.var.actual_irrigation_consumption,
-                land_use_type=self.var.land_use_type,
-                crop_kc=self.var.cropKC,
-                EWRef=self.var.EWRef,
-                topwater=self.var.topwater,
+                natural_available_water_infiltration=self.HRU.bucket.natural_available_water_infiltration,
+                actual_irrigation_consumption=self.HRU.bucket.actual_irrigation_consumption,
+                land_use_type=self.HRU.bucket.land_use_type,
+                crop_kc=self.HRU.bucket.cropKC,
+                EWRef=self.HRU.bucket.EWRef,
+                topwater=self.HRU.bucket.topwater,
             )
         )
 
         timer.new_split("Available infiltration")
 
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
+        assert (self.HRU.bucket.w[:, bioarea] <= self.HRU.bucket.ws[:, bioarea]).all()
+        assert (self.HRU.bucket.w[:, bioarea] >= self.HRU.bucket.wres[:, bioarea]).all()
 
         runoff_from_groundwater = rise_from_groundwater(
-            w=self.var.w,
-            ws=self.ws,
+            w=self.HRU.bucket.w,
+            ws=self.HRU.bucket.ws,
             capillary_rise_from_groundwater=capillary_rise_from_groundwater.astype(
                 np.float32
             ),
         )
 
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
+        assert (self.HRU.bucket.w[:, bioarea] <= self.HRU.bucket.ws[:, bioarea]).all()
+        assert (self.HRU.bucket.w[:, bioarea] >= self.HRU.bucket.wres[:, bioarea]).all()
 
         timer.new_split("Capillary rise from groundwater")
 
@@ -1154,39 +1163,43 @@ class Soil(object):
             actual_total_transpiration,
             actual_bare_soil_evaporation,
         ) = evapotranspirate(
-            wwp=self.wwp,
-            wfc=self.wfc,
-            ws=self.ws,
-            wres=self.wres,
-            aeration_days_counter=self.var.aeration_days_counter,
-            soil_layer_height=self.soil_layer_height,
-            land_use_type=self.var.land_use_type,
-            root_depth=self.var.root_depth,
-            crop_map=self.var.crop_map,
-            natural_crop_groups=self.natural_crop_groups,
-            crop_lag_aeration_days=self.crop_lag_aeration_days,
+            wwp=self.HRU.bucket.wwp,
+            wfc=self.HRU.bucket.wfc,
+            ws=self.HRU.bucket.ws,
+            wres=self.HRU.bucket.wres,
+            aeration_days_counter=self.HRU.bucket.aeration_days_counter,
+            soil_layer_height=self.HRU.bucket.soil_layer_height,
+            land_use_type=self.HRU.bucket.land_use_type,
+            root_depth=self.HRU.bucket.root_depth,
+            crop_map=self.HRU.bucket.crop_map,
+            natural_crop_groups=self.HRU.bucket.natural_crop_groups,
+            crop_lag_aeration_days=self.HRU.bucket.crop_lag_aeration_days,
             potential_transpiration=potential_transpiration,
             potential_bare_soil_evaporation=potential_bare_soil_evaporation,
             potential_evapotranspiration=potential_evapotranspiration,
-            frost_index=self.var.frost_index,
-            crop_group_number_per_group=self.model.agents.crop_farmers.crop_data[
+            frost_index=self.HRU.bucket.frost_index,
+            crop_group_number_per_group=self.model.agents.crop_farmers.bucket.crop_data[
                 "crop_group_number"
             ].values.astype(np.float32),
-            w=self.var.w,
-            topwater=self.var.topwater,
+            w=self.HRU.bucket.w,
+            topwater=self.HRU.bucket.topwater,
             open_water_evaporation=open_water_evaporation,
             available_water_infiltration=available_water_infiltration,
         )
         assert actual_total_transpiration.dtype == np.float32
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
+        assert (self.HRU.bucket.w[:, bioarea] <= self.HRU.bucket.ws[:, bioarea]).all()
+        assert (self.HRU.bucket.w[:, bioarea] >= self.HRU.bucket.wres[:, bioarea]).all()
 
         timer.new_split("Evapotranspiration")
 
         n_substeps = 3
-        preferential_flow = np.zeros_like(self.var.land_use_type, dtype=np.float32)
-        direct_runoff = np.zeros_like(self.var.land_use_type, dtype=np.float32)
-        groundwater_recharge = np.zeros_like(self.var.land_use_type, dtype=np.float32)
+        preferential_flow = np.zeros_like(
+            self.HRU.bucket.land_use_type, dtype=np.float32
+        )
+        direct_runoff = np.zeros_like(self.HRU.bucket.land_use_type, dtype=np.float32)
+        groundwater_recharge = np.zeros_like(
+            self.HRU.bucket.land_use_type, dtype=np.float32
+        )
 
         for _ in range(n_substeps):
             (
@@ -1196,18 +1209,18 @@ class Soil(object):
             ) = vertical_water_transport(
                 available_water_infiltration / n_substeps,
                 capillary_rise_from_groundwater / n_substeps,
-                self.ws,
-                self.wres,
-                self.ksat / n_substeps,
-                self.lambda_pore_size_distribution,
-                self.bubbling_pressure_cm,
-                self.var.land_use_type,
-                self.var.frost_index,
-                self.var.arnoBeta,
-                self.preferential_flow_constant,
-                self.var.w,
-                self.var.topwater,
-                self.soil_layer_height,
+                self.HRU.bucket.ws,
+                self.HRU.bucket.wres,
+                self.HRU.bucket.ksat / n_substeps,
+                self.HRU.bucket.lambda_pore_size_distribution,
+                self.HRU.bucket.bubbling_pressure_cm,
+                self.HRU.bucket.land_use_type,
+                self.HRU.bucket.frost_index,
+                self.HRU.bucket.arnoBeta,
+                np.float32(self.bucket.preferential_flow_constant),
+                self.HRU.bucket.w,
+                self.HRU.bucket.topwater,
+                self.HRU.bucket.soil_layer_height,
             )
 
             preferential_flow += preferential_flow_substep
@@ -1216,29 +1229,33 @@ class Soil(object):
 
         timer.new_split("Vertical transport")
 
-        assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
-        assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
+        assert (self.HRU.bucket.w[:, bioarea] <= self.HRU.bucket.ws[:, bioarea]).all()
+        assert (self.HRU.bucket.w[:, bioarea] >= self.HRU.bucket.wres[:, bioarea]).all()
 
         runoff = direct_runoff + runoff_from_groundwater
 
         assert preferential_flow.dtype == np.float32
         assert runoff.dtype == np.float32
 
-        self.var.actual_evapotranspiration += actual_bare_soil_evaporation
-        self.var.actual_evapotranspiration += actual_total_transpiration
-        self.var.actual_evapotranspiration += open_water_evaporation
+        self.HRU.bucket.actual_evapotranspiration += actual_bare_soil_evaporation
+        self.HRU.bucket.actual_evapotranspiration += actual_total_transpiration
+        self.HRU.bucket.actual_evapotranspiration += open_water_evaporation
 
         if __debug__:
-            assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
-            assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
+            assert (
+                self.HRU.bucket.w[:, bioarea] <= self.HRU.bucket.ws[:, bioarea]
+            ).all()
+            assert (
+                self.HRU.bucket.w[:, bioarea] >= self.HRU.bucket.wres[:, bioarea]
+            ).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
                 name="soil_1",
                 how="cellwise",
                 influxes=[
-                    self.var.natural_available_water_infiltration[bioarea],
+                    self.HRU.bucket.natural_available_water_infiltration[bioarea],
                     capillary_rise_from_groundwater[bioarea],
-                    self.var.actual_irrigation_consumption[bioarea],
+                    self.HRU.bucket.actual_irrigation_consumption[bioarea],
                 ],
                 outfluxes=[
                     runoff[bioarea],
@@ -1253,8 +1270,8 @@ class Soil(object):
                     topwater_pre[bioarea],
                 ],
                 poststorages=[
-                    self.var.w[:, bioarea].sum(axis=0),
-                    self.var.topwater[bioarea],
+                    self.HRU.bucket.w[:, bioarea].sum(axis=0),
+                    self.HRU.bucket.topwater[bioarea],
                 ],
                 tollerance=1e-6,
             )
@@ -1263,25 +1280,25 @@ class Soil(object):
                 name="soil_2",
                 how="cellwise",
                 influxes=[
-                    self.var.natural_available_water_infiltration[bioarea],
+                    self.HRU.bucket.natural_available_water_infiltration[bioarea],
                     capillary_rise_from_groundwater[bioarea],
-                    self.var.actual_irrigation_consumption[bioarea],
-                    self.var.snowEvap[bioarea],
-                    self.var.interception_evaporation[bioarea],
+                    self.HRU.bucket.actual_irrigation_consumption[bioarea],
+                    self.HRU.bucket.snowEvap[bioarea],
+                    self.HRU.bucket.interception_evaporation[bioarea],
                 ],
                 outfluxes=[
                     runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    self.var.actual_evapotranspiration[bioarea],
+                    self.HRU.bucket.actual_evapotranspiration[bioarea],
                 ],
                 prestorages=[
                     w_pre[:, bioarea].sum(axis=0),
                     topwater_pre[bioarea],
                 ],
                 poststorages=[
-                    self.var.w[:, bioarea].sum(axis=0),
-                    self.var.topwater[bioarea],
+                    self.HRU.bucket.w[:, bioarea].sum(axis=0),
+                    self.HRU.bucket.topwater[bioarea],
                 ],
                 tollerance=1e-6,
             )
