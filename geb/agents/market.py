@@ -31,11 +31,12 @@ class Market(AgentBaseClass):
         if self.model.spinup:
             self.spinup()
 
-    def spinup(self) -> None:
-        self.bucket = self.model.store.create_bucket("agents.market")
-        self.bucket._crop_prices = load_regional_crop_data_from_dict(
+        self._crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"
         )
+
+    def spinup(self) -> None:
+        self.bucket = self.model.store.create_bucket("agents.market")
         with open(self.model.files["dict"]["economics/inflation_rates"], "r") as f:
             inflation = json.load(f)
             inflation["time"] = [int(time) for time in inflation["time"]]
@@ -114,7 +115,7 @@ class Market(AgentBaseClass):
         print(self.bucket.parameters)
 
     def get_modelled_crop_prices(self) -> np.ndarray:
-        number_of_regions = self.bucket._crop_prices[1].shape[1]
+        number_of_regions = self._crop_prices[1].shape[1]
 
         price_pred_per_region = np.full(
             (number_of_regions, self.bucket.production.shape[0]),
@@ -175,18 +176,18 @@ class Market(AgentBaseClass):
         ):
             return self.get_modelled_crop_prices()
         else:
-            if self.bucket._crop_prices[0] is None:
+            if self._crop_prices[0] is None:
                 print("WARNING: Using static crop prices")
                 return np.full(
                     (
                         len(self.bucket.cumulative_inflation_per_region),
                         len(self.agents.crop_farmers.crop_ids),
                     ),
-                    self.bucket._crop_prices[1],
+                    self._crop_prices[1],
                 )
             else:
-                index = self.bucket._crop_prices[0].get(self.model.current_time)
-                return self.bucket._crop_prices[1][index]
+                index = self._crop_prices[0].get(self.model.current_time)
+                return self._crop_prices[1][index]
 
     @property
     def year_index(self) -> int:

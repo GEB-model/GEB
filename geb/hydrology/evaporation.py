@@ -44,6 +44,12 @@ class Evaporation(object):
         self.HRU = model.data.HRU
         self.model = model
 
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
+
     def step(self, ETRef):
         """
         Dynamic part of the soil module

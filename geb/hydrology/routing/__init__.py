@@ -124,7 +124,11 @@ class Routing(object):
         self.HRU = model.data.HRU
         self.model = model
 
-        self.bucket = model.store.create_bucket("routing")
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        self.bucket = self.model.store.create_bucket("routing")
 
         ldd = self.grid.load(
             self.model.files["grid"]["routing/kinematic/ldd"],

@@ -29,19 +29,22 @@ class GroundWater:
         self.HRU = model.data.HRU
         self.grid = model.data.grid
         self.model = model
+        if self.model.spinup:
+            self.spinup()
 
+    def spinup(self):
         # load hydraulic conductivity (md-1)
-        hydraulic_conductivity = self.model.data.grid.load(
+        self.grid.bucket.hydraulic_conductivity = self.model.data.grid.load(
             self.model.files["grid"]["groundwater/hydraulic_conductivity"],
             layer=None,
         )
 
-        specific_yield = self.model.data.grid.load(
+        self.grid.bucket.specific_yield = self.model.data.grid.load(
             self.model.files["grid"]["groundwater/specific_yield"],
             layer=None,
         )
 
-        layer_boundary_elevation = self.model.data.grid.load(
+        self.grid.bucket.layer_boundary_elevation = self.model.data.grid.load(
             self.model.files["grid"]["groundwater/layer_boundary_elevation"],
             layer=None,
         )
@@ -50,11 +53,14 @@ class GroundWater:
         #     self.model.files["grid"]["groundwater/recession_coefficient"],
         # )
 
-        elevation = self.model.data.grid.load(
+        self.grid.bucket.elevation = self.model.data.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation"]
         )
 
-        assert hydraulic_conductivity.shape == specific_yield.shape
+        assert (
+            self.grid.bucket.hydraulic_conductivity.shape
+            == self.grid.bucket.specific_yield.shape
+        )
 
         self.grid.bucket.channel_ratio = self.grid.load(
             self.model.files["grid"]["routing/kinematic/channel_ratio"]
@@ -72,32 +78,33 @@ class GroundWater:
             heads = np.where(
                 ~np.isnan(heads),
                 heads,
-                layer_boundary_elevation[1:] + 0.1,
+                self.grid.bucket.layer_boundary_elevation[1:] + 0.1,
             )
             heads = np.where(
-                heads > layer_boundary_elevation[1:],
+                heads > self.grid.bucket.layer_boundary_elevation[1:],
                 heads,
-                layer_boundary_elevation[1:] + 0.1,
+                self.grid.bucket.layer_boundary_elevation[1:] + 0.1,
             )
             return heads
 
         self.grid.bucket.heads = get_initial_head()
 
+        self.grid.bucket.capillar = self.grid.full_compressed(0, dtype=np.float32)
+
+    def initalize_modflow_model(self):
         self.modflow = ModFlowSimulation(
             self.model,
-            topography=elevation,
+            topography=self.grid.bucket.elevation,
             gt=self.model.data.grid.gt,
             ndays=self.model.n_timesteps,
-            specific_storage=np.zeros_like(specific_yield),
-            specific_yield=specific_yield,
-            layer_boundary_elevation=layer_boundary_elevation,
+            specific_storage=np.zeros_like(self.grid.bucket.specific_yield),
+            specific_yield=self.grid.bucket.specific_yield,
+            layer_boundary_elevation=self.grid.bucket.layer_boundary_elevation,
             basin_mask=self.model.data.grid.mask,
             heads=self.grid.bucket.heads,
-            hydraulic_conductivity=hydraulic_conductivity,
+            hydraulic_conductivity=self.grid.bucket.hydraulic_conductivity,
             verbose=False,
         )
-
-        self.grid.bucket.capillar = self.grid.full_compressed(0, dtype=np.float32)
 
     def step(self, groundwater_recharge, groundwater_abstraction_m3):
         assert (groundwater_abstraction_m3 + 1e-7 >= 0).all()

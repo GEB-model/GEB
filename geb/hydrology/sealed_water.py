@@ -53,6 +53,12 @@ class SealedWater(object):
         self.HRU = model.data.HRU
         self.model = model
 
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
+
     def step(self, capillar, openWaterEvap, directRunoff):
         """
         Dynamic part of the sealed_water module

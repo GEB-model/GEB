@@ -85,6 +85,11 @@ class RunoffConcentration(object):
         """
         self.grid = model.data.grid
         self.model = model
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
 
     def step(self, interflow, directRunoff):
         assert (directRunoff >= 0).all()

@@ -4699,10 +4699,10 @@ class CropFarmers(AgentBaseClass):
         groundwater_depth = get_farmer_groundwater_depth(
             self.n,
             self.model.groundwater.groundwater_depth,
-            self.model.data.HRU.HRU_to_grid,
+            self.HRU.bucket.HRU_to_grid,
             self.bucket.field_indices,
             self.bucket.field_indices_by_farmer.data,
-            self.model.data.HRU.cellArea,
+            self.HRU.bucket.cellArea,
         )
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth

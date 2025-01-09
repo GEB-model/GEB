@@ -80,6 +80,8 @@ class Hydrology:
             * l: time and first gauge discharge
             * t: timing of different processes at the end
         """
+        if self.current_timestep == 1:
+            self.groundwater.initalize_modflow_model()
 
         timer = TimingModule("CWatM")
 
@@ -123,7 +125,8 @@ class Hydrology:
         Finalize the model
         """
         # finalize modflow model
-        self.groundwater.modflow.finalize()
+        if hasattr(self.groundwater, "modflow"):
+            self.groundwater.modflow.finalize()
 
         if self.config["general"]["simulate_forest"]:
             for plantFATE_model in self.model.plantFATE:
