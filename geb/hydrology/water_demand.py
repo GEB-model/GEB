@@ -317,11 +317,7 @@ class WaterDemand:
             return_flow_irrigation_m,
             irrigation_loss_to_evaporation_m,
         ) = self.crop_farmers.abstract_water(
-            cell_area=(
-                self.HRU.bucket.cellArea.get()
-                if self.model.use_gpu
-                else self.HRU.bucket.cellArea
-            ),
+            cell_area=self.HRU.bucket.cellArea,
             paddy_level=paddy_level,
             readily_available_water=readily_available_water,
             critical_water_level=critical_water_level,
@@ -331,11 +327,7 @@ class WaterDemand:
             available_groundwater_m3=available_groundwater_m3,
             groundwater_depth=self.model.groundwater.modflow.groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
-            command_areas=(
-                self.HRU.bucket.reservoir_command_areas.get()
-                if self.model.use_gpu
-                else self.HRU.bucket.reservoir_command_areas
-            ),
+            command_areas=self.HRU.bucket.reservoir_command_areas,
         )
         timer.new_split("Irrigation")
 
@@ -418,11 +410,7 @@ class WaterDemand:
                     self.model.data.grid.domestic_withdrawal_m3,
                     self.model.data.grid.industry_withdrawal_m3,
                     self.model.data.grid.livestock_withdrawal_m3,
-                    (
-                        irrigation_water_withdrawal_m * self.HRU.bucket.cellArea.get()
-                        if self.model.use_gpu
-                        else self.HRU.bucket.cellArea
-                    ),
+                    self.HRU.bucket.cellArea,
                 ],
                 prestorages=[
                     available_channel_storage_m3_pre,

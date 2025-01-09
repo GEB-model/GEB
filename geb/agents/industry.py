@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 import calendar
 import numpy as np
-
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
 from .general import downscale_volume, AgentBaseClass
 from ..hydrology.landcover import SEALED
 
@@ -42,9 +37,6 @@ class Industry(AgentBaseClass):
 
     def update_water_demand(self):
         downscale_mask = self.HRU.bucket.land_use_type != SEALED
-        if self.model.use_gpu:
-            downscale_mask = downscale_mask.get()
-
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         water_demand = (
@@ -68,8 +60,6 @@ class Industry(AgentBaseClass):
             downscale_mask,
             self.HRU.bucket.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_demand = cp.array(water_demand)
         water_demand = self.HRU.M3toM(water_demand)
 
         water_consumption = (
@@ -93,8 +83,7 @@ class Industry(AgentBaseClass):
             downscale_mask,
             self.HRU.bucket.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_consumption = cp.array(water_consumption)
+
         water_consumption = self.HRU.M3toM(water_consumption)
 
         efficiency = np.divide(

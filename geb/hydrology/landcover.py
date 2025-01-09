@@ -21,11 +21,6 @@
 
 import numpy as np
 import xarray as xr
-
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
 from numba import njit
 from geb.workflows import TimingModule, balance_check
 
@@ -348,9 +343,6 @@ class LandCover(object):
             (self.HRU.bucket.land_use_type == GRASSLAND_LIKE)
             & (self.HRU.bucket.land_owners != -1)
         ] = 0.05  # fallow land. The rooting depth
-
-        if self.model.use_gpu:
-            self.HRU.bucket.cropKC = cp.array(self.HRU.bucket.cropKC)
 
         forest_cropCoefficientNC = self.model.data.to_HRU(
             data=self.model.data.grid.compress(

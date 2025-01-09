@@ -6,11 +6,6 @@ from time import time
 import copy
 import warnings
 
-try:
-    import cupy as cp
-except ImportError:
-    pass
-
 from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from honeybees.model import Model as ABM_Model
@@ -84,8 +79,6 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         files: dict,
         spinup: bool = False,
         crs=4326,
-        use_gpu: bool = False,
-        gpu_device=0,
         timing=False,
         mode="w",
     ):
@@ -95,10 +88,6 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         self.mode = mode
 
         self.spinup = spinup
-        self.use_gpu = use_gpu
-        if self.use_gpu:
-            cp.cuda.Device(gpu_device).use()
-
         self.config = self.setup_config(config)
         self.store = Store(self)
 

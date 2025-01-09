@@ -12,11 +12,6 @@ import zarr.convenience
 from geb.workflows import AsyncForcingReader
 from scipy.spatial import cKDTree
 
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
-
 
 def determine_nearest_river_cell(river_grid, HRU_to_grid):
     threshold = 15
@@ -746,10 +741,7 @@ class HRUs(BaseVariables):
         Returns:
             array: Array with size of number of HRUs.
         """
-        if self.model.use_gpu:
-            return cp.zeros(size, dtype, *args, **kwargs)
-        else:
-            return np.zeros(size, dtype, *args, **kwargs)
+        return np.zeros(size, dtype, *args, **kwargs)
 
     def full_compressed(
         self, fill_value, dtype, gpu=None, *args, **kwargs
@@ -763,12 +755,7 @@ class HRUs(BaseVariables):
         Returns:
             array: Array with size of number of HRUs.
         """
-        if gpu is None:
-            gpu = self.model.use_gpu
-        if gpu:
-            return cp.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
-        else:
-            return np.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
+        return np.full(self.compressed_size, fill_value, dtype, *args, **kwargs)
 
     def decompress(self, HRU_array: np.ndarray) -> np.ndarray:
         """Decompress HRU array.
@@ -779,8 +766,6 @@ class HRUs(BaseVariables):
         Returns:
             outarray: Decompressed HRU_array.
         """
-        if self.model.use_gpu:
-            HRU_array = HRU_array.get()
         if np.issubdtype(HRU_array.dtype, np.integer):
             nanvalue = -1
         elif np.issubdtype(HRU_array.dtype, bool):
@@ -989,9 +974,6 @@ class Data:
                 )
         else:
             raise NotImplementedError
-        if self.model.use_gpu:
-            output_data = cp.asarray(output_data)
-
         return output_data
 
     def to_grid(self, *, HRU_data=None, fn=None):
@@ -1011,8 +993,6 @@ class Data:
         ):  # check if data is simple float. Otherwise should be numpy array.
             outdata = HRU_data
         else:
-            if self.model.use_gpu and isinstance(HRU_data, cp.ndarray):
-                HRU_data = HRU_data.get()
             outdata = to_grid(
                 HRU_data,
                 self.HRU.bucket.grid_to_HRU,
@@ -1025,11 +1005,6 @@ class Data:
     def split_HRU_data(self, a, i, ratio=None):
         assert ratio is None or (ratio > 0 and ratio < 1)
         assert ratio is None or np.issubdtype(a.dtype, np.floating)
-        if self.model.use_gpu and isinstance(a, cp.ndarray):
-            is_cupy = True
-            a = a.get()
-        else:
-            is_cupy = False
         if a.ndim == 1:
             a = np.insert(a, i, a[i] * (ratio or 1), axis=0)
         elif a.ndim == 2:
@@ -1038,8 +1013,6 @@ class Data:
             raise NotImplementedError
         if ratio is not None:
             a[i + 1] = (1 - ratio) * a[i + 1]
-        if is_cupy:
-            a = cp.array(a)
         return a
 
     @property

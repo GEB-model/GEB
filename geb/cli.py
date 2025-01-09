@@ -135,17 +135,6 @@ def click_run_options():
             help="Working directory for model.",
         )
         @click.option(
-            "--use_gpu",
-            is_flag=True,
-            help="Whether a GPU can be used to run the model. This requires CuPy to be installed.",
-        )
-        @click.option(
-            "--gpu_device",
-            type=int,
-            default=0,
-            help="""Specify the GPU to use (zero-indexed).""",
-        )
-        @click.option(
             "--gui",
             is_flag=True,
             help="""The model can be run with a graphical user interface in a browser. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
@@ -183,9 +172,7 @@ def click_run_options():
 
 def run_model(
     spinup,
-    gpu_device,
     profiling,
-    use_gpu,
     config,
     working_directory,
     gui,
@@ -202,9 +189,6 @@ def run_model(
     # set the working directory
     os.chdir(working_directory)
 
-    if use_gpu:
-        pass
-
     MODEL_NAME = "GEB"
     config = parse_config(config)
 
@@ -217,8 +201,6 @@ def run_model(
     model_params = {
         "config": config,
         "files": files,
-        "use_gpu": use_gpu,
-        "gpu_device": gpu_device,
         "spinup": spinup,
         "timing": timing,
     }
@@ -268,12 +250,6 @@ def run_model(
             port=None,
         )
         server.launch(port=port, browser=no_browser)
-
-    if use_gpu:
-        from numba import cuda
-
-        device = cuda.get_current_device()
-        device.reset()
 
 
 @main.command()

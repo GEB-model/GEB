@@ -15,11 +15,6 @@ import rioxarray
 from rasterio.features import shapes
 from shapely.geometry import shape
 
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
-
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
     """
@@ -340,8 +335,6 @@ class Households(AgentBaseClass):
 
         """
         downscale_mask = self.HRU.bucket.land_use_type != SEALED
-        if self.model.use_gpu:
-            downscale_mask = downscale_mask.get()
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
         water_demand = (
             self.model.domestic_water_demand_ds.sel(
@@ -364,8 +357,6 @@ class Households(AgentBaseClass):
             downscale_mask,
             self.model.data.HRU.bucket.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_demand = cp.array(water_demand)
         water_demand = self.model.data.HRU.M3toM(water_demand)
 
         water_consumption = (
@@ -389,8 +380,6 @@ class Households(AgentBaseClass):
             downscale_mask,
             self.model.data.HRU.bucket.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_consumption = cp.array(water_consumption)
         water_consumption = self.model.data.HRU.M3toM(water_consumption)
 
         efficiency = np.divide(

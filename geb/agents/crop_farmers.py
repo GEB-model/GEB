@@ -2121,8 +2121,6 @@ class CropFarmers(AgentBaseClass):
 
             harvesting_farmer_fields = self.HRU.bucket.land_owners[harvest]
             harvested_area = self.HRU.bucket.cellArea[harvest]
-            if self.model.use_gpu:
-                harvested_area = harvested_area.get()
 
             harvested_crops = self.HRU.bucket.crop_map[harvest]
             max_yield_per_crop = np.take(
@@ -4664,9 +4662,7 @@ class CropFarmers(AgentBaseClass):
         return self.field_size_per_farmer_numba(
             self.bucket.field_indices_by_farmer.data,
             self.bucket.field_indices,
-            self.HRU.bucket.cellArea.get()
-            if self.model.use_gpu
-            else self.HRU.bucket.cellArea,
+            self.HRU.bucket.cellArea,
         )
 
     @property

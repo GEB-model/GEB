@@ -5,11 +5,6 @@ import numpy as np
 import re
 from operator import attrgetter
 
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
-
 from geb.store import DynamicArray
 
 
@@ -146,14 +141,14 @@ class Artists(honeybeesArtists):
         add_vars(
             "data.grid",
             compressed_size=self.model.data.grid.compressed_size,
-            dtypes=(np.ndarray, cp.ndarray) if self.model.use_gpu else np.ndarray,
+            dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
         )
         add_vars(
             "data.HRU",
             compressed_size=self.model.data.HRU.compressed_size,
-            dtypes=(np.ndarray, cp.ndarray) if self.model.use_gpu else np.ndarray,
+            dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
         )

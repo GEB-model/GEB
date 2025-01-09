@@ -2,11 +2,6 @@
 import calendar
 import numpy as np
 from .general import downscale_volume, AgentBaseClass
-
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
 from ..hydrology.landcover import GRASSLAND_LIKE
 
 
@@ -76,8 +71,7 @@ class LiveStockFarmers(AgentBaseClass):
             downscale_mask,
             self.HRU.bucket.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_consumption = cp.array(water_consumption)
+
         water_consumption = self.HRU.M3toM(water_consumption)
 
         efficiency = 1.0

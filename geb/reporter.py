@@ -11,11 +11,6 @@ from honeybees.library.raster import coord_to_pixel
 from pathlib import Path
 from numcodecs import Blosc
 import zarr.hierarchy
-
-try:
-    import cupy as cp
-except ImportError:
-    cp = np
 from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
@@ -237,7 +232,7 @@ class hydrology_reporter(ABMReporter):
             decompressed_array = self.decompress(attr, array)
             return array, decompressed_array
 
-        assert isinstance(array, (np.ndarray, cp.ndarray))
+        assert isinstance(array, np.ndarray)
 
         return array
 
@@ -283,7 +278,7 @@ class hydrology_reporter(ABMReporter):
             elif conf["format"] == "csv":
                 fn += ".csv"
                 fp = os.path.join(folder, fn)
-                if isinstance(value, (np.ndarray, cp.ndarray)):
+                if isinstance(value, np.ndarray):
                     value = value.tolist()
                 if isinstance(value, (float, int)):
                     value = [value]
