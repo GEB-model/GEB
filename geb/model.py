@@ -4,7 +4,6 @@ import geopandas as gpd
 from typing import Union
 from time import time
 import copy
-import numpy as np
 import warnings
 
 try:
@@ -16,7 +15,7 @@ from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from honeybees.model import Model as ABM_Model
 
-from geb.store import DynamicArray, Store
+from geb.store import Store
 from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists

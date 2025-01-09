@@ -25,12 +25,6 @@ from .subroutines import (
     kinematic,
 )
 import numpy as np
-
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
-
 from geb.workflows import balance_check
 from ..landcover import OPEN_WATER
 from .subroutines import PIT

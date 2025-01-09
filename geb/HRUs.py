@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
 from typing import Union
 from numba import njit
-from pathlib import Path
 import rasterio
 import warnings
-import os
 import math
 from affine import Affine
-from operator import attrgetter
 import xarray as xr
 import zarr
 import numpy as np

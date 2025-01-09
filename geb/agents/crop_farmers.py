@@ -1319,14 +1319,6 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=99
         )
 
-        agent_relation_attributes = [
-            "yearly_yield_ratio",
-            "yearly_SPEI_probability",
-            "yearly_profits",
-            "yearly_potential_profits",
-            "farmer_yield_probability_relation",
-        ]
-
         self.bucket.yearly_SPEI_probability = DynamicArray(
             n=self.n,
             max_n=self.max_n,
@@ -1547,9 +1539,6 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.update_field_indices()
-
-    def restore():
-        return self.bucket.restore()
 
     @staticmethod
     @njit(cache=True)
