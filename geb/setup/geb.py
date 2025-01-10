@@ -265,9 +265,9 @@ class GEBModel(GridModel):
         assert hydrography_fn is None, "Please remove this parameter"
         assert basin_index_fn is None, "Please remove this parameter"
 
-        assert (
-            resolution_arcsec % 3 == 0
-        ), "resolution_arcsec must be a multiple of 3 to align with MERIT"
+        assert resolution_arcsec % 3 == 0, (
+            "resolution_arcsec must be a multiple of 3 to align with MERIT"
+        )
         assert sub_grid_factor >= 2
 
         hydrography = self.data_catalog.get_rasterdataset(
@@ -560,9 +560,9 @@ class GEBModel(GridModel):
         """
         self.logger.info("Preparing crops data")
 
-        assert source in (
-            "MIRCA2000",
-        ), f"crop_variables_source {source} not understood, must be 'MIRCA2000'"
+        assert source in ("MIRCA2000",), (
+            f"crop_variables_source {source} not understood, must be 'MIRCA2000'"
+        )
         if crop_specifier is None:
             crop_data = {
                 "data": (
@@ -750,13 +750,13 @@ class GEBModel(GridModel):
             total_years = data.index.get_level_values("year").unique()
 
             if project_past_until_year:
-                assert (
-                    total_years[0] > project_past_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
+                assert total_years[0] > project_past_until_year, (
+                    f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
+                )
             if project_future_until_year:
-                assert (
-                    total_years[-1] < project_future_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
+                assert total_years[-1] < project_future_until_year, (
+                    f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
+                )
 
             if (
                 project_past_until_year is not None
@@ -1162,9 +1162,9 @@ class GEBModel(GridModel):
         start_year,
         end_year,
     ):
-        assert (
-            end_year != start_year
-        ), "extra processed years must not be the same as data years"
+        assert end_year != start_year, (
+            "extra processed years must not be the same as data years"
+        )
 
         if end_year < start_year:
             operator = "div"
@@ -1701,9 +1701,9 @@ class GEBModel(GridModel):
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
         assert "volume_total" in waterbodies.columns, "volume_total is required"
-        assert (
-            "average_discharge" in waterbodies.columns
-        ), "average_discharge is required"
+        assert "average_discharge" in waterbodies.columns, (
+            "average_discharge is required"
+        )
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_table(waterbodies, name="routing/lakesreservoirs/basin_lakes_data")
 
@@ -2107,9 +2107,9 @@ class GEBModel(GridModel):
 
         if data_source == "isimip":
             if resolution_arcsec == 30:
-                assert (
-                    forcing == "chelsa-w5e5"
-                ), "Only chelsa-w5e5 is supported for 30 arcsec resolution"
+                assert forcing == "chelsa-w5e5", (
+                    "Only chelsa-w5e5 is supported for 30 arcsec resolution"
+                )
                 # download source data from ISIMIP
                 self.logger.info("setting up forcing data")
                 high_res_variables = ["pr", "rsds", "tas", "tasmax", "tasmin"]
@@ -2642,9 +2642,9 @@ class GEBModel(GridModel):
                 w5e5_regridded = (
                     regridder(w5e5_30min_sel, output_chunks=(-1, -1)) * 0.01
                 )  # convert to fraction
-                assert (
-                    w5e5_regridded >= 0.1
-                ).all(), "too low values in relative humidity"
+                assert (w5e5_regridded >= 0.1).all(), (
+                    "too low values in relative humidity"
+                )
                 assert (w5e5_regridded <= 1).all(), "relative humidity > 1"
 
                 w5e5_regridded_mean = w5e5_regridded.mean(
@@ -3162,9 +3162,9 @@ class GEBModel(GridModel):
             self.region.total_bounds,
             regions.to_crs(self.region.crs).total_bounds,
         )
-        assert np.issubdtype(
-            regions["region_id"].dtype, np.integer
-        ), "Region ID must be integer"
+        assert np.issubdtype(regions["region_id"].dtype, np.integer), (
+            "Region ID must be integer"
+        )
 
         region_id_mapping = {
             i: region_id for region_id, i in enumerate(regions["region_id"])
@@ -3172,9 +3172,9 @@ class GEBModel(GridModel):
         regions["region_id"] = regions["region_id"].map(region_id_mapping)
         self.set_dict(region_id_mapping, name="areamaps/region_id_mapping")
 
-        assert (
-            "ISO3" in regions.columns
-        ), f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
+        assert "ISO3" in regions.columns, (
+            f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
+        )
 
         self.set_geoms(regions, name="areamaps/regions")
 
@@ -3325,7 +3325,9 @@ class GEBModel(GridModel):
         assert (
             not project_future_until_year
             or project_future_until_year > reference_start_year
-        ), f"project_future_until_year ({project_future_until_year}) must be larger than reference_start_year ({reference_start_year})"
+        ), (
+            f"project_future_until_year ({project_future_until_year}) must be larger than reference_start_year ({reference_start_year})"
+        )
 
         lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
@@ -3388,9 +3390,9 @@ class GEBModel(GridModel):
             # Create a helper to process rates and assert single row data
             def process_rates(df, rate_cols, convert_percent=False):
                 filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
-                assert (
-                    len(filtered_data) == 1
-                ), f"Expected one row for {ISO3}, got {len(filtered_data)}"
+                assert len(filtered_data) == 1, (
+                    f"Expected one row for {ISO3}, got {len(filtered_data)}"
+                )
                 if convert_percent:
                     return (filtered_data.iloc[0] / 100 + 1).tolist()
                 return filtered_data.iloc[0].tolist()
@@ -4043,9 +4045,9 @@ class GEBModel(GridModel):
             }
         else:
             assert size_class_boundaries is not None
-            assert (
-                farm_size_donor_countries is None
-            ), "farm_size_donor_countries is only used for lowder data"
+            assert farm_size_donor_countries is None, (
+                "farm_size_donor_countries is only used for lowder data"
+            )
 
         cultivated_land = (
             self.region_subgrid["landsurface/full_region_cultivated_land"]
@@ -4057,9 +4059,9 @@ class GEBModel(GridModel):
 
         regions_shapes = self.geoms["areamaps/regions"]
         if data_source == "lowder":
-            assert (
-                country_iso3_column in regions_shapes.columns
-            ), f"Region database must contain {country_iso3_column} column ({self.data_catalog['gadm_level1'].path})"
+            assert country_iso3_column in regions_shapes.columns, (
+                f"Region database must contain {country_iso3_column} column ({self.data_catalog['gadm_level1'].path})"
+            )
 
             farm_sizes_per_region = (
                 self.data_catalog.get_dataframe("lowder_farm_sizes")
@@ -4078,9 +4080,9 @@ class GEBModel(GridModel):
             farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
                 COUNTRY_NAME_TO_ISO3
             )
-            assert (
-                not farm_sizes_per_region["ISO3"].isna().any()
-            ), f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
+            assert not farm_sizes_per_region["ISO3"].isna().any(), (
+                f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
+            )
         else:
             # load data source
             farm_sizes_per_region = pd.read_excel(
@@ -4134,9 +4136,9 @@ class GEBModel(GridModel):
                 region_farm_sizes = farm_sizes_per_region.loc[
                     (farm_sizes_per_region["ISO3"] == country_ISO3)
                 ].drop(["Country", "Census Year", "Total"], axis=1)
-                assert (
-                    len(region_farm_sizes) == 2
-                ), f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
+                assert len(region_farm_sizes) == 2, (
+                    f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
+                )
 
                 # Extract holdings and agricultural area data
                 region_n_holdings = (
@@ -4913,9 +4915,9 @@ class GEBModel(GridModel):
                 crop_rotation_matrix = crop_rotation[1]
                 starting_days = crop_rotation_matrix[:, 2]
                 starting_days = starting_days[starting_days != -1]
-                assert (
-                    np.unique(starting_days).size == starting_days.size
-                ), "ensure all starting days are unique"
+                assert np.unique(starting_days).size == starting_days.size, (
+                    "ensure all starting days are unique"
+                )
                 # TODO: Add check to ensure crop calendars are not overlapping.
                 cropping_calenders_crop_rotation.append(crop_rotation_matrix)
             area_per_crop_rotation = np.array(area_per_crop_rotation)
@@ -5345,9 +5347,9 @@ class GEBModel(GridModel):
                     # Set irrigation status to True for these farmers
                     farmer_irrigated[overall_farmer_indices] = True
 
-        assert not (
-            farmer_crops == -1
-        ).any(), "Error: some farmers have no crops assigned"
+        assert not (farmer_crops == -1).any(), (
+            "Error: some farmers have no crops assigned"
+        )
 
         return farmer_crops, farmer_irrigated
 
@@ -5846,7 +5848,9 @@ class GEBModel(GridModel):
                         max_file_path_length = os.pathconf("/", "PC_PATH_MAX")
                     assert (
                         len(str(download_path / new_file_name)) <= max_file_path_length
-                    ), f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
+                    ), (
+                        f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
+                    )
                     zip_ref.extract(file_name, path=download_path)
             # remove zip file
             (
@@ -6085,9 +6089,9 @@ class GEBModel(GridModel):
 
             water_levels = water_levels.sel(stations=station_ids).compute()
 
-            assert (
-                len(water_levels.stations) > 0
-            ), "No stations found in the region. If no stations should be set, set include_coastal=False"
+            assert len(water_levels.stations) > 0, (
+                "No stations found in the region. If no stations should be set, set include_coastal=False"
+            )
 
             path = self.set_forcing(
                 water_levels,
@@ -6393,9 +6397,9 @@ class GEBModel(GridModel):
             if "time" in forcing.dims:
                 with ProgressBar(dt=10):  # print progress bar every 10 seconds
                     if is_spatial_dataset:
-                        assert (
-                            forcing.dims[1] == "y" and forcing.dims[2] == "x"
-                        ), "y and x dimensions must be second and third, otherwise xarray will not chunk correctly"
+                        assert forcing.dims[1] == "y" and forcing.dims[2] == "x", (
+                            "y and x dimensions must be second and third, otherwise xarray will not chunk correctly"
+                        )
                         chunksizes = {
                             "time": min(forcing.time.size, time_chunksize),
                             "y": min(forcing.y.size, y_chunksize),
@@ -6432,9 +6436,9 @@ class GEBModel(GridModel):
                     name = forcing.name
                     encoding = {forcing.name: {"compressor": compressor}}
                 elif isinstance(forcing, xr.Dataset):
-                    assert (
-                        len(forcing.data_vars) > 0
-                    ), "forcing must have more than one variable or name must be set"
+                    assert len(forcing.data_vars) > 0, (
+                        "forcing must have more than one variable or name must be set"
+                    )
                     encoding = {
                         var: {"compressor": compressor} for var in forcing.data_vars
                     }

@@ -29,9 +29,9 @@ class DynamicArray:
             raise ValueError("Only one of input_array or dtype can be given")
 
         if input_array is not None:
-            assert (
-                extra_dims is None
-            ), "extra_dims cannot be given if input_array is given"
+            assert extra_dims is None, (
+                "extra_dims cannot be given if input_array is given"
+            )
             assert n is None, "n cannot be given if input_array is given"
             # assert dtype is not object
             assert input_array.dtype != object, "dtype cannot be object"

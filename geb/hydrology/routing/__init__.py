@@ -182,9 +182,9 @@ class Routing(object):
         self.grid.var.chanLength = self.grid.load(
             self.model.files["grid"]["routing/kinematic/channel_length"]
         )
-        assert (
-            self.grid.var.chanLength[self.grid.var.lddCompress != PIT] > 0
-        ).all(), "Channel length must be greater than 0 for all cells except for pits"
+        assert (self.grid.var.chanLength[self.grid.var.lddCompress != PIT] > 0).all(), (
+            "Channel length must be greater than 0 for all cells except for pits"
+        )
         # Channel bottom width [meters]
         self.grid.var.chanWidth = self.grid.load(
             self.model.files["grid"]["routing/kinematic/channel_width"]
@@ -354,9 +354,9 @@ class Routing(object):
             * self.model.lakes_reservoirs.var.lake_area
             / self.var.noRoutingSteps
         )
-        assert np.all(
-            evaporation_from_water_bodies_per_routing_step >= 0.0
-        ), "evaporation_from_water_bodies_per_routing_step < 0.0"
+        assert np.all(evaporation_from_water_bodies_per_routing_step >= 0.0), (
+            "evaporation_from_water_bodies_per_routing_step < 0.0"
+        )
 
         fraction_water = np.array(self.model.data.HRU.var.land_use_ratio)
         fraction_water[self.model.data.HRU.var.land_use_type != OPEN_WATER] = 0

@@ -82,12 +82,12 @@ def to_grid(data, grid_to_HRU, land_use_ratio, fn="weightedmean"):
     """
     output_data = np.empty(grid_to_HRU.size, dtype=data.dtype)
 
-    assert (
-        grid_to_HRU[0] != 0
-    ), "First value of grid_to_HRU cannot be 0. This would mean that the first HRU is empty."
-    assert (
-        grid_to_HRU[-1] == land_use_ratio.size
-    ), "The last value of grid_to_HRU must be equal to the size of land_use_ratio. Otherwise, the last HRU would not be used."
+    assert grid_to_HRU[0] != 0, (
+        "First value of grid_to_HRU cannot be 0. This would mean that the first HRU is empty."
+    )
+    assert grid_to_HRU[-1] == land_use_ratio.size, (
+        "The last value of grid_to_HRU must be equal to the size of land_use_ratio. Otherwise, the last HRU would not be used."
+    )
 
     prev_index = 0
     for i in range(grid_to_HRU.size):
@@ -384,9 +384,9 @@ class Grid(BaseVariables):
         if not hasattr(self, "ps_ds"):
             self.ps_ds = self.load_forcing_ds("ps")
         ps = self.load_forcing(self.ps_ds, self.model.current_time)
-        assert (
-            (ps > 30_000).all() and (ps < 120_000).all()
-        ), "ps out of range"  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
+        assert (ps > 30_000).all() and (ps < 120_000).all(), (
+            "ps out of range"
+        )  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
         return ps
 
     @property
@@ -435,9 +435,9 @@ class Grid(BaseVariables):
         if not hasattr(self, "sfcWind_ds"):
             self.sfcWind_ds = self.load_forcing_ds("sfcwind")
         sfcWind = self.load_forcing(self.sfcWind_ds, self.model.current_time)
-        assert (
-            (sfcWind >= 0).all() and (sfcWind < 150).all()
-        ), "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
+        assert (sfcWind >= 0).all() and (sfcWind < 150).all(), (
+            "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
+        )
         return sfcWind
 
     @property

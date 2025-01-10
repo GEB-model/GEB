@@ -665,9 +665,9 @@ def plant(
     Returns:
         plant: Subarray map of what crops are planted this day.
     """
-    assert (
-        farmers_going_out_of_business is False
-    ), "Farmers going out of business not implemented."
+    assert farmers_going_out_of_business is False, (
+        "Farmers going out of business not implemented."
+    )
 
     plant = np.full_like(crop_map, -1, dtype=np.int32)
     sell_land = np.zeros(n, dtype=np.bool_)
@@ -4498,9 +4498,9 @@ class CropFarmers(AgentBaseClass):
             # Loop through each month from start_date to end_date to get the sum of crop costs over the past year
             current_date = start_date
             while current_date <= end_date:
-                assert (
-                    self.crop_prices[0] is not None
-                ), "behavior needs crop prices to work"
+                assert self.crop_prices[0] is not None, (
+                    "behavior needs crop prices to work"
+                )
                 monthly_price = self.crop_prices[1][
                     self.crop_prices[0].get(current_date)
                 ]
@@ -4832,9 +4832,9 @@ class CropFarmers(AgentBaseClass):
 
     def remove_agent(self, farmer_idx: int, land_use_type: int) -> np.ndarray:
         assert farmer_idx >= 0, "Farmer index must be positive."
-        assert (
-            farmer_idx < self.n
-        ), "Farmer index must be less than the number of agents."
+        assert farmer_idx < self.n, (
+            "Farmer index must be less than the number of agents."
+        )
         last_farmer_HRUs = get_farmer_HRUs(
             self.var.field_indices, self.var.field_indices_by_farmer.data, -1
         )

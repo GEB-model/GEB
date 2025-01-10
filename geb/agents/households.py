@@ -308,7 +308,7 @@ class Households(AgentBaseClass):
             curves=self.var.buildings_content_curve,
         )
         total_damages_content = damages_buildings_content.sum()
-        print(f"damages to building content are: { total_damages_content}")
+        print(f"damages to building content are: {total_damages_content}")
 
         roads = self.var.roads.to_crs(flood_map.rio.crs)
         damages_roads = object_scanner(

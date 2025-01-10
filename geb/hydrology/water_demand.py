@@ -145,9 +145,9 @@ class WaterDemand:
         soil_water_storage_cap = topsoil_ws_nonpaddy_irrigated_land.sum(axis=0)
 
         relative_saturation = soil_water_storage / soil_water_storage_cap
-        assert (
-            relative_saturation <= 1 + 1e-7
-        ).all(), "Relative saturation should always be <= 1"
+        assert (relative_saturation <= 1 + 1e-7).all(), (
+            "Relative saturation should always be <= 1"
+        )
         relative_saturation[relative_saturation > 1] = 1
 
         relative_saturation[relative_saturation > 1] = 1

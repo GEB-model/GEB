@@ -137,9 +137,7 @@ def distribute_well_rate_per_layer(
                 if remaining_well_rate == 0:
                     break
 
-        assert (
-            remaining_well_rate > -1e-10
-        ), (
+        assert remaining_well_rate > -1e-10, (
             "Well rate could not be distributed, layers are too dry"
         )  # leaving some tollerance for numerical errors
 
@@ -718,9 +716,7 @@ class ModFlowSimulation:
         """Set well rate, value in m3/day"""
         assert not np.isnan(groundwater_abstraction).any()
 
-        assert (
-            self.available_groundwater_m3 >= groundwater_abstraction
-        ).all(), (
+        assert (self.available_groundwater_m3 >= groundwater_abstraction).all(), (
             "Requested groundwater abstraction exceeds available groundwater storage. "
         )
 
