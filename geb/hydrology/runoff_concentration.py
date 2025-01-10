@@ -94,5 +94,5 @@ class RunoffConcentration(object):
     def step(self, interflow, directRunoff):
         assert (directRunoff >= 0).all()
         assert (interflow >= 0).all()
-        assert (self.grid.bucket.baseflow >= 0).all()
-        self.grid.bucket.runoff = directRunoff + interflow + self.grid.bucket.baseflow
+        assert (self.grid.var.baseflow >= 0).all()
+        self.grid.var.runoff = directRunoff + interflow + self.grid.var.baseflow

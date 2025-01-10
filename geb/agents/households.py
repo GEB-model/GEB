@@ -51,26 +51,26 @@ class Households(AgentBaseClass):
             self.spinup()
 
     def spinup(self):
-        self.bucket = self.model.store.create_bucket("agents.households")
+        self.var = self.model.store.create_bucket("agents.households.var")
 
         # Load buildings
-        self.bucket.buildings = gpd.read_file(
+        self.var.buildings = gpd.read_file(
             self.model.files["geoms"]["assets/buildings"]
         )
-        self.bucket.buildings["object_type"] = "building_structure"
-        self.bucket.buildings_centroid = gpd.GeoDataFrame(
-            geometry=self.bucket.buildings.centroid
+        self.var.buildings["object_type"] = "building_structure"
+        self.var.buildings_centroid = gpd.GeoDataFrame(
+            geometry=self.var.buildings.centroid
         )
-        self.bucket.buildings_centroid["object_type"] = "building_content"
+        self.var.buildings_centroid["object_type"] = "building_content"
 
         # Load roads
-        self.bucket.roads = gpd.read_file(
+        self.var.roads = gpd.read_file(
             self.model.files["geoms"]["assets/roads"]
         ).rename(columns={"highway": "object_type"})
 
         # Load rail
-        self.bucket.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
-        self.bucket.rail["object_type"] = "rail"
+        self.var.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
+        self.var.rail["object_type"] = "rail"
 
         # Load maximum damages
         with open(
@@ -79,12 +79,8 @@ class Households(AgentBaseClass):
             ],
             "r",
         ) as f:
-            self.bucket.max_dam_buildings_structure = float(
-                json.load(f)["maximum_damage"]
-            )
-        self.bucket.buildings["maximum_damage"] = (
-            self.bucket.max_dam_buildings_structure
-        )
+            self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
+        self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
 
         with open(
             self.model.files["dict"][
@@ -93,11 +89,11 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             max_dam_buildings_content = json.load(f)
-        self.bucket.max_dam_buildings_content = float(
+        self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
-        self.bucket.buildings_centroid["maximum_damage"] = (
-            self.bucket.max_dam_buildings_content
+        self.var.buildings_centroid["maximum_damage"] = (
+            self.var.max_dam_buildings_content
         )
 
         with open(
@@ -106,10 +102,10 @@ class Households(AgentBaseClass):
             ],
             "r",
         ) as f:
-            self.bucket.max_dam_rail = float(json.load(f)["maximum_damage"])
-        self.bucket.rail["maximum_damage"] = self.bucket.max_dam_rail
+            self.var.max_dam_rail = float(json.load(f)["maximum_damage"])
+        self.var.rail["maximum_damage"] = self.var.max_dam_rail
 
-        self.bucket.max_dam_road = {}
+        self.var.max_dam_road = {}
         road_types = [
             ("residential", "damage_parameters/flood/road/residential/maximum_damage"),
             (
@@ -139,10 +135,10 @@ class Households(AgentBaseClass):
         for road_type, path in road_types:
             with open(self.model.files["dict"][path], "r") as f:
                 max_damage = json.load(f)
-            self.bucket.max_dam_road[road_type] = max_damage["maximum_damage"]
+            self.var.max_dam_road[road_type] = max_damage["maximum_damage"]
 
-        self.bucket.roads["maximum_damage"] = self.bucket.roads["object_type"].map(
-            self.bucket.max_dam_road
+        self.var.roads["maximum_damage"] = self.var.roads["object_type"].map(
+            self.var.max_dam_road
         )
 
         with open(
@@ -151,7 +147,7 @@ class Households(AgentBaseClass):
             ],
             "r",
         ) as f:
-            self.bucket.max_dam_forest = float(json.load(f)["maximum_damage"])
+            self.var.max_dam_forest = float(json.load(f)["maximum_damage"])
 
         with open(
             self.model.files["dict"][
@@ -159,7 +155,7 @@ class Households(AgentBaseClass):
             ],
             "r",
         ) as f:
-            self.bucket.max_dam_agriculture = float(json.load(f)["maximum_damage"])
+            self.var.max_dam_agriculture = float(json.load(f)["maximum_damage"])
 
         # Load vulnerability curves
         road_curves = []
@@ -188,71 +184,67 @@ class Households(AgentBaseClass):
 
             road_curves.append(df[[road_type]])
 
-        self.bucket.road_curves = pd.concat([severity_column] + road_curves, axis=1)
-        self.bucket.road_curves.set_index("severity", inplace=True)
+        self.var.road_curves = pd.concat([severity_column] + road_curves, axis=1)
+        self.var.road_curves.set_index("severity", inplace=True)
 
-        self.bucket.forest_curve = pd.read_parquet(
+        self.var.forest_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/land_use/forest/curve"]
         )
-        self.bucket.forest_curve.set_index("severity", inplace=True)
-        self.bucket.forest_curve = self.bucket.forest_curve.rename(
+        self.var.forest_curve.set_index("severity", inplace=True)
+        self.var.forest_curve = self.var.forest_curve.rename(
             columns={"damage_ratio": "forest"}
         )
-        self.bucket.agriculture_curve = pd.read_parquet(
+        self.var.agriculture_curve = pd.read_parquet(
             self.model.files["table"][
                 "damage_parameters/flood/land_use/agriculture/curve"
             ]
         )
-        self.bucket.agriculture_curve.set_index("severity", inplace=True)
-        self.bucket.agriculture_curve = self.bucket.agriculture_curve.rename(
+        self.var.agriculture_curve.set_index("severity", inplace=True)
+        self.var.agriculture_curve = self.var.agriculture_curve.rename(
             columns={"damage_ratio": "agriculture"}
         )
 
-        self.bucket.buildings_structure_curve = pd.read_parquet(
+        self.var.buildings_structure_curve = pd.read_parquet(
             self.model.files["table"][
                 "damage_parameters/flood/buildings/structure/curve"
             ]
         )
-        self.bucket.buildings_structure_curve.set_index("severity", inplace=True)
-        self.bucket.buildings_structure_curve = (
-            self.bucket.buildings_structure_curve.rename(
-                columns={"damage_ratio": "building_structure"}
-            )
+        self.var.buildings_structure_curve.set_index("severity", inplace=True)
+        self.var.buildings_structure_curve = self.var.buildings_structure_curve.rename(
+            columns={"damage_ratio": "building_structure"}
         )
 
-        self.bucket.buildings_content_curve = pd.read_parquet(
+        self.var.buildings_content_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
         )
-        self.bucket.buildings_content_curve.set_index("severity", inplace=True)
-        self.bucket.buildings_content_curve = (
-            self.bucket.buildings_content_curve.rename(
-                columns={"damage_ratio": "building_content"}
-            )
+        self.var.buildings_content_curve.set_index("severity", inplace=True)
+        self.var.buildings_content_curve = self.var.buildings_content_curve.rename(
+            columns={"damage_ratio": "building_content"}
         )
 
-        self.bucket.rail_curve = pd.read_parquet(
+        self.var.rail_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
         )
-        self.bucket.rail_curve.set_index("severity", inplace=True)
-        self.bucket.rail_curve = self.bucket.rail_curve.rename(
+        self.var.rail_curve.set_index("severity", inplace=True)
+        self.var.rail_curve = self.var.rail_curve.rename(
             columns={"damage_ratio": "rail"}
         )
 
         super().__init__()
 
         water_demand, efficiency = self.update_water_demand()
-        self.bucket.current_water_demand = water_demand
-        self.bucket.current_efficiency = efficiency
+        self.var.current_water_demand = water_demand
+        self.var.current_efficiency = efficiency
 
         locations = np.load(self.model.files["binary"]["agents/households/locations"])[
             "data"
         ]
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
 
-        self.bucket.locations = DynamicArray(locations, max_n=self.max_n)
+        self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
         sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
-        self.bucket.sizes = DynamicArray(sizes, max_n=self.max_n)
+        self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
     def flood(self, flood_map, simulation_root, return_period=None):
         if return_period is not None:
@@ -264,21 +256,19 @@ class Households(AgentBaseClass):
         flood_map = rioxarray.open_rasterio(flood_path)
 
         agriculture = from_landuse_raster_to_polygon(
-            self.model.data.HRU.decompress(
-                self.model.data.HRU.bucket.land_owners != -1
-            ),
+            self.model.data.HRU.decompress(self.model.data.HRU.var.land_owners != -1),
             self.model.data.HRU.transform,
             self.model.crs,
         )
         agriculture["object_type"] = "agriculture"
-        agriculture["maximum_damage"] = self.bucket.max_dam_agriculture
+        agriculture["maximum_damage"] = self.var.max_dam_agriculture
 
         agriculture = agriculture.to_crs(flood_map.rio.crs)
 
         damages_agriculture = object_scanner(
             objects=agriculture,
             hazard=flood_map,
-            curves=self.bucket.agriculture_curve,
+            curves=self.var.agriculture_curve,
         )
         total_damages_agriculture = damages_agriculture.sum()
         print(f"damages to agriculture are: {total_damages_agriculture}")
@@ -286,54 +276,54 @@ class Households(AgentBaseClass):
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
             self.model.data.HRU.decompress(
-                self.model.data.HRU.bucket.land_use_type == FOREST
+                self.model.data.HRU.var.land_use_type == FOREST
             ),
             self.model.data.HRU.transform,
             self.model.crs,
         )
         forest["object_type"] = "forest"
-        forest["maximum_damage"] = self.bucket.max_dam_forest
+        forest["maximum_damage"] = self.var.max_dam_forest
 
         forest = forest.to_crs(flood_map.rio.crs)
 
         damages_forest = object_scanner(
-            objects=forest, hazard=flood_map, curves=self.bucket.forest_curve
+            objects=forest, hazard=flood_map, curves=self.var.forest_curve
         )
         total_damages_forest = damages_forest.sum()
         print(f"damages to forest are: {total_damages_forest}")
 
-        buildings = self.bucket.buildings.to_crs(flood_map.rio.crs)
+        buildings = self.var.buildings.to_crs(flood_map.rio.crs)
         damages_buildings_structure = object_scanner(
             objects=buildings,
             hazard=flood_map,
-            curves=self.bucket.buildings_structure_curve,
+            curves=self.var.buildings_structure_curve,
         )
         total_damage_structure = damages_buildings_structure.sum()
         print(f"damages to building structure are: {total_damage_structure}")
 
-        buildings_centroid = self.bucket.buildings_centroid.to_crs(flood_map.rio.crs)
+        buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
         damages_buildings_content = object_scanner(
             objects=buildings_centroid,
             hazard=flood_map,
-            curves=self.bucket.buildings_content_curve,
+            curves=self.var.buildings_content_curve,
         )
         total_damages_content = damages_buildings_content.sum()
         print(f"damages to building content are: { total_damages_content}")
 
-        roads = self.bucket.roads.to_crs(flood_map.rio.crs)
+        roads = self.var.roads.to_crs(flood_map.rio.crs)
         damages_roads = object_scanner(
             objects=roads,
             hazard=flood_map,
-            curves=self.bucket.road_curves,
+            curves=self.var.road_curves,
         )
         total_damages_roads = damages_roads.sum()
         print(f"damages to roads are: {total_damages_roads} ")
 
-        rail = self.bucket.rail.to_crs(flood_map.rio.crs)
+        rail = self.var.rail.to_crs(flood_map.rio.crs)
         damages_rail = object_scanner(
             objects=rail,
             hazard=flood_map,
-            curves=self.bucket.rail_curve,
+            curves=self.var.rail_curve,
         )
         total_damages_rail = damages_rail.sum()
         print(f"damages to rail are: {total_damages_rail}")
@@ -356,7 +346,7 @@ class Households(AgentBaseClass):
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """
-        downscale_mask = self.HRU.bucket.land_use_type != SEALED
+        downscale_mask = self.HRU.var.land_use_type != SEALED
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
         water_demand = (
             self.model.domestic_water_demand_ds.sel(
@@ -377,7 +367,7 @@ class Households(AgentBaseClass):
             self.model.data.grid.mask,
             self.model.data.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.bucket.land_use_ratio,
+            self.model.data.HRU.var.land_use_ratio,
         )
         water_demand = self.model.data.HRU.M3toM(water_demand)
 
@@ -400,7 +390,7 @@ class Households(AgentBaseClass):
             self.model.data.grid.mask,
             self.model.data.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.bucket.land_use_ratio,
+            self.model.data.HRU.var.land_use_ratio,
         )
         water_consumption = self.model.data.HRU.M3toM(water_consumption)
 
@@ -415,7 +405,7 @@ class Households(AgentBaseClass):
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()
-        self.bucket.last_water_demand_update = self.model.current_time
+        self.var.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
 
     def water_demand(self):
@@ -424,16 +414,16 @@ class Households(AgentBaseClass):
             in self.model.domestic_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
-            self.bucket.current_water_demand = water_demand
-            self.bucket.current_efficiency = efficiency
+            self.var.current_water_demand = water_demand
+            self.var.current_efficiency = efficiency
 
         assert (
-            self.model.current_time - self.bucket.last_water_demand_update
+            self.model.current_time - self.var.last_water_demand_update
         ).days < 366, (
             "Water demand has not been updated for over a year. "
             "Please check the household water demand datasets."
         )
-        return self.bucket.current_water_demand, self.bucket.current_efficiency
+        return self.var.current_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
         return None

@@ -95,9 +95,9 @@ class SnowFrost(object):
             self.spinup()
 
     def spinup(self):
-        self.bucket = self.model.store.create_bucket("snowfrost")
-        self.bucket.numberSnowLayers = 3  # default 3
-        self.HRU.bucket.glaciertransportZone = (
+        self.var = self.model.store.create_bucket("snowfrost.var")
+        self.var.numberSnowLayers = 3  # default 3
+        self.HRU.var.glaciertransportZone = (
             1.0  # default 1 -> highest zone is transported to middle zone
         )
 
@@ -150,10 +150,10 @@ class SnowFrost(object):
             ]
         )
 
-        # divNo = 1./float(self.bucket.numberSnowLayers)
-        # deltaNorm = np.linspace(divNo/2, 1-divNo/2, self.bucket.numberSnowLayers)
-        # self.HRU.bucket.deltaInvNorm = norm.ppf(deltaNorm)
-        self.HRU.bucket.deltaInvNorm = dn[self.bucket.numberSnowLayers]
+        # divNo = 1./float(self.var.numberSnowLayers)
+        # deltaNorm = np.linspace(divNo/2, 1-divNo/2, self.var.numberSnowLayers)
+        # self.HRU.var.deltaInvNorm = norm.ppf(deltaNorm)
+        self.HRU.var.deltaInvNorm = dn[self.var.numberSnowLayers]
 
         TemperatureLapseRate = 0.0065
 
@@ -162,35 +162,33 @@ class SnowFrost(object):
         )
         elevation_std = self.model.data.to_HRU(data=elevation_std, fn=None)
 
-        self.HRU.bucket.DeltaTSnow = elevation_std * TemperatureLapseRate
+        self.HRU.var.DeltaTSnow = elevation_std * TemperatureLapseRate
 
-        self.HRU.bucket.SnowDayDegrees = 0.9856
+        self.HRU.var.SnowDayDegrees = 0.9856
         # day of the year to degrees: 360/365.25 = 0.9856
-        self.HRU.bucket.summerSeasonStart = 165
-        # self.HRU.bucket.IceDayDegrees = 1.915
-        self.HRU.bucket.IceDayDegrees = 180.0 / (
-            259 - self.HRU.bucket.summerSeasonStart
-        )
+        self.HRU.var.summerSeasonStart = 165
+        # self.HRU.var.IceDayDegrees = 1.915
+        self.HRU.var.IceDayDegrees = 180.0 / (259 - self.HRU.var.summerSeasonStart)
         # days of summer (15th June-15th Sept.) to degree: 180/(259-165)
         SnowSeasonAdj = 0.001
-        self.HRU.bucket.SnowSeason = SnowSeasonAdj * 0.5
+        self.HRU.var.SnowSeason = SnowSeasonAdj * 0.5
         # default value of range  of seasonal melt factor is set to 0.001 m C-1 day-1
         # 0.5 x range of sinus function [-1,1]
-        self.HRU.bucket.TempSnow = 1.0
-        self.HRU.bucket.SnowFactor = 1.0
-        self.HRU.bucket.SnowMeltCoef = self.model.config["parameters"]["SnowMeltCoef"]
-        self.HRU.bucket.IceMeltCoef = 0.007
+        self.HRU.var.TempSnow = 1.0
+        self.HRU.var.SnowFactor = 1.0
+        self.HRU.var.SnowMeltCoef = self.model.config["parameters"]["SnowMeltCoef"]
+        self.HRU.var.IceMeltCoef = 0.007
 
-        self.HRU.bucket.TempMelt = 1.0
+        self.HRU.var.TempMelt = 1.0
 
         # initialize snowcovers as many as snow layers -> read them as SnowCover1 , SnowCover2 ...
         # SnowCover1 is the highest zone
-        self.HRU.bucket.SnowCoverS = np.tile(
+        self.HRU.var.SnowCoverS = np.tile(
             self.model.data.to_HRU(
                 data=self.grid.full_compressed(0, dtype=np.float32),
                 fn=None,
             ),
-            (self.bucket.numberSnowLayers, 1),
+            (self.var.numberSnowLayers, 1),
         )
         # Pixel-average initial snow cover: average of values in 3 elevation
         # zones
@@ -198,12 +196,12 @@ class SnowFrost(object):
         # ---------------------------------------------------------------------------------
         # Initial part of frost index
 
-        self.HRU.bucket.Afrost = 0.97
-        self.HRU.bucket.frost_indexThreshold = 56.0
-        self.HRU.bucket.SnowWaterEquivalent = 0.45
+        self.HRU.var.Afrost = 0.97
+        self.HRU.var.frost_indexThreshold = 56.0
+        self.HRU.var.SnowWaterEquivalent = 0.45
 
-        self.HRU.bucket.frost_index = self.HRU.full_compressed(0, dtype=np.float32)
-        self.HRU.bucket.extfrost_index = False
+        self.HRU.var.frost_index = self.HRU.full_compressed(0, dtype=np.float32)
+        self.HRU.var.extfrost_index = False
 
     def step(self):
         """
@@ -224,62 +222,60 @@ class SnowFrost(object):
             calculate sinus shape function for the southern hemisspere
         """
         if __debug__:
-            self.HRU.bucket.prevSnowCover = self.HRU.bucket.SnowCoverS.copy()
+            self.HRU.var.prevSnowCover = self.HRU.var.SnowCoverS.copy()
 
         day_of_year = self.model.current_time.timetuple().tm_yday
         SeasSnowMeltCoef = (
-            self.HRU.bucket.SnowSeason
-            * np.sin(math.radians((day_of_year - 81) * self.HRU.bucket.SnowDayDegrees))
-            + self.HRU.bucket.SnowMeltCoef
+            self.HRU.var.SnowSeason
+            * np.sin(math.radians((day_of_year - 81) * self.HRU.var.SnowDayDegrees))
+            + self.HRU.var.SnowMeltCoef
         )
 
         # sinus shaped function between the
         # annual minimum (December 21st) and annual maximum (June 21st)
         # TODO change this for the southern hemisspere
 
-        if (day_of_year > self.HRU.bucket.summerSeasonStart) and (day_of_year < 260):
+        if (day_of_year > self.HRU.var.summerSeasonStart) and (day_of_year < 260):
             SummerSeason = np.sin(
                 math.radians(
-                    (day_of_year - self.HRU.bucket.summerSeasonStart)
-                    * self.HRU.bucket.IceDayDegrees
+                    (day_of_year - self.HRU.var.summerSeasonStart)
+                    * self.HRU.var.IceDayDegrees
                 )
             )
         else:
             SummerSeason = 0.0
 
         Snow = self.HRU.full_compressed(0, dtype=np.float32)
-        self.HRU.bucket.Rain = self.HRU.full_compressed(0, dtype=np.float32)
-        self.HRU.bucket.SnowMelt = self.HRU.full_compressed(0, dtype=np.float32)
+        self.HRU.var.Rain = self.HRU.full_compressed(0, dtype=np.float32)
+        self.HRU.var.SnowMelt = self.HRU.full_compressed(0, dtype=np.float32)
 
         tas_C = self.HRU.tas - 273.15
-        self.HRU.bucket.precipitation_m_day = (
+        self.HRU.var.precipitation_m_day = (
             0.001 * 86400.0 * self.HRU.pr
         )  # kg/m2/s to m/day
 
-        for i in range(self.bucket.numberSnowLayers):
-            TavgS = tas_C + self.HRU.bucket.DeltaTSnow * self.HRU.bucket.deltaInvNorm[i]
+        for i in range(self.var.numberSnowLayers):
+            TavgS = tas_C + self.HRU.var.DeltaTSnow * self.HRU.var.deltaInvNorm[i]
             # Temperature at center of each zone (temperature at zone B equals Tavg)
             # i=0 -> highest zone
             # i=2 -> lower zone
             SnowS = np.where(
-                TavgS < self.HRU.bucket.TempSnow,
-                self.HRU.bucket.SnowFactor * self.HRU.bucket.precipitation_m_day,
+                TavgS < self.HRU.var.TempSnow,
+                self.HRU.var.SnowFactor * self.HRU.var.precipitation_m_day,
                 self.HRU.full_compressed(0, dtype=np.float32),
             )
             # Precipitation is assumed to be snow if daily average temperature is below TempSnow
             # Snow is multiplied by correction factor to account for undercatch of
             # snow precipitation (which is common)
             RainS = np.where(
-                TavgS >= self.HRU.bucket.TempSnow,
-                self.HRU.bucket.precipitation_m_day,
+                TavgS >= self.HRU.var.TempSnow,
+                self.HRU.var.precipitation_m_day,
                 self.HRU.full_compressed(0, dtype=np.float32),
             )
             # if it's snowing then no rain
             # snowmelt coeff in m/deg C/day
             SnowMeltS = (
-                (TavgS - self.HRU.bucket.TempMelt)
-                * SeasSnowMeltCoef
-                * (1 + 0.01 * RainS)
+                (TavgS - self.HRU.var.TempMelt) * SeasSnowMeltCoef * (1 + 0.01 * RainS)
             )
             SnowMeltS = np.maximum(
                 SnowMeltS, self.HRU.full_compressed(0, dtype=np.float32)
@@ -288,71 +284,67 @@ class SnowFrost(object):
             # for which layer the ice melt is calcultated with the middle temp.
             # for the others it is calculated with the corrected temp
             # this is to mimic glacier transport to lower zones
-            if i <= self.HRU.bucket.glaciertransportZone:
-                IceMeltS = tas_C * self.HRU.bucket.IceMeltCoef * SummerSeason
+            if i <= self.HRU.var.glaciertransportZone:
+                IceMeltS = tas_C * self.HRU.var.IceMeltCoef * SummerSeason
                 # if i = 0 and 1 -> higher and middle zone
                 # Ice melt coeff in m/C/deg
             else:
-                IceMeltS = TavgS * self.HRU.bucket.IceMeltCoef * SummerSeason
+                IceMeltS = TavgS * self.HRU.var.IceMeltCoef * SummerSeason
 
             IceMeltS = np.maximum(
                 IceMeltS, self.HRU.full_compressed(0, dtype=np.float32)
             )
             SnowMeltS = np.maximum(
-                np.minimum(SnowMeltS + IceMeltS, self.HRU.bucket.SnowCoverS[i]),
+                np.minimum(SnowMeltS + IceMeltS, self.HRU.var.SnowCoverS[i]),
                 self.HRU.full_compressed(0, dtype=np.float32),
             )
             # check if snow+ice not bigger than snowcover
-            self.HRU.bucket.SnowCoverS[i] = (
-                self.HRU.bucket.SnowCoverS[i] + SnowS - SnowMeltS
-            )
+            self.HRU.var.SnowCoverS[i] = self.HRU.var.SnowCoverS[i] + SnowS - SnowMeltS
             Snow += SnowS
-            self.HRU.bucket.Rain += RainS
-            self.HRU.bucket.SnowMelt += SnowMeltS
+            self.HRU.var.Rain += RainS
+            self.HRU.var.SnowMelt += SnowMeltS
 
-            if self.HRU.bucket.extfrost_index:
+            if self.HRU.var.extfrost_index:
                 Kfrost = np.where(TavgS < 0, 0.08, 0.5)
                 frost_indexChangeRate = -(
-                    1 - self.HRU.bucket.Afrost
-                ) * self.HRU.bucket.frost_indexS[i] - TavgS * np.exp(
+                    1 - self.HRU.var.Afrost
+                ) * self.HRU.var.frost_indexS[i] - TavgS * np.exp(
                     -0.4
                     * 100
                     * Kfrost
                     * np.minimum(
                         1.0,
-                        self.HRU.bucket.SnowCoverS[i]
-                        / self.HRU.bucket.SnowWaterEquivalent,
+                        self.HRU.var.SnowCoverS[i] / self.HRU.var.SnowWaterEquivalent,
                     )
                 )
-                self.HRU.bucket.frost_indexS[i] = np.maximum(
-                    self.HRU.bucket.frost_indexS[i] + frost_indexChangeRate, 0
+                self.HRU.var.frost_indexS[i] = np.maximum(
+                    self.HRU.var.frost_indexS[i] + frost_indexChangeRate, 0
                 )
 
-        self.HRU.bucket.Snow = Snow / self.bucket.numberSnowLayers
-        self.HRU.bucket.Rain /= self.bucket.numberSnowLayers
-        self.HRU.bucket.SnowMelt /= self.bucket.numberSnowLayers
+        self.HRU.var.Snow = Snow / self.var.numberSnowLayers
+        self.HRU.var.Rain /= self.var.numberSnowLayers
+        self.HRU.var.SnowMelt /= self.var.numberSnowLayers
 
         if __debug__:
             balance_check(
                 name="snow_1",
                 how="cellwise",
-                influxes=[self.HRU.bucket.Snow],
-                outfluxes=[self.HRU.bucket.SnowMelt],
+                influxes=[self.HRU.var.Snow],
+                outfluxes=[self.HRU.var.SnowMelt],
                 prestorages=[
-                    np.sum(self.HRU.bucket.prevSnowCover, axis=0)
-                    / self.bucket.numberSnowLayers
+                    np.sum(self.HRU.var.prevSnowCover, axis=0)
+                    / self.var.numberSnowLayers
                 ],
                 poststorages=[
-                    np.sum(self.HRU.bucket.SnowCoverS, axis=0)
-                    / self.bucket.numberSnowLayers
+                    np.sum(self.HRU.var.SnowCoverS, axis=0) / self.var.numberSnowLayers
                 ],
                 tollerance=1e-7,
             )
             balance_check(
                 name="snow_2",
                 how="cellwise",
-                influxes=[self.HRU.bucket.precipitation_m_day],
-                outfluxes=[self.HRU.bucket.Snow, self.HRU.bucket.Rain],
+                influxes=[self.HRU.var.precipitation_m_day],
+                outfluxes=[self.HRU.var.Snow, self.HRU.var.Rain],
                 tollerance=1e-7,
             )
 
@@ -369,21 +361,18 @@ class SnowFrost(object):
         # Kfrost, (snow depth reduction coefficient) is taken as 0.57 [1/cm], (HH, p. 7.28) -> from Molnau taken as 0.5 for t> 0 and 0.08 for T<0
         Kfrost = np.where(tas_C < 0, 0.08, 0.5).astype(tas_C.dtype)
         frost_indexChangeRate = -(
-            1 - self.HRU.bucket.Afrost
-        ) * self.HRU.bucket.frost_index - tas_C * np.exp(
+            1 - self.HRU.var.Afrost
+        ) * self.HRU.var.frost_index - tas_C * np.exp(
             -0.4
             * 100
             * Kfrost
             * np.minimum(
                 1.0,
-                (
-                    np.sum(self.HRU.bucket.SnowCoverS, axis=0)
-                    / self.bucket.numberSnowLayers
-                )
-                / self.HRU.bucket.SnowWaterEquivalent,
+                (np.sum(self.HRU.var.SnowCoverS, axis=0) / self.var.numberSnowLayers)
+                / self.HRU.var.SnowWaterEquivalent,
             )
         )
         # Rate of change of frost index (expressed as rate, [degree days/day])
-        self.HRU.bucket.frost_index = np.maximum(
-            self.HRU.bucket.frost_index + frost_indexChangeRate, 0
+        self.HRU.var.frost_index = np.maximum(
+            self.HRU.var.frost_index + frost_indexChangeRate, 0
         )

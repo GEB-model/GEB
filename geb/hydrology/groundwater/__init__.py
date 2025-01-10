@@ -34,17 +34,17 @@ class GroundWater:
 
     def spinup(self):
         # load hydraulic conductivity (md-1)
-        self.grid.bucket.hydraulic_conductivity = self.model.data.grid.load(
+        self.grid.var.hydraulic_conductivity = self.model.data.grid.load(
             self.model.files["grid"]["groundwater/hydraulic_conductivity"],
             layer=None,
         )
 
-        self.grid.bucket.specific_yield = self.model.data.grid.load(
+        self.grid.var.specific_yield = self.model.data.grid.load(
             self.model.files["grid"]["groundwater/specific_yield"],
             layer=None,
         )
 
-        self.grid.bucket.layer_boundary_elevation = self.model.data.grid.load(
+        self.grid.var.layer_boundary_elevation = self.model.data.grid.load(
             self.model.files["grid"]["groundwater/layer_boundary_elevation"],
             layer=None,
         )
@@ -53,21 +53,21 @@ class GroundWater:
         #     self.model.files["grid"]["groundwater/recession_coefficient"],
         # )
 
-        self.grid.bucket.elevation = self.model.data.grid.load(
+        self.grid.var.elevation = self.model.data.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation"]
         )
 
         assert (
-            self.grid.bucket.hydraulic_conductivity.shape
-            == self.grid.bucket.specific_yield.shape
+            self.grid.var.hydraulic_conductivity.shape
+            == self.grid.var.specific_yield.shape
         )
 
-        self.grid.bucket.channel_ratio = self.grid.load(
+        self.grid.var.channel_ratio = self.grid.load(
             self.model.files["grid"]["routing/kinematic/channel_ratio"]
         )
 
-        self.grid.bucket.leakageriver_factor = 0.001  # in m/day
-        self.grid.bucket.leakagelake_factor = 0.001  # in m/day
+        self.grid.var.leakageriver_factor = 0.001  # in m/day
+        self.grid.var.leakagelake_factor = 0.001  # in m/day
 
         self.initial_water_table_depth = 2
 
@@ -78,31 +78,31 @@ class GroundWater:
             heads = np.where(
                 ~np.isnan(heads),
                 heads,
-                self.grid.bucket.layer_boundary_elevation[1:] + 0.1,
+                self.grid.var.layer_boundary_elevation[1:] + 0.1,
             )
             heads = np.where(
-                heads > self.grid.bucket.layer_boundary_elevation[1:],
+                heads > self.grid.var.layer_boundary_elevation[1:],
                 heads,
-                self.grid.bucket.layer_boundary_elevation[1:] + 0.1,
+                self.grid.var.layer_boundary_elevation[1:] + 0.1,
             )
             return heads
 
-        self.grid.bucket.heads = get_initial_head()
+        self.grid.var.heads = get_initial_head()
 
-        self.grid.bucket.capillar = self.grid.full_compressed(0, dtype=np.float32)
+        self.grid.var.capillar = self.grid.full_compressed(0, dtype=np.float32)
 
     def initalize_modflow_model(self):
         self.modflow = ModFlowSimulation(
             self.model,
-            topography=self.grid.bucket.elevation,
+            topography=self.grid.var.elevation,
             gt=self.model.data.grid.gt,
             ndays=self.model.n_timesteps,
-            specific_storage=np.zeros_like(self.grid.bucket.specific_yield),
-            specific_yield=self.grid.bucket.specific_yield,
-            layer_boundary_elevation=self.grid.bucket.layer_boundary_elevation,
+            specific_storage=np.zeros_like(self.grid.var.specific_yield),
+            specific_yield=self.grid.var.specific_yield,
+            layer_boundary_elevation=self.grid.var.layer_boundary_elevation,
             basin_mask=self.model.data.grid.mask,
-            heads=self.grid.bucket.heads,
-            hydraulic_conductivity=self.grid.bucket.hydraulic_conductivity,
+            heads=self.grid.var.heads,
+            hydraulic_conductivity=self.grid.var.hydraulic_conductivity,
             verbose=False,
         )
 
@@ -134,15 +134,13 @@ class GroundWater:
             tollerance=100,  # 100 m3
         )
 
-        groundwater_drainage = self.modflow.drainage_m3 / self.grid.bucket.cellArea
+        groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cellArea
 
-        self.grid.bucket.capillar = groundwater_drainage * (
-            1 - self.grid.bucket.channel_ratio
+        self.grid.var.capillar = groundwater_drainage * (
+            1 - self.grid.var.channel_ratio
         )
-        self.grid.bucket.baseflow = (
-            groundwater_drainage * self.grid.bucket.channel_ratio
-        )
-        self.grid.bucket.heads = self.modflow.heads
+        self.grid.var.baseflow = groundwater_drainage * self.grid.var.channel_ratio
+        self.grid.var.heads = self.modflow.heads
 
         # capriseindex is 1 where capilary rise occurs
         self.model.data.HRU.capriseindex = self.model.data.to_HRU(

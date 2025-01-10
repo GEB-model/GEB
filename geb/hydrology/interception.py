@@ -69,10 +69,10 @@ class Interception(object):
             self.spinup()
 
     def spinup(self):
-        self.HRU.bucket.minInterceptCap = self.HRU.full_compressed(
+        self.HRU.var.minInterceptCap = self.HRU.full_compressed(
             np.nan, dtype=np.float32
         )
-        self.HRU.bucket.interceptStor = self.model.data.HRU.full_compressed(
+        self.HRU.var.interceptStor = self.model.data.HRU.full_compressed(
             0, dtype=np.float32
         )
 
@@ -86,15 +86,13 @@ class Interception(object):
         }
 
         for cover, minimum_intercept_capacity in minimum_intercept_capacity.items():
-            coverType_indices = np.where(self.HRU.bucket.land_use_type == cover)
-            self.HRU.bucket.minInterceptCap[coverType_indices] = (
-                minimum_intercept_capacity
-            )
+            coverType_indices = np.where(self.HRU.var.land_use_type == cover)
+            self.HRU.var.minInterceptCap[coverType_indices] = minimum_intercept_capacity
 
-        assert not np.isnan(self.HRU.bucket.interceptStor).any()
-        assert not np.isnan(self.HRU.bucket.minInterceptCap).any()
+        assert not np.isnan(self.HRU.var.interceptStor).any()
+        assert not np.isnan(self.HRU.var.minInterceptCap).any()
 
-        self.grid.bucket.interception = np.tile(
+        self.grid.var.interception = np.tile(
             self.grid.full_compressed(np.nan, dtype=np.float32),
             (len(ALL_LAND_COVER_TYPES), 37, 1),
         )
@@ -106,7 +104,7 @@ class Interception(object):
                 engine="zarr",
             )
 
-            self.grid.bucket.interception[cover] = self.grid.compress(
+            self.grid.var.interception[cover] = self.grid.compress(
                 ds[f"interceptCap{cover_name.title()}_10days"].values
             )
 
@@ -122,21 +120,21 @@ class Interception(object):
         """
 
         if __debug__:
-            interceptStor_pre = self.HRU.bucket.interceptStor.copy()
+            interceptStor_pre = self.HRU.var.interceptStor.copy()
 
         interceptCap = self.HRU.full_compressed(np.nan, dtype=np.float32)
         for cover in ALL_LAND_COVER_TYPES:
-            coverType_indices = np.where(self.HRU.bucket.land_use_type == cover)
+            coverType_indices = np.where(self.HRU.var.land_use_type == cover)
             if cover in (FOREST, GRASSLAND_LIKE):
                 interception_cover = self.model.data.to_HRU(
-                    data=self.grid.bucket.interception[cover][
+                    data=self.grid.var.interception[cover][
                         (self.model.current_day_of_year - 1) // 10
                     ],
                     fn=None,
                 )
                 interceptCap[coverType_indices] = interception_cover[coverType_indices]
             else:
-                interceptCap[coverType_indices] = self.HRU.bucket.minInterceptCap[
+                interceptCap[coverType_indices] = self.HRU.var.minInterceptCap[
                     coverType_indices
                 ]
 
@@ -145,74 +143,74 @@ class Interception(object):
         # Rain instead Pr, because snow is substracted later
         # assuming that all interception storage is used the other time step
         throughfall = np.maximum(
-            0.0, self.HRU.bucket.Rain + self.HRU.bucket.interceptStor - interceptCap
+            0.0, self.HRU.var.Rain + self.HRU.var.interceptStor - interceptCap
         )
 
         # update interception storage after throughfall
-        self.HRU.bucket.interceptStor = (
-            self.HRU.bucket.interceptStor + self.HRU.bucket.Rain - throughfall
+        self.HRU.var.interceptStor = (
+            self.HRU.var.interceptStor + self.HRU.var.Rain - throughfall
         )
 
         # availWaterInfiltration Available water for infiltration: throughfall + snow melt
-        self.HRU.bucket.natural_available_water_infiltration = np.maximum(
-            0.0, throughfall + self.HRU.bucket.SnowMelt
+        self.HRU.var.natural_available_water_infiltration = np.maximum(
+            0.0, throughfall + self.HRU.var.SnowMelt
         )
 
-        sealed_area = np.where(self.HRU.bucket.land_use_type == SEALED)
-        water_area = np.where(self.HRU.bucket.land_use_type == OPEN_WATER)
-        bio_area = np.where(self.HRU.bucket.land_use_type < SEALED)
+        sealed_area = np.where(self.HRU.var.land_use_type == SEALED)
+        water_area = np.where(self.HRU.var.land_use_type == OPEN_WATER)
+        bio_area = np.where(self.HRU.var.land_use_type < SEALED)
 
-        self.HRU.bucket.interception_evaporation = self.HRU.full_compressed(
+        self.HRU.var.interception_evaporation = self.HRU.full_compressed(
             np.nan, dtype=np.float32
         )
         # interception_evaporation evaporation from intercepted water (based on potential_transpiration)
-        self.HRU.bucket.interception_evaporation[bio_area] = np.minimum(
-            self.HRU.bucket.interceptStor[bio_area],
+        self.HRU.var.interception_evaporation[bio_area] = np.minimum(
+            self.HRU.var.interceptStor[bio_area],
             potential_transpiration[bio_area]
             * np.nan_to_num(
-                self.HRU.bucket.interceptStor[bio_area] / interceptCap[bio_area],
+                self.HRU.var.interceptStor[bio_area] / interceptCap[bio_area],
                 nan=0.0,
             )
             ** (2.0 / 3.0),
         )
 
-        self.HRU.bucket.interception_evaporation[sealed_area] = np.maximum(
+        self.HRU.var.interception_evaporation[sealed_area] = np.maximum(
             np.minimum(
-                self.HRU.bucket.interceptStor[sealed_area],
-                self.HRU.bucket.EWRef[sealed_area],
+                self.HRU.var.interceptStor[sealed_area],
+                self.HRU.var.EWRef[sealed_area],
             ),
             self.HRU.full_compressed(0, dtype=np.float32)[sealed_area],
         )
 
-        self.HRU.bucket.interception_evaporation[water_area] = (
+        self.HRU.var.interception_evaporation[water_area] = (
             0  # never interception for water
         )
 
         # update interception storage and potential_transpiration
-        self.HRU.bucket.interceptStor = (
-            self.HRU.bucket.interceptStor - self.HRU.bucket.interception_evaporation
+        self.HRU.var.interceptStor = (
+            self.HRU.var.interceptStor - self.HRU.var.interception_evaporation
         )
         potential_transpiration = np.maximum(
-            0, potential_transpiration - self.HRU.bucket.interception_evaporation
+            0, potential_transpiration - self.HRU.var.interception_evaporation
         )
 
         # update actual evaporation (after interception_evaporation)
         # interception_evaporation is the first flux in ET, soil evapo and transpiration are added later
-        self.HRU.bucket.actual_evapotranspiration = (
-            self.HRU.bucket.interception_evaporation + self.HRU.bucket.snowEvap
+        self.HRU.var.actual_evapotranspiration = (
+            self.HRU.var.interception_evaporation + self.HRU.var.snowEvap
         )
 
         if __debug__:
             balance_check(
                 name="interception",
                 how="cellwise",
-                influxes=[self.HRU.bucket.Rain, self.HRU.bucket.SnowMelt],  # In
+                influxes=[self.HRU.var.Rain, self.HRU.var.SnowMelt],  # In
                 outfluxes=[
-                    self.HRU.bucket.natural_available_water_infiltration,
-                    self.HRU.bucket.interception_evaporation,
+                    self.HRU.var.natural_available_water_infiltration,
+                    self.HRU.var.interception_evaporation,
                 ],  # Out
                 prestorages=[interceptStor_pre],  # prev storage
-                poststorages=[self.HRU.bucket.interceptStor],
+                poststorages=[self.HRU.var.interceptStor],
                 tollerance=1e-7,
             )
 

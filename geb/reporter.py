@@ -197,7 +197,7 @@ class hydrology_reporter(ABMReporter):
         Returns:
             decompressed_array: The decompressed array.
         """
-        return attrgetter(".".join(attr.split(".")[:-1]).replace(".bucket", ""))(
+        return attrgetter(".".join(attr.split(".")[:-1]).replace(".var", ""))(
             self.model
         ).decompress(array)
 

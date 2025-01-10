@@ -72,18 +72,18 @@ class Evaporation(object):
         )
 
         # calculate snow evaporation
-        self.HRU.bucket.snowEvap = np.minimum(
-            self.HRU.bucket.SnowMelt, potential_bare_soil_evaporation
+        self.HRU.var.snowEvap = np.minimum(
+            self.HRU.var.SnowMelt, potential_bare_soil_evaporation
         )
-        self.HRU.bucket.SnowMelt = self.HRU.bucket.SnowMelt - self.HRU.bucket.snowEvap
+        self.HRU.var.SnowMelt = self.HRU.var.SnowMelt - self.HRU.var.snowEvap
         potential_bare_soil_evaporation = (
-            potential_bare_soil_evaporation - self.HRU.bucket.snowEvap
+            potential_bare_soil_evaporation - self.HRU.var.snowEvap
         )
 
         # calculate potential ET
-        ##  self.HRU.bucket.potential_evapotranspiration total potential evapotranspiration for a reference crop for a land cover class [m]
+        ##  self.HRU.var.potential_evapotranspiration total potential evapotranspiration for a reference crop for a land cover class [m]
         potential_evapotranspiration = (
-            self.model.crop_factor_calibration_factor * self.HRU.bucket.cropKC * ETRef
+            self.model.crop_factor_calibration_factor * self.HRU.var.cropKC * ETRef
         )
 
         ## potential_transpiration: Transpiration for each land cover class
@@ -91,7 +91,7 @@ class Evaporation(object):
             0.0,
             potential_evapotranspiration
             - potential_bare_soil_evaporation
-            - self.HRU.bucket.snowEvap,
+            - self.HRU.var.snowEvap,
         )
 
         return (

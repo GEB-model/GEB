@@ -67,61 +67,61 @@ class ReservoirOperators(AgentBaseClass):
         super().__init__()
 
     def spinup(self):
-        self.bucket = self.model.store.create_bucket("agents.reservoir_operators")
+        self.var = self.model.store.create_bucket("agents.reservoir_operators.var")
 
     def set_reservoir_data(self, water_body_data):
         self.reservoirs = water_body_data[water_body_data["waterbody_type"] == 2].copy()
         assert (self.reservoirs["volume_total"] > 0).all()
-        self.bucket.active_reservoirs = self.reservoirs[
+        self.var.active_reservoirs = self.reservoirs[
             self.reservoirs["waterbody_type"] == 2
         ]
 
         np.save(
             self.model.report_folder / "active_reservoirs_waterBodyIDs.npy",
-            self.bucket.active_reservoirs.index.to_numpy(),
+            self.var.active_reservoirs.index.to_numpy(),
         )
 
-        self.bucket.reservoir_release_factors = DynamicArray(
+        self.var.reservoir_release_factors = DynamicArray(
             np.full(
-                len(self.bucket.active_reservoirs),
+                len(self.var.active_reservoirs),
                 self.model.config["agent_settings"]["reservoir_operators"][
                     "max_reservoir_release_factor"
                 ],
             )
         )
 
-        self.bucket.reservoir_volume = DynamicArray(
-            self.bucket.active_reservoirs["volume_total"].values
+        self.var.reservoir_volume = DynamicArray(
+            self.var.active_reservoirs["volume_total"].values
         )
-        self.bucket.flood_volume = DynamicArray(
-            self.bucket.active_reservoirs["volume_flood"].values
+        self.var.flood_volume = DynamicArray(
+            self.var.active_reservoirs["volume_flood"].values
         )
-        self.bucket.dis_avg = DynamicArray(
-            self.bucket.active_reservoirs["average_discharge"].values
+        self.var.dis_avg = DynamicArray(
+            self.var.active_reservoirs["average_discharge"].values
         )
-        self.bucket.norm_limit_ratio = DynamicArray(
-            self.bucket.flood_volume / self.bucket.reservoir_volume
+        self.var.norm_limit_ratio = DynamicArray(
+            self.var.flood_volume / self.var.reservoir_volume
         )
-        self.bucket.cons_limit_ratio = DynamicArray(
-            np.full(len(self.bucket.active_reservoirs), 0.02, dtype=np.float32)
+        self.var.cons_limit_ratio = DynamicArray(
+            np.full(len(self.var.active_reservoirs), 0.02, dtype=np.float32)
         )
-        self.bucket.flood_limit_ratio = DynamicArray(
-            np.full(len(self.bucket.active_reservoirs), 1.0, dtype=np.float32)
+        self.var.flood_limit_ratio = DynamicArray(
+            np.full(len(self.var.active_reservoirs), 1.0, dtype=np.float32)
         )
 
-        self.bucket.minQC = DynamicArray(
+        self.var.minQC = DynamicArray(
             self.model.config["agent_settings"]["reservoir_operators"]["MinOutflowQ"]
-            * self.bucket.dis_avg
+            * self.var.dis_avg
         )
-        self.bucket.normQC = DynamicArray(
+        self.var.normQC = DynamicArray(
             self.model.config["agent_settings"]["reservoir_operators"]["NormalOutflowQ"]
-            * self.bucket.dis_avg
+            * self.var.dis_avg
         )
-        self.bucket.nondmgQC = DynamicArray(
+        self.var.nondmgQC = DynamicArray(
             self.model.config["agent_settings"]["reservoir_operators"][
                 "NonDamagingOutflowQ"
             ]
-            * self.bucket.dis_avg
+            * self.var.dis_avg
         )
 
     def regulate_reservoir_outflow(self, reservoirStorageM3, inflow, waterBodyIDs):
@@ -139,9 +139,7 @@ class ReservoirOperators(AgentBaseClass):
         """
         assert reservoirStorageM3.size == inflow.size == waterBodyIDs.size
         # assert that the reservoir IDs match the active reservoirs
-        assert np.array_equal(
-            waterBodyIDs, self.bucket.active_reservoirs.index.to_numpy()
-        )
+        assert np.array_equal(waterBodyIDs, self.var.active_reservoirs.index.to_numpy())
 
         # make outflow same as inflow for a setting without a reservoir
         if "ruleset" in self.config and self.config["ruleset"] == "no-human-influence":
@@ -149,21 +147,21 @@ class ReservoirOperators(AgentBaseClass):
 
         reservoir_outflow = regulate_reservoir_outflow(
             reservoirStorageM3,
-            self.bucket.reservoir_volume.data,
+            self.var.reservoir_volume.data,
             inflow,
-            self.bucket.minQC.data,
-            self.bucket.normQC.data,
-            self.bucket.nondmgQC.data,
-            self.bucket.cons_limit_ratio.data,
-            self.bucket.norm_limit_ratio.data,
-            self.bucket.flood_limit_ratio.data,
+            self.var.minQC.data,
+            self.var.normQC.data,
+            self.var.nondmgQC.data,
+            self.var.cons_limit_ratio.data,
+            self.var.norm_limit_ratio.data,
+            self.var.flood_limit_ratio.data,
         )
         assert (reservoir_outflow >= 0).all()
 
         return reservoir_outflow
 
     def get_available_water_reservoir_command_areas(self, reservoir_storage_m3):
-        return self.bucket.reservoir_release_factors * reservoir_storage_m3
+        return self.var.reservoir_release_factors * reservoir_storage_m3
 
     def step(self) -> None:
         return None

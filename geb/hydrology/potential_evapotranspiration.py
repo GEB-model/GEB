@@ -200,7 +200,7 @@ class PotentialEvapotranspiration(object):
         Dynamic part of the potential evaporation module
         Based on Penman Monteith - FAO 56
         """
-        self.HRU.bucket.ETRef, self.HRU.bucket.EWRef = PET(
+        self.HRU.var.ETRef, self.HRU.var.EWRef = PET(
             tas=self.HRU.tas,
             tasmin=self.HRU.tasmin,
             tasmax=self.HRU.tasmax,
@@ -211,7 +211,7 @@ class PotentialEvapotranspiration(object):
             sfcWind=self.HRU.sfcWind,
         )
 
-        assert self.HRU.bucket.ETRef.dtype == np.float32
-        assert self.HRU.bucket.EWRef.dtype == np.float32
+        assert self.HRU.var.ETRef.dtype == np.float32
+        assert self.HRU.var.EWRef.dtype == np.float32
 
         self.model.agents.crop_farmers.save_water_deficit()

@@ -102,10 +102,10 @@ class LandCover(object):
             self.spinup()
 
     def spinup(self):
-        self.bucket = self.model.store.create_bucket("landcover")
-        self.HRU.bucket.capriseindex = self.HRU.full_compressed(0, dtype=np.float32)
+        self.var = self.model.store.create_bucket("landcover.var")
+        self.HRU.var.capriseindex = self.HRU.full_compressed(0, dtype=np.float32)
 
-        self.grid.bucket.forest_kc_per_10_days = xr.open_dataset(
+        self.grid.var.forest_kc_per_10_days = xr.open_dataset(
             self.model.files["forcing"][
                 "landcover/forest/cropCoefficientForest_10days"
             ],
@@ -116,10 +116,10 @@ class LandCover(object):
         """computing leakage from rivers"""
         riverbedExchangeM3 = (
             self.model.data.grid.leakageriver_factor
-            * self.HRU.bucket.cellArea
-            * ((1 - self.HRU.bucket.capriseindex + 0.25) // 1)
+            * self.HRU.var.cellArea
+            * ((1 - self.HRU.var.capriseindex + 0.25) // 1)
         )
-        riverbedExchangeM3[self.HRU.bucket.land_use_type != OPEN_WATER] = 0
+        riverbedExchangeM3[self.HRU.var.land_use_type != OPEN_WATER] = 0
         riverbedExchangeM3 = self.model.data.to_grid(
             HRU_data=riverbedExchangeM3, fn="sum"
         )
@@ -210,9 +210,9 @@ class LandCover(object):
 
         # leakage depends on water bodies storage, water bodies fraction and modflow saturated area
         lakebedExchangeM = self.model.data.grid.leakagelake_factor * (
-            (1 - self.HRU.bucket.capriseindex + 0.25) // 1
+            (1 - self.HRU.var.capriseindex + 0.25) // 1
         )
-        lakebedExchangeM[self.HRU.bucket.land_use_type != OPEN_WATER] = 0
+        lakebedExchangeM[self.HRU.var.land_use_type != OPEN_WATER] = 0
         lakebedExchangeM = self.model.data.to_grid(HRU_data=lakebedExchangeM, fn="sum")
         lakebedExchangeM = np.minimum(lakebedExchangeM, minlake)
 
@@ -256,7 +256,7 @@ class LandCover(object):
             * self.model.data.grid.MtoM3C
         )
 
-        # substract from both, because it is sorted by self.HRU.bucket.waterBodyTypCTemp
+        # substract from both, because it is sorted by self.HRU.var.waterBodyTypCTemp
         self.model.data.grid.lakeStorageC = (
             self.model.data.grid.lakeStorageC - lakeExchangeM3
         )
@@ -291,83 +291,78 @@ class LandCover(object):
         timer = TimingModule("Landcover")
 
         if __debug__:
-            interceptStor_pre = self.HRU.bucket.interceptStor.copy()
-            w_pre = self.HRU.bucket.w.copy()
-            topwater_pre = self.HRU.bucket.topwater.copy()
+            interceptStor_pre = self.HRU.var.interceptStor.copy()
+            w_pre = self.HRU.var.w.copy()
+            topwater_pre = self.HRU.var.topwater.copy()
 
         crop_stage_lenghts = np.column_stack(
             [
-                self.crop_farmers.bucket.crop_data["l_ini"],
-                self.crop_farmers.bucket.crop_data["l_dev"],
-                self.crop_farmers.bucket.crop_data["l_mid"],
-                self.crop_farmers.bucket.crop_data["l_late"],
+                self.crop_farmers.var.crop_data["l_ini"],
+                self.crop_farmers.var.crop_data["l_dev"],
+                self.crop_farmers.var.crop_data["l_mid"],
+                self.crop_farmers.var.crop_data["l_late"],
             ]
         )
 
         crop_factors = np.column_stack(
             [
-                self.crop_farmers.bucket.crop_data["kc_initial"],
-                self.crop_farmers.bucket.crop_data["kc_mid"],
-                self.crop_farmers.bucket.crop_data["kc_end"],
+                self.crop_farmers.var.crop_data["kc_initial"],
+                self.crop_farmers.var.crop_data["kc_mid"],
+                self.crop_farmers.var.crop_data["kc_end"],
             ]
         )
 
         root_depths = np.column_stack(
             [
-                self.crop_farmers.bucket.crop_data["rd_rain"],
-                self.crop_farmers.bucket.crop_data["rd_irr"],
+                self.crop_farmers.var.crop_data["rd_rain"],
+                self.crop_farmers.var.crop_data["rd_irr"],
             ]
         )
 
-        self.HRU.bucket.cropKC, self.HRU.bucket.root_depth = (
-            get_crop_kc_and_root_depths(
-                self.HRU.bucket.crop_map,
-                self.HRU.bucket.crop_age_days_map,
-                self.HRU.bucket.crop_harvest_age_days,
-                irrigated_fields=self.model.agents.crop_farmers.irrigated_fields,
-                crop_stage_data=crop_stage_lenghts,
-                kc_crop_stage=crop_factors,
-                rooth_depths=root_depths,
-                init_root_depth=0.01,
-            )
+        self.HRU.var.cropKC, self.HRU.var.root_depth = get_crop_kc_and_root_depths(
+            self.HRU.var.crop_map,
+            self.HRU.var.crop_age_days_map,
+            self.HRU.var.crop_harvest_age_days,
+            irrigated_fields=self.model.agents.crop_farmers.irrigated_fields,
+            crop_stage_data=crop_stage_lenghts,
+            kc_crop_stage=crop_factors,
+            rooth_depths=root_depths,
+            init_root_depth=0.01,
         )
 
-        self.HRU.bucket.root_depth[self.HRU.bucket.land_use_type == FOREST] = (
-            2.0  # forest
-        )
-        self.HRU.bucket.root_depth[
-            (self.HRU.bucket.land_use_type == GRASSLAND_LIKE)
-            & (self.HRU.bucket.land_owners == -1)
+        self.HRU.var.root_depth[self.HRU.var.land_use_type == FOREST] = 2.0  # forest
+        self.HRU.var.root_depth[
+            (self.HRU.var.land_use_type == GRASSLAND_LIKE)
+            & (self.HRU.var.land_owners == -1)
         ] = 0.1  # grassland
-        self.HRU.bucket.root_depth[
-            (self.HRU.bucket.land_use_type == GRASSLAND_LIKE)
-            & (self.HRU.bucket.land_owners != -1)
+        self.HRU.var.root_depth[
+            (self.HRU.var.land_use_type == GRASSLAND_LIKE)
+            & (self.HRU.var.land_owners != -1)
         ] = 0.05  # fallow land. The rooting depth
 
         forest_cropCoefficientNC = self.model.data.to_HRU(
             data=self.model.data.grid.compress(
-                self.grid.bucket.forest_kc_per_10_days[
+                self.grid.var.forest_kc_per_10_days[
                     (self.model.current_day_of_year - 1) // 10
                 ]
             ),
             fn=None,
         )
 
-        self.HRU.bucket.cropKC[self.HRU.bucket.land_use_type == FOREST] = (
-            forest_cropCoefficientNC[self.HRU.bucket.land_use_type == FOREST]
+        self.HRU.var.cropKC[self.HRU.var.land_use_type == FOREST] = (
+            forest_cropCoefficientNC[self.HRU.var.land_use_type == FOREST]
         )  # forest
         assert (
-            self.HRU.bucket.crop_map[self.HRU.bucket.land_use_type == GRASSLAND_LIKE]
-            == -1
+            self.HRU.var.crop_map[self.HRU.var.land_use_type == GRASSLAND_LIKE] == -1
         ).all()
 
-        self.HRU.bucket.cropKC[self.HRU.bucket.land_use_type == GRASSLAND_LIKE] = 0.2
+        self.HRU.var.cropKC[self.HRU.var.land_use_type == GRASSLAND_LIKE] = 0.2
 
         (
             potential_transpiration,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
-        ) = self.model.evaporation.step(self.HRU.bucket.ETRef)
+        ) = self.model.evaporation.step(self.HRU.var.ETRef)
 
         timer.new_split("PET")
 
@@ -388,7 +383,7 @@ class LandCover(object):
 
         # Soil for forest, grassland, and irrigated land
         capillar = self.model.data.to_HRU(
-            data=self.model.data.grid.bucket.capillar, fn=None
+            data=self.model.data.grid.var.capillar, fn=None
         )
 
         (
@@ -414,15 +409,15 @@ class LandCover(object):
 
         timer.new_split("Sealed")
 
-        self.HRU.bucket.actual_evapotranspiration_crop_life[
-            self.HRU.bucket.crop_map != -1
+        self.HRU.var.actual_evapotranspiration_crop_life[
+            self.HRU.var.crop_map != -1
         ] += np.minimum(
-            self.HRU.bucket.actual_evapotranspiration[self.HRU.bucket.crop_map != -1],
-            potential_evapotranspiration[self.HRU.bucket.crop_map != -1],
+            self.HRU.var.actual_evapotranspiration[self.HRU.var.crop_map != -1],
+            potential_evapotranspiration[self.HRU.var.crop_map != -1],
         )
-        self.HRU.bucket.potential_evapotranspiration_crop_life[
-            self.HRU.bucket.crop_map != -1
-        ] += potential_evapotranspiration[self.HRU.bucket.crop_map != -1]
+        self.HRU.var.potential_evapotranspiration_crop_life[
+            self.HRU.var.crop_map != -1
+        ] += potential_evapotranspiration[self.HRU.var.crop_map != -1]
 
         assert not (directRunoff < 0).any()
         assert not np.isnan(interflow).any()
@@ -432,11 +427,11 @@ class LandCover(object):
         assert not np.isnan(open_water_evaporation).any()
 
         total_evapotranspiration = (
-            self.HRU.bucket.actual_evapotranspiration
+            self.HRU.var.actual_evapotranspiration
             + actual_bare_soil_evaporation
             + open_water_evaporation
-            + self.HRU.bucket.interception_evaporation
-            + self.HRU.bucket.snowEvap  # ice should be included in the future
+            + self.HRU.var.interception_evaporation
+            + self.HRU.var.snowEvap  # ice should be included in the future
             + irrigation_loss_to_evaporation_m
         )
 
@@ -449,13 +444,13 @@ class LandCover(object):
             balance_check(
                 name="landcover_1",
                 how="cellwise",
-                influxes=[self.HRU.bucket.Rain, self.HRU.bucket.SnowMelt],
+                influxes=[self.HRU.var.Rain, self.HRU.var.SnowMelt],
                 outfluxes=[
-                    self.HRU.bucket.natural_available_water_infiltration,
-                    self.HRU.bucket.interception_evaporation,
+                    self.HRU.var.natural_available_water_infiltration,
+                    self.HRU.var.interception_evaporation,
                 ],
                 prestorages=[interceptStor_pre],
-                poststorages=[self.HRU.bucket.interceptStor],
+                poststorages=[self.HRU.var.interceptStor],
                 tollerance=1e-6,
             )
 
@@ -463,9 +458,9 @@ class LandCover(object):
                 name="landcover_2",
                 how="cellwise",
                 influxes=[
-                    self.HRU.bucket.natural_available_water_infiltration,
+                    self.HRU.var.natural_available_water_infiltration,
                     capillar,
-                    self.HRU.bucket.actual_irrigation_consumption,
+                    self.HRU.var.actual_irrigation_consumption,
                 ],
                 outfluxes=[
                     directRunoff,
@@ -477,22 +472,22 @@ class LandCover(object):
                 ],
                 prestorages=[w_pre.sum(axis=0), topwater_pre],
                 poststorages=[
-                    self.HRU.bucket.w.sum(axis=0),
-                    self.HRU.bucket.topwater,
+                    self.HRU.var.w.sum(axis=0),
+                    self.HRU.var.topwater,
                 ],
                 tollerance=1e-6,
             )
 
             totalstorage_landcover = (
-                np.sum(self.HRU.bucket.SnowCoverS, axis=0)
-                / self.model.snowfrost.bucket.numberSnowLayers
-                + self.HRU.bucket.interceptStor
-                + self.HRU.bucket.w.sum(axis=0)
-                + self.HRU.bucket.topwater
+                np.sum(self.HRU.var.SnowCoverS, axis=0)
+                / self.model.snowfrost.var.numberSnowLayers
+                + self.HRU.var.interceptStor
+                + self.HRU.var.w.sum(axis=0)
+                + self.HRU.var.topwater
             )
             totalstorage_landcover_pre = (
-                np.sum(self.HRU.bucket.prevSnowCover, axis=0)
-                / self.model.snowfrost.bucket.numberSnowLayers
+                np.sum(self.HRU.var.prevSnowCover, axis=0)
+                / self.model.snowfrost.var.numberSnowLayers
                 + w_pre.sum(axis=0)
                 + topwater_pre
                 + interceptStor_pre
@@ -502,8 +497,8 @@ class LandCover(object):
                 name="landcover_3",
                 how="cellwise",
                 influxes=[
-                    self.HRU.bucket.precipitation_m_day,
-                    self.HRU.bucket.actual_irrigation_consumption,
+                    self.HRU.var.precipitation_m_day,
+                    self.HRU.var.actual_irrigation_consumption,
                     capillar,
                 ],
                 outfluxes=[
@@ -513,8 +508,8 @@ class LandCover(object):
                     actual_total_transpiration,
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
-                    self.HRU.bucket.interception_evaporation,
-                    self.HRU.bucket.snowEvap,
+                    self.HRU.var.interception_evaporation,
+                    self.HRU.var.snowEvap,
                 ],
                 prestorages=[totalstorage_landcover_pre],
                 poststorages=[totalstorage_landcover],
@@ -525,7 +520,7 @@ class LandCover(object):
                 name="landcover_4",
                 how="cellwise",
                 influxes=[
-                    self.HRU.bucket.precipitation_m_day,
+                    self.HRU.var.precipitation_m_day,
                     capillar,
                 ],
                 outfluxes=[

@@ -453,7 +453,7 @@ class SFINCS:
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
-            self.model.data.grid.bucket.discharge_substep
+            self.model.data.grid.var.discharge_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
     @property

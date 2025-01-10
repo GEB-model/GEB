@@ -30,13 +30,13 @@ class Industry(AgentBaseClass):
             self.spinup()
 
     def spinup(self) -> None:
-        self.bucket = self.model.store.create_bucket("agents.industry")
+        self.var = self.model.store.create_bucket("agents.industry.var")
         water_demand, efficiency = self.update_water_demand()
-        self.bucket.current_water_demand = water_demand
-        self.bucket.current_efficiency = efficiency
+        self.var.current_water_demand = water_demand
+        self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        downscale_mask = self.HRU.bucket.land_use_type != SEALED
+        downscale_mask = self.HRU.var.land_use_type != SEALED
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         water_demand = (
@@ -58,7 +58,7 @@ class Industry(AgentBaseClass):
             self.model.data.grid.mask,
             self.model.data.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.HRU.bucket.land_use_ratio,
+            self.HRU.var.land_use_ratio,
         )
         water_demand = self.HRU.M3toM(water_demand)
 
@@ -81,7 +81,7 @@ class Industry(AgentBaseClass):
             self.model.data.grid.mask,
             self.model.data.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.HRU.bucket.land_use_ratio,
+            self.HRU.var.land_use_ratio,
         )
 
         water_consumption = self.HRU.M3toM(water_consumption)
@@ -97,7 +97,7 @@ class Industry(AgentBaseClass):
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()
-        self.bucket.last_water_demand_update = self.model.current_time
+        self.var.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
 
     def water_demand(self):
@@ -106,16 +106,16 @@ class Industry(AgentBaseClass):
             in self.model.industry_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
-            self.bucket.current_water_demand = water_demand
-            self.bucket.current_efficiency = efficiency
+            self.var.current_water_demand = water_demand
+            self.var.current_efficiency = efficiency
 
         assert (
-            self.model.current_time - self.bucket.last_water_demand_update
+            self.model.current_time - self.var.last_water_demand_update
         ).days < 366, (
             "Water demand has not been updated for over a year. "
             "Please check the industry water demand datasets."
         )
-        return self.bucket.current_water_demand, self.bucket.current_efficiency
+        return self.var.current_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
         """This function is run each timestep."""
