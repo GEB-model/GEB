@@ -4,18 +4,13 @@ import geopandas as gpd
 from typing import Union
 from time import time
 import copy
-import numpy as np
 import warnings
-
-try:
-    import cupy as cp
-except ImportError:
-    pass
 
 from honeybees.library.helpers import timeprint
 from honeybees.area import Area
 from honeybees.model import Model as ABM_Model
 
+from geb.store import Store
 from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
@@ -56,7 +51,6 @@ class ABM(ABM_Model):
 
         self.area = Area(self, study_area)
         self.agents = Agents(self)
-        self.artists = Artists(self)
 
         # This variable is required for the batch runner. To stop the model
         # if some condition is met set running to False.
@@ -85,8 +79,6 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         files: dict,
         spinup: bool = False,
         crs=4326,
-        use_gpu: bool = False,
-        gpu_device=0,
         timing=False,
         mode="w",
     ):
@@ -96,10 +88,6 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         self.mode = mode
 
         self.spinup = spinup
-        self.use_gpu = use_gpu
-        if self.use_gpu:
-            cp.cuda.Device(gpu_device).use()
-
         self.config = self.setup_config(config)
 
         if "simulate_hydrology" not in self.config["general"]:
@@ -118,7 +106,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             for key, value in data.items():
                 data[key] = Path(config["general"]["input_folder"]) / value
 
-        if spinup is True:
+        if spinup:
             self.run_name = "spinup"
         elif "name" in self.config["general"]:
             self.run_name = self.config["general"]["name"]
@@ -126,20 +114,18 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             print('No "name" specified in config file under general. Using "default".')
             self.run_name = "default"
 
+        self.store = Store(self)
+
         self.report_folder = (
             Path(self.config["general"]["report_folder"]) / self.run_name
         )
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
-        self.initial_conditions_folder = Path(
-            self.config["general"]["initial_conditions_folder"]
-        )
-
         self.spinup_start = datetime.datetime.combine(
             self.config["general"]["spinup_time"], datetime.time(0)
         )
 
-        if self.spinup is True:
+        if self.spinup:
             end_time = datetime.datetime.combine(
                 self.config["general"]["start_time"], datetime.time(0)
             )
@@ -150,24 +136,13 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                 print(
                     "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
                 )
-
-            self.load_initial_data = False
-            self.save_initial_data = self.config["general"]["export_inital_on_spinup"]
         else:
-            # check if spinup has been executed before
-            if not self.initial_conditions_folder.exists():
-                raise FileNotFoundError(
-                    f"The initial conditions folder ({self.initial_conditions_folder.resolve()}) does not exist. Spinup is required before running the model, and will make the 'initial' folder. Please run the spinup first."
-                )
-
             current_time = datetime.datetime.combine(
                 self.config["general"]["start_time"], datetime.time(0)
             )
             end_time = datetime.datetime.combine(
                 self.config["general"]["end_time"], datetime.time(0)
             )
-            self.load_initial_data = True
-            self.save_initial_data = False
 
         assert isinstance(end_time, datetime.datetime)
         assert isinstance(current_time, datetime.datetime)
@@ -197,26 +172,11 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                     self,
                 )
 
-            self.reporter = Reporter(self)
+        if not self.spinup:
+            self.store.load()
 
-            np.savez_compressed(
-                Path(self.reporter.abm_reporter.export_folder, "land_owners.npz"),
-                data=self.data.HRU.land_owners,
-            )
-            np.savez_compressed(
-                Path(
-                    self.reporter.abm_reporter.export_folder, "unmerged_HRU_indices.npz"
-                ),
-                data=self.data.HRU.unmerged_HRU_indices,
-            )
-            np.savez_compressed(
-                Path(self.reporter.abm_reporter.export_folder, "scaling.npz"),
-                data=self.data.HRU.scaling,
-            )
-            np.savez_compressed(
-                Path(self.reporter.abm_reporter.export_folder, "activation_order.npz"),
-                data=self.agents.crop_farmers.activation_order_by_elevation,
-            )
+        self.reporter = Reporter(self)
+        self.artists = Artists(self)
 
     def step(self, step_size: Union[int, str] = 1) -> None:
         """
@@ -249,9 +209,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         for _ in range(self.n_timesteps):
             self.step()
 
-        if self.save_initial_data:
-            self.data.save_state()
-            self.agents.save_state()
+        if self.spinup:
+            self.store.save()
 
         print("Model run finished")
 
@@ -272,6 +231,17 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             simulation_root: Path of the simulation root.
         """
         folder = Path("simulation_root") / self.run_name
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def simulation_root_spinup(self) -> Path:
+        """Gets the simulation root of the spinup.
+
+        Returns:
+            simulation_root: Path of the simulation root.
+        """
+        folder = Path("simulation_root") / "spinup"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 

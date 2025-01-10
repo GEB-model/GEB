@@ -401,9 +401,7 @@ def run_model(individual, config, gauges, observed_streamflow):
 			template['general']['export_inital_on_spinup'] = True
 		
 			template['general']['report_folder'] = run_directory
-			template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial')
-			
-
+	
 			# Update the template configuration file with the individual's parameters
 			template['general']['spinup_time'] = config['calibration']['spinup_time']
 			template['general']['start_time'] = config['calibration']['start_time']
@@ -422,17 +420,6 @@ def run_model(individual, config, gauges, observed_streamflow):
 			with open(config_path, 'w') as f:
 				yaml.dump(template, f)
 
-			# acquire lock to check and set GPU usage
-			lock.acquire()
-			if current_gpu_use_count.value < n_gpu_spots:
-				use_gpu = int(current_gpu_use_count.value / config['calibration']['DEAP']['models_per_gpu'])
-				current_gpu_use_count.value += 1
-				print(f'Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
-			else:
-				use_gpu = False
-				print(f'Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
-			lock.release()
-
 			def run_model_scenario(run_command):
 				# Set the correct geb command run path 
 				# geb_path = '/scistor/ivm/mka483/miniconda3/envs/geb_p2/bin/geb'
@@ -441,8 +428,6 @@ def run_model(individual, config, gauges, observed_streamflow):
 				command = [sys.executable, os.environ.get('GEB_PACKAGE_DIR') + '/geb/cli.py', run_command, '--config', config_path]
 				# build the command to run the script, including the use of a GPU if specified
 				
-				if use_gpu is not False:
-					command.extend(["--GPU", "--gpu_device", use_gpu])
 				print(command, flush=True)
 
 				# run the command and capture the output and errors
@@ -473,22 +458,9 @@ def run_model(individual, config, gauges, observed_streamflow):
 			if return_code == 0:
 				return_code = run_model_scenario("run")
 				if return_code == 0:
-					# release the GPU if it was used
-					if use_gpu is not False:
-						lock.acquire()
-						current_gpu_use_count.value -= 1
-						lock.release()
-						print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 					with open(os.path.join(run_directory, 'done.txt'), 'w') as f:
 						f.write('done')
 					break
-
-			# release the GPU if it was used
-			if use_gpu is not False:
-				lock.acquire()
-				current_gpu_use_count.value -= 1
-				lock.release()
-				print(f'Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}')
 
 	scores = []
 	for score in config['calibration']['calibration_targets']:

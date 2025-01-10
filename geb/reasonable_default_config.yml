@@ -9,7 +9,6 @@ general:
   original_data: ../../../original_data/
   preprocessing_folder: preprocessing/
   report_folder: report/
-  initial_conditions_folder: initial/
   init_water_table: report/init/water_table.npy
   name: default
   export_inital_on_spinup: true

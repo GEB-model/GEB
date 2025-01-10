@@ -5,12 +5,7 @@ import numpy as np
 import re
 from operator import attrgetter
 
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
-
-from geb.agents.general import AgentArray
+from geb.store import DynamicArray
 
 
 class Artists(honeybeesArtists):
@@ -146,21 +141,21 @@ class Artists(honeybeesArtists):
         add_vars(
             "data.grid",
             compressed_size=self.model.data.grid.compressed_size,
-            dtypes=(np.ndarray, cp.ndarray) if self.model.use_gpu else np.ndarray,
+            dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
         )
         add_vars(
             "data.HRU",
             compressed_size=self.model.data.HRU.compressed_size,
-            dtypes=(np.ndarray, cp.ndarray) if self.model.use_gpu else np.ndarray,
+            dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
         )
         add_vars(
             "agents.crop_farmers",
             compressed_size=self.model.agents.crop_farmers.n,
-            dtypes=AgentArray,
+            dtypes=DynamicArray,
             variant_dim=1,
             invariant_dim=0,
         )
@@ -201,7 +196,7 @@ class Artists(honeybeesArtists):
                 array = attrgetter(self.background_variable[: slicer.span(0)[0]])(
                     self.model
                 )
-                array = AgentArray(array[:, int(slicer.group(1))], n=array.shape[0])
+                array = DynamicArray(array[:, int(slicer.group(1))], n=array.shape[0])
             else:
                 array = attrgetter(self.background_variable)(self.model)
 

@@ -264,8 +264,6 @@ def define_river_network(ldd2D, grid):
     # all pits gets a high number
     downstruct[lddCompress == PIT] = grid.compressed_size
 
-    # self.var.dirDown: direction downstream - from each cell the pointer to a downstream cell (can only be 1)
-    # self.var.catchment: each catchment with a pit gets a own ID
     dirDown = []
     dirDown, catchment = dirDownstream(dirUp, lddCompress, dirDown)
     lendirDown = len(dirDown)
