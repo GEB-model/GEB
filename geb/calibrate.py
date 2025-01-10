@@ -401,9 +401,7 @@ def run_model(individual, config, gauges, observed_streamflow):
 			template['general']['export_inital_on_spinup'] = True
 		
 			template['general']['report_folder'] = run_directory
-			template['general']['initial_conditions_folder'] = os.path.join(run_directory, 'initial')
-			
-
+	
 			# Update the template configuration file with the individual's parameters
 			template['general']['spinup_time'] = config['calibration']['spinup_time']
 			template['general']['start_time'] = config['calibration']['start_time']

@@ -1598,7 +1598,7 @@ class CropFarmers(AgentBaseClass):
             "size"
         ]
 
-        self.social_network = DynamicArray(
+        self.bucket.social_network = DynamicArray(
             n=self.n,
             max_n=self.max_n,
             extra_dims=(n_neighbor,),
@@ -1607,7 +1607,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
-        self.social_network[:] = find_neighbors(
+        self.bucket.social_network[:] = find_neighbors(
             self.bucket.locations.data,
             radius=radius,
             n_neighbor=n_neighbor,
@@ -3346,7 +3346,9 @@ class CropFarmers(AgentBaseClass):
 
         # Adjust the intention threshold based on whether neighbors already have similar crop
         # Check for each farmer which crops their neighbors are cultivating
-        social_network_crops = self.bucket.crop_calendar[self.social_network, 0, 0]
+        social_network_crops = self.bucket.crop_calendar[
+            self.bucket.social_network, 0, 0
+        ]
 
         # Check whether adapting agents have adaptation type in their network and create mask
         network_has_crop = np.any(
@@ -3774,7 +3776,7 @@ class CropFarmers(AgentBaseClass):
         # Compare EU values for those who haven't adapted yet and get boolean results
         SEUT_adaptation_decision = SEUT_adapt > SEUT_do_nothing
 
-        social_network_adaptation = adapted[self.social_network]
+        social_network_adaptation = adapted[self.bucket.social_network]
 
         # Check whether adapting agents have adaptation type in their network and create mask
         network_has_adaptation = np.any(social_network_adaptation == 1, axis=1)

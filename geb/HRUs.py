@@ -772,7 +772,7 @@ class HRUs(BaseVariables):
             nanvalue = False
         else:
             nanvalue = np.nan
-        outarray = HRU_array[self.unmerged_HRU_indices]
+        outarray = HRU_array[self.bucket.unmerged_HRU_indices]
         outarray[self.mask] = nanvalue
         return outarray
 

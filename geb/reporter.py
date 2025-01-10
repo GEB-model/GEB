@@ -197,7 +197,9 @@ class hydrology_reporter(ABMReporter):
         Returns:
             decompressed_array: The decompressed array.
         """
-        return attrgetter(".".join(attr.split(".")[:-1]))(self.model).decompress(array)
+        return attrgetter(".".join(attr.split(".")[:-1]).replace(".bucket", ""))(
+            self.model
+        ).decompress(array)
 
     def get_array(self, attr: str, decompress: bool = False) -> np.ndarray:
         """This function retrieves a NumPy array from the model based the name of the variable. Optionally decompresses the array.

@@ -1,8 +1,9 @@
-from pathlib import Path
+import shutil
 from operator import attrgetter
 import json
 from datetime import datetime
 import pandas as pd
+import geopandas as gpd
 
 import numpy as np
 
@@ -329,6 +330,7 @@ class Bucket:
                 float,
                 np.ndarray,
                 list,
+                gpd.GeoDataFrame,
                 pd.DataFrame,
                 str,
                 dict,
@@ -346,6 +348,8 @@ class Bucket:
                 np.savez_compressed(
                     (path / name).with_suffix(".array.npz"), value=value
                 )
+            elif isinstance(value, gpd.GeoDataFrame):
+                value.to_parquet((path / name).with_suffix(".geoparquet"))
             elif isinstance(value, pd.DataFrame):
                 value.to_parquet((path / name).with_suffix(".parquet"))
             elif isinstance(value, (list, dict)):
@@ -373,6 +377,12 @@ class Bucket:
                     self,
                     filename.name.removesuffix("".join(filename.suffixes)),
                     np.load(filename)["value"],
+                )
+            elif filename.suffix == ".geoparquet":
+                setattr(
+                    self,
+                    filename.stem,
+                    gpd.read_parquet(filename),
                 )
             elif filename.suffix == ".parquet":
                 setattr(
@@ -403,6 +413,13 @@ class Store:
     def __init__(self, model):
         self.model = model
         self.buckets = {}
+        if self.model.spinup:
+            self.path.mkdir(parents=True, exist_ok=True)
+        else:
+            if not self.path.exists():
+                raise FileNotFoundError(
+                    f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
+                )
 
     def create_bucket(self, name):
         assert name not in self.buckets
@@ -415,6 +432,7 @@ class Store:
         return self.buckets[name]
 
     def save(self):
+        shutil.rmtree(self.path, ignore_errors=True)
         for name, bucket in self.buckets.items():
             bucket.save(self.path / name)
 
@@ -428,4 +446,4 @@ class Store:
 
     @property
     def path(self):
-        return Path(self.model.initial_conditions_folder)
+        return self.model.simulation_root_spinup / "store"
