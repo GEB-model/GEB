@@ -82,6 +82,7 @@ class Hydrology:
         """
         if self.current_timestep == 1:
             self.groundwater.initalize_modflow_model()
+            self.soil.set_global_variables()
 
         timer = TimingModule("CWatM")
 

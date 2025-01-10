@@ -813,8 +813,6 @@ class Soil(object):
             data=soil_layer_height, fn=None
         )
 
-        self.set_global_variables()
-
         # θ saturation, field capacity, wilting point and residual moisture content
         thetas = self.model.data.grid.load(
             self.model.files["grid"]["soil/thetas"], layer=None
@@ -1118,9 +1116,6 @@ class Soil(object):
         Dependend on soil depth, soil hydraulic parameters
         """
         timer = TimingModule("Soil")
-
-        if self.model.current_timestep == 1 and not self.model.spinup:
-            self.set_global_variables()
 
         if __debug__:
             w_pre = self.HRU.var.w.copy()
