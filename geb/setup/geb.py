@@ -5260,13 +5260,9 @@ class GEBModel(GridModel):
             names_data = {
                 "crop_calendar": crop_calendar_per_farmer,
             }
-            for name, data in names_data:
-                fn = os.path.join(name + ".npz")
-                self.logger.debug(f"Writing file {fn}")
-                self.files["binary"][name] = fn
-                self.is_updated["binary"][name]["filename"] = fn
-                self.logger.debug(f"Writing file {fn}")
-                fp = Path(self.root, fn)
+            for name, data in names_data.items():
+                fn = os.path.join(name + f"_{year}" + ".npz")
+                fp = Path("calibration_data/crops", fn)
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 np.savez_compressed(fp, data=data)
         else:
@@ -5561,13 +5557,9 @@ class GEBModel(GridModel):
                 "irrigation_source": irrigation_source,
                 "irrigating_farmers": irrigating_farmers,
             }
-            for name, data in names_data:
+            for name, data in names_data.items():
                 fn = os.path.join(name + f"_{year}" + ".npz")
-                self.logger.debug(f"Writing file {fn}")
-                self.files["binary"][name] = fn
-                self.is_updated["binary"][name]["filename"] = fn
-                self.logger.debug(f"Writing file {fn}")
-                fp = Path(self.root, fn)
+                fp = Path("calibration_data/crops", fn)
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 np.savez_compressed(fp, data=data)
         else:

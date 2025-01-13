@@ -549,7 +549,7 @@ class ModFlowSimulation:
             try:
                 self.mf6 = XmiWrapper(library_path)
             except Exception as e:
-                print("Failed to load " + library_path)
+                print("Failed to load " + str(library_path))
                 print("with message: " + str(e))
                 self.bmi_return(success)
                 raise
