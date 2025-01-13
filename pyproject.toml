@@ -19,7 +19,7 @@ dependencies = [
     "deap>=1.4.1",
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
-    "honeybees>=1.0.4",
+    "honeybees>=1.0.7",
     "hydromt==0.10.0",
     "hydromt-sfincs>=1.1.0",
     "intel-cmplr-lib-rt",
