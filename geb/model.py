@@ -188,21 +188,29 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         # copy current state of timestep and time
         store_timestep = copy.copy(self.current_timestep)
 
+        # set a folder to store the initial state of the multiverse
         store_location = self.simulation_root / "multiverse" / "forecast"
         self.store.save(store_location)
 
+        # perform one run of the multiverse
         discharges_before_restore = []
         for _ in range(10):
             discharges_before_restore.append(self.data.grid.var.discharge.copy())
             self.step()
 
+        # restore the initial state of the multiverse
         self.restore(store_location=store_location, timestep=store_timestep)
 
+        # again perform one run of the multiverse
         discharges_after_restore = []
         for _ in range(10):
             discharges_after_restore.append(self.data.grid.var.discharge.copy())
             self.step()
 
+        # restore the initial state of the multiverse
+        self.restore(store_location=store_location, timestep=store_timestep)
+
+        # check if the discharges are the same in both multiverses
         assert np.array_equal(discharges_before_restore, discharges_after_restore)
 
     def step(self, step_size: Union[int, str] = 1) -> None:
