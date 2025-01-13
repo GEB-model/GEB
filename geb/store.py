@@ -29,9 +29,9 @@ class DynamicArray:
             raise ValueError("Only one of input_array or dtype can be given")
 
         if input_array is not None:
-            assert extra_dims is None, (
-                "extra_dims cannot be given if input_array is given"
-            )
+            assert (
+                extra_dims is None
+            ), "extra_dims cannot be given if input_array is given"
             assert n is None, "n cannot be given if input_array is given"
             # assert dtype is not object
             assert input_array.dtype != object, "dtype cannot be object"
@@ -431,13 +431,19 @@ class Store:
         name = self.get_name(cls)
         return self.buckets[name]
 
-    def save(self):
-        shutil.rmtree(self.path, ignore_errors=True)
-        for name, bucket in self.buckets.items():
-            bucket.save(self.path / name)
+    def save(self, path=None):
+        if path is None:
+            path = self.path
 
-    def load(self):
-        for bucket_folder in self.path.iterdir():
+        shutil.rmtree(path, ignore_errors=True)
+        for name, bucket in self.buckets.items():
+            bucket.save(path / name)
+
+    def load(self, path=None):
+        if path is None:
+            path = self.path
+
+        for bucket_folder in path.iterdir():
             bucket = Bucket().load(bucket_folder)
 
             self.buckets[bucket_folder.name] = bucket

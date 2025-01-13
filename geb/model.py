@@ -178,6 +178,39 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         self.reporter = Reporter(self)
         self.artists = Artists(self)
 
+    def multiverse(self):
+        current_time = copy.copy(self.current_time)
+        current_timestep = copy.copy(self.current_timestep)
+
+        self.store.save(
+            self.simulation_root / "multiverse" / current_time.strftime("%Y%m%dT%H%M%S")
+        )
+
+        for _ in range(10):
+            print(
+                self.data.grid.var.discharge.mean(),
+                self.data.grid.var.discharge.min(),
+                self.data.grid.var.discharge.max(),
+            )
+            self.step()
+
+        self.store.load(
+            self.simulation_root / "multiverse" / current_time.strftime("%Y%m%dT%H%M%S")
+        )
+        self.groundwater.modflow.restore(self.data.grid.var.heads)
+        self.current_time = current_time
+        self.current_timestep = current_timestep
+
+        for _ in range(10):
+            print(
+                self.data.grid.var.discharge.mean(),
+                self.data.grid.var.discharge.min(),
+                self.data.grid.var.discharge.max(),
+            )
+            self.step()
+
+        return None
+
     def step(self, step_size: Union[int, str] = 1) -> None:
         """
         Forward the model by the given the number of steps.
@@ -191,7 +224,6 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             n = step_size
         for _ in range(n):
             t0 = time()
-            self.data.step()
             HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
             if self.config["general"]["simulate_hydrology"]:
@@ -203,6 +235,9 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                 f"{self.current_time} ({round(t1 - t0, 4)}s)",
                 flush=True,
             )
+
+            if self.current_timestep == 5:
+                self.multiverse()
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""

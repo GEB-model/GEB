@@ -440,7 +440,7 @@ class LakesReservoirs(object):
                 self.model.routing.var.dtRouting,
                 self.var.storage[lakes],
                 inflow_m3[lakes],
-                self.lake_factor[lakes],
+                self.var.lake_factor[lakes],
                 self.var.lake_area[lakes],
                 self.var.outflow_height[lakes],
             )
