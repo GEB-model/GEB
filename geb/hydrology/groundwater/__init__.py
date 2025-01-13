@@ -74,7 +74,7 @@ class GroundWater:
         def get_initial_head():
             heads = self.model.data.grid.load(
                 self.model.files["grid"]["groundwater/heads"], layer=None
-            )
+            ).astype(np.float64)  # modflow is an exception, it needs double precision
             heads = np.where(
                 ~np.isnan(heads),
                 heads,
@@ -149,11 +149,11 @@ class GroundWater:
 
     @property
     def groundwater_content_m3(self):
-        return self.modflow.groundwater_content_m3
+        return self.modflow.groundwater_content_m3.astype(np.float32)
 
     @property
     def groundwater_depth(self):
-        return self.modflow.groundwater_depth
+        return self.modflow.groundwater_depth.astype(np.float32)
 
     def decompress(self, data):
         return self.model.data.grid.decompress(data)

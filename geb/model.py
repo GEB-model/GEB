@@ -4,6 +4,7 @@ import geopandas as gpd
 from typing import Union
 from time import time
 import copy
+import numpy as np
 import warnings
 
 from honeybees.library.helpers import timeprint
@@ -178,6 +179,32 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         self.reporter = Reporter(self)
         self.artists = Artists(self)
 
+    def restore(self, store_location, timestep):
+        self.store.load(store_location)
+        self.groundwater.modflow.restore(self.data.grid.var.heads)
+        self.current_timestep = timestep
+
+    def multiverse(self):
+        # copy current state of timestep and time
+        store_timestep = copy.copy(self.current_timestep)
+
+        store_location = self.simulation_root / "multiverse" / "forecast"
+        self.store.save(store_location)
+
+        discharges_before_restore = []
+        for _ in range(10):
+            discharges_before_restore.append(self.data.grid.var.discharge.copy())
+            self.step()
+
+        self.restore(store_location=store_location, timestep=store_timestep)
+
+        discharges_after_restore = []
+        for _ in range(10):
+            discharges_after_restore.append(self.data.grid.var.discharge.copy())
+            self.step()
+
+        assert np.array_equal(discharges_before_restore, discharges_after_restore)
+
     def step(self, step_size: Union[int, str] = 1) -> None:
         """
         Forward the model by the given the number of steps.
@@ -191,7 +218,6 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             n = step_size
         for _ in range(n):
             t0 = time()
-            self.data.step()
             HazardDriver.step(self, 1)
             ABM_Model.step(self, 1, report=False)
             if self.config["general"]["simulate_hydrology"]:
@@ -203,6 +229,9 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                 f"{self.current_time} ({round(t1 - t0, 4)}s)",
                 flush=True,
             )
+
+            # if self.current_timestep == 5:
+            #     self.multiverse()
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""

@@ -187,17 +187,16 @@ class ModFlowSimulation:
         arguments.pop("model")
         self.hash_file = os.path.join(self.working_directory, "input_hash")
 
-        save_flows = False
+        self.save_flows = False
 
         if not self.load_from_disk(arguments):
             try:
                 if self.verbose:
                     print("Creating MODFLOW model")
 
-                sim = self.flexible_grid(
+                sim = self.get_simulation(
                     ndays,
                     gt,
-                    save_flows,
                     heads,
                     hydraulic_conductivity,
                     specific_storage,
@@ -250,11 +249,10 @@ class ModFlowSimulation:
 
         return x_transformed, y_transformed
 
-    def flexible_grid(
+    def get_simulation(
         self,
         ndays,
         gt,
-        save_flows,
         heads,
         hydraulic_conductivity,
         specific_storage,
@@ -265,7 +263,10 @@ class ModFlowSimulation:
             version="mf6",
             sim_ws=os.path.realpath(self.working_directory),
         )
-        flopy.mf6.ModflowTdis(sim, nper=ndays, perioddata=[(1.0, 1, 1)] * ndays)
+        number_of_periods = 100_000
+        flopy.mf6.ModflowTdis(
+            sim, nper=number_of_periods, perioddata=[(1.0, 1, 1)] * number_of_periods
+        )
 
         # create iterative model solution
         flopy.mf6.ModflowIms(
@@ -282,8 +283,8 @@ class ModFlowSimulation:
             sim,
             modelname=self.name,
             newtonoptions="under_relaxation",
-            print_input=save_flows,
-            print_flows=save_flows,
+            print_input=self.save_flows,
+            print_flows=self.save_flows,
         )
 
         # 1. Create vertices
@@ -395,7 +396,7 @@ class ModFlowSimulation:
         icelltype = np.ones_like(domain, dtype=np.int32)
         flopy.mf6.ModflowGwfnpf(
             groundwater_flow,
-            save_flows=save_flows,
+            save_flows=self.save_flows,
             icelltype=icelltype,
             k=k,
         )
@@ -406,7 +407,7 @@ class ModFlowSimulation:
         # Storage
         flopy.mf6.ModflowGwfsto(
             groundwater_flow,
-            save_flows=save_flows,
+            save_flows=self.save_flows,
             iconvert=1,
             ss=ss,
             sy=sy,
@@ -424,7 +425,7 @@ class ModFlowSimulation:
         recharge = flopy.mf6.ModflowGwfrch(
             groundwater_flow,
             fixed_cell=True,
-            save_flows=save_flows,
+            save_flows=self.save_flows,
             maxbound=len(recharge),
             stress_period_data=recharge,
         )
@@ -441,7 +442,7 @@ class ModFlowSimulation:
             groundwater_flow,
             maxbound=len(wells),
             stress_period_data=wells,
-            save_flows=save_flows,
+            save_flows=self.save_flows,
         )
 
         # Drainage
@@ -466,8 +467,8 @@ class ModFlowSimulation:
             groundwater_flow,
             maxbound=len(drainage),
             stress_period_data=drainage,
-            print_flows=save_flows,
-            save_flows=save_flows,
+            print_flows=self.save_flows,
+            save_flows=self.save_flows,
         )
 
         sim.simulation_data.set_sci_note_upper_thres(
@@ -582,6 +583,10 @@ class ModFlowSimulation:
 
         self.prepare_time_step()
 
+        # because modflow rounds heads when they are written to file, we set the modflow
+        # heads to the model heads to ensure that the model is in the same state as the modflow model
+        self.model.data.grid.var.heads = self.heads
+
     @property
     def head_tag(self):
         return self.mf6.get_var_address("X", self.name)
@@ -596,7 +601,7 @@ class ModFlowSimulation:
 
     @heads.setter
     def heads(self, value):
-        self.mf6.get_value_ptr(self.head_tag)[:] = value
+        self.mf6.get_value_ptr(self.head_tag)[:] = value.ravel()
 
     @property
     def groundwater_depth(self):
@@ -725,6 +730,10 @@ class ModFlowSimulation:
         self.potential_well_rate = well_rate
 
     def step(self):
+        assert np.array_equal(self.heads, self.model.data.grid.var.heads), (
+            "Heads in MODFLOW and model are not synchronized"
+        )
+
         if self.mf6.get_current_time() > self.end_time:
             raise StopIteration(
                 "MODFLOW used all iteration steps. Consider increasing `ndays`"
@@ -771,3 +780,6 @@ class ModFlowSimulation:
 
     def finalize(self):
         self.mf6.finalize()
+
+    def restore(self, heads):
+        self.heads = heads
