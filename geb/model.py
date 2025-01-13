@@ -4,6 +4,7 @@ import geopandas as gpd
 from typing import Union
 from time import time
 import copy
+import numpy as np
 import warnings
 
 from honeybees.library.helpers import timeprint
@@ -178,38 +179,31 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         self.reporter = Reporter(self)
         self.artists = Artists(self)
 
-    def multiverse(self):
-        current_time = copy.copy(self.current_time)
-        current_timestep = copy.copy(self.current_timestep)
-
-        self.store.save(
-            self.simulation_root / "multiverse" / current_time.strftime("%Y%m%dT%H%M%S")
-        )
-
-        for _ in range(10):
-            print(
-                self.data.grid.var.discharge.mean(),
-                self.data.grid.var.discharge.min(),
-                self.data.grid.var.discharge.max(),
-            )
-            self.step()
-
-        self.store.load(
-            self.simulation_root / "multiverse" / current_time.strftime("%Y%m%dT%H%M%S")
-        )
+    def restore(self, store_location, timestep):
+        self.store.load(store_location)
         self.groundwater.modflow.restore(self.data.grid.var.heads)
-        self.current_time = current_time
-        self.current_timestep = current_timestep
+        self.current_timestep = timestep
 
+    def multiverse(self):
+        # copy current state of timestep and time
+        store_timestep = copy.copy(self.current_timestep)
+
+        store_location = self.simulation_root / "multiverse" / "forecast"
+        self.store.save(store_location)
+
+        discharges_before_restore = []
         for _ in range(10):
-            print(
-                self.data.grid.var.discharge.mean(),
-                self.data.grid.var.discharge.min(),
-                self.data.grid.var.discharge.max(),
-            )
+            discharges_before_restore.append(self.data.grid.var.discharge.copy())
             self.step()
 
-        return None
+        self.restore(store_location=store_location, timestep=store_timestep)
+
+        discharges_after_restore = []
+        for _ in range(10):
+            discharges_after_restore.append(self.data.grid.var.discharge.copy())
+            self.step()
+
+        assert np.array_equal(discharges_before_restore, discharges_after_restore)
 
     def step(self, step_size: Union[int, str] = 1) -> None:
         """
@@ -236,8 +230,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                 flush=True,
             )
 
-            if self.current_timestep == 5:
-                self.multiverse()
+            # if self.current_timestep == 5:
+            #     self.multiverse()
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""

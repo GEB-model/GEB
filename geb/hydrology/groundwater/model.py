@@ -583,6 +583,10 @@ class ModFlowSimulation:
 
         self.prepare_time_step()
 
+        # because modflow rounds heads when they are written to file, we set the modflow
+        # heads to the model heads to ensure that the model is in the same state as the modflow model
+        self.model.data.grid.var.heads = self.heads
+
     @property
     def head_tag(self):
         return self.mf6.get_var_address("X", self.name)
@@ -726,6 +730,10 @@ class ModFlowSimulation:
         self.potential_well_rate = well_rate
 
     def step(self):
+        assert np.array_equal(self.heads, self.model.data.grid.var.heads), (
+            "Heads in MODFLOW and model are not synchronized"
+        )
+
         if self.mf6.get_current_time() > self.end_time:
             raise StopIteration(
                 "MODFLOW used all iteration steps. Consider increasing `ndays`"
