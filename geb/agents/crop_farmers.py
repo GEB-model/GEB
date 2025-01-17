@@ -2121,6 +2121,8 @@ class CropFarmers(AgentBaseClass):
             crop_age_days=self.var.crop_age_days_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
         )
+        print("printing in harvest function")
+        print(self.n)
 
         self.actual_yield_per_farmer.fill(np.nan)
         self.harvested_crop.fill(-1)
@@ -2224,7 +2226,8 @@ class CropFarmers(AgentBaseClass):
 
             harvesting_farmers_mask = np.zeros(self.n, dtype=bool)
             harvesting_farmers_mask[harvesting_farmers] = True
-
+            print("printing within crop_farmers")
+            print(self.profit_farmer)
             self.save_yearly_profits(self.profit_farmer, potential_profit_farmer)
             self.save_harvest_spei(harvesting_farmers)
             self.drought_risk_perception(harvesting_farmers, total_crop_age)
@@ -2234,6 +2237,11 @@ class CropFarmers(AgentBaseClass):
             self.previous_month = self.model.current_time.month
 
         else:
+            print("running else statement in crop_farmers")
+            print("number of farmers")
+            print(self.agents.crop_farmers.harvested_crop.shape)
+            self.n = self.agents.crop_farmers.harvested_crop.shape[0]
+            print(self.n)
             self.profit_farmer = np.zeros(self.n, dtype=np.float32)
 
         # Reset transpiration values for harvested fields
@@ -4822,21 +4830,26 @@ class CropFarmers(AgentBaseClass):
         #     self.remove_agent(farmer_idx=1000)
 
     def remove_agents(
-        self, farmer_indices: list[int], land_use_type: int
+        self, farmer_indices: list[int], new_land_use_type: int
     ) -> np.ndarray:
         farmer_indices = np.array(farmer_indices)
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
             HRUs_with_removed_farmers = []
             for idx in farmer_indices:
-                HRUs_with_removed_farmers.append(self.remove_agent(idx, land_use_type))
+                HRUs_with_removed_farmers.append(
+                    self.remove_agent(idx, new_land_use_type)
+                )
         return np.concatenate(HRUs_with_removed_farmers)
 
-    def remove_agent(self, farmer_idx: int, land_use_type: int) -> np.ndarray:
+    def remove_agent(self, farmer_idx: int, new_land_use_type: int) -> np.ndarray:
         assert farmer_idx >= 0, "Farmer index must be positive."
         assert (
             farmer_idx < self.n
         ), "Farmer index must be less than the number of agents."
+        print("within remove agent function")
+        print(self.n)
+
         last_farmer_HRUs = get_farmer_HRUs(
             self.field_indices, self.field_indices_by_farmer.data, -1
         )
@@ -4850,7 +4863,7 @@ class CropFarmers(AgentBaseClass):
         self.var.crop_map[HRUs_farmer_to_be_removed] = -1
         self.var.crop_age_days_map[HRUs_farmer_to_be_removed] = -1
         self.var.crop_harvest_age_days[HRUs_farmer_to_be_removed] = -1
-        self.var.land_use_type[HRUs_farmer_to_be_removed] = land_use_type
+        self.var.land_use_type[HRUs_farmer_to_be_removed] = new_land_use_type
 
         # reduce number of agents
         self.n -= 1

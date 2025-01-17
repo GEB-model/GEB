@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import rioxarray
 from .general import AgentBaseClass
 
 
@@ -64,7 +65,128 @@ class Government(AgentBaseClass):
                 self.agents.crop_farmers.irrigation_limit_m3 < irrigation_limit["min"]
             ] = irrigation_limit["min"]
 
+    def reforestation(self) -> None:
+        if not self.config.get("reforestation", False):
+            return None
+        if self.model.current_timestep == 1:
+            print("running the reforestation scenario")
+            import geopandas as gpd
+            import rasterio
+            from rasterio.features import rasterize
+            from rasterio.features import shapes
+            from shapely.geometry import shape
+            import numpy as np
+            from ..hydrology.landcover import (
+                FOREST,
+                GRASSLAND_LIKE,
+                PADDY_IRRIGATED,
+                NON_PADDY_IRRIGATED,
+                SEALED,
+            )
+
+            self.var = self.model.data.HRU
+
+            # load reforestation map
+            forest_path = "/scistor/ivm/vbl220/PhD/reclassified_landuse_only_belgium.nc"
+            to_forest = rioxarray.open_rasterio(forest_path, masked=True)
+            # data = to_forest["esa_worldcover"].values
+            data = to_forest.values
+            data = data.astype(np.uint8)
+
+            y_coords = to_forest.coords["y"].values
+            x_coords = to_forest.coords["x"].values
+
+            transform = rasterio.transform.from_origin(
+                x_coords[0],
+                y_coords[0],
+                abs(x_coords[1] - x_coords[0]),
+                abs(y_coords[1] - y_coords[0]),
+            )
+
+            mask = data == 10
+            shapes_gen = shapes(data, mask=mask, transform=transform)
+
+            polygons = []
+            for geom, value in shapes_gen:
+                if value == 10:
+                    polygons.append(shape(geom))
+
+            forest = gpd.GeoDataFrame(
+                {"value": [10] * len(polygons), "geometry": polygons}
+            )
+            forest.set_crs(epsg=4326, inplace=True)
+
+            # # we turn all forest parts (landuse = 0) to a vector file
+            # forest_mask = (
+            #     to_forest.squeeze().values == 0
+            # )  # Use squeeze() to drop extra dimensions
+            # # Extract shapes from the binary mask
+            # forest_shapes = shapes(
+            #     forest_mask.astype(np.uint8),  # Convert boolean mask to uint8
+            #     mask=forest_mask,  # Use the mask to restrict shapes
+            #     transform=to_forest.rio.transform(),  # Provide the raster transform
+            # )
+
+            # # Create a list of geometries and properties
+            # geometries = [
+            #     {"geometry": shape(geom), "properties": {"value": value}}
+            #     for geom, value in forest_shapes
+            #     if value == 1  # Filter for forest areas
+            # ]
+            # # Create a GeoDataFrame from the geometries
+            # forest = gpd.GeoDataFrame.from_features(geometries, crs=to_forest.rio.crs)
+            # Save the GeoDataFrame as a shapefile
+            output_vector_path = "/scistor/ivm/vbl220/PhD/forestation_vectorized.gpkg"
+            forest.to_file(output_vector_path)
+
+            # then we rasterize this file to match the HRUs
+            forest = rasterize(
+                [(shape(geom), 1) for geom in forest.geometry],
+                out_shape=self.model.data.HRU.shape,
+                transform=self.model.data.HRU.transform,
+                fill=False,
+                dtype="uint8",  # bool is not supported, so we use uint8 and convert to bool
+            ).astype(bool)
+            # do not create forests outside the study area
+            forest[self.model.data.HRU.mask] = False
+            # only create forests in grassland or agricultural areas
+            forest[
+                ~np.isin(
+                    self.model.data.HRU.decompress(self.var.land_use_type),
+                    [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
+                )
+            ] = False
+
+            import matplotlib.pyplot as plt
+
+            plt.imshow(forest)
+            plt.savefig("forest.png")
+
+            new_forest_HRUs = np.unique(
+                self.model.data.HRU.unmerged_HRU_indices[forest]
+            )
+
+            # set the land use type to forest
+            self.var.land_use_type[new_forest_HRUs] = FOREST
+
+            # get the farmers corresponding to the new forest HRUs
+            farmers_with_land_converted_to_forest = np.unique(
+                self.model.data.HRU.land_owners[new_forest_HRUs]
+            )
+            farmers_with_land_converted_to_forest = (
+                farmers_with_land_converted_to_forest
+            )[farmers_with_land_converted_to_forest != -1]
+
+            HRUs_removed_farmers = self.model.agents.crop_farmers.remove_agents(
+                farmers_with_land_converted_to_forest, new_land_use_type=FOREST
+            )
+
+            new_forest_HRUs = np.unique(
+                np.concatenate([new_forest_HRUs, HRUs_removed_farmers])
+            )
+
     def step(self) -> None:
         """This function is run each timestep."""
         self.set_irrigation_limit()
         self.provide_subsidies()
+        self.reforestation()
