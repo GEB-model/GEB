@@ -491,7 +491,7 @@ def abstract_water(
                     < critical_water_level[
                         farmer_fields
                     ],  # if there is not enough water
-                    critical_water_level[farmer_fields]
+                    max_water_content[farmer_fields]
                     - readily_available_water[
                         farmer_fields
                     ],  # irrigate to field capacity (if possible)
