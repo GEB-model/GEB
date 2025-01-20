@@ -69,14 +69,13 @@ class DummyData:
 
 class DummyModel:
     def __init__(self):
-        self.simulation_root = tmp_folder / "modflow"
+        self.simulation_root_spinup = tmp_folder / "modflow"
         self.data = DummyData()
 
 
 default_params = {
     "model": DummyModel(),
     "gt": gt,
-    "ndays": 1000,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.8), basin_mask),
     "topography": compress(topography, basin_mask),
@@ -86,6 +85,7 @@ default_params = {
     "hydraulic_conductivity": compress(np.full((NLAY, YSIZE, XSIZE), 1), basin_mask),
     "verbose": True,
     "never_load_from_disk": True,
+    "heads_update_callback": lambda heads: None,
 }
 
 

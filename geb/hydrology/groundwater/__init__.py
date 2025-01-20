@@ -91,12 +91,14 @@ class GroundWater:
 
         self.grid.var.capillar = self.grid.full_compressed(0, dtype=np.float32)
 
+    def heads_update_callback(self, heads):
+        self.model.data.grid.var.heads = heads
+
     def initalize_modflow_model(self):
         self.modflow = ModFlowSimulation(
             self.model,
             topography=self.grid.var.elevation,
             gt=self.model.data.grid.gt,
-            ndays=self.model.n_timesteps,
             specific_storage=np.zeros_like(self.grid.var.specific_yield),
             specific_yield=self.grid.var.specific_yield,
             layer_boundary_elevation=self.grid.var.layer_boundary_elevation,
@@ -104,6 +106,7 @@ class GroundWater:
             heads=self.grid.var.heads,
             hydraulic_conductivity=self.grid.var.hydraulic_conductivity,
             verbose=False,
+            heads_update_callback=self.heads_update_callback,
         )
 
     def step(self, groundwater_recharge, groundwater_abstraction_m3):
@@ -140,7 +143,6 @@ class GroundWater:
             1 - self.grid.var.channel_ratio
         )
         self.grid.var.baseflow = groundwater_drainage * self.grid.var.channel_ratio
-        self.grid.var.heads = self.modflow.heads
 
         # capriseindex is 1 where capilary rise occurs
         self.model.data.HRU.capriseindex = self.model.data.to_HRU(
