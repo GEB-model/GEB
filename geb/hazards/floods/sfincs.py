@@ -11,11 +11,9 @@ import hydromt
 from shapely.geometry import Point
 from rasterio.features import shapes
 import math
-import matplotlib.pyplot as plt
 from pyproj import CRS
 from geb.hydrology.landcover import SEALED, OPEN_WATER
 import itertools
-from os.path import join
 
 try:
     from geb_hydrodynamics.build_model import build_sfincs

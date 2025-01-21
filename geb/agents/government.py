@@ -81,7 +81,6 @@ class Government(AgentBaseClass):
                 GRASSLAND_LIKE,
                 PADDY_IRRIGATED,
                 NON_PADDY_IRRIGATED,
-                SEALED,
             )
 
             self.var = self.model.data.HRU
