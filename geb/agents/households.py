@@ -80,29 +80,6 @@ class Households(AgentBaseClass):
         # Load maximum damages
         with open(
             self.model.files["dict"][
-                "damage_parameters/flood/buildings/structure/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
-        self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
-
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/buildings/content/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            max_dam_buildings_content = json.load(f)
-        self.var.max_dam_buildings_content = float(
-            max_dam_buildings_content["maximum_damage"]
-        )
-        self.var.buildings_centroid["maximum_damage"] = (
-            self.var.max_dam_buildings_content
-        )
-
-        with open(
-            self.model.files["dict"][
                 "damage_parameters/flood/rail/main/maximum_damage"
             ],
             "r",
@@ -218,8 +195,10 @@ class Households(AgentBaseClass):
                 ]
             )
             self.var.buildings_structure_curve.set_index("severity", inplace=True)
-            self.var.buildings_structure_curve = self.buildings_structure_curve.rename(
-                columns={"damage_ratio": "building_structure"}
+            self.var.buildings_structure_curve = (
+                self.var.buildings_structure_curve.rename(
+                    columns={"damage_ratio": "building_structure"}
+                )
             )
 
             self.var.buildings_content_curve = pd.read_parquet(
@@ -228,7 +207,7 @@ class Households(AgentBaseClass):
                 ]
             )
             self.var.buildings_content_curve.set_index("severity", inplace=True)
-            self.var.buildings_content_curve = self.buildings_content_curve.rename(
+            self.var.buildings_content_curve = self.var.buildings_content_curve.rename(
                 columns={"damage_ratio": "building_content"}
             )
             with open(

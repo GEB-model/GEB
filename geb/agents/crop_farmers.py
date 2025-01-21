@@ -2209,7 +2209,7 @@ class CropFarmers(AgentBaseClass):
             self.var.previous_month = self.model.current_time.month
 
         else:
-            self.n = self.agents.crop_farmers.harvested_crop.shape[0]
+            self.n = self.var.harvested_crop.shape[0]
             self.profit_farmer = np.zeros(self.n, dtype=np.float32)
 
         # Reset transpiration values for harvested fields

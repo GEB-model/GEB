@@ -581,25 +581,38 @@ class SFINCS:
 
     def save_soil_moisture(self):  # is used in driver.py on every timestep
         # load and process initial soil moisture grid
-        self.model.data.HRU.w[:, self.model.data.HRU.land_use_type == SEALED] = 0
-        self.model.data.HRU.w[:, self.model.data.HRU.land_use_type == OPEN_WATER] = 0
-        initial_soil_moisture_grid = self.model.data.HRU.w[:2].sum(axis=0)
+        self.model.data.HRU.var.w[
+            :, self.model.data.HRU.var.land_use_type == SEALED
+        ] = 0
+        self.model.data.HRU.var.w[
+            :, self.model.data.HRU.var.land_use_type == OPEN_WATER
+        ] = 0
+        initial_soil_moisture_grid = self.model.data.HRU.var.w[:2].sum(axis=0)
 
         self.soil_moisture_per_timestep.append(initial_soil_moisture_grid)
 
     def save_max_soil_moisture(self):
         # smax
-
-        self.model.soil.ws[:, self.model.data.HRU.land_use_type == SEALED] = 0
-        self.model.soil.ws[:, self.model.data.HRU.land_use_type == OPEN_WATER] = 0
-        max_water_storage_grid = self.model.soil.ws[:2].sum(axis=0)
+        self.model.data.HRU.var.ws[
+            :, self.model.data.HRU.var.land_use_type == SEALED
+        ] = 0
+        self.model.data.HRU.var.ws[
+            :, self.model.data.HRU.var.land_use_type == OPEN_WATER
+        ] = 0
+        max_water_storage_grid = self.model.data.HRU.var.ws[:2].sum(axis=0)
         self.max_water_storage_per_timestep.append(max_water_storage_grid)
 
     def save_ksat(self):
         # ksat
-        self.model.soil.ksat[:, self.model.data.HRU.land_use_type == SEALED] = 0
-        self.model.soil.ksat[:, self.model.data.HRU.land_use_type == OPEN_WATER] = 0
-        saturated_hydraulic_conductivity_grid = self.model.soil.ksat[:2].sum(axis=0)
+        self.model.data.HRU.var.ksat[
+            :, self.model.data.HRU.var.land_use_type == SEALED
+        ] = 0
+        self.model.data.HRU.var.ksat[
+            :, self.model.data.HRU.var.land_use_type == OPEN_WATER
+        ] = 0
+        saturated_hydraulic_conductivity_grid = self.model.data.HRU.var.ksat[:2].sum(
+            axis=0
+        )
         self.saturated_hydraulic_conductivity_per_timestep.append(
             saturated_hydraulic_conductivity_grid
         )

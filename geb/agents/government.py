@@ -116,26 +116,6 @@ class Government(AgentBaseClass):
             )
             forest.set_crs(epsg=4326, inplace=True)
 
-            # # we turn all forest parts (landuse = 0) to a vector file
-            # forest_mask = (
-            #     to_forest.squeeze().values == 0
-            # )  # Use squeeze() to drop extra dimensions
-            # # Extract shapes from the binary mask
-            # forest_shapes = shapes(
-            #     forest_mask.astype(np.uint8),  # Convert boolean mask to uint8
-            #     mask=forest_mask,  # Use the mask to restrict shapes
-            #     transform=to_forest.rio.transform(),  # Provide the raster transform
-            # )
-
-            # # Create a list of geometries and properties
-            # geometries = [
-            #     {"geometry": shape(geom), "properties": {"value": value}}
-            #     for geom, value in forest_shapes
-            #     if value == 1  # Filter for forest areas
-            # ]
-            # # Create a GeoDataFrame from the geometries
-            # forest = gpd.GeoDataFrame.from_features(geometries, crs=to_forest.rio.crs)
-            # Save the GeoDataFrame as a shapefile
             output_vector_path = "/scistor/ivm/vbl220/PhD/forestation_vectorized.gpkg"
             forest.to_file(output_vector_path)
 
