@@ -141,16 +141,11 @@ class Market(AgentBaseClass):
             self.total_farmer_profit[:, self.year_index] = 0
         mask = self.agents.crop_farmers.harvested_crop != -1
         # TODO: This does not yet diffentiate per region
-        print("printing within market")
-        print(self.agents.crop_farmers.harvested_crop.shape)
-        print(self.agents.crop_farmers.actual_yield_per_farmer.shape)
-        print(mask.shape)
         yield_per_crop = np.bincount(
             self.agents.crop_farmers.harvested_crop[mask],
             weights=self.agents.crop_farmers.actual_yield_per_farmer[mask],
             minlength=self.production.shape[0],
         )
-        print(self.agents.crop_farmers.profit_farmer.shape)
         profit_per_crop = np.bincount(
             self.agents.crop_farmers.harvested_crop[mask],
             weights=self.agents.crop_farmers.profit_farmer[mask],

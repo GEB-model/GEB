@@ -2121,8 +2121,6 @@ class CropFarmers(AgentBaseClass):
             crop_age_days=self.var.crop_age_days_map,
             crop_harvest_age_days=self.var.crop_harvest_age_days,
         )
-        print("printing in harvest function")
-        print(self.n)
 
         self.actual_yield_per_farmer.fill(np.nan)
         self.harvested_crop.fill(-1)
@@ -2226,8 +2224,6 @@ class CropFarmers(AgentBaseClass):
 
             harvesting_farmers_mask = np.zeros(self.n, dtype=bool)
             harvesting_farmers_mask[harvesting_farmers] = True
-            print("printing within crop_farmers")
-            print(self.profit_farmer)
             self.save_yearly_profits(self.profit_farmer, potential_profit_farmer)
             self.save_harvest_spei(harvesting_farmers)
             self.drought_risk_perception(harvesting_farmers, total_crop_age)
@@ -2237,11 +2233,7 @@ class CropFarmers(AgentBaseClass):
             self.previous_month = self.model.current_time.month
 
         else:
-            print("running else statement in crop_farmers")
-            print("number of farmers")
-            print(self.agents.crop_farmers.harvested_crop.shape)
             self.n = self.agents.crop_farmers.harvested_crop.shape[0]
-            print(self.n)
             self.profit_farmer = np.zeros(self.n, dtype=np.float32)
 
         # Reset transpiration values for harvested fields
@@ -4847,8 +4839,6 @@ class CropFarmers(AgentBaseClass):
         assert (
             farmer_idx < self.n
         ), "Farmer index must be less than the number of agents."
-        print("within remove agent function")
-        print(self.n)
 
         last_farmer_HRUs = get_farmer_HRUs(
             self.field_indices, self.field_indices_by_farmer.data, -1
