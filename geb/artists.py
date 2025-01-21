@@ -20,7 +20,7 @@ class Artists(honeybeesArtists):
         self.color = "#1386FF"
         self.min_colorbar_alpha = 0.4
         self.background_variable = (
-            "data.HRU.land_use_type"  # set initial background iamge.
+            "data.HRU.var.land_use_type"  # set initial background iamge.
         )
         self.custom_plot = self.get_custom_plot()
         self.set_variables()
@@ -132,28 +132,35 @@ class Artists(honeybeesArtists):
                         and variable.shape[invariant_dim] == compressed_size
                     ):
                         for i in range(variable.shape[variant_dim]):
-                            self.variables_dict[f"{name}.{varname}[{i}]"] = variable[
-                                :, i
-                            ]
+                            if variant_dim == 0:
+                                self.variables_dict[f"{name}.{varname}[{i}]"] = (
+                                    variable[i]
+                                )
+                            elif variant_dim == 1:
+                                self.variables_dict[f"{name}.{varname}[:, {i}]"] = (
+                                    variable[:, i]
+                                )
+                            else:
+                                raise ValueError
                     else:
                         continue
 
         add_vars(
-            "data.grid",
+            "data.grid.var",
             compressed_size=self.model.data.grid.compressed_size,
             dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
         )
         add_vars(
-            "data.HRU",
+            "data.HRU.var",
             compressed_size=self.model.data.HRU.compressed_size,
             dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
         )
         add_vars(
-            "agents.crop_farmers",
+            "agents.crop_farmers.var",
             compressed_size=self.model.agents.crop_farmers.n,
             dtypes=DynamicArray,
             variant_dim=1,
@@ -190,13 +197,10 @@ class Artists(honeybeesArtists):
             background: RGBA-array to display as background.
             legend: Dictionary with data and formatting rules for background legend.
         """
-        if self.background_variable.startswith("agents.farmers"):
-            slicer = re.search(r"\[([0-9]+)\]$", self.background_variable)
+        if self.background_variable.startswith("agents.crop_farmers"):
+            slicer = re.search(r"\[([^\]]+)\]$", self.background_variable)
             if slicer:
-                array = attrgetter(self.background_variable[: slicer.span(0)[0]])(
-                    self.model
-                )
-                array = DynamicArray(array[:, int(slicer.group(1))], n=array.shape[0])
+                array = eval("self.model." + self.background_variable)
             else:
                 array = attrgetter(self.background_variable)(self.model)
 
@@ -205,9 +209,9 @@ class Artists(honeybeesArtists):
             compressed_array, array = self.model.reporter.hydrology_reporter.get_array(
                 self.background_variable, decompress=True
             )
-            mask = attrgetter(".".join(self.background_variable.split(".")[:-1]))(
-                self.model
-            ).mask
+            mask = attrgetter(
+                ".".join(self.background_variable.split(".")[:-1]).replace(".var", "")
+            )(self.model).mask
 
         if self.background_variable in self.custom_plot:
             options = self.custom_plot[self.background_variable]
@@ -233,9 +237,10 @@ class Artists(honeybeesArtists):
             else:
                 raise ValueError
 
-        if self.background_variable.startswith("agents.farmers"):
+        if self.background_variable.startswith("agents.crop_farmers"):
             compressed_array = array.copy()
-            array = array.by_field(self.model.data.HRU.land_owners, options["nanvalue"])
+            array = np.take(compressed_array, self.model.data.HRU.var.land_owners)
+            array[self.model.data.HRU.var.land_owners == -1] = options["nanvalue"]
             array = self.model.data.HRU.decompress(array)
 
         if options["type"] == "bool":

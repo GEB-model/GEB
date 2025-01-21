@@ -778,28 +778,57 @@ class HRUs(BaseVariables):
 
     @staticmethod
     @njit(cache=True)
-    def compress_numba(array, unmerged_HRU_indices, outarray, nodatavalue):
+    def compress_numba(array, unmerged_HRU_indices, outarray, nodatavalue, method):
         array = array.ravel()
         unmerged_HRU_indices = unmerged_HRU_indices.ravel()
-        for i in range(array.size):
-            value = array[i]
-            if value != nodatavalue:
-                HRU = unmerged_HRU_indices[i]
-                outarray[HRU] = value
+        if method == "last":
+            for i in range(array.size):
+                value = array[i]
+                if value != nodatavalue:
+                    HRU = unmerged_HRU_indices[i]
+                    outarray[HRU] = value
+        elif method == "mean":
+            array = array[unmerged_HRU_indices != -1]
+            unmerged_HRU_indices = unmerged_HRU_indices[unmerged_HRU_indices != -1]
+            outarray[:] = np.bincount(
+                unmerged_HRU_indices, weights=array
+            ) / np.bincount(unmerged_HRU_indices)
+        else:
+            raise ValueError("Method not implemented")
         return outarray
 
     def compress(self, array: np.ndarray, method="last") -> np.ndarray:
-        assert method == "last", "Only last method is implemented"
-        assert self.mask.shape == array.shape, "Array must have same shape as mask"
+        assert method in ("last", "mean"), "Only last and mean method are implemented"
+        assert self.mask.shape == array.shape[-2:], "Array must have same shape as mask"
         if np.issubdtype(array.dtype, np.integer):
             fill_value = -1
         else:
             fill_value = np.nan
-        outarray = self.full_compressed(fill_value, array.dtype)
-        outarray = self.compress_numba(
-            array, self.var.unmerged_HRU_indices, outarray, nodatavalue=fill_value
+
+        output_data = np.empty(
+            (*array.shape[:-2], self.var.land_use_ratio.size), dtype=array.dtype
         )
-        return outarray
+
+        if array.ndim == 2:
+            self.compress_numba(
+                array,
+                self.var.unmerged_HRU_indices,
+                output_data,
+                nodatavalue=fill_value,
+                method=method,
+            )
+        elif array.ndim == 3:
+            for i in range(array.shape[0]):
+                self.compress_numba(
+                    array[i],
+                    self.var.unmerged_HRU_indices,
+                    output_data[i],
+                    nodatavalue=fill_value,
+                    method=method,
+                )
+        else:
+            raise NotImplementedError
+        return output_data
 
     def plot(self, HRU_array: np.ndarray, ax=None, show: bool = True):
         """Function to plot HRU data.

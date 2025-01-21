@@ -335,9 +335,6 @@ class GEBModel(GridModel):
         )
 
         scale_factor = resolution_arcsec // 3
-        self.set_dict(
-            {"hydrography_scale_factor": scale_factor}, name="hydrography_scale_factor"
-        )
 
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
         flow_raster_upscaled, idxs_out = flow_raster.upscale(
@@ -1456,20 +1453,20 @@ class GEBModel(GridModel):
 
         self.logger.info("Setting up soil parameters")
         (
-            hydraulic_conductivity,
-            bubbling_pressure_cm,
-            lambda_,
-            thetas,
-            thetar,
+            sand,
+            silt,
+            clay,
+            bulk_density,
+            soil_organic_carbon,
             soil_layer_height,
-        ) = load_soilgrids(self.data_catalog, self.grid, self.region)
+        ) = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 
-        self.set_grid(hydraulic_conductivity, name="soil/hydraulic_conductivity")
-        self.set_grid(bubbling_pressure_cm, name="soil/bubbling_pressure_cm")
-        self.set_grid(lambda_, name="soil/lambda")
-        self.set_grid(thetas, name="soil/thetas")
-        self.set_grid(thetar, name="soil/thetar")
-        self.set_grid(soil_layer_height, name="soil/soil_layer_height")
+        self.set_subgrid(sand, name="soil/sand")
+        self.set_subgrid(silt, name="soil/silt")
+        self.set_subgrid(clay, name="soil/clay")
+        self.set_subgrid(bulk_density, name="soil/bulk_density")
+        self.set_subgrid(soil_organic_carbon, name="soil/soil_organic_carbon")
+        self.set_subgrid(soil_layer_height, name="soil/soil_layer_height")
 
         soil_ds = self.data_catalog.get_rasterdataset(
             "cwatm_soil_5min", bbox=self.bounds, buffer=10
@@ -2152,7 +2149,7 @@ class GEBModel(GridModel):
             mask = self.grid["areamaps/grid_mask"]
 
             files = download_ERA5(
-                folder=Path(self.root).parent / "preprocessing" / "climate" / "ERA5",
+                folder=self.preprocessing_dir / "climate" / "ERA5",
                 variables=[
                     "total_precipitation",
                     "surface_solar_radiation_downwards",
@@ -2581,13 +2578,7 @@ class GEBModel(GridModel):
         start_year = starttime.year
         end_year = endtime.year
 
-        chelsa_folder = (
-            Path(self.root).parent
-            / "preprocessing"
-            / "climate"
-            / "chelsa-bioclim+"
-            / "hurs"
-        )
+        chelsa_folder = self.preprocessing_dir / "climate" / "chelsa-bioclim+" / "hurs"
         chelsa_folder.mkdir(parents=True, exist_ok=True)
 
         self.logger.info(
@@ -3852,13 +3843,7 @@ class GEBModel(GridModel):
         See the `setup_farmers` method for more information on how the farmer data is set up in the model.
         """
         if path is None:
-            path = (
-                Path(self.root).parent
-                / "preprocessing"
-                / "agents"
-                / "farmers"
-                / "farmers.csv"
-            )
+            path = self.preprocessing_dir / "agents" / "farmers" / "farmers.csv"
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
@@ -3987,7 +3972,7 @@ class GEBModel(GridModel):
         )
 
         # Save the concatenated DataArrays as NetCDF files
-        save_dir = Path(self.root).parent / "preprocessing" / "crops" / "MIRCA2000"
+        save_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
         save_dir.mkdir(parents=True, exist_ok=True)
 
         output_filename = save_dir / "crop_area_fraction_all_years.nc"
@@ -5187,7 +5172,7 @@ class GEBModel(GridModel):
 
     def assign_crops_irrigation_farmers(self, year=2000):
         # Define the directory and file paths
-        data_dir = Path(self.root).parent / "preprocessing" / "crops" / "MIRCA2000"
+        data_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
         crop_area_file = data_dir / "crop_area_fraction_all_years.nc"
         crop_irr_fraction_file = data_dir / "crop_irrigated_fraction_all_years.nc"
 
@@ -5517,7 +5502,7 @@ class GEBModel(GridModel):
         if isinstance(feature_types, str):
             feature_types = [feature_types]
 
-        OSM_data_dir = Path(self.root).parent / "preprocessing" / "osm"
+        OSM_data_dir = self.preprocessing_dir / "osm"
         OSM_data_dir.mkdir(exist_ok=True, parents=True)
 
         if source == "geofabrik":
@@ -5697,9 +5682,7 @@ class GEBModel(GridModel):
         assert (starttime is None) == (endtime is None)
 
         client = ISIMIPClient()
-        download_path = (
-            Path(self.root).parent / "preprocessing" / "climate" / forcing / variable
-        )
+        download_path = self.preprocessing_dir / "climate" / forcing / variable
         download_path.mkdir(parents=True, exist_ok=True)
 
         # Code to get data from disk rather than server.
@@ -6875,5 +6858,5 @@ class GEBModel(GridModel):
         return subgrid_factor
 
     @property
-    def hydrography_scale_factor(self):
-        return self.dict["hydrography_scale_factor"]["hydrography_scale_factor"]
+    def preprocessing_dir(self):
+        return Path(self.root) / "preprocessing"
