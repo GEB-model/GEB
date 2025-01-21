@@ -1453,20 +1453,20 @@ class GEBModel(GridModel):
 
         self.logger.info("Setting up soil parameters")
         (
-            hydraulic_conductivity,
-            bubbling_pressure_cm,
-            lambda_,
-            thetas,
-            thetar,
+            sand,
+            silt,
+            clay,
+            bulk_density,
+            soil_organic_carbon,
             soil_layer_height,
-        ) = load_soilgrids(self.data_catalog, self.grid, self.region)
+        ) = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 
-        self.set_grid(hydraulic_conductivity, name="soil/hydraulic_conductivity")
-        self.set_grid(bubbling_pressure_cm, name="soil/bubbling_pressure_cm")
-        self.set_grid(lambda_, name="soil/lambda")
-        self.set_grid(thetas, name="soil/thetas")
-        self.set_grid(thetar, name="soil/thetar")
-        self.set_grid(soil_layer_height, name="soil/soil_layer_height")
+        self.set_subgrid(sand, name="soil/sand")
+        self.set_subgrid(silt, name="soil/silt")
+        self.set_subgrid(clay, name="soil/clay")
+        self.set_subgrid(bulk_density, name="soil/bulk_density")
+        self.set_subgrid(soil_organic_carbon, name="soil/soil_organic_carbon")
+        self.set_subgrid(soil_layer_height, name="soil/soil_layer_height")
 
         soil_ds = self.data_catalog.get_rasterdataset(
             "cwatm_soil_5min", bbox=self.bounds, buffer=10
