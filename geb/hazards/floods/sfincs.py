@@ -576,7 +576,7 @@ class SFINCS:
         self,
     ):  # is used in driver.py on every timestep. This is saving the CWATM model output for use in SFINCS (driver.py)
         self.discharge_per_timestep.append(
-            self.model.data.grid.discharge_substep  # this is a hourly discharge
+            self.model.data.grid.var.discharge_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
     def save_soil_moisture(self):  # is used in driver.py on every timestep

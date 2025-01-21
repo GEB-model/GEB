@@ -187,26 +187,31 @@ class PotentialEvapotranspiration(object):
         """
         The constructor evaporationPot
         """
-        self.var = model.data.HRU
+        self.HRU = model.data.HRU
         self.model = model
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
 
     def step(self):
         """
         Dynamic part of the potential evaporation module
         Based on Penman Monteith - FAO 56
         """
-        self.var.ETRef, self.var.EWRef = PET(
-            tas=self.var.tas,
-            tasmin=self.var.tasmin,
-            tasmax=self.var.tasmax,
-            hurs=self.var.hurs,
-            ps=self.var.ps,
-            rlds=self.var.rlds,
-            rsds=self.var.rsds,
-            sfcWind=self.var.sfcWind,
+        self.HRU.var.ETRef, self.HRU.var.EWRef = PET(
+            tas=self.HRU.tas,
+            tasmin=self.HRU.tasmin,
+            tasmax=self.HRU.tasmax,
+            hurs=self.HRU.hurs,
+            ps=self.HRU.ps,
+            rlds=self.HRU.rlds,
+            rsds=self.HRU.rsds,
+            sfcWind=self.HRU.sfcWind,
         )
 
-        assert self.var.ETRef.dtype == np.float32
-        assert self.var.EWRef.dtype == np.float32
+        assert self.HRU.var.ETRef.dtype == np.float32
+        assert self.HRU.var.EWRef.dtype == np.float32
 
         self.model.agents.crop_farmers.save_water_deficit()

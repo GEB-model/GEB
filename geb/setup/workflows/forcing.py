@@ -111,7 +111,7 @@ def download_ERA5(
         month_end = month_start + timedelta(days=days_in_month)
         output_fn = (
             folder
-            / f"{month_start.strftime("%Y%m%d")}_{month_end.strftime("%Y%m%d")}.nc"
+            / f"{month_start.strftime('%Y%m%d')}_{month_end.strftime('%Y%m%d')}.nc"
         )
         if output_fn.exists():
             if logger:
@@ -177,7 +177,7 @@ def download_ERA5(
                     )
                     break
                 except Exception as e:
-                    print(f"Download failed. Retrying... ({retries+1}/{max_retries})")
+                    print(f"Download failed. Retrying... ({retries + 1}/{max_retries})")
                     print(e)
                     print(request)
                     retries += 1

@@ -38,7 +38,6 @@ class SmallLakesReservoirs(object):
     Variable [self.var]   Description                                                                       Unit
     ====================  ================================================================================  =========
     EWRef                 potential evaporation rate from water surface                                     m
-    load_initial
     waterbalance_module
     seconds_per_timestep                 number of seconds per timestep (default = 86400)                                  s
     lakeEvaFactor         a factor which increases evaporation from lake because of wind                    --
@@ -76,6 +75,11 @@ class SmallLakesReservoirs(object):
         """
         self.var = model.data.grid
         self.model = model
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
 
     def step(self):
         pass

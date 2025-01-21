@@ -11,11 +11,6 @@ from honeybees.library.raster import coord_to_pixel
 from pathlib import Path
 from numcodecs import Blosc
 import zarr.hierarchy
-
-try:
-    import cupy as cp
-except ImportError:
-    cp = np
 from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
@@ -202,7 +197,9 @@ class hydrology_reporter(ABMReporter):
         Returns:
             decompressed_array: The decompressed array.
         """
-        return attrgetter(".".join(attr.split(".")[:-1]))(self.model).decompress(array)
+        return attrgetter(".".join(attr.split(".")[:-1]).replace(".var", ""))(
+            self.model
+        ).decompress(array)
 
     def get_array(self, attr: str, decompress: bool = False) -> np.ndarray:
         """This function retrieves a NumPy array from the model based the name of the variable. Optionally decompresses the array.
@@ -237,7 +234,7 @@ class hydrology_reporter(ABMReporter):
             decompressed_array = self.decompress(attr, array)
             return array, decompressed_array
 
-        assert isinstance(array, (np.ndarray, cp.ndarray))
+        assert isinstance(array, np.ndarray)
 
         return array
 
@@ -283,7 +280,7 @@ class hydrology_reporter(ABMReporter):
             elif conf["format"] == "csv":
                 fn += ".csv"
                 fp = os.path.join(folder, fn)
-                if isinstance(value, (np.ndarray, cp.ndarray)):
+                if isinstance(value, np.ndarray):
                     value = value.tolist()
                 if isinstance(value, (float, int)):
                     value = [value]

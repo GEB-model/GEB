@@ -19,7 +19,7 @@ dependencies = [
     "deap>=1.4.1",
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
-    "honeybees>=1.0.4",
+    "honeybees>=1.0.7",
     "hydromt==0.10.0",
     "hydromt-sfincs>=1.1.0",
     "intel-cmplr-lib-rt",
@@ -45,7 +45,7 @@ dependencies = [
     "xclim>=0.52.0",
     "xesmf>=0.8.4",
     "xmipy>=1.5.0",
-    "zarr>=2.18.2",
+    "zarr>=2.18.2,<3",
 ]
 requires-python = ">=3.11, <3.13"
 readme = "README.md"

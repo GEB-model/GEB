@@ -1,7 +1,8 @@
 import numpy as np
 import geopandas as gpd
 import calendar
-from .general import AgentArray, downscale_volume, AgentBaseClass
+from .general import downscale_volume, AgentBaseClass
+from ..store import DynamicArray
 from ..hydrology.landcover import (
     SEALED,
     FOREST,
@@ -13,11 +14,6 @@ import json
 import rioxarray
 from rasterio.features import shapes
 from shapely.geometry import shape
-
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
@@ -46,6 +42,8 @@ def from_landuse_raster_to_polygon(mask, transform, crs):
 class Households(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
+        self.HRU = model.data.HRU
+        self.grid = model.data.grid
         self.agents = agents
         self.reduncancy = reduncancy
         self.config = (
@@ -53,29 +51,66 @@ class Households(AgentBaseClass):
             if "households" in self.model.config["agent_settings"]
             else {}
         )
+
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        self.var = self.model.store.create_bucket("agents.households.var")
+
         # Load buildings
-        self.buildings = gpd.read_file(self.model.files["geoms"]["assets/buildings"])
-        self.buildings["object_type"] = "building_structure"
-        self.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
-        self.buildings_centroid["object_type"] = "building_content"
+        self.var.buildings = gpd.read_file(
+            self.model.files["geoms"]["assets/buildings"]
+        )
+        self.var.buildings["object_type"] = "building_structure"
+        self.var.buildings_centroid = gpd.GeoDataFrame(
+            geometry=self.var.buildings.centroid
+        )
+        self.var.buildings_centroid["object_type"] = "building_content"
 
         # Load roads
-        self.roads = gpd.read_file(self.model.files["geoms"]["assets/roads"])
-        self.roads = self.roads.rename(columns={"highway": "object_type"})
+        self.var.roads = gpd.read_file(
+            self.model.files["geoms"]["assets/roads"]
+        ).rename(columns={"highway": "object_type"})
 
         # Load rail
-        self.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
-        self.rail["object_type"] = "rail"
+        self.var.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
+        self.var.rail["object_type"] = "rail"
 
         # Load maximum damages
         with open(
-            model.files["dict"]["damage_parameters/flood/rail/main/maximum_damage"], "r"
+            self.model.files["dict"][
+                "damage_parameters/flood/buildings/structure/maximum_damage"
+            ],
+            "r",
         ) as f:
-            self.max_dam_rail = json.load(f)
-        self.max_dam_rail = float(self.max_dam_rail["maximum_damage"])
-        self.rail["maximum_damage"] = self.max_dam_rail
+            self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
+        self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
 
-        self.max_dam_road = {}
+        with open(
+            self.model.files["dict"][
+                "damage_parameters/flood/buildings/content/maximum_damage"
+            ],
+            "r",
+        ) as f:
+            max_dam_buildings_content = json.load(f)
+        self.var.max_dam_buildings_content = float(
+            max_dam_buildings_content["maximum_damage"]
+        )
+        self.var.buildings_centroid["maximum_damage"] = (
+            self.var.max_dam_buildings_content
+        )
+
+        with open(
+            self.model.files["dict"][
+                "damage_parameters/flood/rail/main/maximum_damage"
+            ],
+            "r",
+        ) as f:
+            self.var.max_dam_rail = float(json.load(f)["maximum_damage"])
+        self.var.rail["maximum_damage"] = self.var.max_dam_rail
+
+        self.var.max_dam_road = {}
         road_types = [
             ("residential", "damage_parameters/flood/road/residential/maximum_damage"),
             (
@@ -103,32 +138,32 @@ class Households(AgentBaseClass):
         ]
 
         for road_type, path in road_types:
-            with open(model.files["dict"][path], "r") as f:
+            with open(self.model.files["dict"][path], "r") as f:
                 max_damage = json.load(f)
-            self.max_dam_road[road_type] = max_damage["maximum_damage"]
+            self.var.max_dam_road[road_type] = max_damage["maximum_damage"]
 
-        self.roads["maximum_damage"] = self.roads["object_type"].map(self.max_dam_road)
+        self.var.roads["maximum_damage"] = self.var.roads["object_type"].map(
+            self.var.max_dam_road
+        )
 
         with open(
-            model.files["dict"][
+            self.model.files["dict"][
                 "damage_parameters/flood/land_use/forest/maximum_damage"
             ],
             "r",
         ) as f:
-            self.max_dam_forest = json.load(f)
-        self.max_dam_forest = float(self.max_dam_forest["maximum_damage"])
+            self.var.max_dam_forest = float(json.load(f)["maximum_damage"])
 
         with open(
-            model.files["dict"][
+            self.model.files["dict"][
                 "damage_parameters/flood/land_use/agriculture/maximum_damage"
             ],
             "r",
         ) as f:
-            self.max_dam_agriculture = json.load(f)
-        self.max_dam_agriculture = float(self.max_dam_agriculture["maximum_damage"])
+            self.var.max_dam_agriculture = float(json.load(f)["maximum_damage"])
 
         # Load vulnerability curves
-        self.road_curves = []
+        road_curves = []
         road_types = [
             ("residential", "damage_parameters/flood/road/residential/curve"),
             ("unclassified", "damage_parameters/flood/road/unclassified/curve"),
@@ -152,193 +187,195 @@ class Households(AgentBaseClass):
 
             df = df.rename(columns={"damage_ratio": road_type})
 
-            self.road_curves.append(df[[road_type]])
-        self.road_curves = pd.concat([severity_column] + self.road_curves, axis=1)
-        self.road_curves.set_index("severity", inplace=True)
+            road_curves.append(df[[road_type]])
 
-        self.forest_curve = pd.read_parquet(
+        self.var.road_curves = pd.concat([severity_column] + road_curves, axis=1)
+        self.var.road_curves.set_index("severity", inplace=True)
+
+        self.var.forest_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/land_use/forest/curve"]
         )
-        self.forest_curve.set_index("severity", inplace=True)
-        self.forest_curve = self.forest_curve.rename(columns={"damage_ratio": "forest"})
-        self.agriculture_curve = pd.read_parquet(
+        self.var.forest_curve.set_index("severity", inplace=True)
+        self.var.forest_curve = self.var.forest_curve.rename(
+            columns={"damage_ratio": "forest"}
+        )
+        self.var.agriculture_curve = pd.read_parquet(
             self.model.files["table"][
                 "damage_parameters/flood/land_use/agriculture/curve"
             ]
         )
-        self.agriculture_curve.set_index("severity", inplace=True)
-        self.agriculture_curve = self.agriculture_curve.rename(
+        self.var.agriculture_curve.set_index("severity", inplace=True)
+        self.var.agriculture_curve = self.var.agriculture_curve.rename(
             columns={"damage_ratio": "agriculture"}
         )
 
         # Get vulnerability curves based on adaptation scenario
         if self.config.get("measure") not in ["dry_proofing", "wet_proofing"]:
             print("were going for the normal curves ")
-            self.buildings_structure_curve = pd.read_parquet(
+            self.var.buildings_structure_curve = pd.read_parquet(
                 self.model.files["table"][
                     "damage_parameters/flood/buildings/normal/structure/curve"
                 ]
             )
-            self.buildings_structure_curve.set_index("severity", inplace=True)
-            self.buildings_structure_curve = self.buildings_structure_curve.rename(
+            self.var.buildings_structure_curve.set_index("severity", inplace=True)
+            self.var.buildings_structure_curve = self.buildings_structure_curve.rename(
                 columns={"damage_ratio": "building_structure"}
             )
 
-            self.buildings_content_curve = pd.read_parquet(
+            self.var.buildings_content_curve = pd.read_parquet(
                 self.model.files["table"][
                     "damage_parameters/flood/buildings/normal/content/curve"
                 ]
             )
-            self.buildings_content_curve.set_index("severity", inplace=True)
-            self.buildings_content_curve = self.buildings_content_curve.rename(
+            self.var.buildings_content_curve.set_index("severity", inplace=True)
+            self.var.buildings_content_curve = self.buildings_content_curve.rename(
                 columns={"damage_ratio": "building_content"}
             )
             with open(
-                model.files["dict"][
+                self.model.files["dict"][
                     "damage_parameters/flood/buildings/normal/structure/maximum_damage"
                 ],
                 "r",
             ) as f:
-                self.max_dam_buildings_structure = json.load(f)
-            self.max_dam_buildings_structure = float(
-                self.max_dam_buildings_structure["maximum_damage"]
+                self.var.max_dam_buildings_structure = json.load(f)
+            self.var.max_dam_buildings_structure = float(
+                self.var.max_dam_buildings_structure["maximum_damage"]
             )
-            self.buildings["maximum_damage"] = self.max_dam_buildings_structure
+            self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
             with open(
-                model.files["dict"][
+                self.model.files["dict"][
                     "damage_parameters/flood/buildings/normal/content/maximum_damage"
                 ],
                 "r",
             ) as f:
-                self.max_dam_buildings_content = json.load(f)
-            self.max_dam_buildings_content = float(
-                self.max_dam_buildings_content["maximum_damage"]
+                self.var.max_dam_buildings_content = json.load(f)
+            self.var.max_dam_buildings_content = float(
+                self.var.max_dam_buildings_content["maximum_damage"]
             )
-            self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
+            self.var.buildings_centroid["maximum_damage"] = (
+                self.var.max_dam_buildings_content
+            )
 
         if self.config.get("measure") == "dry_proofing":
             print("turning on dryproofing")
-            self.buildings_structure_curve = pd.read_parquet(
+            self.var.buildings_structure_curve = pd.read_parquet(
                 self.model.files["table"][
                     "damage_parameters/flood/buildings/dry_proofing/structure/curve"
                 ]
             )
-            self.buildings_structure_curve.set_index("severity", inplace=True)
-            self.buildings_structure_curve = self.buildings_structure_curve.rename(
-                columns={"damage_ratio": "building_structure"}
+            self.var.buildings_structure_curve.set_index("severity", inplace=True)
+            self.var.buildings_structure_curve = (
+                self.var.buildings_structure_curve.rename(
+                    columns={"damage_ratio": "building_structure"}
+                )
             )
 
-            self.buildings_content_curve = pd.read_parquet(
+            self.var.buildings_content_curve = pd.read_parquet(
                 self.model.files["table"][
                     "damage_parameters/flood/buildings/dry_proofing/content/curve"
                 ]
             )
-            self.buildings_content_curve.set_index("severity", inplace=True)
-            self.buildings_content_curve = self.buildings_content_curve.rename(
+            self.var.buildings_content_curve.set_index("severity", inplace=True)
+            self.var.buildings_content_curve = self.var.buildings_content_curve.rename(
                 columns={"damage_ratio": "building_content"}
             )
-            print(self.buildings_structure_curve)
-            print(self.buildings_content_curve)
             with open(
-                model.files["dict"][
+                self.model.files["dict"][
                     "damage_parameters/flood/buildings/dry_proofing/structure/maximum_damage"
                 ],
                 "r",
             ) as f:
-                self.max_dam_buildings_structure = json.load(f)
-            self.max_dam_buildings_structure = float(
-                self.max_dam_buildings_structure["maximum_damage"]
+                self.var.max_dam_buildings_structure = json.load(f)
+            self.var.max_dam_buildings_structure = float(
+                self.var.max_dam_buildings_structure["maximum_damage"]
             )
-            self.buildings["maximum_damage"] = self.max_dam_buildings_structure
+            self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
             with open(
-                model.files["dict"][
+                self.model.files["dict"][
                     "damage_parameters/flood/buildings/dry_proofing/content/maximum_damage"
                 ],
                 "r",
             ) as f:
-                self.max_dam_buildings_content = json.load(f)
-            self.max_dam_buildings_content = float(
-                self.max_dam_buildings_content["maximum_damage"]
+                self.var.max_dam_buildings_content = json.load(f)
+            self.var.max_dam_buildings_content = float(
+                self.var.max_dam_buildings_content["maximum_damage"]
             )
-            self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
+            self.var.buildings_centroid["maximum_damage"] = (
+                self.var.max_dam_buildings_content
+            )
+
         if self.config.get("measure") == "wet_proofing":
             print("turning on wetproofing")
-            self.buildings_structure_curve = pd.read_parquet(
+            self.var.buildings_structure_curve = pd.read_parquet(
                 self.model.files["table"][
                     "damage_parameters/flood/buildings/wet_proofing/structure/curve"
                 ]
             )
-            self.buildings_structure_curve.set_index("severity", inplace=True)
-            self.buildings_structure_curve = self.buildings_structure_curve.rename(
-                columns={"damage_ratio": "building_structure"}
+            self.var.buildings_structure_curve.set_index("severity", inplace=True)
+            self.var.buildings_structure_curve = (
+                self.var.buildings_structure_curve.rename(
+                    columns={"damage_ratio": "building_structure"}
+                )
             )
-            print("builing structure curve")
-            print(self.buildings_structure_curve)
 
-            self.buildings_content_curve = pd.read_parquet(
+            self.var.buildings_content_curve = pd.read_parquet(
                 self.model.files["table"][
                     "damage_parameters/flood/buildings/wet_proofing/content/curve"
                 ]
             )
-            self.buildings_content_curve.set_index("severity", inplace=True)
-            self.buildings_content_curve = self.buildings_content_curve.rename(
+            self.var.buildings_content_curve.set_index("severity", inplace=True)
+            self.var.buildings_content_curve = self.var.buildings_content_curve.rename(
                 columns={"damage_ratio": "building_content"}
             )
 
-            print("building content curve")
-            print(self.buildings_content_curve)
             with open(
-                model.files["dict"][
+                self.model.files["dict"][
                     "damage_parameters/flood/buildings/wet_proofing/structure/maximum_damage"
                 ],
                 "r",
             ) as f:
-                self.max_dam_buildings_structure = json.load(f)
-            self.max_dam_buildings_structure = float(
-                self.max_dam_buildings_structure["maximum_damage"]
+                self.var.max_dam_buildings_structure = json.load(f)
+            self.var.max_dam_buildings_structure = float(
+                self.var.max_dam_buildings_structure["maximum_damage"]
             )
-            self.buildings["maximum_damage"] = self.max_dam_buildings_structure
+            self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
             with open(
-                model.files["dict"][
+                self.model.files["dict"][
                     "damage_parameters/flood/buildings/wet_proofing/content/maximum_damage"
                 ],
                 "r",
             ) as f:
-                self.max_dam_buildings_content = json.load(f)
-            self.max_dam_buildings_content = float(
-                self.max_dam_buildings_content["maximum_damage"]
+                self.var.max_dam_buildings_content = json.load(f)
+            self.var.max_dam_buildings_content = float(
+                self.var.max_dam_buildings_content["maximum_damage"]
             )
-            self.buildings_centroid["maximum_damage"] = self.max_dam_buildings_content
+            self.var.buildings_centroid["maximum_damage"] = (
+                self.var.max_dam_buildings_content
+            )
 
-        self.rail_curve = pd.read_parquet(
+        self.var.rail_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
         )
-        self.rail_curve.set_index("severity", inplace=True)
-        self.rail_curve = self.rail_curve.rename(columns={"damage_ratio": "rail"})
+        self.var.rail_curve.set_index("severity", inplace=True)
+        self.var.rail_curve = self.var.rail_curve.rename(
+            columns={"damage_ratio": "rail"}
+        )
 
         super().__init__()
 
         water_demand, efficiency = self.update_water_demand()
-        self.current_water_demand = water_demand
-        self.current_efficiency = efficiency
+        self.var.current_water_demand = water_demand
+        self.var.current_efficiency = efficiency
 
-    def initiate(self) -> None:
         locations = np.load(self.model.files["binary"]["agents/households/locations"])[
             "data"
         ]
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
 
-        self.locations = AgentArray(locations, max_n=self.max_n)
+        self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
         sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
-        self.sizes = AgentArray(sizes, max_n=self.max_n)
-
-        self.flood_depth = AgentArray(
-            n=self.n, max_n=self.max_n, fill_value=0, dtype=np.float32
-        )
-        self.risk_perception = AgentArray(
-            n=self.n, max_n=self.max_n, fill_value=1, dtype=np.float32
-        )
+        self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
     def flood(self, flood_map, model_root, simulation_root, return_period=None):
         if return_period is not None:
@@ -362,25 +399,28 @@ class Households(AgentBaseClass):
         )
 
         # Load landuse and make turn into polygons
-        self.agriculture = from_landuse_raster_to_polygon(
-            self.model.data.HRU.decompress(self.model.data.HRU.land_owners != -1),
+        agriculture = from_landuse_raster_to_polygon(
+            self.model.data.HRU.decompress(self.model.data.HRU.var.land_owners != -1),
             self.model.data.HRU.transform,
             self.model.crs,
         )
-        self.agriculture["object_type"] = "agriculture"
-        self.agriculture["maximum_damage"] = self.max_dam_agriculture
+        agriculture["object_type"] = "agriculture"
+        agriculture["maximum_damage"] = self.var.max_dam_agriculture
 
-        self.agriculture = self.agriculture.to_crs(flood_map.rio.crs)
+        agriculture = agriculture.to_crs(flood_map.rio.crs)
 
-        self.forest = from_landuse_raster_to_polygon(
-            self.model.data.HRU.decompress(self.model.data.HRU.land_use_type == FOREST),
+        # Load landuse and make turn into polygons
+        forest = from_landuse_raster_to_polygon(
+            self.model.data.HRU.decompress(
+                self.model.data.HRU.var.land_use_type == FOREST
+            ),
             self.model.data.HRU.transform,
             self.model.crs,
         )
-        self.forest["object_type"] = "forest"
-        self.forest["maximum_damage"] = self.max_dam_forest
+        forest["object_type"] = "forest"
+        forest["maximum_damage"] = self.var.max_dam_forest
 
-        self.forest = self.forest.to_crs(flood_map.rio.crs)
+        forest = forest.to_crs(flood_map.rio.crs)
 
         flood_map = flood_map.where(~rivers_mask)
         flood_map = flood_map.fillna(0)
@@ -393,23 +433,6 @@ class Households(AgentBaseClass):
         flood_map_clipped = flood_map.rio.clip(
             region_projected.geometry, region_projected.crs
         )
-
-        # If scenario is water buffer, no damages within the buffer, so clip out location of water buffers
-        # if self.model.config["hazards"]["floods"]["measure"] == "waterbuffers":
-        #     # waterbuffer_locations = gpd.read_file(
-        #     #     "/scistor/ivm/vbl220/PhD/waterbuffer_more_info.gpkg"
-        #     # )
-        #     waterbuffer_locations = gpd.read_file(
-        #         "/scistor/ivm/vbl220/PhD/large_water_buffer.gpkg"
-        #     )
-        #     waterbuffer_locations_reprojected = waterbuffer_locations.to_crs(
-        #         flood_map.rio.crs
-        #     )
-        #     flood_map_clipped = flood_map_clipped.rio.clip(
-        #         waterbuffer_locations_reprojected.geometry,
-        #         waterbuffer_locations_reprojected.crs,
-        #         invert=True,
-        #     )
 
         def compute_damages_by_country(assets, curve, category_name):
             assets = assets.to_crs(flood_map_clipped.rio.crs)
@@ -506,27 +529,29 @@ class Households(AgentBaseClass):
         gdf_filtered_countries = all_countries[
             all_countries["COUNTRY"].isin(selection_countries)
         ]
-        if self.buildings.crs != flood_map.rio.crs:
+        if self.var.buildings.crs != flood_map.rio.crs:
             gdf_filtered_countries = gdf_filtered_countries.to_crs(flood_map.rio.crs)
 
         # Compute damages for each category
         total_damages_agriculture = compute_damages_by_country(
-            self.agriculture, self.agriculture_curve, "agriculture"
+            agriculture, self.var.agriculture_curve, "agriculture"
         )
         total_damages_forest = compute_damages_by_country(
-            self.forest, self.forest_curve, "forest"
+            forest, self.var.forest_curve, "forest"
         )
         total_damage_structure = compute_damages_by_country(
-            self.buildings, self.buildings_structure_curve, "building structure"
+            self.var.buildings, self.var.buildings_structure_curve, "building structure"
         )
         total_damages_content = compute_damages_by_country(
-            self.buildings_centroid, self.buildings_content_curve, "building content"
+            self.var.buildings_centroid,
+            self.var.buildings_content_curve,
+            "building content",
         )
         total_damages_roads = compute_damages_by_country(
-            self.roads, self.road_curves, "roads"
+            self.var.roads, self.var.road_curves, "roads"
         )
         total_damages_rail = compute_damages_by_country(
-            self.rail, self.rail_curve, "rail"
+            self.var.rail, self.var.rail_curve, "rail"
         )
 
         # Calculate total flood damages
@@ -547,9 +572,7 @@ class Households(AgentBaseClass):
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """
-        downscale_mask = self.model.data.HRU.land_use_type != SEALED
-        if self.model.use_gpu:
-            downscale_mask = downscale_mask.get()
+        downscale_mask = self.HRU.var.land_use_type != SEALED
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
         water_demand = (
             self.model.domestic_water_demand_ds.sel(
@@ -570,10 +593,8 @@ class Households(AgentBaseClass):
             self.model.data.grid.mask,
             self.model.data.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.land_use_ratio,
+            self.model.data.HRU.var.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_demand = cp.array(water_demand)
         water_demand = self.model.data.HRU.M3toM(water_demand)
 
         water_consumption = (
@@ -595,10 +616,8 @@ class Households(AgentBaseClass):
             self.model.data.grid.mask,
             self.model.data.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.land_use_ratio,
+            self.model.data.HRU.var.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_consumption = cp.array(water_consumption)
         water_consumption = self.model.data.HRU.M3toM(water_consumption)
 
         efficiency = np.divide(
@@ -612,7 +631,7 @@ class Households(AgentBaseClass):
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()
-        self.last_water_demand_update = self.model.current_time
+        self.var.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
 
     def water_demand(self):
@@ -621,17 +640,18 @@ class Households(AgentBaseClass):
             in self.model.domestic_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
-            self.current_water_demand = water_demand
-            self.current_efficiency = efficiency
+            self.var.current_water_demand = water_demand
+            self.var.current_efficiency = efficiency
 
-        assert (self.model.current_time - self.last_water_demand_update).days < 366, (
+        assert (
+            self.model.current_time - self.var.last_water_demand_update
+        ).days < 366, (
             "Water demand has not been updated for over a year. "
             "Please check the household water demand datasets."
         )
-        return self.current_water_demand, self.current_efficiency
+        return self.var.current_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
-        # self.risk_perception *= self.risk_perception
         return None
 
     @property

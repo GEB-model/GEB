@@ -146,9 +146,9 @@ class Survey:
     def apply_mapper(self, variable, values):
         values_ = []
         for value in values:
-            assert (
-                variable in self.mappers
-            ), f"Mapper for variable {variable} does not exist"
+            assert variable in self.mappers, (
+                f"Mapper for variable {variable} does not exist"
+            )
             mapper = self.mappers[variable]
             bin = value - mapper["min"]
             range_ = mapper["sd_bins"][bin : bin + 2]
@@ -168,9 +168,9 @@ class Survey:
 
     def bin(self, data, question):
         values = self.bins[question]
-        assert (
-            len(values["bins"]) == len(values["labels"]) + 1
-        ), "Bin bounds must be one longer than labels"
+        assert len(values["bins"]) == len(values["labels"]) + 1, (
+            "Bin bounds must be one longer than labels"
+        )
         return pd.cut(
             data,
             bins=values["bins"],
@@ -198,16 +198,16 @@ class Survey:
         sampler = BayesianModelSampling(self.model)
         # if no evidence this is equalivalent to forward sampling
         if evidence:
-            assert (
-                evidence_columns
-            ), "If evidence is given, evidence_columns must be given as well"
-            assert len(evidence) == len(
-                evidence_columns
-            ), "Number of evidence values must match number of evidence columns"
+            assert evidence_columns, (
+                "If evidence is given, evidence_columns must be given as well"
+            )
+            assert len(evidence) == len(evidence_columns), (
+                "Number of evidence values must match number of evidence columns"
+            )
             for state, evidence_column in zip(evidence, evidence_columns):
-                assert (
-                    state in self.model.states[evidence_column]
-                ), f"State {state} is not a valid state for variable {evidence_column}"
+                assert state in self.model.states[evidence_column], (
+                    f"State {state} is not a valid state for variable {evidence_column}"
+                )
             evidence = [
                 State(var=evidence_column, state=state)
                 for evidence_column, state in zip(evidence_columns, evidence)
@@ -691,7 +691,7 @@ class fairSTREAMModel(GEBModel):
 
             crops = np.random.choice(crop_ids, size=n_crops)
             for season_idx, crop in enumerate(crops):
-                duration = crop_variables[crop][f"season_#{season_idx+1}_duration"]
+                duration = crop_variables[crop][f"season_#{season_idx + 1}_duration"]
                 if duration > 365:
                     year_index = 1
                     crop_calendar_rotation_years[idx] = 2
@@ -699,8 +699,8 @@ class fairSTREAMModel(GEBModel):
                     year_index = 0
                 farmer_crop_calendar[season_idx] = [
                     crop,
-                    seasons[f"season_#{season_idx+1}_start"] - 1,
-                    crop_variables[crop][f"season_#{season_idx+1}_duration"],
+                    seasons[f"season_#{season_idx + 1}_start"] - 1,
+                    crop_variables[crop][f"season_#{season_idx + 1}_duration"],
                     year_index,
                 ]
 
