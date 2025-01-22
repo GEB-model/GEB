@@ -1451,7 +1451,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Load the why class of agent's aquifer
-        self.why_class = DynamicArray(
+        self.var.why_class = DynamicArray(
             n=self.n,
             max_n=self.max_n,
             dtype=np.int32,
@@ -1460,7 +1460,7 @@ class CropFarmers(AgentBaseClass):
 
         why_map = load_grid(self.model.files["grid"]["groundwater/why_map"])
 
-        self.why_class[:] = sample_from_map(
+        self.var.why_class[:] = sample_from_map(
             why_map, self.var.locations.data, self.model.data.grid.gt
         )
 
@@ -3971,12 +3971,18 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Initialize the well unit cost array with zeros
-        well_unit_cost = np.zeros_like(self.why_class, dtype=np.float32)
+        well_unit_cost = np.zeros_like(self.var.why_class, dtype=np.float32)
 
         # Assign unit costs to each agent based on their well class using boolean indexing
-        well_unit_cost[self.why_class == 1] = well_cost_class_1[self.why_class == 1]
-        well_unit_cost[self.why_class == 2] = well_cost_class_2[self.why_class == 2]
-        well_unit_cost[self.why_class == 3] = well_cost_class_3[self.why_class == 3]
+        well_unit_cost[self.var.why_class == 1] = well_cost_class_1[
+            self.var.why_class == 1
+        ]
+        well_unit_cost[self.var.why_class == 2] = well_cost_class_2[
+            self.var.why_class == 2
+        ]
+        well_unit_cost[self.var.why_class == 3] = well_cost_class_3[
+            self.var.why_class == 3
+        ]
 
         # Get electricity costs per agent based on their region and current time
         electricity_costs = self.get_value_per_farmer_from_region_id(
@@ -4659,6 +4665,12 @@ class CropFarmers(AgentBaseClass):
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth
 
+    def create_agent_classes(self, *characteristics):
+        agent_classes = np.unique(
+            np.stack(characteristics), axis=1, return_inverse=True
+        )[1]
+        return agent_classes
+
     def step(self) -> None:
         """
         This function is called at the beginning of each timestep.
@@ -4686,45 +4698,18 @@ class CropFarmers(AgentBaseClass):
                     self.var.irrigation_limit_m3[:]
                 )
 
-            # for now class is only dependent on being in a command area or not
-            self.var.farmer_class[:] = self.is_in_command_area.copy().astype(np.int32)
-
             # Set to 0 if channel abstraction is bigger than reservoir and groundwater, 1 for reservoir, 2 for groundwater and 3 no abstraction
-            self.var.farmer_class[
-                (
-                    self.var.yearly_abstraction_m3_by_farmer[:, 0, 0]
-                    > self.var.yearly_abstraction_m3_by_farmer[:, 1, 0]
-                )
-                & (
-                    self.var.yearly_abstraction_m3_by_farmer[:, 0, 0]
-                    > self.var.yearly_abstraction_m3_by_farmer[:, 2, 0]
-                )
-            ] = 0
-            self.var.farmer_class[
-                (
-                    self.var.yearly_abstraction_m3_by_farmer[:, 1, 0]
-                    > self.var.yearly_abstraction_m3_by_farmer[:, 0, 0]
-                )
-                & (
-                    self.var.yearly_abstraction_m3_by_farmer[:, 1, 0]
-                    > self.var.yearly_abstraction_m3_by_farmer[:, 2, 0]
-                )
-            ] = 1
-            self.var.farmer_class[
-                (
-                    self.var.yearly_abstraction_m3_by_farmer[:, 2, 0]
-                    > self.var.yearly_abstraction_m3_by_farmer[:, 0, 0]
-                )
-                & (
-                    self.var.yearly_abstraction_m3_by_farmer[:, 2, 0]
-                    > self.var.yearly_abstraction_m3_by_farmer[:, 1, 0]
-                )
-            ] = 2
-
+            main_irrigation_source = np.argmax(
+                self.var.yearly_abstraction_m3_by_farmer[:, :3, 0], axis=1
+            )
             # Set to 3 for precipitation if there is no abstraction
-            self.var.farmer_class[
-                self.var.yearly_abstraction_m3_by_farmer[:, 3, 0] == 0
+            main_irrigation_source[
+                self.var.yearly_abstraction_m3_by_farmer[:, :3, 0].sum(axis=1) == 0
             ] = 3
+
+            self.var.farmer_class[:] = self.create_agent_classes(
+                main_irrigation_source, self.farmer_command_area
+            )
 
             print(
                 "well",
