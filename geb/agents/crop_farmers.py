@@ -204,7 +204,7 @@ def get_farmer_groundwater_depth(
     return groundwater_depth_by_farmer
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def get_deficit_between_dates(cumulative_water_deficit_m3, farmer, start, end):
     return (
         cumulative_water_deficit_m3[farmer, end]
@@ -214,7 +214,7 @@ def get_deficit_between_dates(cumulative_water_deficit_m3, farmer, start, end):
     )
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def get_future_deficit(
     farmer: int,
     day_index: int,
@@ -261,7 +261,7 @@ def get_future_deficit(
     return future_water_deficit
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def adjust_irrigation_to_limit(
     farmer: int,
     day_index: int,
@@ -277,7 +277,7 @@ def adjust_irrigation_to_limit(
         potential_irrigation_consumption_m.fill(0)
         return potential_irrigation_consumption_m
     # calculate future water deficit, but also include today's irrigation consumption
-
+    # Check whether a full year has passed
     if np.all(~np.isnan(cumulative_water_deficit_m3[farmer])):
         future_water_deficit = get_future_deficit(
             farmer=farmer,
@@ -321,7 +321,7 @@ def adjust_irrigation_to_limit(
     return potential_irrigation_consumption_m
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def withdraw_channel(
     available_channel_storage_m3: np.ndarray,
     grid_cell: int,
@@ -355,7 +355,7 @@ def withdraw_channel(
     return irrigation_water_demand_field
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def withdraw_reservoir(
     command_area: int,
     field: int,
@@ -386,7 +386,7 @@ def withdraw_reservoir(
     return irrigation_water_demand_field
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def withdraw_groundwater(
     farmer: int,
     grid_cell: int,
@@ -425,7 +425,7 @@ def withdraw_groundwater(
     return irrigation_water_demand_field
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def abstract_water(
     day_index: int,
     n: int,
@@ -458,6 +458,7 @@ def abstract_water(
     crop_calendar: np.ndarray,
     current_crop_calendar_rotation_year_index: np.ndarray,
     max_paddy_water_level: float,
+    calibration_irrigation_moment: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -565,10 +566,14 @@ def abstract_water(
                 # if soil moisture content falls below critical level, irrigate to field capacity
                 potential_irrigation_consumption_m = np.where(
                     readily_available_water[farmer_fields]
-                    < critical_water_level[
-                        farmer_fields
-                    ],  # if there is not enough water
-                    critical_water_level[farmer_fields]
+                    < (
+                        (
+                            max_water_content[farmer_fields]
+                            - critical_water_level[farmer_fields]
+                        )
+                        / calibration_irrigation_moment
+                    ),  # if there is not enough water
+                    max_water_content[farmer_fields]
                     - readily_available_water[
                         farmer_fields
                     ],  # irrigate to field capacity (if possible)
@@ -1086,7 +1091,7 @@ class CropFarmers(AgentBaseClass):
         self.allocation_vic = np.float32(1.0)
         self.allocation_nsw = np.float32(1.0)
 
-        export_path = Path("calibration_data/water_use")
+        export_path = self.model.config["calibration"]["path"] / Path("models")
         model_file_rf = export_path / "randomforest_model.joblib"
         self.rf_model = joblib.load(model_file_rf)
 
@@ -1232,6 +1237,10 @@ class CropFarmers(AgentBaseClass):
         self.price_to_allocation_factor_nsw_b = self.model.config["agent_settings"][
             "calibration"
         ]["allocation_water_price_transfer_nsw_b"]
+
+        self.calibration_irrigation_moment = self.model.config["agent_settings"][
+            "calibration"
+        ]["calibration_irrigation_moment"]
 
         super().__init__()
 
@@ -1578,12 +1587,36 @@ class CropFarmers(AgentBaseClass):
         self.irrigation_efficiency = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0.50
         )
+
+        eff_vict = self.model.config["agent_settings"]["farmers"]["expected_utility"][
+            "adaptation_sprinkler"
+        ]["eff_vict"]
+        eff_nsw = self.model.config["agent_settings"]["farmers"]["expected_utility"][
+            "adaptation_sprinkler"
+        ]["eff_nsw"]
+
+        region_agents = np.where(
+            self.model.regions["NAME_1"].values[self.region_id] == "New South Wales",
+            1,
+            0,
+        )  # Vict is 0, NSW is 1
+
+        eff_vict_mask = irrigation_mask & (region_agents == 0)
+        eff_nsw_mask = irrigation_mask & (region_agents == 1)
+
         rng = np.random.default_rng(42)
-        self.irrigation_efficiency[irrigation_mask] = rng.choice(
-            [0.50, 0.70, 0.90], size=irrigation_mask.sum(), p=[0.8, 0.15, 0.05]
-        )
-        self.adapted[:, 2][self.irrigation_efficiency >= 0.70] = 1
-        self.adapted[:, 3][self.irrigation_efficiency >= 0.90] = 1
+        self.irrigation_efficiency[eff_vict_mask] = rng.choice(
+            [0.50, 0.70, 0.90],
+            size=eff_vict_mask.sum(),
+            p=[eff_vict[0], eff_vict[1], eff_vict[2]],
+        )  # vict
+        self.irrigation_efficiency[eff_nsw_mask] = rng.choice(
+            [0.50, 0.70, 0.90],
+            size=eff_nsw_mask.sum(),
+            p=[eff_nsw[0], eff_nsw[1], eff_nsw[2]],
+        )  # nsw
+        self.adapted[:, 2][self.irrigation_efficiency == 0.70] = 1
+        self.adapted[:, 3][self.irrigation_efficiency == 0.90] = 1
 
         rng_drip = np.random.default_rng(70)
         self.time_adapted[self.adapted[:, 2] == 1, 2] = rng_drip.uniform(
@@ -1831,7 +1864,7 @@ class CropFarmers(AgentBaseClass):
         ]  # Cultivation costs are set as a fraction of crop prices
         date_index, cultivation_costs_array = self.cultivation_costs
 
-        if "crops" in self.model.config["calibration"]["calibration_targets"]:
+        if "KGE_crops" in self.model.config["calibration"]["calibration_targets"]:
             # Load price change factors 0 to 25 into a NumPy array
             factors = np.array(
                 [
@@ -1985,7 +2018,7 @@ class CropFarmers(AgentBaseClass):
                 * np.mean(self.var.water_price_monthly)
             )
             / 12
-        )  # m3 / Month
+        ) * 1000  # m3 / Month
         self.allocation_nsw = (
             self.price_to_allocation_factor_nsw_a
             * np.exp(
@@ -1993,7 +2026,7 @@ class CropFarmers(AgentBaseClass):
                 * np.mean(self.var.water_price_monthly)
             )
             / 12
-        )  # m3 / Month
+        ) * 1000  # m3 / Month
 
         aus_region_HRUs = np.where(
             self.model.regions["NAME_1"].values[self.HRU_regions_map]
@@ -2073,11 +2106,11 @@ class CropFarmers(AgentBaseClass):
         total_field_size_vic = self.field_size_per_farmer[vic_irrigating_farmers].sum()
         total_field_size_nsw = self.field_size_per_farmer[nsw_irrigating_farmers].sum()
 
-        self.remaining_irrigation_limit_m3[vic_irrigating_farmers] = (
+        self.remaining_irrigation_limit_m3[vic_irrigating_farmers] += (
             self.field_size_per_farmer[vic_irrigating_farmers] / total_field_size_vic
         ) * self.crop_allocation_vic
 
-        self.remaining_irrigation_limit_m3[nsw_irrigating_farmers] = (
+        self.remaining_irrigation_limit_m3[nsw_irrigating_farmers] += (
             self.field_size_per_farmer[nsw_irrigating_farmers] / total_field_size_nsw
         ) * self.crop_allocation_nsw
 
@@ -2238,6 +2271,7 @@ class CropFarmers(AgentBaseClass):
             crop_calendar=self.crop_calendar.data,
             current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index.data,
             max_paddy_water_level=self.max_paddy_water_level,
+            calibration_irrigation_moment=self.calibration_irrigation_moment,
         )
 
         if __debug__:
@@ -3660,10 +3694,8 @@ class CropFarmers(AgentBaseClass):
         ]
         annual_cost_empty = np.zeros(self.n, dtype=np.float32)
 
-        # Perennial crops cant switch
-        extra_constraint = np.bool(
-            np.where(self.crop_calendar.data[:, 0, 0] == 23, 1, 0)
-        )
+        # No constraint
+        extra_constraint = np.ones_like(annual_cost_empty, dtype=bool)
 
         # Set variable which indicates all possible crop options
         unique_crop_calendars = np.unique(self.crop_calendar[:, :, 0], axis=0)
@@ -3712,9 +3744,9 @@ class CropFarmers(AgentBaseClass):
         SEUT_crop_options = np.full(
             (self.n, len(unique_crop_calendars)), 0, dtype=np.float32
         )
-        for crop_option in range(len(unique_crop_calendars)):
+        for idx, crop_option in enumerate(unique_crop_calendars[:, 0]):
             # Determine the cost difference between old and potential new crop
-            new_crop_nr_option = new_crop_nr[:, crop_option]
+            new_crop_nr_option = new_crop_nr[:, idx]
             cultivation_cost_new_crop = cultivation_cost[
                 self.region_id, new_crop_nr_option
             ]
@@ -3725,16 +3757,12 @@ class CropFarmers(AgentBaseClass):
             decision_params_option = copy.deepcopy(decision_params)
             decision_params_option.update(
                 {
-                    "total_profits_adaptation": total_profits_adaptation[
-                        crop_option, :, :
-                    ],
-                    "profits_no_event_adaptation": profits_no_event_adaptation[
-                        crop_option, :
-                    ],
+                    "total_profits_adaptation": total_profits_adaptation[idx, :, :],
+                    "profits_no_event_adaptation": profits_no_event_adaptation[idx, :],
                     "adaptation_costs": cost_difference_adaptation,
                 }
             )
-            SEUT_crop_options[:, crop_option] = self.decision_module.calcEU_adapt(
+            SEUT_crop_options[:, idx] = self.decision_module.calcEU_adapt(
                 **decision_params_option
             )
 
@@ -3926,7 +3954,12 @@ class CropFarmers(AgentBaseClass):
         print("Irrigation well farms:", percentage_adapted, "(%)")
 
     def adapt_irrigation_efficiency(
-        self, energy_cost, water_cost, m2_adaptation_costs, adaptation_type
+        self,
+        energy_cost,
+        water_cost,
+        m2_adaptation_costs,
+        adaptation_type,
+        efficiency,
     ) -> None:
         """
         Handle the adaptation of farmers to irrigation wells.
@@ -4041,7 +4074,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Update irrigation efficiency for farmers who adapted
-        self.irrigation_efficiency[SEUT_adaptation_decision] = 0.9
+        self.irrigation_efficiency[SEUT_adaptation_decision] = efficiency
 
         # Print the percentage of adapted households
         percentage_adapted = round(
@@ -5154,7 +5187,18 @@ class CropFarmers(AgentBaseClass):
         self.save_discharge_daily()
 
         if self.model.current_time.day == 1:
+            if self.model.current_time.month == 7 and (
+                self.model.current_time.year - 1 > self.model.spinup_start.year
+            ):
+                # reset the irrigation limit, but only if a full year has passed already. Otherwise
+                # the cumulative water deficit is not year completed.
+                if "irrigation_limit" in self.config:
+                    self.remaining_irrigation_limit_m3[:] = self.irrigation_limit_m3[:]
+                else:
+                    self.remaining_irrigation_limit_m3[:] = 0
+
             jingelic = "jingelic"
+
             if jingelic in os.getcwd():
                 self.water_price = self.determine_water_price_jingelic.copy()  # $ / ML
                 self.crop_allocation_vic, self.crop_allocation_nsw = (
@@ -5175,13 +5219,6 @@ class CropFarmers(AgentBaseClass):
             )
 
             self.save_yearly_spei()
-
-            # reset the irrigation limit, but only if a full year has passed already. Otherwise
-            # the cumulative water deficit is not year completed.
-            if (
-                self.model.current_time.year - 1 > self.model.spinup_start.year
-            ) and "irrigation_limit" in self.config:
-                self.remaining_irrigation_limit_m3[:] = self.irrigation_limit_m3[:]
 
             # for now class is only dependent on being in a command area or not
             self.farmer_class = self.is_in_command_area.copy().astype(np.int32)
@@ -5280,10 +5317,10 @@ class CropFarmers(AgentBaseClass):
                         )
 
                         self.adapt_irrigation_efficiency(
-                            energy_cost, water_cost, m2_capital_cost_sprinkler, 2
+                            energy_cost, water_cost, m2_capital_cost_sprinkler, 2, 0.7
                         )
                         self.adapt_irrigation_efficiency(
-                            energy_cost, water_cost, m2_capital_cost_drip, 3
+                            energy_cost, water_cost, m2_capital_cost_drip, 3, 0.9
                         )
                         timer.new_split("irr efficiency")
                     if (
