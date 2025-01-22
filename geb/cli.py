@@ -236,8 +236,9 @@ def run_model(
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
         if "draw" in config and "plot" in config["draw"] and config["draw"]["plot"]:
-            server_elements = server_elements
-            +[ChartModule(series) for series in config["draw"]["plot"]]
+            server_elements = server_elements + [
+                ChartModule(series) for series in config["draw"]["plot"]
+            ]
 
         DISPLAY_TIMESTEPS = ["day", "week", "month", "year"]
 
