@@ -2668,7 +2668,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     def save_yearly_spei(self):
-        assert self.model.current_time.month == 7
+        assert self.model.current_time.month == 1
 
         # calculate the SPEI probability using GEV parameters
         SPEI_probability = genextreme.sf(
