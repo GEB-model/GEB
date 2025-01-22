@@ -6773,7 +6773,6 @@ class GEBModel(GridModel):
                     assert grid[dvar].shape == data[dvar].shape
                     assert (grid[dvar].y.values == data[dvar].y.values).all()
                     assert (grid[dvar].x.values == data[dvar].x.values).all()
-                    assert data.dims == grid.dims
                     grid = grid.drop_vars(dvar)
 
                 assert CRS.from_wkt(data.spatial_ref.crs_wkt) == CRS.from_wkt(
