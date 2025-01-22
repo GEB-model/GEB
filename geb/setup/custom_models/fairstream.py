@@ -1,12 +1,9 @@
 from ..geb import GEBModel
 
 import numpy as np
-import geopandas as gpd
 import zipfile
-import gzip
 from pathlib import Path
 import pandas as pd
-from honeybees.library.raster import pixels_to_coords
 import matplotlib.pyplot as plt
 
 from scipy.stats import norm
@@ -540,7 +537,7 @@ class fairSTREAMModel(GEBModel):
         # process crop calendars
         crop_calendar_per_farmer = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
         crop_calendar_rotation_years = np.full(n_farmers, 1, dtype=np.int32)
-        crop_ids = list(crop_variables.keys())
+        # crop_ids = list(crop_variables.keys())
 
         for idx in range(n_farmers):
             farmer_crop_calendar = crop_calendar_per_farmer[idx]
