@@ -1205,7 +1205,7 @@ class CropFarmers(AgentBaseClass):
             max_n=self.max_n,
         )
         # set the adaptation of wells to 1 if farmers have well
-        self.var.adapted[:, 1][
+        self.var.adapted[:, WELL_ADAPTATION][
             np.isin(
                 self.var.irrigation_source,
                 np.array(
@@ -1226,10 +1226,12 @@ class CropFarmers(AgentBaseClass):
         )
         # Set how long the agents have adapted somewhere across the lifespan of farmers, would need to be a bit more realistic likely
         rng_wells = np.random.default_rng(17)
-        self.var.time_adapted[self.var.adapted[:, 1] == 1, 1] = rng_wells.uniform(
+        self.var.time_adapted[
+            self.var.adapted[:, WELL_ADAPTATION] == 1, WELL_ADAPTATION
+        ] = rng_wells.uniform(
             1,
             self.var.lifespan_well,
-            np.sum(self.var.adapted[:, 1] == 1),
+            np.sum(self.var.adapted[:, WELL_ADAPTATION] == 1),
         )
 
         # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
@@ -1391,12 +1393,17 @@ class CropFarmers(AgentBaseClass):
         self.var.irrigation_efficiency[irrigation_mask] = rng.choice(
             [0.50, 0.70, 0.90], size=irrigation_mask.sum(), p=[0.8, 0.15, 0.05]
         )
-        self.var.adapted[:, 2][self.var.irrigation_efficiency >= 0.90] = 1
+        self.var.adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION][
+            self.var.irrigation_efficiency >= 0.90
+        ] = 1
         rng_drip = np.random.default_rng(70)
-        self.var.time_adapted[self.var.adapted[:, 2] == 1, 2] = rng_drip.uniform(
+        self.var.time_adapted[
+            self.var.adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION] == 1,
+            IRRIGATION_EFFICIENCY_ADAPTATION,
+        ] = rng_drip.uniform(
             1,
             self.var.lifespan_irrigation,
-            np.sum(self.var.adapted[:, 2] == 1),
+            np.sum(self.var.adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION] == 1),
         )
 
         # Set irrigation expansion data
@@ -1404,7 +1411,9 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
         self.var.fraction_irrigated_field[:] = 1
-        self.var.adapted[:, 3][self.var.fraction_irrigated_field >= 1] = 1
+        self.var.adapted[:, FIELD_EXPANSION_ADAPTATION][
+            self.var.fraction_irrigated_field >= 1
+        ] = 1
 
         self.var.base_management_yield_ratio = DynamicArray(
             n=self.n,
@@ -3389,9 +3398,6 @@ class CropFarmers(AgentBaseClass):
         TODO:
             - Possibly externalize hard-coded values.
         """
-        # Constants
-        adaptation_type = 1
-
         groundwater_depth = self.groundwater_depth
         groundwater_depth[groundwater_depth < 0] = 0
 
@@ -3402,7 +3408,6 @@ class CropFarmers(AgentBaseClass):
         # Compute the total annual per square meter costs if farmers adapt during this cycle
         # This cost is the cost if the farmer would adapt, plus its current costs of previous
         # adaptations
-
         total_annual_costs_m2 = (
             annual_cost + self.var.all_loans_annual_cost[:, -1, 0]
         ) / self.field_size_per_farmer
@@ -3417,10 +3422,10 @@ class CropFarmers(AgentBaseClass):
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # and who's wells are much shallower than the groundwater depth
         expired_adaptations = (
-            self.var.time_adapted[:, adaptation_type] == self.var.lifespan_well
+            self.var.time_adapted[:, WELL_ADAPTATION] == self.var.lifespan_well
         ) | (groundwater_depth > self.var.well_depth)
-        self.var.adapted[expired_adaptations, adaptation_type] = 0
-        self.var.time_adapted[expired_adaptations, adaptation_type] = -1
+        self.var.adapted[expired_adaptations, WELL_ADAPTATION] = 0
+        self.var.time_adapted[expired_adaptations, WELL_ADAPTATION] = -1
         self.var.irrigation_source[expired_adaptations] = (
             self.var.irrigation_source_key["no"]
         )
@@ -3430,7 +3435,7 @@ class CropFarmers(AgentBaseClass):
         extra_constraint = well_reaches_groundwater
 
         # To determine the benefit of irrigation, those who have a well are adapted
-        adapted = np.where((self.var.adapted[:, 1] == 1), 1, 0)
+        adapted = np.where((self.var.adapted[:, WELL_ADAPTATION] == 1), 1, 0)
 
         (
             energy_diff,
@@ -3442,7 +3447,7 @@ class CropFarmers(AgentBaseClass):
             profits_no_event,
             total_profits_adaptation,
             profits_no_event_adaptation,
-        ) = self.profits_SEUT(adaptation_type, adapted)
+        ) = self.profits_SEUT(WELL_ADAPTATION, adapted)
 
         total_profits_adaptation = total_profits_adaptation + energy_diff + water_diff
         profits_no_event_adaptation = (
@@ -3464,7 +3469,7 @@ class CropFarmers(AgentBaseClass):
             "total_annual_costs": total_annual_costs_m2,
             "adaptation_costs": annual_cost_m2,
             "adapted": adapted,
-            "time_adapted": self.var.time_adapted[:, adaptation_type],
+            "time_adapted": self.var.time_adapted[:, WELL_ADAPTATION],
             "T": np.full(
                 self.n,
                 self.model.config["agent_settings"]["farmers"]["expected_utility"][
@@ -3479,10 +3484,10 @@ class CropFarmers(AgentBaseClass):
         SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
         SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
 
-        assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
+        assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
 
         SEUT_adaptation_decision = self.update_adaptation_decision(
-            adaptation_type=adaptation_type,
+            adaptation_type=WELL_ADAPTATION,
             adapted=adapted,
             loan_duration=loan_duration,
             annual_cost=annual_cost,
@@ -3502,8 +3507,8 @@ class CropFarmers(AgentBaseClass):
 
         # Print the percentage of adapted households
         percentage_adapted = round(
-            np.sum(self.var.adapted[:, adaptation_type])
-            / len(self.var.adapted[:, adaptation_type])
+            np.sum(self.var.adapted[:, WELL_ADAPTATION])
+            / len(self.var.adapted[:, WELL_ADAPTATION])
             * 100,
             2,
         )
@@ -3615,7 +3620,7 @@ class CropFarmers(AgentBaseClass):
         SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
         SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
 
-        assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
+        assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
 
         SEUT_adaptation_decision = self.update_adaptation_decision(
             adaptation_type=adaptation_type,
@@ -3732,7 +3737,7 @@ class CropFarmers(AgentBaseClass):
         SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
         SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
 
-        assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
+        assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
 
         SEUT_adaptation_decision = self.update_adaptation_decision(
             adaptation_type=adaptation_type,
