@@ -23,6 +23,7 @@ class Industry(AgentBaseClass):
             if "town_managers" in self.model.config["agent_settings"]
             else {}
         )
+        self.calibration_factor = self.config["calibration_factor"]
 
         AgentBaseClass.__init__(self)
 

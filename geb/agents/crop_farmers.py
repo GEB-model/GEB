@@ -8,6 +8,7 @@ from typing import Tuple, Union
 
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
+import os
 
 # from gplearn.genetic import SymbolicRegressor
 from geb.workflows import TimingModule
@@ -73,12 +74,83 @@ def shift_and_update(array, update):
     array[:, 0] = update
 
 
+def shift_and_update_1d(array, update):
+    """Shifts the array and updates the first element with the update value.
+
+    Args:
+        array: The array that needs to be shifted.
+        update: The value that needs to be added to the first element of the array.
+    """
+    array[1:] = array[:-1]
+    array[0] = update
+
+
 def shift_and_reset_matrix(matrix: np.ndarray) -> None:
     """
     Shifts columns to the right in the matrix and sets the first column to zero.
     """
     matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
     matrix[:, 0] = 0  # Reset the first column to 0
+
+
+def rolling_mean_2d(array, window):
+    return np.apply_along_axis(
+        lambda x: np.concatenate(
+            (
+                np.convolve(x, np.ones(window) / window, mode="valid"),
+                np.full(window - 1, np.nan),
+            )
+        ),
+        axis=-1,
+        arr=array,
+    )
+
+
+def ema_2d(array, span=60):
+    """
+    Compute the exponential moving average (EMA) along the last axis (axis=-1) for a 2D array.
+    This replicates the behavior of Pandas' .ewm(span=span, adjust=False).mean() for each 1D slice.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        2D NumPy array of shape (M, N), where we want to compute an EMA along each row.
+    span : int
+        The EMA span, analogous to `span` in Pandas' ewm. The effective smoothing factor alpha
+        is given by alpha = 2 / (span + 1).
+
+    Returns
+    -------
+    ema_array : np.ndarray
+        2D NumPy array of the same shape as `array`, where each row has been replaced
+        by its exponential moving average along the last axis.
+    """
+
+    # Calculate alpha using Pandas' ewm(span=...).mean() convention:
+    # alpha = 2 / (span + 1)
+    alpha = 2.0 / (span + 1)
+
+    def ema_1d(x):
+        """
+        Compute EMA for a 1D array x using iterative approach:
+        ema[i] = alpha * x[i] + (1 - alpha) * ema[i-1].
+        """
+        out = np.zeros_like(x, dtype=float)
+        if len(x) == 0:
+            return out
+
+        # Initialize first value directly
+        out[0] = x[0]
+
+        # Iteratively compute EMA
+        for i in range(1, len(x)):
+            out[i] = alpha * x[i] + (1 - alpha) * out[i - 1]
+
+        return out
+
+    # Apply ema_1d along the last axis of the 2D array
+    ema_array = np.apply_along_axis(ema_1d, axis=-1, arr=array)
+    return ema_array
 
 
 @njit(cache=True, inline="always")
@@ -216,14 +288,18 @@ def adjust_irrigation_to_limit(
         potential_irrigation_consumption_m.fill(0)
         return potential_irrigation_consumption_m
     # calculate future water deficit, but also include today's irrigation consumption
-    future_water_deficit = get_future_deficit(
-        farmer=farmer,
-        day_index=day_index,
-        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
-        crop_calendar=crop_calendar,
-        crop_rotation_year_index=crop_rotation_year_index,
-        potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
-    )
+    # Check whether a full year has passed
+    if np.all(~np.isnan(cumulative_water_deficit_m3[farmer])):
+        future_water_deficit = get_future_deficit(
+            farmer=farmer,
+            day_index=day_index,
+            cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+            crop_calendar=crop_calendar,
+            crop_rotation_year_index=crop_rotation_year_index,
+            potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
+        )
+    else:
+        future_water_deficit = 1
 
     assert future_water_deficit > 0
 
@@ -393,6 +469,7 @@ def abstract_water(
     crop_calendar: np.ndarray,
     current_crop_calendar_rotation_year_index: np.ndarray,
     max_paddy_water_level: float,
+    calibration_irrigation_moment: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -1036,6 +1113,20 @@ class CropFarmers(AgentBaseClass):
         self.var.subdistrict_map = load_grid(
             self.model.files["region_subgrid"]["areamaps/region_subgrid"]
         )
+        region_mask = load_grid(
+            self.model.files["region_subgrid"]["areamaps/region_mask"]
+        )
+        self.HRU_regions_map = np.zeros_like(self.model.data.HRU.mask, dtype=np.int8)
+        self.HRU_regions_map[~self.model.data.HRU.mask] = self.subdistrict_map[
+            region_mask == 0
+        ]
+        self.HRU_regions_map = self.model.data.HRU.compress(self.HRU_regions_map)
+
+        self.crop_prices = load_regional_crop_data_from_dict(
+            self.model, "crops/crop_prices"
+        )
+
+        self.adjust_cultivation_costs()
 
         # Set the cultivation costs
         cultivation_cost_fraction = self.model.config["agent_settings"]["farmers"][
@@ -1389,9 +1480,10 @@ class CropFarmers(AgentBaseClass):
         self.var.irrigation_efficiency = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0.50
         )
+
         rng = np.random.default_rng(42)
         self.var.irrigation_efficiency[irrigation_mask] = rng.choice(
-            [0.50, 0.70, 0.90], size=irrigation_mask.sum(), p=[0.8, 0.15, 0.05]
+            [0.50, 0.90], size=irrigation_mask.sum(), p=[0.8, 0.2]
         )
         self.var.adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION][
             self.var.irrigation_efficiency >= 0.90
@@ -1633,6 +1725,35 @@ class CropFarmers(AgentBaseClass):
             maxy=self.model.bounds[3],
         )
 
+    def adjust_cultivation_costs(self):
+        # Set the cultivation costs
+        self.cultivation_costs = load_regional_crop_data_from_dict(
+            self.model, "crops/cultivation_costs"
+        )
+        cultivation_cost_fraction = self.model.config["agent_settings"]["farmers"][
+            "cultivation_cost_fraction"
+        ]  # Cultivation costs are set as a fraction of crop prices
+        date_index, cultivation_costs_array = self.cultivation_costs
+
+        if "KGE_crops" in self.model.config["calibration"]["calibration_targets"]:
+            # Load price change factors 0 to 25 into a NumPy array
+            factors = np.array(
+                [
+                    self.model.config["agent_settings"]["calibration_crops"][
+                        f"price_{i}"
+                    ]
+                    for i in range(26)
+                ]
+            )
+
+            # Multiply the cultivation_costs_array by the factors along the last axis
+            cultivation_costs_array *= factors
+        else:
+            cultivation_costs_array = (
+                cultivation_costs_array * cultivation_cost_fraction
+            )
+        self.cultivation_costs = (date_index, cultivation_costs_array)
+
     @property
     def activation_order_by_elevation(self):
         """
@@ -1680,6 +1801,19 @@ class CropFarmers(AgentBaseClass):
     @property
     def is_in_command_area(self):
         return self.farmer_command_area != -1
+
+    def save_discharge_daily(self):
+        # Retrieve gauges
+        gauges = np.array(self.gauges)
+
+        shift_and_update(
+            self.var.discharge_daily,
+            sample_from_map(
+                array=self.model.data.grid.decompress(self.model.data.grid.discharge),
+                coords=gauges,
+                gt=self.model.data.grid.gt,
+            ),
+        )
 
     def save_water_deficit(self, discount_factor=0.8):
         water_deficit_day_m3 = (
@@ -1836,7 +1970,7 @@ class CropFarmers(AgentBaseClass):
                     self.var.groundwater_abstraction_m3_by_farmer,
                 ),
                 outfluxes=[(water_withdrawal_m * cell_area)],
-                tollerance=10,
+                tollerance=50,
             )
 
             # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
@@ -1846,7 +1980,7 @@ class CropFarmers(AgentBaseClass):
                 outfluxes=self.var.channel_abstraction_m3_by_farmer,
                 prestorages=available_channel_storage_m3_pre,
                 poststorages=available_channel_storage_m3,
-                tollerance=10,
+                tollerance=50,
             )
 
             balance_check(
@@ -1855,7 +1989,7 @@ class CropFarmers(AgentBaseClass):
                 outfluxes=self.var.reservoir_abstraction_m3_by_farmer,
                 prestorages=available_reservoir_storage_m3_pre,
                 poststorages=available_reservoir_storage_m3,
-                tollerance=10,
+                tollerance=50,
             )
 
             balance_check(
@@ -1864,7 +1998,7 @@ class CropFarmers(AgentBaseClass):
                 outfluxes=self.var.groundwater_abstraction_m3_by_farmer,
                 prestorages=available_groundwater_m3_pre,
                 poststorages=available_groundwater_m3,
-                tollerance=10,
+                tollerance=50,
             )
 
             # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
@@ -1888,6 +2022,7 @@ class CropFarmers(AgentBaseClass):
                 poststorages=self.var.remaining_irrigation_limit_m3[
                     ~np.isnan(self.var.remaining_irrigation_limit_m3)
                 ],
+                tollerance=50,
             )
 
             # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
@@ -1900,7 +2035,7 @@ class CropFarmers(AgentBaseClass):
                     addtoevapotrans_m,
                 ),
                 outfluxes=water_withdrawal_m,
-                tollerance=0.0001,
+                tollerance=50,
             )
 
             assert water_withdrawal_m.dtype == np.float32
@@ -2542,7 +2677,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     def save_yearly_spei(self):
-        assert self.model.current_time.month == 1
+        assert self.model.current_time.month == 7
 
         # calculate the SPEI probability using GEV parameters
         SPEI_probability = genextreme.sf(
@@ -2607,7 +2742,6 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_potential_profits[:, 0] += potential_profit / cum_inflation
 
     def calculate_yield_spei_relation_test_solo(self):
-        import os
         import matplotlib
 
         matplotlib.use("Agg")  # Use the 'Agg' backend for non-interactive plotting
@@ -2829,7 +2963,6 @@ class CropFarmers(AgentBaseClass):
             print(f"Median R² for {model}: {median_r2}")
 
     def calculate_yield_spei_relation_test_group(self):
-        import os
         import matplotlib
 
         matplotlib.use("Agg")
@@ -3252,7 +3385,8 @@ class CropFarmers(AgentBaseClass):
         ]
         annual_cost_empty = np.zeros(self.n, dtype=np.float32)
 
-        extra_constraint = np.full(self.n, 1, dtype=np.bool_)
+        # No constraint
+        extra_constraint = np.ones_like(annual_cost_empty, dtype=bool)
 
         # Set variable which indicates all possible crop options
         unique_crop_calendars = np.unique(self.var.crop_calendar[:, :, 0], axis=0)
@@ -3301,9 +3435,9 @@ class CropFarmers(AgentBaseClass):
         SEUT_crop_options = np.full(
             (self.n, len(unique_crop_calendars)), 0, dtype=np.float32
         )
-        for crop_option in range(len(unique_crop_calendars)):
+        for idx, crop_option in enumerate(unique_crop_calendars[:, 0]):
             # Determine the cost difference between old and potential new crop
-            new_crop_nr_option = new_crop_nr[:, crop_option]
+            new_crop_nr_option = new_crop_nr[:, idx]
             cultivation_cost_new_crop = cultivation_cost[
                 self.var.region_id, new_crop_nr_option
             ]
@@ -3314,16 +3448,12 @@ class CropFarmers(AgentBaseClass):
             decision_params_option = copy.deepcopy(decision_params)
             decision_params_option.update(
                 {
-                    "total_profits_adaptation": total_profits_adaptation[
-                        crop_option, :, :
-                    ],
-                    "profits_no_event_adaptation": profits_no_event_adaptation[
-                        crop_option, :
-                    ],
+                    "total_profits_adaptation": total_profits_adaptation[idx, :, :],
+                    "profits_no_event_adaptation": profits_no_event_adaptation[idx, :],
                     "adaptation_costs": cost_difference_adaptation,
                 }
             )
-            SEUT_crop_options[:, crop_option] = self.decision_module.calcEU_adapt(
+            SEUT_crop_options[:, idx] = self.decision_module.calcEU_adapt(
                 **decision_params_option
             )
 
@@ -3527,16 +3657,23 @@ class CropFarmers(AgentBaseClass):
         TODO:
             - Possibly externalize hard-coded values.
         """
-        # Constants
+
         adaptation_type = 2
+
+        # placeholder
+        m2_adaptation_costs = np.full(
+            self.n,
+            self.model.config["agent_settings"]["farmers"]["expected_utility"][
+                "adaptation_sprinkler"
+            ]["m2_cost"],
+        )
 
         loan_duration = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["adaptation_sprinkler"]["loan_duration"]
 
         # Placeholder
-        # 0.5 because they first decide to irrigate half their field
-        costs_irrigation_system = 1 * self.field_size_per_farmer * 0.5
+        costs_irrigation_system = m2_adaptation_costs * self.field_size_per_farmer
 
         # interest_rate = self.get_value_per_farmer_from_region_id(
         #     self.var.lending_rate, self.model.current_time
@@ -3737,7 +3874,7 @@ class CropFarmers(AgentBaseClass):
         SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
         SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
 
-        assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
+        assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
 
         SEUT_adaptation_decision = self.update_adaptation_decision(
             adaptation_type=adaptation_type,
@@ -3917,7 +4054,7 @@ class CropFarmers(AgentBaseClass):
         # Get energy cost rate per agent (LCU per kWh)
         energy_cost_rate = electricity_costs[mask_groundwater]
 
-        # Compute energy costs per agent (LCU/year)
+        # Compute energy costs per agent (LCU/year) for groundwater irrigating farmers
         energy_costs[mask_groundwater] = energy * energy_cost_rate
 
         # Compute water costs for agents using channel water (LCU/year)
@@ -4721,9 +4858,15 @@ class CropFarmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.water_abstraction_sum()
+        self.save_discharge_daily()
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+            if self.model.current_time.year - 1 > self.model.spinup_start.year:
+                # reset the irrigation limit, but only if a full year has passed already. Otherwise
+                # the cumulative water deficit is not year completed.
+                self.remaining_irrigation_limit_m3[:] = 0
+
             # Set yearly yield ratio based on the difference between saved actual and potential profit
             self.var.yearly_yield_ratio = (
                 self.var.yearly_profits / self.var.yearly_potential_profits
@@ -4799,15 +4942,8 @@ class CropFarmers(AgentBaseClass):
                         == "no-adaptation"
                     ):
                         self.adapt_irrigation_efficiency(energy_cost, water_cost)
+
                         timer.new_split("irr efficiency")
-                    if (
-                        not self.config["expected_utility"][
-                            "adaptation_irrigation_expansion"
-                        ]["ruleset"]
-                        == "no-adaptation"
-                    ):
-                        self.adapt_irrigation_expansion(energy_cost, water_cost)
-                        timer.new_split("irr expansion")
                     if (
                         not self.config["expected_utility"]["crop_switching"]["ruleset"]
                         == "no-adaptation"

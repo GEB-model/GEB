@@ -1,5 +1,6 @@
 from tqdm import tqdm
 from pathlib import Path
+import csv
 import hydromt.workflows
 from datetime import date, datetime, timedelta
 from typing import Union, Dict, List, Optional
@@ -3532,6 +3533,93 @@ class GEBModel(GridModel):
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"economics/{price_type}")
 
+    def setup_irrigation_prices_by_reference_year(
+        self,
+        operation_surface: float,
+        operation_sprinkler: float,
+        operation_drip: float,
+        capital_cost_surface: float,
+        capital_cost_sprinkler: float,
+        capital_cost_drip: float,
+        reference_year: int,
+        start_year: int,
+        end_year: int,
+    ):
+        """
+        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+
+        Parameters
+        ----------
+        well_price : float
+            The price of a well in the reference year.
+        upkeep_price_per_m2 : float
+            The upkeep price per square meter of a well in the reference year.
+        reference_year : int
+            The reference year for the well prices and upkeep prices.
+        start_year : int
+            The start year for the well prices and upkeep prices.
+        end_year : int
+            The end year for the well prices and upkeep prices.
+
+        Notes
+        -----
+        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
+        retrieves the inflation rates data from the `economics/inflation_rates` dictionary. It then creates dictionaries to
+        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
+        data dimension.
+
+        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+        resulting prices are stored in the dictionaries with the region ID as the key.
+
+        The resulting well prices and upkeep prices data are set as dictionary with names of the form
+        'economics/well_prices' and 'economics/upkeep_prices_well_per_m2', respectively.
+        """
+        self.logger.info("Setting up well prices by reference year")
+
+        # Retrieve the inflation rates data
+        inflation_rates = self.dict["economics/inflation_rates"]
+        regions = list(inflation_rates["data"].keys())
+
+        # Create a dictionary to store the various types of prices with their initial reference year values
+        price_types = {
+            "operation_cost_surface": operation_surface,
+            "operation_cost_sprinkler": operation_sprinkler,
+            "operation_cost_drip": operation_drip,
+            "capital_cost_surface": capital_cost_surface,
+            "capital_cost_sprinkler": capital_cost_sprinkler,
+            "capital_cost_drip": capital_cost_drip,
+        }
+
+        # Iterate over each price type and calculate the prices across years for each region
+        for price_type, initial_price in price_types.items():
+            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
+
+            for region in regions:
+                prices = pd.Series(index=range(start_year, end_year + 1))
+                prices.loc[reference_year] = initial_price
+
+                # Forward calculation from the reference year
+                for year in range(reference_year + 1, end_year + 1):
+                    prices.loc[year] = (
+                        prices[year - 1]
+                        * inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year))
+                        ]
+                    )
+                # Backward calculation from the reference year
+                for year in range(reference_year - 1, start_year - 1, -1):
+                    prices.loc[year] = (
+                        prices[year + 1]
+                        / inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year + 1))
+                        ]
+                    )
+
+                prices_dict["data"][region] = prices.tolist()
+
+            # Set the calculated prices in the appropriate dictionary
+            self.set_dict(prices_dict, name=f"economics/{price_type}")
+
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,
@@ -4859,11 +4947,28 @@ class GEBModel(GridModel):
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_binary(interest_rate, name="agents/farmers/interest_rate")
 
+    def setup_farmer_crop_calendar_multirun(
+        self,
+        year=2000,
+        reduce_crops=False,
+        replace_base=False,
+        export=False,
+    ):
+        years = [2000, 2005, 2010, 2015]
+        nr_runs = 20
+
+        for year_nr in years:
+            for run in range(nr_runs):
+                self.setup_farmer_crop_calendar(
+                    year_nr, reduce_crops, replace_base, export
+                )
+
     def setup_farmer_crop_calendar(
         self,
         year=2000,
         reduce_crops=False,
         replace_base=False,
+        export=False,
     ):
         n_farmers = self.binary["agents/farmers/id"].size
 
@@ -4887,7 +4992,7 @@ class GEBModel(GridModel):
         )
 
         farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(year)
-        self.setup_farmer_irrigation_source(is_irrigated)
+        self.setup_farmer_irrigation_source(is_irrigated, year, export)
 
         crop_calendar_per_farmer = np.zeros((n_farmers, 3, 4), dtype=np.int32)
         for mirca_unit in np.unique(farmer_mirca_units):
@@ -4963,212 +5068,296 @@ class GEBModel(GridModel):
                         :, [0, 2, 3, 4]
                     ]
 
-            # Define constants for crop IDs
-            WHEAT = 0
-            MAIZE = 1
-            RICE = 2
-            BARLEY = 3
-            RYE = 4
-            MILLET = 5
-            SORGHUM = 6
-            SOYBEANS = 7
-            SUNFLOWER = 8
-            POTATOES = 9
-            CASSAVA = 10
-            SUGAR_CANE = 11
-            SUGAR_BEETS = 12
-            OIL_PALM = 13
-            RAPESEED = 14
-            GROUNDNUTS = 15
-            # PULSES = 16
-            # CITRUS = 17
-            # # DATE_PALM = 18
-            # # GRAPES = 19
-            # COTTON = 20
-            COCOA = 21
-            COFFEE = 22
-            OTHERS_PERENNIAL = 23
-            FODDER_GRASSES = 24
-            OTHERS_ANNUAL = 25
-            WHEAT_DROUGHT = 26
-            WHEAT_FLOOD = 27
-            MAIZE_DROUGHT = 28
-            MAIZE_FLOOD = 29
-            RICE_DROUGHT = 30
-            RICE_FLOOD = 31
-            SOYBEANS_DROUGHT = 32
-            SOYBEANS_FLOOD = 33
-            POTATOES_DROUGHT = 34
-            POTATOES_FLOOD = 35
+        # Define constants for crop IDs
+        WHEAT = 0
+        MAIZE = 1
+        RICE = 2
+        BARLEY = 3
+        RYE = 4
+        MILLET = 5
+        SORGHUM = 6
+        SOYBEANS = 7
+        SUNFLOWER = 8
+        POTATOES = 9
+        CASSAVA = 10
+        SUGAR_CANE = 11
+        SUGAR_BEETS = 12
+        OIL_PALM = 13
+        RAPESEED = 14
+        GROUNDNUTS = 15
+        # PULSES = 16
+        # CITRUS = 17
+        # # DATE_PALM = 18
+        # # GRAPES = 19
+        # COTTON = 20
+        COCOA = 21
+        COFFEE = 22
+        OTHERS_PERENNIAL = 23
+        FODDER_GRASSES = 24
+        OTHERS_ANNUAL = 25
+        WHEAT_DROUGHT = 26
+        WHEAT_FLOOD = 27
+        MAIZE_DROUGHT = 28
+        MAIZE_FLOOD = 29
+        RICE_DROUGHT = 30
+        RICE_FLOOD = 31
+        SOYBEANS_DROUGHT = 32
+        SOYBEANS_FLOOD = 33
+        POTATOES_DROUGHT = 34
+        POTATOES_FLOOD = 35
 
-            # Manual replacement of certain crops
-            def replace_crop(
-                crop_calendar_per_farmer, crop_values, replaced_crop_values
-            ):
-                # Find the most common crop value among the given crop_values
-                crop_instances = crop_calendar_per_farmer[:, :, 0][
-                    np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
-                ]
+        # Manual replacement of certain crops
+        def replace_crop(crop_calendar_per_farmer, crop_values, replaced_crop_values):
+            # Find the most common crop value among the given crop_values
+            crop_instances = crop_calendar_per_farmer[:, :, 0][
+                np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+            ]
 
-                # if none of the crops are present, no need to replace anything
-                if crop_instances.size == 0:
-                    return crop_calendar_per_farmer
-
-                crops, crop_counts = np.unique(crop_instances, return_counts=True)
-                most_common_crop = crops[np.argmax(crop_counts)]
-
-                # Determine if there are multiple cropping versions of this crop and assign it to the most common
-                new_crop_types = crop_calendar_per_farmer[
-                    (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
-                    :,
-                    :,
-                ]
-                unique_rows, counts = np.unique(
-                    new_crop_types, axis=0, return_counts=True
-                )
-                max_index = np.argmax(counts)
-                crop_replacement = unique_rows[max_index]
-
-                for replaced_crop in replaced_crop_values:
-                    # Check where to be replaced crop is
-                    crop_mask = (
-                        crop_calendar_per_farmer[:, :, 0] == replaced_crop
-                    ).any(axis=1)
-                    # Replace the crop
-                    crop_calendar_per_farmer[crop_mask] = crop_replacement
-
+            # if none of the crops are present, no need to replace anything
+            if crop_instances.size == 0:
                 return crop_calendar_per_farmer
 
-            def insert_other_variant_crop(
+            crops, crop_counts = np.unique(crop_instances, return_counts=True)
+            most_common_crop = crops[np.argmax(crop_counts)]
+
+            # Determine if there are multiple cropping versions of this crop and assign it to the most common
+            new_crop_types = crop_calendar_per_farmer[
+                (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
+                :,
+                :,
+            ]
+            unique_rows, counts = np.unique(new_crop_types, axis=0, return_counts=True)
+            max_index = np.argmax(counts)
+            crop_replacement = unique_rows[max_index]
+
+            for replaced_crop in replaced_crop_values:
+                # Check where to be replaced crop is
+                crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(
+                    axis=1
+                )
+                # Replace the crop
+                crop_calendar_per_farmer[crop_mask] = crop_replacement
+
+            return crop_calendar_per_farmer
+
+        def unify_crop_variants(crop_calendar_per_farmer, target_crop):
+            # Create a mask for all entries whose first value == target_crop
+            mask = crop_calendar_per_farmer[..., 0] == target_crop
+
+            # If the crop does not appear at all, nothing to do
+            if not np.any(mask):
+                return crop_calendar_per_farmer
+
+            # Extract only the rows/entries that match the target crop
+            crop_entries = crop_calendar_per_farmer[mask]
+
+            # Among these crop rows, find unique variants and their counts
+            # (axis=0 ensures we treat each row/entry as a unit)
+            unique_variants, variant_counts = np.unique(
+                crop_entries, axis=0, return_counts=True
+            )
+
+            # The most common variant is the unique variant with the highest count
+            most_common_variant = unique_variants[np.argmax(variant_counts)]
+
+            # Replace all the target_crop rows with the most common variant
+            crop_calendar_per_farmer[mask] = most_common_variant
+
+            return crop_calendar_per_farmer
+
+        def insert_other_variant_crop(
+            crop_calendar_per_farmer, base_crops, resistant_crops
+        ):
+            # find crop rotation mask
+            base_crop_rotation_mask = (
+                crop_calendar_per_farmer[:, :, 0] == base_crops
+            ).any(axis=1)
+
+            # Find the indices of the crops to be replaced
+            indices = np.where(base_crop_rotation_mask)[0]
+
+            # Shuffle the indices to randomize the selection
+            np.random.shuffle(indices)
+
+            # Determine the number of crops for each category (stay same, first resistant, last resistant)
+            n = len(indices)
+            n_same = n // 3
+            n_first_resistant = (n // 3) + (
+                n % 3 > 0
+            )  # Ensuring we account for rounding issues
+
+            # Assign the new values
+            crop_calendar_per_farmer[indices[:n_same], 0, 0] = base_crops
+            crop_calendar_per_farmer[
+                indices[n_same : n_same + n_first_resistant], 0, 0
+            ] = resistant_crops[0]
+            crop_calendar_per_farmer[indices[n_same + n_first_resistant :], 0, 0] = (
+                resistant_crops[1]
+            )
+
+            return crop_calendar_per_farmer
+
+        # Reduces certain crops of the same GCAM category to the one that is most common in that region
+        # First line checks which crop is most common, second denotes which crops will be replaced by the most common one
+        if reduce_crops:
+            # Conversion based on the classification in table S1 by Yoon, J., Voisin, N., Klassert, C., Thurber, T., & Xu, W. (2024).
+            # Representing farmer irrigated crop area adaptation in a large-scale hydrological model. Hydrology and Earth
+            # System Sciences, 28(4), 899–916. https://doi.org/10.5194/hess-28-899-2024
+
+            # Replace fodder with the most common grain crop
+            most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
+            replaced_value = [FODDER_GRASSES]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change the grain crops to one
+            most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
+            replaced_value = [BARLEY, RYE, MILLET, SORGHUM]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change other annual / misc to one
+            most_common_check = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
+            replaced_value = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change oils to one
+            most_common_check = [SOYBEANS, SUNFLOWER, RAPESEED]
+            replaced_value = [SOYBEANS, SUNFLOWER, RAPESEED]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change tubers to one
+            most_common_check = [POTATOES, CASSAVA]
+            replaced_value = [POTATOES, CASSAVA]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Reduce sugar crops to one
+            most_common_check = [SUGAR_CANE, SUGAR_BEETS]
+            replaced_value = [SUGAR_CANE, SUGAR_BEETS]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change perennial to annual, otherwise counted double in esa dataset
+            most_common_check = [OIL_PALM, OTHERS_PERENNIAL]
+            replaced_value = [OIL_PALM, OTHERS_PERENNIAL]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            unique_rows = np.unique(crop_calendar_per_farmer, axis=0)
+            values = unique_rows[:, 0, 0]
+            unique_values, counts = np.unique(values, return_counts=True)
+            duplicates = unique_values[counts > 1]
+
+            if len(duplicates) > 0:
+                for duplicate in duplicates:
+                    crop_calendar_per_farmer = unify_crop_variants(
+                        crop_calendar_per_farmer, duplicate
+                    )
+
+        if replace_base:
+            base_crops = [WHEAT]
+            resistant_crops = [WHEAT_DROUGHT, WHEAT_FLOOD]
+
+            crop_calendar_per_farmer = insert_other_variant_crop(
                 crop_calendar_per_farmer, base_crops, resistant_crops
-            ):
-                # find crop rotation mask
-                base_crop_rotation_mask = (
-                    crop_calendar_per_farmer[:, :, 0] == base_crops
-                ).any(axis=1)
+            )
 
-                # Find the indices of the crops to be replaced
-                indices = np.where(base_crop_rotation_mask)[0]
+            base_crops = [MAIZE]
+            resistant_crops = [MAIZE_DROUGHT, MAIZE_FLOOD]
 
-                # Shuffle the indices to randomize the selection
-                np.random.shuffle(indices)
+            crop_calendar_per_farmer = insert_other_variant_crop(
+                crop_calendar_per_farmer, base_crops, resistant_crops
+            )
 
-                # Determine the number of crops for each category (stay same, first resistant, last resistant)
-                n = len(indices)
-                n_same = n // 3
-                n_first_resistant = (n // 3) + (
-                    n % 3 > 0
-                )  # Ensuring we account for rounding issues
+            base_crops = [RICE]
+            resistant_crops = [RICE_DROUGHT, RICE_FLOOD]
 
-                # Assign the new values
-                crop_calendar_per_farmer[indices[:n_same], 0, 0] = base_crops
-                crop_calendar_per_farmer[
-                    indices[n_same : n_same + n_first_resistant], 0, 0
-                ] = resistant_crops[0]
-                crop_calendar_per_farmer[
-                    indices[n_same + n_first_resistant :], 0, 0
-                ] = resistant_crops[1]
+            crop_calendar_per_farmer = insert_other_variant_crop(
+                crop_calendar_per_farmer, base_crops, resistant_crops
+            )
 
-                return crop_calendar_per_farmer
+            base_crops = [SOYBEANS]
+            resistant_crops = [SOYBEANS_DROUGHT, SOYBEANS_FLOOD]
 
-            # Reduces certain crops of the same GCAM category to the one that is most common in that region
-            # First line checks which crop is most common, second denotes which crops will be replaced by the most common one
-            if reduce_crops:
-                # Conversion based on the classification in table S1 by Yoon, J., Voisin, N., Klassert, C., Thurber, T., & Xu, W. (2024).
-                # Representing farmer irrigated crop area adaptation in a large-scale hydrological model. Hydrology and Earth
-                # System Sciences, 28(4), 899–916. https://doi.org/10.5194/hess-28-899-2024
+            crop_calendar_per_farmer = insert_other_variant_crop(
+                crop_calendar_per_farmer, base_crops, resistant_crops
+            )
 
-                # Replace fodder with the most common grain crop
-                most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
-                replaced_value = [FODDER_GRASSES]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
+            base_crops = [POTATOES]
+            resistant_crops = [POTATOES_DROUGHT, POTATOES_FLOOD]
 
-                # Change the grain crops to one
-                most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
-                replaced_value = [BARLEY, RYE, MILLET, SORGHUM]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
+            crop_calendar_per_farmer = insert_other_variant_crop(
+                crop_calendar_per_farmer, base_crops, resistant_crops
+            )
 
-                # Change other annual / misc to one
-                most_common_check = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
-                replaced_value = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-                # Change oils to one
-                most_common_check = [SOYBEANS, SUNFLOWER, RAPESEED]
-                replaced_value = [SOYBEANS, SUNFLOWER, RAPESEED]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-                # Change tubers to one
-                most_common_check = [POTATOES, CASSAVA]
-                replaced_value = [POTATOES, CASSAVA]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-                # Reduce sugar crops to one
-                most_common_check = [SUGAR_CANE, SUGAR_BEETS]
-                replaced_value = [SUGAR_CANE, SUGAR_BEETS]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-                # Change perennial to annual, otherwise counted double in esa dataset
-                most_common_check = [OIL_PALM, OTHERS_PERENNIAL]
-                replaced_value = [OTHERS_ANNUAL]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-            if replace_base:
-                base_crops = [WHEAT]
-                resistant_crops = [WHEAT_DROUGHT, WHEAT_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-                base_crops = [MAIZE]
-                resistant_crops = [MAIZE_DROUGHT, MAIZE_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-                base_crops = [RICE]
-                resistant_crops = [RICE_DROUGHT, RICE_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-                base_crops = [SOYBEANS]
-                resistant_crops = [SOYBEANS_DROUGHT, SOYBEANS_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-                base_crops = [POTATOES]
-                resistant_crops = [POTATOES_DROUGHT, POTATOES_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-        self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         assert crop_calendar_per_farmer[:, :, 3].max() == 0
-        self.set_binary(
-            np.full_like(is_irrigated, 1, dtype=np.int32),
-            name="agents/farmers/crop_calendar_rotation_years",
-        )
+
+        if export:
+            names_data = {
+                "crop_calendar": crop_calendar_per_farmer,
+            }
+
+            for name, data in names_data.items():
+                fn = os.path.join(name + f"_{year}" + ".npz")
+                fp = Path("calibration_data/crops", fn)
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(fp, data=data)
+
+            farms_flat = self.subgrid["agents/farmers/farms"].values.ravel()
+            areas_flat = self.subgrid["areamaps/sub_cell_area"].values.ravel()
+
+            mask = farms_flat != -1
+            farms_flat = farms_flat[mask]
+            areas_flat = areas_flat[mask]
+
+            unique_ids, inverse = np.unique(farms_flat, return_inverse=True)
+            field_size_per_farmer = np.bincount(inverse, weights=areas_flat)
+
+            unique_calendars, inverse = np.unique(
+                crop_calendar_per_farmer, axis=0, return_inverse=True
+            )
+            area_per_crop = np.bincount(inverse, weights=field_size_per_farmer)
+            crop_ids = unique_calendars[:, 0, 0]
+
+            # Build the CSV filename
+            fn_2 = os.path.join(name + f"_{year}" + ".csv")
+            csv_path = Path("calibration_data/crops", fn_2)
+
+            # Convert to Python lists
+            header = crop_ids.tolist()
+            row_data = area_per_crop.tolist()
+
+            # Check if the CSV already exists
+            file_exists = csv_path.is_file()
+
+            if not file_exists:
+                with open(csv_path, mode="w", newline="") as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(header)
+                    writer.writerow(row_data)
+            else:
+                # If file exists, only append the row_data
+                with open(csv_path, mode="a", newline="") as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(row_data)
+        else:
+            self.set_binary(
+                crop_calendar_per_farmer, name="agents/farmers/crop_calendar"
+            )
+            self.set_binary(
+                np.full_like(is_irrigated, 1, dtype=np.int32),
+                name="agents/farmers/crop_calendar_rotation_years",
+            )
 
     def assign_crops_irrigation_farmers(self, year=2000):
         # Define the directory and file paths
@@ -5338,7 +5527,7 @@ class GEBModel(GridModel):
 
         return farmer_crops, farmer_irrigated
 
-    def setup_farmer_irrigation_source(self, irrigating_farmers):
+    def setup_farmer_irrigation_source(self, irrigating_farmers, year, export):
         fraction_sw_irrigation = "aeisw"
         fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
             f"global_irrigation_area_{fraction_sw_irrigation}",
@@ -5448,9 +5637,21 @@ class GEBModel(GridModel):
                     p=probabilities,
                 )
 
-        # Update the irrigation_source attribute or return it as needed
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-        self.set_binary(irrigating_farmers, name="agents/farmers/irrigating_farmers")
+        if export:
+            names_data = {
+                "irrigation_source": irrigation_source,
+                "irrigating_farmers": irrigating_farmers,
+            }
+            for name, data in names_data.items():
+                fn = os.path.join(name + f"_{year}" + ".npz")
+                fp = Path("calibration_data/crops", fn)
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(fp, data=data)
+        else:
+            self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
+            self.set_binary(
+                irrigating_farmers, name="agents/farmers/irrigating_farmers"
+            )
 
     def setup_population(self):
         populaton_map = self.data_catalog.get_rasterdataset(
