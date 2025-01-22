@@ -32,6 +32,18 @@ from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRR
 from ..HRUs import load_grid
 
 
+NO_IRRIGATION = -1
+CHANNEL_IRRIGATION = 0
+RESERVOIR_IRRIGATION = 1
+GROUNDWATER_IRRIGATION = 2
+TOTAL_IRRIGATION = 3
+
+NO_COST_ADAPTATION = 0
+WELL_ADAPTATION = 1
+IRRIGATION_EFFICIENCY_ADAPTATION = 2
+FIELD_EXPANSION_ADAPTATION = 3
+
+
 def cumulative_mean(mean, counter, update, mask=None):
     """Calculates the cumulative mean of a series of numbers. This function
     operates in place.
@@ -2469,22 +2481,22 @@ class CropFarmers(AgentBaseClass):
         """
 
         # Update yearly channel water abstraction for each farmer
-        self.var.yearly_abstraction_m3_by_farmer[:, 0, 0] += (
+        self.var.yearly_abstraction_m3_by_farmer[:, CHANNEL_IRRIGATION, 0] += (
             self.var.channel_abstraction_m3_by_farmer
         )
 
         # Update yearly reservoir water abstraction for each farmer
-        self.var.yearly_abstraction_m3_by_farmer[:, 1, 0] += (
+        self.var.yearly_abstraction_m3_by_farmer[:, RESERVOIR_IRRIGATION, 0] += (
             self.var.reservoir_abstraction_m3_by_farmer
         )
 
         # Update yearly groundwater water abstraction for each farmer
-        self.var.yearly_abstraction_m3_by_farmer[:, 2, 0] += (
+        self.var.yearly_abstraction_m3_by_farmer[:, GROUNDWATER_IRRIGATION, 0] += (
             self.var.groundwater_abstraction_m3_by_farmer
         )
 
         # Compute and update the total water abstraction for each farmer
-        self.var.yearly_abstraction_m3_by_farmer[:, 3, 0] += (
+        self.var.yearly_abstraction_m3_by_farmer[:, TOTAL_IRRIGATION, 0] += (
             self.var.channel_abstraction_m3_by_farmer
             + self.var.reservoir_abstraction_m3_by_farmer
             + self.var.groundwater_abstraction_m3_by_farmer
@@ -3541,7 +3553,8 @@ class CropFarmers(AgentBaseClass):
 
         # Create mask for those who have access to irrigation water
         has_irrigation_access = ~np.all(
-            self.var.yearly_abstraction_m3_by_farmer[:, 3, :] == 0, axis=1
+            self.var.yearly_abstraction_m3_by_farmer[:, TOTAL_IRRIGATION, :] == 0,
+            axis=1,
         )
 
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
@@ -3664,15 +3677,19 @@ class CropFarmers(AgentBaseClass):
         annual_cost_m2 = annual_cost / self.field_size_per_farmer
 
         # Create mask for those who have access to irrigation water
-        has_irrigation_access = np.all(
-            self.var.yearly_abstraction_m3_by_farmer[:, 3, :] == 0, axis=1
+        has_irrigation_access = ~np.all(
+            self.var.yearly_abstraction_m3_by_farmer[:, TOTAL_IRRIGATION, :] == 0,
+            axis=1,
         )
 
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # or who's never had access to irrigation water
         expired_adaptations = (
             self.var.time_adapted[:, adaptation_type] == self.var.lifespan_irrigation
-        ) | np.all(self.var.yearly_abstraction_m3_by_farmer[:, 3, :] == 0, axis=1)
+        ) | np.all(
+            self.var.yearly_abstraction_m3_by_farmer[:, TOTAL_IRRIGATION, :] == 0,
+            axis=1,
+        )
         self.var.adapted[expired_adaptations, adaptation_type] = 0
         self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
@@ -3875,9 +3892,11 @@ class CropFarmers(AgentBaseClass):
         )  # Convert from m³/year to m³/s
 
         # Create boolean masks for different types of water sources
-        mask_channel = self.var.farmer_class == 0
-        mask_reservoir = self.var.farmer_class == 1
-        mask_groundwater = self.var.farmer_class == 2
+        main_irrigation_sources = self.main_irrigation_source
+
+        mask_channel = main_irrigation_sources == CHANNEL_IRRIGATION
+        mask_reservoir = main_irrigation_sources == RESERVOIR_IRRIGATION
+        mask_groundwater = main_irrigation_sources == GROUNDWATER_IRRIGATION
 
         # Compute power required for groundwater extraction per agent (kW)
         power = (
@@ -4671,6 +4690,22 @@ class CropFarmers(AgentBaseClass):
         )[1]
         return agent_classes
 
+    @property
+    def main_irrigation_source(self):
+        # Set to 0 if channel abstraction is bigger than reservoir and groundwater, 1 for reservoir, 2 for groundwater and 3 no abstraction
+        main_irrigation_source = np.argmax(
+            self.var.yearly_abstraction_m3_by_farmer[:, :TOTAL_IRRIGATION, 0],
+            axis=1,
+        )
+        # Set to -1 for precipitation if there is no abstraction
+        main_irrigation_source[
+            self.var.yearly_abstraction_m3_by_farmer[:, :TOTAL_IRRIGATION, 0].sum(
+                axis=1
+            )
+            == 0
+        ] = NO_IRRIGATION
+        return main_irrigation_source
+
     def step(self) -> None:
         """
         This function is called at the beginning of each timestep.
@@ -4698,14 +4733,7 @@ class CropFarmers(AgentBaseClass):
                     self.var.irrigation_limit_m3[:]
                 )
 
-            # Set to 0 if channel abstraction is bigger than reservoir and groundwater, 1 for reservoir, 2 for groundwater and 3 no abstraction
-            main_irrigation_source = np.argmax(
-                self.var.yearly_abstraction_m3_by_farmer[:, :3, 0], axis=1
-            )
-            # Set to 3 for precipitation if there is no abstraction
-            main_irrigation_source[
-                self.var.yearly_abstraction_m3_by_farmer[:, :3, 0].sum(axis=1) == 0
-            ] = 3
+            main_irrigation_source = self.main_irrigation_source
 
             self.var.farmer_class[:] = self.create_agent_classes(
                 main_irrigation_source, self.farmer_command_area
@@ -4713,9 +4741,17 @@ class CropFarmers(AgentBaseClass):
 
             print(
                 "well",
-                np.mean(self.var.yearly_yield_ratio[self.var.farmer_class == 2, 1]),
-                "no well",
-                np.mean(self.var.yearly_yield_ratio[self.var.farmer_class == 3, 1]),
+                np.mean(
+                    self.var.yearly_yield_ratio[
+                        main_irrigation_source == GROUNDWATER_IRRIGATION, 1
+                    ]
+                ),
+                "no irrigation",
+                np.mean(
+                    self.var.yearly_yield_ratio[
+                        main_irrigation_source == NO_IRRIGATION, 1
+                    ]
+                ),
                 "total_mean",
                 np.mean(self.var.yearly_yield_ratio[:, 1]),
             )
