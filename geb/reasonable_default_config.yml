@@ -25,10 +25,10 @@ agent_settings:
   market:
     dynamic_market: false
     price_frequency: yearly
-  # government:
-  #   irrigation_limit:
-  #     limit: 10000  # previous tried 1700
-  #     per: capita
+  government:
+    irrigation_limit:
+      limit: 10000  # previous tried 1700
+      per: capita
   farmers:
     ruleset: base
     base_management_yield_ratio: 1
@@ -51,6 +51,7 @@ agent_settings:
         lifespan_sprink_drip: 15
         loan_duration: 21
         decision_horizon: 20
+        m2_cost: 1
       adaptation_irrigation_expansion:
         ruleset: no-adaptation
       adaptation_well:
