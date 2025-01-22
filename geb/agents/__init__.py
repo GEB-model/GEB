@@ -28,8 +28,8 @@ class Agents:
         self.market = Market(model, self)
 
         self.agents = [
-            self.households,
             self.crop_farmers,
+            self.households,
             self.livestock_farmers,
             self.industry,
             self.reservoir_operators,
@@ -38,34 +38,7 @@ class Agents:
             self.market,
         ]
 
-        if not self.model.load_initial_data:
-            self.initiate()
-        else:
-            self.restore_state()
-            self.restart()
-
-    def initiate(self) -> None:
-        """Initiate all agents."""
-        for agent_type in self.agents:
-            agent_type.initiate()
-
     def step(self) -> None:
         """This function is called every timestep and activates the agents in order of NGO, government and then farmers."""
         for agent_type in self.agents:
             agent_type.step()
-
-    def save_state(self) -> None:
-        """Save the state of all agents."""
-        for agent_type in self.agents:
-            agent_type.save_state(folder=agent_type.__class__.__name__)
-
-    def restore_state(self) -> None:
-        """Load the state of all agents."""
-        for agent_type in self.agents:
-            agent_type.restore_state(folder=agent_type.__class__.__name__)
-
-    def restart(self):
-        """Restart all agents."""
-        for agent_type in self.agents:
-            if hasattr(agent_type, "restart"):
-                agent_type.restart()

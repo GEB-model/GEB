@@ -21,4 +21,6 @@ jobs:
     - name: Install the project
       run: uv sync --extra dev
     - name: Run tests
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: uv run pytest -s

@@ -22,3 +22,15 @@ class HazardDriver:
                 assert type(self.current_time.date()) is type(event["end_time"])
                 if self.current_time.date() == event["end_time"]:
                     self.sfincs.run(event)
+
+            if (
+                "calculate_return_period_maps_at_and_of_spinup"
+                in self.config["hazards"]["floods"]
+                and self.config["hazards"]["floods"][
+                    "calculate_return_period_maps_at_and_of_spinup"
+                ]
+                is True
+                and self.current_timestep == self.n_timesteps - 1
+                and self.spinup
+            ):
+                self.sfincs.get_return_period_maps()
