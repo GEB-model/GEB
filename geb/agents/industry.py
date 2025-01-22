@@ -19,11 +19,10 @@ class Industry(AgentBaseClass):
         self.grid = model.data.grid
         self.agents = agents
         self.config = (
-            self.model.config["agent_settings"]["town_managers"]
-            if "town_managers" in self.model.config["agent_settings"]
+            self.model.config["agent_settings"]["industry"]
+            if "industry" in self.model.config["agent_settings"]
             else {}
         )
-        self.calibration_factor = self.config["calibration_factor"]
 
         AgentBaseClass.__init__(self)
 

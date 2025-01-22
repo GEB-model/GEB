@@ -469,7 +469,6 @@ def abstract_water(
     crop_calendar: np.ndarray,
     current_crop_calendar_rotation_year_index: np.ndarray,
     max_paddy_water_level: float,
-    calibration_irrigation_moment: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -1117,7 +1116,7 @@ class CropFarmers(AgentBaseClass):
             self.model.files["region_subgrid"]["areamaps/region_mask"]
         )
         self.HRU_regions_map = np.zeros_like(self.model.data.HRU.mask, dtype=np.int8)
-        self.HRU_regions_map[~self.model.data.HRU.mask] = self.subdistrict_map[
+        self.HRU_regions_map[~self.model.data.HRU.mask] = self.var.subdistrict_map[
             region_mask == 0
         ]
         self.HRU_regions_map = self.model.data.HRU.compress(self.HRU_regions_map)
@@ -1801,19 +1800,6 @@ class CropFarmers(AgentBaseClass):
     @property
     def is_in_command_area(self):
         return self.farmer_command_area != -1
-
-    def save_discharge_daily(self):
-        # Retrieve gauges
-        gauges = np.array(self.gauges)
-
-        shift_and_update(
-            self.var.discharge_daily,
-            sample_from_map(
-                array=self.model.data.grid.decompress(self.model.data.grid.discharge),
-                coords=gauges,
-                gt=self.model.data.grid.gt,
-            ),
-        )
 
     def save_water_deficit(self, discount_factor=0.8):
         water_deficit_day_m3 = (
@@ -2677,7 +2663,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     def save_yearly_spei(self):
-        assert self.model.current_time.month == 7
+        assert self.model.current_time.month == 1
 
         # calculate the SPEI probability using GEV parameters
         SPEI_probability = genextreme.sf(
@@ -4826,7 +4812,7 @@ class CropFarmers(AgentBaseClass):
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth
 
-    def create_agent_classes(self, *characteristics):
+    def create_farmer_classes(self, *characteristics):
         agent_classes = np.unique(
             np.stack(characteristics), axis=1, return_inverse=True
         )[1]
@@ -4858,14 +4844,13 @@ class CropFarmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.water_abstraction_sum()
-        self.save_discharge_daily()
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
             if self.model.current_time.year - 1 > self.model.spinup_start.year:
                 # reset the irrigation limit, but only if a full year has passed already. Otherwise
                 # the cumulative water deficit is not year completed.
-                self.remaining_irrigation_limit_m3[:] = 0
+                self.var.remaining_irrigation_limit_m3[:] = 0
 
             # Set yearly yield ratio based on the difference between saved actual and potential profit
             self.var.yearly_yield_ratio = (
@@ -4883,7 +4868,7 @@ class CropFarmers(AgentBaseClass):
 
             main_irrigation_source = self.main_irrigation_source
 
-            self.var.farmer_class[:] = self.create_agent_classes(
+            self.var.farmer_class[:] = self.create_farmer_classes(
                 main_irrigation_source, self.farmer_command_area
             )
 
