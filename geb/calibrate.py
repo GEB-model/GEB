@@ -25,6 +25,8 @@ import signal
 import pandas as pd
 import yaml
 import geopandas as gpd
+from io import StringIO
+import collections
 
 from deap import creator, base, tools, algorithms
 from functools import wraps, partial
@@ -249,11 +251,6 @@ def get_irrigation_wells_score(run_directory, individual, config):
         myfile.write(str(individual.label) + "," + str(irrigation_well_score) + "\n")
 
     return irrigation_well_score
-
-
-def get_crops_score(run_directory, individual, config):
-    kge = 1
-    return kge
 
 
 def KGE_water_price(run_directory, individual, config):
@@ -584,7 +581,7 @@ def determine_water_price_model(run_directory, config):
     print("\nAverage Feature Importance (Random Forest across CV folds):")
     print(importance_df_rf_cv)
 
-    export_path = Path("calibration_data/water_use")
+    export_path = config["calibration"]["path"] / Path("models")
     export_path.mkdir(parents=True, exist_ok=True)
     model_file_rf = export_path / "randomforest_model.joblib"
 
@@ -968,11 +965,31 @@ def get_observed_irrigation_method(config):
     groups = []
     for d in all_desc:
         g = df_flat[df_flat["Description"] == d].copy()
-        g = g.set_index("time").sort_index()
-        dates = pd.date_range(min_date, max_date, freq="A-JUN")
+
+        # set index to a proper datetime
+        g = g.set_index("time")
+        g.index = pd.to_datetime(g.index, errors="coerce")
+
+        g = g.sort_index()
+
+        # reindex to fill with np.nan
+        dates = pd.date_range(min_date, max_date, freq="YE-JUN")
         g = g.reindex(dates, fill_value=np.nan)
+
+        # separate out non-numeric columns so they won't raise warnings
+        non_numeric_cols = g.select_dtypes(exclude=["number"]).columns
+        temp_non_numeric = g[non_numeric_cols]
+        g = g.drop(columns=non_numeric_cols)
+
+        g = g.infer_objects(copy=False)
         g = g.interpolate(method="time", limit_direction="both")
+
+        # bring back non-numeric columns
+        g[non_numeric_cols] = temp_non_numeric
+
+        # ensure "Description" column is still set
         g["Description"] = d
+
         groups.append(g)
 
     # Recombine, pivot back
@@ -990,7 +1007,7 @@ def get_irrigation_method_score(run_directory, individual, config):
         subset = array_simulated[region_agents == region_value]
         if len(subset) == 0:
             return 0.0, 0.0, 0.0
-        sprinkler_count = np.sum(subset == 0.8)
+        sprinkler_count = np.sum(subset == 0.7)
         drip_count = np.sum(subset == 0.9)
         surface_count = np.sum(subset == 0.5)
         total = len(subset)
@@ -1095,7 +1112,8 @@ def get_irrigation_method_score(run_directory, individual, config):
             df_simulated_vict, df_observed_vict, fraction_name
         )
 
-    kge = (kge_results_nsw + kge_results_vict) / 2
+    all_results = list(kge_results_nsw.values()) + list(kge_results_vict.values())
+    kge = np.nanmean(all_results)
 
     print(
         "run_id: "
@@ -1105,6 +1123,173 @@ def get_irrigation_method_score(run_directory, individual, config):
     )
     with open(
         os.path.join(config["calibration"]["path"], "KGE_irr_method_log.csv"), "a"
+    ) as myfile:
+        myfile.write(str(individual.label) + "," + str(kge) + "\n")
+
+    return kge
+
+
+def get_observed_crops(run_directory, individual, config):
+    def parse_water_year(year_int):
+        return pd.to_datetime(f"{year_int}-06-30")
+
+    def clean_csv_by_majority_length_in_memory(fp_in):
+        with open(fp_in, "r") as f_in:
+            lines = [line.strip() for line in f_in]
+        lengths = [len(line.split(",")) for line in lines]
+        counts = collections.Counter(lengths)
+        majority_len = counts.most_common(1)[0][0]
+
+        cleaned_lines = []
+        for line in lines:
+            parts = line.split(",")
+            if len(parts) == majority_len:
+                cleaned_lines.append(parts)
+            elif len(parts) > majority_len:
+                nums = list(map(int, parts))
+                diff = len(parts) - majority_len
+                for _ in range(diff):
+                    nums.remove(min(nums))
+                cleaned_lines.append(list(map(str, nums)))
+            else:
+                continue
+
+        csv_str = "\n".join([",".join(line) for line in cleaned_lines])
+        return csv_str
+
+    years = [2000, 2005, 2010, 2015]
+
+    calibration_config = config["calibration"]
+    folder_path = Path(os.path.join(calibration_config["observed_data"], "crops"))
+
+    # Prepare a container for results
+    all_data = []
+
+    for year in years:
+        csv_pattern = Path(f"crop_calendar_{year}.csv")
+        fp = folder_path / csv_pattern
+
+        csv_str = clean_csv_by_majority_length_in_memory(fp)
+        df = pd.read_csv(StringIO(csv_str))
+
+        # Take the mean across rows => mean of all runs
+        mean_series = df.mean()
+
+        # Put that mean into a single-row DataFrame
+        # (columns become 0,1,2,... if no header in CSV)
+        mean_df = pd.DataFrame([mean_series.values], columns=mean_series.index)
+
+        # Add a time column (or rename if you prefer 'Year')
+        mean_df["time"] = parse_water_year(year)
+
+        # Append to the list of yearly results
+        all_data.append(mean_df)
+
+    # Combine all years into one DataFrame
+    if all_data:
+        final_df = pd.concat(all_data, ignore_index=True)
+    else:
+        final_df = pd.DataFrame()
+
+    final_df = pd.DataFrame(final_df)
+
+    final_df.set_index("time", inplace=True)
+
+    final_pivot = final_df.pivot_table(
+        index=["time"],
+        aggfunc="first",  # or pivot columns if needed
+    ).sort_index(level="time")
+
+    final_pivot.columns = final_pivot.columns.astype(int)
+
+    return final_pivot
+
+
+def get_simulated_crops(run_directory, individual, config, observed_pivot):
+    start_time = observed_pivot.index.get_level_values("time").min()
+    end_time = observed_pivot.index.get_level_values("time").max()
+    fp_simulated = Path(os.path.join(run_directory, config["calibration"]["scenario"]))
+
+    crop_calendar_simulated = load_ds(
+        fp_simulated,
+        "crop_calendar",
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    field_size_per_farmer = load_ds(
+        fp_simulated,
+        "field_size_per_farmer",
+        start_time=config["calibration"]["start_time"],
+        end_time=config["calibration"]["end_time"],
+    ).values
+
+    times = (
+        crop_calendar_simulated.time.values
+    )  # or crop_calendar_simulated.coords['time'].values
+    results = []
+
+    for i, current_time in enumerate(times):
+        # crop_calendar at this time step, shape: (agents,)
+        crops_for_this_timestep = crop_calendar_simulated.values[i, :]
+
+        # Compute unique crop IDs and the bincount index
+        unique_crops, inverse = np.unique(crops_for_this_timestep, return_inverse=True)
+
+        # Sum field sizes for each unique crop
+        # field_size_per_farmer should have shape: (agents,) or broadcastable
+        area_per_crop = np.bincount(inverse, weights=field_size_per_farmer)
+
+        # Convert to a dict: {crop_id: total_area, ..., 'time': current_time}
+        row_dict = dict(zip(unique_crops, area_per_crop))
+        row_dict["time"] = current_time
+
+        # Append this dict to the results list
+        results.append(row_dict)
+
+    df_area_by_crop = pd.DataFrame(results)
+    # Make 'time' the index
+    df_area_by_crop.set_index("time", inplace=True)
+
+    final_pivot = df_area_by_crop.pivot_table(
+        index=["time"],
+        aggfunc="first",  # or pivot columns if needed
+    ).sort_index(level="time")
+
+    final_pivot.columns = final_pivot.columns.astype(int)
+
+    return final_pivot
+
+
+def get_crops_KGE(run_directory, individual, config):
+    # Get observed data
+    observed_df = get_observed_crops(run_directory, individual, config)
+    simulated_df = get_simulated_crops(run_directory, individual, config, observed_df)
+
+    # Filter both DataFrames to keep ccommon dates
+    common_index = simulated_df.index.intersection(observed_df.index)
+    simulated_filtered = simulated_df.loc[common_index]
+    observed_filtered = observed_df.loc[common_index]
+
+    common_columns = simulated_filtered.columns.intersection(observed_filtered.columns)
+    simulated_filtered = simulated_filtered[common_columns]
+    observed_filtered = observed_filtered[common_columns]
+
+    kge_results = {}
+    for crop_col in common_columns:
+        s = simulated_filtered[crop_col].values
+        o = observed_filtered[crop_col].values
+        kge_results[crop_col] = KGE_calculation(s, o)
+
+    kge_values = [val for val in kge_results.values() if not np.isnan(val)]
+    if len(kge_values) > 0:
+        kge = np.mean(kge_values)
+    else:
+        kge = np.nan
+
+    print("run_id: " + str(individual.label) + ", KGE_crops: " + "{0:.3f}".format(kge))
+    with open(
+        os.path.join(config["calibration"]["path"], "KGE_crops_log.csv"), "a"
     ) as myfile:
         myfile.write(str(individual.label) + "," + str(kge) + "\n")
 
@@ -1381,9 +1566,9 @@ def run_model(individual, config, gauges, observed_streamflow):
                     run_directory, individual, config, gauges, observed_streamflow
                 )
             )
-        if score == "crops":
-            scores.append(get_crops_score(run_directory, individual, config))
-        if score == "irrigation_method":
+        if score == "KGE_crops":
+            scores.append(get_crops_KGE(run_directory, individual, config))
+        if score == "KGE_irrigation_method":
             scores.append(
                 get_irrigation_method_score(run_directory, individual, config)
             )
