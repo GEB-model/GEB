@@ -347,13 +347,17 @@ class hydrology_reporter(ABMReporter):
                                     gt = self.model.data.HRU.gt
                                 else:
                                     raise ValueError
-                                x, y = coord_to_pixel(
+                                px, py = coord_to_pixel(
                                     (float(args[0]), float(args[1])), gt
                                 )
                                 decompressed_array = self.decompress(
                                     conf["varname"], array
                                 )
-                                value = decompressed_array[y, x]
+                                try:
+                                    value = decompressed_array[py, px]
+                                except IndexError as e:
+                                    index_error = f"{e}. Most likely the coordinate ({args[0]},{args[1]}) is outside the model domain."
+                                    raise IndexError(index_error)
                             else:
                                 raise ValueError(f"Function {function} not recognized")
                     self.report_value(name, value, conf)
