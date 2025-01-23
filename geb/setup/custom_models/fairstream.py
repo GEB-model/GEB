@@ -535,6 +535,45 @@ class fairSTREAMModel(GEBModel):
 
         region_id = self.binary["agents/farmers/region_id"]
         regions = self.geoms["areamaps/regions"]
+
+        irrigation_status_per_tehsil = pd.read_excel(
+            self.preprocessing_dir / "census" / "irrigation_sources.xlsx"
+        )
+        irrigation_status_per_tehsil["state_name"] = irrigation_status_per_tehsil[
+            "state_name"
+        ].ffill()
+        irrigation_status_per_tehsil["district_n"] = irrigation_status_per_tehsil[
+            "district_n"
+        ].ffill()
+        irrigation_status_per_tehsil["sub_dist_1"] = irrigation_status_per_tehsil[
+            "sub_dist_1"
+        ].ffill()
+
+        # assign region_id to crop data
+        irrigation_status_per_tehsil["region_id"] = irrigation_status_per_tehsil.apply(
+            lambda row: regions.loc[
+                (regions["state_name"] == row["state_name"])
+                & (regions["district_n"] == row["district_n"])
+                & (regions["sub_dist_1"] == row["sub_dist_1"]),
+            ]["region_id"].item(),
+            axis=1,
+        )
+        irrigation_status_per_tehsil = irrigation_status_per_tehsil.drop(
+            ["state_name", "district_n", "sub_dist_1"], axis=1
+        )
+
+        irrigation_status_per_tehsil["well_ratio"] = (
+            irrigation_status_per_tehsil["well_n_holdings"]
+            + irrigation_status_per_tehsil["tubewell_n_holdings"]
+        ) / (
+            irrigation_status_per_tehsil["canals_n_holdings"]
+            + irrigation_status_per_tehsil["tank_n_holdings"]
+            + irrigation_status_per_tehsil["well_n_holdings"]
+            + irrigation_status_per_tehsil["tubewell_n_holdings"]
+            + irrigation_status_per_tehsil["other_n_holdings"]
+            + irrigation_status_per_tehsil["no_irrigation_n_holdings"]
+        )
+
         crop_data_per_tehsil = pd.read_excel(
             self.preprocessing_dir / "census" / "crop_data.xlsx"
         )
@@ -638,7 +677,14 @@ class fairSTREAMModel(GEBModel):
                 size_class = "20.0 & ABOVE"
 
             crop_data = crop_data_df.loc[farmer_region_id, size_class]
-            assert crop_data.sum() > 0, "No crop data available for this farmer"
+            if crop_data.sum() == 0:
+                if crop_data_df.loc[farmer_region_id].values.sum() == 0:
+                    crop_data_df = crop_data_per_tehsil_rainfed
+                    crop_data = crop_data_df.loc[farmer_region_id, size_class]
+                    assert crop_data.sum() > 0
+                else:
+                    crop_data = crop_data_df.loc[farmer_region_id].sum()
+                    assert crop_data.sum() > 0
 
             crop = np.random.choice(crop_data.index, p=crop_data / crop_data.sum())
             crop = crop_name_to_ID[crop]
