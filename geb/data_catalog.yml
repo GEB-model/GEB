@@ -9,7 +9,11 @@ fabdem:
     source_license: CC BY-NC-SA 4.0
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
-  path: /scistor/ivm/data_catalogue/topography/fabdem.vrt
+  path: topography/FABDEM1-2.vrt
+  kwargs:
+    chunks:
+      x: 128
+      y: 128
 geul_dem:
   data_type: RasterDataset
   driver: raster
@@ -118,6 +122,7 @@ gebco:
   crs: 4326
   data_type: RasterDataset
   driver: raster
+  filesystem: local
   meta:
     category: topography
     paper_doi: 10.5285/a29c5465-b138-234d-e053-6c86abc040b9
@@ -126,7 +131,7 @@ gebco:
     source_url: https://www.bodc.ac.uk/data/open_download/gebco/gebco_2020/geotiff/
     source_version: 2020
     unit: m+MSL
-  path: /scistor/ivm/data_catalogue/hydrology/topography/gebco/gebco.vrt
+  path: /vsizip/vsihttps://www.bodc.ac.uk/data/open_download/gebco/gebco_2024_sub_ice_topo/geotiff/GEBCO_2024_sub_ice_topo.nc
 merit_hydro:
   crs: 4326
   data_type: RasterDataset
@@ -167,62 +172,6 @@ river_centerlines_MERIT_Basins:
     source_license: CC BY-NC-SA 4.0
     paper_doi: 10.1029/2019WR024873
     paper_ref: Yamazaki et al. (2019)
-glofas_4_0_discharge:
-  data_type: RasterDataset
-  path: /scistor/ivm/data_catalogue/hydrology/discharge/glofas_4.0_discharge_netcdf/Glofas-Discharge-*.nc
-  driver: netcdf
-  filesystem: local
-  crs: 4326
-  rename:
-    dis24: discharge
-  meta:
-      category: discharge from glofas all years
-      version:  LISFLOOD 4.0
-      source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
-glofas_4_0_discharge_yearly:
-  data_type: RasterDataset
-  path: /scistor/ivm/data_catalogue/hydrology/discharge/GloFAS_Yearly_Time_Step_Resampled.nc
-  driver: netcdf
-  filesystem: local
-  crs: 4326
-  rename:
-    dis24: discharge
-  meta:
-      version:  LISFLOOD 4.0
-      source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
-glofas_uparea:
-  data_type: RasterDataset
-  path: /scistor/ivm/data_catalogue/hydrology/discharge/uparea_glofas_v4_0.nc
-  driver: netcdf
-  crs: 4326
-  unit_mult:
-    uparea: 0.000001
-  meta:
-      version:  LISFLOOD 4.0
-      source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
-gcn250:
-  data_type: RasterDataset
-  path: /scistor/ivm/data_catalogue/hydrology/soil/gcn_sfincs/{variable}.tif
-  driver: raster
-  filesystem: local
-  nodata: 255
-  meta:
-    category: soil
-    paper_doi: 10.1038/s41597-019-0155-x
-    paper_ref: Jaafar et al. (2019)
-    source_license: CC BY 4.0
-    source_url: https://doi.org/10.6084/m9.figshare.7756202.v1
-    source_version: v1
-merit_hydro_index:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  meta:
-    category: topography
-    paper_doi: 10.5194/hess-2020-582
-    paper_ref: Eilander et al. (in review)
-    source_license: CC-BY-NC 4.0
-  path: merit_hydro_index.gpkg
 rivers_lin2019_v1:
   data_type: GeoDataFrame
   driver: vector
@@ -234,17 +183,6 @@ rivers_lin2019_v1:
     source_url: https://zenodo.org/record/3552776#.YVbOrppByUk
     source_version: 1
   path: rivers_lin2019_v1.gpkg
-vito:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: landuse
-    paper_doi: 10.5281/zenodo.3939038
-    paper_ref: Buchhorn et al (2020)
-    source_url: https://land.copernicus.eu/global/products/lc
-    source_version: v2.0.2
-  path: vito.tif
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
@@ -433,13 +371,6 @@ GDL_regions_v4:
 GLOPOP-S:
   data_type: Dataset
   path: /scistor/ivm/data_catalogue/population/synthpop_{region}.dat.gz
-ERA5_geopotential:
-  data_type: RasterDataset
-  driver: netcdf
-  path: ERA5_geopotential.nc
-  crs: 4326
-  meta:
-    source_url: https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#ERA5Land:datadocumentation-parameterlistingParameterlistings
 esa_worldcover_2020_v100:
   crs: 4326
   data_type: RasterDataset
@@ -611,26 +542,6 @@ FAO_crop_price:
     Item: crop
   unit_mult:
     price_per_kg: 0.001  # tonne to kg
-era5_hourly:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  meta:
-    category: meteo
-    history: Extracted from Copernicus Climate Data Store
-    paper_doi: 10.1002/qj.3803
-    paper_ref: Hersbach et al. (2019)
-    source_license: https://cds.climate.copernicus.eu/cdsapp/#!/terms/licence-to-use-copernicus-products
-    source_url: https://doi.org/10.24381/cds.bd0915c6
-    source_version: ERA5 hourly data on pressure levels
-  path: era5_hourly.nc
-  unit_add:
-    temp: -273.15
-  unit_mult:
-    kin: 0.000277778
-    kout: 0.000277778
-    precip: 1000
-    press_msl: 0.01
 hydraulic_conductivity_globgm:
   crs: 4326
   data_type: RasterDataset

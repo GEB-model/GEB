@@ -6116,7 +6116,7 @@ class GEBModel(GridModel):
         self,
         land_cover="esa_worldcover_2021_v200",
         include_coastal=True,
-        DEM=["fabdem", "gebco"],
+        DEM=["gebco", "fabdem"],
     ):
         if isinstance(DEM, str):
             DEM = [DEM]
@@ -6140,21 +6140,6 @@ class GEBModel(GridModel):
         )
 
         bounds = tuple(hydrobasins.total_bounds)
-
-        gcn250 = self.data_catalog.get_rasterdataset(
-            "gcn250", bbox=bounds, buffer=100, variables=["cn_avg"]
-        )
-        gcn250.name = "gcn250"
-        self.set_forcing(gcn250, name="hydrodynamics/gcn250")
-
-        hydrodynamics_data_catalog.add_source(
-            "gcn250",
-            RasterDatasetAdapter(
-                path=Path(self.root) / "hydrodynamics" / "gcn250.zarr.zip",
-                meta=self.data_catalog.get_source("gcn250").meta,
-                driver="zarr",
-            ),  # hydromt likes absolute paths
-        )
 
         for DEM_name in DEM:
             DEM_raster = self.data_catalog.get_rasterdataset(
