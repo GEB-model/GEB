@@ -500,36 +500,47 @@ class fairSTREAMModel(GEBModel):
             farm_mask, weights=groundwater_depth_subgrid.ravel()[farm_mask]
         ) / np.bincount(farm_mask)
 
-        # well probability is set such that the farmers with the deepest groundwater have the lowest probability
-        farmer_well_probability = 1 - (
-            groundwater_depth_per_farm - groundwater_depth_per_farm.min()
-        ) / (groundwater_depth_per_farm.max() - groundwater_depth_per_farm.min())
+        # # well probability is set such that the farmers with the deepest groundwater have the lowest probability
+        # farmer_well_probability = 1 - (
+        #     groundwater_depth_per_farm - groundwater_depth_per_farm.min()
+        # ) / (groundwater_depth_per_farm.max() - groundwater_depth_per_farm.min())
 
         farm_sizes = self.get_farm_size()
         assert farm_sizes.size == n_farmers
 
-        irrigated_area = (
-            (irrigation_source == irrigation_sources["canal"]) * farm_sizes
-        ).sum()
+        # irrigated_area = (
+        #     (irrigation_source == irrigation_sources["canal"]) * farm_sizes
+        # ).sum()
 
-        target_irrigated_area_ratio = 0.9
+        # target_irrigated_area_ratio = 0.9
 
-        remaining_irrigated_area = (
-            farm_sizes.sum() * target_irrigated_area_ratio - irrigated_area
-        )
+        # remaining_irrigated_area = (
+        #     farm_sizes.sum() * target_irrigated_area_ratio - irrigated_area
+        # )
 
-        ordered_well_indices = np.arange(n_farmers)[
-            np.argsort(farmer_well_probability)[::-1]
-        ]
-        cumulative_farm_area = np.cumsum(farm_sizes[ordered_well_indices])
-        farmers_with_well = ordered_well_indices[
-            cumulative_farm_area <= remaining_irrigated_area
-        ]
-        irrigation_source[farmers_with_well] = irrigation_sources["well"]
+        # ordered_well_indices = np.arange(n_farmers)[
+        #     np.argsort(farmer_well_probability)[::-1]
+        # ]
+        # cumulative_farm_area = np.cumsum(farm_sizes[ordered_well_indices])
+        # farmers_with_well = ordered_well_indices[
+        #     cumulative_farm_area <= remaining_irrigated_area
+        # ]
+        # irrigation_source[farmers_with_well] = irrigation_sources["well"]
 
-        irrigated_area = (
-            (irrigation_source != irrigation_sources["no"]) * farm_sizes
-        ).sum()
+        # irrigated_area = (
+        #     (irrigation_source != irrigation_sources["no"]) * farm_sizes
+        # ).sum()
+
+        farm_size_class = np.zeros(n_farmers, dtype=np.int32)
+        farm_size_class[farm_sizes > 5000] = 1
+        farm_size_class[farm_sizes > 10000] = 2
+        farm_size_class[farm_sizes > 20000] = 3
+        farm_size_class[farm_sizes > 30000] = 4
+        farm_size_class[farm_sizes > 40000] = 5
+        farm_size_class[farm_sizes > 50000] = 6
+        farm_size_class[farm_sizes > 75000] = 7
+        farm_size_class[farm_sizes > 100000] = 8
+        farm_size_class[farm_sizes > 200000] = 9
 
         self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
 
@@ -538,6 +549,20 @@ class fairSTREAMModel(GEBModel):
 
         irrigation_status_per_tehsil = pd.read_excel(
             self.preprocessing_dir / "census" / "irrigation_sources.xlsx"
+        )
+        irrigation_status_per_tehsil["size_class"].map(
+            {
+                "Below 0.5": 0,
+                "0.5-1.0": 1,
+                "1.0-2.0": 2,
+                "2.0-3.0": 3,
+                "3.0-4.0": 4,
+                "4.0-5.0": 5,
+                "5.0-7.5": 6,
+                "7.5-10.0": 7,
+                "10.0-20.0": 8,
+                "20.0 & ABOVE": 9,
+            }
         )
         irrigation_status_per_tehsil["state_name"] = irrigation_status_per_tehsil[
             "state_name"
