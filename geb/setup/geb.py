@@ -7017,4 +7017,4 @@ class GEBModel(GridModel):
 
     @property
     def preprocessing_dir(self):
-        return Path(self.root) / "preprocessing"
+        return Path(self.root).parent / "preprocessing"
