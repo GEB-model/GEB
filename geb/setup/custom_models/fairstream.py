@@ -40,8 +40,7 @@ class Survey:
         self.model.fit(
             self.samples,
             estimator=BayesianEstimator,
-            prior_type="dirichlet",
-            pseudo_counts=0.1,
+            prior_type="K2",
         )
         self.model.get_cpds()
 
@@ -534,6 +533,66 @@ class fairSTREAMModel(GEBModel):
 
         self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
 
+        region_id = self.binary["agents/farmers/region_id"]
+        regions = self.geoms["areamaps/regions"]
+        crop_data_per_tehsil = pd.read_excel(
+            self.preprocessing_dir / "census" / "crop_data.xlsx"
+        )
+        crop_data_per_tehsil = crop_data_per_tehsil[
+            [
+                c
+                for c in crop_data_per_tehsil.columns
+                if "_area" not in c and "_total" not in c
+            ]
+        ]
+        crop_data_per_tehsil["state_name"] = crop_data_per_tehsil["state_name"].ffill()
+        crop_data_per_tehsil["district_n"] = crop_data_per_tehsil["district_n"].ffill()
+        crop_data_per_tehsil["sub_dist_1"] = crop_data_per_tehsil["sub_dist_1"].ffill()
+
+        # assign region_id to crop data
+        crop_data_per_tehsil["region_id"] = crop_data_per_tehsil.apply(
+            lambda row: regions.loc[
+                (regions["state_name"] == row["state_name"])
+                & (regions["district_n"] == row["district_n"])
+                & (regions["sub_dist_1"] == row["sub_dist_1"]),
+            ]["region_id"].item(),
+            axis=1,
+        )
+
+        crop_data_per_tehsil = crop_data_per_tehsil.drop(
+            ["state_name", "district_n", "sub_dist_1"], axis=1
+        )
+
+        # create multi-level index using region id as the first level
+        crop_data_per_tehsil = crop_data_per_tehsil.set_index(
+            ["region_id", "size_class"]
+        )
+
+        crop_data_per_tehsil = crop_data_per_tehsil[
+            [c for c in crop_data_per_tehsil.columns if "Cotton" not in c]
+        ]
+        crop_data_per_tehsil.columns = [
+            c.replace("_holdings", "").replace("Tur (Arhar)", "Tur")
+            for c in crop_data_per_tehsil.columns
+        ]
+        crop_data_per_tehsil_irrigated = crop_data_per_tehsil[
+            [c for c in crop_data_per_tehsil.columns if "rain" not in c]
+        ]
+        crop_data_per_tehsil_irrigated.columns = [
+            c.replace("_irr", "") for c in crop_data_per_tehsil_irrigated.columns
+        ]
+        crop_data_per_tehsil_rainfed = crop_data_per_tehsil[
+            [c for c in crop_data_per_tehsil.columns if "irr" not in c]
+        ]
+        crop_data_per_tehsil_rainfed.columns = [
+            c.replace("_rain", "") for c in crop_data_per_tehsil_rainfed.columns
+        ]
+
+        crop_name_to_ID = {
+            crop["name"]: int(ID)
+            for ID, crop in self.dict["crops/crop_data"]["data"].items()
+        }
+
         # process crop calendars
         crop_calendar_per_farmer = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
         crop_calendar_rotation_years = np.full(n_farmers, 1, dtype=np.int32)
@@ -543,16 +602,48 @@ class fairSTREAMModel(GEBModel):
             farmer_crop_calendar = crop_calendar_per_farmer[idx]
             farmer_irrigation_source = irrigation_source[idx]
 
+            farmer_region_id = region_id[idx]
+
             if farmer_irrigation_source in (
                 irrigation_sources["well"],
                 irrigation_sources["canal"],
             ):
+                crop_data_df = crop_data_per_tehsil_irrigated
                 n_crops = 1 if np.random.random() < 0.2 else 2
             else:
+                crop_data_df = crop_data_per_tehsil_rainfed
                 n_crops = 1 if np.random.random() < 0.8 else 2
 
-            # crops = np.random.choice(crop_ids, size=n_crops)
-            crops = np.full(n_crops, 5)  # only wheat
+            farm_size = farm_sizes[idx]
+
+            if farm_size < 5000:
+                size_class = "Below 0.5"
+            elif farm_size < 10000:
+                size_class = "0.5-1.0"
+            elif farm_size < 20000:
+                size_class = "1.0-2.0"
+            elif farm_size < 30000:
+                size_class = "2.0-3.0"
+            elif farm_size < 40000:
+                size_class = "3.0-4.0"
+            elif farm_size < 50000:
+                size_class = "4.0-5.0"
+            elif farm_size < 75000:
+                size_class = "5.0-7.5"
+            elif farm_size < 100000:
+                size_class = "7.5-10.0"
+            elif farm_size < 200000:
+                size_class = "10.0-20.0"
+            else:
+                size_class = "20.0 & ABOVE"
+
+            crop_data = crop_data_df.loc[farmer_region_id, size_class]
+            assert crop_data.sum() > 0, "No crop data available for this farmer"
+
+            crop = np.random.choice(crop_data.index, p=crop_data / crop_data.sum())
+            crop = crop_name_to_ID[crop]
+
+            crops = np.full(n_crops, crop)
             for season_idx, crop in enumerate(crops):
                 duration = crop_variables[crop][f"season_#{season_idx + 1}_duration"]
                 if duration > 365:
@@ -585,17 +676,17 @@ class fairSTREAMModel(GEBModel):
         bayesian_net_folder = Path(self.root).parent / "preprocessing" / "bayesian_net"
         bayesian_net_folder.mkdir(exist_ok=True, parents=True)
 
-        IHDS_survey = IHDSSurvey()
-        IHDS_survey.parse(path=Path("data") / "IHDS_I.csv")
-        save_path = bayesian_net_folder / "IHDS.bif"
-        if not save_path.exists() or overwrite_bayesian_network:
-            IHDS_survey.learn_structure()
-            IHDS_survey.estimate_parameters(
-                plot=False, save=bayesian_net_folder / "IHDS.png"
-            )
-            IHDS_survey.save(save_path)
-        else:
-            IHDS_survey.read(save_path)
+        # IHDS_survey = IHDSSurvey()
+        # IHDS_survey.parse(path=Path("data") / "IHDS_I.csv")
+        # save_path = bayesian_net_folder / "IHDS.bif"
+        # if not save_path.exists() or overwrite_bayesian_network:
+        #     IHDS_survey.learn_structure()
+        #     IHDS_survey.estimate_parameters(
+        #         plot=False, save=bayesian_net_folder / "IHDS.png"
+        #     )
+        #     IHDS_survey.save(save_path)
+        # else:
+        #     IHDS_survey.read(save_path)
 
         farmer_survey = FarmerSurvey()
         farmer_survey.parse(path=Path("data") / "survey_results_cleaned.zip")
