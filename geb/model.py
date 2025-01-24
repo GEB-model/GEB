@@ -173,11 +173,11 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                     self,
                 )
 
-        if not self.spinup:
-            self.store.load()
+            if not self.spinup:
+                self.store.load()
 
-        self.reporter = Reporter(self)
-        self.artists = Artists(self)
+            self.reporter = Reporter(self)
+            self.artists = Artists(self)
 
     def restore(self, store_location, timestep):
         self.store.load(store_location)
