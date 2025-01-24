@@ -609,21 +609,39 @@ class fairSTREAMModel(GEBModel):
         region_ids = np.unique(region_id)
         size_classes = np.unique(farm_size_class)
 
+        WELL_DEPTH_THRESHOLD = 80
+
         for region_id_class in region_ids:
             for size_class in size_classes:
                 agent_subset = np.where(
                     (region_id_class == region_id) & (size_class == farm_size_class)
                 )[0]
+                if agent_subset.size == 0:
+                    continue
                 agent_irrigation_status = irrigation_source[agent_subset]
                 target_well_ratio = irrigation_status_per_tehsil.loc[
                     (region_id_class, size_class), "well_ratio"
                 ]
                 not_yet_irrigated_agents = np.where(agent_irrigation_status == -1)[0]
 
+                if not_yet_irrigated_agents.size == 0:
+                    continue
+
+                groundwater_depth_subset = groundwater_depth_per_farm[agent_subset][
+                    not_yet_irrigated_agents
+                ]
+                if (groundwater_depth_subset > WELL_DEPTH_THRESHOLD).all():
+                    continue
+
+                well_probability = np.maximum(
+                    1 - (groundwater_depth_subset / WELL_DEPTH_THRESHOLD), 0
+                )
+
                 well_irrigated_agents = np.random.choice(
                     not_yet_irrigated_agents,
                     int(target_well_ratio * len(not_yet_irrigated_agents)),
                     replace=False,
+                    p=well_probability / well_probability.sum(),
                 )
 
                 irrigation_source[agent_subset[well_irrigated_agents]] = 1
