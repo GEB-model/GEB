@@ -531,26 +531,14 @@ class fairSTREAMModel(GEBModel):
         #     (irrigation_source != irrigation_sources["no"]) * farm_sizes
         # ).sum()
 
-        farm_size_class = np.zeros(n_farmers, dtype=np.int32)
-        farm_size_class[farm_sizes > 5000] = 1
-        farm_size_class[farm_sizes > 10000] = 2
-        farm_size_class[farm_sizes > 20000] = 3
-        farm_size_class[farm_sizes > 30000] = 4
-        farm_size_class[farm_sizes > 40000] = 5
-        farm_size_class[farm_sizes > 50000] = 6
-        farm_size_class[farm_sizes > 75000] = 7
-        farm_size_class[farm_sizes > 100000] = 8
-        farm_size_class[farm_sizes > 200000] = 9
-
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-
-        region_id = self.binary["agents/farmers/region_id"]
         regions = self.geoms["areamaps/regions"]
 
         irrigation_status_per_tehsil = pd.read_excel(
             self.preprocessing_dir / "census" / "irrigation_sources.xlsx"
         )
-        irrigation_status_per_tehsil["size_class"].map(
+        irrigation_status_per_tehsil["size_class"] = irrigation_status_per_tehsil[
+            "size_class"
+        ].map(
             {
                 "Below 0.5": 0,
                 "0.5-1.0": 1,
@@ -587,6 +575,10 @@ class fairSTREAMModel(GEBModel):
             ["state_name", "district_n", "sub_dist_1"], axis=1
         )
 
+        irrigation_status_per_tehsil = irrigation_status_per_tehsil.set_index(
+            ["region_id", "size_class"]
+        )
+
         irrigation_status_per_tehsil["well_ratio"] = (
             irrigation_status_per_tehsil["well_n_holdings"]
             + irrigation_status_per_tehsil["tubewell_n_holdings"]
@@ -598,6 +590,43 @@ class fairSTREAMModel(GEBModel):
             + irrigation_status_per_tehsil["other_n_holdings"]
             + irrigation_status_per_tehsil["no_irrigation_n_holdings"]
         )
+
+        farm_size_class = np.zeros(n_farmers, dtype=np.int32)
+        farm_size_class[farm_sizes > 5000] = 1
+        farm_size_class[farm_sizes > 10000] = 2
+        farm_size_class[farm_sizes > 20000] = 3
+        farm_size_class[farm_sizes > 30000] = 4
+        farm_size_class[farm_sizes > 40000] = 5
+        farm_size_class[farm_sizes > 50000] = 6
+        farm_size_class[farm_sizes > 75000] = 7
+        farm_size_class[farm_sizes > 100000] = 8
+        farm_size_class[farm_sizes > 200000] = 9
+
+        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
+
+        region_id = self.binary["agents/farmers/region_id"]
+
+        region_ids = np.unique(region_id)
+        size_classes = np.unique(farm_size_class)
+
+        for region_id_class in region_ids:
+            for size_class in size_classes:
+                agent_subset = np.where(
+                    (region_id_class == region_id) & (size_class == farm_size_class)
+                )[0]
+                agent_irrigation_status = irrigation_source[agent_subset]
+                target_well_ratio = irrigation_status_per_tehsil.loc[
+                    (region_id_class, size_class), "well_ratio"
+                ]
+                not_yet_irrigated_agents = np.where(agent_irrigation_status == -1)[0]
+
+                well_irrigated_agents = np.random.choice(
+                    not_yet_irrigated_agents,
+                    int(target_well_ratio * len(not_yet_irrigated_agents)),
+                    replace=False,
+                )
+
+                irrigation_source[agent_subset[well_irrigated_agents]] = 1
 
         crop_data_per_tehsil = pd.read_excel(
             self.preprocessing_dir / "census" / "crop_data.xlsx"
