@@ -1,4 +1,5 @@
 import datetime
+import shutil
 from pathlib import Path
 import geopandas as gpd
 from typing import Union
@@ -120,6 +121,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         self.report_folder = (
             Path(self.config["general"]["report_folder"]) / self.run_name
         )
+        # clean report model at start of run
+        shutil.rmtree(self.report_folder, ignore_errors=True)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.spinup_start = datetime.datetime.combine(
