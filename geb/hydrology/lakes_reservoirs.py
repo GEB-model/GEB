@@ -609,3 +609,6 @@ class LakesReservoirs(object):
     @property
     def lake_storage(self):
         return self.var.storage[self.var.waterBodyTypC == LAKE]
+
+    def decompress(self, array):
+        return array
