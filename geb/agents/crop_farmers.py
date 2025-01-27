@@ -3354,7 +3354,8 @@ class CropFarmers(AgentBaseClass):
         self.var.farmer_yield_probability_relation = farmer_yield_probability_relation
 
         # Print median R²
-        valid_r2 = r_squared_array[~np.isnan(r_squared_array)][group_indices]
+        weighted_r2 = r_squared_array[group_indices]
+        valid_r2 = weighted_r2[~np.isnan(weighted_r2)]
         print(
             "Median R² for exponential model:",
             np.median(valid_r2) if len(valid_r2) > 0 else "N/A",
