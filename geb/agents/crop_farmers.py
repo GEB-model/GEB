@@ -1741,7 +1741,7 @@ class CropFarmers(AgentBaseClass):
                     self.model.config["agent_settings"]["calibration_crops"][
                         f"price_{i}"
                     ]
-                    for i in range(26)
+                    for i in range(len(self.var.crop_ids))
                 ]
             )
 
