@@ -1,3 +1,9 @@
+"""This module contains the main setup for the GEB model.
+
+Notes:
+- All prices are in nominal USD (face value) for their respective years. That means that the prices are not adjusted for inflation.
+"""
+
 from tqdm import tqdm
 from pathlib import Path
 import csv
@@ -908,9 +914,6 @@ class GEBModel(GridModel):
         4. Drops the 'ISO3' column before returning the updated DataFrame.
         """
 
-        if "economics/ppp_conversion_rates" not in self.dict:
-            raise ValueError("Please run setup_economic_data first")
-
         # create a copy of the data to avoid using data that was adjusted in this function
         data_out = None
 
@@ -977,23 +980,6 @@ class GEBModel(GridModel):
         data_out = data_out.dropna(axis=0, how="all")
 
         return data_out
-
-    def convert_price_using_ppp(
-        self, price_source_LCU, ppp_factor_source, ppp_factor_target
-    ):
-        """
-        Convert a price from one country's LCU to another's using PPP conversion factors.
-
-        Parameters:
-        - price_source_LCU (float): Array of the prices in the source country's local currency units (LCU).
-        - ppp_factor_source (float): The PPP conversion factor for the source country.
-        - ppp_factor_target (float): The PPP conversion factor for the target country.
-
-        Returns:
-        - float: The price in the target country's local currency units (LCU).
-        """
-        price_target_LCU = (price_source_LCU / ppp_factor_source) * ppp_factor_target
-        return price_target_LCU
 
     def determine_price_variability(self, costs, unique_regions):
         """
@@ -3323,25 +3309,16 @@ class GEBModel(GridModel):
 
         lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
-
-        ppp_conversion_rates = self.data_catalog.get_dataframe("wb_ppp_conversion_rate")
-        lcu_per_usd_conversion_rates = self.data_catalog.get_dataframe(
-            "lcu_per_usd_conversion_rate"
-        )
+        price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
             columns_to_keep = additional_cols + [
-                col for col in df.columns if "YR" in col
+                col
+                for col in df.columns
+                if col.isnumeric() and 1900 <= int(col) <= 3000
             ]
             filtered_df = df[columns_to_keep]
-
-            # Rename columns to just the year or keep the original name for specified columns
-            filtered_df.columns = additional_cols + [
-                col.split(" ")[0]
-                for col in filtered_df.columns
-                if col not in additional_cols
-            ]
             return filtered_df
 
         def extract_years(df):
@@ -3353,20 +3330,11 @@ class GEBModel(GridModel):
             ]
 
         # Assuming dataframes for PPP and LCU per USD have been initialized
-        ppp_filtered = filter_and_rename(
-            ppp_conversion_rates, ["Country Name", "Country Code"]
+        price_ratio_filtered = filter_and_rename(
+            price_ratio, ["Country Name", "Country Code"]
         )
-        lcu_per_usd_filtered = filter_and_rename(
-            lcu_per_usd_conversion_rates, ["Country Name", "Country Code"]
-        )
-        years_ppp_conversion_rates = extract_years(ppp_filtered)
-        years_lcu_per_usd_conversion_rates = extract_years(lcu_per_usd_filtered)
-
-        ppp_conversion_rates_dict = {"time": years_ppp_conversion_rates, "data": {}}
-        lcu_per_usd_conversion_rates_dict = {
-            "time": years_lcu_per_usd_conversion_rates,
-            "data": {},
-        }
+        years_price_ratio = extract_years(price_ratio_filtered)
+        price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
 
         # Assume lending_rates and inflation_rates are available
         years_lending_rates = extract_years(lending_rates)
@@ -3390,17 +3358,14 @@ class GEBModel(GridModel):
                 return filtered_data.iloc[0].tolist()
 
             # Store data in dictionaries
-            ppp_conversion_rates_dict["data"][region_id] = process_rates(
-                ppp_filtered, years_ppp_conversion_rates
-            )
-            lcu_per_usd_conversion_rates_dict["data"][region_id] = process_rates(
-                lcu_per_usd_filtered, years_lcu_per_usd_conversion_rates
-            )
             lending_rates_dict["data"][region_id] = process_rates(
                 lending_rates, years_lending_rates, True
             )
             inflation_rates_dict["data"][region_id] = process_rates(
                 inflation_rates, years_inflation_rates, True
+            )
+            price_ratio_dict["data"][region_id] = process_rates(
+                price_ratio_filtered, years_price_ratio
             )
 
         if project_future_until_year:
@@ -3439,11 +3404,7 @@ class GEBModel(GridModel):
 
         self.set_dict(inflation_rates_dict, name="economics/inflation_rates")
         self.set_dict(lending_rates_dict, name="economics/lending_rates")
-        self.set_dict(ppp_conversion_rates_dict, name="economics/ppp_conversion_rates")
-        self.set_dict(
-            lcu_per_usd_conversion_rates_dict,
-            name="economics/lcu_per_usd_conversion_rates",
-        )
+        self.set_dict(price_ratio_dict, name="economics/price_ratio")
 
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
@@ -3662,23 +3623,13 @@ class GEBModel(GridModel):
 
         # Retrieve the inflation rates data
         inflation_rates = self.dict["economics/inflation_rates"]
-        ppp_conversion_rates = self.dict["economics/ppp_conversion_rates"]
+        price_ratio = self.dict["economics/price_ratio"]
 
-        full_years_array_ppp = np.array(ppp_conversion_rates["time"], dtype=str)
-        years_index_ppp = np.isin(full_years_array_ppp, str(reference_year))
-        source_conversion_rates = 1  # US ppp is 1
-
-        electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
-        electricity_rates["ISO3"] = electricity_rates["Country"].map(
-            SUPERWELL_NAME_TO_ISO3
-        )
-        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
         # Create a dictionary to store the various types of prices with their initial reference year values
         price_types = {
             "why_10": WHY_10,
             "why_20": WHY_20,
             "why_30": WHY_30,
-            "electricity_cost": electricity_rates,
         }
 
         # Iterate over each price type and calculate the prices across years for each region
@@ -3689,18 +3640,11 @@ class GEBModel(GridModel):
                 region_id = str(region["region_id"])
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
+                price_ratio_region_year = price_ratio["data"][region_id][
+                    price_ratio["time"].index(str(reference_year))
+                ]
 
-                target_conversion_rates = np.array(
-                    ppp_conversion_rates["data"][region_id], dtype=float
-                )[years_index_ppp]
-
-                prices.loc[reference_year] = self.convert_price_using_ppp(
-                    initial_price[region["ISO3"]]
-                    if isinstance(initial_price, dict)
-                    else initial_price,
-                    source_conversion_rates,
-                    target_conversion_rates,
-                )
+                prices.loc[reference_year] = price_ratio_region_year * initial_price
 
                 # Forward calculation from the reference year
                 for year in range(reference_year + 1, end_year + 1):
@@ -3710,6 +3654,7 @@ class GEBModel(GridModel):
                             inflation_rates["time"].index(str(year))
                         ]
                     )
+
                 # Backward calculation from the reference year
                 for year in range(reference_year - 1, start_year - 1, -1):
                     prices.loc[year] = (
@@ -3723,6 +3668,46 @@ class GEBModel(GridModel):
 
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"economics/{price_type}")
+
+        electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
+        electricity_rates["ISO3"] = electricity_rates["Country"].map(
+            SUPERWELL_NAME_TO_ISO3
+        )
+        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
+
+        electricity_rates_dict = {
+            "time": list(range(start_year, end_year + 1)),
+            "data": {},
+        }
+
+        for _, region in self.geoms["areamaps/regions"].iterrows():
+            region_id = str(region["region_id"])
+
+            prices = pd.Series(index=range(start_year, end_year + 1))
+            prices.loc[reference_year] = electricity_rates[region["ISO3"]]
+
+            # Forward calculation from the reference year
+            for year in range(reference_year + 1, end_year + 1):
+                prices.loc[year] = (
+                    prices[year - 1]
+                    * inflation_rates["data"][region_id][
+                        inflation_rates["time"].index(str(year))
+                    ]
+                )
+
+            # Backward calculation from the reference year
+            for year in range(reference_year - 1, start_year - 1, -1):
+                prices.loc[year] = (
+                    prices[year + 1]
+                    / inflation_rates["data"][region_id][
+                        inflation_rates["time"].index(str(year + 1))
+                    ]
+                )
+
+            electricity_rates_dict["data"][region_id] = prices.tolist()
+
+        # Set the calculated prices in the appropriate dictionary
+        self.set_dict(electricity_rates_dict, name="economics/electricity_cost")
 
     def setup_drip_irrigation_prices_by_reference_year(
         self,

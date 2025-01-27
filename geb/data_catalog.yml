@@ -279,24 +279,17 @@ wb_lending_rate:
   data_type: DataFrame
   kwargs:
     skiprows: 4
-wb_ppp_conversion_rate:
+world_bank_price_ratio:
   meta:
     category: economics
     source_author: World Bank
     source_license: CC-BY-4.0
-    source_url: https://databank.worldbank.org/source/world-development-indicators/Series/PA.NUS.PPP#
-  path: economics/currency_conversion/PPP_conversion_1990_2022.csv
+    source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
+  path: economics/price_ratio/API_PA.NUS.PPPC.RF_DS2_en_csv_v2_4549.csv
   driver: csv
   data_type: DataFrame
-lcu_per_usd_conversion_rate:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://databank.worldbank.org/reports.aspx?source=2&type=metadata&series=PA.NUS.FCRF#
-  path: economics/currency_conversion/LCU_per_USD_conversion_1960_2023.csv
-  driver: csv
-  data_type: DataFrame
+  kwargs:
+    skiprows: 4
 gcam_electricity_rates:
   meta:
     category: economics
