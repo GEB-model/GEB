@@ -984,6 +984,115 @@ def kv_brakensiek(thetas, clay, sand):
     return kv / 1000  # m/day
 
 
+def estimate_soil_properties(
+    self, soil_layer_height, soil_organic_carbon, bulk_density, sand, clay, silt
+):
+    is_top_soil = np.zeros_like(clay, dtype=bool)
+    is_top_soil[0:3] = True
+
+    thetas = thetas_toth(
+        soil_organic_carbon=soil_organic_carbon,
+        bulk_density=bulk_density,
+        is_top_soil=is_top_soil,
+        clay=clay,
+        silt=silt,
+    )
+    thetar = thetar_brakensiek(sand=sand, clay=clay, thetas=thetas)
+    self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
+        clay=clay, sand=sand, thetas=thetas
+    )
+    self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
+        sand=sand, thetas=thetas, clay=clay
+    )
+
+    # θ saturation, field capacity, wilting point and residual moisture content
+    thetafc = get_soil_moisture_at_pressure(
+        np.float32(-100.0),  # assuming field capacity is at -100 cm (pF 2)
+        self.HRU.var.bubbling_pressure_cm,
+        thetas,
+        thetar,
+        self.HRU.var.lambda_pore_size_distribution,
+    )
+
+    thetawp = get_soil_moisture_at_pressure(
+        np.float32(-(10**4.2)),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
+        self.HRU.var.bubbling_pressure_cm,
+        thetas,
+        thetar,
+        self.HRU.var.lambda_pore_size_distribution,
+    )
+
+    self.HRU.var.ws = thetas * self.HRU.var.soil_layer_height
+    self.HRU.var.wfc = thetafc * self.HRU.var.soil_layer_height
+    self.HRU.var.wwp = thetawp * self.HRU.var.soil_layer_height
+    self.HRU.var.wres = thetar * self.HRU.var.soil_layer_height
+
+    # initial soil water storage between field capacity and wilting point
+    # set soil moisture to nan where land use is not bioarea
+    self.HRU.var.w = np.where(
+        self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
+        (self.HRU.var.wfc + self.HRU.var.wwp) / 2,
+        np.nan,
+    )
+    # for paddy irrigation flooded paddy fields
+    self.HRU.var.topwater = self.HRU.full_compressed(0, dtype=np.float32)
+
+    self.HRU.var.ksat = kv_brakensiek(thetas=thetas, clay=clay, sand=sand)
+
+    # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
+    # crop groups for formular in van Diepen et al, 1988
+    natural_crop_groups = self.model.data.grid.load(
+        self.model.files["grid"]["soil/cropgrp"]
+    )
+    self.HRU.var.natural_crop_groups = self.model.data.to_HRU(data=natural_crop_groups)
+
+    # ------------ Preferential Flow constant ------------------------------------------
+    self.HRU.var.preferential_flow_constant = float(
+        self.model.config["parameters"]["preferentialFlowConstant"]
+    )
+
+    self.HRU.var.arnoBeta = self.HRU.full_compressed(np.nan, dtype=np.float32)
+
+    # Improved Arno's scheme parameters: Hageman and Gates 2003
+    # arnoBeta defines the shape of soil water capacity distribution curve as a function of  topographic variability
+    # b = max( (oh - o0)/(oh + omax), 0.01)
+    # oh: the standard deviation of orography, o0: minimum std dev, omax: max std dev
+    elevation_std = self.grid.load(
+        self.model.files["grid"]["landsurface/topo/elevation_STD"]
+    )
+    elevation_std = self.model.data.to_HRU(data=elevation_std, fn=None)
+    arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)
+
+    arnoBetaOro += self.model.config["parameters"][
+        "arnoBeta_add"
+    ]  # calibration parameter
+    arnoBetaOro = np.clip(arnoBetaOro, 0.01, 1.2)
+
+    arnobeta_cover_types = {
+        FOREST: 0.2,
+        GRASSLAND_LIKE: 0.0,
+        PADDY_IRRIGATED: 0.2,
+        NON_PADDY_IRRIGATED: 0.2,
+    }
+
+    for cover, arno_beta in arnobeta_cover_types.items():
+        land_use_indices = np.where(self.HRU.var.land_use_type == cover)[0]
+
+        self.HRU.var.arnoBeta[land_use_indices] = (arnoBetaOro + arno_beta)[
+            land_use_indices
+        ]
+        self.HRU.var.arnoBeta[land_use_indices] = np.minimum(
+            1.2, np.maximum(0.01, self.HRU.var.arnoBeta[land_use_indices])
+        )
+
+    self.HRU.var.aeration_days_counter = np.full_like(
+        self.HRU.var.ws, 0, dtype=np.int32
+    )
+    self.HRU.var.crop_lag_aeration_days = np.full_like(
+        self.HRU.var.land_use_type, 3, dtype=np.int32
+    )
+
+
 class Soil(object):
     def __init__(self, model):
         """
@@ -1002,7 +1111,7 @@ class Soil(object):
     def spinup(self):
         self.var = self.model.store.create_bucket("soil.var")
 
-        # Soil properties
+        # Load Soil properties from the original files
         self.HRU.var.soil_layer_height = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/soil_layer_height"],
@@ -1011,35 +1120,35 @@ class Soil(object):
             method="mean",
         )
 
-        soil_organic_carbon = self.HRU.compress(
+        self.HRU.var.soil_organic_carbon = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon"],
                 layer=None,
             ),
             method="mean",
         )
-        bulk_density = self.HRU.compress(
+        self.HRU.var.bulk_density = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/bulk_density"],
                 layer=None,
             ),
             method="mean",
         )
-        sand = self.HRU.compress(
+        self.HRU.var.sand = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/sand"],
                 layer=None,
             ),
             method="mean",
         )
-        silt = self.HRU.compress(
+        self.HRU.var.silt = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/silt"],
                 layer=None,
             ),
             method="mean",
         )
-        clay = self.HRU.compress(
+        self.HRU.var.clay = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/clay"],
                 layer=None,
@@ -1047,111 +1156,15 @@ class Soil(object):
             method="mean",
         )
 
-        is_top_soil = np.zeros_like(clay, dtype=bool)
-        is_top_soil[0:3] = True
-
-        thetas = thetas_toth(
-            soil_organic_carbon=soil_organic_carbon,
-            bulk_density=bulk_density,
-            is_top_soil=is_top_soil,
-            clay=clay,
-            silt=silt,
-        )
-        thetar = thetar_brakensiek(sand=sand, clay=clay, thetas=thetas)
-        self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
-            clay=clay, sand=sand, thetas=thetas
-        )
-        self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
-            sand=sand, thetas=thetas, clay=clay
-        )
-
-        # θ saturation, field capacity, wilting point and residual moisture content
-        thetafc = get_soil_moisture_at_pressure(
-            np.float32(-100.0),  # assuming field capacity is at -100 cm (pF 2)
-            self.HRU.var.bubbling_pressure_cm,
-            thetas,
-            thetar,
-            self.HRU.var.lambda_pore_size_distribution,
-        )
-
-        thetawp = get_soil_moisture_at_pressure(
-            np.float32(-(10**4.2)),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
-            self.HRU.var.bubbling_pressure_cm,
-            thetas,
-            thetar,
-            self.HRU.var.lambda_pore_size_distribution,
-        )
-
-        self.HRU.var.ws = thetas * self.HRU.var.soil_layer_height
-        self.HRU.var.wfc = thetafc * self.HRU.var.soil_layer_height
-        self.HRU.var.wwp = thetawp * self.HRU.var.soil_layer_height
-        self.HRU.var.wres = thetar * self.HRU.var.soil_layer_height
-
-        # initial soil water storage between field capacity and wilting point
-        # set soil moisture to nan where land use is not bioarea
-        self.HRU.var.w = np.where(
-            self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
-            (self.HRU.var.wfc + self.HRU.var.wwp) / 2,
-            np.nan,
-        )
-        # for paddy irrigation flooded paddy fields
-        self.HRU.var.topwater = self.HRU.full_compressed(0, dtype=np.float32)
-
-        self.HRU.var.ksat = kv_brakensiek(thetas=thetas, clay=clay, sand=sand)
-
-        # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
-        # crop groups for formular in van Diepen et al, 1988
-        natural_crop_groups = self.model.data.grid.load(
-            self.model.files["grid"]["soil/cropgrp"]
-        )
-        self.HRU.var.natural_crop_groups = self.model.data.to_HRU(
-            data=natural_crop_groups
-        )
-
-        # ------------ Preferential Flow constant ------------------------------------------
-        self.var.preferential_flow_constant = float(
-            self.model.config["parameters"]["preferentialFlowConstant"]
-        )
-
-        self.HRU.var.arnoBeta = self.HRU.full_compressed(np.nan, dtype=np.float32)
-
-        # Improved Arno's scheme parameters: Hageman and Gates 2003
-        # arnoBeta defines the shape of soil water capacity distribution curve as a function of  topographic variability
-        # b = max( (oh - o0)/(oh + omax), 0.01)
-        # oh: the standard deviation of orography, o0: minimum std dev, omax: max std dev
-        elevation_std = self.grid.load(
-            self.model.files["grid"]["landsurface/topo/elevation_STD"]
-        )
-        elevation_std = self.model.data.to_HRU(data=elevation_std, fn=None)
-        arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)
-
-        arnoBetaOro += self.model.config["parameters"][
-            "arnoBeta_add"
-        ]  # calibration parameter
-        arnoBetaOro = np.clip(arnoBetaOro, 0.01, 1.2)
-
-        arnobeta_cover_types = {
-            FOREST: 0.2,
-            GRASSLAND_LIKE: 0.0,
-            PADDY_IRRIGATED: 0.2,
-            NON_PADDY_IRRIGATED: 0.2,
-        }
-
-        for cover, arno_beta in arnobeta_cover_types.items():
-            land_use_indices = np.where(self.HRU.var.land_use_type == cover)[0]
-
-            self.HRU.var.arnoBeta[land_use_indices] = (arnoBetaOro + arno_beta)[
-                land_use_indices
-            ]
-            self.HRU.var.arnoBeta[land_use_indices] = np.minimum(
-                1.2, np.maximum(0.01, self.HRU.var.arnoBeta[land_use_indices])
-            )
-
-        self.HRU.var.aeration_days_counter = np.full_like(
-            self.HRU.var.ws, 0, dtype=np.int32
-        )
-        self.HRU.var.crop_lag_aeration_days = np.full_like(
-            self.HRU.var.land_use_type, 3, dtype=np.int32
+        # Estimate soil properties
+        estimate_soil_properties(
+            self,
+            soil_layer_height=self.HRU.var.soil_layer_height,
+            soil_organic_carbon=self.HRU.var.soil_organic_carbon,
+            bulk_density=self.HRU.var.bulk_density,
+            sand=self.HRU.var.sand,
+            clay=self.HRU.var.clay,
+            silt=self.HRU.var.silt,
         )
 
         def create_ini(yaml, idx, plantFATE_cluster, biodiversity_scenario):
@@ -1436,7 +1449,7 @@ class Soil(object):
                 self.HRU.var.land_use_type,
                 self.HRU.var.frost_index,
                 self.HRU.var.arnoBeta,
-                np.float32(self.var.preferential_flow_constant),
+                np.float32(self.HRU.var.preferential_flow_constant),
                 self.HRU.var.w,
                 self.HRU.var.topwater,
                 self.HRU.var.soil_layer_height,

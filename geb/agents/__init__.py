@@ -28,13 +28,13 @@ class Agents:
         self.market = Market(model, self)
 
         self.agents = [
+            self.government,
             self.crop_farmers,
             self.households,
             self.livestock_farmers,
             self.industry,
             self.reservoir_operators,
             self.town_managers,
-            self.government,
             self.market,
         ]
 

@@ -665,9 +665,9 @@ def plant(
     Returns:
         plant: Subarray map of what crops are planted this day.
     """
-    assert (
-        farmers_going_out_of_business is False
-    ), "Farmers going out of business not implemented."
+    assert farmers_going_out_of_business is False, (
+        "Farmers going out of business not implemented."
+    )
 
     plant = np.full_like(crop_map, -1, dtype=np.int32)
     sell_land = np.zeros(n, dtype=np.bool_)
@@ -1055,16 +1055,17 @@ class CropFarmers(AgentBaseClass):
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
 
+        # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy
         farms = self.model.data.farms
-
-        # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
         self.n = np.unique(farms[farms != -1]).size
+        print(f"number of unique farmers: {self.n}")
         self.max_n = self.get_max_n(self.n)
 
         # The code below obtains the coordinates of the farmers' locations.
         # First the horizontal and vertical indices of the pixels that are not -1 are obtained. Then, for each farmer the
         # average of the horizontal and vertical indices is calculated. This is done by using the bincount function.
         # Finally, the coordinates are obtained by adding .5 to the pixels and converting them to coordinates using pixel_to_coord.
+       
         vertical_index = (
             np.arange(farms.shape[0])
             .repeat(farms.shape[1])
@@ -1549,6 +1550,7 @@ class CropFarmers(AgentBaseClass):
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
         """
         agents = np.unique(land_owners)
+     
         if agents[0] == -1:
             n_agents = agents.size - 1
         else:
@@ -1576,7 +1578,7 @@ class CropFarmers(AgentBaseClass):
     def update_field_indices(self) -> None:
         """Creates `field_indices_by_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer."""
         (
-            self.var.field_indices_by_farmer[:],
+            self.var.field_indices_by_farmer,
             self.var.field_indices,
         ) = self.update_field_indices_numba(self.HRU.var.land_owners)
 
@@ -1661,6 +1663,7 @@ class CropFarmers(AgentBaseClass):
         return self.farmer_command_area != -1
 
     def save_water_deficit(self, discount_factor=0.8):
+        
         water_deficit_day_m3 = (
             self.model.data.HRU.var.ETRef - self.model.data.HRU.pr
         ) * self.model.data.HRU.var.cellArea
@@ -2099,9 +2102,10 @@ class CropFarmers(AgentBaseClass):
             crop_age_days=self.HRU.var.crop_age_days_map,
             crop_harvest_age_days=self.HRU.var.crop_harvest_age_days,
         )
-
+        # print(f"number of farmers start harvest: {self.n}")
         self.var.actual_yield_per_farmer.fill(np.nan)
         self.var.harvested_crop.fill(-1)
+        
         # If there are fields to be harvested, compute yield ratio and various related metrics
         if np.count_nonzero(harvest):
             # Get yield ratio for the harvested crops
@@ -2209,8 +2213,14 @@ class CropFarmers(AgentBaseClass):
             self.var.previous_month = self.model.current_time.month
 
         else:
-            self.n = self.var.harvested_crop.shape[0]
+            # print("running else statement in crop_farmers")
+            # print("number of farmers")
+            # print(self.var.harvested_crop.shape)
+            # # self.n = self.var.harvested_crop.shape[0]
+            # print(self.n)
+            # self.profit_farmer = np.zeros(self.n, dtype=np.float32)
             self.profit_farmer = np.zeros(self.n, dtype=np.float32)
+            # print(self.profit_farmer.shape[0])
 
         # Reset transpiration values for harvested fields
         self.HRU.var.actual_evapotranspiration_crop_life[harvest] = 0
@@ -4498,9 +4508,9 @@ class CropFarmers(AgentBaseClass):
             # Loop through each month from start_date to end_date to get the sum of crop costs over the past year
             current_date = start_date
             while current_date <= end_date:
-                assert (
-                    self.crop_prices[0] is not None
-                ), "behavior needs crop prices to work"
+                assert self.crop_prices[0] is not None, (
+                    "behavior needs crop prices to work"
+                )
                 monthly_price = self.crop_prices[1][
                     self.crop_prices[0].get(current_date)
                 ]
@@ -4830,13 +4840,14 @@ class CropFarmers(AgentBaseClass):
                 HRUs_with_removed_farmers.append(
                     self.remove_agent(idx, new_land_use_type)
                 )
+
         return np.concatenate(HRUs_with_removed_farmers)
 
     def remove_agent(self, farmer_idx: int, new_land_use_type: int) -> np.ndarray:
         assert farmer_idx >= 0, "Farmer index must be positive."
-        assert (
-            farmer_idx < self.n
-        ), "Farmer index must be less than the number of agents."
+        assert farmer_idx < self.n, (
+            "Farmer index must be less than the number of agents."
+        )
         last_farmer_HRUs = get_farmer_HRUs(
             self.var.field_indices, self.var.field_indices_by_farmer.data, -1
         )
@@ -4856,7 +4867,7 @@ class CropFarmers(AgentBaseClass):
 
         # reduce number of agents
         self.n -= 1
-
+        print(self.n)
         if not self.n == farmer_idx:
             # move data of last agent to the index of the agent that is to be removed, effectively removing that agent.
             for name, agent_array in self.agent_arrays.items():
@@ -4870,6 +4881,7 @@ class CropFarmers(AgentBaseClass):
         else:
             for agent_array in self.agent_arrays.values():
                 agent_array.n = self.n
+
 
         # TODO: Speed up field index updating.
         self.update_field_indices()

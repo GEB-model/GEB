@@ -116,7 +116,7 @@ class AgentBaseClass(HoneybeesAgentBaseClass):
     def agent_arrays(self):
         agent_arrays = {
             name: value
-            for name, value in vars(self).items()
+            for name, value in vars(self.var).items()
             if isinstance(value, DynamicArray)
         }
         ids = [id(v) for v in agent_arrays.values()]

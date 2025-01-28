@@ -1,6 +1,21 @@
 # -*- coding: utf-8 -*-
 import rioxarray
 from .general import AgentBaseClass
+import geopandas as gpd
+import rasterio
+from rasterio.features import rasterize
+from rasterio.features import shapes
+from shapely.geometry import shape
+import numpy as np
+from ..hydrology.landcover import (
+    FOREST,
+    GRASSLAND_LIKE,
+    PADDY_IRRIGATED,
+    NON_PADDY_IRRIGATED,
+)
+
+from ..hydrology.soil import estimate_soil_properties
+from geb.HRUs import load_grid
 
 
 class Government(AgentBaseClass):
@@ -14,12 +29,16 @@ class Government(AgentBaseClass):
     def __init__(self, model, agents):
         self.model = model
         self.agents = agents
+        self.HRU = model.data.HRU
+        self.grid = model.data.grid
         self.config = (
             self.model.config["agent_settings"]["government"]
             if "government" in self.model.config["agent_settings"]
             else {}
         )
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
+        if self.model.spinup:
+            self.spinup()
 
         AgentBaseClass.__init__(self)
 
@@ -70,21 +89,6 @@ class Government(AgentBaseClass):
             return None
         if self.model.current_timestep == 1:
             print("running the reforestation scenario")
-            import geopandas as gpd
-            import rasterio
-            from rasterio.features import rasterize
-            from rasterio.features import shapes
-            from shapely.geometry import shape
-            import numpy as np
-            from ..hydrology.landcover import (
-                FOREST,
-                GRASSLAND_LIKE,
-                PADDY_IRRIGATED,
-                NON_PADDY_IRRIGATED,
-            )
-
-            self.var = self.model.data.HRU
-
             # load reforestation map
             forest_path = "/scistor/ivm/vbl220/PhD/reclassified_landuse_only_belgium.nc"
             to_forest = rioxarray.open_rasterio(forest_path, masked=True)
@@ -131,7 +135,9 @@ class Government(AgentBaseClass):
             # only create forests in grassland or agricultural areas
             forest[
                 ~np.isin(
-                    self.model.data.HRU.decompress(self.var.land_use_type),
+                    self.model.data.HRU.decompress(
+                        self.model.data.HRU.var.land_use_type
+                    ),
                     [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
                 )
             ] = False
@@ -142,19 +148,20 @@ class Government(AgentBaseClass):
             plt.savefig("forest.png")
 
             new_forest_HRUs = np.unique(
-                self.model.data.HRU.unmerged_HRU_indices[forest]
+                self.model.data.HRU.var.unmerged_HRU_indices[forest]
             )
-
             # set the land use type to forest
-            self.var.land_use_type[new_forest_HRUs] = FOREST
+            self.model.data.HRU.var.land_use_type[new_forest_HRUs] = FOREST
 
             # get the farmers corresponding to the new forest HRUs
             farmers_with_land_converted_to_forest = np.unique(
-                self.model.data.HRU.land_owners[new_forest_HRUs]
+                self.model.data.HRU.var.land_owners[new_forest_HRUs]
             )
             farmers_with_land_converted_to_forest = (
                 farmers_with_land_converted_to_forest
             )[farmers_with_land_converted_to_forest != -1]
+
+            print(farmers_with_land_converted_to_forest)
 
             HRUs_removed_farmers = self.model.agents.crop_farmers.remove_agents(
                 farmers_with_land_converted_to_forest, new_land_use_type=FOREST
@@ -163,6 +170,68 @@ class Government(AgentBaseClass):
             new_forest_HRUs = np.unique(
                 np.concatenate([new_forest_HRUs, HRUs_removed_farmers])
             )
+           
+           
+            print("loading soil parameter input files")
+            # # Load soil parameter inputs
+            # self.HRU.var.soil_layer_height = self.HRU.compress(
+            #     load_grid(
+            #         self.model.files["subgrid"]["soil/soil_layer_height"],
+            #         layer=None,
+            #     ),
+            #     method="mean",
+            # )
+          
+            self.HRU.var.soil_organic_carbon = self.HRU.compress(
+                load_grid(
+                    self.model.files["subgrid"]["soil/new_soil_organic_carbon"],
+                    layer=None,
+                ),
+                method="mean",
+            )
+
+            # self.HRU.var.bulk_density = ...
+          
+            self.HRU.var.bulk_density = self.HRU.compress(
+                load_grid(
+                    self.model.files["subgrid"]["soil/new_bulk_density"],
+                    layer=None,
+                ),
+                method="mean",
+            )
+            # # sand = self.HRU.compress(
+            #     load_grid(
+            #         self.model.files["subgrid"]["soil/sand"],
+            #         layer=None,
+            #     ),
+            #     method="mean",
+            # )
+            # silt = self.HRU.compress(
+            #     load_grid(
+            #         self.model.files["subgrid"]["soil/silt"],
+            #         layer=None,
+            #     ),
+            #     method="mean",
+            # )
+            # clay = self.HRU.compress(
+            #     load_grid(
+            #         self.model.files["subgrid"]["soil/clay"],
+            #         layer=None,
+            #     ),
+            #     method="mean",
+            # )
+            print("changing soil parameters")
+            # Estimate soil properties
+            estimate_soil_properties(
+                self,
+                soil_layer_height=self.HRU.var.soil_layer_height,
+                soil_organic_carbon=self.HRU.var.soil_organic_carbon,
+                bulk_density=self.HRU.var.bulk_density,
+                sand=self.HRU.var.sand,
+                clay=self.HRU.var.clay,
+                silt=self.HRU.var.silt,
+            )
+            print("soil parameters should be changed")
 
     def step(self) -> None:
         """This function is run each timestep."""
