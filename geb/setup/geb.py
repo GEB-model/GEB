@@ -266,9 +266,9 @@ class GEBModel(GridModel):
         assert hydrography_fn is None, "Please remove this parameter"
         assert basin_index_fn is None, "Please remove this parameter"
 
-        assert (
-            resolution_arcsec % 3 == 0
-        ), "resolution_arcsec must be a multiple of 3 to align with MERIT"
+        assert resolution_arcsec % 3 == 0, (
+            "resolution_arcsec must be a multiple of 3 to align with MERIT"
+        )
         assert sub_grid_factor >= 2
 
         hydrography = self.data_catalog.get_rasterdataset(
@@ -555,9 +555,9 @@ class GEBModel(GridModel):
         """
         self.logger.info("Preparing crops data")
 
-        assert source in (
-            "MIRCA2000",
-        ), f"crop_variables_source {source} not understood, must be 'MIRCA2000'"
+        assert source in ("MIRCA2000",), (
+            f"crop_variables_source {source} not understood, must be 'MIRCA2000'"
+        )
         if crop_specifier is None:
             crop_data = {
                 "data": (
@@ -745,13 +745,13 @@ class GEBModel(GridModel):
             total_years = data.index.get_level_values("year").unique()
 
             if project_past_until_year:
-                assert (
-                    total_years[0] > project_past_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
+                assert total_years[0] > project_past_until_year, (
+                    f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
+                )
             if project_future_until_year:
-                assert (
-                    total_years[-1] < project_future_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
+                assert total_years[-1] < project_future_until_year, (
+                    f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
+                )
 
             if (
                 project_past_until_year is not None
@@ -1157,9 +1157,9 @@ class GEBModel(GridModel):
         start_year,
         end_year,
     ):
-        assert (
-            end_year != start_year
-        ), "extra processed years must not be the same as data years"
+        assert end_year != start_year, (
+            "extra processed years must not be the same as data years"
+        )
 
         if end_year < start_year:
             operator = "div"
@@ -1696,9 +1696,9 @@ class GEBModel(GridModel):
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
         assert "volume_total" in waterbodies.columns, "volume_total is required"
-        assert (
-            "average_discharge" in waterbodies.columns
-        ), "average_discharge is required"
+        assert "average_discharge" in waterbodies.columns, (
+            "average_discharge is required"
+        )
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_table(waterbodies, name="routing/lakesreservoirs/basin_lakes_data")
 
@@ -2102,9 +2102,9 @@ class GEBModel(GridModel):
 
         if data_source == "isimip":
             if resolution_arcsec == 30:
-                assert (
-                    forcing == "chelsa-w5e5"
-                ), "Only chelsa-w5e5 is supported for 30 arcsec resolution"
+                assert forcing == "chelsa-w5e5", (
+                    "Only chelsa-w5e5 is supported for 30 arcsec resolution"
+                )
                 # download source data from ISIMIP
                 self.logger.info("setting up forcing data")
                 high_res_variables = ["pr", "rsds", "tas", "tasmax", "tasmin"]
@@ -2637,9 +2637,9 @@ class GEBModel(GridModel):
                 w5e5_regridded = (
                     regridder(w5e5_30min_sel, output_chunks=(-1, -1)) * 0.01
                 )  # convert to fraction
-                assert (
-                    w5e5_regridded >= 0.1
-                ).all(), "too low values in relative humidity"
+                assert (w5e5_regridded >= 0.1).all(), (
+                    "too low values in relative humidity"
+                )
                 assert (w5e5_regridded <= 1).all(), "relative humidity > 1"
 
                 w5e5_regridded_mean = w5e5_regridded.mean(
@@ -3156,9 +3156,9 @@ class GEBModel(GridModel):
             self.region.total_bounds,
             regions.to_crs(self.region.crs).total_bounds,
         )
-        assert np.issubdtype(
-            regions["region_id"].dtype, np.integer
-        ), "Region ID must be integer"
+        assert np.issubdtype(regions["region_id"].dtype, np.integer), (
+            "Region ID must be integer"
+        )
 
         region_id_mapping = {
             i: region_id for region_id, i in enumerate(regions["region_id"])
@@ -3166,9 +3166,9 @@ class GEBModel(GridModel):
         regions["region_id"] = regions["region_id"].map(region_id_mapping)
         self.set_dict(region_id_mapping, name="areamaps/region_id_mapping")
 
-        assert (
-            "ISO3" in regions.columns
-        ), f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
+        assert "ISO3" in regions.columns, (
+            f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
+        )
 
         self.set_geoms(regions, name="areamaps/regions")
 
@@ -3319,7 +3319,9 @@ class GEBModel(GridModel):
         assert (
             not project_future_until_year
             or project_future_until_year > reference_start_year
-        ), f"project_future_until_year ({project_future_until_year}) must be larger than reference_start_year ({reference_start_year})"
+        ), (
+            f"project_future_until_year ({project_future_until_year}) must be larger than reference_start_year ({reference_start_year})"
+        )
 
         lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
@@ -3382,9 +3384,9 @@ class GEBModel(GridModel):
             # Create a helper to process rates and assert single row data
             def process_rates(df, rate_cols, convert_percent=False):
                 filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
-                assert (
-                    len(filtered_data) == 1
-                ), f"Expected one row for {ISO3}, got {len(filtered_data)}"
+                assert len(filtered_data) == 1, (
+                    f"Expected one row for {ISO3}, got {len(filtered_data)}"
+                )
                 if convert_percent:
                     return (filtered_data.iloc[0] / 100 + 1).tolist()
                 return filtered_data.iloc[0].tolist()
@@ -3723,6 +3725,258 @@ class GEBModel(GridModel):
 
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"economics/{price_type}")
+
+    def setup_water_prices_australia(
+        self,
+        start_year: int,
+        end_year: int,
+    ):
+        def get_observed_diversion_price():
+            # Regions of interest
+            regions_of_interest = [
+                "VIC Goulburn-Broken",
+                "VIC Murray Above",
+                "VIC Loddon-Campaspe",
+                "NSW Murray Below",
+                "NSW Murray Above",
+            ]
+
+            ################ Water price #######################
+            # Observed data path
+            water_price_observed_fp = Path(
+                "calibration_data/water_use/WaterMarketOutlook_2023-04_data_tables_v1.0.0.xlsx"
+            )
+            water_price_observed_df = pd.read_excel(
+                water_price_observed_fp, sheet_name=3
+            )
+
+            # Filter relevant regions, rename columns
+            filtered_prices_df = water_price_observed_df[
+                water_price_observed_df["Region"].isin(regions_of_interest)
+            ].copy()
+            filtered_prices_df = filtered_prices_df[
+                ["Date", "Region", "Monthly average price ($/ML)"]
+            ]
+            filtered_prices_df.columns = ["time", "Region", "water_price_observed"]
+            filtered_prices_df["time"] = pd.to_datetime(
+                filtered_prices_df["time"]
+            ).dt.normalize()
+
+            pivot_df = filtered_prices_df.pivot(
+                index="time", columns="Region", values="water_price_observed"
+            ).sort_index()
+            pivot_df = pivot_df.apply(pd.to_numeric, errors="coerce").interpolate(
+                method="time"
+            )
+            pivot_df["Victoria"] = pivot_df[
+                ["VIC Goulburn-Broken", "VIC Murray Above", "VIC Loddon-Campaspe"]
+            ].mean(axis=1)
+            pivot_df["New South Wales"] = pivot_df[
+                ["NSW Murray Below", "NSW Murray Above"]
+            ].mean(axis=1)
+
+            # Convert from AUD to USD if needed
+            conversion_rates = self.dict["economics/lcu_per_usd_conversion_rates"]
+            yearly_rates = dict(
+                zip(
+                    map(int, conversion_rates["time"]),
+                    map(float, conversion_rates["data"]["0"]),
+                )
+            )
+            pivot_df["year"] = pivot_df.index.year
+            pivot_df["conversion_rate"] = pivot_df["year"].map(yearly_rates)
+
+            pivot_df = pivot_df.div(pivot_df["conversion_rate"], axis=0)
+
+            df_observed_price = pivot_df.drop(columns=["year", "conversion_rate"])
+            df_observed_price.index.name = "time"
+
+            ################ Diversions #######################
+
+            # Load the new dataset
+            diversions_observed_fp = Path(
+                "calibration_data/water_use/MDBWaterMarketCatchmentDataset_Supply_v1.0.0.xlsx"
+            )
+            diversions_observed_df = pd.read_excel(diversions_observed_fp, sheet_name=1)
+
+            # Filter to only the regions of interest
+            filtered_diversions_df = diversions_observed_df[
+                diversions_observed_df["Region"].isin(regions_of_interest)
+            ].copy()
+
+            # Keep only relevant columns
+            filtered_diversions_df = filtered_diversions_df[
+                ["Year", "Region", "U"]
+            ].rename(columns={"Year": "time", "U": "diversion_observed"})
+
+            # Convert 'time' to datetime
+            filtered_diversions_df["time"] = pd.to_datetime(
+                filtered_diversions_df["time"].astype(str) + "-06-30"
+            )
+
+            pivot_diversions_df = filtered_diversions_df.pivot(
+                index="time", columns="Region", values="diversion_observed"
+            ).sort_index()
+
+            # pivot_price_df = pivot_price_df.shift(1)
+            pivot_diversions_df = pivot_diversions_df.apply(
+                pd.to_numeric, errors="coerce"
+            ).interpolate("time")
+
+            pivot_diversions_df["Victoria"] = pivot_diversions_df[
+                ["VIC Goulburn-Broken", "VIC Murray Above", "VIC Loddon-Campaspe"]
+            ].sum(axis=1)
+            pivot_diversions_df["New South Wales"] = pivot_diversions_df[
+                ["NSW Murray Below", "NSW Murray Above"]
+            ].sum(axis=1)
+
+            return df_observed_price, pivot_diversions_df
+
+        df_observed_price, df_observed_diversion = get_observed_diversion_price()
+
+        inflation_rates = self.dict["economics/inflation_rates"]
+
+        dictionary_types = {
+            "diversions": df_observed_diversion,
+            "water_price": df_observed_price,
+        }
+
+        for dictionary_type, data in dictionary_types.items():
+            # If we're dealing with water_price, create monthly time steps
+            if dictionary_type == "water_price":
+                monthly_dates = pd.date_range(
+                    start=pd.Timestamp(start_year, 1, 1),
+                    end=pd.Timestamp(end_year, 12, 31),
+                    freq="MS",
+                )
+                dictionary = {
+                    "time": [d.strftime("%Y-%m-%d") for d in monthly_dates],
+                    "data": {},
+                }
+            else:
+                # For diversions, keep the original annual time steps
+                dictionary = {"time": list(range(start_year, end_year + 1)), "data": {}}
+
+            for _, region_row in self.geoms["areamaps/regions"].iterrows():
+                region_id = str(region_row["region_id"])
+                region_state = region_row["NAME_1"]
+
+                data_region = data[region_state]
+
+                if dictionary_type == "diversions":
+                    # Keep the existing (annual) logic for diversions exactly as before
+
+                    min_obs_year = data_region.index.year.min()
+                    max_obs_year = data_region.index.year.max()
+                    if max_obs_year > np.int32(inflation_rates["time"][-1]):
+                        max_obs_year = np.int32(inflation_rates["time"][-1])
+
+                    real_values = []
+                    for year in range(min_obs_year, max_obs_year + 1):
+                        nominal = data_region.loc[data_region.index.year == year]
+                        if len(nominal) == 0:
+                            continue
+                        factor = 1.0
+                        for y in range(min_obs_year + 1, year + 1):
+                            inf = inflation_rates["data"][region_id][
+                                inflation_rates["time"].index(str(y))
+                            ]
+                            factor *= inf
+                        real_values.append(nominal.iloc[0] / factor)
+
+                    baseline = np.mean(real_values)
+                    prices = pd.Series(
+                        index=range(start_year, end_year + 1), dtype=float
+                    )
+                    prices.loc[min_obs_year] = baseline
+
+                    for y in range(start_year, end_year + 1):
+                        if y in data_region.index.year:
+                            prices.loc[y] = data_region.loc[
+                                data_region.index.year == y
+                            ].iloc[0]
+                        elif y < min_obs_year or y > max_obs_year:
+                            prices.loc[y] = baseline
+                        else:
+                            if pd.isna(prices.loc[y]):
+                                prices.loc[y] = baseline
+
+                    dictionary["data"][region_id] = prices.tolist()
+
+                else:
+                    # WATER PRICE: handle monthly data
+                    # Ensure we have a sorted DatetimeIndex for monthly data
+                    data_region = data_region.sort_index()
+                    min_obs_date = data_region.index.min()
+                    max_obs_date = data_region.index.max()
+
+                    # Compute a baseline by deflating observed monthly values back to min_obs_date.year
+                    real_values = []
+                    if pd.notna(min_obs_date) and pd.notna(max_obs_date):
+                        min_yr = min_obs_date.year
+                        for dt_obs in data_region.index:
+                            val = data_region.loc[dt_obs]
+                            factor = 1.0
+                            for y in range(min_yr + 1, dt_obs.year + 1):
+                                y_str = str(y)
+                                if y_str in inflation_rates["time"]:
+                                    idx = inflation_rates["time"].index(y_str)
+                                    factor *= inflation_rates["data"][region_id][idx]
+                            real_values.append(val / factor)
+
+                    if len(real_values) > 0:
+                        baseline = np.mean(real_values)
+                    else:
+                        baseline = 0.0
+
+                    prices = pd.Series(index=monthly_dates, dtype=float)
+
+                    # Fill any known monthly data directly
+                    for dt_obs in data_region.index:
+                        if dt_obs in prices.index:
+                            prices.loc[dt_obs] = data_region.loc[dt_obs]
+
+                    # Helper to apply annual inflation only if we crossed a year boundary
+                    def inflation_factor(prev_date, curr_date, region):
+                        if curr_date.year != prev_date.year:
+                            y_str = str(curr_date.year)
+                            if y_str in inflation_rates["time"]:
+                                idx = inflation_rates["time"].index(y_str)
+                                return inflation_rates["data"][region][idx]
+                        return 1.0
+
+                    all_dates = prices.index
+
+                    # If we have at least one observed monthly date, forward/backward fill
+                    if pd.notna(min_obs_date):
+                        # Set the earliest known date to baseline if not set
+                        prices.loc[min_obs_date] = baseline
+
+                        # Go forward
+                        start_idx = all_dates.get_loc(min_obs_date)
+                        for i in range(start_idx + 1, len(all_dates)):
+                            prev_date = all_dates[i - 1]
+                            curr_date = all_dates[i]
+                            if pd.isna(prices.loc[curr_date]):
+                                f = inflation_factor(prev_date, curr_date, region_id)
+                                prices.loc[curr_date] = prices.loc[prev_date] * f
+
+                        # Go backward
+                        for i in range(start_idx - 1, -1, -1):
+                            next_date = all_dates[i + 1]
+                            curr_date = all_dates[i]
+                            if pd.isna(prices.loc[curr_date]):
+                                f = inflation_factor(curr_date, next_date, region_id)
+                                if f == 0:
+                                    f = 1.0
+                                prices.loc[curr_date] = prices.loc[next_date] / f
+                    else:
+                        # No observed data at all
+                        prices[:] = baseline
+
+                    dictionary["data"][region_id] = prices.tolist()
+
+            self.set_dict(dictionary, name=f"economics/{dictionary_type}")
 
     def setup_drip_irrigation_prices_by_reference_year(
         self,
@@ -4124,9 +4378,9 @@ class GEBModel(GridModel):
             }
         else:
             assert size_class_boundaries is not None
-            assert (
-                farm_size_donor_countries is None
-            ), "farm_size_donor_countries is only used for lowder data"
+            assert farm_size_donor_countries is None, (
+                "farm_size_donor_countries is only used for lowder data"
+            )
 
         cultivated_land = (
             self.region_subgrid["landsurface/full_region_cultivated_land"]
@@ -4138,9 +4392,9 @@ class GEBModel(GridModel):
 
         regions_shapes = self.geoms["areamaps/regions"]
         if data_source == "lowder":
-            assert (
-                country_iso3_column in regions_shapes.columns
-            ), f"Region database must contain {country_iso3_column} column ({self.data_catalog['gadm_level1'].path})"
+            assert country_iso3_column in regions_shapes.columns, (
+                f"Region database must contain {country_iso3_column} column ({self.data_catalog['gadm_level1'].path})"
+            )
 
             farm_sizes_per_region = (
                 self.data_catalog.get_dataframe("lowder_farm_sizes")
@@ -4159,9 +4413,9 @@ class GEBModel(GridModel):
             farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
                 COUNTRY_NAME_TO_ISO3
             )
-            assert (
-                not farm_sizes_per_region["ISO3"].isna().any()
-            ), f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
+            assert not farm_sizes_per_region["ISO3"].isna().any(), (
+                f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
+            )
         else:
             # load data source
             farm_sizes_per_region = pd.read_excel(
@@ -4215,9 +4469,9 @@ class GEBModel(GridModel):
                 region_farm_sizes = farm_sizes_per_region.loc[
                     (farm_sizes_per_region["ISO3"] == country_ISO3)
                 ].drop(["Country", "Census Year", "Total"], axis=1)
-                assert (
-                    len(region_farm_sizes) == 2
-                ), f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
+                assert len(region_farm_sizes) == 2, (
+                    f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
+                )
 
                 # Extract holdings and agricultural area data
                 region_n_holdings = (
@@ -4958,7 +5212,7 @@ class GEBModel(GridModel):
         export=False,
     ):
         years = [2000, 2005, 2010, 2015]
-        nr_runs = 20
+        nr_runs = 1
 
         for year_nr in years:
             for run in range(nr_runs):
@@ -5008,9 +5262,9 @@ class GEBModel(GridModel):
                 crop_rotation_matrix = crop_rotation[1]
                 starting_days = crop_rotation_matrix[:, 2]
                 starting_days = starting_days[starting_days != -1]
-                assert (
-                    np.unique(starting_days).size == starting_days.size
-                ), "ensure all starting days are unique"
+                assert np.unique(starting_days).size == starting_days.size, (
+                    "ensure all starting days are unique"
+                )
                 # TODO: Add check to ensure crop calendars are not overlapping.
                 cropping_calenders_crop_rotation.append(crop_rotation_matrix)
             area_per_crop_rotation = np.array(area_per_crop_rotation)
@@ -5524,9 +5778,9 @@ class GEBModel(GridModel):
                     # Set irrigation status to True for these farmers
                     farmer_irrigated[overall_farmer_indices] = True
 
-        assert not (
-            farmer_crops == -1
-        ).any(), "Error: some farmers have no crops assigned"
+        assert not (farmer_crops == -1).any(), (
+            "Error: some farmers have no crops assigned"
+        )
 
         return farmer_crops, farmer_irrigated
 
@@ -6037,7 +6291,9 @@ class GEBModel(GridModel):
                         max_file_path_length = os.pathconf("/", "PC_PATH_MAX")
                     assert (
                         len(str(download_path / new_file_name)) <= max_file_path_length
-                    ), f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
+                    ), (
+                        f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
+                    )
                     zip_ref.extract(file_name, path=download_path)
             # remove zip file
             (
@@ -6315,9 +6571,9 @@ class GEBModel(GridModel):
 
             water_levels = water_levels.sel(stations=station_ids).compute()
 
-            assert (
-                len(water_levels.stations) > 0
-            ), "No stations found in the region. If no stations should be set, set include_coastal=False"
+            assert len(water_levels.stations) > 0, (
+                "No stations found in the region. If no stations should be set, set include_coastal=False"
+            )
 
             path = self.set_forcing(
                 water_levels,
@@ -6622,9 +6878,9 @@ class GEBModel(GridModel):
             if "time" in forcing.dims:
                 with ProgressBar(dt=10):  # print progress bar every 10 seconds
                     if is_spatial_dataset:
-                        assert (
-                            forcing.dims[1] == "y" and forcing.dims[2] == "x"
-                        ), "y and x dimensions must be second and third, otherwise xarray will not chunk correctly"
+                        assert forcing.dims[1] == "y" and forcing.dims[2] == "x", (
+                            "y and x dimensions must be second and third, otherwise xarray will not chunk correctly"
+                        )
                         chunksizes = {
                             "time": min(forcing.time.size, time_chunksize),
                             "y": min(forcing.y.size, y_chunksize),
@@ -6661,9 +6917,9 @@ class GEBModel(GridModel):
                     name = forcing.name
                     encoding = {forcing.name: {"compressor": compressor}}
                 elif isinstance(forcing, xr.Dataset):
-                    assert (
-                        len(forcing.data_vars) > 0
-                    ), "forcing must have more than one variable or name must be set"
+                    assert len(forcing.data_vars) > 0, (
+                        "forcing must have more than one variable or name must be set"
+                    )
                     encoding = {
                         var: {"compressor": compressor} for var in forcing.data_vars
                     }

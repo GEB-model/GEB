@@ -85,23 +85,20 @@ class LiveStockFarmers(AgentBaseClass):
         return water_demand, efficiency
 
     def water_demand(self):
-        if (
-            np.datetime64(self.model.current_time, "ns")
-            in self.model.livestock_water_consumption_ds.time
-        ):
+        if self.model.current_time.day == 1 and self.model.current_time.month == 7:
             water_demand, efficiency = self.update_water_demand()
             self.current_water_demand = water_demand
-            self.total_water_demand = self.current_water_demand
+
+            self.total_water_demand = (
+                self.current_water_demand + self.additional_water_allocation
+            )
+
             self.current_efficiency = efficiency
 
         assert (self.model.current_time - self.last_water_demand_update).days < 366, (
             "Water demand has not been updated for over a year. "
             "Please check the livestock water demand datasets."
         )
-        if self.model.current_time.day == 1:
-            self.total_water_demand = (
-                self.current_water_demand + self.additional_water_allocation
-            )
 
         return self.total_water_demand, self.current_efficiency
 
