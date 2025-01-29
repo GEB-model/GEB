@@ -32,6 +32,7 @@ agent_settings:
   #     per: capita
   farmers:
     ruleset: base
+    nearest_grid_cell_min_cells: 5
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
@@ -106,12 +107,12 @@ draw:
 
 report:
 
-report_hydrology:
-  discharge_daily:
-    varname: data.grid.discharge
-    function: null
-    format: zarr
-    single_file: true
+# report_hydrology:
+#   discharge_daily:
+#     varname: data.grid.discharge
+#     function: null
+#     format: zarr
+#     single_file: true
 
 parameters:
   SnowMeltCoef: 0.004
