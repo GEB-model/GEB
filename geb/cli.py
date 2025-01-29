@@ -214,6 +214,8 @@ def run_model(
         else config["general"]["files"]
     )
 
+    print("Running Scenario:", config["general"]["name"])
+
     model_params = {
         "config": config,
         "files": files,
