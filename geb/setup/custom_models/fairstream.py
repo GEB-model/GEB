@@ -758,21 +758,31 @@ class fairSTREAMModel(GEBModel):
                     crop_data = crop_data_df.loc[farmer_region_id].sum()
                     assert crop_data.sum() > 0
 
-            crop = np.random.choice(crop_data.index, p=crop_data / crop_data.sum())
-            crop = crop_name_to_ID[crop]
+            farmer_main_crop = np.random.choice(
+                crop_data.index, p=crop_data / crop_data.sum()
+            )
+            farmer_main_crop = crop_name_to_ID[farmer_main_crop]
 
-            crops = np.full(n_crops, crop)
-            for season_idx, crop in enumerate(crops):
-                duration = crop_variables[crop][f"season_#{season_idx + 1}_duration"]
+            if farmer_main_crop == crop_name_to_ID["Sugarcane"]:
+                crop_per_season = np.array([-1, -1, farmer_main_crop])
+            else:
+                crop_per_season = np.full(n_crops, farmer_main_crop)
+            for season_idx, season_crop in enumerate(crop_per_season):
+                if season_crop == -1:
+                    continue
+                duration = crop_variables[season_crop][
+                    f"season_#{season_idx + 1}_duration"
+                ]
+                assert duration is not None
                 if duration > 365:
                     year_index = 1
                     crop_calendar_rotation_years[idx] = 2
                 else:
                     year_index = 0
                 farmer_crop_calendar[season_idx] = [
-                    crop,
+                    season_crop,
                     seasons[f"season_#{season_idx + 1}_start"] - 1,
-                    crop_variables[crop][f"season_#{season_idx + 1}_duration"],
+                    crop_variables[season_crop][f"season_#{season_idx + 1}_duration"],
                     year_index,
                 ]
 
