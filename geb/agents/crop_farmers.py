@@ -3395,15 +3395,10 @@ class CropFarmers(AgentBaseClass):
 
         assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
 
-        # Mask out empty rows (agents) where data is zero or NaN
-        mask_agents = np.any(self.var.yearly_yield_ratio != 0, axis=1)
-        if mask_agents.sum() <= self.n:
-            raise NotImplementedError
-
         # Apply the mask to data
-        masked_yearly_yield_ratio = self.var.yearly_yield_ratio[mask_agents, :]
-        masked_SPEI_probability = self.var.yearly_SPEI_probability[mask_agents, :]
-        group_indices = group_indices[mask_agents]
+        masked_yearly_yield_ratio = self.var.yearly_yield_ratio
+        masked_SPEI_probability = self.var.yearly_SPEI_probability
+        group_indices = group_indices
 
         # Number of groups
         n_groups = unique_crop_combinations.shape[0]
@@ -4391,13 +4386,14 @@ class CropFarmers(AgentBaseClass):
         yield_ratios = self.convert_probability_to_yield_ratio()
 
         # Create a mask for valid crops (exclude non-crop values)
-        crops_mask = (self.crop_calendar[:, :, 0] >= 0) & (
-            self.crop_calendar[:, :, 0] < len(self.crop_data["reference_yield_kg_m2"])
+        crops_mask = (self.var.crop_calendar[:, :, 0] >= 0) & (
+            self.var.crop_calendar[:, :, 0]
+            < len(self.var.crop_data["reference_yield_kg_m2"])
         )
 
         # Create an array filled with NaNs for reference data
         nan_array = np.full_like(
-            self.crop_calendar[:, :, 0], fill_value=np.nan, dtype=float
+            self.var.crop_calendar[:, :, 0], fill_value=np.nan, dtype=float
         )
 
         # Compute profits without adaptation
@@ -4420,13 +4416,13 @@ class CropFarmers(AgentBaseClass):
             crop_elevation_group=crop_elevation_group,
             unique_crop_groups=unique_crop_groups,
             group_indices=group_indices,
-            crop_calendar=self.crop_calendar.data,
+            crop_calendar=self.var.crop_calendar.data,
             unique_crop_calendars=unique_crop_calendars,
-            p_droughts=self.p_droughts,
+            p_droughts=self.var.p_droughts,
         )
 
         total_profits_adaptation = np.full(
-            (len(unique_crop_calendars), len(self.p_droughts[:-1]), self.n),
+            (len(unique_crop_calendars), len(self.var.p_droughts[:-1]), self.n),
             0.0,
             dtype=np.float32,
         )
