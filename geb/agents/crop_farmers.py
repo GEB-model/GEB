@@ -3,12 +3,13 @@ import math
 from datetime import datetime
 import json
 import copy
+import os
 import calendar
 from typing import Tuple, Union
 
+import pandas as pd
 from scipy.stats import genextreme
 from scipy.optimize import curve_fit
-import os
 
 # from gplearn.genetic import SymbolicRegressor
 from geb.workflows import TimingModule
@@ -4974,8 +4975,24 @@ class CropFarmers(AgentBaseClass):
 
             main_irrigation_source = self.main_irrigation_source
 
+            # Create a DataFrame with command area and elevation
+            df = pd.DataFrame(
+                {
+                    "command_area": self.farmer_command_area,
+                    "elevation": self.var.elevation,
+                }
+            )
+
+            # Compute group-specific median elevation
+            df["group_median"] = df.groupby("command_area")["elevation"].transform(
+                "median"
+            )
+
+            # Determine lower or higher part and assign distinct ids
+            up_or_downstream = np.where(df["elevation"] <= df["group_median"], 0, 1)
+
             self.var.farmer_class[:] = self.create_farmer_classes(
-                main_irrigation_source, self.farmer_command_area
+                main_irrigation_source, self.farmer_command_area, up_or_downstream
             )
 
             print(
