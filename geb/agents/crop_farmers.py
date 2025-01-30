@@ -218,12 +218,15 @@ def get_farmer_groundwater_depth(
 
 @njit(cache=True)
 def get_deficit_between_dates(cumulative_water_deficit_m3, farmer, start, end):
-    return (
+    assert end >= start
+    deficit = (
         cumulative_water_deficit_m3[farmer, end]
         - cumulative_water_deficit_m3[
             farmer, start
         ]  # current day of year is effectively starting "tommorrow" due to Python's 0-indexing
     )
+    assert deficit >= 0
+    return deficit
 
 
 @njit(cache=True)
@@ -236,6 +239,8 @@ def get_future_deficit(
     potential_irrigation_consumption_farmer_m3: float,
 ):
     future_water_deficit = potential_irrigation_consumption_farmer_m3
+    # if final days of year, there is no "future" deficit within the remainder of the year
+    # so we can skip the additional calculations
     if day_index >= 365:
         return future_water_deficit
     for crop in crop_calendar[farmer]:
@@ -247,12 +252,17 @@ def get_future_deficit(
             end_day = start_day + growth_length
 
             if end_day > 365:
+                # if a crop grows beyond the year boundary, only calculate the deficit
+                # up to the year boundary (water deficit is reset at the start of the year)
                 future_water_deficit += get_deficit_between_dates(
                     cumulative_water_deficit_m3,
                     farmer,
                     max(start_day, day_index + 1),
                     365,
                 )
+                # if a crop starts growing the previous year, but ends in the current year
+                # calculate the deficit from the current day, up to the harvest day of
+                # the crop which is in the current year, thus the end_day % 366
                 if growth_length < 366 and end_day - 366 > day_index:
                     future_water_deficit += get_deficit_between_dates(
                         cumulative_water_deficit_m3,
@@ -261,6 +271,8 @@ def get_future_deficit(
                         end_day % 366,
                     )
 
+            # if the crop is harvested before the end of the year, calculate the deficit up to
+            # the harvest day (end_day)
             elif day_index < end_day:
                 future_water_deficit += get_deficit_between_dates(
                     cumulative_water_deficit_m3,
