@@ -97,49 +97,29 @@ def rolling_mean_2d(array, window):
 
 def ema_2d(array, span=60):
     """
-    Compute the exponential moving average (EMA) along the last axis (axis=-1) for a 2D array.
-    This replicates the behavior of Pandas' .ewm(span=span, adjust=False).mean() for each 1D slice.
-
-    Parameters
-    ----------
-    array : np.ndarray
-        2D NumPy array of shape (M, N), where we want to compute an EMA along each row.
-    span : int
-        The EMA span, analogous to `span` in Pandas' ewm. The effective smoothing factor alpha
-        is given by alpha = 2 / (span + 1).
-
-    Returns
-    -------
-    ema_array : np.ndarray
-        2D NumPy array of the same shape as `array`, where each row has been replaced
-        by its exponential moving average along the last axis.
+    Compute the exponential moving average (EMA) along the last axis
+    for each row in a 2D array (M, N).
     """
-
-    # Calculate alpha using Pandas' ewm(span=...).mean() convention:
-    # alpha = 2 / (span + 1)
     alpha = 2.0 / (span + 1)
 
     def ema_1d(x):
-        """
-        Compute EMA for a 1D array x using iterative approach:
-        ema[i] = alpha * x[i] + (1 - alpha) * ema[i-1].
-        """
         out = np.zeros_like(x, dtype=float)
         if len(x) == 0:
             return out
-
-        # Initialize first value directly
         out[0] = x[0]
-
-        # Iteratively compute EMA
         for i in range(1, len(x)):
             out[i] = alpha * x[i] + (1 - alpha) * out[i - 1]
-
         return out
 
-    # Apply ema_1d along the last axis of the 2D array
-    ema_array = np.apply_along_axis(ema_1d, axis=-1, arr=array)
-    return ema_array
+    return np.apply_along_axis(ema_1d, axis=-1, arr=array)
+
+
+def rolling_mean(arr, window_size):
+    arr_flipped = arr[:, :, ::-1]
+    sw = np.lib.stride_tricks.sliding_window_view(
+        arr_flipped, window_shape=window_size, axis=2
+    )
+    return sw.mean(axis=-1)[:, :, 0]
 
 
 @njit(cache=True, inline="always")
@@ -204,14 +184,47 @@ def get_farmer_groundwater_depth(
     return groundwater_depth_by_farmer
 
 
-@njit(cache=True)
-def get_deficit_between_dates(cumulative_water_deficit_m3, farmer, start, end):
-    return (
-        cumulative_water_deficit_m3[farmer, end]
-        - cumulative_water_deficit_m3[
-            farmer, start
-        ]  # current day of year is effectively starting "tommorrow" due to Python's 0-indexing
-    )
+@njit(cache=True, inline="always")
+def get_deficit_between_dates(
+    cumulative_water_deficit_m3, farmer, start_index, end_index
+):
+    """
+    Get the water deficit between two dates for a farmer.
+
+    Parameters
+    ----------
+    cumulative_water_deficit_m3 : np.ndarray
+        Cumulative water deficit in m3 for each day of the year for each farmer.
+    farmer : int
+        Farmer index.
+    start_index : int
+        Start day of cumulative water deficit calculation (index-based; Jan 1 == 0).
+    end_index : int
+        End day of cumulative water deficit calculation (index-based; Jan 1 == 0).
+
+    Returns
+    -------
+    float
+        Water deficit in m3 between the two dates.
+    """
+    if end_index == start_index:
+        deficit = 0
+    elif end_index > start_index:
+        deficit = (
+            cumulative_water_deficit_m3[farmer, end_index]
+            - cumulative_water_deficit_m3[
+                farmer, start_index
+            ]  # current day of year is effectively starting "tommorrow" due to Python's 0-indexing
+        )
+    else:  # end < start
+        deficit = cumulative_water_deficit_m3[farmer, -1] - (
+            cumulative_water_deficit_m3[farmer, start_index]
+            - cumulative_water_deficit_m3[farmer, end_index]
+        )
+
+    if deficit < 0:
+        raise ValueError("Deficit must be positive or zero")
+    return deficit
 
 
 @njit(cache=True)
@@ -222,42 +235,75 @@ def get_future_deficit(
     crop_calendar: np.ndarray,
     crop_rotation_year_index: np.ndarray,
     potential_irrigation_consumption_farmer_m3: float,
+    reset_day_index=0,
 ):
+    """
+    Get the future water deficit for a farmer.
+
+    Parameters
+    ----------
+    farmer : int
+        Farmer index.
+    day_index : int
+        Current day index (0-indexed).
+    cumulative_water_deficit_m3 : np.ndarray
+        Cumulative water deficit in m3 for each day of the year for each farmer.
+    crop_calendar : np.ndarray
+        Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
+        Each crop is a list of [crop_type, planting_day, growing_days, crop_year_index].
+        Planting day is 0-indexed (Jan 1 == 0).
+        Growing days is the number of days the crop grows.
+        Crop year index is the index of the year in the crop rotation.
+    crop_rotation_year_index : np.ndarray
+        Crop rotation year index for each farmer.
+    potential_irrigation_consumption_farmer_m3 : float
+        Potential irrigation consumption in m3 for each farmer on the current day.
+    reset_day_index : int, optional
+        Day index to reset the water year (0-indexed; Jan 1 == 0). Default is 0. Deficit
+        is calculated up to this day. For example, when the reset day index is 364, the
+        deficit is calculated up to Dec 31. When the reset day index is 0, the deficit is
+        calculated up to Jan 1. Default is 0.
+
+    Returns
+    -------
+    float
+        Future water deficit in m3 for the farmer in the growing season.
+    """
+    if reset_day_index >= 365 or reset_day_index < 0:
+        raise ValueError("Reset day index must be lower than 365 and greater than -1")
+    day = day_index + 1
     future_water_deficit = potential_irrigation_consumption_farmer_m3
-    if day_index >= 365:
-        return future_water_deficit
     for crop in crop_calendar[farmer]:
         crop_type = crop[0]
         crop_year_index = crop[3]
         if crop_type != -1 and crop_year_index == crop_rotation_year_index[farmer]:
-            start_day = crop[1]
+            start_day_index = crop[1]
+            if start_day_index < 0 or start_day_index >= 365:
+                raise ValueError("Start day must be between 0 and 364")
             growth_length = crop[2]
-            end_day = start_day + growth_length
 
-            if end_day > 365:
+            relative_start_day_index = (start_day_index - reset_day_index) % 365
+            relative_end_day_index = relative_start_day_index + growth_length
+            relative_day = (day - reset_day_index) % 365
+
+            if relative_end_day_index > 365:
+                relative_end_day_index = 365
+
+            if relative_start_day_index < relative_day:
+                relative_start_day_index = relative_day
+
+            if relative_day > relative_end_day_index:
+                continue
+            else:
                 future_water_deficit += get_deficit_between_dates(
                     cumulative_water_deficit_m3,
                     farmer,
-                    max(start_day, day_index + 1),
-                    365,
-                )
-                if growth_length < 366 and end_day - 366 > day_index:
-                    future_water_deficit += get_deficit_between_dates(
-                        cumulative_water_deficit_m3,
-                        farmer,
-                        day_index + 1,
-                        end_day % 366,
-                    )
-
-            elif day_index < end_day:
-                future_water_deficit += get_deficit_between_dates(
-                    cumulative_water_deficit_m3,
-                    farmer,
-                    max(start_day, day_index + 1),
-                    end_day,
+                    (relative_start_day_index + reset_day_index) % 365,
+                    (relative_end_day_index + reset_day_index) % 365,
                 )
 
-    assert future_water_deficit >= 0
+    if future_water_deficit < 0:
+        raise ValueError("Future water deficit must be positive or zero")
     return future_water_deficit
 
 
@@ -1771,11 +1817,21 @@ class CropFarmers(AgentBaseClass):
             ]["decisions"]["decision_horizon"],
         )
 
+        self.window_water_deficit = self.model.config["agent_settings"]["farmers"][
+            "window_water_deficit"
+        ]
+
         self.cumulative_water_deficit_m3 = AgentArray(
             n=self.n,
             max_n=self.max_n,
-            extra_dims=(366,),
-            extra_dims_names=("day",),
+            extra_dims=(
+                366,
+                self.window_water_deficit + 1,
+            ),
+            extra_dims_names=(
+                "day",
+                "year",
+            ),
             dtype=np.float32,
             fill_value=np.nan,
         )
@@ -2124,23 +2180,23 @@ class CropFarmers(AgentBaseClass):
             weights=water_deficit_day_m3[self.var.land_owners != -1],
         )
 
-        def add_water_deficit(water_deficit_day_m3_per_farmer, index):
-            self.cumulative_water_deficit_m3[:, index] = np.where(
-                np.isnan(self.cumulative_water_deficit_m3[:, index]),
-                water_deficit_day_m3_per_farmer,
-                self.cumulative_water_deficit_m3[:, index],
-            )
-
         if self.model.current_day_of_year == 1:
-            add_water_deficit(
-                water_deficit_day_m3_per_farmer, self.model.current_day_of_year - 1
+            # Advance multi-year water year
+            self.cumulative_water_deficit_m3[:, :, 1:] = (
+                self.cumulative_water_deficit_m3[:, :, :-1]
             )
-            self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 1] = (
-                water_deficit_day_m3_per_farmer
-            )
+            self.cumulative_water_deficit_m3[:, :, 0] = 0
+
+            self.cumulative_water_deficit_m3[
+                :, self.model.current_day_of_year - 1, 0
+            ] = water_deficit_day_m3_per_farmer
         else:
-            self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 1] = (
-                self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 2]
+            self.cumulative_water_deficit_m3[
+                :, self.model.current_day_of_year - 1, 0
+            ] = (
+                self.cumulative_water_deficit_m3[
+                    :, self.model.current_day_of_year - 2, 0
+                ]
                 + water_deficit_day_m3_per_farmer
             )
             # if this is the last day of the year, but not a leap year, the virtual
@@ -2149,8 +2205,8 @@ class CropFarmers(AgentBaseClass):
             if self.model.current_day_of_year == 365 and not calendar.isleap(
                 self.model.current_time.year
             ):
-                self.cumulative_water_deficit_m3[:, 365] = (
-                    self.cumulative_water_deficit_m3[:, 364]
+                self.cumulative_water_deficit_m3[:, 365, 0] = (
+                    self.cumulative_water_deficit_m3[:, 364, 0]
                 )
 
     def abstract_water(
@@ -2193,8 +2249,16 @@ class CropFarmers(AgentBaseClass):
         self.activation_order_by_elevation_ = AgentArray(
             self.activation_order_by_elevation, max_n=self.max_n
         )
-        if self.model.current_time.month == 12 and self.model.current_time.day == 31:
-            pass
+        if (
+            (self.model.current_time.year + 1)
+            - self.model.config["general"]["spinup_time"].year
+        ) > self.window_water_deficit:
+            cumulative_water_deficit_m3 = rolling_mean(
+                self.cumulative_water_deficit_m3[:, :, 1:].data,
+                self.window_water_deficit,
+            )
+        else:
+            cumulative_water_deficit_m3 = self.cumulative_water_deficit_m3.data[:, :, 1]
 
         if __debug__:
             irrigation_limit_pre = self.remaining_irrigation_limit_m3.copy()
@@ -2254,7 +2318,7 @@ class CropFarmers(AgentBaseClass):
             ],
             well_depth=self.well_depth.data,
             remaining_irrigation_limit_m3=self.remaining_irrigation_limit_m3.data,
-            cumulative_water_deficit_m3=self.cumulative_water_deficit_m3.data,
+            cumulative_water_deficit_m3=cumulative_water_deficit_m3,
             crop_calendar=self.crop_calendar.data,
             current_crop_calendar_rotation_year_index=self.current_crop_calendar_rotation_year_index.data,
             max_paddy_water_level=self.max_paddy_water_level,
