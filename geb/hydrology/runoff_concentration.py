@@ -49,7 +49,6 @@ class RunoffConcentration(object):
     ====================  ================================================================================  =========
     Variable [self.var]   Description                                                                       Unit
     ====================  ================================================================================  =========
-    load_initial
     baseflow              simulated baseflow (= groundwater discharge to river)                             m
     coverTypes            land cover types - forest - grassland - irrPaddy - irrNonPaddy - water - sealed   --
     runoff
@@ -84,11 +83,16 @@ class RunoffConcentration(object):
         Note:
             only if option **includeRunoffConcentration** is TRUE
         """
-        self.var = model.data.grid
+        self.grid = model.data.grid
         self.model = model
+        if self.model.spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
 
     def step(self, interflow, directRunoff):
         assert (directRunoff >= 0).all()
         assert (interflow >= 0).all()
-        assert (self.var.baseflow >= 0).all()
-        self.var.runoff = directRunoff + interflow + self.var.baseflow
+        assert (self.grid.var.baseflow >= 0).all()
+        self.grid.var.runoff = directRunoff + interflow + self.grid.var.baseflow

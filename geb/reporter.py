@@ -11,11 +11,6 @@ from honeybees.library.raster import coord_to_pixel
 from pathlib import Path
 from numcodecs import Blosc
 import zarr.hierarchy
-
-try:
-    import cupy as cp
-except ImportError:
-    cp = np
 from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
@@ -49,7 +44,7 @@ class hydrology_reporter(ABMReporter):
                             "single_file" in config and config["single_file"] is True
                         ), "Only single_file=True is supported for zarr format."
                         zarr_path = Path(self.export_folder, name + ".zarr.zip")
-                        config["absolute_path"] = str(zarr_path)
+                        config["path"] = str(zarr_path)
                         if zarr_path.exists():
                             zarr_path.unlink()
                         if "time_ranges" not in config:
@@ -109,7 +104,8 @@ class hydrology_reporter(ABMReporter):
                                     f"WARNING: None of the time ranges for {name} are in the simulation period."
                                 )
 
-                        zarr_group = zarr.open_group(zarr_path, mode="w")
+                        zarr_store = zarr.ZipStore(zarr_path)
+                        zarr_group = zarr.open_group(zarr_store, mode="w")
 
                         zarr_group.create_dataset(
                             "time",
@@ -129,7 +125,7 @@ class hydrology_reporter(ABMReporter):
                         zarr_group.create_dataset(
                             "y",
                             data=self.model.data.grid.lat,
-                            dtype="float32",
+                            dtype="float64",
                         )
                         zarr_group["y"].attrs.update(
                             {
@@ -142,7 +138,7 @@ class hydrology_reporter(ABMReporter):
                         zarr_group.create_dataset(
                             "x",
                             data=self.model.data.grid.lon,
-                            dtype="float32",
+                            dtype="float64",
                         )
                         zarr_group["x"].attrs.update(
                             {
@@ -184,7 +180,7 @@ class hydrology_reporter(ABMReporter):
                             crs = crs.to_string()
                         zarr_group.attrs["crs"] = crs
 
-                        self.variables[name] = zarr_group
+                        self.variables[name] = zarr_store
 
                     else:
                         self.variables[name] = []
@@ -201,7 +197,9 @@ class hydrology_reporter(ABMReporter):
         Returns:
             decompressed_array: The decompressed array.
         """
-        return attrgetter(".".join(attr.split(".")[:-1]))(self.model).decompress(array)
+        return attrgetter(".".join(attr.split(".")[:-1]).replace(".var", ""))(
+            self.model
+        ).decompress(array)
 
     def get_array(self, attr: str, decompress: bool = False) -> np.ndarray:
         """This function retrieves a NumPy array from the model based the name of the variable. Optionally decompresses the array.
@@ -236,7 +234,7 @@ class hydrology_reporter(ABMReporter):
             decompressed_array = self.decompress(attr, array)
             return array, decompressed_array
 
-        assert isinstance(array, (np.ndarray, cp.ndarray))
+        assert isinstance(array, np.ndarray)
 
         return array
 
@@ -253,22 +251,20 @@ class hydrology_reporter(ABMReporter):
                 f"Export format must be specified for {name} in config file (npy/npz/csv/xlsx/zarr)."
             )
         if conf["format"] == "zarr":
+            zarr_group = zarr.open_group(self.variables[name])
             if (
-                np.isin(
-                    np.datetime64(self.model.current_time), self.variables[name].time
-                )
+                np.isin(np.datetime64(self.model.current_time), zarr_group.time)
                 and value is not None
             ):
                 time_index = np.where(
-                    self.variables[name].time[:]
-                    == np.datetime64(self.model.current_time)
+                    zarr_group.time[:] == np.datetime64(self.model.current_time)
                 )[0].item()
                 if "substeps" in conf:
                     time_index_start = np.where(time_index)[0][0]
                     time_index_end = time_index_start + conf["substeps"]
-                    self.variables[name][time_index_start:time_index_end, ...] = value
+                    zarr_group[name][time_index_start:time_index_end, ...] = value
                 else:
-                    self.variables[name][name][time_index, ...] = value
+                    zarr_group[name][time_index, ...] = value
         else:
             folder = os.path.join(self.export_folder, name)
             os.makedirs(folder, exist_ok=True)
@@ -284,7 +280,7 @@ class hydrology_reporter(ABMReporter):
             elif conf["format"] == "csv":
                 fn += ".csv"
                 fp = os.path.join(folder, fn)
-                if isinstance(value, (np.ndarray, cp.ndarray)):
+                if isinstance(value, np.ndarray):
                     value = value.tolist()
                 if isinstance(value, (float, int)):
                     value = [value]
@@ -365,8 +361,8 @@ class hydrology_reporter(ABMReporter):
     def report(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
-            if isinstance(values, zarr.hierarchy.Group):
-                pass
+            if self.model.config["report_hydrology"][name]["format"] == "zarr":
+                continue
             else:
                 if isinstance(values[0], Iterable):
                     df = pd.DataFrame.from_dict(

@@ -9,7 +9,6 @@ general:
   original_data: ../../../original_data/
   preprocessing_folder: preprocessing/
   report_folder: report/
-  initial_conditions_folder: initial/
   init_water_table: report/init/water_table.npy
   name: default
   export_inital_on_spinup: true
@@ -26,11 +25,15 @@ agent_settings:
   market:
     dynamic_market: false
     price_frequency: yearly
+  government:
+    irrigation_limit:
+      limit: 10000  # previous tried 1700
+      per: capita
   farmers:
     ruleset: base
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
-    cultivation_cost_fraction: 0.5
+    cultivation_cost_fraction: 0.1
     microcredit:
       interest_rate: 0.2
       loan_duration: 2
@@ -44,16 +47,16 @@ agent_settings:
         ruleset: base
       adaptation_sprinkler:
         ruleset: base
-        interest_rate: 0.04
-        lifespan: 10
-        loan_duration: 11
-        yield_multiplier: 1
-        decision_horizon: 10
+        lifespan: 20
+        loan_duration: 21
+        decision_horizon: 20
+      adaptation_irrigation_expansion:
+        ruleset: no-adaptation
       adaptation_well:
         loan_duration: 21
         lifespan: 20
         decision_horizon: 20
-        ruleset: base
+        ruleset: no-adaptation
         pump_hours: 3.5
         specific_weight_water: 9800 # (kg/m3*m/s2)
         max_initial_sat_thickness: 50 # m
@@ -73,8 +76,8 @@ agent_settings:
         risk_perception:
           base: 1.6
           coef: -2.5
-          max: 4.4118829846402114
-          min: 0.1
+          max: 10
+          min: 0.5
   fix_activation_order: true
   reservoir_operators:
     MinOutflowQ: 0.0

@@ -2,6 +2,7 @@ from pathlib import Path
 from collections import deque
 from datetime import datetime
 import xarray as xr
+import zarr
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -14,16 +15,20 @@ import matplotlib.pyplot as plt
 
 
 try:
-    from geb_hydrodynamics import (
-        build_sfincs,
-        update_sfincs_model_forcing,
-        run_sfincs_simulation,
-        read_flood_map,
-    )
+    from geb_hydrodynamics.build_model import build_sfincs
 except ModuleNotFoundError:
     raise ModuleNotFoundError(
         "The 'GEB-hydrodynamics' package is not installed. Please install it by running 'pip install geb-hydrodynamics'."
     )
+from geb_hydrodynamics.sfincs_utils import run_sfincs_simulation
+from geb_hydrodynamics.update_model_forcing import update_sfincs_model_forcing
+from geb_hydrodynamics.run_sfincs_for_return_periods import (
+    run_sfincs_for_return_periods,
+)
+from geb_hydrodynamics.postprocess_model import read_flood_map
+from geb_hydrodynamics.estimate_discharge_for_return_periods import (
+    estimate_discharge_for_return_periods,
+)
 
 
 class SFINCS:
@@ -161,10 +166,7 @@ class SFINCS:
     def setup(self, event, config_fn="sfincs.yml", force_overwrite=False):
         build_parameters = {}
 
-        force_overwrite = True
-
         if "basin_id" in event:
-            build_parameters["basin_id"] = event["basin_id"]
             event_name = self.get_event_name(event)
         elif "region" in event:
             if event["region"] is None:
@@ -198,10 +200,13 @@ class SFINCS:
                 "config_fn": str(config_fn),
                 "model_root": self.sfincs_model_root(event_name),
                 "data_catalogs": self.data_catalogs,
-                "mask": detailed_region,
-                "method": "precipitation",
-                "rivers": "detailed",
+                "region": detailed_region,
+                "river_method": "default",
                 "depth_calculation": "power_law",
+                "discharge_ds": self.discharge_spinup_ds,
+                "discharge_name": "discharge_daily",
+                "uparea_ds": self.uparea_ds,
+                "uparea_name": "data",
             }
         )
         if (
@@ -311,6 +316,7 @@ class SFINCS:
                 "tstart": self.to_sfincs_datetime(tstart),
                 "tend": self.to_sfincs_datetime(tend.dt).item(),
             },
+            forcing_method="precipitation",
             discharge_grid=discharge_grid,
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
@@ -358,6 +364,40 @@ class SFINCS:
 
         scaled_event["precipitation"] = sfincs_precipitation
         return scaled_event
+
+    def get_return_period_maps(self, config_fn="sfincs.yml", force_overwrite=True):
+        # close the zarr store
+        self.model.reporter.variables["discharge_daily"].close()
+
+        model_root = self.sfincs_model_root("entire_region")
+        if force_overwrite or not (model_root / "sfincs.inp").exists():
+            build_sfincs(
+                config_fn=str(config_fn),
+                model_root=model_root,
+                data_catalogs=self.data_catalogs,
+                region=gpd.read_file(self.model.files["geoms"]["region"]),
+                discharge_ds=self.discharge_spinup_ds,
+                uparea_ds=self.uparea_ds,
+                uparea_name="data",
+                discharge_name="discharge_daily",
+                river_method="default",
+                depth_calculation="power_law",
+                mask_flood_plains=True,
+            )
+        estimate_discharge_for_return_periods(
+            model_root,
+            discharge_ds=self.discharge_ds,
+            data_catalogs=self.data_catalogs,
+            discharge_ds_varname="discharge_daily",
+        )
+        run_sfincs_for_return_periods(
+            model_root=model_root, return_periods=[2, 100, 1000]
+        )
+
+        # and re-open afterwards
+        self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
+            self.model.config["report_hydrology"]["discharge_daily"]["path"], mode="a"
+        )
 
     def run(self, event):
         start_time = event["start_time"]
@@ -413,5 +453,17 @@ class SFINCS:
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
-            self.model.data.grid.discharge_substep
+            self.model.data.grid.var.discharge_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
+
+    @property
+    def discharge_spinup_ds(self):
+        discharge_path = self.model.config["report_hydrology"]["discharge_daily"][
+            "path"
+        ].replace(self.model.run_name, "spinup")
+        return xr.open_dataset(discharge_path, engine="zarr")
+
+    @property
+    def uparea_ds(self):
+        uparea_path = self.model.files["grid"]["routing/kinematic/upstream_area"]
+        return xr.open_dataset(uparea_path, engine="zarr")

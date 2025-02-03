@@ -10,6 +10,9 @@ from numba import config
 import importlib
 import faulthandler
 
+os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
+# os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
+
 
 if platform.system() != "Windows":
     # Modify LD_LIBRARY_PATH on Unix-like systems (Linux, macOS)

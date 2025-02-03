@@ -137,9 +137,7 @@ def distribute_well_rate_per_layer(
                 if remaining_well_rate == 0:
                     break
 
-        assert (
-            remaining_well_rate > -1e-10
-        ), (
+        assert remaining_well_rate > -1e-10, (
             "Well rate could not be distributed, layers are too dry"
         )  # leaving some tollerance for numerical errors
 
@@ -153,24 +151,25 @@ class ModFlowSimulation:
         model,
         topography,
         gt,
-        ndays,
         specific_storage,
         specific_yield,
         layer_boundary_elevation,
         basin_mask,
-        heads,
         hydraulic_conductivity,
+        heads,
+        heads_update_callback,
         min_remaining_layer_storage_m=0.1,
         verbose=False,
         never_load_from_disk=False,
     ):
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
         self.model = model
+        self.heads_update_callback = heads_update_callback
         self.basin_mask = basin_mask
         self.nlay = hydraulic_conductivity.shape[0]
         assert self.basin_mask.dtype == bool
         self.n_active_cells = self.basin_mask.size - self.basin_mask.sum()
-        self.working_directory = model.simulation_root / "modflow_model"
+        self.working_directory = model.simulation_root_spinup / "modflow_model"
         os.makedirs(self.working_directory, exist_ok=True)
         self.verbose = verbose
         self.never_load_from_disk = never_load_from_disk
@@ -187,20 +186,22 @@ class ModFlowSimulation:
         arguments = dict(locals())
         arguments.pop("self")
         arguments.pop("model")
+        arguments.pop("heads_update_callback")  # not hashable and not needed
+        arguments.pop(
+            "heads"
+        )  # heads is set after loading the model or writing to disk
+
         self.hash_file = os.path.join(self.working_directory, "input_hash")
 
-        save_flows = False
+        self.save_flows = False
 
         if not self.load_from_disk(arguments):
             try:
                 if self.verbose:
                     print("Creating MODFLOW model")
 
-                sim = self.flexible_grid(
-                    ndays,
+                sim = self.get_simulation(
                     gt,
-                    save_flows,
-                    heads,
                     hydraulic_conductivity,
                     specific_storage,
                     specific_yield,
@@ -216,7 +217,7 @@ class ModFlowSimulation:
         elif self.verbose:
             print("Loading MODFLOW model from disk")
 
-        self.load_bmi()
+        self.load_bmi(heads)
 
     def create_vertices(self, nrows, ncols, gt):
         x_coordinates = np.linspace(gt[0], gt[0] + gt[1] * ncols, ncols + 1)
@@ -252,12 +253,9 @@ class ModFlowSimulation:
 
         return x_transformed, y_transformed
 
-    def flexible_grid(
+    def get_simulation(
         self,
-        ndays,
         gt,
-        save_flows,
-        heads,
         hydraulic_conductivity,
         specific_storage,
         specific_yield,
@@ -267,7 +265,10 @@ class ModFlowSimulation:
             version="mf6",
             sim_ws=os.path.realpath(self.working_directory),
         )
-        flopy.mf6.ModflowTdis(sim, nper=ndays, perioddata=[(1.0, 1, 1)] * ndays)
+        number_of_periods = 100_000
+        flopy.mf6.ModflowTdis(
+            sim, nper=number_of_periods, perioddata=[(1.0, 1, 1)] * number_of_periods
+        )
 
         # create iterative model solution
         flopy.mf6.ModflowIms(
@@ -284,8 +285,8 @@ class ModFlowSimulation:
             sim,
             modelname=self.name,
             newtonoptions="under_relaxation",
-            print_input=save_flows,
-            print_flows=save_flows,
+            print_input=self.save_flows,
+            print_flows=self.save_flows,
         )
 
         # 1. Create vertices
@@ -387,17 +388,17 @@ class ModFlowSimulation:
             idomain=domain.tolist(),
         )
 
-        # Initial conditions
-        heads = self.model.data.grid.decompress(heads)
-        flopy.mf6.ModflowGwfic(groundwater_flow, strt=heads)
-
         # Node property flow
         k = self.model.data.grid.decompress(hydraulic_conductivity)
+
+        # Initial conditions
+        flopy.mf6.ModflowGwfic(groundwater_flow, strt=np.full_like(k, np.nan))
+
         # Create icelltype array (assuming convertible cells i.e., that can be converted between confined and unconfined)
         icelltype = np.ones_like(domain, dtype=np.int32)
         flopy.mf6.ModflowGwfnpf(
             groundwater_flow,
-            save_flows=save_flows,
+            save_flows=self.save_flows,
             icelltype=icelltype,
             k=k,
         )
@@ -408,7 +409,7 @@ class ModFlowSimulation:
         # Storage
         flopy.mf6.ModflowGwfsto(
             groundwater_flow,
-            save_flows=save_flows,
+            save_flows=self.save_flows,
             iconvert=1,
             ss=ss,
             sy=sy,
@@ -426,7 +427,7 @@ class ModFlowSimulation:
         recharge = flopy.mf6.ModflowGwfrch(
             groundwater_flow,
             fixed_cell=True,
-            save_flows=save_flows,
+            save_flows=self.save_flows,
             maxbound=len(recharge),
             stress_period_data=recharge,
         )
@@ -443,7 +444,7 @@ class ModFlowSimulation:
             groundwater_flow,
             maxbound=len(wells),
             stress_period_data=wells,
-            save_flows=save_flows,
+            save_flows=self.save_flows,
         )
 
         # Drainage
@@ -468,8 +469,8 @@ class ModFlowSimulation:
             groundwater_flow,
             maxbound=len(drainage),
             stress_period_data=drainage,
-            print_flows=save_flows,
-            save_flows=save_flows,
+            print_flows=self.save_flows,
+            save_flows=self.save_flows,
         )
 
         sim.simulation_data.set_sci_note_upper_thres(
@@ -514,7 +515,7 @@ class ModFlowSimulation:
             lines = f.readlines()
         return success, lines
 
-    def load_bmi(self):
+    def load_bmi(self, heads):
         """Load the Basic Model Interface"""
         success = False
 
@@ -549,7 +550,7 @@ class ModFlowSimulation:
             try:
                 self.mf6 = XmiWrapper(library_path)
             except Exception as e:
-                print("Failed to load " + library_path)
+                print("Failed to load " + str(library_path))
                 print("with message: " + str(e))
                 self.bmi_return(success)
                 raise
@@ -580,9 +581,13 @@ class ModFlowSimulation:
 
         # so we can use the area of the top layer
         self.area = area[0].copy()
-        assert not np.isnan(self.heads).any()
 
         self.prepare_time_step()
+
+        # because modflow rounds heads when they are written to file, we set the modflow heads
+        # to the actual model heads to ensure that the model is in the same state as the modflow model
+        self.heads = heads
+        assert not np.isnan(self.heads).any()
 
     @property
     def head_tag(self):
@@ -598,7 +603,7 @@ class ModFlowSimulation:
 
     @heads.setter
     def heads(self, value):
-        self.mf6.get_value_ptr(self.head_tag)[:] = value
+        self.mf6.get_value_ptr(self.head_tag)[:] = value.ravel()
 
     @property
     def groundwater_depth(self):
@@ -718,9 +723,7 @@ class ModFlowSimulation:
         """Set well rate, value in m3/day"""
         assert not np.isnan(groundwater_abstraction).any()
 
-        assert (
-            self.available_groundwater_m3 >= groundwater_abstraction
-        ).all(), (
+        assert (self.available_groundwater_m3 >= groundwater_abstraction).all(), (
             "Requested groundwater abstraction exceeds available groundwater storage. "
         )
 
@@ -729,10 +732,8 @@ class ModFlowSimulation:
         self.potential_well_rate = well_rate
 
     def step(self):
-        if self.mf6.get_current_time() > self.end_time:
-            raise StopIteration(
-                "MODFLOW used all iteration steps. Consider increasing `ndays`"
-            )
+        if self.mf6.get_current_time() == self.end_time:
+            raise StopIteration("MODFLOW used all iteration steps.")
 
         t0 = time()
         # loop over subcomponents
@@ -768,6 +769,8 @@ class ModFlowSimulation:
                 f"MODFLOW timestep {int(self.mf6.get_current_time())} converged in {round(time() - t0, 2)} seconds"
             )
 
+        self.heads_update_callback(self.heads)
+
         # If next step exists, prepare timestep. Otherwise the data set through the bmi
         # will be overwritten when preparing the next timestep.
         if self.mf6.get_current_time() < self.end_time:
@@ -775,3 +778,6 @@ class ModFlowSimulation:
 
     def finalize(self):
         self.mf6.finalize()
+
+    def restore(self, heads):
+        self.heads = heads

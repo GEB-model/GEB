@@ -69,14 +69,13 @@ class DummyData:
 
 class DummyModel:
     def __init__(self):
-        self.simulation_root = tmp_folder / "modflow"
+        self.simulation_root_spinup = tmp_folder / "modflow"
         self.data = DummyData()
 
 
 default_params = {
     "model": DummyModel(),
     "gt": gt,
-    "ndays": 1000,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.8), basin_mask),
     "topography": compress(topography, basin_mask),
@@ -86,6 +85,7 @@ default_params = {
     "hydraulic_conductivity": compress(np.full((NLAY, YSIZE, XSIZE), 1), basin_mask),
     "verbose": True,
     "never_load_from_disk": True,
+    "heads_update_callback": lambda heads: None,
 }
 
 
@@ -299,6 +299,45 @@ def test_modflow_simulation_with_visualization():
 
     sim.finalize()
     plt.savefig(output_folder / "modflow_simulation.png")
+
+
+def test_modflow_simulation_with_restore():
+    parameters = deepcopy(default_params)
+    parameters["heads"][:,] = compress(topography, basin_mask)
+    sim = ModFlowSimulation(**parameters)
+
+    recharge = np.random.uniform(0, 0.001, size=(YSIZE, XSIZE))
+    sim.set_recharge_m(compress(recharge, sim.basin_mask))
+
+    groundwater_abstracton = np.full((YSIZE, XSIZE), 0.0)
+    groundwater_abstracton[2, 2] = 1.25
+    groundwater_abstracton[3, 5] = 0.20
+
+    sim.set_groundwater_abstraction_m3(
+        compress(groundwater_abstracton, sim.basin_mask) * sim.area
+    )
+
+    # Run the simulation for a few steps
+    for i in range(2):
+        sim.step()
+
+    heads_mid = sim.heads.copy()
+
+    for i in range(3):
+        print("before restore", sim.heads.mean())
+        sim.step()
+
+    heads_end = sim.heads.copy()
+
+    sim.restore(heads_mid)
+
+    for i in range(3):
+        print("after restore", sim.heads.mean())
+        sim.step()
+
+    np.testing.assert_allclose(sim.heads, heads_end)
+
+    sim.finalize()
 
 
 def test_get_water_table_depth():

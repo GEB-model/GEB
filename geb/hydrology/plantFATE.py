@@ -67,6 +67,7 @@ class Model:
 
         self.plantFATE_model.simulate_to(self.tcurrent)
         trans = self.plantFATE_model.props.fluxes.trans
+        # trans = trans/365
         potential_soil_evaporation = self.plantFATE_model.props.fluxes.pe_soil
         # print('potential soil evap')
         # print(potential_soil_evaporation)
@@ -96,7 +97,6 @@ class Model:
 
         self.plantFATE_model.init(datediff, datediff + 1000)
 
-        # print("test 2")
         self.plantFATE_model.reset_time(datediff)
 
         # print("Running first step - after init")
@@ -150,15 +150,8 @@ class Model:
         soil_specific_depletion_2 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
         soil_specific_depletion_3 = np.nan  # this is currently not calculated in plantFATE, so just setting to np.nan to avoid confusion
 
-        # print(transpiration)
-        # print(np.isnan(transpiration))
-        # print(soil_evaporation)
-        transpiration = transpiration / 1000  # kg H2O/m2/day to m/day - double check this value
-        #
-        # if np.isnan(transpiration):
-        #     transpiration = 0
-        # if np.isnan(soil_evaporation):
-        #     soil_evaporation = 0
+        transpiration = transpiration / 1000  # kg H2O/m2/day to m/day
+
         return (
             transpiration,
             soil_evaporation,
@@ -172,8 +165,12 @@ class Model:
 
     @property
     def n_individuals(self):
-        return sum(self.plantFATE_model.cwm.n_ind_vec)
+        return sum(self.plantFATE_model.props.species.n_ind_vec)
 
     @property
     def biomass(self):
-        return sum(self.plantFATE_model.cwm.biomass_vec)  # kgC / m2
+        return self.plantFATE_model.props.structure.biomass  # kgC / m2
+
+    @property
+    def npp(self):
+        return self.plantFATE_model.props.fluxes.npp

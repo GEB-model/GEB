@@ -264,8 +264,6 @@ def define_river_network(ldd2D, grid):
     # all pits gets a high number
     downstruct[lddCompress == PIT] = grid.compressed_size
 
-    # self.var.dirDown: direction downstream - from each cell the pointer to a downstream cell (can only be 1)
-    # self.var.catchment: each catchment with a pit gets a own ID
     dirDown = []
     dirDown, catchment = dirDownstream(dirUp, lddCompress, dirDown)
     lendirDown = len(dirDown)
@@ -317,7 +315,9 @@ def repairLdd1(ldd):
 
 @njit(cache=True)
 def dirID(lddorder, ldd):
-    out_array = np.full_like(ldd, -1)  # Initialize out_array with -1, same shape as ldd
+    out_array = np.full_like(
+        ldd, -1, dtype=np.int32
+    )  # Initialize out_array with -1, same shape as ldd
     dirX = np.array([0, -1, 0, 1, -1, 0, 1, -1, 0, 1], dtype=np.int32)
     dirY = np.array([0, 1, 1, 1, 0, 0, 0, -1, -1, -1], dtype=np.int32)
 

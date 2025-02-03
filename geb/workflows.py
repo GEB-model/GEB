@@ -142,6 +142,7 @@ def balance_check(
     prestorages=[],
     poststorages=[],
     tollerance=1e-10,
+    raise_on_error=False,
 ):
     income = 0
     out = 0
@@ -175,7 +176,8 @@ def balance_check(
                 print(name, text)
             else:
                 print(text)
-            # raise AssertionError(text)
+            if raise_on_error:
+                raise AssertionError(text)
             return False
         else:
             return True
@@ -197,7 +199,8 @@ def balance_check(
                 print(name, text)
             else:
                 print(text)
-            # raise AssertionError(text)
+            if raise_on_error:
+                raise AssertionError(text)
             return False
         else:
             return True

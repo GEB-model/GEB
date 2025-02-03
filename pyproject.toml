@@ -12,22 +12,25 @@ authors = [
     {name = "Tim Busker", email = "tim.busker@vu.nl"},
 ]
 dependencies = [
-    "cdsapi>=0.7.3",
+    "cdsapi>=0.7.4",
+    "cfgrib>=0.9.14",
     "damagescanner==0.8b1",
     "dask>=2024.6",
     "deap>=1.4.1",
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
-    "honeybees>=1.0.4",
+    "honeybees>=1.0.7",
     "hydromt==0.10.0",
     "hydromt-sfincs>=1.1.0",
+    "intel-cmplr-lib-rt",
     "isimip-client>=1.0.1",
     "matplotlib>=3.9.2",
-    "numba>=0.60.0",
+    "numba>=0.61.0",
     "numpy<2",
     "openpyxl>=3.1.2",
     "pyarrow>=17.0.0",
     "pybind11>=2.13.4",
+    "pyflwdir>=0.5.8",
     "pyogrio>=0.9.0",
     "pyyaml>=6.0.2",
     "rasterio>=1.3.10",
@@ -35,6 +38,7 @@ dependencies = [
     "s3fs>=2023.6.0",
     "SALib>=1.4.8",
     "scipy>=1.14.0",
+    "setuptools>=75.8.0",
     "seaborn>=0.13.2",
     "tbb4py>=2021.13.1",
     "tqdm>=4.66.1",
@@ -42,9 +46,9 @@ dependencies = [
     "xclim>=0.52.0",
     "xesmf>=0.8.4",
     "xmipy>=1.5.0",
-    "zarr>=2.18.2",
+    "zarr>=2.18.2,<3",
 ]
-requires-python = ">=3.11, <3.13"
+requires-python = ">=3.12, <3.14"
 readme = "README.md"
 classifiers = [
     # https://pypi.python.org/pypi?%3Aaction=list_classifiers
@@ -73,9 +77,6 @@ docs = [
     "sphinx_rtd_theme",
     "sphinxcontrib-autoyaml",
     "pypandoc",
-]
-gpu = [
-    "cupy"
 ]
 
 full = [

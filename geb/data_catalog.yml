@@ -13,6 +13,7 @@ fabdem:
 geul_dem:
   data_type: RasterDataset
   driver: raster
+  crs: 28992
   meta:
     category: topography
   path: project_data/geul/Geul_Filled_DEM_EPSG28992.tif
@@ -64,6 +65,44 @@ MIRCA2000_cropping_calendar_{irrigated_or_rainfed}:
     source_version: 1.1
   placeholders:
     irrigated_or_rainfed: [irrigated, rainfed]
+MIRCA2000_cropping_calendar_{irrigated_or_rainfed}_{year}:
+  data_type: Dataset
+  path: /scistor/ivm/data_catalogue/agriculture/MIRCA2000/condensed_cropping_calendars_2024/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
+  meta:
+    paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
+    paper_ref: Kebede et al. (2024) (preprint)
+    source_license: CC BY 4.0
+    source_url: https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/
+  placeholders:
+    irrigated_or_rainfed: [irrigated, rainfed]
+    year: ['2000', '2005', '2010', '2015']
+MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
+  data_type: RasterDataset
+  driver: raster
+  path: /scistor/ivm/data_catalogue/agriculture/MIRCA2000_Annual_Harvested_Area_Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{ir_or_rf}.tif
+  meta:
+    paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
+    paper_ref: Kebede et al. (2024) (preprint)
+    source_license: CC BY 4.0
+    source_url: https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/
+  placeholders:
+    year: ['2000', '2005', '2010', '2015']
+    resolution: ['5-arcminute', '30-arcminute']
+    crop: ['Barley', 'Cassava', 'Cocoa', 'Coffee', 'Cotton', 'Fodder', 'Groundnuts', 'Maize', 'Millet', 'Oil_palm', 'Others_annual', 'Others_perennial', 'Potatoes', 'Pulses', 'Rapeseed', 'Rice', 'Rye', 'Sorghum', 'Soybeans', 'Sugar_beet', 'Sugar_cane', 'Sunflower', 'Wheat']
+    ir_or_rf: [ir, rf]
+global_irrigation_area_{irrigation_type}:
+  data_type: RasterDataset
+  driver: raster
+  path: /scistor/ivm/GEB/data_catalog/irrigation/gmia_v5_{irrigation_type}_pct_aei.asc
+  crs: 4326
+  meta:
+    paper_doi: 10.5194/hess-14-1863-2010
+    paper_ref: Siebert et al. (2010)
+    source_license: CC BY 4.0
+    source_url: https://www.fao.org/aquastat/en/geospatial-information/global-maps-irrigated-areas/latest-version/
+    source_version: 5
+  placeholders:
+    irrigation_type: [aei, aai, aeisw, aeigw]
 GTSM:
   data_type: Dataset
   path: /scistor/ivm/data_catalogue/water_level/GTSM/reanalysis_waterlevel_10min_*_v1.nc
@@ -174,20 +213,6 @@ gcn250:
     source_license: CC BY 4.0
     source_url: https://doi.org/10.6084/m9.figshare.7756202.v1
     source_version: v1
-merit_hydro_30sec:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: topography
-    paper_doi: 10.5281/zenodo.5166932
-    paper_ref: Eilander et al. (2020)
-    source_license: ODC-By 1.0
-    source_url: https://zenodo.org/record/5166932#.YVbxJ5pByUk
-    source_version: 1.0
-  path: merit_hydro_30sec/{variable}.tif
-  rename:
-    basids: basins
 merit_hydro_index:
   crs: 4326
   data_type: GeoDataFrame
@@ -299,7 +324,7 @@ wb_inflation_rate:
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/FP.CPI.TOTL.ZG
     sorce_version: 5551656
-  path: economics/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_5551656.csv
+  path: economics/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_77.csv
   driver: csv
   data_type: DataFrame
   kwargs:
@@ -311,7 +336,7 @@ wb_lending_rate:
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/FR.INR.LEND
     sorce_version: 5553913
-  path: economics/WB lending interest rates/API_FR.INR.LEND_DS2_en_csv_v2_5553913.csv
+  path: economics/WB lending interest rates/API_FR.INR.LEND_DS2_en_csv_v2_3789.csv
   driver: csv
   data_type: DataFrame
   kwargs:
@@ -407,7 +432,7 @@ GDL_regions_v4:
     source_license: https://globaldatalab.org/termsofuse/
 GLOPOP-S:
   data_type: Dataset
-  path: /scistor/ivm/data_catalogue/population/GLOPOP-S/{region}.dat.gz
+  path: /scistor/ivm/data_catalogue/population/synthpop_{region}.dat.gz
 ERA5_geopotential:
   data_type: RasterDataset
   driver: netcdf
@@ -456,7 +481,7 @@ CHELSA-BIOCLIM+_monthly_{variable}_{month}_{year}:
     category: climate
     source_license: CC0 1.0
     source_url: https://www.doi.org/10.16904/envidat.332
-  path: https://os.zhdk.cloud.switch.ch/envicloud/chelsa/chelsa_V2/GLOBAL/monthly/{variable}/CHELSA_{variable}_{month}_{year}_V.2.1.tif
+  path: https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/monthly/{variable}/CHELSA_{variable}_{month}_{year}_V.2.1.tif
 global_wind_atlas:
   crs: 4326
   data_type: RasterDataset
@@ -498,6 +523,24 @@ lowder_farm_sizes:
     paper_ref: Lowder Sarah K. et al. 2016
     source_license: CC BY-NC-ND 4.0
     source_url: https://doi.org/10.1016/j.worlddev.2015.10.041
+preferences_individual:
+  path: socioeconomic/social/cleaned_individual_data.csv
+  driver: csv
+  data_type: DataFrame
+  meta:
+    category: time and risk preferences
+    source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
+    paper_doi: doi.org/10.1093/qje/qjy013
+    paper_ref: Falk et al. (2018)
+preferences_country:
+  path: socioeconomic/social/cleaned_country_data.csv
+  driver: csv
+  data_type: DataFrame
+  meta:
+    category: time and risk preferences
+    source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
+    paper_doi: doi.org/10.1093/qje/qjy013
+    paper_ref: Falk et al. (2018)
 cwatm_domestic_water_demand_{scenario}_year:
   crs: 4326
   data_type: RasterDataset

@@ -105,12 +105,12 @@ calibration:
 #   - **single_file**: whether to save all data in a single file. This option is compulsory for netcdf format.
 report:
   remaining_irrigation_limit_m3:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: remaining_irrigation_limit_m3
     format: npz
   irrigation_source:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: irrigation_source
     frequency:
@@ -124,13 +124,13 @@ report:
     frequency: initial
     format: npz
   command_area:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: farmer_command_area
     frequency: initial
     format: npz
   elevation:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: elevation
     frequency: final
@@ -142,17 +142,17 @@ report:
     format: npz
     frequency: initial
   reservoir_irrigation:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: reservoir_abstraction_m3_by_farmer
     format: npz
   groundwater_irrigation:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: groundwater_abstraction_m3_by_farmer
     format: npz
   channel_irrigation:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: channel_abstraction_m3_by_farmer
     format: npz
@@ -165,7 +165,7 @@ report:
     varname: groundwater_depth
     format: npz
   well_depth:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     frequency:
       every: month
@@ -173,7 +173,7 @@ report:
     varname: well_depth
     format: npz
   well_adaptation:
-    type: crop_farmers
+    type: crop_farmers.var
     function: mean
     varname: adapted[:,1]
     format: npz
@@ -181,7 +181,7 @@ report:
       every: month
       day: 1
   yearly_abstraction_m3_by_farmer_channel:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: yearly_abstraction_m3_by_farmer[:, 0, 0]
     format: npz
@@ -190,7 +190,7 @@ report:
       month: 12
       day: 31
   yearly_abstraction_m3_by_farmer_reservoir:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: yearly_abstraction_m3_by_farmer[:, 1, 0]
     format: npz
@@ -199,7 +199,7 @@ report:
       month: 12
       day: 31
   yearly_abstraction_m3_by_farmer_groundwater:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: yearly_abstraction_m3_by_farmer[:, 2, 0]
     format: npz
@@ -208,7 +208,7 @@ report:
       month: 12
       day: 31
   yearly_profit:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: yearly_profits[:,0]
     format: npz
@@ -217,7 +217,7 @@ report:
       month: 12
       day: 31
   yearly_yield_ratio:
-    type: crop_farmers
+    type: crop_farmers.var
     function: null
     varname: yearly_yield_ratio[:,1]
     format: npz
