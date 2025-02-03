@@ -303,6 +303,4 @@ class HillSlopeErosion:
         G = G_clay + G_silt + G_sand  # Is G the total material transported away?
         # D = D_clay + D_silt + D_sand  # Is D the total material deposited?
 
-        print(G.sum())
-
         return G
