@@ -129,6 +129,33 @@ def get_material_transport(
     return transported_material, redeposited_material
 
 
+def get_mannings_vegatation(water_depth, stem_diameter, number_of_stems):
+    return (water_depth**0.67) / ((2 * 9.81) / (stem_diameter * number_of_stems)) ** 0.5
+
+
+def get_mannings_tillaged_soil(surface_roughness_parameter_tillage):
+    return np.exp(-2.1132 + 0.0349 * surface_roughness_parameter_tillage)
+
+
+def get_flow_velocity(manning, water_depth, slope, minimum_slope=1e-5):
+    """Use the Manning's equation to calculate the flow velocity.
+
+    Parameters
+    ----------
+    manning : float
+        Manning's coefficient
+    water_depth : float
+        Water depth
+    slope : float
+        Slope
+    minimum_slope : float, optional
+        Minimum slope, by default 1e-5
+    """
+    return (
+        1 / manning * water_depth ** (2 / 3) * np.maximum(slope, minimum_slope) ** 0.5
+    )
+
+
 class HillSlopeErosion:
     """The Morgan–Morgan–Finney (MMF) model is a process-based soil erosion model
     developed by Morgan, Morgan, and Finney (1984). It is designed to estimate annual
@@ -154,11 +181,32 @@ class HillSlopeErosion:
         self.HRU.var.slope = self.HRU.full_compressed(0.1, dtype=np.float32)
         self.HRU.var.plant_height = self.HRU.full_compressed(1, dtype=np.float32)
         # need to see what this is, dependent on land use type probably.
-        self.HRU.var.no_erosion = self.HRU.full_compressed(0, dtype=np.float32)
+        self.HRU.var.no_erosion = self.HRU.full_compressed(False, dtype=bool)
         # need to see what this is.
         self.HRU.var.cover = self.HRU.full_compressed(0, dtype=np.float32)
 
-        self.HRU.var.cell_length = self.HRU.full_compressed(1, dtype=np.float32)
+        # Is correct?
+        self.HRU.var.cell_length = np.sqrt(self.HRU.var.cellArea)
+
+        # NOTE: water depth in field seems quite deep now, and is not variable.
+        # perhaps this should be made more dynamic?
+        self.HRU.var.water_depth_in_field = self.HRU.full_compressed(
+            0.1, dtype=np.float32
+        )
+        self.HRU.var.stem_diameter = self.HRU.full_compressed(0.01, dtype=np.float32)
+        self.HRU.var.stem_diameter_harvested = self.HRU.full_compressed(
+            0.005, dtype=np.float32
+        )
+
+        self.var.mannings_bare_soil = 0.015
+        self.var.surface_roughness_parameter_tillage = 6.0
+        self.HRU.var.no_elements = self.HRU.full_compressed(1000, dtype=np.float32)
+        self.HRU.var.no_elements_harvested = self.HRU.full_compressed(
+            10000, dtype=np.float32
+        )
+
+        self.HRU.var.tillaged = self.HRU.full_compressed(True, dtype=bool)
+        self.HRU.var.no_vegetation = self.HRU.full_compressed(False, dtype=bool)
 
         self.var.alpha = 0.34  # using a constant for now
 
@@ -180,6 +228,57 @@ class HillSlopeErosion:
         self.var.rho = 1100  # Sediment density (kg m−3). Typically 2650 kg m−3.
         self.var.rho_s = 2650  # Flow density (kg m-3). Typically 1100 kg m−3 for runoff on hillslopes (Abrahams et al., 2001).
         self.var.eta = 0.0015  # Fluid viscosity (kg m−1 s−1). Nominally 0.001 kg m−1 s−1 but taken as 0.0015 to allow for the effects of the sediment in the flow.
+
+    def get_velocity(self):
+        mannings_vegated_field = get_mannings_vegatation(
+            self.HRU.var.water_depth_in_field,
+            self.HRU.var.stem_diameter,
+            self.HRU.var.no_elements,
+        )
+        mannings_vegated_field[self.HRU.var.no_vegetation] = 0
+        mannings_vegated_field[self.HRU.var.no_erosion] = 0
+
+        # this one is not yet implemented
+        # mannings_vegated_field = pcr.ifthenelse(
+        #     self.n_table > 0, self.n_table, mannings_vegated_field
+        # )
+
+        mannings_tilled_soil = get_mannings_tillaged_soil(
+            self.var.surface_roughness_parameter_tillage
+        )
+        mannings_soil = np.where(
+            self.HRU.var.tillaged, mannings_tilled_soil, self.var.mannings_bare_soil
+        )
+
+        mannings_field = (mannings_soil**2 + mannings_vegated_field**2) ** 0.5
+        flow_velocity_field = get_flow_velocity(
+            mannings_field, self.HRU.var.water_depth_in_field, self.HRU.var.slope
+        )
+
+        mannings_vegated_field_harvested = get_mannings_vegatation(
+            self.HRU.var.water_depth_in_field,
+            self.HRU.var.stem_diameter_harvested,
+            self.HRU.var.no_elements_harvested,
+        )
+        mannings_vegated_field_harvested[self.HRU.var.tillaged] = 0
+
+        mannings_field_harvested = (
+            mannings_soil**2 + mannings_vegated_field_harvested**2
+        ) ** 0.5
+        flow_velocity_field_harvested = get_flow_velocity(
+            mannings_field_harvested,
+            self.HRU.var.water_depth_in_field,
+            self.HRU.var.slope,
+        )
+
+        # all cells without a crop (-1), but with a land owner (not -1) can be considered harvested
+        harvested = (self.HRU.var.crop_map == -1) & (self.HRU.var.land_owners != -1)
+        flow_velocity = np.where(
+            harvested,
+            flow_velocity_field_harvested,
+            flow_velocity_field,
+        )
+        return flow_velocity
 
     def step(self):
         pr_mm_day = self.HRU.pr * (24 * 3600)  # # kg/m2/s to m/day
@@ -266,17 +365,12 @@ class HillSlopeErosion:
         #     + detachment_from_flow_sand
         # )
 
-        velocity = self.HRU.full_compressed(
-            0.0001, dtype=np.float32
-        )  # constant for now
-        water_depth = self.HRU.full_compressed(
-            0.1, dtype=np.float32
-        )  # constant for now
+        velocity = self.get_velocity()
 
         particle_fall_number_clay = get_particle_fall_number(
             self.var.particle_diameter_clay,
             velocity,
-            water_depth,
+            self.HRU.var.water_depth_in_field,
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
@@ -287,7 +381,7 @@ class HillSlopeErosion:
         particle_fall_number_silt = get_particle_fall_number(
             self.var.particle_diameter_silt,
             velocity,
-            water_depth,
+            self.HRU.var.water_depth_in_field,
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
@@ -298,7 +392,7 @@ class HillSlopeErosion:
         particle_fall_number_sand = get_particle_fall_number(
             self.var.particle_diameter_sand,
             velocity,
-            water_depth,
+            self.HRU.var.water_depth_in_field,
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
