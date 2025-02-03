@@ -141,21 +141,25 @@ class HillSlopeErosion:
         self.HRU.var.cell_length = self.HRU.full_compressed(1, dtype=np.float32)
 
         self.var.alpha = 0.34  # using a constant for now
-        self.var.K_clay = 0.0004  # using a constant for now
-        self.var.K_silt = 0.0002  # using a constant for now
-        self.var.K_sand = 0.0001  # using a constant for now
 
-        self.var.DR_clay = 0.0004  # using a constant for now, detachment ratio?
-        self.var.DR_silt = 0.0002  # using a constant for now
-        self.var.DR_sand = 0.0001  # using a constant for now
+        # Detachability (K) of the soil by raindrop impact (g J−1)
+        self.var.K_clay = 0.1
+        self.var.K_silt = 0.5
+        self.var.K_sand = 0.3
 
-        self.var.delta_clay = 0.000002  # using a constant for now
-        self.var.delta_silt = 0.000001  # using a constant for now
-        self.var.delta_sand = 0.0000005  # using a constant for now
+        # Detachability of the soil by runoff (g mm−1)
+        self.var.DR_clay = 1.0
+        self.var.DR_silt = 1.6
+        self.var.DR_sand = 1.5
 
-        self.var.rho = 1000  # using a constant for now
-        self.var.rho_s = 2650  # using a constant for now
-        self.var.eta = 0.001  # using a constant for now
+        # particle diameter (m)
+        self.var.particle_diameter_clay = 2e-6
+        self.var.particle_diameter_silt = 60e-6
+        self.var.particle_diameter_sand = 200e-6
+
+        self.var.rho = 1100  # Sediment density (kg m−3). Typically 2650 kg m−3.
+        self.var.rho_s = 2650  # Flow density (kg m-3). Typically 1100 kg m−3 for runoff on hillslopes (Abrahams et al., 2001).
+        self.var.eta = 0.0015  # Fluid viscosity (kg m−1 s−1). Nominally 0.001 kg m−1 s−1 but taken as 0.0015 to allow for the effects of the sediment in the flow.
 
     def step(self):
         pr_mm_day = self.HRU.pr * (24 * 3600)  # # kg/m2/s to m/day
@@ -250,7 +254,7 @@ class HillSlopeErosion:
         )  # constant for now
 
         particle_fall_number_clay = get_particle_fall_number(
-            self.var.delta_clay,
+            self.var.particle_diameter_clay,
             velocity,
             water_depth,
             self.var.rho_s,
@@ -261,7 +265,7 @@ class HillSlopeErosion:
         )
 
         particle_fall_number_silt = get_particle_fall_number(
-            self.var.delta_silt,
+            self.var.particle_diameter_silt,
             velocity,
             water_depth,
             self.var.rho_s,
@@ -272,7 +276,7 @@ class HillSlopeErosion:
         )
 
         particle_fall_number_sand = get_particle_fall_number(
-            self.var.delta_sand,
+            self.var.particle_diameter_sand,
             velocity,
             water_depth,
             self.var.rho_s,
@@ -298,5 +302,7 @@ class HillSlopeErosion:
 
         G = G_clay + G_silt + G_sand  # Is G the total material transported away?
         # D = D_clay + D_silt + D_sand  # Is D the total material deposited?
+
+        print(G.sum())
 
         return G
