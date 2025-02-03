@@ -216,16 +216,46 @@ def get_farmer_groundwater_depth(
     return groundwater_depth_by_farmer
 
 
-@njit(cache=True)
-def get_deficit_between_dates(cumulative_water_deficit_m3, farmer, start, end):
-    assert end >= start
-    deficit = (
-        cumulative_water_deficit_m3[farmer, end]
-        - cumulative_water_deficit_m3[
-            farmer, start
-        ]  # current day of year is effectively starting "tommorrow" due to Python's 0-indexing
-    )
-    assert deficit >= 0
+@njit(cache=True, inline="always")
+def get_deficit_between_dates(
+    cumulative_water_deficit_m3, farmer, start_index, end_index
+):
+    """
+    Get the water deficit between two dates for a farmer.
+
+    Parameters
+    ----------
+    cumulative_water_deficit_m3 : np.ndarray
+        Cumulative water deficit in m3 for each day of the year for each farmer.
+    farmer : int
+        Farmer index.
+    start_index : int
+        Start day of cumulative water deficit calculation (index-based; Jan 1 == 0).
+    end_index : int
+        End day of cumulative water deficit calculation (index-based; Jan 1 == 0).
+
+    Returns
+    -------
+    float
+        Water deficit in m3 between the two dates.
+    """
+    if end_index == start_index:
+        deficit = 0
+    elif end_index > start_index:
+        deficit = (
+            cumulative_water_deficit_m3[farmer, end_index]
+            - cumulative_water_deficit_m3[
+                farmer, start_index
+            ]  # current day of year is effectively starting "tommorrow" due to Python's 0-indexing
+        )
+    else:  # end < start
+        deficit = cumulative_water_deficit_m3[farmer, -1] - (
+            cumulative_water_deficit_m3[farmer, start_index]
+            - cumulative_water_deficit_m3[farmer, end_index]
+        )
+
+    if deficit < 0:
+        raise ValueError("Deficit must be positive or zero")
     return deficit
 
 
@@ -237,51 +267,75 @@ def get_future_deficit(
     crop_calendar: np.ndarray,
     crop_rotation_year_index: np.ndarray,
     potential_irrigation_consumption_farmer_m3: float,
+    reset_day_index=0,
 ):
+    """
+    Get the future water deficit for a farmer.
+
+    Parameters
+    ----------
+    farmer : int
+        Farmer index.
+    day_index : int
+        Current day index (0-indexed).
+    cumulative_water_deficit_m3 : np.ndarray
+        Cumulative water deficit in m3 for each day of the year for each farmer.
+    crop_calendar : np.ndarray
+        Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
+        Each crop is a list of [crop_type, planting_day, growing_days, crop_year_index].
+        Planting day is 0-indexed (Jan 1 == 0).
+        Growing days is the number of days the crop grows.
+        Crop year index is the index of the year in the crop rotation.
+    crop_rotation_year_index : np.ndarray
+        Crop rotation year index for each farmer.
+    potential_irrigation_consumption_farmer_m3 : float
+        Potential irrigation consumption in m3 for each farmer on the current day.
+    reset_day_index : int, optional
+        Day index to reset the water year (0-indexed; Jan 1 == 0). Default is 0. Deficit
+        is calculated up to this day. For example, when the reset day index is 364, the
+        deficit is calculated up to Dec 31. When the reset day index is 0, the deficit is
+        calculated up to Jan 1. Default is 0.
+
+    Returns
+    -------
+    float
+        Future water deficit in m3 for the farmer in the growing season.
+    """
+    if reset_day_index >= 365 or reset_day_index < 0:
+        raise ValueError("Reset day index must be lower than 365 and greater than -1")
+    day = day_index + 1
     future_water_deficit = potential_irrigation_consumption_farmer_m3
-    # if final days of year, there is no "future" deficit within the remainder of the year
-    # so we can skip the additional calculations
-    if day_index >= 365:
-        return future_water_deficit
     for crop in crop_calendar[farmer]:
         crop_type = crop[0]
         crop_year_index = crop[3]
         if crop_type != -1 and crop_year_index == crop_rotation_year_index[farmer]:
-            start_day = crop[1]
+            start_day_index = crop[1]
+            if start_day_index < 0 or start_day_index >= 365:
+                raise ValueError("Start day must be between 0 and 364")
             growth_length = crop[2]
-            end_day = start_day + growth_length
 
-            if end_day > 365:
-                # if a crop grows beyond the year boundary, only calculate the deficit
-                # up to the year boundary (water deficit is reset at the start of the year)
+            relative_start_day_index = (start_day_index - reset_day_index) % 365
+            relative_end_day_index = relative_start_day_index + growth_length
+            relative_day = (day - reset_day_index) % 365
+
+            if relative_end_day_index > 365:
+                relative_end_day_index = 365
+
+            if relative_start_day_index < relative_day:
+                relative_start_day_index = relative_day
+
+            if relative_day > relative_end_day_index:
+                continue
+            else:
                 future_water_deficit += get_deficit_between_dates(
                     cumulative_water_deficit_m3,
                     farmer,
-                    max(start_day, day_index + 1),
-                    365,
-                )
-                # if a crop starts growing the previous year, but ends in the current year
-                # calculate the deficit from the current day, up to the harvest day of
-                # the crop which is in the current year, thus the end_day % 366
-                if growth_length < 366 and end_day - 366 > day_index:
-                    future_water_deficit += get_deficit_between_dates(
-                        cumulative_water_deficit_m3,
-                        farmer,
-                        day_index + 1,
-                        end_day % 366,
-                    )
-
-            # if the crop is harvested before the end of the year, calculate the deficit up to
-            # the harvest day (end_day)
-            elif day_index < end_day:
-                future_water_deficit += get_deficit_between_dates(
-                    cumulative_water_deficit_m3,
-                    farmer,
-                    max(start_day, day_index + 1),
-                    end_day,
+                    (relative_start_day_index + reset_day_index) % 365,
+                    (relative_end_day_index + reset_day_index) % 365,
                 )
 
-    assert future_water_deficit >= 0
+    if future_water_deficit < 0:
+        raise ValueError("Future water deficit must be positive or zero")
     return future_water_deficit
 
 
