@@ -262,46 +262,33 @@ def KGE_water_price(run_directory, individual, config):
         "NSW Murray Above",
     ]
 
-    # open water price data
+    ################ Water price #######################
+    # Observed data path
     water_price_observed_fp = Path(
         "calibration_data/water_use/WaterMarketOutlook_2023-04_data_tables_v1.0.0.xlsx"
     )
     water_price_observed_df = pd.read_excel(water_price_observed_fp, sheet_name=3)
 
-    # Filter to only the regions of interest
+    # Filter relevant regions, rename columns
     filtered_prices_df = water_price_observed_df[
         water_price_observed_df["Region"].isin(regions_of_interest)
     ].copy()
-
-    # Keep only relevant columns
     filtered_prices_df = filtered_prices_df[
         ["Date", "Region", "Monthly average price ($/ML)"]
-    ].rename(
-        columns={"Date": "time", "Monthly average price ($/ML)": "water_price_observed"}
-    )
-
-    # Convert time to datetime
+    ]
+    filtered_prices_df.columns = ["time", "Region", "water_price_observed"]
     filtered_prices_df["time"] = pd.to_datetime(
         filtered_prices_df["time"]
     ).dt.normalize()
 
-    # Pivot so that each region is a column
     pivot_df = filtered_prices_df.pivot(
         index="time", columns="Region", values="water_price_observed"
-    )
-    pivot_df = pivot_df.sort_index()
-
-    # Convert to numeric and interpolate
-    pivot_df = pivot_df.apply(pd.to_numeric, errors="coerce")
-    pivot_df = pivot_df.interpolate(method="time")
-
-    # Take mean across regions
+    ).sort_index()
+    pivot_df = pivot_df.apply(pd.to_numeric, errors="coerce").interpolate(method="time")
     pivot_df["water_price_observed"] = pivot_df[regions_of_interest].mean(axis=1)
+    combined_regions_df = pivot_df[["water_price_observed"]].copy()
 
-    # Keep only combined water_price_observed
-    combined_regions_df = pivot_df[["water_price_observed"]]
-
-    # Adjust to US dollars
+    # Convert from AUD to USD if needed
     fp_conversion = os.path.join(
         config["general"]["input_folder"],
         "economics",
@@ -315,19 +302,19 @@ def KGE_water_price(run_directory, individual, config):
             map(float, conversion_rates["data"]["0"]),
         )
     )
-    combined_regions_df = combined_regions_df.copy()
-    combined_regions_df.loc[:, "year"] = combined_regions_df.index.year
-    combined_regions_df.loc[:, "conversion_rate"] = combined_regions_df["year"].map(
+    combined_regions_df["year"] = combined_regions_df.index.year
+    combined_regions_df["conversion_rate"] = combined_regions_df["year"].map(
         yearly_rates
     )
-    combined_regions_df.loc[:, "water_price_observed"] = (
+    combined_regions_df["water_price_observed"] = (
         combined_regions_df["water_price_observed"]
         / combined_regions_df["conversion_rate"]
     )
-    combined_regions_df.drop(columns=["year", "conversion_rate"], inplace=True)
-    df_observed = combined_regions_df.copy()
-    df_observed = df_observed.rename(columns={"water_price_observed": "observed"})
-    df_observed.index.name = "time"  # If necessary, ensure index is named 'time'
+    df_observed_price = combined_regions_df.drop(columns=["year", "conversion_rate"])
+    df_observed_price = df_observed_price.rename(
+        columns={"water_price_observed": "observed"}
+    )
+    df_observed_price.index.name = "time"
 
     # Add in the simulated data
     fp_simulated = Path(
@@ -342,9 +329,17 @@ def KGE_water_price(run_directory, individual, config):
         start_time=config["calibration"]["start_time"],
         end_time=config["calibration"]["end_time"],
     )
-
     df_simulated = water_price_simulated.to_dataframe(name="simulated")
-    df_combined = pd.concat([df_simulated, df_observed], axis=1, join="inner")
+
+    # Combine
+    df_combined = pd.concat(
+        [
+            df_simulated.resample("YE-JUN").mean(),
+            df_observed_price.resample("YE-JUN").mean(),
+        ],
+        axis=1,
+        join="inner",
+    )
 
     kge = KGE_calculation(s=df_combined["simulated"], o=df_combined["observed"])
     print(
@@ -358,235 +353,6 @@ def KGE_water_price(run_directory, individual, config):
     ) as myfile:
         myfile.write(str(individual.label) + "," + str(kge) + "\n")
     return kge
-
-
-def determine_water_price_model(run_directory, config):
-    # Load observed water prices
-    regions_of_interest = [
-        "VIC Goulburn-Broken",
-        "VIC Murray Above",
-        "VIC Loddon-Campaspe",
-        "NSW Murray Below",
-        "NSW Murray Above",
-    ]
-
-    water_price_observed_fp = Path(
-        "calibration_data/water_use/WaterMarketOutlook_2023-04_data_tables_v1.0.0.xlsx"
-    )
-    water_price_observed_df = pd.read_excel(water_price_observed_fp, sheet_name=3)
-
-    # Filter to only the regions of interest
-    filtered_prices_df = water_price_observed_df[
-        water_price_observed_df["Region"].isin(regions_of_interest)
-    ].copy()
-
-    # Keep only relevant columns
-    filtered_prices_df = filtered_prices_df[
-        ["Date", "Region", "Monthly average price ($/ML)"]
-    ].rename(
-        columns={"Date": "time", "Monthly average price ($/ML)": "water_price_observed"}
-    )
-
-    # Convert time to datetime
-    filtered_prices_df["time"] = pd.to_datetime(
-        filtered_prices_df["time"]
-    ).dt.normalize()
-
-    # Pivot so that each region is a column
-    pivot_df = filtered_prices_df.pivot(
-        index="time", columns="Region", values="water_price_observed"
-    )
-    pivot_df = pivot_df.sort_index()
-
-    # Convert to numeric and interpolate
-    pivot_df = pivot_df.apply(pd.to_numeric, errors="coerce")
-    pivot_df = pivot_df.interpolate(method="time")
-
-    # Take mean across regions
-    pivot_df["water_price_observed"] = pivot_df[regions_of_interest].mean(axis=1)
-
-    # Keep only combined water_price_observed
-    combined_regions_df = pivot_df[["water_price_observed"]]
-
-    # Adjust to US dollars
-    fp_conversion = os.path.join(
-        config["general"]["input_folder"],
-        "economics",
-        "lcu_per_usd_conversion_rates.json",
-    )
-    with open(fp_conversion, "r", encoding="utf-8") as file:
-        conversion_rates = json.load(file)
-    yearly_rates = dict(
-        zip(
-            map(int, conversion_rates["time"]),
-            map(float, conversion_rates["data"]["0"]),
-        )
-    )
-    combined_regions_df = combined_regions_df.copy()
-    combined_regions_df.loc[:, "year"] = combined_regions_df.index.year
-    combined_regions_df.loc[:, "conversion_rate"] = combined_regions_df["year"].map(
-        yearly_rates
-    )
-    combined_regions_df.loc[:, "water_price_observed"] = (
-        combined_regions_df["water_price_observed"]
-        / combined_regions_df["conversion_rate"]
-    )
-    combined_regions_df.drop(columns=["year", "conversion_rate"], inplace=True)
-
-    # Water price simulated
-    gauges = [(143.3458, -34.8458), (147.229, -36.405), (147.711, -35.929)]
-    simulated_streamflows = {}
-
-    def get_streamflows(run_directory, gauge):
-        gauge_name = f"{gauge[0]}_{gauge[1]}"
-        Qsim_tss = os.path.join(
-            run_directory,
-            config["calibration"]["scenario"],
-            f"{gauge[0]} {gauge[1]}.csv",
-        )
-
-        simulated_streamflow = pd.read_csv(
-            Qsim_tss, sep=",", parse_dates=True, index_col=0
-        )
-        col_name = " ".join(map(str, gauge))
-        simulated_streamflows[gauge_name] = simulated_streamflow[col_name]
-        simulated_streamflows[gauge_name].name = f"simulated_{gauge_name}"
-
-    streamflows_list = []
-    for gauge in gauges:
-        df_gauge = get_streamflows(run_directory, gauge)
-        streamflows_list.append(df_gauge)
-
-    # Compute monthly metrics for gauges (sum, rolling mean, fraction)
-    all_gauges_df_simulated = pd.DataFrame()
-    for gauge_name, daily_series in simulated_streamflows.items():
-        monthly = daily_series.resample("MS").sum()  # Using sum for gauges as before
-        # rolling_5yr = monthly.rolling(window=60, min_periods=60).mean()
-        rolling_5yr = monthly.ewm(span=60, adjust=False).mean()
-        fraction = monthly / rolling_5yr
-
-        gauge_df = pd.DataFrame(
-            {
-                f"monthly_discharge_{gauge_name}_simulated": monthly,
-                f"discharge_5yr_mean_{gauge_name}_simulated": rolling_5yr,
-                f"discharge_fraction_{gauge_name}_simulated": fraction,
-            }
-        )
-
-        if all_gauges_df_simulated.empty:
-            all_gauges_df_simulated = gauge_df
-        else:
-            all_gauges_df_simulated = all_gauges_df_simulated.join(
-                gauge_df, how="outer"
-            )
-
-    all_gauges_df_simulated = all_gauges_df_simulated.dropna(how="any")
-
-    output_folder = Path(os.path.join("report", "base"))
-
-    parameters = [
-        # "water_price",
-        "area_SPEI",
-        # "reservoir_fraction",
-    ]
-
-    dfs = []
-    for parameter in parameters:
-        da = load_ds(
-            output_folder,
-            parameter,
-            config["calibration"]["start_time"],
-            config["calibration"]["end_time"],
-        )  # da is an xarray.DataArray
-        df_param = da.to_dataframe(name=parameter)
-        dfs.append(df_param)
-        predictors = []
-
-    if len(dfs) > 0:
-        model_df = pd.concat(dfs, axis=1)
-    else:
-        model_df = pd.DataFrame(index=combined_regions_df.index)
-
-    combined_df = combined_regions_df.join(all_gauges_df_simulated, how="inner")
-    combined_df = combined_df.join(model_df, how="inner").dropna()
-    combined_df = combined_df.reset_index()
-    combined_df["time"] = combined_df["time"].dt.strftime("%Y-%m-%d")
-
-    for gauge_name in simulated_streamflows.keys():
-        # predictors.append(f"monthly_discharge_{gauge_name}")
-        predictors.append(f"discharge_5yr_mean_{gauge_name}_simulated")
-        # predictors.append(f"discharge_fraction_{gauge_name}")
-    predictors.append("area_SPEI")
-
-    X = np.float32(combined_df[predictors].values)
-    y = np.float32(combined_df["water_price_observed"].values)
-
-    cv = KFold(n_splits=10, shuffle=True, random_state=42)
-
-    # Prepare lists to store fold results
-    rf_scores = []
-    rf_importances = []
-
-    # Manually perform cross-validation to get feature importances per fold
-    for train_index, test_index in cv.split(X, y):
-        X_train, X_test = X[train_index], X[test_index]
-        y_train, y_test = y[train_index], y[test_index]
-
-        # Random Forest model
-        rf_model_fold = RandomForestRegressor(n_estimators=100, random_state=42)
-        rf_model_fold.fit(X_train, y_train)
-        rf_fold_score = rf_model_fold.score(X_test, y_test)
-        rf_scores.append(rf_fold_score)
-        rf_importances.append(rf_model_fold.feature_importances_)
-
-    # Compute mean and std of CV scores
-    rf_mean, rf_std = np.mean(rf_scores), np.std(rf_scores)
-
-    print(f"Random Forest CV R²: mean={rf_mean:.3f}, std={rf_std:.3f}")
-
-    # Compute average feature importances across folds
-    avg_rf_importance = np.mean(rf_importances, axis=0)
-
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
-    rf_model.fit(X, y)
-    y_pred_rf = rf_model.predict(X)
-    r_squared_rf = rf_model.score(X, y)
-
-    final_df = combined_df[["time", "water_price_observed"]].rename(
-        columns={"water_price_observed": "price"}
-    )
-    final_df["time"] = pd.to_datetime(final_df["time"])
-    final_df = final_df.set_index("time").sort_index()
-
-    final_df["predicted_price_rf"] = y_pred_rf
-
-    observed = final_df["price"]
-    predicted_rf = final_df["predicted_price_rf"]
-
-    if not (observed.index.equals(predicted_rf.index)):
-        raise ValueError("Indices do not match among observed and predicted series.")
-
-    print("R² Score (Random Forest, full data):", r_squared_rf)
-
-    feature_importances_rf = rf_model.feature_importances_
-    importance_df_rf = pd.DataFrame(
-        {"feature": predictors, "importance": feature_importances_rf}
-    ).sort_values("importance", ascending=False)
-    print("\nFeature Importance (Random Forest on full data):")
-    print(importance_df_rf)
-
-    importance_df_rf_cv = pd.DataFrame(
-        {"feature": predictors, "avg_importance": avg_rf_importance}
-    ).sort_values("avg_importance", ascending=False)
-    print("\nAverage Feature Importance (Random Forest across CV folds):")
-    print(importance_df_rf_cv)
-
-    export_path = config["calibration"]["path"] / Path("models")
-    export_path.mkdir(parents=True, exist_ok=True)
-    model_file_rf = export_path / "randomforest_model.joblib"
-
-    joblib.dump(rf_model, model_file_rf)
-    print(f"Random Forest Model exported to {model_file_rf.resolve()}")
 
 
 def KGE_region_diversion(run_directory, individual, config):
@@ -606,79 +372,75 @@ def KGE_region_diversion(run_directory, individual, config):
         dfs_simulated.append(df_param)
 
     df_simulated = pd.concat(dfs_simulated, axis=1)
-    df_simulated_yearly = df_simulated.resample("A-JUN").sum() / 1_000_000
+    df_simulated_yearly = df_simulated.resample("A-JUN").sum() / 1_000
 
     # ---------------------------------------------------------
     # Load observed data; treat the 'Date' as YYYY-07-01
     # so it aligns with the July–June year used above.
     # ---------------------------------------------------------
-    annual_diversions_fp = Path("calibration_data/water_use/mdb_annual_diversions.xlsx")
-    annual_diversions_df = pd.read_excel(annual_diversions_fp)
+    # Load the new dataset
+    regions_of_interest = [
+        "VIC Goulburn-Broken",
+        "VIC Murray Above",
+        "VIC Loddon-Campaspe",
+        "NSW Murray Below",
+        "NSW Murray Above",
+    ]
+    diversions_observed_fp = Path(
+        "calibration_data/water_use/MDBWaterMarketCatchmentDataset_Supply_v1.0.0.xlsx"
+    )
+    diversions_observed_df = pd.read_excel(diversions_observed_fp, sheet_name=1)
 
-    annual_diversions_df["Date"] = pd.to_datetime(
-        annual_diversions_df["Date"].astype(str) + "-07-01", format="%Y-%m-%d"
+    # Filter to only the regions of interest
+    filtered_diversions_df = diversions_observed_df[
+        diversions_observed_df["Region"].isin(regions_of_interest)
+    ].copy()
+
+    # Keep only relevant columns
+    filtered_diversions_df = filtered_diversions_df[["Year", "Region", "U"]].rename(
+        columns={"Year": "time", "U": "diversion_observed"}
     )
 
-    # Pivot
-    annual_diversions_pivot = annual_diversions_df.pivot(
-        index="Date", columns="Region", values="annual_diversions"
-    )
-    annual_diversions_pivot.index = annual_diversions_pivot.index + pd.DateOffset(
-        years=1
+    # Convert 'time' to datetime
+    filtered_diversions_df["time"] = pd.to_datetime(
+        filtered_diversions_df["time"].astype(str) + "-06-30"
     )
 
-    # Rename columns, combine VIC, keep only needed columns
-    diversions_observed_df = annual_diversions_pivot[
-        ["nsw_murray", "goulburn_broken_loddon", "vic_murray_kiewa", "campaspe"]
-    ].rename(columns={"nsw_murray": "diversions_murray"})
+    pivot_diversions_df = filtered_diversions_df.pivot(
+        index="time", columns="Region", values="diversion_observed"
+    ).sort_index()
 
-    diversions_observed_df["diversions_vic"] = (
-        diversions_observed_df["goulburn_broken_loddon"]
-        + diversions_observed_df["vic_murray_kiewa"]
-        + diversions_observed_df["campaspe"]
-    )
+    # pivot_price_df = pivot_price_df.shift(1)
+    pivot_diversions_df = pivot_diversions_df.apply(
+        pd.to_numeric, errors="coerce"
+    ).interpolate("time")
 
-    diversions_observed_df = diversions_observed_df[
-        ["diversions_murray", "diversions_vic"]
-    ].rename(columns={"diversions_murray": "diversions_nsw"})
+    pivot_diversions_df["diversions_vic"] = pivot_diversions_df[
+        ["VIC Goulburn-Broken", "VIC Murray Above", "VIC Loddon-Campaspe"]
+    ].sum(axis=1)
+    pivot_diversions_df["diversions_nsw"] = pivot_diversions_df[
+        ["NSW Murray Below", "NSW Murray Above"]
+    ].sum(axis=1)
 
-    # We already have one row per year, but let's also resample to A-JUN
-    # so the index labels match df_simulated_yearly's A-JUN endings.
-    diversions_observed_yearly = diversions_observed_df.resample("A-JUN").sum()
-
-    # ---------------------------------------------------------
-    # Combine VIC
-    # ---------------------------------------------------------
-    df_combined_vic = pd.concat(
-        [
-            df_simulated_yearly["allocation_vic"],
-            diversions_observed_yearly["diversions_vic"],
-        ],
+    df_vic = pd.concat(
+        [df_simulated_yearly["allocation_vic"], pivot_diversions_df["diversions_vic"]],
         axis=1,
         join="inner",
     )
-    df_combined_vic.columns = ["simulated", "observed"]
-    df_combined_vic["simulated"] += 0.0001
+    df_vic.columns = ["simulated", "observed"]
+    df_vic["simulated"] += 0.0001
+    kge_vic = KGE_calculation(df_vic["simulated"], df_vic["observed"])
 
-    # ---------------------------------------------------------
-    # Combine NSW
-    # ---------------------------------------------------------
-    df_combined_nsw = pd.concat(
-        [
-            df_simulated_yearly["allocation_nsw"],
-            diversions_observed_yearly["diversions_nsw"],
-        ],
+    # NSW
+    df_nsw = pd.concat(
+        [df_simulated_yearly["allocation_nsw"], pivot_diversions_df["diversions_nsw"]],
         axis=1,
         join="inner",
     )
-    df_combined_nsw.columns = ["simulated", "observed"]
-    df_combined_nsw["simulated"] += 0.0001
+    df_nsw.columns = ["simulated", "observed"]
+    df_nsw["simulated"] += 0.0001
+    kge_nsw = KGE_calculation(df_nsw["simulated"], df_nsw["observed"])
 
-    # ---------------------------------------------------------
-    # Compute KGE
-    # ---------------------------------------------------------
-    kge_vic = KGE_calculation(df_combined_vic["simulated"], df_combined_vic["observed"])
-    kge_nsw = KGE_calculation(df_combined_nsw["simulated"], df_combined_nsw["observed"])
     kge = (kge_vic + kge_nsw) / 2.0
 
     print(
@@ -1803,13 +1565,6 @@ def calibrate(config, working_directory):
             population[:] = toolbox.select(
                 population + offspring, select_best_n_individuals
             )
-
-        # Optionally retrain a water price model with the best run
-        best_ind = tools.selBest(pareto_front, k=1)[0]
-        runs_path = os.path.join(config["calibration"]["path"], "runs")
-        run_directory = os.path.join(runs_path, best_ind.label)
-        print("Best run for water price model:", best_ind.label)
-        determine_water_price_model(run_directory, config)
 
         history.update(population)
 
