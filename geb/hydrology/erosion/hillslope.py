@@ -105,16 +105,36 @@ def get_particle_fall_number(
 
 
 def get_deposition(particle_fall_number):
+    """Gets the percentage of particles deposited on the soil surface.
+    Parameters
+    ----------
+    particle_fall_number : np.array
+
+    Returns
+    -------
+    np.array
+    """
     return np.minimum(44.1 * particle_fall_number**0.29, 100)
 
 
-def get_material_transport(detachment_from_raindrops, detachment_from_flow, deposition):
-    G = (detachment_from_raindrops + detachment_from_flow) * (1 - deposition / 100)
-    D = (detachment_from_raindrops + detachment_from_flow) * deposition / 100
-    return G, D
+def get_material_transport(
+    detachment_from_raindrops, detachment_from_flow, deposition_percentage
+):
+    transported_material = (detachment_from_raindrops + detachment_from_flow) * (
+        1 - deposition_percentage / 100
+    )
+    redeposited_material = (
+        (detachment_from_raindrops + detachment_from_flow) * deposition_percentage / 100
+    )
+    return transported_material, redeposited_material
 
 
 class HillSlopeErosion:
+    """The Morgan–Morgan–Finney (MMF) model is a process-based soil erosion model
+    developed by Morgan, Morgan, and Finney (1984). It is designed to estimate annual
+    or event-based soil loss by considering the detachment and transport of soil
+    particles separately."""
+
     def __init__(self, model):
         """The constructor erosion"""
         self.HRU = model.data.HRU
@@ -286,21 +306,31 @@ class HillSlopeErosion:
             self.HRU.var.cell_length,
         )
 
-        deposition_clay = get_deposition(particle_fall_number_clay)
-        deposition_silt = get_deposition(particle_fall_number_silt)
-        deposition_sand = get_deposition(particle_fall_number_sand)
+        percentage_deposition_clay = get_deposition(particle_fall_number_clay)
+        percentage_deposition_silt = get_deposition(particle_fall_number_silt)
+        percentage_deposition_sand = get_deposition(particle_fall_number_sand)
 
-        G_clay, D_clay = get_material_transport(
-            detachment_from_raindrops_clay, detachment_from_flow_clay, deposition_clay
+        transported_material_clay, redeposited_material_clay = get_material_transport(
+            detachment_from_raindrops_clay,
+            detachment_from_flow_clay,
+            percentage_deposition_clay,
         )
-        G_silt, D_silt = get_material_transport(
-            detachment_from_raindrops_silt, detachment_from_flow_silt, deposition_silt
+        transported_material_silt, redeposited_material_silt = get_material_transport(
+            detachment_from_raindrops_silt,
+            detachment_from_flow_silt,
+            percentage_deposition_silt,
         )
-        G_sand, D_sand = get_material_transport(
-            detachment_from_raindrops_sand, detachment_from_flow_sand, deposition_sand
+        transported_material_sand, redeposited_material_sand = get_material_transport(
+            detachment_from_raindrops_sand,
+            detachment_from_flow_sand,
+            percentage_deposition_sand,
         )
 
-        G = G_clay + G_silt + G_sand  # Is G the total material transported away?
-        # D = D_clay + D_silt + D_sand  # Is D the total material deposited?
+        transported_material = (
+            transported_material_clay
+            + transported_material_silt
+            + transported_material_sand
+        )
+        # redeposited_material = redeposited_material_clay + redeposited_material_silt + redeposited_material_sand  # Is D the total material deposited?
 
-        return G
+        return transported_material
