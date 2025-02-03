@@ -1025,21 +1025,21 @@ class Soil(object):
             ),
             method="mean",
         )
-        sand = self.HRU.compress(
+        self.HRU.var.sand = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/sand"],
                 layer=None,
             ),
             method="mean",
         )
-        silt = self.HRU.compress(
+        self.HRU.var.silt = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/silt"],
                 layer=None,
             ),
             method="mean",
         )
-        clay = self.HRU.compress(
+        self.HRU.var.clay = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/clay"],
                 layer=None,
@@ -1047,22 +1047,24 @@ class Soil(object):
             method="mean",
         )
 
-        is_top_soil = np.zeros_like(clay, dtype=bool)
+        is_top_soil = np.zeros_like(self.HRU.var.clay, dtype=bool)
         is_top_soil[0:3] = True
 
         thetas = thetas_toth(
             soil_organic_carbon=soil_organic_carbon,
             bulk_density=bulk_density,
             is_top_soil=is_top_soil,
-            clay=clay,
-            silt=silt,
+            clay=self.HRU.var.clay,
+            silt=self.HRU.var.silt,
         )
-        thetar = thetar_brakensiek(sand=sand, clay=clay, thetas=thetas)
+        thetar = thetar_brakensiek(
+            sand=self.HRU.var.sand, clay=self.HRU.var.clay, thetas=thetas
+        )
         self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
-            clay=clay, sand=sand, thetas=thetas
+            clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
         )
         self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
-            sand=sand, thetas=thetas, clay=clay
+            sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
         )
 
         # θ saturation, field capacity, wilting point and residual moisture content
@@ -1097,7 +1099,9 @@ class Soil(object):
         # for paddy irrigation flooded paddy fields
         self.HRU.var.topwater = self.HRU.full_compressed(0, dtype=np.float32)
 
-        self.HRU.var.ksat = kv_brakensiek(thetas=thetas, clay=clay, sand=sand)
+        self.HRU.var.ksat = kv_brakensiek(
+            thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand
+        )
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
