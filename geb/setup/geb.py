@@ -3791,21 +3791,90 @@ class GEBModel(GridModel):
             df_observed_price = pivot_df.drop(columns=["year", "conversion_rate"])
             df_observed_price.index.name = "time"
 
-            ################ Diversions #######################
-
             # Load the new dataset
-            diversions_observed_fp = Path(
+            diversions_price__observed_fp = Path(
                 "calibration_data/water_use/MDBWaterMarketCatchmentDataset_Supply_v1.0.0.xlsx"
             )
-            diversions_observed_df = pd.read_excel(diversions_observed_fp, sheet_name=1)
+            diversions_price_observed_df = pd.read_excel(
+                diversions_price__observed_fp, sheet_name=1
+            )
 
             # Filter to only the regions of interest
-            filtered_diversions_df = diversions_observed_df[
-                diversions_observed_df["Region"].isin(regions_of_interest)
+            filtered_diversions_price_df = diversions_price_observed_df[
+                diversions_price_observed_df["Region"].isin(regions_of_interest)
             ].copy()
 
+            filtered_water_price_df = filtered_diversions_price_df[
+                ["Year", "Region", "P"]
+            ].rename(
+                columns={
+                    "Year": "time",
+                    "P": "water_price_observed",
+                }
+            )
+            # Convert 'time' to datetime
+            filtered_water_price_df["time"] = pd.to_datetime(
+                filtered_water_price_df["time"].astype(str) + "-06-30"
+            )
+
+            pivot_water_price_df = filtered_water_price_df.pivot(
+                index="time", columns="Region", values="water_price_observed"
+            ).sort_index()
+
+            # pivot_price_df = pivot_price_df.shift(1)
+            pivot_water_price_df = pivot_water_price_df.apply(
+                pd.to_numeric, errors="coerce"
+            ).interpolate("time")
+
+            pivot_water_price_df["Victoria"] = pivot_water_price_df[
+                ["VIC Goulburn-Broken", "VIC Murray Above", "VIC Loddon-Campaspe"]
+            ].mean(axis=1)
+            pivot_water_price_df["New South Wales"] = pivot_water_price_df[
+                ["NSW Murray Below", "NSW Murray Above"]
+            ].mean(axis=1)
+
+            start_date = "2000-07-01"
+            end_date = "2004-06-30"
+            monthly_index = pd.date_range(start=start_date, end=end_date, freq="MS")
+
+            def find_year_ended_june_for_month(m):
+                if m.month < 7:
+                    return pd.Timestamp(year=m.year, month=6, day=30)
+                else:
+                    return pd.Timestamp(year=m.year + 1, month=6, day=30)
+
+            df_list = []
+            for m in monthly_index:
+                match_date = find_year_ended_june_for_month(m)
+                if match_date in pivot_water_price_df.index:
+                    row_vals = pivot_water_price_df.loc[match_date]
+                    df_list.append(pd.DataFrame(row_vals).T.assign(time=m))
+                else:
+                    df_list.append(
+                        pd.DataFrame(
+                            np.nan, index=[0], columns=pivot_water_price_df.columns
+                        ).assign(time=m)
+                    )
+            df_annual_to_monthly = pd.concat(df_list, ignore_index=True).set_index(
+                "time"
+            )
+
+            df_observed_post_aug_2004 = df_observed_price[
+                df_observed_price.index >= "2004-08-01"
+            ]
+            df_combined = pd.concat([df_annual_to_monthly, df_observed_post_aug_2004])
+            full_monthly_index = pd.date_range(
+                start=df_combined.index.min(),
+                end=df_observed_price.index.max(),
+                freq="MS",
+            )
+            df_combined = df_combined.reindex(full_monthly_index)
+            df_observed_price = df_combined.interpolate(method="time")
+
+            ################ Diversions #######################
+
             # Keep only relevant columns
-            filtered_diversions_df = filtered_diversions_df[
+            filtered_diversions_df = filtered_diversions_price_df[
                 ["Year", "Region", "U"]
             ].rename(columns={"Year": "time", "U": "diversion_observed"})
 
