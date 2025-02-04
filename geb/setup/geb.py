@@ -373,6 +373,24 @@ class GEBModel(GridModel):
         outflow_elevation = elevation_coarsened.min()
         self.set_grid(outflow_elevation, name="routing/kinematic/outflow_elevation")
 
+        mask = xr.full_like(outflow_elevation, False, dtype=bool)
+        # we use the inverted mask, that is True outside the study area
+        mask.data = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
+        self.set_grid(mask, name="areamaps/grid_mask")
+
+        slope = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        slope.raster.set_nodata(np.nan)
+        slope_data = pyflwdir.dem.slope(
+            elevation.values,
+            nodata=np.nan,
+            latlon=True,
+            transform=elevation.raster.transform,
+        )
+        # set slope to zero on the mask boundary
+        slope_data[np.isnan(slope_data) & (~mask.data)] = 0
+        slope.data = slope_data
+        self.set_grid(slope, name="landsurface/topo/slope")
+
         # flow direction
         ldd = xr.full_like(outflow_elevation, 255, dtype=np.uint8)
         ldd.raster.set_nodata(255)
@@ -409,11 +427,6 @@ class GEBModel(GridModel):
             river_slope,
             name="routing/kinematic/channel_slope",
         )
-
-        mask = xr.full_like(outflow_elevation, False, dtype=bool)
-        # we use the inverted mask, that is True outside the study area
-        mask.data = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
-        self.set_grid(mask, name="areamaps/grid_mask")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
 
