@@ -1,6 +1,4 @@
 setup_grid:
-  hydrography_fn: merit_hydro_30sec
-  basin_index_fn: merit_hydro_index
   sub_grid_factor: 20
 
 setup_cell_area:
