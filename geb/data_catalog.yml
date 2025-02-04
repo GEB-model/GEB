@@ -150,6 +150,10 @@ merit_hydro:
       path: /scistor/ivm/data_catalogue/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
     - provider: local
       path: merit_hydro_03sec/{variable}.vrt
+  kwargs:
+    chunks:
+      x: 1000
+      y: 1000
 hydrobasins_8:
   crs: 4326
   data_type: GeoDataFrame
