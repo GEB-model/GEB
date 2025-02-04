@@ -1543,12 +1543,12 @@ class Soil(object):
             w_pre = self.HRU.var.w.copy()
             topwater_pre = self.HRU.var.topwater.copy()
 
-        if not self.model.spinup and self.model.current_timestep == 1:
+        if not self.model.spinup and self.model.config["plantFATE"]["new_forest"] and self.model.current_timestep == 1:
             import geopandas as gpd
             from rasterio.features import rasterize
             from shapely.geometry import shape
 
-            forest = gpd.read_file("data/junnar_potential_CFR.gpkg")
+            forest = gpd.read_file(self.model.config["plantFATE"]["new_forest_filename"])
             forest = rasterize(
                 [(shape(geom), 1) for geom in forest.geometry],
                 out_shape=self.model.data.HRU.shape,

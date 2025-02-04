@@ -207,19 +207,9 @@ class PotentialEvapotranspiration(object):
         Dynamic part of the potential evaporation module
         Based on Penman Monteith - FAO 56
         """
-        self.HRU.var.ETRef, self.HRU.var.EWRef = PET(
-            tas=self.HRU.tas,
-            tasmin=self.HRU.tasmin,
-            tasmax=self.HRU.tasmax,
-            hurs=self.HRU.hurs,
-            ps=self.HRU.ps,
-            rlds=self.HRU.rlds,
-            rsds=self.HRU.rsds,
-            sfcWind=self.HRU.sfcWind,
-        (
-            self.var.ETRef,
-            self.var.EWRef,
-            net_absorbed_radiation_vegetation_MJ_m2_day,
+        (self.var.ETRef,
+        self.var.EWRef,
+        net_absorbed_radiation_vegetation_MJ_m2_day,
         ) = PET(
             tas=self.var.tas,
             tasmin=self.var.tasmin,
