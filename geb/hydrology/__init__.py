@@ -67,7 +67,7 @@ class Hydrology:
         self.routing = Routing(self)
         self.lakes_reservoirs = LakesReservoirs(self)
         self.water_demand = WaterDemand(self)
-        self.hill_slope_erosion = HillSlopeErosion(self)
+        self.hillslope_erosion = HillSlopeErosion(self)
 
     def step(self):
         """
@@ -120,7 +120,7 @@ class Hydrology:
         self.routing.step(openWaterEvap, channel_abstraction, returnFlow)
         timer.new_split("Routing")
 
-        self.hill_slope_erosion.step()
+        self.hillslope_erosion.step()
         timer.new_split("Hill slope erosion")
 
         if self.timing:
