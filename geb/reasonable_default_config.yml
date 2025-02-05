@@ -20,6 +20,8 @@ hazards:
     simulate: false
   damage:
     simulate: false
+  erosion:
+    simulate: false
 
 agent_settings:
   market:

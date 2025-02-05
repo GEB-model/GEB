@@ -176,18 +176,27 @@ class HillSlopeErosion:
             return None
 
         self.var = self.model.store.create_bucket("hillslope_erosion.var")
+
+        self.var.total_erosion = 0
+
         self.HRU.var.canopy_cover = self.HRU.full_compressed(
             0.5, dtype=np.float32
         )  # using a constant for now
         self.HRU.var.ground_cover = self.HRU.full_compressed(
             0.5, dtype=np.float32
         )  # using a constant for now
-        self.HRU.var.slope = self.HRU.load(self.files["grid"]["areamaps/topo/slope"])
         self.HRU.var.plant_height = self.HRU.full_compressed(1, dtype=np.float32)
         # need to see what this is, dependent on land use type probably.
         self.HRU.var.no_erosion = self.HRU.full_compressed(False, dtype=bool)
         # need to see what this is.
         self.HRU.var.cover = self.HRU.full_compressed(0, dtype=np.float32)
+
+        self.HRU.var.slope = self.model.data.to_HRU(
+            data=self.model.data.grid.load(
+                self.model.files["grid"]["landsurface/topo/slope"]
+            ),
+            fn=None,
+        )
 
         # Is correct?
         self.HRU.var.cell_length = np.sqrt(self.HRU.var.cellArea)
@@ -433,5 +442,11 @@ class HillSlopeErosion:
             + transported_material_sand
         )
         # redeposited_material = redeposited_material_clay + redeposited_material_silt + redeposited_material_sand  # Is D the total material deposited?
+
+        transported_material_kg = transported_material * self.HRU.var.cellArea  # kg
+
+        self.var.total_erosion += transported_material_kg.sum()
+
+        print(self.var.total_erosion)
 
         return transported_material
