@@ -166,11 +166,15 @@ class HillSlopeErosion:
         """The constructor erosion"""
         self.HRU = model.data.HRU
         self.model = model
+        self.simulate = self.model.config["hazards"]["erosion"]["simulate"]
 
         if self.model.spinup:
             self.spinup()
 
     def spinup(self):
+        if not self.simulate:
+            return None
+
         self.var = self.model.store.create_bucket("hillslope_erosion.var")
         self.HRU.var.canopy_cover = self.HRU.full_compressed(
             0.5, dtype=np.float32
@@ -178,7 +182,7 @@ class HillSlopeErosion:
         self.HRU.var.ground_cover = self.HRU.full_compressed(
             0.5, dtype=np.float32
         )  # using a constant for now
-        self.HRU.var.slope = self.HRU.full_compressed(0.1, dtype=np.float32)
+        self.HRU.var.slope = self.HRU.load(self.files["grid"]["areamaps/topo/slope"])
         self.HRU.var.plant_height = self.HRU.full_compressed(1, dtype=np.float32)
         # need to see what this is, dependent on land use type probably.
         self.HRU.var.no_erosion = self.HRU.full_compressed(False, dtype=bool)
@@ -216,9 +220,9 @@ class HillSlopeErosion:
         self.var.K_sand = 0.3
 
         # Detachability of the soil by runoff (g mm−1)
-        self.var.DR_clay = 1.0
-        self.var.DR_silt = 1.6
-        self.var.DR_sand = 1.5
+        self.var.detachability_due_to_runoff_clay = 1.0
+        self.var.detachability_due_to_runoff_silt = 1.6
+        self.var.detachability_due_to_runoff_sand = 1.5
 
         # particle diameter (m)
         self.var.particle_diameter_clay = 2e-6
@@ -281,6 +285,9 @@ class HillSlopeErosion:
         return flow_velocity
 
     def step(self):
+        if not self.simulate:
+            return None
+
         pr_mm_day = self.HRU.pr * (24 * 3600)  # # kg/m2/s to m/day
         effective_rainfall_mm_day = pr_mm_day * np.cos(self.HRU.var.slope)
 
@@ -333,7 +340,7 @@ class HillSlopeErosion:
         # )
 
         detachment_from_flow_clay = get_detachment_from_flow(
-            self.var.DR_clay,
+            self.var.detachability_due_to_runoff_clay,
             self.HRU.var.clay[0] / 100,  # only consider top layer
             self.HRU.var.direct_runoff,
             self.HRU.var.slope,
@@ -342,7 +349,7 @@ class HillSlopeErosion:
         )
 
         detachment_from_flow_silt = get_detachment_from_flow(
-            self.var.DR_silt,
+            self.var.detachability_due_to_runoff_silt,
             self.HRU.var.silt[0] / 100,  # only consider top layer
             self.HRU.var.direct_runoff,
             self.HRU.var.slope,
@@ -351,7 +358,7 @@ class HillSlopeErosion:
         )
 
         detachment_from_flow_sand = get_detachment_from_flow(
-            self.var.DR_sand,
+            self.var.detachability_due_to_runoff_sand,
             self.HRU.var.sand[0] / 100,  # only consider top layer
             self.HRU.var.direct_runoff,
             self.HRU.var.slope,
