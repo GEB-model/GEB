@@ -357,13 +357,22 @@ class Households(AgentBaseClass):
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
     def flood(self, flood_map, model_root, simulation_root, return_period=None):
-        if return_period is not None:
+        # Check if a custom flood map is provided in the config
+        custom_flood_map = self.config.get("hazards", {}).get("floods", {}).get("custom_flood_map")
+        if custom_flood_map:
+            flood_path = custom_flood_map
+            flood_map = rioxarray.open_rasterio(flood_path)
+            flood_map = flood_map.rio.write_crs(28992)
+
+        elif return_period is not None:
             flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
+            flood_map = rioxarray.open_rasterio(flood_path)
+
         else:
             flood_path = join(simulation_root, "hmax.tif")
+            flood_map = rioxarray.open_rasterio(flood_path)
 
         print(f"using this flood map: {flood_path}")
-        flood_map = rioxarray.open_rasterio(flood_path)
 
         # Remove rivers from flood map
         rivers_path = join(model_root, "rivers.gpkg")
