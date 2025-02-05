@@ -33,6 +33,8 @@ from .routing.subroutines import (
     upstream1,
 )
 
+from .routing.subroutines import PIT
+
 OFF = 0
 LAKE = 1
 RESERVOIR = 2
@@ -569,8 +571,13 @@ class LakesReservoirs(object):
         outflow_shifted_downstream = upstream1(
             self.grid.var.downstruct_no_water_bodies, outflow_grid
         )
+
+        # in this assert we exclude any outflow that is already in a pit
+        # because this should disappear when the water is shifted downstream
         assert math.isclose(
-            outflow_shifted_downstream.sum(), outflow_grid.sum(), rel_tol=0.00001
+            outflow_shifted_downstream.sum(),
+            outflow_grid[self.grid.var.lddCompress != PIT].sum(),
+            rel_tol=0.00001,
         )
 
         # everything with is not going to another lake is output to river network
