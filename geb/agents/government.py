@@ -3,6 +3,9 @@ import rioxarray
 from .general import AgentBaseClass
 import geopandas as gpd
 import rasterio
+import xarray as xr
+import rioxarray
+import numpy as np
 from rasterio.features import rasterize
 from rasterio.features import shapes
 from shapely.geometry import shape
@@ -90,11 +93,24 @@ class Government(AgentBaseClass):
         if self.model.current_timestep == 1:
             print("running the reforestation scenario")
             # load reforestation map
-            forest_path = "/scistor/ivm/vbl220/PhD/reclassified_landuse_only_belgium.nc"
-            to_forest = rioxarray.open_rasterio(forest_path, masked=True)
-            # data = to_forest["esa_worldcover"].values
-            data = to_forest.values
-            data = data.astype(np.uint8)
+            forest_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_new4.nc"
+
+            # Open dataset and explicitly select `esa_worldcover`
+            to_forest = xr.open_dataset(forest_path)["esa_worldcover"]
+
+            # Convert to a spatially-aware raster dataset
+            to_forest = to_forest.rio.write_crs("EPSG:28992").squeeze()
+
+            # If needed, reproject to match other layers (e.g., EPSG:4326)
+            to_forest = to_forest.rio.reproject("EPSG:4326")
+
+            # Ensure values are in correct range and type
+            data = np.clip(to_forest.values, 0, 255).astype(np.uint8)
+
+            # Debug information
+            print(f"Shape: {to_forest.shape}, Dtype: {to_forest.dtype}")
+            print(f"Min: {data.min()}, Max: {data.max()}")
+
 
             y_coords = to_forest.coords["y"].values
             x_coords = to_forest.coords["x"].values
@@ -173,53 +189,153 @@ class Government(AgentBaseClass):
            
            
             print("loading soil parameter input files")
-            # # Load soil parameter inputs
-            # self.HRU.var.soil_layer_height = self.HRU.compress(
-            #     load_grid(
-            #         self.model.files["subgrid"]["soil/soil_layer_height"],
-            #         layer=None,
-            #     ),
-            #     method="mean",
-            # )
           
             self.HRU.var.soil_organic_carbon = self.HRU.compress(
                 load_grid(
-                    self.model.files["subgrid"]["soil/new_soil_organic_carbon"],
+                    self.model.files["subgrid"]["soil/forestation_soil_organic_carbon"],
                     layer=None,
                 ),
                 method="mean",
             )
-
-            # self.HRU.var.bulk_density = ...
           
             self.HRU.var.bulk_density = self.HRU.compress(
                 load_grid(
-                    self.model.files["subgrid"]["soil/new_bulk_density"],
+                    self.model.files["subgrid"]["soil/forestation_bulk_density"],
                     layer=None,
                 ),
                 method="mean",
             )
-            # # sand = self.HRU.compress(
-            #     load_grid(
-            #         self.model.files["subgrid"]["soil/sand"],
-            #         layer=None,
-            #     ),
-            #     method="mean",
+         
+            print("changing soil parameters")
+            # Estimate soil properties
+            estimate_soil_properties(
+                self,
+                soil_layer_height=self.HRU.var.soil_layer_height,
+                soil_organic_carbon=self.HRU.var.soil_organic_carbon,
+                bulk_density=self.HRU.var.bulk_density,
+                sand=self.HRU.var.sand,
+                clay=self.HRU.var.clay,
+                silt=self.HRU.var.silt,
+            )
+            print("soil parameters should be changed")
+
+    def cropland_to_grassland(self) -> None:
+        if not self.config.get("cropland_to_grassland", False):
+            return None
+        if self.model.current_timestep == 1:
+            print("running the cropland to grassland conversion scenario")
+
+            # Load scenario 
+            new_grassland_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion.nc"
+
+            # Open dataset and explicitly select `esa_worldcover`
+            to_grasland = xr.open_dataset(new_grassland_path, engine="netcdf4")["esa_worldcover"]
+
+            # Convert to a spatially-aware raster dataset
+            to_grasland = to_grasland.rio.write_crs("EPSG:28992").squeeze()
+            to_grasland = to_grasland.rio.reproject("EPSG:4326")
+
+            # Ensure values are in correct range and type
+            data = np.clip(to_grasland.values, 0, 255).astype(np.uint8)
+
+            # Debug information
+            print(f"Shape: {to_grasland.shape}, Dtype: {to_grasland.dtype}")
+            print(f"Min: {data.min()}, Max: {data.max()}")
+
+
+            y_coords = to_grasland.coords["y"].values
+            x_coords = to_grasland.coords["x"].values
+
+            transform = rasterio.transform.from_origin(
+                x_coords[0],
+                y_coords[0],
+                abs(x_coords[1] - x_coords[0]),
+                abs(y_coords[1] - y_coords[0]),
+            )
+
+            mask = data == 30
+            shapes_gen = shapes(data, mask=mask, transform=transform)
+
+            polygons = []
+            for geom, value in shapes_gen:
+                if value == 30:
+                    polygons.append(shape(geom))
+
+            grassland = gpd.GeoDataFrame(
+                {"value": [30] * len(polygons), "geometry": polygons}
+            )
+            grassland.set_crs(epsg=4326, inplace=True)
+
+            output_vector_path = "/scistor/ivm/vbl220/PhD/grassland_vectorized.gpkg"
+            grassland.to_file(output_vector_path)
+
+            # then we rasterize this file to match the HRUs
+            grassland = rasterize(
+                [(shape(geom), 1) for geom in grassland.geometry],
+                out_shape=self.model.data.HRU.shape,
+                transform=self.model.data.HRU.transform,
+                fill=False,
+                dtype="uint8",  # bool is not supported, so we use uint8 and convert to bool
+            ).astype(bool)
+            # do not create forests outside the study area
+            grassland[self.model.data.HRU.mask] = False
+            # only create forests in grassland or agricultural areas
+            grassland[
+                ~np.isin(
+                    self.model.data.HRU.decompress(
+                        self.model.data.HRU.var.land_use_type
+                    ),
+                    [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
+                )
+            ] = False
+
+            import matplotlib.pyplot as plt
+
+            plt.imshow(grassland)
+            plt.savefig("grassland.png")
+
+            # new_grassland_HRUs = np.unique(
+            #     self.model.data.HRU.var.unmerged_HRU_indices[GRASSLAND_LIKE]
             # )
-            # silt = self.HRU.compress(
-            #     load_grid(
-            #         self.model.files["subgrid"]["soil/silt"],
-            #         layer=None,
-            #     ),
-            #     method="mean",
+            # print(new_grassland_HRUs)
+            # self.model.data.HRU.var.land_use_type[new_grassland_HRUs] = GRASSLAND_LIKE
+            # print(self.model.data.HRU.var.land_use_type)
+            # farmers_with_land_converted_to_grassland = np.unique(
+            #     self.model.data.HRU.var.land_owners[new_grassland_HRUs]
             # )
-            # clay = self.HRU.compress(
-            #     load_grid(
-            #         self.model.files["subgrid"]["soil/clay"],
-            #         layer=None,
-            #     ),
-            #     method="mean",
+            # print(farmers_with_land_converted_to_grassland)
+            # farmers_with_land_converted_to_grassland = (
+            #     farmers_with_land_converted_to_grassland
+            # )[farmers_with_land_converted_to_grassland != -1]
+
+            # print(farmers_with_land_converted_to_grassland)
+
+            # HRUs_removed_farmers = self.model.agents.crop_farmers.remove_agents(
+            #     farmers_with_land_converted_to_grassland, new_land_use_type=GRASSLAND_LIKE
             # )
+
+            # new_grassland_HRUs = np.unique(
+            #     np.concatenate([new_grassland_HRUs, HRUs_removed_farmers])
+            # )
+           
+            print("loading soil parameter input files")
+          
+            self.HRU.var.soil_organic_carbon = self.HRU.compress(
+                load_grid(
+                    self.model.files["subgrid"]["soil/grassland_soil_organic_carbon"],
+                    layer=None,
+                ),
+                method="mean",
+            )
+          
+            self.HRU.var.bulk_density = self.HRU.compress(
+                load_grid(
+                    self.model.files["subgrid"]["soil/grassland_bulk_density"],
+                    layer=None,
+                ),
+                method="mean",
+            )
+         
             print("changing soil parameters")
             # Estimate soil properties
             estimate_soil_properties(
@@ -238,3 +354,4 @@ class Government(AgentBaseClass):
         self.set_irrigation_limit()
         self.provide_subsidies()
         self.reforestation()
+        self.cropland_to_grassland()

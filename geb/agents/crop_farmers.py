@@ -4852,18 +4852,27 @@ class CropFarmers(AgentBaseClass):
             self.var.field_indices, self.var.field_indices_by_farmer.data, -1
         )
         last_farmer_field_size = self.field_size_per_farmer[-1]  # for testing only
+        print(f"field size is :{last_farmer_field_size}")
 
+             
         # disown the farmer.
         HRUs_farmer_to_be_removed = get_farmer_HRUs(
             self.var.field_indices,
             self.var.field_indices_by_farmer.data,
             farmer_idx,
         )
+
+        print(f"Before removal, land owners for farmer {farmer_idx}:",
+        self.HRU.var.land_owners[HRUs_farmer_to_be_removed])
+        
         self.HRU.var.land_owners[HRUs_farmer_to_be_removed] = -1
         self.HRU.var.crop_map[HRUs_farmer_to_be_removed] = -1
         self.HRU.var.crop_age_days_map[HRUs_farmer_to_be_removed] = -1
         self.HRU.var.crop_harvest_age_days[HRUs_farmer_to_be_removed] = -1
         self.HRU.var.land_use_type[HRUs_farmer_to_be_removed] = new_land_use_type
+
+        print(f"After removal, land owners for farmer {farmer_idx}:",
+        self.HRU.var.land_owners[HRUs_farmer_to_be_removed])
 
         # reduce number of agents
         self.n -= 1
@@ -4886,6 +4895,15 @@ class CropFarmers(AgentBaseClass):
         # TODO: Speed up field index updating.
         self.update_field_indices()
         if self.n == farmer_idx:
+            print( get_farmer_HRUs(
+                    self.var.field_indices,
+                    self.var.field_indices_by_farmer.data,
+                    farmer_idx))
+            print( get_farmer_HRUs(
+                    self.var.field_indices,
+                    self.var.field_indices_by_farmer.data,
+                    farmer_idx,
+                ).size)
             assert (
                 get_farmer_HRUs(
                     self.var.field_indices,
@@ -4910,7 +4928,6 @@ class CropFarmers(AgentBaseClass):
                 self.field_size_per_farmer[farmer_idx],
                 abs_tol=1,
             )
-
         assert (self.HRU.var.land_owners[HRUs_farmer_to_be_removed] == -1).all()
         return HRUs_farmer_to_be_removed
 

@@ -236,6 +236,67 @@ class SFINCS:
             region_file=self.model.files["geoms"]["region"]
         )
 
+        import yaml
+        from pathlib import Path
+        # Get YAML file path
+        yaml_path = Path(self.model.config["general"]["input_folder"]) / "hydrodynamics" / "data_catalog.yml"
+
+        # Read the YAML file
+        with open(yaml_path, "r") as file:
+            updated_data_catalog = yaml.safe_load(file)
+
+        # Ensure self.data_catalogs is a dictionary
+        if not isinstance(updated_data_catalog, dict):
+            print(f"Warning: data_catalogs was not a dictionary (got {type(updated_data_catalog)}), resetting.")
+            updated_data_catalog = {}
+
+        if (
+            self.model.config["agent_settings"]
+            .get("government", {})
+            .get("cropland_to_grassland")
+            is True
+        ):   
+            print("running cropland conversion scenario -- updating data catalog")
+            updated_data_catalog["esa_worldcover"] = {
+                "data_type": "RasterDataset",
+                "path": "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion_reprojected.nc",
+                "driver": "netcdf",
+                "crs": 4326,
+            }
+        
+        elif (
+            self.model.config["agent_settings"]
+            .get("government", {})
+            .get("reforestation")
+            is True
+        ):   
+            print("running reforestation scenario -- updating data catalog")
+            updated_data_catalog["esa_worldcover"] = {
+                "data_type": "RasterDataset",
+                "path": "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_renamed.nc",
+                "driver": "netcdf",
+                "crs": 28992,
+            }
+
+        else:
+            updated_data_catalog["esa_worldcover"] = {
+                "data_type": "RasterDataset",
+                "path": "esa_worldcover.zarr.zip",
+                "driver": "zarr",
+                "crs": 4326,
+                "meta": {
+                    "category": "landuse",
+                    "source_license": "CC BY 4.0",
+                    "source_url": "https://doi.org/10.5281/zenodo.5571936",
+                    "source_version": "v200",
+                },
+            }
+
+        # Write the modified data back to the YAML file
+        with open(yaml_path, "w") as file:
+            yaml.safe_dump(updated_data_catalog, file)
+        print("Updated data_catalog.yml saved.")
+
         build_parameters.update(
             {
                 "config_fn": str(config_fn),
@@ -349,16 +410,6 @@ class SFINCS:
                 },
             )
 
-        # self.model.data.HRU.w[:2] # top two layers of the soil
-        # top_two_layers = self.model.data.HRU.w[:2].sum(axis=0)
-        # self.model.data.HRU.decompress(top_two_layers)
-        # geotransformation = self.model.data.HRU.gt
-        # self.model.soil.ws
-        # self.model.soil.ksat
-        # self.model.soil.soil_layer_height
-
-        # self.model.data.HRU.decompress(self.model.data.HRU.w)
-
         else:
             substeps = 24  # when setting 0 it doesn't matter so much how many substeps. 24 is a reasonable default.
             max_number_of_timesteps = (event["end_time"] - event["start_time"]).days
@@ -384,8 +435,6 @@ class SFINCS:
             )
 
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
-
-        ######################## assignment of CRS to the grids ########################
 
         crs_obj = CRS.from_wkt(
             self.model.data.grid.crs
@@ -447,7 +496,6 @@ class SFINCS:
         return None
 
     def run_single_event(self, event, start_time, return_period=None):
-        ############################ Run Sfincs simulation ############################
         self.setup(event)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
@@ -456,10 +504,6 @@ class SFINCS:
             simulation_root=self.sfincs_simulation_root(event_name),
             model_root=self.sfincs_model_root(event_name),
         )
-
-        ############################## plotting of flood map (hmax) ############################
-
-        ## load and save flood map
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
