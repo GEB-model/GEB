@@ -159,6 +159,7 @@ def parse_MIRCA_file(parsed_calendar, crop_calendar, MIRCA_units, is_irrigated):
                         ),
                     )
                 parsed_calendar[unit_code].append(crop_rotation)
+                assert crop_rotation[1][0][2] != crop_rotation[1][1][2]
             else:
                 raise NotImplementedError
         return parsed_calendar

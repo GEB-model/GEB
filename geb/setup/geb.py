@@ -5125,6 +5125,15 @@ class GEBModel(GridModel):
             max_index = np.argmax(counts)
             crop_replacement = unique_rows[max_index]
 
+            crop_replacement_only_crops = crop_replacement[
+                crop_replacement[:, -1] != -1
+            ]
+            if crop_replacement_only_crops.shape[0] > 1:
+                assert (
+                    np.unique(crop_replacement_only_crops[:, [1, 3]], axis=0).shape[0]
+                    == crop_replacement_only_crops.shape[0]
+                )
+
             for replaced_crop in replaced_crop_values:
                 # Check where to be replaced crop is
                 crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(
@@ -5253,10 +5262,34 @@ class GEBModel(GridModel):
             unique_values, counts = np.unique(values, return_counts=True)
             duplicates = unique_values[counts > 1]
 
-            if len(duplicates) > 0:
-                for duplicate in duplicates:
-                    crop_calendar_per_farmer = unify_crop_variants(
-                        crop_calendar_per_farmer, duplicate
+            # this part asserts that the crop calendar is correctly set up
+            # particulary that no two crops are planted at the same time
+            for farmer_crop_calender in crop_calendar_per_farmer:
+                farmer_crop_calender = farmer_crop_calender[
+                    farmer_crop_calender[:, -1] != -1
+                ]
+                if farmer_crop_calender.shape[0] > 1:
+                    assert (
+                        np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
+                        == farmer_crop_calender.shape[0]
+                    )
+
+            # if len(duplicates) > 0:
+            #     for duplicate in duplicates:
+            #         crop_calendar_per_farmer = unify_crop_variants(
+            #             crop_calendar_per_farmer, duplicate
+            #         )
+
+            # this part asserts that the crop calendar is correctly set up
+            # particulary that no two crops are planted at the same time
+            for farmer_crop_calender in crop_calendar_per_farmer:
+                farmer_crop_calender = farmer_crop_calender[
+                    farmer_crop_calender[:, -1] != -1
+                ]
+                if farmer_crop_calender.shape[0] > 1:
+                    assert (
+                        np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
+                        == farmer_crop_calender.shape[0]
                     )
 
         if replace_base:
@@ -5345,14 +5378,24 @@ class GEBModel(GridModel):
                 with open(csv_path, mode="a", newline="") as csvfile:
                     writer = csv.writer(csvfile)
                     writer.writerow(row_data)
-        else:
-            self.set_binary(
-                crop_calendar_per_farmer, name="agents/farmers/crop_calendar"
-            )
-            self.set_binary(
-                np.full_like(is_irrigated, 1, dtype=np.int32),
-                name="agents/farmers/crop_calendar_rotation_years",
-            )
+
+        # this part asserts that the crop calendar is correctly set up
+        # particulary that no two crops are planted at the same time
+        for farmer_crop_calender in crop_calendar_per_farmer:
+            farmer_crop_calender = farmer_crop_calender[
+                farmer_crop_calender[:, -1] != -1
+            ]
+            if farmer_crop_calender.shape[0] > 1:
+                assert (
+                    np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
+                    == farmer_crop_calender.shape[0]
+                )
+
+        self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
+        self.set_binary(
+            np.full_like(is_irrigated, 1, dtype=np.int32),
+            name="agents/farmers/crop_calendar_rotation_years",
+        )
 
     def assign_crops_irrigation_farmers(self, year=2000):
         # Define the directory and file paths
