@@ -4481,9 +4481,6 @@ class GEBModel(GridModel):
             locations, GDL_regions, how="left", predicate="within"
         )
 
-        GDL_region_per_farmer.to_file("GDL.gpkg")
-        locations.to_file("locatons.gpkg")
-
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
 
