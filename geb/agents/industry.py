@@ -46,11 +46,14 @@ class Industry(AgentBaseClass):
             * 1_000_000
             / days_in_year
         )
-        water_demand = water_demand.rio.set_crs(4326).rio.reproject(
-            4326,
-            shape=self.model.data.grid.shape,
-            transform=self.model.data.grid.transform,
-        )
+        water_demand = (
+            water_demand.rio.set_crs(4326).rio.reproject(
+                4326,
+                shape=self.model.data.grid.shape,
+                transform=self.model.data.grid.transform,
+            )
+            / (water_demand.rio.transform().a / self.model.data.grid.transform.a) ** 2
+        )  # correct for change in cell size
         water_demand = downscale_volume(
             water_demand.rio.transform().to_gdal(),
             self.model.data.grid.gt,
@@ -69,10 +72,14 @@ class Industry(AgentBaseClass):
             * 1_000_000
             / days_in_year
         )
-        water_consumption = water_consumption.rio.set_crs(4326).rio.reproject(
-            4326,
-            shape=self.model.data.grid.shape,
-            transform=self.model.data.grid.transform,
+        water_consumption = (
+            water_consumption.rio.set_crs(4326).rio.reproject(
+                4326,
+                shape=self.model.data.grid.shape,
+                transform=self.model.data.grid.transform,
+            )
+            / (water_consumption.rio.transform().a / self.model.data.grid.transform.a)
+            ** 2
         )
         water_consumption = downscale_volume(
             water_consumption.rio.transform().to_gdal(),
