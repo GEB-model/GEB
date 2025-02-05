@@ -342,6 +342,14 @@ setup_damage_parameters:
             - [6.00, 0.05]
           maximum_damage: 25
 
+setup_well_prices_by_reference_year_global:
+  WHY_10: 82.0209974 # $/m
+  WHY_20: 164 # $/m
+  WHY_30: 50 # $/m
+  reference_year: 2017
+  start_year: 1960
+  end_year: 2020
+
 setup_forcing:
   data_source: era5
   starttime: 2000-01-01
@@ -351,31 +359,3 @@ setup_SPEI:
   window: 7
   calibration_period_start: 2000-01-01
   calibration_period_end: 2020-12-31
-
-setup_well_prices_by_reference_year_global:
-  WHY_10: 82.0209974 # $/m
-  WHY_20: 164 # $/m
-  WHY_30: 50 # $/m
-  reference_year: 2017
-  start_year: 1960
-  end_year: 2020
-
-setup_irrigation_sources:
-  irrigation_sources:
-    "no": -1
-    canal: 0
-    well: 1
-
-setup_create_farms_simple:
-  data_source: lowder
-
-setup_farmer_characteristics_simple:
-  interest_rate: 0.05
-
-setup_population:
-
-setup_assets:
-  feature_types:
-  - buildings
-  - roads
-  - rails
