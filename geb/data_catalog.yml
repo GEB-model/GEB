@@ -10,10 +10,6 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: topography/FABDEM1-2.vrt
-  kwargs:
-    chunks:
-      x: 128
-      y: 128
 geul_dem:
   data_type: RasterDataset
   driver: raster
@@ -150,10 +146,6 @@ merit_hydro:
       path: /scistor/ivm/data_catalogue/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
     - provider: local
       path: merit_hydro_03sec/{variable}.vrt
-  kwargs:
-    chunks:
-      x: 1000
-      y: 1000
 hydrobasins_8:
   crs: 4326
   data_type: GeoDataFrame
