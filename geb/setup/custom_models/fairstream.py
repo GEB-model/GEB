@@ -454,14 +454,35 @@ class fairSTREAMModel(GEBModel):
         n_farmers = self.binary["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
+        from geb.agents.crop_farmers import (
+            SURFACE_IRRIGATION_EQUIPMENT,
+            WELL_ADAPTATION,
+            IRRIGATION_EFFICIENCY_ADAPTATION,
+            FIELD_EXPANSION_ADAPTATION,
+        )
+
         # Set all farmers within command areas to canal irrigation
-        irrigation_sources = self.dict["agents/farmers/irrigation_sources"]
-        irrigation_source = np.full(n_farmers, irrigation_sources["no"], dtype=np.int32)
+        adaptations = np.full(
+            (
+                n_farmers,
+                max(
+                    [
+                        SURFACE_IRRIGATION_EQUIPMENT,
+                        WELL_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION,
+                        FIELD_EXPANSION_ADAPTATION,
+                    ]
+                )
+                + 1,
+            ),
+            -1,
+            dtype=np.int32,
+        )
 
         command_areas = self.subgrid["routing/lakesreservoirs/subcommand_areas"]
         canal_irrigated_farms = np.unique(farms.where(command_areas != -1, -1))
         canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
-        irrigation_source[canal_irrigated_farms] = irrigation_sources["canal"]
+        adaptations[canal_irrigated_farms, SURFACE_IRRIGATION_EQUIPMENT] = 1
 
         # Set all farmers within cells with rivers to canal irrigation
 
@@ -484,7 +505,7 @@ class fairSTREAMModel(GEBModel):
 
         canal_irrigated_farms = np.unique(farms.where(subgrid_cells_with_river, -1))
         canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
-        irrigation_source[canal_irrigated_farms] = irrigation_sources["canal"]
+        adaptations[canal_irrigated_farms, SURFACE_IRRIGATION_EQUIPMENT] = 1
 
         groundwater_depth = self.grid["landsurface/topo/elevation"] - self.grid[
             "groundwater/heads"
@@ -493,12 +514,14 @@ class fairSTREAMModel(GEBModel):
             groundwater_depth.values, self.subgrid_factor
         )
 
-        farm_mask = farms.values.ravel()
-        farm_mask = farm_mask[farm_mask != -1]
+        farms_values = farms.values.ravel()
+        farms_mask = np.where(farms_values != -1)[0]
+        farms_values_masked = farms_values[farms_mask]
 
         groundwater_depth_per_farm = np.bincount(
-            farm_mask, weights=groundwater_depth_subgrid.ravel()[farm_mask]
-        ) / np.bincount(farm_mask)
+            farms_values_masked, weights=groundwater_depth_subgrid.ravel()[farms_mask]
+        ) / np.bincount(farms_values_masked)
+        assert not np.isnan(groundwater_depth_per_farm).any()
 
         # # well probability is set such that the farmers with the deepest groundwater have the lowest probability
         # farmer_well_probability = 1 - (
@@ -562,15 +585,25 @@ class fairSTREAMModel(GEBModel):
             "sub_dist_1"
         ].ffill()
 
-        # assign region_id to crop data
-        irrigation_status_per_tehsil["region_id"] = irrigation_status_per_tehsil.apply(
-            lambda row: regions.loc[
+        def match_region(row, regions):
+            region_id = regions.loc[
                 (regions["state_name"] == row["state_name"])
                 & (regions["district_n"] == row["district_n"])
                 & (regions["sub_dist_1"] == row["sub_dist_1"]),
-            ]["region_id"].item(),
+            ]["region_id"]  # .item()
+            if region_id.size == 0:
+                return -1
+            else:
+                return region_id.item()
+
+        # assign region_id to crop data
+        irrigation_status_per_tehsil["region_id"] = irrigation_status_per_tehsil.apply(
+            lambda row: match_region(row, regions),
             axis=1,
         )
+        irrigation_status_per_tehsil = irrigation_status_per_tehsil[
+            irrigation_status_per_tehsil["region_id"] != -1
+        ]
         irrigation_status_per_tehsil = irrigation_status_per_tehsil.drop(
             ["state_name", "district_n", "sub_dist_1"], axis=1
         )
@@ -602,8 +635,6 @@ class fairSTREAMModel(GEBModel):
         farm_size_class[farm_sizes > 100000] = 8
         farm_size_class[farm_sizes > 200000] = 9
 
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-
         region_id = self.binary["agents/farmers/region_id"]
 
         region_ids = np.unique(region_id)
@@ -618,33 +649,50 @@ class fairSTREAMModel(GEBModel):
                 )[0]
                 if agent_subset.size == 0:
                     continue
-                agent_irrigation_status = irrigation_source[agent_subset]
                 target_well_ratio = irrigation_status_per_tehsil.loc[
                     (region_id_class, size_class), "well_ratio"
                 ]
-                not_yet_irrigated_agents = np.where(agent_irrigation_status == -1)[0]
 
-                if not_yet_irrigated_agents.size == 0:
-                    continue
-
-                groundwater_depth_subset = groundwater_depth_per_farm[agent_subset][
-                    not_yet_irrigated_agents
-                ]
-                if (groundwater_depth_subset > WELL_DEPTH_THRESHOLD).all():
-                    continue
+                groundwater_depth_subset = groundwater_depth_per_farm[agent_subset]
 
                 well_probability = np.maximum(
                     1 - (groundwater_depth_subset / WELL_DEPTH_THRESHOLD), 0
                 )
 
                 well_irrigated_agents = np.random.choice(
-                    not_yet_irrigated_agents,
-                    int(target_well_ratio * len(not_yet_irrigated_agents)),
+                    agent_subset,
+                    int(target_well_ratio * len(agent_subset)),
                     replace=False,
                     p=well_probability / well_probability.sum(),
                 )
 
-                irrigation_source[agent_subset[well_irrigated_agents]] = 1
+                adaptations[agent_subset[well_irrigated_agents], WELL_ADAPTATION] = 1
+
+                # not_yet_irrigated_agents = np.where(
+                #     adaptations[agent_subset, SURFACE_IRRIGATION_EQUIPMENT] == -1
+                # )[0]
+
+                # if not_yet_irrigated_agents.size == 0:
+                #     continue
+
+                # groundwater_depth_subset = groundwater_depth_per_farm[agent_subset][
+                #     not_yet_irrigated_agents
+                # ]
+                # if (groundwater_depth_subset > WELL_DEPTH_THRESHOLD).all():
+                #     continue
+
+                # well_probability = np.maximum(
+                #     1 - (groundwater_depth_subset / WELL_DEPTH_THRESHOLD), 0
+                # )
+
+                # well_irrigated_agents = np.random.choice(
+                #     not_yet_irrigated_agents,
+                #     int(target_well_ratio * len(not_yet_irrigated_agents)),
+                #     replace=False,
+                #     p=well_probability / well_probability.sum(),
+                # )
+
+                # adaptations[agent_subset[well_irrigated_agents], WELL_ADAPTATION] = 1
 
         crop_data_per_tehsil = pd.read_excel(
             self.preprocessing_dir / "census" / "crop_data.xlsx"
@@ -662,14 +710,12 @@ class fairSTREAMModel(GEBModel):
 
         # assign region_id to crop data
         crop_data_per_tehsil["region_id"] = crop_data_per_tehsil.apply(
-            lambda row: regions.loc[
-                (regions["state_name"] == row["state_name"])
-                & (regions["district_n"] == row["district_n"])
-                & (regions["sub_dist_1"] == row["sub_dist_1"]),
-            ]["region_id"].item(),
+            lambda row: match_region(row, regions),
             axis=1,
         )
-
+        crop_data_per_tehsil = crop_data_per_tehsil[
+            crop_data_per_tehsil["region_id"] != -1
+        ]
         crop_data_per_tehsil = crop_data_per_tehsil.drop(
             ["state_name", "district_n", "sub_dist_1"], axis=1
         )
@@ -711,14 +757,13 @@ class fairSTREAMModel(GEBModel):
 
         for idx in range(n_farmers):
             farmer_crop_calendar = crop_calendar_per_farmer[idx]
-            farmer_irrigation_source = irrigation_source[idx]
+            is_irrigated = (
+                adaptations[idx, [SURFACE_IRRIGATION_EQUIPMENT, WELL_ADAPTATION]] > 0
+            ).any()
 
             farmer_region_id = region_id[idx]
 
-            if farmer_irrigation_source in (
-                irrigation_sources["well"],
-                irrigation_sources["canal"],
-            ):
+            if is_irrigated:
                 crop_data_df = crop_data_per_tehsil_irrigated
                 n_crops = 1 if np.random.random() < 0.2 else 2
             else:
@@ -786,6 +831,7 @@ class fairSTREAMModel(GEBModel):
                     year_index,
                 ]
 
+        self.set_binary(adaptations, name="agents/farmers/adaptations")
         self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         self.set_binary(
             crop_calendar_rotation_years,
