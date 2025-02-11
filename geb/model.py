@@ -247,6 +247,10 @@ class GEBModel(HazardDriver, ABM, Hydrology):
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
+        print(
+            f"{self.current_time}",
+            flush=True,
+        )
         for _ in range(self.n_timesteps):
             self.step()
 
