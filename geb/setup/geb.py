@@ -5260,7 +5260,6 @@ class GEBModel(GridModel):
             unique_rows = np.unique(crop_calendar_per_farmer, axis=0)
             values = unique_rows[:, 0, 0]
             unique_values, counts = np.unique(values, return_counts=True)
-            duplicates = unique_values[counts > 1]
 
             # this part asserts that the crop calendar is correctly set up
             # particulary that no two crops are planted at the same time
@@ -5274,6 +5273,7 @@ class GEBModel(GridModel):
                         == farmer_crop_calender.shape[0]
                     )
 
+            # duplicates = unique_values[counts > 1]
             # if len(duplicates) > 0:
             #     for duplicate in duplicates:
             #         crop_calendar_per_farmer = unify_crop_variants(
