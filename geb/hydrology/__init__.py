@@ -82,9 +82,6 @@ class Hydrology:
             * l: time and first gauge discharge
             * t: timing of different processes at the end
         """
-        if self.current_timestep == 1:
-            self.groundwater.initalize_modflow_model()
-            self.soil.set_global_variables()
 
         timer = TimingModule("CWatM")
 

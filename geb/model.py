@@ -58,6 +58,9 @@ class ABM(ABM_Model):
         # if some condition is met set running to False.
         timeprint("Finished setup")
 
+    def step(self):
+        self.agents.step()
+
 
 class GEBModel(HazardDriver, ABM, Hydrology):
     """GEB parent class.
@@ -180,6 +183,9 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             if not self.spinup:
                 self.store.load()
 
+            self.groundwater.initalize_modflow_model()
+            self.soil.set_global_variables()
+
             self.reporter = Reporter(self)
             self.artists = Artists(self)
 
@@ -231,7 +237,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         for _ in range(n):
             t0 = time()
             HazardDriver.step(self, 1)
-            ABM_Model.step(self, 1, report=False)
+            ABM.step(self)
             if self.config["general"]["simulate_hydrology"]:
                 Hydrology.step(self)
 
@@ -244,13 +250,10 @@ class GEBModel(HazardDriver, ABM, Hydrology):
 
             # if self.current_timestep == 5:
             #     self.multiverse()
+            self.current_timestep += 1
 
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
-        print(
-            f"{self.current_time}",
-            flush=True,
-        )
         for _ in range(self.n_timesteps):
             self.step()
 
