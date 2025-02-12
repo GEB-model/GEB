@@ -1,13 +1,15 @@
 from geb.agents.crop_farmers import (
     cumulative_mean,
     shift_and_update,
+    advance_crop_rotation_year,
+)
+from geb.agents.workflows.crop_farmers import (
     get_deficit_between_dates,
     get_future_deficit,
     adjust_irrigation_to_limit,
     withdraw_groundwater,
     withdraw_channel,
     withdraw_reservoir,
-    advance_crop_rotation_year,
 )
 
 import numpy as np
@@ -144,7 +146,7 @@ def test_get_future_deficit():
         potential_irrigation_consumption_farmer_m3=10,
         reset_day_index=181,
     )
-    assert future_water_deficit == 20.0
+    assert future_water_deficit == 10.0
 
     future_water_deficit = get_future_deficit(
         farmer=0,
@@ -483,6 +485,49 @@ def test_get_future_deficit():
     )
     assert future_water_deficit == 60.0
 
+    future_water_deficits = np.full(365, np.nan)
+    for day_index in range(365):
+        future_water_deficit = get_future_deficit(
+            farmer=0,
+            day_index=day_index,
+            cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+            crop_calendar=np.array(
+                [
+                    [
+                        [0, 1, 364, 0],
+                    ]
+                ]
+            ),  # crop ID (irrelevant here), planting day, growing days
+            crop_rotation_year_index=np.array([0]),
+            potential_irrigation_consumption_farmer_m3=10,
+        )
+        future_water_deficits[day_index] = future_water_deficit
+    assert np.array_equal(future_water_deficits, np.arange(3650, 0, -10))
+
+    future_water_deficits = np.full(365, np.nan)
+    for day_index in range(365):
+        future_water_deficit = get_future_deficit(
+            farmer=0,
+            day_index=day_index,
+            cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+            crop_calendar=np.array(
+                [
+                    [
+                        [0, 1, 364, 0],
+                    ]
+                ]
+            ),  # crop ID (irrelevant here), planting day, growing days
+            crop_rotation_year_index=np.array([0]),
+            potential_irrigation_consumption_farmer_m3=10,
+            reset_day_index=180,
+        )
+        future_water_deficits[day_index] = future_water_deficit
+    assert future_water_deficits[180] == 1800.0
+    assert np.array_equal(
+        future_water_deficits,
+        np.concatenate([np.arange(1800, 0, -10), np.full(185, 1800)]),
+    )
+
 
 def test_adjust_irrigation_to_limit():
     cumulative_water_deficit_m3 = np.array([[0.0, 15.0, 30.0]])
@@ -502,7 +547,9 @@ def test_adjust_irrigation_to_limit():
     # In the future, still 15 + 10 irrigation is needed
     # irrigation limit remaining is 10, and 10 requested today, so only 10/25*10 = 4. irrigation is possible
     # Then adjusted for the irrigation efficiency is 4*0.5 = 2.0
-    assert np.array_equal(potential_irrigation_consumption_farmer_m3, np.array([2.0]))
+    np.testing.assert_almost_equal(
+        potential_irrigation_consumption_farmer_m3, np.array([2.0])
+    )
 
     # On the last day of the year, the farmer should be able to irrigate the remaining water deficit
     potential_irrigation_consumption_farmer_m3 = adjust_irrigation_to_limit(
@@ -520,7 +567,9 @@ def test_adjust_irrigation_to_limit():
     # irrigation limit remaining is 5, and 10 requested today, so only 10/10*5 = 5. irrigation is possible
     # which is all irrigation for the last day of the year
     # then adjusted for the irrigation efficiency is 5*0.5 = 2.5
-    assert np.array_equal(potential_irrigation_consumption_farmer_m3, np.array([2.5]))
+    np.testing.assert_almost_equal(
+        potential_irrigation_consumption_farmer_m3, np.array([2.5])
+    )
 
     # If no allowed irrigation, the farmer should not irrigate
     potential_irrigation_consumption_farmer_m3 = adjust_irrigation_to_limit(
@@ -535,7 +584,9 @@ def test_adjust_irrigation_to_limit():
         potential_irrigation_consumption_farmer_m3=10,
     )
     # As irrigation limit is 0, no irrigation is possible
-    assert np.array_equal(potential_irrigation_consumption_farmer_m3, np.array([0.0]))
+    np.testing.assert_almost_equal(
+        potential_irrigation_consumption_farmer_m3, np.array([0.0])
+    )
 
 
 def test_withdraw_groundwater():

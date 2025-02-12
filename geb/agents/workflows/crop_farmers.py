@@ -152,7 +152,6 @@ def get_future_deficit(
     """
     if reset_day_index >= 365 or reset_day_index < 0:
         raise ValueError("Reset day index must be lower than 365 and greater than -1")
-    day = day_index + 1
     future_water_deficit = potential_irrigation_consumption_farmer_m3
     for crop in crop_calendar[farmer]:
         crop_type = crop[0]
@@ -165,15 +164,18 @@ def get_future_deficit(
 
             relative_start_day_index = (start_day_index - reset_day_index) % 365
             relative_end_day_index = relative_start_day_index + growth_length
-            relative_day = (day - reset_day_index) % 365
+            relative_day_index = (day_index - reset_day_index) % 365
 
             if relative_end_day_index > 365:
                 relative_end_day_index = 365
 
-            if relative_start_day_index < relative_day:
-                relative_start_day_index = relative_day
+            if relative_start_day_index < relative_day_index:
+                relative_start_day_index = relative_day_index
 
-            if relative_day > relative_end_day_index:
+            if relative_start_day_index == relative_day_index:
+                relative_start_day_index = (relative_start_day_index + 1) % 365
+
+            if relative_day_index >= relative_end_day_index:
                 continue
             else:
                 future_water_deficit += get_deficit_between_dates(
