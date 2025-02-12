@@ -31,10 +31,6 @@ import collections
 from deap import creator, base, tools, algorithms
 from functools import wraps, partial
 
-from sklearn.ensemble import RandomForestRegressor
-import joblib
-from sklearn.model_selection import KFold
-
 import json
 import sys
 import datetime
@@ -77,6 +73,31 @@ def load_ds(output_folder, name, start_time, end_time, time=True):
     if time and start_time is not None and end_time is not None:
         var = var.sel(time=slice(start_time, end_time))
     return np.squeeze(var)
+
+
+def load_zarr(
+    config,
+    directory,
+    parameters,
+    start_time,
+    end_time,
+):
+    """
+    Loads the specified parameters from Zarr and returns a single DataFrame
+    with a MultiIndex (time, agents) for the rows, and one column per parameter.
+    """
+    dfs_simulated = []
+    for param in parameters:
+        da = load_ds(directory, param, start_time=start_time, end_time=end_time)
+        df_param = da.to_dataframe(name=param)
+        dfs_simulated.append(df_param)
+
+    df_simulated = pd.concat(dfs_simulated, axis=1)
+    return df_simulated
+
+
+def parse_water_year(wy_str):
+    return pd.to_datetime(f"{int(wy_str.split('/')[0]) + 1}-06-30")
 
 
 def get_observed_well_ratio(config):
@@ -891,6 +912,217 @@ def get_irrigation_method_score(run_directory, individual, config):
     return kge
 
 
+def get_observed_water_use(config):
+    calibration_config = config["calibration"]
+
+    # Read data
+    fp = os.path.join(
+        calibration_config["observed_data"], "water_use", "murray_water_use.csv"
+    )
+    data_df = pd.read_csv(fp)
+    data_df["Value"] = pd.to_numeric(data_df["Value"], errors="coerce")
+
+    # Subset by desired parameters
+    parameters = ["volume_applied_cultivated", "application_rate_cultivated"]
+    water_use_df = data_df[data_df["Description"].isin(parameters)]
+    water_use_df = water_use_df.rename(columns={"Year": "time"})
+
+    # Parse e.g. "2002/3" -> datetime(2003-06-30)
+    water_use_df["time"] = water_use_df["time"].apply(parse_water_year)
+
+    # PIVOT so that "Region" => columns, and "Description" => part of the index
+    # This keeps "Description" in the index (like your first code snippet).
+    water_use_pivot = water_use_df.pivot_table(
+        index=["time", "Description"],  # pivot on (time, Description)
+        columns="Region",  # region becomes columns
+        values="Value",
+        aggfunc="first",
+    ).sort_index(level="time")
+
+    # Estimate missing data via ratio of target region to reference region
+    ref_regions = {
+        "murray": "NSW",
+        "goulburn_broken": "VICT",
+        "north_central": "VICT",
+        "north_east": "VICT",
+    }
+    for target, ref in ref_regions.items():
+        # Only proceed if both target & ref columns exist
+        if target in water_use_pivot.columns and ref in water_use_pivot.columns:
+            water_use_pivot["Ratio"] = water_use_pivot[target] / water_use_pivot[ref]
+            # Compute the average ratio per Description
+            desc_ratio = water_use_pivot.groupby(level="Description")["Ratio"].mean()
+
+            # Map that ratio back to each row
+            water_use_pivot["Avg_Ratio"] = water_use_pivot.index.get_level_values(
+                "Description"
+            ).map(desc_ratio)
+            # Estimate missing values
+            water_use_pivot["Estimated"] = (
+                water_use_pivot[ref] * water_use_pivot["Avg_Ratio"]
+            )
+            water_use_pivot[target] = water_use_pivot[target].fillna(
+                water_use_pivot["Estimated"]
+            )
+
+            # Drop temporary columns
+            water_use_pivot = water_use_pivot.drop(
+                columns=["Ratio", "Avg_Ratio", "Estimated"]
+            )
+
+    # Flatten for time interpolation
+    df_flat = (
+        water_use_pivot.reset_index()
+    )  # brings 'time' & 'Description' back as columns
+    df_flat = df_flat.sort_values("time")
+    min_date = df_flat["time"].min()
+    max_date = df_flat["time"].max()
+
+    # For each Description, reindex by full date range, interpolate by time
+    all_desc = df_flat["Description"].unique()
+    groups = []
+    for d in all_desc:
+        g = df_flat[df_flat["Description"] == d].copy()
+
+        # set index to datetime
+        g = g.set_index("time")
+        g.index = pd.to_datetime(g.index, errors="coerce")
+        g = g.sort_index()
+
+        # reindex to fill with NaN
+        dates = pd.date_range(min_date, max_date, freq="YE-JUN")
+        g = g.reindex(dates, fill_value=np.nan)
+
+        # separate out non-numeric columns to avoid warnings
+        non_numeric_cols = g.select_dtypes(exclude=["number"]).columns
+        temp_non_numeric = g[non_numeric_cols]
+        g = g.drop(columns=non_numeric_cols)
+
+        # interpolate in time
+        g = g.infer_objects(copy=False)
+        g = g.interpolate(method="time", limit_direction="both")
+
+        # bring back non-numeric columns
+        g[non_numeric_cols] = temp_non_numeric
+        g["Description"] = d
+
+        groups.append(g)
+
+    # Recombine, pivot again if desired
+    df_flat_int = pd.concat(groups).reset_index().rename(columns={"index": "time"})
+    pivot_df = df_flat_int.pivot_table(
+        index=["time", "Description"],
+        aggfunc="first",  # keep numeric columns or pivot more specifically
+    ).sort_index(level="time")
+
+    return pivot_df
+
+
+def get_water_use_score(run_directory, individual, config, observed_pivot):
+    observed_pivot = get_observed_water_use(config)
+
+    start_time = observed_pivot.index.get_level_values("time").min()
+    end_time = observed_pivot.index.get_level_values("time").max()
+
+    fp_simulated = Path(os.path.join(run_directory, config["calibration"]["scenario"]))
+
+    # Load region_id for each agent
+    region_id = load_ds(
+        Path("report/base"),
+        "region_id",
+        start_time=config["calibration"]["start_time"],
+        end_time=config["calibration"]["end_time"],
+    ).values
+
+    # Load shapefile (or GeoPackage) with state names
+    aus_states = gpd.read_file(
+        os.path.join(config["general"]["input_folder"], "areamaps", "regions.gpkg")
+    )
+
+    # Create masks for each state
+    agent_states = aus_states["NAME_1"].values[np.int32(region_id)]
+    mask_nsw = agent_states == "New South Wales"
+    mask_vic = agent_states == "Victoria"
+
+    # Parameters for irrigation water use
+    parameters_water_use = [
+        "groundwater_irrigation",
+        "channel_irrigation",
+    ]
+
+    # Load the relevant Zarr data
+    df_simulated = load_zarr(
+        config, fp_simulated, parameters_water_use, start_time, end_time
+    )
+
+    # Sum the two irrigation parameters
+    df_total_use = (
+        df_simulated[parameters_water_use[0]] + df_simulated[parameters_water_use[1]]
+    )
+
+    # Convert negative/zero to NaN or filter them out
+    df_total_use = df_total_use[df_total_use > 0]
+
+    # --- Split by region ---
+    df_total_use_nsw = df_total_use[
+        df_total_use.index.get_level_values("agents").isin(np.where(mask_nsw)[0])
+    ].dropna()
+
+    df_total_use_vic = df_total_use[
+        df_total_use.index.get_level_values("agents").isin(np.where(mask_vic)[0])
+    ].dropna()
+
+    # Aggregate
+    df_simulated_nsw = (
+        df_total_use_nsw.groupby(level="time").sum().resample("YE-JUN").sum()
+    ) / 1000  # aggregate and m3 -> ML
+    df_simulated_nsw.name = "simulated"
+
+    df_simulated_vic = (
+        df_total_use_vic.groupby(level="time").sum().resample("YE-JUN").sum()
+    ) / 1000  # aggregate and m3 -> ML
+    df_simulated_vic.name = "simulated"
+
+    df_observed_nsw = observed_pivot.xs(
+        "volume_applied_cultivated", level="Description"
+    )["murray"]
+    df_observed_nsw.name = "observed"
+
+    df_observed_vic = observed_pivot.xs(
+        "volume_applied_cultivated", level="Description"
+    )[["goulburn_broken", "north_central", "north_east"]].sum(axis=1)
+    df_observed_vic.name = "observed"
+
+    df_vic = pd.concat(
+        [df_simulated_vic, df_observed_vic],
+        axis=1,
+        join="inner",
+    )
+
+    df_nsw = pd.concat(
+        [df_simulated_nsw, df_observed_nsw],
+        axis=1,
+        join="inner",
+    )
+
+    kge_vic = KGE_calculation(
+        df_vic["simulated"].iloc[1:-1], df_vic["observed"].iloc[1:-1]
+    )
+
+    kge_nsw = KGE_calculation(
+        df_nsw["simulated"].iloc[1:-1], df_nsw["observed"].iloc[1:-1]
+    )
+
+    kge = (kge_vic + kge_nsw) / 2.0
+    print(
+        "run_id: " + str(individual.label) + ", KGE_water_use: " + "{0:.3f}".format(kge)
+    )
+    with open(
+        os.path.join(config["calibration"]["path"], "KGE_water_use_log.csv"), "a"
+    ) as myfile:
+        myfile.write(str(individual.label) + "," + str(kge) + "\n")
+
+
 def get_observed_crops(run_directory, individual, config):
     def parse_water_year(year_int):
         return pd.to_datetime(f"{year_int}-06-30")
@@ -1328,6 +1560,8 @@ def run_model(individual, config, gauges, observed_streamflow):
                     run_directory, individual, config, gauges, observed_streamflow
                 )
             )
+        if score == "KGE_water_use":
+            scores.append(get_water_use_score(run_directory, individual, config))
         if score == "KGE_crops":
             scores.append(get_crops_KGE(run_directory, individual, config))
         if score == "KGE_irrigation_method":
