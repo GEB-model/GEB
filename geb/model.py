@@ -157,7 +157,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
 
         timestep_length = datetime.timedelta(days=1)
         self.seconds_per_timestep = timestep_length.total_seconds()
-        n_timesteps = (end_time - current_time) / timestep_length
+        n_timesteps = (end_time - current_time) / timestep_length + 1
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
         assert n_timesteps > 0, "End time is before or identical to start time"
