@@ -1259,11 +1259,6 @@ class CropFarmers(AgentBaseClass):
             ),
             gpu=False,
         )
-        self.var.discharge_daily = self.var.load_initial(
-            "discharge_daily",
-            default=lambda: np.full((len(self.gauges), 31), 0, dtype=np.float32),
-            gpu=False,
-        )
 
         self.var.water_price_monthly = self.var.load_initial(
             "water_price_monthly",
@@ -1829,7 +1824,14 @@ class CropFarmers(AgentBaseClass):
             extra_dims=(366,),
             extra_dims_names=("day",),
             dtype=np.float32,
-            fill_value=np.nan,
+            fill_value=0,
+        )
+
+        self.var.cumulative_water_deficit_current_day = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.float32,
+            fill_value=0,
         )
 
         self.field_indices_by_farmer = AgentArray(
@@ -1998,52 +2000,6 @@ class CropFarmers(AgentBaseClass):
     def is_in_command_area(self):
         return self.farmer_command_area != -1
 
-    # @property
-    # def determine_water_price(self):
-    #     # Determine parameters for current reservoirs
-    #     # reservoir_mask = np.isin(self.model.data.grid.waterBodyOrigID, self.reservoirs)
-    #     # current_reservoir_volume = self.model.data.grid.storage[reservoir_mask]
-    #     current_tot_res_vol = self.model.data.grid.storage[
-    #         self.var.data.grid.waterBodyTypC == 2
-    #     ].sum()
-    #     shift_and_update_1d(self.var.reservoir_monthly, current_tot_res_vol)
-    #     rolling_5yr_res = rolling_mean_2d(self.var.reservoir_monthly, self.alpha)[0]
-    #     # reservoir_fraction = current_tot_res_vol / rolling_5yr_res
-
-    #     # Tally discharge of this month and compare this months to 5 year average
-    #     self.current_discharge = self.var.discharge_daily.sum(axis=1)
-    #     shift_and_update(self.var.discharge_monthly, self.current_discharge)
-    #     rolling_5yr_dis = ema_2d(self.var.discharge_monthly, span=60)[:, 0]
-    #     self.discharge_fraction = self.current_discharge / rolling_5yr_dis
-
-    #     self.var.discharge_daily[:] = 0  # Reset past months discharge
-
-    #     # SPEI
-    #     self.area_SPEI = np.mean(
-    #         self.model.data.grid.spei_uncompressed[self.model.data.grid.mask]
-    #     )
-
-    #     # Prediction model order needs to be same as when created
-    #     prediction_data = np.array(
-    #         [
-    #             rolling_5yr_dis[0],  # "discharge_5yr_mean_143.3458_-34.8458"
-    #             rolling_5yr_dis[1],  # "discharge_5yr_mean_147.229_-36.405"
-    #             rolling_5yr_dis[2],  # "discharge_5yr_mean_147.711_-35.929"
-    #             current_tot_res_vol,
-    #             rolling_5yr_res,
-    #         ]
-    #     )
-
-    #     # # Convert to float32 as done during training
-    #     X_new = np.float32(prediction_data).reshape(1, -1)
-
-    #     # ### Machine learning model
-    #     self.water_price = self.rf_model.predict(X_new)  #
-
-    #     shift_and_update_1d(self.var.water_price_monthly, self.water_price[0])
-
-    #     return self.water_price  # USD / ML
-
     @property
     def determine_water_price_fixed(self):
         water_price = np.full(
@@ -2152,19 +2108,6 @@ class CropFarmers(AgentBaseClass):
             crop_allocation_nsw * field_size_fraction_nsw
         )
 
-    def save_discharge_daily(self):
-        # Retrieve gauges
-        gauges = np.array(self.gauges)
-
-        shift_and_update(
-            self.var.discharge_daily,
-            sample_from_map(
-                array=self.model.data.grid.decompress(self.model.data.grid.discharge),
-                coords=gauges,
-                gt=self.model.data.grid.gt,
-            ),
-        )
-
     def save_water_deficit(self, discount_factor=0.8):
         water_deficit_day_m3 = (
             self.model.data.HRU.ETRef - self.model.data.HRU.pr
@@ -2176,29 +2119,42 @@ class CropFarmers(AgentBaseClass):
             weights=water_deficit_day_m3[self.var.land_owners != -1],
         )
 
-        if self.model.current_day_of_year == 1:
-            # Advance multi-year water year
-            # self.cumulative_water_deficit_m3[:, :, 1:] = (
-            #     self.cumulative_water_deficit_m3[:, :, :-1]
-            # )
-            # self.cumulative_water_deficit_m3[:, :, 0] = 0
+        day_index = self.model.current_day_of_year - 1
 
-            self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 1] = (
-                water_deficit_day_m3_per_farmer
+        (
+            self.var.cumulative_water_deficit_current_day,
+            self.var.cumulative_water_deficit_previous_day,
+        ) = (
+            (self.var.cumulative_water_deficit_m3[:, day_index]).copy(),
+            self.var.cumulative_water_deficit_current_day,
+        )
+
+        if day_index == 0:
+            self.var.cumulative_water_deficit_m3[:, day_index] = (
+                self.var.cumulative_water_deficit_m3[:, day_index]
+                * (1 - discount_factor)
+                + water_deficit_day_m3_per_farmer * discount_factor
             )
         else:
-            self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 1] = (
-                self.cumulative_water_deficit_m3[:, self.model.current_day_of_year - 2]
-                + water_deficit_day_m3_per_farmer
+            self.var.cumulative_water_deficit_m3[:, day_index] = (
+                self.var.cumulative_water_deficit_m3[:, day_index - 1]
+                + water_deficit_day_m3_per_farmer * discount_factor
+                + (1 - discount_factor)
+                * (
+                    self.var.cumulative_water_deficit_m3[:, day_index]
+                    - self.var.cumulative_water_deficit_previous_day
+                )
             )
+            assert (
+                self.var.cumulative_water_deficit_m3[:, day_index]
+                >= self.var.cumulative_water_deficit_m3[:, day_index - 1]
+            ).all()
             # if this is the last day of the year, but not a leap year, the virtual
             # 366th day of the year is the same as the 365th day of the year
             # this avoids complications with the leap year
-            if self.model.current_day_of_year == 365 and not calendar.isleap(
-                self.model.current_time.year
-            ):
-                self.cumulative_water_deficit_m3[:, 365] = (
-                    self.cumulative_water_deficit_m3[:, 364]
+            if day_index == 364 and not calendar.isleap(self.model.current_time.year):
+                self.var.cumulative_water_deficit_m3[:, 365] = (
+                    self.var.cumulative_water_deficit_m3[:, 364]
                 )
 
     def abstract_water(
@@ -5240,7 +5196,6 @@ class CropFarmers(AgentBaseClass):
         self.harvest()
         self.plant()
         self.water_abstraction_sum()
-        self.save_discharge_daily()
 
         if self.model.current_time.day == 1:
             self.water_price = self.determine_water_price_fixed.copy()  # $ / m3
