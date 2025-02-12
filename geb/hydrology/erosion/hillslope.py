@@ -96,11 +96,60 @@ def get_detachment_from_flow(
     )
 
 
+def get_particle_fall_velocity(particle_diameter, rho_s, rho, eta, g=9.81):
+    """See https://doi.org/10.1002/esp.1530 equation 31
+
+    Parameters
+    ----------
+    particle_diameter : float
+        Particle diameter [m]
+    rho_s : float
+        Sediment density [kg m−3]
+    rho : float
+        Flow density [kg m−3]
+    eta : float
+        Fluid viscosity [kg m−1 s−1]
+
+    Returns
+    -------
+    np.array
+
+    """
+    return (1 / 18 * (particle_diameter**2) * (rho_s - rho) * g) / eta
+
+
 def get_particle_fall_number(
-    delta, velocity, water_depth, rho_s, rho, eta, slope, cell_length
+    particle_diameter, velocity, water_depth, rho_s, rho, eta, slope, cell_length
 ):
-    v_s = (float(1) / 18 * (delta**2) * (rho_s - rho) * 9.81) / (eta)
-    N_f = (cell_length / np.cos(slope) * v_s) / (velocity * water_depth)
+    """
+    See https://doi.org/10.1002/esp.1530 equations 28-30
+
+    Parameters
+    ----------
+    particle_diameter : float
+        Particle diameter [m]
+    velocity : np.array
+        Flow velocity [m/s]
+    water_depth : np.array
+        Water depth [m]
+    rho_s : float
+        Sediment density [kg m−3]
+    rho : float
+        Flow density [kg m−3]
+    eta : float
+        Fluid viscosity [kg m−1 s−1]
+
+    Returns
+    -------
+    np.array
+
+    """
+    particle_fall_velocity = get_particle_fall_velocity(
+        particle_diameter, rho_s, rho, eta
+    )
+    N_f = (cell_length / np.cos(slope) * particle_fall_velocity) / (
+        velocity * water_depth
+    )
     return N_f
 
 
@@ -198,11 +247,12 @@ class HillSlopeErosion:
             fn=None,
         )
 
-        # Is correct?
+        # Is correct? -> Does not seem to be correct. Should be "length" of the element. But what is that?
         self.HRU.var.cell_length = np.sqrt(self.HRU.var.cellArea)
 
         # NOTE: water depth in field seems quite deep now, and is not variable.
         # perhaps this should be made more dynamic?
+        # Depth is dicussed here, depends on type of rill: https://doi.org/10.1002/esp.1530
         self.HRU.var.water_depth_in_field = self.HRU.full_compressed(
             0.1, dtype=np.float32
         )
@@ -235,8 +285,8 @@ class HillSlopeErosion:
 
         # particle diameter (m)
         self.var.particle_diameter_clay = 2e-6
-        self.var.particle_diameter_silt = 60e-6
-        self.var.particle_diameter_sand = 200e-6
+        self.var.particle_diameter_silt = 6e-5
+        self.var.particle_diameter_sand = 2e-4
 
         self.var.rho = 1100  # Sediment density (kg m−3). Typically 2650 kg m−3.
         self.var.rho_s = 2650  # Flow density (kg m-3). Typically 1100 kg m−3 for runoff on hillslopes (Abrahams et al., 2001).
