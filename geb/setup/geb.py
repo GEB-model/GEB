@@ -3356,29 +3356,45 @@ class GEBModel(GridModel):
         lending_rates_dict = {"time": years_lending_rates, "data": {}}
         inflation_rates_dict = {"time": years_inflation_rates, "data": {}}
 
+        # Create a helper to process rates and assert single row data
+        def process_rates(df, rate_cols, ISO3, convert_percent_to_ratio=False):
+            filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
+            assert len(filtered_data) == 1, (
+                f"Expected one row for {ISO3}, got {len(filtered_data)}"
+            )
+            if convert_percent_to_ratio:
+                return (filtered_data.iloc[0] / 100 + 1).tolist()
+            return filtered_data.iloc[0].tolist()
+
+        USA_inflation_rates = process_rates(
+            inflation_rates,
+            years_inflation_rates,
+            "USA",
+            convert_percent_to_ratio=True,
+        )
+
         for _, region in self.geoms["areamaps/regions"].iterrows():
             region_id = str(region["region_id"])
-            ISO3 = region["ISO3"]
-
-            # Create a helper to process rates and assert single row data
-            def process_rates(df, rate_cols, convert_percent=False):
-                filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
-                assert len(filtered_data) == 1, (
-                    f"Expected one row for {ISO3}, got {len(filtered_data)}"
-                )
-                if convert_percent:
-                    return (filtered_data.iloc[0] / 100 + 1).tolist()
-                return filtered_data.iloc[0].tolist()
 
             # Store data in dictionaries
             lending_rates_dict["data"][region_id] = process_rates(
-                lending_rates, years_lending_rates, True
+                lending_rates,
+                years_lending_rates,
+                region["ISO3"],
+                convert_percent_to_ratio=True,
             )
-            inflation_rates_dict["data"][region_id] = process_rates(
-                inflation_rates, years_inflation_rates, True
+            local_inflation_rates = process_rates(
+                inflation_rates,
+                years_inflation_rates,
+                region["ISO3"],
+                convert_percent_to_ratio=True,
             )
+            inflation_rates_dict["data"][region_id] = np.array(
+                local_inflation_rates
+            ) / np.array(USA_inflation_rates)
+
             price_ratio_dict["data"][region_id] = process_rates(
-                price_ratio_filtered, years_price_ratio
+                price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
         if project_future_until_year:
