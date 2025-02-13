@@ -1827,7 +1827,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
-        self.var.cumulative_water_deficit_current_day = AgentArray(
+        self.cumulative_water_deficit_current_day = AgentArray(
             n=self.n,
             max_n=self.max_n,
             dtype=np.float32,
@@ -2122,39 +2122,38 @@ class CropFarmers(AgentBaseClass):
         day_index = self.model.current_day_of_year - 1
 
         (
-            self.var.cumulative_water_deficit_current_day,
-            self.var.cumulative_water_deficit_previous_day,
+            self.cumulative_water_deficit_current_day[:],
+            self.cumulative_water_deficit_previous_day,
         ) = (
-            (self.var.cumulative_water_deficit_m3[:, day_index]).copy(),
-            self.var.cumulative_water_deficit_current_day,
+            (self.cumulative_water_deficit_m3[:, day_index]).copy(),
+            self.cumulative_water_deficit_current_day,
         )
 
         if day_index == 0:
-            self.var.cumulative_water_deficit_m3[:, day_index] = (
-                self.var.cumulative_water_deficit_m3[:, day_index]
-                * (1 - discount_factor)
+            self.cumulative_water_deficit_m3[:, day_index] = (
+                self.cumulative_water_deficit_m3[:, day_index] * (1 - discount_factor)
                 + water_deficit_day_m3_per_farmer * discount_factor
             )
         else:
-            self.var.cumulative_water_deficit_m3[:, day_index] = (
-                self.var.cumulative_water_deficit_m3[:, day_index - 1]
+            self.cumulative_water_deficit_m3[:, day_index] = (
+                self.cumulative_water_deficit_m3[:, day_index - 1]
                 + water_deficit_day_m3_per_farmer * discount_factor
                 + (1 - discount_factor)
                 * (
-                    self.var.cumulative_water_deficit_m3[:, day_index]
-                    - self.var.cumulative_water_deficit_previous_day
+                    self.cumulative_water_deficit_m3[:, day_index]
+                    - self.cumulative_water_deficit_previous_day
                 )
             )
             assert (
-                self.var.cumulative_water_deficit_m3[:, day_index]
-                >= self.var.cumulative_water_deficit_m3[:, day_index - 1]
+                self.cumulative_water_deficit_m3[:, day_index]
+                >= self.cumulative_water_deficit_m3[:, day_index - 1]
             ).all()
             # if this is the last day of the year, but not a leap year, the virtual
             # 366th day of the year is the same as the 365th day of the year
             # this avoids complications with the leap year
             if day_index == 364 and not calendar.isleap(self.model.current_time.year):
-                self.var.cumulative_water_deficit_m3[:, 365] = (
-                    self.var.cumulative_water_deficit_m3[:, 364]
+                self.cumulative_water_deficit_m3[:, 365] = (
+                    self.cumulative_water_deficit_m3[:, 364]
                 )
 
     def abstract_water(
