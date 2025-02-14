@@ -207,22 +207,22 @@ class PotentialEvapotranspiration(object):
         Dynamic part of the potential evaporation module
         Based on Penman Monteith - FAO 56
         """
-        (self.var.ETRef,
-        self.var.EWRef,
+        (self.HRU.var.ETRef,
+        self.HRU.var.EWRef,
         net_absorbed_radiation_vegetation_MJ_m2_day,
         ) = PET(
-            tas=self.var.tas,
-            tasmin=self.var.tasmin,
-            tasmax=self.var.tasmax,
-            hurs=self.var.hurs,
-            ps=self.var.ps,
-            rlds=self.var.rlds,
-            rsds=self.var.rsds,
-            sfcWind=self.var.sfcWind,
+            tas=self.HRU.tas,
+            tasmin=self.HRU.tasmin,
+            tasmax=self.HRU.tasmax,
+            hurs=self.HRU.hurs,
+            ps=self.HRU.ps,
+            rlds=self.HRU.rlds,
+            rsds=self.HRU.rsds,
+            sfcWind=self.HRU.sfcWind,
         )
 
         net_absorbed_radiation_vegetation_MJ_m2_day[
-            self.var.land_use_type != FOREST
+            self.HRU.var.land_use_type != FOREST
         ] = np.nan
         self.model.data.grid.net_absorbed_radiation_vegetation_MJ_m2_day = (
             self.model.data.to_grid(
@@ -230,7 +230,7 @@ class PotentialEvapotranspiration(object):
             )
         )
 
-        assert self.var.ETRef.dtype == np.float32
-        assert self.var.EWRef.dtype == np.float32
+        assert self.HRU.var.ETRef.dtype == np.float32
+        assert self.HRU.var.EWRef.dtype == np.float32
 
         self.model.agents.crop_farmers.save_water_deficit()

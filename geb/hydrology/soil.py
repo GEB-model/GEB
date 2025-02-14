@@ -1296,7 +1296,7 @@ class Soil(object):
 
             already_has_plantFATE_cell = False
             max_num_plantFATE_cells = 1
-            max_num_plantFATE_cells = len(self.var.land_use_type)
+            max_num_plantFATE_cells = len(self.HRU.var.land_use_type)
 
             from . import plantFATE
 
@@ -1305,9 +1305,9 @@ class Soil(object):
                 self.HRU.var.land_use_type, dtype=bool
             )
 
-            for i, land_use_type_RU in enumerate(self.var.land_use_type):
-                grid_cell = self.var.HRU_to_grid[i]
-                if land_use_type_RU == FOREST and self.var.land_use_ratio[i] > 0.5:
+            for i, land_use_type_RU in enumerate(self.HRU.var.land_use_type):
+                grid_cell = self.HRU.var.HRU_to_grid[i]
+                if land_use_type_RU == FOREST and self.HRU.var.land_use_ratio[i] > 0.5:
                 # if land_use_type_RU == FOREST and grid_cell == cell_id:
                 # if land_use_type_RU == FOREST:
                     if already_has_plantFATE_cell:
@@ -1446,27 +1446,27 @@ class Soil(object):
             if plantFATE_model is not None:
                 plantFATE_data = {
                     "soil_water_potential": self.calculate_soil_water_potential_MPa(
-                        soil_moisture=self.var.w[0:len(self.var.w), indx].sum(),
-                        soil_moisture_wilting_point=self.wres[0:len(self.wres), indx].sum(),
-                        soil_moisture_field_capacity=self.wfc[0:len(self.wfc), indx].sum(),
-                        soil_tickness=self.soil_layer_height[0:len(self.soil_layer_height), indx].sum(),
+                        soil_moisture=self.HRU.var.w[0:len(self.HRU.var.w), indx].sum(),
+                        soil_moisture_wilting_point=self.HRU.var.wres[0:len(self.HRU.var.wres), indx].sum(),
+                        soil_moisture_field_capacity=self.HRU.var.wfc[0:len(self.HRU.var.wfc), indx].sum(),
+                        soil_tickness=self.HRU.var.soil_layer_height[0:len(self.HRU.var.soil_layer_height), indx].sum(),
                     ),
                     "vapour_pressure_deficit": self.calculate_vapour_pressure_deficit_kPa(
-                        temperature_K=self.var.tas[indx],
-                        relative_humidity=self.var.hurs[indx],
+                        temperature_K=self.HRU.tas[indx],
+                        relative_humidity=self.HRU.hurs[indx],
                     ) * 1000,  # kPa to Pa
                     "photosynthetic_photon_flux_density": self.calculate_photosynthetic_photon_flux_density(
-                        shortwave_radiation=self.var.rsds[indx]
+                        shortwave_radiation=self.HRU.rsds[indx]
                     ),
-                    "temperature": self.var.tas[indx] - 273.15,  # - 273.15,  # K to C
+                    "temperature": self.HRU.tas[indx] - 273.15,  # - 273.15,  # K to C
                     "topsoil_volumetric_water_content": self.calculate_topsoil_volumetric_content(
-                        topsoil_water_content=self.var.w[0, indx],
-                        topsoil_wilting_point=self.wres[0, indx],
-                        topsoil_fieldcap=self.wfc[0, indx]
+                        topsoil_water_content=self.HRU.var.w[0, indx],
+                        topsoil_wilting_point=self.HRU.var.wres[0, indx],
+                        topsoil_fieldcap=self.HRU.var.wfc[0, indx]
                     ),
                     "net_radiation": self.calculate_net_radiation(
-                        shortwave_radiation_downwelling=self.var.rsds[indx],
-                        longwave_radiation_net=self.var.rlds[indx],
+                        shortwave_radiation_downwelling=self.HRU.rsds[indx],
+                        longwave_radiation_net=self.HRU.rlds[indx],
                         albedo=0.13  # temporary value for forest
                     )
                     # "net_radiation": self.model.data.grid.net_absorbed_radiation_vegetation_MJ_m2_day[i]
@@ -1498,14 +1498,14 @@ class Soil(object):
                     plantfate_co2[indx] = plantFATE_model.npp
                     plantfate_num_ind[indx] = plantFATE_model.n_individuals
 
-                    total_water_by_layer = self.var.w[0:len(self.var.w), indx] - self.wres[0:len(self.var.w), indx]
+                    total_water_by_layer = self.HRU.var.w[0:len(self.HRU.var.w), indx] - self.HRU.var.wres[0:len(self.HRU.var.w), indx]
                     # print("Total Available Water " + str(sum(total_water_by_layer)))
                     # print("Water we are taking " + str(transpiration))
                     transpiration = min(transpiration, sum(total_water_by_layer))
                     plantfate_transpiration[indx] = transpiration
                     # print("Total Available Water after \"fix\"" + str(sum(total_water_by_layer)))
                     # print("Water we are taking " + str(transpiration))
-                    total_water = self.var.w[0:len(self.var.w), indx].sum() - self.wres[0:len(self.var.w), indx].sum()
+                    total_water = self.HRU.var.w[0:len(self.HRU.var.w), indx].sum() - self.HRU.var.wres[0:len(self.HRU.var.w), indx].sum()
                     for layer in range(N_SOIL_LAYERS):
                         plantfate_transpiration_by_layer[layer, indx] = plantfate_transpiration[indx] * (
                         total_water_by_layer[layer]) / total_water
@@ -1620,20 +1620,20 @@ class Soil(object):
             )
         )
 
-        w_forest = self.var.w.sum(axis=0)
-        w_forest[self.var.land_use_type != FOREST] = np.nan
+        w_forest = self.HRU.var.w.sum(axis=0)
+        w_forest[self.HRU.var.land_use_type != FOREST] = np.nan
         w_forest = self.model.data.to_grid(HRU_data=w_forest, fn="nanmax")
 
-        wwp_forest = self.wwp.sum(axis=0)
-        wwp_forest[self.var.land_use_type != FOREST] = np.nan
+        wwp_forest = self.HRU.var.wwp.sum(axis=0)
+        wwp_forest[self.HRU.var.land_use_type != FOREST] = np.nan
         wwp_forest = self.model.data.to_grid(HRU_data=wwp_forest, fn="nanmax")
 
-        wfc_forest = self.wfc.sum(axis=0)
-        wfc_forest[self.var.land_use_type != FOREST] = np.nan
+        wfc_forest = self.HRU.var.wfc.sum(axis=0)
+        wfc_forest[self.HRU.var.land_use_type != FOREST] = np.nan
         wfc_forest = self.model.data.to_grid(HRU_data=wfc_forest, fn="nanmax")
 
-        soil_height_forest = self.soil_layer_height.sum(axis=0)
-        soil_height_forest[self.var.land_use_type != FOREST] = np.nan
+        soil_height_forest = self.HRU.var.soil_layer_height.sum(axis=0)
+        soil_height_forest[self.HRU.var.land_use_type != FOREST] = np.nan
         soil_height_forest = self.model.data.to_grid(
             HRU_data=soil_height_forest, fn="nanmax"
         )
@@ -1676,8 +1676,8 @@ class Soil(object):
 
         timer.new_split("Capillary rise from groundwater")
 
-        mask = self.var.land_use_type >= SEALED
-        mask_evap = self.var.land_use_type >= SEALED
+        mask = self.HRU.var.land_use_type >= SEALED
+        mask_evap = self.HRU.var.land_use_type >= SEALED
         # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
         if self.model.config["general"]["simulate_forest"]:
             mask[self.plantFATE_forest_RUs] = True
@@ -1720,7 +1720,7 @@ class Soil(object):
         plantfate_transpiration = np.zeros(len(self.plantFATE_forest_RUs))
         plantfate_bare_soil_evaporation = np.zeros(len(self.plantFATE_forest_RUs))
         plantfate_transpiration_by_layer = np.zeros_like(
-            self.var.w
+            self.HRU.var.w
         )
         plantfate_biomass = np.zeros(len(self.plantFATE_forest_RUs))
         plantfate_co2 = np.zeros(len(self.plantFATE_forest_RUs))
@@ -1761,7 +1761,7 @@ class Soil(object):
         # actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
             # print(plantfate_bare_soil_evaporation)
         actual_total_transpiration += plantfate_transpiration
-        self.var.w -= plantfate_transpiration_by_layer
+        self.HRU.var.w -= plantfate_transpiration_by_layer
 
         self.model.data.grid.plantFATE_biomass = self.model.data.to_grid(HRU_data=plantfate_biomass, fn="weightedmean")
         self.model.data.grid.plantFATE_NPP = self.model.data.to_grid(HRU_data=plantfate_co2, fn="weightedmean")
