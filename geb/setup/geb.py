@@ -760,6 +760,21 @@ class GEBModel(GridModel):
                             f"No crop price data available for crop {crop_name}"
                         )
 
+            # Extract the crop names from the dictionary and convert them to lowercase
+            crop_names = [
+                crop["name"].lower()
+                for idx, crop in self.dict["crops/crop_data"]["data"].items()
+            ]
+
+            # Filter the columns of the data DataFrame
+            data = data[
+                [
+                    col
+                    for col in data.columns
+                    if col.lower() in crop_names or col == "_crop_price_inflation"
+                ]
+            ]
+
             data = self.inter_and_extrapolate_prices(
                 prices_plus_crop_price_inflation, unique_regions
             )
@@ -775,10 +790,7 @@ class GEBModel(GridModel):
                     f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
                 )
 
-            if (
-                project_past_until_year is not None
-                or project_future_until_year is not None
-            ):
+            if project_past_until_year or project_future_until_year:
                 data = self.process_additional_years(
                     costs=data,
                     total_years=total_years,
@@ -869,20 +881,45 @@ class GEBModel(GridModel):
                 },
                 index=pd.to_datetime(data["time"]),
             )
+            # compute mean price per year, using start day as index
+            data = data.resample("AS").mean()
+            # extend dataframe to include start and end years
             data = data.reindex(
-                columns=pd.MultiIndex.from_product(
+                index=pd.date_range(
+                    start=datetime(project_past_until_year, 1, 1),
+                    end=datetime(project_future_until_year, 1, 1),
+                    freq="YS",
+                )
+            )
+            # only use year identifier as index
+            data.index = data.index.year
+
+            data = data.reindex(
+                index=pd.MultiIndex.from_product(
                     [
                         self.geoms["areamaps/regions"]["region_id"],
-                        data.columns,
-                    ]
+                        data.index,
+                    ],
+                    names=["region_id", "date"],
                 ),
                 level=1,
             )
+
+            data = self.determine_price_variability(
+                data, self.geoms["areamaps/regions"]
+            )
+
+            data = self.inter_and_extrapolate_prices(
+                data, self.geoms["areamaps/regions"]
+            )
+
             data = {
                 "type": "time_series",
-                "time": data.index.tolist(),
+                "time": data.xs(
+                    data.index.get_level_values(0)[0], level=0
+                ).index.tolist(),
                 "data": {
-                    str(region_id): data[region_id].to_dict(orient="list")
+                    str(region_id): data.loc[region_id].to_dict(orient="list")
                     for region_id in self.geoms["areamaps/regions"]["region_id"]
                 },
             }
@@ -1064,21 +1101,6 @@ class GEBModel(GridModel):
         5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
         """
 
-        # Extract the crop names from the dictionary and convert them to lowercase
-        crop_names = [
-            crop["name"].lower()
-            for idx, crop in self.dict["crops/crop_data"]["data"].items()
-        ]
-
-        # Filter the columns of the data DataFrame
-        data = data[
-            [
-                col
-                for col in data.columns
-                if col.lower() in crop_names or col == "_crop_price_inflation"
-            ]
-        ]
-
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
@@ -1205,6 +1227,8 @@ class GEBModel(GridModel):
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
         project_future_until_year: Optional[int] = False,
+        project_past_until_year: Optional[int] = False,
+        translate_crop_names: Optional[Dict[str, str]] = None,
     ):
         """
         Sets up the cultivation costs for the model.
@@ -1218,7 +1242,10 @@ class GEBModel(GridModel):
         """
         self.logger.info("Preparing cultivation costs")
         cultivation_costs = self.process_crop_data(
-            cultivation_costs, project_future_until_year=project_future_until_year
+            crop_prices=cultivation_costs,
+            project_future_until_year=project_future_until_year,
+            project_past_until_year=project_past_until_year,
+            translate_crop_names=translate_crop_names,
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
