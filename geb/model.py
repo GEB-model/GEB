@@ -6,7 +6,6 @@ from typing import Union
 from time import time
 import copy
 import numpy as np
-import warnings
 
 from honeybees.library.helpers import timeprint
 from honeybees.area import Area
@@ -82,28 +81,15 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         self,
         config: dict,
         files: dict,
-        spinup: bool = False,
         crs=4326,
-        timing=False,
         mode="w",
+        timing=False,
     ):
         self.crs = crs
         self.timing = timing
-        assert mode in ("w", "r")
         self.mode = mode
 
-        self.spinup = spinup
         self.config = self.setup_config(config)
-
-        if "simulate_hydrology" not in self.config["general"]:
-            self.config["general"]["simulate_hydrology"] = True
-            warnings.warn(
-                "Please add 'simulate_hydrology' to the general section of the config file. For most cases this should be set to 'true'.",
-                DeprecationWarning,
-            )
-
-        if self.spinup:
-            self.config["report"] = {}
 
         # make a deep copy to avoid issues when the model is initialized multiple times
         self.files = copy.deepcopy(files)
@@ -111,83 +97,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             for key, value in data.items():
                 data[key] = Path(config["general"]["input_folder"]) / value
 
-        if spinup:
-            self.run_name = "spinup"
-        elif "name" in self.config["general"]:
-            self.run_name = self.config["general"]["name"]
-        else:
-            print('No "name" specified in config file under general. Using "default".')
-            self.run_name = "default"
-
-        self.store = Store(self)
-
-        self.report_folder = (
-            Path(self.config["general"]["report_folder"]) / self.run_name
-        )
-        if self.mode == "w":
-            # clean report model at start of run
-            shutil.rmtree(self.report_folder, ignore_errors=True)
-        self.report_folder.mkdir(parents=True, exist_ok=True)
-
-        self.spinup_start = datetime.datetime.combine(
-            self.config["general"]["spinup_time"], datetime.time(0)
-        )
-
-        if self.spinup:
-            end_time = datetime.datetime.combine(
-                self.config["general"]["start_time"], datetime.time(0)
-            )
-            current_time = datetime.datetime.combine(
-                self.config["general"]["spinup_time"], datetime.time(0)
-            )
-            if end_time.year - current_time.year < 10:
-                print(
-                    "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
-                )
-        else:
-            current_time = datetime.datetime.combine(
-                self.config["general"]["start_time"], datetime.time(0)
-            )
-            end_time = datetime.datetime.combine(
-                self.config["general"]["end_time"], datetime.time(0)
-            )
-
-        assert isinstance(end_time, datetime.datetime)
-        assert isinstance(current_time, datetime.datetime)
-
-        timestep_length = datetime.timedelta(days=1)
-        self.seconds_per_timestep = timestep_length.total_seconds()
-        n_timesteps = (end_time - current_time) / timestep_length + 1
-        assert n_timesteps.is_integer()
-        n_timesteps = int(n_timesteps)
-        assert n_timesteps > 0, "End time is before or identical to start time"
-
         self.regions = gpd.read_file(self.files["geoms"]["areamaps/regions"])
-        self.data = Data(self)
-
-        if self.mode == "w":
-            HazardDriver.__init__(self)
-
-            ABM.__init__(
-                self,
-                current_time,
-                timestep_length,
-                n_timesteps,
-            )
-
-            if self.config["general"]["simulate_hydrology"]:
-                Hydrology.__init__(
-                    self,
-                )
-
-            if not self.spinup:
-                self.store.load()
-
-            self.groundwater.initalize_modflow_model()
-            self.soil.set_global_variables()
-
-            self.reporter = Reporter(self)
-            self.artists = Artists(self)
+        self.store = Store(self)
 
     def restore(self, store_location, timestep):
         self.store.load(store_location)
@@ -223,7 +134,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         # check if the discharges are the same in both multiverses
         assert np.array_equal(discharges_before_restore, discharges_after_restore)
 
-    def step(self, step_size: Union[int, str] = 1) -> None:
+    def step(self, step_size: Union[int, str] = 1, report=False) -> None:
         """
         Forward the model by the given the number of steps.
 
@@ -241,26 +152,152 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             if self.config["general"]["simulate_hydrology"]:
                 Hydrology.step(self)
 
-            self.reporter.step()
             t1 = time()
             print(
                 f"{self.current_time} ({round(t1 - t0, 4)}s)",
                 flush=True,
             )
 
+            if report:
+                self.reporter.step()
+
             # if self.current_timestep == 5:
             #     self.multiverse()
             self.current_timestep += 1
 
+    def create_datetime(self, date):
+        return datetime.datetime.combine(date, datetime.time(0))
+
+    def _initialize(
+        self,
+        run_name,
+        report,
+        current_time,
+        end_time,
+        in_spinup=False,
+        clean_report_folder=False,
+        load_data_from_store=False,
+    ) -> None:
+        """Initializes the model."""
+        self.run_name = run_name
+        self.in_spinup = in_spinup
+
+        # optionally clean report model at start of run
+        if clean_report_folder:
+            shutil.rmtree(self.report_folder, ignore_errors=True)
+
+        self.data = Data(self)
+        self.report_folder.mkdir(parents=True, exist_ok=True)
+
+        self.spinup_start = datetime.datetime.combine(
+            self.config["general"]["spinup_time"], datetime.time(0)
+        )
+
+        timestep_length = datetime.timedelta(days=1)
+        self.seconds_per_timestep = timestep_length.total_seconds()
+        n_timesteps = (end_time - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
+
+        HazardDriver.__init__(self)
+
+        ABM.__init__(
+            self,
+            current_time,
+            timestep_length,
+            n_timesteps,
+        )
+
+        if self.config["general"]["simulate_hydrology"]:
+            Hydrology.__init__(
+                self,
+            )
+
+        if load_data_from_store:
+            self.store.load()
+
+        self.groundwater.initalize_modflow_model()
+        self.soil.set_global_variables()
+
+        if report:
+            self.reporter = Reporter(self)
+        self.artists = Artists(self)
+
     def run(self) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
+        if not self.store.path.exists():
+            raise FileNotFoundError(
+                f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
+            )
+
+        if "name" in self.config["general"]:
+            run_name = self.config["general"]["name"]
+        else:
+            print('No "name" specified in config file under general. Using "default".')
+            run_name = "default"
+
+        current_time = self.create_datetime(self.config["general"]["start_time"])
+        end_time = self.create_datetime(self.config["general"]["end_time"])
+
+        self._initialize(
+            run_name=run_name,
+            report=True,
+            current_time=current_time,
+            end_time=end_time,
+            clean_report_folder=True,
+            load_data_from_store=True,
+        )
+
         for _ in range(self.n_timesteps):
-            self.step()
+            self.step(report=True)
 
-        if self.spinup:
-            self.store.save()
+        print("Model run finished, finalizing report...")
+        self.reporter.finalize()
 
-        print("Model run finished")
+    def spinup(self) -> None:
+        """Run the model for the spinup period."""
+        run_name = "spinup"
+
+        # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
+        current_time = self.create_datetime(self.config["general"]["spinup_time"])
+        end_time = self.create_datetime(self.config["general"]["start_time"])
+
+        if end_time.year - current_time.year < 10:
+            print(
+                "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
+            )
+
+        self._initialize(
+            run_name=run_name,
+            report=False,
+            current_time=current_time,
+            end_time=end_time,
+            clean_report_folder=True,
+            in_spinup=True,
+        )
+
+        for _ in range(self.n_timesteps):
+            self.step(report=False)
+
+        print("Spinup finished, saving conditions at end of spinup...")
+
+        self.store.save()
+
+    def estimate_risk(self) -> None:
+        """Estimate the risk of the model."""
+        current_time = self.create_datetime(self.config["general"]["start_time"])
+        end_time = self.create_datetime(self.config["general"]["end_time"])
+
+        self._initialize(
+            run_name="estimate_risk",
+            report=False,
+            current_time=current_time,
+            end_time=end_time,
+            load_data_from_store=True,
+        )
+
+        ...
 
     @property
     def current_day_of_year(self) -> int:
@@ -292,6 +329,10 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         folder = Path("simulation_root") / "spinup"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    @property
+    def report_folder(self):
+        return Path(self.config["general"]["report_folder"]) / self.run_name
 
     def close(self) -> None:
         """Finalizes the model."""

@@ -217,7 +217,7 @@ class HillSlopeErosion:
         self.model = model
         self.simulate = self.model.config["hazards"]["erosion"]["simulate"]
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):

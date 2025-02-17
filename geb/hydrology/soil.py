@@ -996,7 +996,7 @@ class Soil(object):
         self.HRU = model.data.HRU
         self.grid = model.data.grid
         self.model = model
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
@@ -1164,7 +1164,7 @@ class Soil(object):
             ini_file = out_dir / "p_daily.ini"
 
             yaml["> STRINGS"]["outDir"] = out_dir
-            if self.model.spinup is True:
+            if self.model.in_spinup is True:
                 original_state_file = (
                     Path("input")
                     / "plantFATE_initialization"

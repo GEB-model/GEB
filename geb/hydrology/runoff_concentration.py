@@ -85,7 +85,7 @@ class RunoffConcentration(object):
         """
         self.grid = model.data.grid
         self.model = model
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):

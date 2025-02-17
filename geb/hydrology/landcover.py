@@ -98,7 +98,7 @@ class LandCover(object):
         self.model = model
         self.crop_farmers = model.agents.crop_farmers
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):

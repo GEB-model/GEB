@@ -797,7 +797,7 @@ class ModFlowSimulation:
                 "\tAbstraction (mean)",
                 self.actual_well_rate.mean(),
                 "m3",
-                (self.actual_well_rate / self.area).mean(),
+                (self.actual_well_rate.sum(axis=0) / self.area).mean(),
                 "m",
             )
             print(

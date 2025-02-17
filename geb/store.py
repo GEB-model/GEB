@@ -413,13 +413,6 @@ class Store:
     def __init__(self, model):
         self.model = model
         self.buckets = {}
-        if self.model.spinup:
-            self.path.mkdir(parents=True, exist_ok=True)
-        else:
-            if not self.path.exists():
-                raise FileNotFoundError(
-                    f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
-                )
 
     def create_bucket(self, name):
         assert name not in self.buckets

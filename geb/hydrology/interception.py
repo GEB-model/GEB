@@ -65,7 +65,7 @@ class Interception(object):
         self.HRU = model.data.HRU
         self.grid = model.data.grid
         self.model = model
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):

@@ -105,7 +105,7 @@ def create_logger(fp):
 @click.group()
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
-def main(ctx):  # , quiet, verbose):
+def cli(ctx):  # , quiet, verbose):
     """Command line interface for GEB."""
     if ctx.obj is None:
         ctx.obj = {}
@@ -170,8 +170,8 @@ def click_run_options():
     return decorator
 
 
-def run_model(
-    spinup,
+def run_model_with_method(
+    method,
     profiling,
     config,
     working_directory,
@@ -189,7 +189,6 @@ def run_model(
     # set the working directory
     os.chdir(working_directory)
 
-    MODEL_NAME = "GEB"
     config = parse_config(config)
 
     files = parse_config(
@@ -201,7 +200,6 @@ def run_model(
     model_params = {
         "config": config,
         "files": files,
-        "spinup": spinup,
         "timing": timing,
     }
 
@@ -211,8 +209,7 @@ def run_model(
             profile.enable()
 
         with GEBModel(**model_params) as model:
-            model.run()
-            model.report()
+            getattr(model, method)()
 
         if profiling:
             profile.disable()
@@ -243,7 +240,7 @@ def run_model(
         DISPLAY_TIMESTEPS = ["day", "week", "month", "year"]
 
         server = ModularServer(
-            MODEL_NAME,
+            "GEB",
             GEBModel,
             server_elements,
             DISPLAY_TIMESTEPS,
@@ -253,19 +250,26 @@ def run_model(
         server.launch(port=port, browser=no_browser)
 
 
-@main.command()
+@cli.command()
 @click_run_options()
 def run(*args, **kwargs):
-    run_model(spinup=False, *args, **kwargs)
+    run_model_with_method(method="run", *args, **kwargs)
 
 
-@main.command()
+@cli.command()
 @click_run_options()
 def spinup(*args, **kwargs):
-    run_model(spinup=True, *args, **kwargs)
+    run_model_with_method(method="spinup", *args, **kwargs)
 
 
-@main.command()
+@cli.command()
+@click.argument("method", required=True)
+@click_run_options()
+def exec(method, *args, **kwargs):
+    run_model_with_method(method=method, *args, **kwargs)
+
+
+@cli.command()
 @click_config
 @click.option(
     "--working-directory", "-wd", default=".", help="Working directory for model."
@@ -277,7 +281,7 @@ def calibrate(config, working_directory):
     geb_calibrate(config, working_directory)
 
 
-@main.command()
+@cli.command()
 @click_config
 @click.option(
     "--working-directory", "-wd", default=".", help="Working directory for model."
@@ -289,7 +293,7 @@ def sensitivity(config, working_directory):
     geb_sensitivity_analysis(config, working_directory)
 
 
-@main.command()
+@cli.command()
 @click_config
 @click.option(
     "--working-directory", "-wd", default=".", help="Working directory for model."
@@ -379,7 +383,7 @@ def customize_data_catalog(data_catalogs):
         return data_catalogs
 
 
-@main.command()
+@cli.command()
 @click_build_options()
 def build(
     data_catalog, config, build_config, custom_model, working_directory, data_provider
@@ -437,7 +441,7 @@ def build(
     )
 
 
-@main.command()
+@cli.command()
 @click_build_options()
 @click.option("--model", "-m", default="../base", help="Folder for base model.")
 def alter(
@@ -476,7 +480,7 @@ def alter(
     )
 
 
-@main.command()
+@cli.command()
 @click_build_options(build_config="update.yml")
 def update(
     data_catalog, config, build_config, custom_model, working_directory, data_provider
@@ -502,7 +506,7 @@ def update(
     geb_model.update(opt=configread(build_config))
 
 
-@main.command()
+@cli.command()
 def evaluate():
     """Evaluate model."""
     raise NotImplementedError
@@ -520,7 +524,7 @@ def evaluate():
     default="model",
     help="Working directory for model.",
 )
-@main.command()
+@cli.command()
 def share(working_directory, name):
     """Share model."""
 
@@ -573,4 +577,4 @@ def share(working_directory, name):
 
 
 if __name__ == "__main__":
-    main()
+    cli()

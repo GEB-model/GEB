@@ -47,7 +47,7 @@ class Households(AgentBaseClass):
         self.agents = agents
         self.reduncancy = reduncancy
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):

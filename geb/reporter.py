@@ -362,7 +362,7 @@ class hydrology_reporter(ABMReporter):
                                 raise ValueError(f"Function {function} not recognized")
                     self.report_value(name, value, conf)
 
-    def report(self) -> None:
+    def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
             if self.model.config["report_hydrology"][name]["format"] == "zarr":
@@ -415,8 +415,8 @@ class Reporter:
         self.abm_reporter.step()
         self.hydrology_reporter.step()
 
-    def report(self):
+    def finalize(self):
         """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM."""
-        self.abm_reporter.report()
-        self.hydrology_reporter.report()
+        self.abm_reporter.finalize()
+        self.hydrology_reporter.finalize()
         print("Reported data")

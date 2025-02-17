@@ -26,7 +26,7 @@ class LiveStockFarmers(AgentBaseClass):
 
         AgentBaseClass.__init__(self)
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self) -> None:

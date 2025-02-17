@@ -531,7 +531,7 @@ class HRUs(BaseVariables):
         )
         BaseVariables.__init__(self)
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
@@ -925,7 +925,7 @@ class Data:
         self.HRU = HRUs(self, model)
         self.modflow = Modflow(self, model)
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
         self.load_water_demand()
 

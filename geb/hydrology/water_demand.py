@@ -50,7 +50,7 @@ class WaterDemand:
         self.households = model.agents.households
         self.reservoir_operators = model.agents.reservoir_operators
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):

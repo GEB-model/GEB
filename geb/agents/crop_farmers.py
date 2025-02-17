@@ -201,9 +201,9 @@ class CropFarmers(AgentBaseClass):
         self.inflation_rate = load_economic_data(
             self.model.files["dict"]["economics/inflation_rates"]
         )
-        self.lending_rate = load_economic_data(
-            self.model.files["dict"]["economics/lending_rates"]
-        )
+        # self.lending_rate = load_economic_data(
+        #     self.model.files["dict"]["economics/lending_rates"]
+        # )
         self.electricity_cost = load_economic_data(
             self.model.files["dict"]["economics/electricity_cost"]
         )
@@ -225,7 +225,7 @@ class CropFarmers(AgentBaseClass):
             self.model, "crops/cultivation_costs"
         )
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
@@ -1865,18 +1865,18 @@ class CropFarmers(AgentBaseClass):
                 self.inflation_rate, datetime(year, 1, 1)
             )
             for year in range(
-                self.model.config["general"]["spinup_time"].year,
+                self.model.config["general"]["spinup_time"].year + 1,
                 self.model.current_time.year + 1,
             )
         ]
 
-        cum_inflation = np.ones_like(inflation_arrays[0])
-        for inflation in inflation_arrays:
-            cum_inflation *= inflation
-
-        # Adjust yearly profits by the latest profit, field size, and cumulative inflation for each harvesting farmer
-        self.var.yearly_profits[:, 0] += profit / cum_inflation
-        self.var.yearly_potential_profits[:, 0] += potential_profit / cum_inflation
+        # compute cumulative inflation for each farmer
+        cumulative_inflation = np.prod(inflation_arrays, axis=0)
+        # Adjust yearly profits by the cumulative inflation for each harvesting farmer
+        self.var.yearly_profits[:, 0] += profit / cumulative_inflation
+        self.var.yearly_potential_profits[:, 0] += (
+            potential_profit / cumulative_inflation
+        )
 
     def calculate_yield_spei_relation_test_solo(self):
         import matplotlib
@@ -4000,7 +4000,7 @@ class CropFarmers(AgentBaseClass):
             timer.new_split("water & energy costs")
 
             if (
-                not self.model.spinup
+                not self.model.in_spinup
                 and "ruleset" in self.config
                 and not self.config["ruleset"] == "no-adaptation"
             ):

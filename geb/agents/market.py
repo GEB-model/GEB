@@ -28,7 +28,7 @@ class Market(AgentBaseClass):
         )
         AgentBaseClass.__init__(self)
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
         self._crop_prices = load_regional_crop_data_from_dict(
@@ -167,7 +167,7 @@ class Market(AgentBaseClass):
     @property
     def crop_prices(self) -> np.ndarray:
         if (
-            not self.model.spinup
+            not self.model.in_spinup
             and "dynamic_market" in self.config
             and self.config["dynamic_market"] is True
         ):
