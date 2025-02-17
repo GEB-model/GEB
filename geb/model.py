@@ -134,7 +134,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         # check if the discharges are the same in both multiverses
         assert np.array_equal(discharges_before_restore, discharges_after_restore)
 
-    def step(self, step_size: Union[int, str] = 1, report=False) -> None:
+    def step(self, step_size: Union[int, str] = 1, report=True) -> None:
         """
         Forward the model by the given the number of steps.
 
@@ -250,7 +250,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         )
 
         for _ in range(self.n_timesteps):
-            self.step(report=True)
+            self.step()
 
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
@@ -268,9 +268,22 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                 "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
             )
 
+        # turn off any reporting for the ABM
+        self.config["report"] = {}
+
+        # export discharge as zarr file for the hydrological model
+        self.config["report_hydrology"] = {
+            "discharge_daily": {
+                "varname": "data.grid.var.discharge",
+                "function": None,
+                "format": "zarr",
+                "single_file": True,
+            }
+        }
+
         self._initialize(
             run_name=run_name,
-            report=False,
+            report=True,
             current_time=current_time,
             end_time=end_time,
             clean_report_folder=True,
@@ -278,7 +291,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         )
 
         for _ in range(self.n_timesteps):
-            self.step(report=False)
+            self.step()
 
         print("Spinup finished, saving conditions at end of spinup...")
 
@@ -297,7 +310,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             load_data_from_store=True,
         )
 
-        ...
+        HazardDriver.initialize(self, longest_flood_event=30)
+        self.sfincs.get_return_period_maps(force_overwrite=True)
 
     @property
     def current_day_of_year(self) -> int:

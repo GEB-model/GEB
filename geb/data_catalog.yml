@@ -127,7 +127,7 @@ gebco:
     source_url: https://www.bodc.ac.uk/data/open_download/gebco/gebco_2020/geotiff/
     source_version: 2020
     unit: m+MSL
-  path: /vsizip/vsihttps://www.bodc.ac.uk/data/open_download/gebco/gebco_2024_sub_ice_topo/geotiff/GEBCO_2024_sub_ice_topo.nc
+  path: /scistor/ivm/data_catalogue/hydrology/topography/gebco/gebco.vrt
 merit_hydro:
   crs: 4326
   data_type: RasterDataset

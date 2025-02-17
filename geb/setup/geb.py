@@ -6261,7 +6261,6 @@ class GEBModel(GridModel):
             variables=["uparea", "flwdir", "elevtn"],
             provider=self.data_provider,
         )
-        del merit_hydro["flwdir"].attrs["_FillValue"]
         self.set_forcing(
             merit_hydro, name="hydrodynamics/merit_hydro", split_dataset=False
         )
