@@ -73,6 +73,11 @@ from .workflows.forcing import (
     download_ERA5,
     open_ERA5,
 )
+from .workflows.hydrography import (
+    get_upstream_subbasin_ids,
+    get_subbasin_id_from_coordinate,
+    get_subbasins,
+)
 
 XY_CHUNKSIZE = 350
 
@@ -277,6 +282,16 @@ class GEBModel(GridModel):
         )
         assert sub_grid_factor >= 2
 
+        lon, lat = region["subbasin"][0][0], region["subbasin"][1][0]
+
+        subbasin_id = get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
+        upstream_subbasin_ids = get_upstream_subbasin_ids(
+            self.data_catalog, subbasin_id
+        )
+        subbasins = get_subbasins(self.data_catalog, upstream_subbasin_ids)
+
+        self.set_geoms(subbasins, name="subbasins")
+
         hydrography = self.data_catalog.get_rasterdataset(
             "merit_hydro", provider=self.data_provider
         )
@@ -285,19 +300,19 @@ class GEBModel(GridModel):
         kind, region = hydromt.workflows.parse_region(region, logger=self.logger)
         if kind in ["basin", "subbasin"]:
             # get basin geometry
-            max_bounds = region["max_bounds"]
-            region.pop("max_bounds")
+            xmin, ymin, xmax, ymax = subbasins.total_bounds
             geom, xy = hydromt.workflows.get_basin_geometry(
                 ds=hydrography,
                 flwdir_name="dir",
                 kind=kind,
                 logger=self.logger,
                 bounds=[
-                    max_bounds["xmin"],
-                    max_bounds["ymin"],
-                    max_bounds["xmax"],
-                    max_bounds["ymax"],
+                    xmin,
+                    ymin,
+                    xmax,
+                    ymax,
                 ],
+                buffer=10,
                 **region,
             )
             region.update(xy=xy)

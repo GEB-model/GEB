@@ -10,6 +10,24 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: topography/FABDEM1-2.vrt
+MERIT_Basins_rivers:
+  data_type: GeoDataFrame
+  driver: vector
+  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins/riv_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg
+  meta:
+    category: hydrology
+    source_license: CC BY-NC-SA 4.0
+    source_url: https://www.reachhydro.org/home/params/merit-basins
+    source_version: v1.0_bugfix1
+MERIT_Basins_basins:
+  data_type: GeoDataFrame
+  driver: vector
+  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins/cat_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg
+  meta:
+    category: hydrology
+    source_license: CC BY-NC-SA 4.0
+    source_url: https://www.reachhydro.org/home/params/merit-basins
+    source_version: v1.0_bugfix1
 geul_dem:
   data_type: RasterDataset
   driver: raster
