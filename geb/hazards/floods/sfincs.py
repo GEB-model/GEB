@@ -393,7 +393,10 @@ class SFINCS:
             discharge_ds_varname="discharge_daily",
         )
         run_sfincs_for_return_periods(
-            model_root=model_root, return_periods=[2, 100, 1000], gpu=False
+            model_root=model_root,
+            return_periods=[2, 100, 1000],
+            gpu=False,
+            export_dir=self.model.report_folder / "flood_maps",
         )
 
         if hasattr(self.model, "reporter"):
@@ -462,9 +465,20 @@ class SFINCS:
 
     @property
     def discharge_spinup_ds(self):
-        return xr.open_dataset(
+        ds = xr.open_dataset(
             Path("report") / "spinup" / "discharge_daily.zarr.zip", engine="zarr"
         )
+        start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
+        ds = ds.sel(time=slice(start_time, ds.time[-1]))
+
+        # make sure there is at least 20 years of data
+        if not len(ds.time.groupby(ds.time.dt.year).groups) >= 20:
+            raise ValueError(
+                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
+
+        return ds
 
     @property
     def uparea_ds(self):
