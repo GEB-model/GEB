@@ -271,7 +271,6 @@ def get_future_deficit(
     """
     if reset_day_index >= 365 or reset_day_index < 0:
         raise ValueError("Reset day index must be lower than 365 and greater than -1")
-    day = day_index + 1
     future_water_deficit = potential_irrigation_consumption_farmer_m3
     for crop in crop_calendar[farmer]:
         crop_type = crop[0]
@@ -284,15 +283,18 @@ def get_future_deficit(
 
             relative_start_day_index = (start_day_index - reset_day_index) % 365
             relative_end_day_index = relative_start_day_index + growth_length
-            relative_day = (day - reset_day_index) % 365
+            relative_day_index = (day_index - reset_day_index) % 365
 
             if relative_end_day_index > 365:
                 relative_end_day_index = 365
 
-            if relative_start_day_index < relative_day:
-                relative_start_day_index = relative_day
+            if relative_start_day_index < relative_day_index:
+                relative_start_day_index = relative_day_index
 
-            if relative_day > relative_end_day_index:
+            if relative_start_day_index == relative_day_index:
+                relative_start_day_index = (relative_start_day_index + 1) % 365
+
+            if relative_day_index >= relative_end_day_index:
                 continue
             else:
                 future_water_deficit += get_deficit_between_dates(
@@ -320,8 +322,8 @@ def adjust_irrigation_to_limit(
     potential_irrigation_consumption_m,
     potential_irrigation_consumption_farmer_m3,
 ):
-    if remaining_irrigation_limit_m3[farmer] < 0:
-        potential_irrigation_consumption_m.fill(0)
+    if remaining_irrigation_limit_m3[farmer] < np.float32(0):
+        potential_irrigation_consumption_m[:] = np.float32(0)
         return potential_irrigation_consumption_m
     # calculate future water deficit, but also include today's irrigation consumption
     # Check whether a full year has passed
@@ -334,18 +336,18 @@ def adjust_irrigation_to_limit(
             crop_rotation_year_index=crop_rotation_year_index,
             potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
         )
+        future_water_deficit *= irrigation_limit_adjustment
+        limit_to_deficit_ratio = (
+            remaining_irrigation_limit_m3[farmer] / future_water_deficit
+        )
     else:
-        future_water_deficit = 1
+        limit_to_deficit_ratio = np.float32(1)
 
-    assert future_water_deficit > 0
-
-    future_water_deficit *= irrigation_limit_adjustment
+    assert future_water_deficit > np.float32(0)
 
     # first find the total irrigation demand for the farmer in m3
     irrigation_water_withdrawal_farmer_m3 = (
-        potential_irrigation_consumption_farmer_m3
-        * remaining_irrigation_limit_m3[farmer]
-        / future_water_deficit
+        potential_irrigation_consumption_farmer_m3 * limit_to_deficit_ratio
     )
     assert not np.isnan(irrigation_water_withdrawal_farmer_m3)
 
@@ -365,7 +367,7 @@ def adjust_irrigation_to_limit(
     assert not np.isnan(reduction_factor)
 
     potential_irrigation_consumption_m = (
-        potential_irrigation_consumption_m * reduction_factor
+        potential_irrigation_consumption_m * np.float32(reduction_factor)
     )
     return potential_irrigation_consumption_m
 
@@ -400,6 +402,7 @@ def withdraw_channel(
     channel_abstraction_m3_by_farmer[farmer] += channel_abstraction_cell_m3
 
     irrigation_water_demand_field -= channel_abstraction_cell_m
+    irrigation_water_demand_field = max(irrigation_water_demand_field, 0)
 
     return irrigation_water_demand_field
 
@@ -432,6 +435,7 @@ def withdraw_reservoir(
     reservoir_abstraction_m3_by_farmer[farmer] += reservoir_abstraction_m_cell_m3
 
     irrigation_water_demand_field -= reservoir_abstraction_m_cell
+    irrigation_water_demand_field = max(irrigation_water_demand_field, 0)
     return irrigation_water_demand_field
 
 
@@ -471,6 +475,7 @@ def withdraw_groundwater(
         groundwater_abstraction_m3_by_farmer[farmer] += groundwater_abstraction_cell_m3
 
         irrigation_water_demand_field -= groundwater_abstraction_cell_m
+        irrigation_water_demand_field = max(irrigation_water_demand_field, 0)
     return irrigation_water_demand_field
 
 
@@ -2108,7 +2113,7 @@ class CropFarmers(AgentBaseClass):
             crop_allocation_nsw * field_size_fraction_nsw
         )
 
-    def save_water_deficit(self, discount_factor=0.8):
+    def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
             self.model.data.HRU.ETRef - self.model.data.HRU.pr
         ) * self.model.data.HRU.cellArea
@@ -2121,13 +2126,13 @@ class CropFarmers(AgentBaseClass):
 
         day_index = self.model.current_day_of_year - 1
 
-        (
-            self.cumulative_water_deficit_current_day[:],
-            self.cumulative_water_deficit_previous_day,
-        ) = (
-            (self.cumulative_water_deficit_m3[:, day_index]).copy(),
-            self.cumulative_water_deficit_current_day,
+        new_current_day = AgentArray(
+            (self.cumulative_water_deficit_m3[:, day_index]).copy()
         )
+        new_previous_day = AgentArray(self.cumulative_water_deficit_current_day)
+
+        self.cumulative_water_deficit_current_day[:] = new_current_day
+        self.cumulative_water_deficit_previous_day = new_previous_day
 
         if day_index == 0:
             self.cumulative_water_deficit_m3[:, day_index] = (
