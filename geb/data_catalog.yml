@@ -10,24 +10,72 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: topography/FABDEM1-2.vrt
-MERIT_Basins_rivers:
+MERIT_Basins_{kind}:
   data_type: GeoDataFrame
   driver: vector
-  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins/riv_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg
+  placeholders: 
+    kind: [riv, cat]
+  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins/{kind}_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg
   meta:
     category: hydrology
     source_license: CC BY-NC-SA 4.0
     source_url: https://www.reachhydro.org/home/params/merit-basins
     source_version: v1.0_bugfix1
-MERIT_Basins_basins:
-  data_type: GeoDataFrame
-  driver: vector
-  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins/cat_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg
-  meta:
-    category: hydrology
-    source_license: CC BY-NC-SA 4.0
-    source_url: https://www.reachhydro.org/home/params/merit-basins
-    source_version: v1.0_bugfix1
+    notes: |
+      ```python
+      import geopandas as gpd
+      import pandas as pd
+      import sqlite3
+
+
+      def merge_dataset(kind):
+          gdfs = []
+          for continent in range(1, 10):
+              print("reading continent", continent)
+              gdf = gpd.read_file(
+                  f"{kind}_pfaf_{continent}_MERIT_Hydro_v07_Basins_v01_bugfix1.shp"
+              )
+              gdfs.append(gdf)
+
+          print("concatenating")
+          merged = pd.concat(gdfs, ignore_index=True)
+
+          print(merged.columns)
+          print(merged.head())
+
+          print("setting crs")
+          if kind == "cat":
+              merged.set_crs("EPSG:4326", inplace=True)
+
+          print("writing")
+          merged.to_file(
+              f"{kind}_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg", driver="GPKG"
+          )
+
+
+      def create_index(kind):
+          gpkg_path = f"{kind}_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg"
+
+          # Connect to the GPKG
+          conn = sqlite3.connect(gpkg_path)
+          cursor = conn.cursor()
+
+          # Create an index on COMID
+          cursor.execute(f"""
+              CREATE INDEX IF NOT EXISTS idx_comid
+              ON {kind}_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1 (COMID);
+          """)
+
+          conn.commit()
+          conn.close()
+
+
+      if __name__ == "__main__":
+          merge_dataset("riv")
+          create_index("riv")
+          merge_dataset("cat")
+          create_index("cat")
+      ```
 geul_dem:
   data_type: RasterDataset
   driver: raster

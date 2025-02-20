@@ -77,6 +77,8 @@ from .workflows.hydrography import (
     get_upstream_subbasin_ids,
     get_subbasin_id_from_coordinate,
     get_subbasins,
+    get_river_graph,
+    get_downstream_subbasin,
 )
 
 XY_CHUNKSIZE = 350
@@ -284,11 +286,23 @@ class GEBModel(GridModel):
 
         lon, lat = region["subbasin"][0][0], region["subbasin"][1][0]
 
+        river_graph = get_river_graph(self.data_catalog)
+
         subbasin_id = get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
-        upstream_subbasin_ids = get_upstream_subbasin_ids(
-            self.data_catalog, subbasin_id
-        )
-        subbasins = get_subbasins(self.data_catalog, upstream_subbasin_ids)
+        subbasin_ids = get_upstream_subbasin_ids(river_graph, subbasin_id)
+        subbasin_ids.add(subbasin_id)
+
+        downstream_subbasin = get_downstream_subbasin(river_graph, subbasin_id)
+        if downstream_subbasin is not None:
+            subbasin_ids.add(downstream_subbasin)
+
+        subbasins = get_subbasins(self.data_catalog, subbasin_ids)
+        subbasins["is_downstream_outflow_subbasin"] = False
+        if downstream_subbasin is not None:
+            subbasins.loc[
+                subbasins["COMID"] == downstream_subbasin,
+                "is_downstream_outflow_subbasin",
+            ] = True
 
         self.set_geoms(subbasins, name="subbasins")
 
