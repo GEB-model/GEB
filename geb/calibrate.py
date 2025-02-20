@@ -786,15 +786,24 @@ def get_observed_irrigation_method(config):
 
 
 def get_irrigation_method_score(run_directory, individual, config):
-    def get_simulated_fractions_by_region(array_simulated, region_agents, region_value):
-        subset = array_simulated[region_agents == region_value]
-        if len(subset) == 0:
+    def get_simulated_fractions_by_region(
+        array_simulated, region_agents, region_value, field_sizes
+    ):
+        # Use field area rather than count
+        mask = region_agents == region_value
+        subset = array_simulated[mask]
+        subset_field_sizes = field_sizes[mask]
+        total_area = np.sum(subset_field_sizes)
+        if total_area == 0:
             return 0.0, 0.0, 0.0
-        sprinkler_count = np.sum(subset == 0.7)
-        drip_count = np.sum(subset == 0.9)
-        surface_count = np.sum(subset == 0.5)
-        total = len(subset)
-        return sprinkler_count / total, drip_count / total, surface_count / total
+        sprinkler_area = np.sum(subset_field_sizes[subset == 0.7])
+        drip_area = np.sum(subset_field_sizes[subset == 0.9])
+        surface_area = np.sum(subset_field_sizes[subset == 0.5])
+        return (
+            sprinkler_area / total_area,
+            drip_area / total_area,
+            surface_area / total_area,
+        )
 
     observed_pivot = get_observed_irrigation_method(config)
     start_time = observed_pivot.index.get_level_values("time").min()
@@ -839,6 +848,13 @@ def get_irrigation_method_score(run_directory, individual, config):
     irrigation_mask = channel_irrigation.any(axis=0) | groundwater_irrigation.any(
         axis=0
     )
+    # Load field size per farmer
+    field_size_per_farmer = load_ds(
+        Path("report/base"),
+        "field_size_per_farmer",
+        start_time=config["calibration"]["start_time"],
+        end_time=config["calibration"]["end_time"],
+    ).values
 
     time_index = irrigation_efficiency_simulated.indexes["time"]
     df_simulated_nsw = pd.DataFrame(
@@ -850,11 +866,13 @@ def get_irrigation_method_score(run_directory, individual, config):
 
     for i, t in enumerate(time_index):
         subset = irrigation_efficiency_simulated.values[i, irrigation_mask]
+        # Subset field sizes for irrigating agents
+        field_size_subset = field_size_per_farmer[irrigation_mask]
         s_nsw, d_nsw, w_nsw = get_simulated_fractions_by_region(
-            subset, region_agents[irrigation_mask], 1
+            subset, region_agents[irrigation_mask], 1, field_size_subset
         )
         s_vict, d_vict, w_vict = get_simulated_fractions_by_region(
-            subset, region_agents[irrigation_mask], 0
+            subset, region_agents[irrigation_mask], 0, field_size_subset
         )
         df_simulated_nsw.loc[t] = [s_nsw, d_nsw, w_nsw]
         df_simulated_vict.loc[t] = [s_vict, d_vict, w_vict]
@@ -1018,7 +1036,7 @@ def get_observed_water_use(config):
     return pivot_df
 
 
-def get_water_use_score(run_directory, individual, config, observed_pivot):
+def get_water_use_score(run_directory, individual, config):
     observed_pivot = get_observed_water_use(config)
 
     start_time = observed_pivot.index.get_level_values("time").min()
@@ -1358,6 +1376,7 @@ def run_model(individual, config, gauges, observed_streamflow):
             template = deepcopy(config)
 
             template["general"]["report_folder"] = run_directory
+            template["general"]["name"] = config["calibration"]["scenario"]
             template["general"]["initial_conditions_folder"] = os.path.join(
                 run_directory, "initial"
             )

@@ -940,9 +940,19 @@ def crop_profit_difference_njit(
     unique_crop_calendars,
     p_droughts,
 ):
+    """
+    For each unique crop group (rotation + metadata),
+    consider all possible 'adapted' counterparts (rotations that differ)
+    and compute the yield ratio gains for switching.
+    """
     n_groups = len(unique_crop_groups)
     n_calendars = len(unique_crop_calendars)
     n_droughts = len(p_droughts)
+
+    # -- Key assumption: the first columns of each row correspond to the
+    #    crop rotation, whose length is the same as unique_crop_calendars.shape[1].
+    #    Everything after that is considered 'metadata.'
+    n_rotation = unique_crop_calendars.shape[1]
 
     unique_yield_ratio_gain = np.full(
         (n_groups, n_calendars, n_droughts),
@@ -950,12 +960,13 @@ def crop_profit_difference_njit(
         dtype=np.float32,
     )
 
+    # Store the best "farmer id" or row index to switch to
     id_to_switch_to = np.full(
         (n_groups, n_calendars),
         -1,
         dtype=np.int32,
     )
-
+    # Store a representative "crop id" or similar from the adapted rotation
     crop_to_switch_to = np.full(
         (n_groups, n_calendars),
         -1,
@@ -963,20 +974,26 @@ def crop_profit_difference_njit(
     )
 
     for group_id in range(n_groups):
+        # The "current group" is one row from unique_crop_groups
         unique_group = unique_crop_groups[group_id]
+
+        # Which farmers in crop_elevation_group match this unique_group?
         unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
 
-        # Identify the adapted counterparts of the current group
+        # Identify which unique rotations differ from the current group's rotation.
+        # The rotation part is unique_group[:n_rotation].
         mask = np.empty(n_calendars, dtype=np.bool_)
         for i in range(n_calendars):
+            # Compare the candidate rotation vs. the current group's rotation columns
             match = True
-            for j in range(unique_crop_calendars.shape[1]):
+            for j in range(n_rotation):
                 if unique_crop_calendars[i, j] != unique_group[j]:
                     match = False
                     break
+            # We consider only those that do NOT match => potential adaptation
             mask[i] = not match
 
-        # Collect candidate crop rotations
+        # Collect all candidate rotations that differ from the current rotation
         candidate_crop_rotations = []
         for i in range(n_calendars):
             if mask[i]:
@@ -984,22 +1001,23 @@ def crop_profit_difference_njit(
 
         num_candidates = len(candidate_crop_rotations)
 
-        # Loop over the counterparts
-        for crop_id in range(num_candidates):
-            unique_rotation = candidate_crop_rotations[crop_id]
-            farmer_class = unique_group[-1]
-            basin_location = unique_group[-2]
-            unique_group_other_crop = np.empty(
-                len(unique_rotation) + 2, dtype=unique_rotation.dtype
-            )
-            unique_group_other_crop[: len(unique_rotation)] = unique_rotation
-            unique_group_other_crop[len(unique_rotation)] = basin_location
-            unique_group_other_crop[len(unique_rotation) + 1] = farmer_class
+        # The metadata columns start at n_rotation
+        metadata = unique_group[n_rotation:]  # shape: (original_cols - n_rotation,)
 
+        # Evaluate each candidate rotation
+        for crop_id in range(num_candidates):
+            unique_rotation = candidate_crop_rotations[crop_id]  # shape: (n_rotation,)
+
+            # Build the 'other crop' group: [candidate rotation + same metadata]
+            # This ensures the final shape matches crop_elevation_group's shape exactly.
+            unique_group_other_crop = np.concatenate((unique_rotation, metadata))
+
+            # Which farmers have this 'other crop' group?
             unique_farmer_groups_other_crop = find_matching_rows(
                 crop_elevation_group, unique_group_other_crop
             )
 
+            # Only if that group actually exists in the data, compute yield gains
             if np.any(unique_farmer_groups_other_crop):
                 # Compute current yield ratio mean
                 current_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
@@ -1008,9 +1026,10 @@ def crop_profit_difference_njit(
                     if unique_farmer_groups[i]:
                         current_sum += yield_ratios[i]
                         count_current += 1
-                current_yield_ratio = (
-                    current_sum / count_current if count_current > 0 else current_sum
-                )
+                if count_current > 0:
+                    current_yield_ratio = current_sum / count_current
+                else:
+                    current_yield_ratio = current_sum  # All zeros
 
                 # Compute candidate yield ratio mean
                 candidate_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
@@ -1019,19 +1038,22 @@ def crop_profit_difference_njit(
                     if unique_farmer_groups_other_crop[i]:
                         candidate_sum += yield_ratios[i]
                         count_candidate += 1
-                candidate_yield_ratio = (
-                    candidate_sum / count_candidate
-                    if count_candidate > 0
-                    else candidate_sum
-                )
+                if count_candidate > 0:
+                    candidate_yield_ratio = candidate_sum / count_candidate
+                else:
+                    candidate_yield_ratio = candidate_sum  # All zeros
 
+                # The difference = potential gain
                 yield_ratio_gain = candidate_yield_ratio - current_yield_ratio
 
+                # For example, assume the first element of the new rotation
+                # is the "crop to switch to."
                 crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
 
                 if np.all(np.isnan(yield_ratio_gain)):
                     yield_ratio_gain = np.zeros_like(yield_ratio_gain)
                 else:
+                    # Find the best match in yield_ratios that looks like 'yield_ratio_gain'
                     id_to_switch_to[group_id, crop_id] = find_most_similar_index(
                         yield_ratio_gain,
                         yield_ratios,
@@ -1040,6 +1062,7 @@ def crop_profit_difference_njit(
 
                 unique_yield_ratio_gain[group_id, crop_id, :] = yield_ratio_gain
 
+    # Now re-index the results for the actual farmers
     gains_adaptation = unique_yield_ratio_gain[group_indices, :, :]
     new_crop_nr = crop_to_switch_to[group_indices, :]
     new_farmer_id = id_to_switch_to[group_indices, :]
@@ -1158,10 +1181,7 @@ class CropFarmers(AgentBaseClass):
 
         # Set water costs
         self.water_price = np.float32(1.0)
-
-        # export_path = self.model.config["calibration"]["path"] / Path("models")
-        # model_file_rf = export_path / "randomforest_model.joblib"
-        # self.rf_model = joblib.load(model_file_rf)
+        self.mean_irrigation_efficiency = np.float32(0.5)
 
         # Irr efficiency variables
         self.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
@@ -1293,6 +1313,14 @@ class CropFarmers(AgentBaseClass):
         self.irrigation_limit_adjustment = self.model.config["agent_settings"][
             "calibration"
         ]["irrigation_limit_adjustment"]
+
+        base_efficiency = self.model.config["agent_settings"]["calibration"][
+            "base_efficiency"
+        ]
+
+        if base_efficiency == 1:
+            self.irrigation_efficiency[:] = 1
+            print("Warning: all irrigation efficiency set at 100")
 
         super().__init__()
 
@@ -1672,6 +1700,8 @@ class CropFarmers(AgentBaseClass):
         )  # nsw
         self.adapted[:, 2][self.irrigation_efficiency == 0.70] = 1
         self.adapted[:, 3][self.irrigation_efficiency == 0.90] = 1
+
+        self.mean_irrigation_efficiency = np.mean(self.irrigation_efficiency)
 
         rng_drip = np.random.default_rng(70)
         self.time_adapted[self.adapted[:, 2] == 1, 2] = rng_drip.uniform(
@@ -3598,7 +3628,7 @@ class CropFarmers(AgentBaseClass):
         farmer_class = self.farmer_class_water.copy()
         farmer_class[farmer_class == 2] = 0
 
-        crop_elevation_group = self.create_unique_groups(farmer_class, 1)
+        crop_elevation_group = self.create_unique_groups(farmer_class)
         crop_elevation_group = np.hstack(
             (crop_elevation_group, self.farmer_class_irrigation.reshape(-1, 1))
         )
@@ -4017,21 +4047,23 @@ class CropFarmers(AgentBaseClass):
         # or who's never had access to irrigation water
         expired_adaptations = (
             self.time_adapted[:, adaptation_type] == self.lifespan_irrigation
-        ) | has_irrigation_access
+        ) | ~has_irrigation_access
         self.adapted[expired_adaptations, adaptation_type] = 0
         self.time_adapted[expired_adaptations, adaptation_type] = -1
 
-        # To determine the benefit of irrigation, those who have above X% irrigation efficiency have adapted
-        adapted = np.where((self.adapted[:, adaptation_type] == 1), 1, 0)
+        adapted = self.adapted[:, adaptation_type].copy()
 
         farmer_class = self.farmer_class_water.copy()
         farmer_class[farmer_class == 2] = 0
 
+        energy_cost_m2 = energy_cost / self.field_size_per_farmer
+        water_cost_m2 = water_cost / self.field_size_per_farmer
+
         (
-            energy_diff,
-            water_diff,
+            energy_diff_m2,
+            water_diff_m2,
         ) = self.adaptation_water_cost_difference(
-            farmer_class, adapted, energy_cost, water_cost
+            farmer_class, adapted, energy_cost_m2, water_cost_m2
         )
 
         (
@@ -4041,9 +4073,11 @@ class CropFarmers(AgentBaseClass):
             profits_no_event_adaptation,
         ) = self.profits_SEUT(farmer_class, adaptation_type, adapted)
 
-        total_profits_adaptation = total_profits_adaptation + energy_diff + water_diff
+        total_profits_adaptation = (
+            total_profits_adaptation + energy_diff_m2 + water_diff_m2
+        )
         profits_no_event_adaptation = (
-            profits_no_event_adaptation + energy_diff + water_diff
+            profits_no_event_adaptation + energy_diff_m2 + water_diff_m2
         )
 
         # Construct a dictionary of parameters to pass to the decision module functions
@@ -4093,11 +4127,11 @@ class CropFarmers(AgentBaseClass):
         # Print the percentage of adapted households
         percentage_adapted = round(
             np.sum(self.adapted[:, adaptation_type])
-            / len(self.adapted[:, adaptation_type])
+            / np.count_nonzero(has_irrigation_access)
             * 100,
             2,
         )
-        print("Irrigation efficient farms:", percentage_adapted, "(%)")
+        print(f"{efficiency * 100}% efficient farms:", percentage_adapted, "(%)")
 
     def adapt_irrigation_expansion(self, energy_cost, water_cost) -> None:
         # Constants
@@ -4275,8 +4309,8 @@ class CropFarmers(AgentBaseClass):
 
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing:
-                - energy_costs (np.ndarray): Energy costs per agent (LCU/year).
-                - water_costs (np.ndarray): Water costs per agent (LCU/year).
+                - energy_costs (np.ndarray): Energy costs per agent (USD/year).
+                - water_costs (np.ndarray): Water costs per agent (USD/year).
                 - average_extraction_speed (np.ndarray): Average water extraction speed per agent (m³/s).
         """
         # Get electricity costs per agent based on their region and current time
@@ -4388,28 +4422,26 @@ class CropFarmers(AgentBaseClass):
         mask_groundwater = self.farmer_class_water == 2
 
         # Create mutually exclusive boolean masks for irrigation methods
-        mask_surface_irrigation = self.irrigation_efficiency < 0.70
-        mask_sprinkler_irrigation = (self.irrigation_efficiency >= 0.70) & (
-            self.irrigation_efficiency < 0.90
-        )
-        mask_drip_irrigation = self.irrigation_efficiency >= 0.90
+        mask_surface_irrigation = self.irrigation_efficiency == 0.50
+        mask_sprinkler_irrigation = self.irrigation_efficiency == 0.70
+        mask_drip_irrigation = self.irrigation_efficiency == 0.90
 
-        # Compute power required for groundwater extraction per agent (kW)
-        power = (
-            self.specific_weight_water
-            * groundwater_depth[mask_groundwater]
-            * average_extraction_speed[mask_groundwater]
-            / self.pump_efficiency
-        ) / 1000  # Convert from W to kW
+        # # Compute power required for groundwater extraction per agent (kW)
+        # power = (
+        #     self.specific_weight_water
+        #     * groundwater_depth[mask_groundwater]
+        #     * average_extraction_speed[mask_groundwater]
+        #     / self.pump_efficiency
+        # ) / 1000  # Convert from W to kW
 
-        # Compute energy consumption per agent (kWh/year)
-        energy = power * (total_pump_duration[mask_groundwater] * self.pump_hours)
+        # # Compute energy consumption per agent (kWh/year)
+        # energy = power * (total_pump_duration[mask_groundwater] * self.pump_hours)
 
-        # Get energy cost rate per agent (LCU per kWh)
-        energy_cost_rate = electricity_costs[mask_groundwater]
+        # # Get energy cost rate per agent (LCU per kWh)
+        # energy_cost_rate = electricity_costs[mask_groundwater]
 
-        # Compute energy costs per agent (LCU/year) for groundwater irrigating farmers
-        energy_costs[mask_groundwater] = energy * energy_cost_rate
+        # # Compute energy costs per agent (LCU/year) for groundwater irrigating farmers
+        # energy_costs[mask_groundwater] += energy * energy_cost_rate
 
         # Compute water costs for agents using channel water (LCU/year)
         water_costs[mask_channel] = (
@@ -4428,24 +4460,21 @@ class CropFarmers(AgentBaseClass):
 
         # Compute energy costs for surface water irrigating farmers based on irrigation method
         # Surface irrigation
-        mask_channel_surface = mask_channel & mask_surface_irrigation
-        energy_costs[mask_channel_surface] = (
-            self.field_size_per_farmer[mask_channel_surface]
-            * operation_cost_surface[mask_channel_surface]
+        energy_costs[mask_surface_irrigation] = (
+            self.field_size_per_farmer[mask_surface_irrigation]
+            * operation_cost_surface[mask_surface_irrigation]
         )
 
         # Sprinkler irrigation
-        mask_channel_sprinkler = mask_channel & mask_sprinkler_irrigation
-        energy_costs[mask_channel_sprinkler] = (
-            self.field_size_per_farmer[mask_channel_sprinkler]
-            * operation_cost_sprinkler[mask_channel_sprinkler]
+        energy_costs[mask_sprinkler_irrigation] = (
+            self.field_size_per_farmer[mask_sprinkler_irrigation]
+            * operation_cost_sprinkler[mask_sprinkler_irrigation]
         )
 
         # Drip irrigation
-        mask_channel_drip = mask_channel & mask_drip_irrigation
-        energy_costs[mask_channel_drip] = (
-            self.field_size_per_farmer[mask_channel_drip]
-            * operation_cost_drip[mask_channel_drip]
+        energy_costs[mask_drip_irrigation] = (
+            self.field_size_per_farmer[mask_drip_irrigation]
+            * operation_cost_drip[mask_drip_irrigation]
         )
 
         # Assume minimal interest rate as farmers pay directly
@@ -4670,7 +4699,7 @@ class CropFarmers(AgentBaseClass):
         total_profits = self.compute_total_profits(yield_ratios, crops_mask, nan_array)
         profit_events, profits_no_event = self.format_results(total_profits)
 
-        crop_elevation_group = self.create_unique_groups(farmer_class)
+        crop_elevation_group = self.create_unique_groups(farmer_class, 2)
         crop_elevation_group = np.hstack(
             (crop_elevation_group, self.farmer_class_irrigation.reshape(-1, 1))
         )
@@ -4815,7 +4844,7 @@ class CropFarmers(AgentBaseClass):
 
         return self.yield_ratios_drought_event
 
-    def create_unique_groups(self, farmer_class, N=5):
+    def create_unique_groups(self, farmer_class, N=2):
         """
         Create unique groups based on elevation data and merge with crop calendar.
 
@@ -5258,8 +5287,8 @@ class CropFarmers(AgentBaseClass):
                 self.yearly_abstraction_m3_by_farmer[:, 3, 0] == 0
             ] = 3
 
-            self.farmer_class_irrigation[self.irrigation_efficiency == 0.70] = 1
-            self.farmer_class_irrigation[self.irrigation_efficiency == 0.90] = 2
+            self.farmer_class_irrigation[self.irrigation_efficiency == 0.70] = 0
+            self.farmer_class_irrigation[self.irrigation_efficiency == 0.90] = 1
 
             timer = TimingModule("crop_farmers")
 
@@ -5324,6 +5353,9 @@ class CropFarmers(AgentBaseClass):
                         )
                         self.adapt_irrigation_efficiency(
                             energy_cost, water_cost, m2_capital_cost_drip, 3, 0.9
+                        )
+                        self.mean_irrigation_efficiency = np.mean(
+                            self.irrigation_efficiency
                         )
                         timer.new_split("irr efficiency")
                     if (

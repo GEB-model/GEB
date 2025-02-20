@@ -79,7 +79,7 @@ class LiveStockFarmers(AgentBaseClass):
             water_consumption = cp.array(water_consumption)
         water_consumption = self.model.data.HRU.M3toM(water_consumption)
 
-        efficiency = 1.0
+        efficiency = self.agents.crop_farmers.mean_irrigation_efficiency
         water_demand = water_consumption / efficiency
         self.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
