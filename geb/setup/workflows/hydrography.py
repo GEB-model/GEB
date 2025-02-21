@@ -57,3 +57,14 @@ def get_subbasins(data_catalog, subbasin_ids):
     )
     assert len(subbasins) == len(subbasin_ids), "Some subbasins were not found"
     return subbasins
+
+
+def get_rivers(data_catalog, subbasin_ids):
+    rivers = gpd.read_file(
+        data_catalog.get_source("MERIT_Basins_riv").path,
+        sql=f"""SELECT * FROM riv_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1 WHERE COMID IN ({
+            ",".join([str(ID) for ID in subbasin_ids])
+        })""",
+    )
+    assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
+    return rivers

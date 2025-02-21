@@ -10,6 +10,51 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: topography/FABDEM1-2.vrt
+SWORD:
+  data_type: GeoDataFrame
+  driver: vector
+  path: /scistor/ivm/data_catalogue/hydrology/rivers/SWORD_v16/sword_reaches_v16.gpkg
+  category: hydrology
+  source_license: Creative Commons Attribution 4.0 International
+  source_url: doi.org/10.5281/zenodo.14727521
+  source_version: v16
+  meta:
+    notes: |
+      ```python
+      import geopandas as gpd
+      import pandas as pd
+      import sqlite3
+
+      SWORD = []
+      for continent in ("sa", "na", "oc", "eu", "af", "as"):
+          SWORD.append(gpd.read_file(f"{continent}_sword_reaches_v16.gpkg"))
+
+      SWORD = pd.concat(SWORD, ignore_index=True)
+
+      SWORD.to_file("sword_reaches_v16.gpkg")
+
+      # Connect to the GPKG
+      conn = sqlite3.connect("sword_reaches_v16.gpkg")
+      cursor = conn.cursor()
+
+      # Create an index on COMID
+      cursor.execute("""
+          CREATE INDEX IF NOT EXISTS idx_reach_id
+          ON sword_reaches_v16 (reach_id);
+      """)
+
+      conn.commit()
+      conn.close()
+      ```
+MERIT_Basins_to_SWORD:
+  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins/mb_to_sword_pfaf_{SWORD_Region}_translate.nc
+  data_type: Dataset
+  driver: netcdf
+  meta:
+    category: hydrology
+    source_license: Creative Commons Attribution Non Commercial Share Alike 4.0 International
+    source_url: doi.org/10.5281/zenodo.14675925
+    source_version: v0.4
 MERIT_Basins_{kind}:
   data_type: GeoDataFrame
   driver: vector

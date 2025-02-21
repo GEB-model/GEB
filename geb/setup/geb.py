@@ -35,6 +35,7 @@ from dateutil.relativedelta import relativedelta
 from contextlib import contextmanager
 from calendar import monthrange
 from numcodecs import Blosc
+from rasterio.features import rasterize
 
 import pyflwdir
 
@@ -79,6 +80,7 @@ from .workflows.hydrography import (
     get_subbasins,
     get_river_graph,
     get_downstream_subbasin,
+    get_rivers,
 )
 
 XY_CHUNKSIZE = 350
@@ -362,6 +364,19 @@ class GEBModel(GridModel):
         flwdir = hydrography["dir"].values
         assert flwdir.dtype == np.uint8
 
+        # import rasterio
+
+        # with rasterio.open(
+        #     "comid.tif",
+        #     "w",
+        #     transform=hydrography.rio.transform(),
+        #     height=flwdir.shape[0],
+        #     width=flwdir.shape[1],
+        #     count=1,
+        #     dtype=np.int32,
+        # ) as dst:
+        #     dst.write(river_raster, 1)
+
         flow_raster = pyflwdir.from_array(
             flwdir,
             ftype="d8",
@@ -378,6 +393,86 @@ class GEBModel(GridModel):
             method="ihu",
         )
         flow_raster_upscaled.repair_loops()
+
+        rivers = get_rivers(self.data_catalog, subbasin_ids)
+
+        river_raster = rasterize(
+            zip(rivers.geometry, rivers["COMID"]),
+            out_shape=flwdir.shape,
+            fill=0,
+            dtype=np.int32,
+            transform=hydrography.rio.transform(),
+            all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
+        )
+
+        river_raster_coarsened = river_raster.ravel()[idxs_out.ravel()].reshape(
+            idxs_out.shape
+        )
+
+        MERIT_Basins_to_SWORD = self.data_catalog.get_source(
+            "MERIT_Basins_to_SWORD"
+        ).path
+        SWORD_files = []
+        for SWORD_region in (
+            list(range(11, 19))
+            + list(range(21, 30))
+            + list(range(31, 37))
+            + list(range(41, 50))
+            + list(range(51, 58))
+            + list(range(61, 68))
+            + list(range(71, 79))
+            + list(range(81, 87))
+            + [91]
+        ):
+            SWORD_files.append(
+                MERIT_Basins_to_SWORD.format(SWORD_Region=str(SWORD_region))
+            )
+        MERIT_Basins_to_SWORD = (
+            xr.open_mfdataset(SWORD_files).sel(mb=rivers["COMID"].tolist()).compute()
+        )
+
+        SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)
+        SWORD_reach_lengths = np.full(
+            (40, len(rivers)), dtype=np.float64, fill_value=np.nan
+        )
+        for i in range(1, 41):
+            SWORD_reach_IDs[i - 1] = MERIT_Basins_to_SWORD[f"sword_{i}"]
+            SWORD_reach_lengths[i - 1] = MERIT_Basins_to_SWORD[f"part_len_{i}"]
+
+        unique_SWORD_reach_ids = np.unique(SWORD_reach_IDs)
+        unique_SWORD_reach_ids = unique_SWORD_reach_ids[unique_SWORD_reach_ids != 0]
+
+        SWORD = gpd.read_file(
+            self.data_catalog.get_source("SWORD").path,
+            sql=f"""SELECT reach_id, width FROM sword_reaches_v16 WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})""",
+        ).set_index("reach_id")
+
+        def lookup_river_width(reach_id):
+            if reach_id == 0:
+                return 0
+            return SWORD.loc[reach_id, "width"]
+
+        SWORD_river_width = np.vectorize(lookup_river_width)(SWORD_reach_IDs)
+
+        river_width = (SWORD_river_width * SWORD_reach_lengths).sum(
+            axis=0
+        ) / SWORD_reach_lengths.sum(axis=0)
+
+        import rasterio
+
+        # ensure that all rivers with a SWORD ID have a width
+        assert (~np.isnan(river_width[(SWORD_reach_IDs != 0).any(axis=0)])).all()
+
+        with rasterio.open(
+            "comid_coarse.tif",
+            "w",
+            transform=hydrography.rio.transform(),
+            height=river_raster_coarsened.shape[0],
+            width=river_raster_coarsened.shape[1],
+            count=1,
+            dtype=np.int32,
+        ) as dst:
+            dst.write(river_raster_coarsened, 1)
 
         elevation_coarsened = (
             hydrography["elv"]
@@ -1365,6 +1460,27 @@ class GEBModel(GridModel):
         minimum width with the minimum width.
         """
         self.logger.info("Setting up channel width")
+        SWORD = self.data_catalog.get_geodataframe("SWORD", geom=self.region)
+        MERIT_Basins_to_SWORD = self.data_catalog.get_source(
+            "MERIT_Basins_to_SWORD"
+        ).path
+        for SWORD_region in (
+            list(range(11, 19))
+            + list(range(21, 30))
+            + list(range(31, 37))
+            + list(range(41, 50))
+            + list(range(51, 58))
+            + list(range(61, 68))
+            + list(range(71, 79))
+            + list(range(81, 87))
+            + [91]
+        ):
+            MERIT_Basins_to_SWORD_with_region = MERIT_Basins_to_SWORD.format(
+                SWORD_Region=str(SWORD_region)
+            )
+            print(MERIT_Basins_to_SWORD_with_region)
+            xr.open_dataset(MERIT_Basins_to_SWORD_with_region)
+            xr.open_dataset(MERIT_Basins_to_SWORD_with_region).mb
         channel_width_data = self.grid["routing/kinematic/upstream_area"] / 500
         channel_width_data = xr.where(
             channel_width_data > minimum_width,
