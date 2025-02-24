@@ -30,7 +30,7 @@ dependencies = [
     "openpyxl>=3.1.2",
     "pyarrow>=17.0.0",
     "pybind11>=2.13.4",
-    "pyflwdir>=0.5.8",
+    "pyflwdir>=0.5.9",
     "pyogrio>=0.9.0",
     "pytest",
     "pyyaml>=6.0.2",
