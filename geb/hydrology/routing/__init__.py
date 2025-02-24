@@ -78,11 +78,9 @@ class Routing(object):
     lendirDown
     UpArea
     beta
-    chanMan
+    channel_mannings
     chanGrad
-    chanWidth
-    chanDepth
-    invbeta
+    channel_width
     invchanLength
     invdtRouting
     totalCrossSectionAre
@@ -110,7 +108,7 @@ class Routing(object):
         Initial part of the routing module
 
         * load and create a river network
-        * calculate river network parameter e.g. river length, width, depth, gradient etc.
+        * calculate river network parameter e.g. river length, width, gradient etc.
         * calculate initial filling
         * calculate manning's roughness coefficient
         """
@@ -158,20 +156,19 @@ class Routing(object):
             self.grid.var.cellArea.astype(np.float64),
         )
 
-        # ---------------------------------------------------------------
-        # Calibration
-        # mannings roughness factor 0.1 - 10.0
-
         # number of substep per day
         self.var.noRoutingSteps = 24
         # kinematic wave parameter: 0.6 is for broad sheet flow
+
         self.var.beta = 0.6  # TODO: Make this a parameter
+
         # Channel Manning's n
-        self.grid.var.chanMan = (
+        self.grid.var.channel_mannings = (
             self.grid.load(self.model.files["grid"]["routing/kinematic/mannings"])
             * self.model.config["parameters"]["manningsN"]
         )
-        assert (self.grid.var.chanMan > 0).all()
+        assert (self.grid.var.channel_mannings > 0).all()
+
         # Channel gradient (fraction, dy/dx)
         minimum_channel_gradient = 0.0001
         self.grid.var.chanGrad = np.maximum(
@@ -186,18 +183,10 @@ class Routing(object):
             "Channel length must be greater than 0 for all cells except for pits"
         )
         # Channel bottom width [meters]
-        self.grid.var.chanWidth = self.grid.load(
+        self.grid.var.channel_width = self.grid.load(
             self.model.files["grid"]["routing/kinematic/channel_width"]
         )
 
-        # Bankfull channel depth [meters]
-        self.grid.var.chanDepth = self.grid.load(
-            self.model.files["grid"]["routing/kinematic/channel_depth"]
-        )
-
-        # -----------------------------------------------
-        # Inverse of beta for kinematic wave
-        self.grid.var.invbeta = 1 / self.var.beta
         # Inverse of channel length [1/m]
         self.grid.var.invchanLength = 1 / self.grid.var.chanLength
 
@@ -205,71 +194,32 @@ class Routing(object):
         self.var.dtRouting = self.model.seconds_per_timestep / self.var.noRoutingSteps
         self.var.invdtRouting = 1 / self.var.dtRouting
 
-        # -----------------------------------------------
-        # ***** CHANNEL GEOMETRY  ************************************
-
-        # Area (sq m) of bank full discharge cross section [m2]
-        self.grid.var.totalCrossSectionAreaBankFull = (
-            self.grid.var.chanDepth * self.grid.var.chanWidth
-        )
-        # Cross-sectional area at half bankfull [m2]
-        # This can be used to initialise channel flow (see below)
-        # TotalCrossSectionAreaHalfBankFull = 0.5 * self.grid.var.TotalCrossSectionAreaBankFull
-        self.grid.var.totalCrossSectionArea = (
-            0.5 * self.grid.var.totalCrossSectionAreaBankFull
-        )
-        # Total cross-sectional area [m2]: if initial value in binding equals -9999 the value at half bankfull is used,
-
-        # -----------------------------------------------
-        # ***** CHANNEL ALPHA (KIN. WAVE)*****************************
-        # ************************************************************
-        # Following calculations are needed to calculate Alpha parameter in kinematic
-        # wave. Alpha currently fixed at half of bankful depth
-
-        # Reference water depth for calculation of Alpha: half of bankfull
-        # chanDepthAlpha = 0.5 * self.grid.var.chanDepth
-        # Channel wetted perimeter [m]
-        self.grid.var.chanWettedPerimeterAlpha = (
-            self.grid.var.chanWidth + 2 * 0.5 * self.grid.var.chanDepth
-        )
+        # for a channel, the wetted perimeter can be approximated by the channel width
+        channel_wetted_perimeter = self.grid.var.channel_width
 
         # ChannelAlpha for kinematic wave
-        alpTermChan = (
-            self.grid.var.chanMan / (np.sqrt(self.grid.var.chanGrad))
-        ) ** self.var.beta
-        self.var.alpPower = self.var.beta / 1.5
+        # source: https://gmd.copernicus.org/articles/13/3267/2020/ eq. 21
         self.grid.var.channelAlpha = (
-            alpTermChan
-            * (self.grid.var.chanWettedPerimeterAlpha**self.var.alpPower)
-            * 2.5
-        )
-        self.grid.var.invchannelAlpha = 1.0 / self.grid.var.channelAlpha
-
-        # -----------------------------------------------
-        # ***** CHANNEL INITIAL DISCHARGE ****************************
+            self.grid.var.channel_mannings
+            * channel_wetted_perimeter ** (2 / 3)
+            / np.sqrt(self.grid.var.chanGrad)
+        ) ** self.var.beta
 
         # channel water volume [m3]
         # Initialise water volume in kinematic wave channels [m3]
-        self.grid.var.channelStorageM3 = (
-            self.grid.var.totalCrossSectionArea * self.grid.var.chanLength * 0.1
+        self.grid.var.channelStorageM3 = np.zeros_like(
+            self.grid.var.channel_width, dtype=np.float32
         )
-        # Initialise discharge at kinematic wave pixels (note that InvBeta is
-        # simply 1/beta, computational efficiency!)
-        # self.grid.var.chanQKin = np.where(self.grid.var.channelAlpha > 0, (self.grid.var.totalCrossSectionArea / self.grid.var.channelAlpha) ** self.grid.var.invbeta, 0.)
         self.grid.var.discharge = (
             self.grid.var.channelStorageM3
             * self.grid.var.invchanLength
-            * self.grid.var.invchannelAlpha
-        ) ** self.grid.var.invbeta
+            / self.grid.var.channelAlpha
+        ) ** (1 / self.var.beta)
         self.grid.var.discharge_substep = np.full(
             (self.var.noRoutingSteps, self.grid.var.discharge.size),
             0,
             dtype=self.grid.var.discharge.dtype,
         )
-        # self.grid.var.chanQKin = chanQKinIni
-
-        # self.grid.var.riverbedExchangeM = globals.inZero.copy()
-        # self.grid.var.discharge = self.grid.var.chanQKin.copy()
 
         # factor for evaporation from lakes, reservoirs and open channels
         self.grid.var.lakeEvaFactor = self.grid.full_compressed(
@@ -295,7 +245,9 @@ class Routing(object):
         # from big lakes/res and small lakes/res is calculated separately
         channelFraction = np.minimum(
             1.0,
-            self.grid.var.chanWidth * self.grid.var.chanLength / self.grid.var.cellArea,
+            self.grid.var.channel_width
+            * self.grid.var.chanLength
+            / self.grid.var.cellArea,
         )
         # put all the water area in which is not reflected in the lakes ,res
         # channelFraction = np.maximum(self.grid.var.fracVegCover[5], channelFraction)

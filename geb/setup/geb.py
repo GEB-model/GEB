@@ -35,14 +35,12 @@ from dateutil.relativedelta import relativedelta
 from contextlib import contextmanager
 from calendar import monthrange
 from numcodecs import Blosc
-from rasterio.features import rasterize
 
 import pyflwdir
 
 from hydromt.models.model_grid import GridModel
 from hydromt.data_catalog import DataCatalog
 from hydromt.data_adapter import (
-    GeoDataFrameAdapter,
     RasterDatasetAdapter,
     DatasetAdapter,
 )
@@ -81,6 +79,9 @@ from .workflows.hydrography import (
     get_river_graph,
     get_downstream_subbasin,
     get_rivers,
+    create_river_raster_from_river_lines,
+    get_SWORD_translation_IDs_and_lenghts,
+    get_SWORD_river_widths,
 )
 
 XY_CHUNKSIZE = 350
@@ -364,19 +365,6 @@ class GEBModel(GridModel):
         flwdir = hydrography["dir"].values
         assert flwdir.dtype == np.uint8
 
-        # import rasterio
-
-        # with rasterio.open(
-        #     "comid.tif",
-        #     "w",
-        #     transform=hydrography.rio.transform(),
-        #     height=flwdir.shape[0],
-        #     width=flwdir.shape[1],
-        #     count=1,
-        #     dtype=np.int32,
-        # ) as dst:
-        #     dst.write(river_raster, 1)
-
         flow_raster = pyflwdir.from_array(
             flwdir,
             ftype="d8",
@@ -393,86 +381,6 @@ class GEBModel(GridModel):
             method="ihu",
         )
         flow_raster_upscaled.repair_loops()
-
-        rivers = get_rivers(self.data_catalog, subbasin_ids)
-
-        river_raster = rasterize(
-            zip(rivers.geometry, rivers["COMID"]),
-            out_shape=flwdir.shape,
-            fill=0,
-            dtype=np.int32,
-            transform=hydrography.rio.transform(),
-            all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
-        )
-
-        river_raster_coarsened = river_raster.ravel()[idxs_out.ravel()].reshape(
-            idxs_out.shape
-        )
-
-        MERIT_Basins_to_SWORD = self.data_catalog.get_source(
-            "MERIT_Basins_to_SWORD"
-        ).path
-        SWORD_files = []
-        for SWORD_region in (
-            list(range(11, 19))
-            + list(range(21, 30))
-            + list(range(31, 37))
-            + list(range(41, 50))
-            + list(range(51, 58))
-            + list(range(61, 68))
-            + list(range(71, 79))
-            + list(range(81, 87))
-            + [91]
-        ):
-            SWORD_files.append(
-                MERIT_Basins_to_SWORD.format(SWORD_Region=str(SWORD_region))
-            )
-        MERIT_Basins_to_SWORD = (
-            xr.open_mfdataset(SWORD_files).sel(mb=rivers["COMID"].tolist()).compute()
-        )
-
-        SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)
-        SWORD_reach_lengths = np.full(
-            (40, len(rivers)), dtype=np.float64, fill_value=np.nan
-        )
-        for i in range(1, 41):
-            SWORD_reach_IDs[i - 1] = MERIT_Basins_to_SWORD[f"sword_{i}"]
-            SWORD_reach_lengths[i - 1] = MERIT_Basins_to_SWORD[f"part_len_{i}"]
-
-        unique_SWORD_reach_ids = np.unique(SWORD_reach_IDs)
-        unique_SWORD_reach_ids = unique_SWORD_reach_ids[unique_SWORD_reach_ids != 0]
-
-        SWORD = gpd.read_file(
-            self.data_catalog.get_source("SWORD").path,
-            sql=f"""SELECT reach_id, width FROM sword_reaches_v16 WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})""",
-        ).set_index("reach_id")
-
-        def lookup_river_width(reach_id):
-            if reach_id == 0:
-                return 0
-            return SWORD.loc[reach_id, "width"]
-
-        SWORD_river_width = np.vectorize(lookup_river_width)(SWORD_reach_IDs)
-
-        river_width = (SWORD_river_width * SWORD_reach_lengths).sum(
-            axis=0
-        ) / SWORD_reach_lengths.sum(axis=0)
-
-        import rasterio
-
-        # ensure that all rivers with a SWORD ID have a width
-        assert (~np.isnan(river_width[(SWORD_reach_IDs != 0).any(axis=0)])).all()
-
-        with rasterio.open(
-            "comid_coarse.tif",
-            "w",
-            transform=hydrography.rio.transform(),
-            height=river_raster_coarsened.shape[0],
-            width=river_raster_coarsened.shape[1],
-            count=1,
-            dtype=np.int32,
-        ) as dst:
-            dst.write(river_raster_coarsened, 1)
 
         elevation_coarsened = (
             hydrography["elv"]
@@ -531,15 +439,15 @@ class GEBModel(GridModel):
         upstream_area.data = upstream_area_data
         self.set_grid(upstream_area, name="routing/kinematic/upstream_area")
 
-        # channel length
-        channel_length = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
-        channel_length.raster.set_nodata(np.nan)
-        channel_length_data = flow_raster.subgrid_rivlen(
+        # river length
+        river_length = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        river_length.raster.set_nodata(np.nan)
+        river_length_data = flow_raster.subgrid_rivlen(
             idxs_out, unit="m", direction="down"
         )
-        channel_length_data[channel_length_data == -9999.0] = np.nan
-        channel_length.data = channel_length_data
-        self.set_grid(channel_length, name="routing/kinematic/channel_length")
+        river_length_data[river_length_data == -9999.0] = np.nan
+        river_length.data = river_length_data
+        self.set_grid(river_length, name="routing/kinematic/river_length")
 
         # river slope
         river_slope = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
@@ -549,8 +457,44 @@ class GEBModel(GridModel):
         river_slope.data = river_slope_data
         self.set_grid(
             river_slope,
-            name="routing/kinematic/channel_slope",
+            name="routing/kinematic/river_slope",
         )
+
+        # river width
+        rivers = get_rivers(self.data_catalog, subbasin_ids)
+        COMID_IDs_raster = create_river_raster_from_river_lines(
+            rivers, idxs_out, hydrography
+        )
+        SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lenghts(
+            self.data_catalog, rivers
+        )
+        SWORD_river_widths = get_SWORD_river_widths(self.data_catalog, SWORD_reach_IDs)
+        MINIMUM_RIVER_WIDTH = 3.0
+        rivers["width"] = np.nansum(
+            SWORD_river_widths * SWORD_reach_lengths, axis=0
+        ) / np.nansum(SWORD_reach_lengths, axis=0)
+        # ensure that all rivers with a SWORD ID have a width
+        assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
+
+        # set initial width guess where width is not available from SWORD
+        rivers.loc[rivers["width"].isnull(), "width"] = (
+            rivers[rivers["width"].isnull()]["uparea"] / 10
+        )
+        rivers["width"] = rivers["width"].clip(lower=float(MINIMUM_RIVER_WIDTH))
+
+        self.set_geoms(rivers, name="rivers")
+
+        river_width_data = np.vectorize(
+            lambda ID: rivers.set_index("COMID")["width"]
+            .to_dict()
+            .get(ID, float(MINIMUM_RIVER_WIDTH))
+        )(COMID_IDs_raster).astype(np.float32)
+
+        river_width = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        river_width.raster.set_nodata(np.nan)
+        assert river_width_data.dtype == np.float32
+        river_width.data = river_width_data
+        self.set_grid(river_width, name="routing/kinematic/river_width")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
 
@@ -1437,110 +1381,10 @@ class GEBModel(GridModel):
         self.set_grid(mannings, mannings.name)
 
     def setup_channel_width(self, minimum_width: float) -> None:
-        """
-        Sets up the channel width for the model.
-
-        Parameters
-        ----------
-        minimum_width : float
-            The minimum channel width in meters.
-
-        Notes
-        -----
-        This method sets up the channel width for the model by calculating the width of each channel based on the upstream
-        area of each cell in the grid. It first retrieves the upstream area of each cell from the `routing/kinematic/upstream_area`
-        attribute of the grid, and then calculates the channel width using the formula:
-
-            W = A / 500
-
-        where W is the channel width, and A is the upstream area of the cell. The resulting channel width is then set as
-        the `routing/kinematic/channel_width` attribute of the grid using the `set_grid()` method.
-
-        Additionally, this method sets a minimum channel width by replacing any channel width values that are less than the
-        minimum width with the minimum width.
-        """
-        self.logger.info("Setting up channel width")
-        SWORD = self.data_catalog.get_geodataframe("SWORD", geom=self.region)
-        MERIT_Basins_to_SWORD = self.data_catalog.get_source(
-            "MERIT_Basins_to_SWORD"
-        ).path
-        for SWORD_region in (
-            list(range(11, 19))
-            + list(range(21, 30))
-            + list(range(31, 37))
-            + list(range(41, 50))
-            + list(range(51, 58))
-            + list(range(61, 68))
-            + list(range(71, 79))
-            + list(range(81, 87))
-            + [91]
-        ):
-            MERIT_Basins_to_SWORD_with_region = MERIT_Basins_to_SWORD.format(
-                SWORD_Region=str(SWORD_region)
-            )
-            print(MERIT_Basins_to_SWORD_with_region)
-            xr.open_dataset(MERIT_Basins_to_SWORD_with_region)
-            xr.open_dataset(MERIT_Basins_to_SWORD_with_region).mb
-        channel_width_data = self.grid["routing/kinematic/upstream_area"] / 500
-        channel_width_data = xr.where(
-            channel_width_data > minimum_width,
-            channel_width_data,
-            minimum_width,
-            keep_attrs=True,
-        )
-
-        channel_width = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="routing/kinematic/channel_width",
-            lazy=True,
-            crs=self.crs,
-        )
-        channel_width.data = channel_width_data
-
-        self.set_grid(channel_width, channel_width.name)
+        raise ValueError("setup_channel_width not needed anymore, please remove")
 
     def setup_channel_depth(self) -> None:
-        """
-        Sets up the channel depth for the model.
-
-        Raises
-        ------
-        AssertionError
-            If the upstream area of any cell in the grid is less than or equal to zero.
-
-        Notes
-        -----
-        This method sets up the channel depth for the model by calculating the depth of each channel based on the upstream
-        area of each cell in the grid. It first retrieves the upstream area of each cell from the `routing/kinematic/upstream_area`
-        attribute of the grid, and then calculates the channel depth using the formula:
-
-            D = 0.27 * A ** 0.26
-
-        where D is the channel depth, and A is the upstream area of the cell. The resulting channel depth is then set as
-        the `routing/kinematic/channel_depth` attribute of the grid using the `set_grid()` method.
-
-        Additionally, this method raises an `AssertionError` if the upstream area of any cell in the grid is less than or
-        equal to zero. This is done to ensure that the upstream area is a positive value, which is required for the channel
-        depth calculation to be valid.
-        """
-        self.logger.info("Setting up channel depth")
-        assert (
-            (self.grid["routing/kinematic/upstream_area"] > 0)
-            | self.grid["areamaps/grid_mask"]
-        ).all()
-        channel_depth_data = 0.27 * self.grid["routing/kinematic/upstream_area"] ** 0.26
-        channel_depth = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="routing/kinematic/channel_depth",
-            lazy=True,
-            crs=self.crs,
-        )
-        channel_depth.data = channel_depth_data
-        self.set_grid(channel_depth, channel_depth.name)
+        raise ValueError("setup_channel_depth not needed anymore, please remove")
 
     def setup_channel_ratio(self) -> None:
         """
@@ -1549,36 +1393,36 @@ class GEBModel(GridModel):
         Raises
         ------
         AssertionError
-            If the channel length of any cell in the grid is less than or equal to zero, or if the channel ratio of any
+            If the river length of any cell in the grid is less than or equal to zero, or if the channel ratio of any
             cell in the grid is less than zero.
 
         Notes
         -----
         This method sets up the channel ratio for the model by calculating the ratio of the channel area to the cell area
         for each cell in the grid. It first retrieves the channel width and length from the `routing/kinematic/channel_width`
-        and `routing/kinematic/channel_length` attributes of the grid, and then calculates the channel area using the
+        and `routing/kinematic/river_length` attributes of the grid, and then calculates the channel area using the
         product of the width and length. It then calculates the channel ratio by dividing the channel area by the cell area
         retrieved from the `areamaps/cell_area` attribute of the grid.
 
         The resulting channel ratio is then set as the `routing/kinematic/channel_ratio` attribute of the grid using the
         `set_grid()` method. Any channel ratio values that are greater than 1 are replaced with 1 (i.e., the whole cell is a channel).
 
-        Additionally, this method raises an `AssertionError` if the channel length of any cell in the grid is less than or
+        Additionally, this method raises an `AssertionError` if the river length of any cell in the grid is less than or
         equal to zero, or if the channel ratio of any cell in the grid is less than zero. These checks are done to ensure
-        that the channel length and ratio are positive values, which are required for the channel ratio calculation to be
+        that the river length and ratio are positive values, which are required for the channel ratio calculation to be
         valid.
         """
         self.logger.info("Setting up channel ratio")
         assert (
-            (self.grid["routing/kinematic/channel_length"] > 0)  # inside mask
+            (self.grid["routing/kinematic/river_length"] > 0)  # inside mask
             | self.grid["areamaps/grid_mask"]  # or is masked
             | (
                 self.grid["routing/kinematic/ldd"] == 5
             )  # or there is a pit in the river network
         ).all()
         channel_area = (
-            self.grid["routing/kinematic/channel_width"]
-            * self.grid["routing/kinematic/channel_length"]
+            self.grid["routing/kinematic/river_width"]
+            * self.grid["routing/kinematic/river_length"]
         )
         channel_ratio_data = channel_area / self.grid["areamaps/cell_area"]
         channel_ratio_data = xr.where(
@@ -6349,23 +6193,7 @@ class GEBModel(GridModel):
 
         hydrodynamics_data_catalog = DataCatalog()
 
-        # hydrobasins
-        hydrobasins = self.data_catalog.get_geodataframe(
-            "hydrobasins_8",
-            geom=self.region,
-            predicate="intersects",
-        )
-        self.set_geoms(hydrobasins, name="hydrodynamics/hydrobasins")
-
-        hydrodynamics_data_catalog.add_source(
-            "hydrobasins_level_8",
-            GeoDataFrameAdapter(
-                path=Path(self.root) / "hydrodynamics" / "hydrobasins.gpkg",
-                meta=self.data_catalog.get_source("hydrobasins_8").meta,
-            ),  # hydromt likes absolute paths
-        )
-
-        bounds = tuple(hydrobasins.total_bounds)
+        bounds = tuple(self.geoms["subbasins"].total_bounds)
 
         for DEM_name in DEM:
             DEM_raster = self.data_catalog.get_rasterdataset(
@@ -6419,30 +6247,10 @@ class GEBModel(GridModel):
             ),  # hydromt likes absolute paths
         )
 
-        # river centerlines
-        river_centerlines = self.data_catalog.get_geodataframe(
-            "river_centerlines_MERIT_Basins",
-            bbox=bounds,
-            predicate="intersects",
-        )
-        self.set_geoms(river_centerlines, name="hydrodynamics/river_centerlines")
-
-        hydrodynamics_data_catalog.add_source(
-            "river_centerlines_MERIT_Basins",
-            GeoDataFrameAdapter(
-                path=Path(self.root)
-                / "hydrodynamics"
-                / "river_centerlines.gpkg",  # hydromt likes absolute paths
-                meta=self.data_catalog.get_source(
-                    "river_centerlines_MERIT_Basins"
-                ).meta,
-            ),
-        )
-
         # landcover
         esa_worldcover = self.data_catalog.get_rasterdataset(
             land_cover,
-            geom=self.geoms["areamaps/regions"],
+            bbox=self.geoms["subbasins"].total_bounds,
             buffer=200,  # 2 km buffer
         ).chunk({"x": XY_CHUNKSIZE, "y": XY_CHUNKSIZE})
         del esa_worldcover.attrs["_FillValue"]

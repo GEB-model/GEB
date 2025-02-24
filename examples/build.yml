@@ -13,11 +13,6 @@ setup_economic_data:
 
 setup_mannings:
 
-setup_channel_width:
-  minimum_width: 3
-
-setup_channel_depth:
-
 setup_channel_ratio:
 
 setup_soil_parameters:
