@@ -666,7 +666,7 @@ class fairSTREAMModel(GEBModel):
                     p=well_probability / well_probability.sum(),
                 )
 
-                adaptations[agent_subset[well_irrigated_agents], WELL_ADAPTATION] = 1
+                adaptations[well_irrigated_agents, WELL_ADAPTATION] = 1
 
                 # not_yet_irrigated_agents = np.where(
                 #     adaptations[agent_subset, SURFACE_IRRIGATION_EQUIPMENT] == -1
