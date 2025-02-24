@@ -41,7 +41,6 @@ class SnowFrost(object):
     Variable [self.var]   Description                                                                       Unit
     ====================  ================================================================================  =========
     Tavg                  average air Temperature (input for the model)                                     K
-    waterbalance_module
     Rain                  Precipitation less snow                                                           m
     SnowMelt              total snow melt from all layers                                                   m
     SnowCover             snow cover (sum over all layers)                                                  m
@@ -76,8 +75,6 @@ class SnowFrost(object):
     prevSnowCover         snow cover of previous day (only for water balance)                               m
     Snow                  Snow (equal to a part of Precipitation)                                           m
     ====================  ================================================================================  =========
-
-    **Functions**
     """
 
     def __init__(self, model):

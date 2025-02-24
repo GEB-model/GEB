@@ -64,8 +64,6 @@ class RunoffConcentration(object):
     directRunoff          Simulated surface runoff                                                          m
     interflow             Simulated flow reaching runoff instead of groundwater                             m
     ====================  ================================================================================  =========
-
-    **Functions**
     """
 
     def __init__(self, model):

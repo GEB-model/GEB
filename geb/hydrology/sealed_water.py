@@ -38,15 +38,12 @@ class SealedWater(object):
     ====================  ================================================================================  =========
     EWRef                 potential evaporation rate from water surface                                     m
     capillar              Simulated flow from groundwater to the third CWATM soil layer                     m
-    waterbalance_module
     availWaterInfiltrati  quantity of water reaching the soil after interception, more snowmelt             m
     actual_evapotranspiration              simulated evapotranspiration from soil, flooded area and vegetation               m
     directRunoff          Simulated surface runoff                                                          m
     openWaterEvap         Simulated evaporation from open areas                                             m
     actual_bare_soil_evaporation       Simulated evaporation from the first soil layer                                   m
     ====================  ================================================================================  =========
-
-    **Functions**
     """
 
     def __init__(self, model):

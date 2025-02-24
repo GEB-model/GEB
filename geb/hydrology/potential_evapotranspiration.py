@@ -179,8 +179,6 @@ class PotentialEvapotranspiration(object):
     ETRef                 potential evapotranspiration rate from reference crop                             m
     EWRef                 potential evaporation rate from water surface                                     m
     ====================  ================================================================================  =========
-
-    **Functions**
     """
 
     def __init__(self, model):

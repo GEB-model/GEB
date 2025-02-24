@@ -36,71 +36,20 @@ class Routing(object):
 
     routing using the kinematic wave
 
-
-    **Global variables**
-
     ====================  ================================================================================  =========
     Variable [self.var]   Description                                                                       Unit
     ====================  ================================================================================  =========
     EWRef                 potential evaporation rate from water surface                                     m
-    waterbalance_module
-    seconds_per_timestep                 number of seconds per timestep (default = 86400)                                  s
     waterBodyID           lakes/reservoirs map with a single ID for each lake/reservoir                     --
-    UpArea1               upstream area of a grid cell                                                      m2
     dirUp                 river network in upstream direction                                               --
     lddCompress           compressed river network (without missing values)                                 --
     compress_LR           boolean map as mask map for compressing lake/reservoir                            --
-    lakeArea              area of each lake/reservoir                                                       m2
     lakeEvaFactor         a factor which increases evaporation from lake because of wind                    --
-    lakeEvaFactorC        compressed map of a factor which increases evaporation from lake because of wind  --
-    EvapWaterBodyM
-    lakeResInflowM
-    lakeResOutflowM
     dtRouting             number of seconds per routing timestep                                            s
-    lakeResStorage
     evaporation_from_water_bodies_per_routing_step
-    sumLakeEvapWaterBody
-    noRoutingSteps
     discharge             discharge                                                                         m3/s
-    runoff
     cellArea              Cell area [m²] of each simulated mesh
-    downstruct
-    pre_storage
-    act_SurfaceWaterAbst
-    fracVegCover          Fraction of area covered by the corresponding landcover type
     openWaterEvap         Simulated evaporation from open areas                                             m
-    chanLength
-    totalCrossSectionAre
-    dirupLen
-    dirupID
-    catchment
-    dirDown
-    lendirDown
-    UpArea
-    beta
-    channel_mannings
-    chanGrad
-    channel_width
-    invchanLength
-    invdtRouting
-    totalCrossSectionAre
-    chanWettedPerimeterA
-    alpPower
-    channelAlpha
-    invchannelAlpha
-    channelStorageM3
-    riverbedExchange
-    pre_channel_storage_m3
-    EvapoChannel
-    QDelta
-    act_bigLakeResAbst
-    act_smallLakeResAbst
-    return_flow
-    sumsideflow
-    inflowDt
-    ====================  ================================================================================  =========
-
-    **Functions**
     """
 
     def __init__(self, model):
@@ -250,7 +199,6 @@ class Routing(object):
             / self.grid.var.cellArea,
         )
         # put all the water area in which is not reflected in the lakes ,res
-        # channelFraction = np.maximum(self.grid.var.fracVegCover[5], channelFraction)
 
         EWRefact = self.grid.var.lakeEvaFactor * self.model.data.to_grid(
             HRU_data=self.model.data.HRU.var.EWRef, fn="weightedmean"
