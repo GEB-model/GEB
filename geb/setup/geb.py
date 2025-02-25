@@ -3388,9 +3388,9 @@ class GEBModel(GridModel):
                 region["ISO3"],
                 convert_percent_to_ratio=True,
             )
-            inflation_rates_dict["data"][region_id] = np.array(
-                local_inflation_rates
-            ) / np.array(USA_inflation_rates)
+            inflation_rates_dict["data"][region_id] = (
+                np.array(local_inflation_rates) / np.array(USA_inflation_rates)
+            ).tolist()
 
             price_ratio_dict["data"][region_id] = process_rates(
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
