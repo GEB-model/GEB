@@ -546,9 +546,7 @@ class HRUs(BaseVariables):
             self.var.unmerged_HRU_indices,
         ) = self.create_HRUs()
 
-        upstream_area = load_grid(
-            self.model.files["grid"]["routing/kinematic/upstream_area"]
-        )
+        upstream_area = load_grid(self.model.files["grid"]["routing/upstream_area"])
 
         self.var.nearest_river_grid_cell = determine_nearest_river_cell(
             upstream_area,

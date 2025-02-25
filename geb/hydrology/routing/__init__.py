@@ -26,8 +26,14 @@ from .subroutines import (
 )
 import numpy as np
 from geb.workflows import balance_check
-from ..landcover import OPEN_WATER
 from .subroutines import PIT
+
+
+def get_channel_ratio(river_width, river_length, cell_area):
+    return np.minimum(
+        1.0,
+        river_width * river_length / cell_area,
+    )
 
 
 class Routing(object):
@@ -72,7 +78,7 @@ class Routing(object):
         self.var = self.model.store.create_bucket("routing.var")
 
         ldd = self.grid.load(
-            self.model.files["grid"]["routing/kinematic/ldd"],
+            self.model.files["grid"]["routing/ldd"],
             compress=False,
         )
         # in previous versions of GEB we followed the CWatM specification, where masked data
@@ -112,58 +118,53 @@ class Routing(object):
         self.var.beta = 0.6  # TODO: Make this a parameter
 
         # Channel Manning's n
-        self.grid.var.channel_mannings = (
-            self.grid.load(self.model.files["grid"]["routing/kinematic/mannings"])
+        self.grid.var.river_mannings = (
+            self.grid.load(self.model.files["grid"]["routing/mannings"])
             * self.model.config["parameters"]["manningsN"]
         )
-        assert (self.grid.var.channel_mannings > 0).all()
+        assert (self.grid.var.river_mannings > 0).all()
 
-        # Channel gradient (fraction, dy/dx)
-        minimum_channel_gradient = 0.0001
-        self.grid.var.chanGrad = np.maximum(
-            self.grid.load(self.model.files["grid"]["routing/kinematic/channel_slope"]),
-            minimum_channel_gradient,
-        )
         # Channel length [meters]
-        self.grid.var.chanLength = self.grid.load(
-            self.model.files["grid"]["routing/kinematic/channel_length"]
+        self.grid.var.river_length = self.grid.load(
+            self.model.files["grid"]["routing/river_length"]
         )
-        assert (self.grid.var.chanLength[self.grid.var.lddCompress != PIT] > 0).all(), (
-            "Channel length must be greater than 0 for all cells except for pits"
-        )
-        # Channel bottom width [meters]
-        self.grid.var.channel_width = self.grid.load(
-            self.model.files["grid"]["routing/kinematic/channel_width"]
-        )
+        assert (
+            self.grid.var.river_length[self.grid.var.lddCompress != PIT] > 0
+        ).all(), "Channel length must be greater than 0 for all cells except for pits"
 
-        # Inverse of channel length [1/m]
-        self.grid.var.invchanLength = 1 / self.grid.var.chanLength
+        # Channel bottom width [meters]
+        self.grid.var.river_width = self.grid.load(
+            self.model.files["grid"]["routing/river_width"]
+        )
 
         # Corresponding sub-timestep (seconds)
         self.var.dtRouting = self.model.seconds_per_timestep / self.var.noRoutingSteps
-        self.var.invdtRouting = 1 / self.var.dtRouting
 
-        # for a channel, the wetted perimeter can be approximated by the channel width
-        channel_wetted_perimeter = self.grid.var.channel_width
+        # for a river, the wetted perimeter can be approximated by the channel width
+        river_wetted_perimeter = self.grid.var.river_width
 
-        # ChannelAlpha for kinematic wave
+        # Channel gradient (fraction, dy/dx)
+        minimum_river_slope = 0.0001
+        river_slope = np.maximum(
+            self.grid.load(self.model.files["grid"]["routing/river_slope"]),
+            minimum_river_slope,
+        )
+
+        # river_alpha for kinematic wave
         # source: https://gmd.copernicus.org/articles/13/3267/2020/ eq. 21
-        self.grid.var.channelAlpha = (
-            self.grid.var.channel_mannings
-            * channel_wetted_perimeter ** (2 / 3)
-            / np.sqrt(self.grid.var.chanGrad)
+        self.grid.var.river_alpha = (
+            self.grid.var.river_mannings
+            * river_wetted_perimeter ** (2 / 3)
+            / np.sqrt(river_slope)
         ) ** self.var.beta
 
-        # channel water volume [m3]
-        # Initialise water volume in kinematic wave channels [m3]
-        self.grid.var.channelStorageM3 = np.zeros_like(
-            self.grid.var.channel_width, dtype=np.float32
+        # Initialise water volume and discharge in rivers, just set at 0 [m3]
+        self.grid.var.river_storage_m3 = np.zeros_like(
+            self.grid.var.river_width, dtype=np.float32
         )
-        self.grid.var.discharge = (
-            self.grid.var.channelStorageM3
-            * self.grid.var.invchanLength
-            / self.grid.var.channelAlpha
-        ) ** (1 / self.var.beta)
+        self.grid.var.discharge = np.zeros_like(
+            self.grid.var.river_width, dtype=np.float32
+        )
         self.grid.var.discharge_substep = np.full(
             (self.var.noRoutingSteps, self.grid.var.discharge.size),
             0,
@@ -187,48 +188,47 @@ class Routing(object):
         """
 
         if __debug__:
-            pre_channel_storage_m3 = self.grid.var.channelStorageM3.copy()
+            pre_channel_storage_m3 = self.grid.var.river_storage_m3.copy()
             pre_storage = self.model.lakes_reservoirs.var.storage.copy()
 
         # Evaporation from open channel
         # from big lakes/res and small lakes/res is calculated separately
-        channelFraction = np.minimum(
-            1.0,
-            self.grid.var.channel_width
-            * self.grid.var.chanLength
-            / self.grid.var.cellArea,
+        channel_ratio = get_channel_ratio(
+            river_length=self.grid.var.river_length,
+            river_width=self.grid.var.river_width,
+            cell_area=self.grid.var.cellArea,
         )
-        # put all the water area in which is not reflected in the lakes ,res
 
-        EWRefact = self.grid.var.lakeEvaFactor * self.model.data.to_grid(
-            HRU_data=self.model.data.HRU.var.EWRef, fn="weightedmean"
-        ) - self.model.data.to_grid(HRU_data=openWaterEvap, fn="weightedmean")
-        # evaporation from channel minus the calculated evaporation from rainfall
-        EvapoChannel = EWRefact * channelFraction * self.grid.var.cellArea
-        # EvapoChannel = self.grid.var.EWRef * channelFraction * self.grid.var.cellArea
-
-        # restrict to 95% of channel storage -> something should stay in the river
-        EvapoChannel = np.where(
-            (0.95 * self.grid.var.channelStorageM3 - EvapoChannel) > 0.0,
-            EvapoChannel,
-            0.95 * self.grid.var.channelStorageM3,
+        evaporation_in_channels_m3 = (
+            self.grid.var.EWRef * channel_ratio * self.grid.var.cellArea
         )
+
+        # limit evaporation to available water
+        evaporation_in_channels_m3[
+            evaporation_in_channels_m3 > self.grid.var.river_storage_m3
+        ] = self.grid.var.river_storage_m3[
+            evaporation_in_channels_m3 > self.grid.var.river_storage_m3
+        ]
+
+        # ensure that there is no evaporation in water bodies
+        # if self.grid.var.river_storage_m3.sum() > 0:
+        #     assert True
 
         # riverbed infiltration (m3):
         # - current implementation based on Inge's principle (later, will be based on groundater head (MODFLOW) and can be negative)
         # - happening only if 0.0 < baseflow < nonFossilGroundwaterAbs
         # - infiltration rate will be based on aquifer saturated conductivity
         # - limited to fracWat
-        # - limited to available channelStorageM3
+        # - limited to available river_storage_m3
         # - this infiltration will be handed to groundwater in the next time step
 
         """
-        self.grid.var.riverbedExchange = np.maximum(0.0,  np.minimum(self.grid.var.channelStorageM3, np.where(self.grid.var.baseflow > 0.0, \
+        self.grid.var.riverbedExchange = np.maximum(0.0,  np.minimum(self.grid.var.river_storage_m3, np.where(self.grid.var.baseflow > 0.0, \
                                 np.where(self.grid.var.nonFossilGroundwaterAbs > self.grid.var.baseflow, \
                                 self.grid.var.kSatAquifer * self.grid.var.fracVegCover[5] * self.grid.var.cellArea, \
                                 0.0), 0.0)))
         # to avoid flip flop
-        self.grid.var.riverbedExchange = np.minimum(self.grid.var.riverbedExchange, 0.95 * self.grid.var.channelStorageM3)
+        self.grid.var.riverbedExchange = np.minimum(self.grid.var.riverbedExchange, 0.95 * self.grid.var.river_storage_m3)
 
 
                 if self.grid.var.modflow:
@@ -245,12 +245,12 @@ class Routing(object):
         # calculate outflow from lakes and reservoirs
 
         # average evaporation overeach lake
-        EWRefavg = np.bincount(
+        average_evaporation_per_water_body = np.bincount(
             self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-            weights=EWRefact[self.grid.var.waterBodyID != -1],
+            weights=self.grid.var.EWRef[self.grid.var.waterBodyID != -1],
         ) / np.bincount(self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1])
         evaporation_from_water_bodies_per_routing_step = (
-            EWRefavg
+            average_evaporation_per_water_body
             * self.model.lakes_reservoirs.var.lake_area
             / self.var.noRoutingSteps
         )
@@ -258,18 +258,11 @@ class Routing(object):
             "evaporation_from_water_bodies_per_routing_step < 0.0"
         )
 
-        fraction_water = np.array(self.model.data.HRU.var.land_use_ratio)
-        fraction_water[self.model.data.HRU.var.land_use_type != OPEN_WATER] = 0
-        fraction_water = self.model.data.to_grid(HRU_data=fraction_water, fn="sum")
-
-        EvapoChannel = np.where(
-            self.grid.var.waterBodyID > 0,
-            (1 - fraction_water) * EvapoChannel,
-            EvapoChannel,
-        )
         # self.grid.var.riverbedExchange = np.where(self.grid.var.waterBodyID > 0, 0., self.grid.var.riverbedExchange)
 
-        EvapoChannelM3Dt = EvapoChannel / self.var.noRoutingSteps
+        evaporation_in_channels_m3_per_routing_step = (
+            evaporation_in_channels_m3 / self.var.noRoutingSteps
+        )
         # riverbedExchangeDt = self.grid.var.riverbedExchangeM3 / self.var.noRoutingSteps
         # del self.grid.var.riverbedExchangeM3
 
@@ -296,14 +289,14 @@ class Routing(object):
             dtype=self.grid.var.discharge.dtype,
         )
 
-        sumsideflow = 0
+        sumsideflow_m3 = 0
         sumwaterbody_evaporation = 0
         discharge_at_outlets = 0
         for subrouting_step in range(self.var.noRoutingSteps):
             # Runoff - Evaporation ( -riverbed exchange), this could be negative  with riverbed exhange also
             sideflowChanM3 = runoffM3.copy()
             # minus evaporation from channels
-            sideflowChanM3 -= EvapoChannelM3Dt
+            sideflowChanM3 -= evaporation_in_channels_m3_per_routing_step
             # # minus riverbed exchange
             # sideflowChanM3 -= riverbedExchangeDt
 
@@ -322,7 +315,7 @@ class Routing(object):
             sumwaterbody_evaporation += waterbody_evaporation
 
             sideflowChan = (
-                sideflowChanM3 * self.grid.var.invchanLength / self.var.dtRouting
+                sideflowChanM3 / self.grid.var.river_length / self.var.dtRouting
             )
 
             self.grid.var.discharge = kinematic(
@@ -331,10 +324,10 @@ class Routing(object):
                 self.grid.var.dirDown,
                 self.grid.var.dirupLen,
                 self.grid.var.dirupID,
-                self.grid.var.channelAlpha,
+                self.grid.var.river_alpha,
                 self.var.beta,
                 self.var.dtRouting,
-                self.grid.var.chanLength,
+                self.grid.var.river_length,
             )
 
             self.grid.var.discharge_substep[subrouting_step, :] = (
@@ -347,14 +340,16 @@ class Routing(object):
                     self.grid.var.lddCompress_LR == PIT
                 ].sum()
 
-                sumsideflow += sideflowChanM3
+                sumsideflow_m3 += sideflowChanM3
 
         assert not np.isnan(self.grid.var.discharge).any()
 
-        self.grid.var.channelStorageM3 = (
-            self.grid.var.channelAlpha
-            * self.grid.var.chanLength
-            * self.grid.var.discharge**self.var.beta
+        # The momentum equation, see eq. 18 in https://gmd.copernicus.org/articles/13/3267/2020/
+        cross_sectional_area_of_flow = (
+            self.grid.var.river_alpha * self.grid.var.discharge**self.var.beta
+        )
+        self.grid.var.river_storage_m3 = (
+            cross_sectional_area_of_flow * self.grid.var.river_length
         )
 
         if __debug__:
@@ -362,7 +357,11 @@ class Routing(object):
             balance_check(
                 how="sum",
                 influxes=[runoffM3, outflow_to_river_network],
-                outfluxes=[sideflowChanM3, EvapoChannelM3Dt, WDAddM3Dt],
+                outfluxes=[
+                    sideflowChanM3,
+                    evaporation_in_channels_m3_per_routing_step,
+                    WDAddM3Dt,
+                ],
                 name="routing_1",
                 tollerance=1e-8,
             )
@@ -374,7 +373,8 @@ class Routing(object):
                 ],
                 outfluxes=[
                     sideflowChanM3 / self.grid.var.cellArea,
-                    EvapoChannelM3Dt / self.grid.var.cellArea,
+                    evaporation_in_channels_m3_per_routing_step
+                    / self.grid.var.cellArea,
                     WDAddM3Dt / self.grid.var.cellArea,
                 ],
                 name="routing_2",
@@ -382,10 +382,10 @@ class Routing(object):
             )
             balance_check(
                 how="sum",
-                influxes=[sumsideflow],
+                influxes=[sumsideflow_m3],
                 outfluxes=[discharge_at_outlets * self.model.seconds_per_timestep],
                 prestorages=[pre_channel_storage_m3],
-                poststorages=[self.grid.var.channelStorageM3],
+                poststorages=[self.grid.var.river_storage_m3],
                 name="routing_3",
                 tollerance=100,
             )
@@ -394,12 +394,12 @@ class Routing(object):
                 influxes=[self.grid.var.runoff * self.grid.var.cellArea],
                 outfluxes=[
                     discharge_at_outlets * self.model.seconds_per_timestep,
-                    EvapoChannel,
+                    evaporation_in_channels_m3,
                     sumwaterbody_evaporation,
                 ],
                 prestorages=[pre_channel_storage_m3, pre_storage],
                 poststorages=[
-                    self.grid.var.channelStorageM3,
+                    self.grid.var.river_storage_m3,
                     self.model.lakes_reservoirs.var.storage,
                 ],
                 name="routing_4",

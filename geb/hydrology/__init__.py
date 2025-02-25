@@ -128,7 +128,7 @@ class Hydrology:
         Finalize the model
         """
         # finalize modflow model
-        if hasattr(self.groundwater, "modflow"):
+        if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
 
         if self.config["general"]["simulate_forest"]:

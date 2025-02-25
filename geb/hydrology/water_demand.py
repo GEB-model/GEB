@@ -207,7 +207,7 @@ class WaterDemand:
             ]
         )
         return (
-            self.grid.var.channelStorageM3.copy(),
+            self.grid.var.river_storage_m3.copy(),
             available_reservoir_storage_m3,
             self.model.groundwater.modflow.available_groundwater_m3.copy(),
         )

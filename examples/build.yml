@@ -13,8 +13,6 @@ setup_economic_data:
 
 setup_mannings:
 
-setup_channel_ratio:
-
 setup_soil_parameters:
 
 setup_land_use_parameters:

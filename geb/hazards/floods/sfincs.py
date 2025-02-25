@@ -321,7 +321,7 @@ class SFINCS:
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
-                self.model.files["grid"]["routing/kinematic/upstream_area"],
+                self.model.files["grid"]["routing/upstream_area"],
                 engine="zarr",
             ),  # .isel(band=0),
         )
@@ -482,5 +482,5 @@ class SFINCS:
 
     @property
     def uparea_ds(self):
-        uparea_path = self.model.files["grid"]["routing/kinematic/upstream_area"]
+        uparea_path = self.model.files["grid"]["routing/upstream_area"]
         return xr.open_dataset(uparea_path, engine="zarr") / 1e6  # m2 to km2

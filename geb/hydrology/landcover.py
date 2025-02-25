@@ -124,7 +124,7 @@ class LandCover(object):
             HRU_data=riverbedExchangeM3, fn="sum"
         )
         riverbedExchangeM3 = np.minimum(
-            riverbedExchangeM3, 0.80 * self.model.data.grid.channelStorageM3
+            riverbedExchangeM3, 0.80 * self.model.data.grid.river_storage_m3
         )
         # if there is a lake in this cell, there is no leakage
         riverbedExchangeM3[self.model.data.grid.waterBodyID > 0] = 0

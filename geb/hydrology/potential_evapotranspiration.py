@@ -186,6 +186,7 @@ class PotentialEvapotranspiration(object):
         The constructor evaporationPot
         """
         self.HRU = model.data.HRU
+        self.grid = model.data.grid
         self.model = model
         if self.model.in_spinup:
             self.spinup()
@@ -207,6 +208,10 @@ class PotentialEvapotranspiration(object):
             rlds=self.HRU.rlds,
             rsds=self.HRU.rsds,
             sfcWind=self.HRU.sfcWind,
+        )
+
+        self.grid.var.EWRef = self.model.data.to_grid(
+            HRU_data=self.HRU.var.EWRef, fn="weightedmean"
         )
 
         assert self.HRU.var.ETRef.dtype == np.float32

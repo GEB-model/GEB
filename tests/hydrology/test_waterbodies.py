@@ -8,7 +8,7 @@ from ..testconfig import output_folder
 from geb.hydrology.lakes_reservoirs import (
     estimate_outflow_height,
     get_lake_factor,
-    get_channel_width,
+    get_river_width,
     get_lake_height_above_outflow,
     estimate_lake_outflow,
     get_lake_outflow_and_storage,
@@ -19,9 +19,9 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     lake_area = np.array([3_480_000.0])
     lake_volume = np.array([7_630_000.0])
     avg_outflow = np.array([2.494])
-    channel_width = get_channel_width(avg_outflow)
+    river_width = get_river_width(avg_outflow)
     lake_factor = get_lake_factor(
-        channel_width=channel_width, overflow_coefficient_mu=0.577, lake_a_factor=1
+        river_width=river_width, overflow_coefficient_mu=0.577, lake_a_factor=1
     )
 
     outflow_height = estimate_outflow_height(

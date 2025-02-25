@@ -81,16 +81,16 @@ def get_lake_height_above_outflow(storage, lake_area, outflow_height):
     return height_above_outflow
 
 
-def get_channel_width(average_discharge):
+def get_river_width(average_discharge):
     return 7.1 * np.power(average_discharge, 0.539)
 
 
-def get_lake_factor(channel_width, overflow_coefficient_mu, lake_a_factor):
+def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
     return (
         lake_a_factor
         * overflow_coefficient_mu
         * (2 / 3)
-        * channel_width
+        * river_width
         * (2 * GRAVITY) ** 0.5
     )
 
@@ -272,10 +272,10 @@ class LakesReservoirs(object):
         )
 
         # channel width in [m]
-        channel_width = get_channel_width(average_discharge)
+        river_width = get_river_width(average_discharge)
 
         self.var.lake_factor = get_lake_factor(
-            channel_width,
+            river_width,
             overflow_coefficient_mu,
             self.model.config["parameters"]["lakeAFactor"],
         )
@@ -345,7 +345,7 @@ class LakesReservoirs(object):
         # especially for very small lakes with a small drainage area.
         # In such cases, we take the outflow cell with the lowest elevation.
         outflow_elevation = load_grid(
-            self.model.files["grid"]["routing/kinematic/outflow_elevation"]
+            self.model.files["grid"]["routing/outflow_elevation"]
         )
         outflow_elevation = self.grid.compress(outflow_elevation)
 
@@ -371,9 +371,7 @@ class LakesReservoirs(object):
             # especially for very small lakes with a small drainage area.
             # In such cases, we take the outflow cell with the lowest elevation.
             outflow_elevation = self.grid.compress(
-                load_grid(
-                    self.model.files["grid"]["routing/kinematic/outflow_elevation"]
-                )
+                load_grid(self.model.files["grid"]["routing/outflow_elevation"])
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:

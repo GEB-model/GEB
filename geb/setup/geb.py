@@ -35,7 +35,7 @@ from dateutil.relativedelta import relativedelta
 from contextlib import contextmanager
 from calendar import monthrange
 from numcodecs import Blosc
-
+from scipy.ndimage import maximum_position
 import pyflwdir
 
 from hydromt.models.model_grid import GridModel
@@ -307,7 +307,7 @@ class GEBModel(GridModel):
                 "is_downstream_outflow_subbasin",
             ] = True
 
-        self.set_geoms(subbasins, name="subbasins")
+        self.set_geoms(subbasins, name="routing/subbasins")
 
         hydrography = self.data_catalog.get_rasterdataset(
             "merit_hydro", provider=self.data_provider
@@ -403,7 +403,7 @@ class GEBModel(GridModel):
 
         # outflow elevation
         outflow_elevation = elevation_coarsened.min()
-        self.set_grid(outflow_elevation, name="routing/kinematic/outflow_elevation")
+        self.set_grid(outflow_elevation, name="routing/outflow_elevation")
 
         mask = xr.full_like(outflow_elevation, False, dtype=bool)
         # we use the inverted mask, that is True outside the study area
@@ -427,7 +427,7 @@ class GEBModel(GridModel):
         ldd = xr.full_like(outflow_elevation, 255, dtype=np.uint8)
         ldd.raster.set_nodata(255)
         ldd.data = flow_raster_upscaled.to_array(ftype="ldd")
-        self.set_grid(ldd, name="routing/kinematic/ldd")
+        self.set_grid(ldd, name="routing/ldd")
 
         # upstream area
         upstream_area = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
@@ -437,7 +437,7 @@ class GEBModel(GridModel):
         )
         upstream_area_data[upstream_area_data == -9999.0] = np.nan
         upstream_area.data = upstream_area_data
-        self.set_grid(upstream_area, name="routing/kinematic/upstream_area")
+        self.set_grid(upstream_area, name="routing/upstream_area")
 
         # river length
         river_length = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
@@ -447,7 +447,7 @@ class GEBModel(GridModel):
         )
         river_length_data[river_length_data == -9999.0] = np.nan
         river_length.data = river_length_data
-        self.set_grid(river_length, name="routing/kinematic/river_length")
+        self.set_grid(river_length, name="routing/river_length")
 
         # river slope
         river_slope = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
@@ -457,17 +457,55 @@ class GEBModel(GridModel):
         river_slope.data = river_slope_data
         self.set_grid(
             river_slope,
-            name="routing/kinematic/river_slope",
+            name="routing/river_slope",
         )
 
         # river width
-        rivers = get_rivers(self.data_catalog, subbasin_ids)
-        COMID_IDs_raster = create_river_raster_from_river_lines(
+        rivers = get_rivers(self.data_catalog, subbasin_ids).set_index("COMID")
+
+        # remove all rivers that are both shorter than 1 km and have no upstream river
+        rivers = rivers[~((rivers["lengthkm"] < 1) & (rivers["maxup"] == 0))]
+
+        rivers = rivers.join(
+            subbasins[["COMID", "is_downstream_outflow_subbasin"]].set_index("COMID"),
+            on="COMID",
+            how="left",
+        )
+
+        COMID_IDs_raster_data = create_river_raster_from_river_lines(
             rivers, idxs_out, hydrography
         )
+
+        rivers["in_subbasin"] = rivers.index.isin(
+            set(np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1]))
+        )
+
+        assert set(
+            np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1])
+        ) == set(np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1]))
+
+        forcing_points = maximum_position(
+            upstream_area,
+            COMID_IDs_raster_data,
+            rivers[~rivers["is_downstream_outflow_subbasin"]].index,
+        )
+        rivers["forcing_point_x"] = -1
+        rivers.loc[
+            rivers[~rivers["is_downstream_outflow_subbasin"]].index, "forcing_point_y"
+        ] = [y for y, _ in forcing_points]
+        rivers.loc[
+            rivers[~rivers["is_downstream_outflow_subbasin"]].index, "forcing_point_x"
+        ] = [x for _, x in forcing_points]
+
+        COMID_IDs_raster = xr.full_like(outflow_elevation, -1, dtype=np.int32)
+        COMID_IDs_raster.raster.set_nodata(-1)
+        COMID_IDs_raster.data = COMID_IDs_raster_data
+        self.set_grid(COMID_IDs_raster, name="routing/COMID_IDs")
+
         SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lenghts(
             self.data_catalog, rivers
         )
+
         SWORD_river_widths = get_SWORD_river_widths(self.data_catalog, SWORD_reach_IDs)
         MINIMUM_RIVER_WIDTH = 3.0
         rivers["width"] = np.nansum(
@@ -482,19 +520,17 @@ class GEBModel(GridModel):
         )
         rivers["width"] = rivers["width"].clip(lower=float(MINIMUM_RIVER_WIDTH))
 
-        self.set_geoms(rivers, name="rivers")
+        self.set_geoms(rivers, name="routing/rivers")
 
         river_width_data = np.vectorize(
-            lambda ID: rivers.set_index("COMID")["width"]
-            .to_dict()
-            .get(ID, float(MINIMUM_RIVER_WIDTH))
+            lambda ID: rivers["width"].to_dict().get(ID, float(MINIMUM_RIVER_WIDTH))
         )(COMID_IDs_raster).astype(np.float32)
 
         river_width = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
         river_width.raster.set_nodata(np.nan)
         assert river_width_data.dtype == np.float32
         river_width.data = river_width_data
-        self.set_grid(river_width, name="routing/kinematic/river_width")
+        self.set_grid(river_width, name="routing/river_width")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
 
@@ -1352,21 +1388,19 @@ class GEBModel(GridModel):
         -----
         This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
         and topography of the grid. It first calculates the upstream area of each cell in the grid using the
-        `routing/kinematic/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
+        `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
 
             C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
 
         where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
 
-        The resulting Manning's coefficient is then set as the `routing/kinematic/mannings` attribute of the grid using the
+        The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
         `set_grid()` method.
         """
         self.logger.info("Setting up Manning's coefficient")
-        a = (2 * self.grid["areamaps/cell_area"]) / self.grid[
-            "routing/kinematic/upstream_area"
-        ]
+        a = (2 * self.grid["areamaps/cell_area"]) / self.grid["routing/upstream_area"]
         a = xr.where(a < 1, a, 1, keep_attrs=True)
-        b = self.grid["routing/kinematic/outflow_elevation"] / 2000
+        b = self.grid["routing/outflow_elevation"] / 2000
         b = xr.where(b < 1, b, 1, keep_attrs=True)
 
         mannings = hydromt.raster.full(
@@ -1374,71 +1408,20 @@ class GEBModel(GridModel):
             nodata=np.nan,
             dtype=np.float32,
             crs=self.crs,
-            name="routing/kinematic/mannings",
+            name="routing/mannings",
             lazy=True,
         )
         mannings.data = 0.025 + 0.015 * a + 0.030 * b
         self.set_grid(mannings, mannings.name)
 
-    def setup_channel_width(self, minimum_width: float) -> None:
-        raise ValueError("setup_channel_width not needed anymore, please remove")
+    def setup_river_width(self, minimum_width: float) -> None:
+        raise ValueError("setup_river_width not needed anymore, please remove")
 
     def setup_channel_depth(self) -> None:
         raise ValueError("setup_channel_depth not needed anymore, please remove")
 
     def setup_channel_ratio(self) -> None:
-        """
-        Sets up the channel ratio for the model.
-
-        Raises
-        ------
-        AssertionError
-            If the river length of any cell in the grid is less than or equal to zero, or if the channel ratio of any
-            cell in the grid is less than zero.
-
-        Notes
-        -----
-        This method sets up the channel ratio for the model by calculating the ratio of the channel area to the cell area
-        for each cell in the grid. It first retrieves the channel width and length from the `routing/kinematic/channel_width`
-        and `routing/kinematic/river_length` attributes of the grid, and then calculates the channel area using the
-        product of the width and length. It then calculates the channel ratio by dividing the channel area by the cell area
-        retrieved from the `areamaps/cell_area` attribute of the grid.
-
-        The resulting channel ratio is then set as the `routing/kinematic/channel_ratio` attribute of the grid using the
-        `set_grid()` method. Any channel ratio values that are greater than 1 are replaced with 1 (i.e., the whole cell is a channel).
-
-        Additionally, this method raises an `AssertionError` if the river length of any cell in the grid is less than or
-        equal to zero, or if the channel ratio of any cell in the grid is less than zero. These checks are done to ensure
-        that the river length and ratio are positive values, which are required for the channel ratio calculation to be
-        valid.
-        """
-        self.logger.info("Setting up channel ratio")
-        assert (
-            (self.grid["routing/kinematic/river_length"] > 0)  # inside mask
-            | self.grid["areamaps/grid_mask"]  # or is masked
-            | (
-                self.grid["routing/kinematic/ldd"] == 5
-            )  # or there is a pit in the river network
-        ).all()
-        channel_area = (
-            self.grid["routing/kinematic/river_width"]
-            * self.grid["routing/kinematic/river_length"]
-        )
-        channel_ratio_data = channel_area / self.grid["areamaps/cell_area"]
-        channel_ratio_data = xr.where(
-            channel_ratio_data < 1, channel_ratio_data, 1, keep_attrs=True
-        )
-        assert ((channel_ratio_data >= 0) | ~self.grid["areamaps/grid_mask"]).all()
-        channel_ratio = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="routing/kinematic/channel_ratio",
-            lazy=True,
-            crs=self.crs,
-        )
-        channel_ratio.data = channel_ratio_data
-        self.set_grid(channel_ratio, channel_ratio.name)
+        raise ValueError("setup_channel_ratio not needed anymore, please remove")
 
     def setup_elevation(self) -> None:
         raise ValueError("setup_elevation not needed anymore, please remove")

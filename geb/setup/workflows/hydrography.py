@@ -75,7 +75,7 @@ def get_rivers(data_catalog, subbasin_ids):
 
 def create_river_raster_from_river_lines(rivers, flwdir_idxs_out, hydrography):
     river_raster = rasterize(
-        zip(rivers.geometry, rivers["COMID"]),
+        zip(rivers.geometry, rivers.index),
         out_shape=hydrography["flwdir"].shape,
         fill=-1,
         dtype=np.int32,
@@ -106,7 +106,7 @@ def get_SWORD_translation_IDs_and_lenghts(data_catalog, rivers):
         SWORD_files.append(MERIT_Basins_to_SWORD.format(SWORD_Region=str(SWORD_region)))
     assert len(SWORD_files) == 61, "There are 61 SWORD regions"
     MERIT_Basins_to_SWORD = (
-        xr.open_mfdataset(SWORD_files).sel(mb=rivers["COMID"].tolist()).compute()
+        xr.open_mfdataset(SWORD_files).sel(mb=rivers.index.tolist()).compute()
     )
 
     SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)

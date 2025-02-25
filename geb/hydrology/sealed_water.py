@@ -40,8 +40,8 @@ class SealedWater(object):
     capillar              Simulated flow from groundwater to the third CWATM soil layer                     m
     availWaterInfiltrati  quantity of water reaching the soil after interception, more snowmelt             m
     actual_evapotranspiration              simulated evapotranspiration from soil, flooded area and vegetation               m
-    directRunoff          Simulated surface runoff                                                          m
-    openWaterEvap         Simulated evaporation from open areas                                             m
+    direct_runoff          Simulated surface runoff                                                          m
+    open_water_evaporation         Simulated evaporation from open areas                                             m
     actual_bare_soil_evaporation       Simulated evaporation from the first soil layer                                   m
     ====================  ================================================================================  =========
     """
@@ -56,7 +56,7 @@ class SealedWater(object):
     def spinup(self):
         pass
 
-    def step(self, capillar, openWaterEvap, directRunoff):
+    def step(self, capillar, open_water_evaporation, direct_runoff):
         """
         Dynamic part of the sealed_water module
 
@@ -65,40 +65,39 @@ class SealedWater(object):
         :param coverType: Land cover type: forest, grassland  ...
         :param No: number of land cover type: forest = 0, grassland = 1 ...
         """
-
-        mult = self.HRU.full_compressed(0, dtype=np.float32)
-        mult[self.HRU.var.land_use_type == OPEN_WATER] = 1
-        mult[self.HRU.var.land_use_type == SEALED] = 0.2
-
-        sealed_area = np.where(
+        sealed_water_area = np.where(
             (self.HRU.var.land_use_type == SEALED) | self.HRU.var.land_use_type
             == OPEN_WATER
         )
+        sealed_area = self.HRU.var.land_use_type == SEALED
 
-        assert (capillar[sealed_area] >= 0).all()
+        assert (capillar[sealed_water_area] >= 0).all()
 
-        openWaterEvap[sealed_area] = mult[sealed_area] * self.HRU.var.EWRef[sealed_area]
+        # evaporation from precipitation fallen on sealed area (ponds) estimated as 0.2 x EWRef
+        # evaporation from open water and channels is calculated in the routing module
+        open_water_evaporation[sealed_area] = 0.2 * self.HRU.var.EWRef[sealed_area]
 
         # as there is no interception on sealed areas, the available water is the sum of the natural available water and the capillar rise
-        directRunoff[sealed_area] = (
-            self.HRU.var.natural_available_water_infiltration[sealed_area]
-            + capillar[sealed_area]
+        direct_runoff[sealed_water_area] = (
+            self.HRU.var.natural_available_water_infiltration[sealed_water_area]
+            + capillar[sealed_water_area]
         )
+
         # limit the evaporation to the available water
-        openWaterEvap[sealed_area] = np.minimum(
-            openWaterEvap[sealed_area], directRunoff[sealed_area]
+        open_water_evaporation[sealed_area] = np.minimum(
+            open_water_evaporation[sealed_area], direct_runoff[sealed_area]
         )
 
         # subtract the evaporation from the runoff water
-        directRunoff[sealed_area] -= openWaterEvap[sealed_area]
+        direct_runoff[sealed_water_area] -= open_water_evaporation[sealed_water_area]
 
         # make sure that the runoff is still positive
-        assert (directRunoff[sealed_area] >= 0).all()
+        assert (direct_runoff[sealed_water_area] >= 0).all()
 
         # open water evaporation is directly substracted from the river, lakes, reservoir
-        self.HRU.var.actual_evapotranspiration[sealed_area] = (
-            self.HRU.var.actual_evapotranspiration[sealed_area]
-            + openWaterEvap[sealed_area]
+        self.HRU.var.actual_evapotranspiration[sealed_water_area] = (
+            self.HRU.var.actual_evapotranspiration[sealed_water_area]
+            + open_water_evaporation[sealed_water_area]
         )
 
         if __debug__:
@@ -106,14 +105,16 @@ class SealedWater(object):
                 name="sealed_water",
                 how="cellwise",
                 influxes=[
-                    self.HRU.var.natural_available_water_infiltration[sealed_area],
-                    capillar[sealed_area],
+                    self.HRU.var.natural_available_water_infiltration[
+                        sealed_water_area
+                    ],
+                    capillar[sealed_water_area],
                 ],
                 outfluxes=[
-                    directRunoff[sealed_area],
-                    openWaterEvap[sealed_area],
+                    direct_runoff[sealed_water_area],
+                    open_water_evaporation[sealed_water_area],
                 ],
                 tollerance=1e-6,
             )
 
-        return directRunoff
+        return direct_runoff
