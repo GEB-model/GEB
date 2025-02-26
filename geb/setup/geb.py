@@ -3953,7 +3953,7 @@ class GEBModel(GridModel):
                             factor *= inf
                         real_values.append(nominal.iloc[0] / factor)
 
-                    baseline = np.mean(real_values)
+                    baseline = real_values[0]
                     prices = pd.Series(
                         index=range(start_year, end_year + 1), dtype=float
                     )
@@ -3994,7 +3994,7 @@ class GEBModel(GridModel):
                             real_values.append(val / factor)
 
                     if len(real_values) > 0:
-                        baseline = np.mean(real_values)
+                        baseline = real_values[0]
                     else:
                         baseline = 0.0
 
