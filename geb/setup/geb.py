@@ -6,7 +6,6 @@ Notes:
 
 from tqdm import tqdm
 from pathlib import Path
-import csv
 import hydromt.workflows
 from datetime import date, datetime, timedelta
 from typing import Union, Dict, List, Optional
@@ -82,6 +81,13 @@ from .workflows.hydrography import (
     create_river_raster_from_river_lines,
     get_SWORD_translation_IDs_and_lenghts,
     get_SWORD_river_widths,
+)
+
+from geb.agents.crop_farmers import (
+    SURFACE_IRRIGATION_EQUIPMENT,
+    WELL_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION,
+    FIELD_EXPANSION_ADAPTATION,
 )
 
 XY_CHUNKSIZE = 350
@@ -3323,7 +3329,7 @@ class GEBModel(GridModel):
             f"project_future_until_year ({project_future_until_year}) must be larger than reference_start_year ({reference_start_year})"
         )
 
-        lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
+        # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
         price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
 
@@ -3353,10 +3359,10 @@ class GEBModel(GridModel):
         price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
 
         # Assume lending_rates and inflation_rates are available
-        years_lending_rates = extract_years(lending_rates)
+        # years_lending_rates = extract_years(lending_rates)
         years_inflation_rates = extract_years(inflation_rates)
 
-        lending_rates_dict = {"time": years_lending_rates, "data": {}}
+        # lending_rates_dict = {"time": years_lending_rates, "data": {}}
         inflation_rates_dict = {"time": years_inflation_rates, "data": {}}
 
         # Create a helper to process rates and assert single row data
@@ -3380,12 +3386,12 @@ class GEBModel(GridModel):
             region_id = str(region["region_id"])
 
             # Store data in dictionaries
-            lending_rates_dict["data"][region_id] = process_rates(
-                lending_rates,
-                years_lending_rates,
-                region["ISO3"],
-                convert_percent_to_ratio=True,
-            )
+            # lending_rates_dict["data"][region_id] = process_rates(
+            #     lending_rates,
+            #     years_lending_rates,
+            #     region["ISO3"],
+            #     convert_percent_to_ratio=True,
+            # )
             local_inflation_rates = process_rates(
                 inflation_rates,
                 years_inflation_rates,
@@ -3405,9 +3411,9 @@ class GEBModel(GridModel):
             inflation_rates = pd.DataFrame(
                 inflation_rates_dict["data"], index=inflation_rates_dict["time"]
             ).dropna()
-            lending_rates = pd.DataFrame(
-                lending_rates_dict["data"], index=lending_rates_dict["time"]
-            ).dropna()
+            # lending_rates = pd.DataFrame(
+            #     lending_rates_dict["data"], index=lending_rates_dict["time"]
+            # ).dropna()
 
             inflation_rates.index = inflation_rates.index.astype(int)
             # extend inflation rates to future
@@ -3421,21 +3427,21 @@ class GEBModel(GridModel):
             inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
             inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
 
-            lending_rates.index = lending_rates.index.astype(int)
+            # lending_rates.index = lending_rates.index.astype(int)
             # extend lending rates to future
-            mean_lending_rate_since_reference_year = lending_rates.loc[
-                reference_start_year:
-            ].mean(axis=0)
-            lending_rates = lending_rates.reindex(
-                range(lending_rates.index.min(), project_future_until_year + 1)
-            ).fillna(mean_lending_rate_since_reference_year)
+            # mean_lending_rate_since_reference_year = lending_rates.loc[
+            #     reference_start_year:
+            # ].mean(axis=0)
+            # lending_rates = lending_rates.reindex(
+            #     range(lending_rates.index.min(), project_future_until_year + 1)
+            # ).fillna(mean_lending_rate_since_reference_year)
 
-            # convert back to dictionary
-            lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
-            lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
+            # # convert back to dictionary
+            # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
+            # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
 
         self.set_dict(inflation_rates_dict, name="economics/inflation_rates")
-        self.set_dict(lending_rates_dict, name="economics/lending_rates")
+        # self.set_dict(lending_rates_dict, name="economics/lending_rates")
         self.set_dict(price_ratio_dict, name="economics/price_ratio")
 
     def setup_irrigation_sources(self, irrigation_sources):
@@ -4982,7 +4988,6 @@ class GEBModel(GridModel):
         year=2000,
         reduce_crops=False,
         replace_base=False,
-        export=False,
     ):
         n_farmers = self.binary["agents/farmers/id"].size
 
@@ -5006,7 +5011,7 @@ class GEBModel(GridModel):
         )
 
         farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(year)
-        self.setup_farmer_irrigation_source(is_irrigated, year, export)
+        self.setup_farmer_irrigation_source(is_irrigated, year)
 
         crop_calendar_per_farmer = np.zeros((n_farmers, 3, 4), dtype=np.int32)
         for mirca_unit in np.unique(farmer_mirca_units):
@@ -5349,55 +5354,6 @@ class GEBModel(GridModel):
 
         assert crop_calendar_per_farmer[:, :, 3].max() == 0
 
-        if export:
-            names_data = {
-                "crop_calendar": crop_calendar_per_farmer,
-            }
-
-            for name, data in names_data.items():
-                fn = os.path.join(name + f"_{year}" + ".npz")
-                fp = Path("calibration_data/crops", fn)
-                fp.parent.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(fp, data=data)
-
-            farms_flat = self.subgrid["agents/farmers/farms"].values.ravel()
-            areas_flat = self.subgrid["areamaps/sub_cell_area"].values.ravel()
-
-            mask = farms_flat != -1
-            farms_flat = farms_flat[mask]
-            areas_flat = areas_flat[mask]
-
-            unique_ids, inverse = np.unique(farms_flat, return_inverse=True)
-            field_size_per_farmer = np.bincount(inverse, weights=areas_flat)
-
-            unique_calendars, inverse = np.unique(
-                crop_calendar_per_farmer, axis=0, return_inverse=True
-            )
-            area_per_crop = np.bincount(inverse, weights=field_size_per_farmer)
-            crop_ids = unique_calendars[:, 0, 0]
-
-            # Build the CSV filename
-            fn_2 = os.path.join(name + f"_{year}" + ".csv")
-            csv_path = Path("calibration_data/crops", fn_2)
-
-            # Convert to Python lists
-            header = crop_ids.tolist()
-            row_data = area_per_crop.tolist()
-
-            # Check if the CSV already exists
-            file_exists = csv_path.is_file()
-
-            if not file_exists:
-                with open(csv_path, mode="w", newline="") as csvfile:
-                    writer = csv.writer(csvfile)
-                    writer.writerow(header)
-                    writer.writerow(row_data)
-            else:
-                # If file exists, only append the row_data
-                with open(csv_path, mode="a", newline="") as csvfile:
-                    writer = csv.writer(csvfile)
-                    writer.writerow(row_data)
-
         # this part asserts that the crop calendar is correctly set up
         # particulary that no two crops are planted at the same time
         for farmer_crop_calender in crop_calendar_per_farmer:
@@ -5584,7 +5540,7 @@ class GEBModel(GridModel):
 
         return farmer_crops, farmer_irrigated
 
-    def setup_farmer_irrigation_source(self, irrigating_farmers, year, export):
+    def setup_farmer_irrigation_source(self, irrigating_farmers, year):
         fraction_sw_irrigation = "aeisw"
         fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
             f"global_irrigation_area_{fraction_sw_irrigation}",
@@ -5628,8 +5584,22 @@ class GEBModel(GridModel):
             fraction_gw_irrigation_data.raster.transform.to_gdal(),
         )
 
-        # Initialize the irrigation_source array
-        irrigation_source = np.full(n_farmers, -1, dtype=np.int32)
+        adaptations = np.full(
+            (
+                n_farmers,
+                max(
+                    [
+                        SURFACE_IRRIGATION_EQUIPMENT,
+                        WELL_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION,
+                        FIELD_EXPANSION_ADAPTATION,
+                    ]
+                )
+                + 1,
+            ),
+            -1,
+            dtype=np.int32,
+        )
 
         for i in range(n_cells):
             farmers_cell_mask = farmer_cells == i  # Boolean mask for farmers in cell i
@@ -5694,21 +5664,7 @@ class GEBModel(GridModel):
                     p=probabilities,
                 )
 
-        if export:
-            names_data = {
-                "irrigation_source": irrigation_source,
-                "irrigating_farmers": irrigating_farmers,
-            }
-            for name, data in names_data.items():
-                fn = os.path.join(name + f"_{year}" + ".npz")
-                fp = Path("calibration_data/crops", fn)
-                fp.parent.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(fp, data=data)
-        else:
-            self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-            self.set_binary(
-                irrigating_farmers, name="agents/farmers/irrigating_farmers"
-            )
+        self.set_binary(adaptations, name="agents/farmers/adaptations")
 
     def setup_population(self):
         populaton_map = self.data_catalog.get_rasterdataset(
