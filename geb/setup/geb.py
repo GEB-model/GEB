@@ -5696,7 +5696,10 @@ class GEBModel(GridModel):
                 farmer_indices_in_region = farmers_cell_indices[irrigating_farmers_mask]
 
                 # Assign irrigation sources using np.random.choice
-                irrigation_source[farmer_indices_in_region] = np.random.choice(
+                raise NotImplementedError(
+                    "Below must be corrected, when you encounter this, please fix it (or ask for help)"
+                )
+                adaptations[farmer_indices_in_region] = np.random.choice(
                     [0, 1],
                     size=len(farmer_indices_in_region),
                     p=probabilities,
