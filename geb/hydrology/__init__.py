@@ -37,6 +37,7 @@ from .runoff_concentration import RunoffConcentration
 from .lakes_res_small import SmallLakesReservoirs
 from .routing import Routing
 from .lakes_reservoirs import LakesReservoirs
+from .erosion.hillslope import HillSlopeErosion
 
 
 class Hydrology:
@@ -66,6 +67,7 @@ class Hydrology:
         self.routing = Routing(self)
         self.lakes_reservoirs = LakesReservoirs(self)
         self.water_demand = WaterDemand(self)
+        self.hillslope_erosion = HillSlopeErosion(self)
 
     def step(self):
         """
@@ -80,9 +82,6 @@ class Hydrology:
             * l: time and first gauge discharge
             * t: timing of different processes at the end
         """
-        if self.current_timestep == 1:
-            self.groundwater.initalize_modflow_model()
-            self.soil.set_global_variables()
 
         timer = TimingModule("CWatM")
 
@@ -118,6 +117,9 @@ class Hydrology:
         self.routing.step(openWaterEvap, channel_abstraction, returnFlow)
         timer.new_split("Routing")
 
+        self.hillslope_erosion.step()
+        timer.new_split("Hill slope erosion")
+
         if self.timing:
             print(timer)
 
@@ -126,7 +128,7 @@ class Hydrology:
         Finalize the model
         """
         # finalize modflow model
-        if hasattr(self.groundwater, "modflow"):
+        if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
 
         if self.config["general"]["simulate_forest"]:

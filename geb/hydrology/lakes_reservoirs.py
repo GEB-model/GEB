@@ -33,6 +33,8 @@ from .routing.subroutines import (
     upstream1,
 )
 
+from .routing.subroutines import PIT
+
 OFF = 0
 LAKE = 1
 RESERVOIR = 2
@@ -79,16 +81,16 @@ def get_lake_height_above_outflow(storage, lake_area, outflow_height):
     return height_above_outflow
 
 
-def get_channel_width(average_discharge):
+def get_river_width(average_discharge):
     return 7.1 * np.power(average_discharge, 0.539)
 
 
-def get_lake_factor(channel_width, overflow_coefficient_mu, lake_a_factor):
+def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
     return (
         lake_a_factor
         * overflow_coefficient_mu
         * (2 / 3)
-        * channel_width
+        * river_width
         * (2 * GRAVITY) ** 0.5
     )
 
@@ -166,7 +168,7 @@ class LakesReservoirs(object):
         self.grid = model.data.grid
         self.model = model
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
@@ -241,6 +243,9 @@ class LakesReservoirs(object):
         )
 
         self.var.waterBodyTypC = self.var.water_body_data["waterbody_type"].values
+        self.var.waterBodyOrigID = self.var.water_body_data[
+            "original_waterbody_id"
+        ].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
         self.var.waterBodyTypC[self.var.waterBodyTypC == LAKE_CONTROL] = LAKE
 
@@ -267,10 +272,10 @@ class LakesReservoirs(object):
         )
 
         # channel width in [m]
-        channel_width = get_channel_width(average_discharge)
+        river_width = get_river_width(average_discharge)
 
         self.var.lake_factor = get_lake_factor(
-            channel_width,
+            river_width,
             overflow_coefficient_mu,
             self.model.config["parameters"]["lakeAFactor"],
         )
@@ -311,10 +316,12 @@ class LakesReservoirs(object):
         water_body_data = water_body_data[
             water_body_data["waterbody_id"].isin(waterbody_original_ids_compressed)
         ]
-        # map the waterbody ids to the new ids
+        # map the waterbody ids to the new ids, save old ids
+        water_body_data["original_waterbody_id"] = water_body_data["waterbody_id"]
         water_body_data["waterbody_id"] = waterbody_mapping[
             water_body_data["waterbody_id"]
         ]
+
         water_body_data = water_body_data.set_index("waterbody_id")
         return water_body_data
 
@@ -338,7 +345,7 @@ class LakesReservoirs(object):
         # especially for very small lakes with a small drainage area.
         # In such cases, we take the outflow cell with the lowest elevation.
         outflow_elevation = load_grid(
-            self.model.files["grid"]["routing/kinematic/outflow_elevation"]
+            self.model.files["grid"]["routing/outflow_elevation"]
         )
         outflow_elevation = self.grid.compress(outflow_elevation)
 
@@ -364,9 +371,7 @@ class LakesReservoirs(object):
             # especially for very small lakes with a small drainage area.
             # In such cases, we take the outflow cell with the lowest elevation.
             outflow_elevation = self.grid.compress(
-                load_grid(
-                    self.model.files["grid"]["routing/kinematic/outflow_elevation"]
-                )
+                load_grid(self.model.files["grid"]["routing/outflow_elevation"])
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:
@@ -564,8 +569,13 @@ class LakesReservoirs(object):
         outflow_shifted_downstream = upstream1(
             self.grid.var.downstruct_no_water_bodies, outflow_grid
         )
+
+        # in this assert we exclude any outflow that is already in a pit
+        # because this should disappear when the water is shifted downstream
         assert math.isclose(
-            outflow_shifted_downstream.sum(), outflow_grid.sum(), rel_tol=0.00001
+            outflow_shifted_downstream.sum(),
+            outflow_grid[self.grid.var.lddCompress != PIT].sum(),
+            rel_tol=0.00001,
         )
 
         # everything with is not going to another lake is output to river network
@@ -604,3 +614,6 @@ class LakesReservoirs(object):
     @property
     def lake_storage(self):
         return self.var.storage[self.var.waterBodyTypC == LAKE]
+
+    def decompress(self, array):
+        return array

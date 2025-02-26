@@ -50,7 +50,7 @@ class WaterDemand:
         self.households = model.agents.households
         self.reservoir_operators = model.agents.reservoir_operators
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
@@ -207,7 +207,7 @@ class WaterDemand:
             ]
         )
         return (
-            self.grid.var.channelStorageM3.copy(),
+            self.grid.var.river_storage_m3.copy(),
             available_reservoir_storage_m3,
             self.model.groundwater.modflow.available_groundwater_m3.copy(),
         )

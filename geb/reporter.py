@@ -347,18 +347,22 @@ class hydrology_reporter(ABMReporter):
                                     gt = self.model.data.HRU.gt
                                 else:
                                     raise ValueError
-                                x, y = coord_to_pixel(
+                                px, py = coord_to_pixel(
                                     (float(args[0]), float(args[1])), gt
                                 )
                                 decompressed_array = self.decompress(
                                     conf["varname"], array
                                 )
-                                value = decompressed_array[y, x]
+                                try:
+                                    value = decompressed_array[py, px]
+                                except IndexError as e:
+                                    index_error = f"{e}. Most likely the coordinate ({args[0]},{args[1]}) is outside the model domain."
+                                    raise IndexError(index_error)
                             else:
                                 raise ValueError(f"Function {function} not recognized")
                     self.report_value(name, value, conf)
 
-    def report(self) -> None:
+    def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
             if self.model.config["report_hydrology"][name]["format"] == "zarr":
@@ -411,8 +415,8 @@ class Reporter:
         self.abm_reporter.step()
         self.hydrology_reporter.step()
 
-    def report(self):
+    def finalize(self):
         """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM."""
-        self.abm_reporter.report()
-        self.hydrology_reporter.report()
+        self.abm_reporter.finalize()
+        self.hydrology_reporter.finalize()
         print("Reported data")

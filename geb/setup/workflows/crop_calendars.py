@@ -64,8 +64,8 @@ def parse_MIRCA_file(parsed_calendar, crop_calendar, MIRCA_units, is_irrigated):
             ]
 
             crop_rotations = sorted(crop_rotations, key=lambda x: x[2])  # sort by area
-            if len(crop_rotations) == 3:
-                crop_rotations = crop_rotations[1:]
+            if len(crop_rotations) > 2:
+                crop_rotations = crop_rotations[-2:]
                 import warnings
 
                 warnings.warn(
@@ -159,6 +159,7 @@ def parse_MIRCA_file(parsed_calendar, crop_calendar, MIRCA_units, is_irrigated):
                         ),
                     )
                 parsed_calendar[unit_code].append(crop_rotation)
+                assert crop_rotation[1][0][2] != crop_rotation[1][1][2]
             else:
                 raise NotImplementedError
         return parsed_calendar

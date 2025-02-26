@@ -64,8 +64,6 @@ class RunoffConcentration(object):
     directRunoff          Simulated surface runoff                                                          m
     interflow             Simulated flow reaching runoff instead of groundwater                             m
     ====================  ================================================================================  =========
-
-    **Functions**
     """
 
     def __init__(self, model):
@@ -85,7 +83,7 @@ class RunoffConcentration(object):
         """
         self.grid = model.data.grid
         self.model = model
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):

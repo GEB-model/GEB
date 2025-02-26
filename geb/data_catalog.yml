@@ -9,7 +9,118 @@ fabdem:
     source_license: CC BY-NC-SA 4.0
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
-  path: /scistor/ivm/data_catalogue/topography/fabdem.vrt
+  path: topography/FABDEM1-2.vrt
+SWORD:
+  data_type: GeoDataFrame
+  driver: vector
+  path: /scistor/ivm/data_catalogue/hydrology/rivers/SWORD_v16/sword_reaches_v16.gpkg
+  category: hydrology
+  source_license: Creative Commons Attribution 4.0 International
+  source_url: doi.org/10.5281/zenodo.14727521
+  source_version: v16
+  meta:
+    notes: |
+      ```python
+      import geopandas as gpd
+      import pandas as pd
+      import sqlite3
+
+      SWORD = []
+      for continent in ("sa", "na", "oc", "eu", "af", "as"):
+          SWORD.append(gpd.read_file(f"{continent}_sword_reaches_v16.gpkg"))
+
+      SWORD = pd.concat(SWORD, ignore_index=True)
+
+      SWORD.to_file("sword_reaches_v16.gpkg")
+
+      # Connect to the GPKG
+      conn = sqlite3.connect("sword_reaches_v16.gpkg")
+      cursor = conn.cursor()
+
+      # Create an index on COMID
+      cursor.execute("""
+          CREATE INDEX IF NOT EXISTS idx_reach_id
+          ON sword_reaches_v16 (reach_id);
+      """)
+
+      conn.commit()
+      conn.close()
+      ```
+MERIT_Basins_to_SWORD:
+  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins_v07/mb_to_sword_pfaf_{SWORD_Region}_translate.nc
+  data_type: Dataset
+  driver: netcdf
+  meta:
+    category: hydrology
+    source_license: Creative Commons Attribution Non Commercial Share Alike 4.0 International
+    source_url: doi.org/10.5281/zenodo.14675925
+    source_version: v0.4
+MERIT_Basins_{kind}:
+  data_type: GeoDataFrame
+  driver: vector
+  placeholders: 
+    kind: [riv, cat]
+  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins_v07/{kind}_pfaf_MERIT_Hydro_v07_Basins_v01.gpkg
+  meta:
+    category: hydrology
+    source_license: CC BY-NC-SA 4.0
+    source_url: https://www.reachhydro.org/home/params/merit-basins
+    source_version: v0.7
+    notes: |
+      ```python
+      import geopandas as gpd
+      import pandas as pd
+      import sqlite3
+
+
+      def merge_dataset(kind):
+          gdfs = []
+          for continent in range(1, 10):
+              print("reading continent", continent)
+              gdf = gpd.read_file(
+                  f"{kind}_pfaf_{continent}_MERIT_Hydro_v07_Basins_v01_bugfix1.shp"
+              )
+              gdfs.append(gdf)
+
+          print("concatenating")
+          merged = pd.concat(gdfs, ignore_index=True)
+
+          print(merged.columns)
+          print(merged.head())
+
+          print("setting crs")
+          if kind == "cat":
+              merged.set_crs("EPSG:4326", inplace=True)
+
+          print("writing")
+          merged.to_file(
+              f"{kind}_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg", driver="GPKG"
+          )
+
+
+      def create_index(kind):
+          gpkg_path = f"{kind}_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1.gpkg"
+
+          # Connect to the GPKG
+          conn = sqlite3.connect(gpkg_path)
+          cursor = conn.cursor()
+
+          # Create an index on COMID
+          cursor.execute(f"""
+              CREATE INDEX IF NOT EXISTS idx_comid
+              ON {kind}_pfaf_MERIT_Hydro_v07_Basins_v01_bugfix1 (COMID);
+          """)
+
+          conn.commit()
+          conn.close()
+
+
+      if __name__ == "__main__":
+          merge_dataset("riv")
+          create_index("riv")
+          merge_dataset("cat")
+          create_index("cat")
+      ```
 geul_dem:
   data_type: RasterDataset
   driver: raster
@@ -118,6 +229,7 @@ gebco:
   crs: 4326
   data_type: RasterDataset
   driver: raster
+  filesystem: local
   meta:
     category: topography
     paper_doi: 10.5285/a29c5465-b138-234d-e053-6c86abc040b9
@@ -155,74 +267,6 @@ hydrobasins_8:
     source_url: https://www.hydrosheds.org
     source_version: 1.0
   path: /scistor/ivm/data_catalogue/hydrology/hydrobasins/level8.gpkg
-river_centerlines_MERIT_Basins:
-  data_type: GeoDataFrame
-  path: /scistor/ivm/data_catalogue/hydrology/rivers/MERIT-Basins/MERIT-Basins.gpkg
-  driver: vector
-  filesystem: local
-  meta:
-    category: hydrology
-    source_url: https://www.reachhydro.org/home/params/merit-basins
-    source_version: 1.0
-    source_license: CC BY-NC-SA 4.0
-    paper_doi: 10.1029/2019WR024873
-    paper_ref: Yamazaki et al. (2019)
-glofas_4_0_discharge:
-  data_type: RasterDataset
-  path: /scistor/ivm/data_catalogue/hydrology/discharge/glofas_4.0_discharge_netcdf/Glofas-Discharge-*.nc
-  driver: netcdf
-  filesystem: local
-  crs: 4326
-  rename:
-    dis24: discharge
-  meta:
-      category: discharge from glofas all years
-      version:  LISFLOOD 4.0
-      source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
-glofas_4_0_discharge_yearly:
-  data_type: RasterDataset
-  path: /scistor/ivm/data_catalogue/hydrology/discharge/GloFAS_Yearly_Time_Step_Resampled.nc
-  driver: netcdf
-  filesystem: local
-  crs: 4326
-  rename:
-    dis24: discharge
-  meta:
-      version:  LISFLOOD 4.0
-      source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
-glofas_uparea:
-  data_type: RasterDataset
-  path: /scistor/ivm/data_catalogue/hydrology/discharge/uparea_glofas_v4_0.nc
-  driver: netcdf
-  crs: 4326
-  unit_mult:
-    uparea: 0.000001
-  meta:
-      version:  LISFLOOD 4.0
-      source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.ff1aef77?tab=overview
-gcn250:
-  data_type: RasterDataset
-  path: /scistor/ivm/data_catalogue/hydrology/soil/gcn_sfincs/{variable}.tif
-  driver: raster
-  filesystem: local
-  nodata: 255
-  meta:
-    category: soil
-    paper_doi: 10.1038/s41597-019-0155-x
-    paper_ref: Jaafar et al. (2019)
-    source_license: CC BY 4.0
-    source_url: https://doi.org/10.6084/m9.figshare.7756202.v1
-    source_version: v1
-merit_hydro_index:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  meta:
-    category: topography
-    paper_doi: 10.5194/hess-2020-582
-    paper_ref: Eilander et al. (in review)
-    source_license: CC-BY-NC 4.0
-  path: merit_hydro_index.gpkg
 rivers_lin2019_v1:
   data_type: GeoDataFrame
   driver: vector
@@ -234,17 +278,6 @@ rivers_lin2019_v1:
     source_url: https://zenodo.org/record/3552776#.YVbOrppByUk
     source_version: 1
   path: rivers_lin2019_v1.gpkg
-vito:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: landuse
-    paper_doi: 10.5281/zenodo.3939038
-    paper_ref: Buchhorn et al (2020)
-    source_url: https://land.copernicus.eu/global/products/lc
-    source_version: v2.0.2
-  path: vito.tif
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
@@ -341,24 +374,17 @@ wb_lending_rate:
   data_type: DataFrame
   kwargs:
     skiprows: 4
-wb_ppp_conversion_rate:
+world_bank_price_ratio:
   meta:
     category: economics
     source_author: World Bank
     source_license: CC-BY-4.0
-    source_url: https://databank.worldbank.org/source/world-development-indicators/Series/PA.NUS.PPP#
-  path: economics/currency_conversion/PPP_conversion_1990_2022.csv
+    source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
+  path: economics/price_ratio/API_PA.NUS.PPPC.RF_DS2_en_csv_v2_4549.csv
   driver: csv
   data_type: DataFrame
-lcu_per_usd_conversion_rate:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://databank.worldbank.org/reports.aspx?source=2&type=metadata&series=PA.NUS.FCRF#
-  path: economics/currency_conversion/LCU_per_USD_conversion_1960_2023.csv
-  driver: csv
-  data_type: DataFrame
+  kwargs:
+    skiprows: 4
 gcam_electricity_rates:
   meta:
     category: economics
@@ -433,13 +459,6 @@ GDL_regions_v4:
 GLOPOP-S:
   data_type: Dataset
   path: /scistor/ivm/data_catalogue/population/synthpop_{region}.dat.gz
-ERA5_geopotential:
-  data_type: RasterDataset
-  driver: netcdf
-  path: ERA5_geopotential.nc
-  crs: 4326
-  meta:
-    source_url: https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#ERA5Land:datadocumentation-parameterlistingParameterlistings
 esa_worldcover_2020_v100:
   crs: 4326
   data_type: RasterDataset
@@ -611,26 +630,6 @@ FAO_crop_price:
     Item: crop
   unit_mult:
     price_per_kg: 0.001  # tonne to kg
-era5_hourly:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  meta:
-    category: meteo
-    history: Extracted from Copernicus Climate Data Store
-    paper_doi: 10.1002/qj.3803
-    paper_ref: Hersbach et al. (2019)
-    source_license: https://cds.climate.copernicus.eu/cdsapp/#!/terms/licence-to-use-copernicus-products
-    source_url: https://doi.org/10.24381/cds.bd0915c6
-    source_version: ERA5 hourly data on pressure levels
-  path: era5_hourly.nc
-  unit_add:
-    temp: -273.15
-  unit_mult:
-    kin: 0.000277778
-    kout: 0.000277778
-    precip: 1000
-    press_msl: 0.01
 hydraulic_conductivity_globgm:
   crs: 4326
   data_type: RasterDataset

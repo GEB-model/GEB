@@ -19,6 +19,13 @@ from scipy.stats import chi2_contingency
 
 from ..workflows.general import repeat_grid
 
+from geb.agents.crop_farmers import (
+    SURFACE_IRRIGATION_EQUIPMENT,
+    WELL_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION,
+    FIELD_EXPANSION_ADAPTATION,
+)
+
 
 class Survey:
     def __init__(self) -> None:
@@ -40,8 +47,7 @@ class Survey:
         self.model.fit(
             self.samples,
             estimator=BayesianEstimator,
-            prior_type="dirichlet",
-            pseudo_counts=0.1,
+            prior_type="K2",
         )
         self.model.get_cpds()
 
@@ -456,13 +462,27 @@ class fairSTREAMModel(GEBModel):
         farms = self.subgrid["agents/farmers/farms"]
 
         # Set all farmers within command areas to canal irrigation
-        irrigation_sources = self.dict["agents/farmers/irrigation_sources"]
-        irrigation_source = np.full(n_farmers, irrigation_sources["no"], dtype=np.int32)
+        adaptations = np.full(
+            (
+                n_farmers,
+                max(
+                    [
+                        SURFACE_IRRIGATION_EQUIPMENT,
+                        WELL_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION,
+                        FIELD_EXPANSION_ADAPTATION,
+                    ]
+                )
+                + 1,
+            ),
+            -1,
+            dtype=np.int32,
+        )
 
         command_areas = self.subgrid["routing/lakesreservoirs/subcommand_areas"]
         canal_irrigated_farms = np.unique(farms.where(command_areas != -1, -1))
         canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
-        irrigation_source[canal_irrigated_farms] = irrigation_sources["canal"]
+        adaptations[canal_irrigated_farms, SURFACE_IRRIGATION_EQUIPMENT] = 1
 
         # Set all farmers within cells with rivers to canal irrigation
 
@@ -485,7 +505,7 @@ class fairSTREAMModel(GEBModel):
 
         canal_irrigated_farms = np.unique(farms.where(subgrid_cells_with_river, -1))
         canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
-        irrigation_source[canal_irrigated_farms] = irrigation_sources["canal"]
+        adaptations[canal_irrigated_farms, SURFACE_IRRIGATION_EQUIPMENT] = 1
 
         groundwater_depth = self.grid["landsurface/topo/elevation"] - self.grid[
             "groundwater/heads"
@@ -494,45 +514,241 @@ class fairSTREAMModel(GEBModel):
             groundwater_depth.values, self.subgrid_factor
         )
 
-        farm_mask = farms.values.ravel()
-        farm_mask = farm_mask[farm_mask != -1]
+        farms_values = farms.values.ravel()
+        farms_mask = np.where(farms_values != -1)[0]
+        farms_values_masked = farms_values[farms_mask]
 
         groundwater_depth_per_farm = np.bincount(
-            farm_mask, weights=groundwater_depth_subgrid.ravel()[farm_mask]
-        ) / np.bincount(farm_mask)
+            farms_values_masked, weights=groundwater_depth_subgrid.ravel()[farms_mask]
+        ) / np.bincount(farms_values_masked)
+        assert not np.isnan(groundwater_depth_per_farm).any()
 
-        # well probability is set such that the farmers with the deepest groundwater have the lowest probability
-        farmer_well_probability = 1 - (
-            groundwater_depth_per_farm - groundwater_depth_per_farm.min()
-        ) / (groundwater_depth_per_farm.max() - groundwater_depth_per_farm.min())
+        # # well probability is set such that the farmers with the deepest groundwater have the lowest probability
+        # farmer_well_probability = 1 - (
+        #     groundwater_depth_per_farm - groundwater_depth_per_farm.min()
+        # ) / (groundwater_depth_per_farm.max() - groundwater_depth_per_farm.min())
 
         farm_sizes = self.get_farm_size()
         assert farm_sizes.size == n_farmers
 
-        irrigated_area = (
-            (irrigation_source == irrigation_sources["canal"]) * farm_sizes
-        ).sum()
+        # irrigated_area = (
+        #     (irrigation_source == irrigation_sources["canal"]) * farm_sizes
+        # ).sum()
 
-        target_irrigated_area_ratio = 0.9
+        # target_irrigated_area_ratio = 0.9
 
-        remaining_irrigated_area = (
-            farm_sizes.sum() * target_irrigated_area_ratio - irrigated_area
+        # remaining_irrigated_area = (
+        #     farm_sizes.sum() * target_irrigated_area_ratio - irrigated_area
+        # )
+
+        # ordered_well_indices = np.arange(n_farmers)[
+        #     np.argsort(farmer_well_probability)[::-1]
+        # ]
+        # cumulative_farm_area = np.cumsum(farm_sizes[ordered_well_indices])
+        # farmers_with_well = ordered_well_indices[
+        #     cumulative_farm_area <= remaining_irrigated_area
+        # ]
+        # irrigation_source[farmers_with_well] = irrigation_sources["well"]
+
+        # irrigated_area = (
+        #     (irrigation_source != irrigation_sources["no"]) * farm_sizes
+        # ).sum()
+
+        regions = self.geoms["areamaps/regions"]
+
+        irrigation_status_per_tehsil = pd.read_excel(
+            self.preprocessing_dir / "census" / "irrigation_sources.xlsx"
+        )
+        irrigation_status_per_tehsil["size_class"] = irrigation_status_per_tehsil[
+            "size_class"
+        ].map(
+            {
+                "Below 0.5": 0,
+                "0.5-1.0": 1,
+                "1.0-2.0": 2,
+                "2.0-3.0": 3,
+                "3.0-4.0": 4,
+                "4.0-5.0": 5,
+                "5.0-7.5": 6,
+                "7.5-10.0": 7,
+                "10.0-20.0": 8,
+                "20.0 & ABOVE": 9,
+            }
+        )
+        irrigation_status_per_tehsil["state_name"] = irrigation_status_per_tehsil[
+            "state_name"
+        ].ffill()
+        irrigation_status_per_tehsil["district_n"] = irrigation_status_per_tehsil[
+            "district_n"
+        ].ffill()
+        irrigation_status_per_tehsil["sub_dist_1"] = irrigation_status_per_tehsil[
+            "sub_dist_1"
+        ].ffill()
+
+        def match_region(row, regions):
+            region_id = regions.loc[
+                (regions["state_name"] == row["state_name"])
+                & (regions["district_n"] == row["district_n"])
+                & (regions["sub_dist_1"] == row["sub_dist_1"]),
+            ]["region_id"]  # .item()
+            if region_id.size == 0:
+                return -1
+            else:
+                return region_id.item()
+
+        # assign region_id to crop data
+        irrigation_status_per_tehsil["region_id"] = irrigation_status_per_tehsil.apply(
+            lambda row: match_region(row, regions),
+            axis=1,
+        )
+        irrigation_status_per_tehsil = irrigation_status_per_tehsil[
+            irrigation_status_per_tehsil["region_id"] != -1
+        ]
+        irrigation_status_per_tehsil = irrigation_status_per_tehsil.drop(
+            ["state_name", "district_n", "sub_dist_1"], axis=1
         )
 
-        ordered_well_indices = np.arange(n_farmers)[
-            np.argsort(farmer_well_probability)[::-1]
-        ]
-        cumulative_farm_area = np.cumsum(farm_sizes[ordered_well_indices])
-        farmers_with_well = ordered_well_indices[
-            cumulative_farm_area <= remaining_irrigated_area
-        ]
-        irrigation_source[farmers_with_well] = irrigation_sources["well"]
+        irrigation_status_per_tehsil = irrigation_status_per_tehsil.set_index(
+            ["region_id", "size_class"]
+        )
 
-        irrigated_area = (
-            (irrigation_source != irrigation_sources["no"]) * farm_sizes
-        ).sum()
+        irrigation_status_per_tehsil["well_ratio"] = (
+            irrigation_status_per_tehsil["well_n_holdings"]
+            + irrigation_status_per_tehsil["tubewell_n_holdings"]
+        ) / (
+            irrigation_status_per_tehsil["canals_n_holdings"]
+            + irrigation_status_per_tehsil["tank_n_holdings"]
+            + irrigation_status_per_tehsil["well_n_holdings"]
+            + irrigation_status_per_tehsil["tubewell_n_holdings"]
+            + irrigation_status_per_tehsil["other_n_holdings"]
+            + irrigation_status_per_tehsil["no_irrigation_n_holdings"]
+        )
 
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
+        farm_size_class = np.zeros(n_farmers, dtype=np.int32)
+        farm_size_class[farm_sizes > 5000] = 1
+        farm_size_class[farm_sizes > 10000] = 2
+        farm_size_class[farm_sizes > 20000] = 3
+        farm_size_class[farm_sizes > 30000] = 4
+        farm_size_class[farm_sizes > 40000] = 5
+        farm_size_class[farm_sizes > 50000] = 6
+        farm_size_class[farm_sizes > 75000] = 7
+        farm_size_class[farm_sizes > 100000] = 8
+        farm_size_class[farm_sizes > 200000] = 9
+
+        region_id = self.binary["agents/farmers/region_id"]
+
+        region_ids = np.unique(region_id)
+        size_classes = np.unique(farm_size_class)
+
+        WELL_DEPTH_THRESHOLD = 80
+
+        for region_id_class in region_ids:
+            for size_class in size_classes:
+                agent_subset = np.where(
+                    (region_id_class == region_id) & (size_class == farm_size_class)
+                )[0]
+                if agent_subset.size == 0:
+                    continue
+                target_well_ratio = irrigation_status_per_tehsil.loc[
+                    (region_id_class, size_class), "well_ratio"
+                ]
+
+                groundwater_depth_subset = groundwater_depth_per_farm[agent_subset]
+
+                well_probability = np.maximum(
+                    1 - (groundwater_depth_subset / WELL_DEPTH_THRESHOLD), 0
+                )
+
+                well_irrigated_agents = np.random.choice(
+                    agent_subset,
+                    int(target_well_ratio * len(agent_subset)),
+                    replace=False,
+                    p=well_probability / well_probability.sum(),
+                )
+
+                adaptations[well_irrigated_agents, WELL_ADAPTATION] = 1
+
+                # not_yet_irrigated_agents = np.where(
+                #     adaptations[agent_subset, SURFACE_IRRIGATION_EQUIPMENT] == -1
+                # )[0]
+
+                # if not_yet_irrigated_agents.size == 0:
+                #     continue
+
+                # groundwater_depth_subset = groundwater_depth_per_farm[agent_subset][
+                #     not_yet_irrigated_agents
+                # ]
+                # if (groundwater_depth_subset > WELL_DEPTH_THRESHOLD).all():
+                #     continue
+
+                # well_probability = np.maximum(
+                #     1 - (groundwater_depth_subset / WELL_DEPTH_THRESHOLD), 0
+                # )
+
+                # well_irrigated_agents = np.random.choice(
+                #     not_yet_irrigated_agents,
+                #     int(target_well_ratio * len(not_yet_irrigated_agents)),
+                #     replace=False,
+                #     p=well_probability / well_probability.sum(),
+                # )
+
+                # adaptations[agent_subset[well_irrigated_agents], WELL_ADAPTATION] = 1
+
+        crop_data_per_tehsil = pd.read_excel(
+            self.preprocessing_dir / "census" / "crop_data.xlsx"
+        )
+        crop_data_per_tehsil = crop_data_per_tehsil[
+            [
+                c
+                for c in crop_data_per_tehsil.columns
+                if "_area" not in c and "_total" not in c
+            ]
+        ]
+        crop_data_per_tehsil["state_name"] = crop_data_per_tehsil["state_name"].ffill()
+        crop_data_per_tehsil["district_n"] = crop_data_per_tehsil["district_n"].ffill()
+        crop_data_per_tehsil["sub_dist_1"] = crop_data_per_tehsil["sub_dist_1"].ffill()
+
+        # assign region_id to crop data
+        crop_data_per_tehsil["region_id"] = crop_data_per_tehsil.apply(
+            lambda row: match_region(row, regions),
+            axis=1,
+        )
+        crop_data_per_tehsil = crop_data_per_tehsil[
+            crop_data_per_tehsil["region_id"] != -1
+        ]
+        crop_data_per_tehsil = crop_data_per_tehsil.drop(
+            ["state_name", "district_n", "sub_dist_1"], axis=1
+        )
+
+        # create multi-level index using region id as the first level
+        crop_data_per_tehsil = crop_data_per_tehsil.set_index(
+            ["region_id", "size_class"]
+        )
+
+        crop_data_per_tehsil = crop_data_per_tehsil[
+            [c for c in crop_data_per_tehsil.columns if "Cotton" not in c]
+        ]
+        crop_data_per_tehsil.columns = [
+            c.replace("_holdings", "").replace("Tur (Arhar)", "Tur")
+            for c in crop_data_per_tehsil.columns
+        ]
+        crop_data_per_tehsil_irrigated = crop_data_per_tehsil[
+            [c for c in crop_data_per_tehsil.columns if "rain" not in c]
+        ]
+        crop_data_per_tehsil_irrigated.columns = [
+            c.replace("_irr", "") for c in crop_data_per_tehsil_irrigated.columns
+        ]
+        crop_data_per_tehsil_rainfed = crop_data_per_tehsil[
+            [c for c in crop_data_per_tehsil.columns if "irr" not in c]
+        ]
+        crop_data_per_tehsil_rainfed.columns = [
+            c.replace("_rain", "") for c in crop_data_per_tehsil_rainfed.columns
+        ]
+
+        crop_name_to_ID = {
+            crop["name"]: int(ID)
+            for ID, crop in self.dict["crops/crop_data"]["data"].items()
+        }
 
         # process crop calendars
         crop_calendar_per_farmer = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
@@ -541,32 +757,81 @@ class fairSTREAMModel(GEBModel):
 
         for idx in range(n_farmers):
             farmer_crop_calendar = crop_calendar_per_farmer[idx]
-            farmer_irrigation_source = irrigation_source[idx]
+            is_irrigated = (
+                adaptations[idx, [SURFACE_IRRIGATION_EQUIPMENT, WELL_ADAPTATION]] > 0
+            ).any()
 
-            if farmer_irrigation_source in (
-                irrigation_sources["well"],
-                irrigation_sources["canal"],
-            ):
+            farmer_region_id = region_id[idx]
+
+            if is_irrigated:
+                crop_data_df = crop_data_per_tehsil_irrigated
                 n_crops = 1 if np.random.random() < 0.2 else 2
             else:
+                crop_data_df = crop_data_per_tehsil_rainfed
                 n_crops = 1 if np.random.random() < 0.8 else 2
 
-            # crops = np.random.choice(crop_ids, size=n_crops)
-            crops = np.full(n_crops, 5)  # only wheat
-            for season_idx, crop in enumerate(crops):
-                duration = crop_variables[crop][f"season_#{season_idx + 1}_duration"]
+            farm_size = farm_sizes[idx]
+
+            if farm_size < 5000:
+                size_class = "Below 0.5"
+            elif farm_size < 10000:
+                size_class = "0.5-1.0"
+            elif farm_size < 20000:
+                size_class = "1.0-2.0"
+            elif farm_size < 30000:
+                size_class = "2.0-3.0"
+            elif farm_size < 40000:
+                size_class = "3.0-4.0"
+            elif farm_size < 50000:
+                size_class = "4.0-5.0"
+            elif farm_size < 75000:
+                size_class = "5.0-7.5"
+            elif farm_size < 100000:
+                size_class = "7.5-10.0"
+            elif farm_size < 200000:
+                size_class = "10.0-20.0"
+            else:
+                size_class = "20.0 & ABOVE"
+
+            crop_data = crop_data_df.loc[farmer_region_id, size_class]
+            if crop_data.sum() == 0:
+                if crop_data_df.loc[farmer_region_id].values.sum() == 0:
+                    crop_data_df = crop_data_per_tehsil_rainfed
+                    crop_data = crop_data_df.loc[farmer_region_id, size_class]
+                    assert crop_data.sum() > 0
+                else:
+                    crop_data = crop_data_df.loc[farmer_region_id].sum()
+                    assert crop_data.sum() > 0
+
+            farmer_main_crop = np.random.choice(
+                crop_data.index, p=crop_data / crop_data.sum()
+            )
+            farmer_main_crop = crop_name_to_ID[farmer_main_crop]
+
+            if farmer_main_crop == crop_name_to_ID["Sugarcane"]:
+                crop_per_season = np.array([-1, -1, farmer_main_crop])
+            else:
+                crop_per_season = np.full(n_crops, farmer_main_crop)
+            for season_idx, season_crop in enumerate(crop_per_season):
+                if season_crop == -1:
+                    continue
+                duration = crop_variables[season_crop][
+                    f"season_#{season_idx + 1}_duration"
+                ]
+                assert duration is not None
                 if duration > 365:
                     year_index = 1
                     crop_calendar_rotation_years[idx] = 2
                 else:
                     year_index = 0
                 farmer_crop_calendar[season_idx] = [
-                    crop,
+                    season_crop,
                     seasons[f"season_#{season_idx + 1}_start"] - 1,
-                    crop_variables[crop][f"season_#{season_idx + 1}_duration"],
+                    crop_variables[season_crop][f"season_#{season_idx + 1}_duration"],
                     year_index,
                 ]
 
+        self.set_binary(adaptations, name="agents/farmers/adaptations")
         self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         self.set_binary(
             crop_calendar_rotation_years,
@@ -585,17 +850,17 @@ class fairSTREAMModel(GEBModel):
         bayesian_net_folder = Path(self.root).parent / "preprocessing" / "bayesian_net"
         bayesian_net_folder.mkdir(exist_ok=True, parents=True)
 
-        IHDS_survey = IHDSSurvey()
-        IHDS_survey.parse(path=Path("data") / "IHDS_I.csv")
-        save_path = bayesian_net_folder / "IHDS.bif"
-        if not save_path.exists() or overwrite_bayesian_network:
-            IHDS_survey.learn_structure()
-            IHDS_survey.estimate_parameters(
-                plot=False, save=bayesian_net_folder / "IHDS.png"
-            )
-            IHDS_survey.save(save_path)
-        else:
-            IHDS_survey.read(save_path)
+        # IHDS_survey = IHDSSurvey()
+        # IHDS_survey.parse(path=Path("data") / "IHDS_I.csv")
+        # save_path = bayesian_net_folder / "IHDS.bif"
+        # if not save_path.exists() or overwrite_bayesian_network:
+        #     IHDS_survey.learn_structure()
+        #     IHDS_survey.estimate_parameters(
+        #         plot=False, save=bayesian_net_folder / "IHDS.png"
+        #     )
+        #     IHDS_survey.save(save_path)
+        # else:
+        #     IHDS_survey.read(save_path)
 
         farmer_survey = FarmerSurvey()
         farmer_survey.parse(path=Path("data") / "survey_results_cleaned.zip")

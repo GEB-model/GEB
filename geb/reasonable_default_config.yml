@@ -20,6 +20,8 @@ hazards:
     simulate: false
   damage:
     simulate: false
+  erosion:
+    simulate: false
 
 agent_settings:
   market:
@@ -47,9 +49,11 @@ agent_settings:
         ruleset: base
       adaptation_sprinkler:
         ruleset: base
-        lifespan: 20
+        lifespan_base: 25
+        lifespan_sprink_drip: 15
         loan_duration: 21
         decision_horizon: 20
+        m2_cost: 1
       adaptation_irrigation_expansion:
         ruleset: no-adaptation
       adaptation_well:

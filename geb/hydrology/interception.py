@@ -45,7 +45,6 @@ class Interception(object):
     Variable [self.var]   Description                                                                       Unit
     ====================  ================================================================================  =========
     EWRef                 potential evaporation rate from water surface                                     m
-    waterbalance_module
     interceptCap          interception capacity of vegetation                                               m
     minInterceptCap       Maximum interception read from file for forest and grassland land cover           m
     interceptStor         simulated vegetation interception storage                                         m
@@ -57,15 +56,13 @@ class Interception(object):
     actual_evapotranspiration              simulated evapotranspiration from soil, flooded area and vegetation               m
     snowEvap              total evaporation from snow for a snow layers                                     m
     ====================  ================================================================================  =========
-
-    **Functions**
     """
 
     def __init__(self, model):
         self.HRU = model.data.HRU
         self.grid = model.data.grid
         self.model = model
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):

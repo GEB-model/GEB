@@ -10,6 +10,12 @@ class DateIndex:
 
     def get(self, date):
         # find first date where date is larger or equal to date in self.dates
+        assert date >= self.dates[0], (
+            f"Date {date} is before first date {self.dates[0]}"
+        )
+        assert date <= self.dates[-1], (
+            f"Date {date} is after last date {self.dates[-1]}"
+        )
         return np.searchsorted(self.dates, date, side="right") - 1
 
     def __len__(self):

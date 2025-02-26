@@ -60,7 +60,7 @@ class ReservoirOperators(AgentBaseClass):
             else {}
         )
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
         AgentBaseClass.__init__(self)
@@ -75,11 +75,6 @@ class ReservoirOperators(AgentBaseClass):
         self.var.active_reservoirs = self.reservoirs[
             self.reservoirs["waterbody_type"] == 2
         ]
-
-        np.save(
-            self.model.report_folder / "active_reservoirs_waterBodyIDs.npy",
-            self.var.active_reservoirs.index.to_numpy(),
-        )
 
         self.var.reservoir_release_factors = DynamicArray(
             np.full(

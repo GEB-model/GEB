@@ -22,6 +22,7 @@
 import numpy as np
 from .model import ModFlowSimulation
 from geb.workflows import balance_check
+from ..routing import get_channel_ratio
 
 
 class GroundWater:
@@ -29,7 +30,7 @@ class GroundWater:
         self.HRU = model.data.HRU
         self.grid = model.data.grid
         self.model = model
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
@@ -60,10 +61,6 @@ class GroundWater:
         assert (
             self.grid.var.hydraulic_conductivity.shape
             == self.grid.var.specific_yield.shape
-        )
-
-        self.grid.var.channel_ratio = self.grid.load(
-            self.model.files["grid"]["routing/kinematic/channel_ratio"]
         )
 
         self.grid.var.leakageriver_factor = 0.001  # in m/day
@@ -139,10 +136,14 @@ class GroundWater:
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cellArea
 
-        self.grid.var.capillar = groundwater_drainage * (
-            1 - self.grid.var.channel_ratio
+        channel_ratio = get_channel_ratio(
+            river_length=self.grid.var.river_length,
+            river_width=self.grid.var.river_width,
+            cell_area=self.grid.var.cellArea,
         )
-        self.grid.var.baseflow = groundwater_drainage * self.grid.var.channel_ratio
+
+        self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
+        self.grid.var.baseflow = groundwater_drainage * channel_ratio
 
         # capriseindex is 1 where capilary rise occurs
         self.model.data.HRU.capriseindex = self.model.data.to_HRU(

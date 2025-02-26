@@ -321,7 +321,7 @@ class SFINCS:
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
-                self.model.files["grid"]["routing/kinematic/upstream_area"],
+                self.model.files["grid"]["routing/upstream_area"],
                 engine="zarr",
             ),  # .isel(band=0),
         )
@@ -367,7 +367,8 @@ class SFINCS:
 
     def get_return_period_maps(self, config_fn="sfincs.yml", force_overwrite=True):
         # close the zarr store
-        self.model.reporter.variables["discharge_daily"].close()
+        if hasattr(self.model, "reporter"):
+            self.model.reporter.variables["discharge_daily"].close()
 
         model_root = self.sfincs_model_root("entire_region")
         if force_overwrite or not (model_root / "sfincs.inp").exists():
@@ -382,22 +383,28 @@ class SFINCS:
                 discharge_name="discharge_daily",
                 river_method="default",
                 depth_calculation="power_law",
-                mask_flood_plains=True,
+                mask_flood_plains=False,  # setting this to True sometimes leads to errors
             )
         estimate_discharge_for_return_periods(
             model_root,
-            discharge_ds=self.discharge_ds,
+            discharge_ds=self.discharge_spinup_ds,
+            uparea_ds=self.uparea_ds,
             data_catalogs=self.data_catalogs,
             discharge_ds_varname="discharge_daily",
         )
         run_sfincs_for_return_periods(
-            model_root=model_root, return_periods=[2, 100, 1000]
+            model_root=model_root,
+            return_periods=[2, 100, 1000],
+            gpu=False,
+            export_dir=self.model.report_folder / "flood_maps",
         )
 
-        # and re-open afterwards
-        self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
-            self.model.config["report_hydrology"]["discharge_daily"]["path"], mode="a"
-        )
+        if hasattr(self.model, "reporter"):
+            # and re-open afterwards
+            self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
+                self.model.config["report_hydrology"]["discharge_daily"]["path"],
+                mode="a",
+            )
 
     def run(self, event):
         start_time = event["start_time"]
@@ -458,12 +465,22 @@ class SFINCS:
 
     @property
     def discharge_spinup_ds(self):
-        discharge_path = self.model.config["report_hydrology"]["discharge_daily"][
-            "path"
-        ].replace(self.model.run_name, "spinup")
-        return xr.open_dataset(discharge_path, engine="zarr")
+        ds = xr.open_dataset(
+            Path("report") / "spinup" / "discharge_daily.zarr.zip", engine="zarr"
+        )
+        start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
+        ds = ds.sel(time=slice(start_time, ds.time[-1]))
+
+        # make sure there is at least 20 years of data
+        if not len(ds.time.groupby(ds.time.dt.year).groups) >= 20:
+            raise ValueError(
+                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
+
+        return ds
 
     @property
     def uparea_ds(self):
-        uparea_path = self.model.files["grid"]["routing/kinematic/upstream_area"]
-        return xr.open_dataset(uparea_path, engine="zarr")
+        uparea_path = self.model.files["grid"]["routing/upstream_area"]
+        return xr.open_dataset(uparea_path, engine="zarr") / 1e6  # m2 to km2

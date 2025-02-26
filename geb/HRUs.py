@@ -13,12 +13,13 @@ from geb.workflows import AsyncForcingReader
 from scipy.spatial import cKDTree
 
 
-def determine_nearest_river_cell(river_grid, HRU_to_grid):
-    threshold = 15
-    valid_mask = river_grid != -9999
-
-    valid_indices = np.argwhere(valid_mask)
-    valid_values = river_grid[valid_mask]
+def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
+    """This function finds the nearest river cell to each HRU. It does so
+    by first selecting the rivers, by checking if the upstream area is
+    above a certain threshold. then for each grid cell, it finds the nearest
+    river cell. Finally, it maps the nearest river cell to each HRU."""
+    valid_indices = np.argwhere(~mask)
+    valid_values = upstream_area[~mask]
 
     above_threshold_mask = valid_values > threshold
     above_threshold_indices = valid_indices[above_threshold_mask]
@@ -28,6 +29,8 @@ def determine_nearest_river_cell(river_grid, HRU_to_grid):
     distances, indices_in_above = tree.query(valid_indices)
 
     nearest_indices_in_valid = above_threshold_indices_in_valid[indices_in_above]
+
+    assert nearest_indices_in_valid.max() < (~mask).sum()
 
     return nearest_indices_in_valid[HRU_to_grid]
 
@@ -528,7 +531,7 @@ class HRUs(BaseVariables):
         )
         BaseVariables.__init__(self)
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
@@ -543,12 +546,13 @@ class HRUs(BaseVariables):
             self.var.unmerged_HRU_indices,
         ) = self.create_HRUs()
 
-        river_grid = load_grid(
-            self.model.files["grid"]["routing/kinematic/upstream_area"]
-        )
+        upstream_area = load_grid(self.model.files["grid"]["routing/upstream_area"])
 
         self.var.nearest_river_grid_cell = determine_nearest_river_cell(
-            river_grid, self.var.HRU_to_grid
+            upstream_area,
+            self.var.HRU_to_grid,
+            mask=self.data.grid.mask,
+            threshold=25_000_000,  # 25 km² to align with MERIT-Basins defintion of a river, https://www.reachhydro.org/home/params/merit-basins
         )
 
     @property
@@ -919,7 +923,7 @@ class Data:
         self.HRU = HRUs(self, model)
         self.modflow = Modflow(self, model)
 
-        if self.model.spinup:
+        if self.model.in_spinup:
             self.spinup()
         self.load_water_demand()
 
