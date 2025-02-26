@@ -8,6 +8,7 @@ from ..hydrology.landcover import (
     FOREST,
 )
 import pandas as pd
+import os
 from os.path import join
 from damagescanner.core import object_scanner
 import json
@@ -186,6 +187,34 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "agriculture"}
         )
 
+        self.var.rail_curve = pd.read_parquet(
+            self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
+        )
+        self.var.rail_curve.set_index("severity", inplace=True)
+        self.var.rail_curve = self.var.rail_curve.rename(
+            columns={"damage_ratio": "rail"}
+        )
+
+        super().__init__()
+
+        water_demand, efficiency = self.update_water_demand()
+        self.var.current_water_demand = water_demand
+        self.var.current_efficiency = efficiency
+
+        locations = np.load(self.model.files["binary"]["agents/households/locations"])[
+            "data"
+        ]
+        self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
+
+        self.var.locations = DynamicArray(locations, max_n=self.max_n)
+
+        sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
+        self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
+
+    def flood(self, flood_map, model_root, simulation_root, return_period=None):
+
+        print("Measure:", self.config.get("measure"))
+
         # Get vulnerability curves based on adaptation scenario
         if self.config.get("measure") not in ["dry_proofing", "wet_proofing"]:
             print("were going for the normal curves ")
@@ -332,32 +361,6 @@ class Households(AgentBaseClass):
                 self.var.max_dam_buildings_content
             )
 
-        self.var.rail_curve = pd.read_parquet(
-            self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
-        )
-        self.var.rail_curve.set_index("severity", inplace=True)
-        self.var.rail_curve = self.var.rail_curve.rename(
-            columns={"damage_ratio": "rail"}
-        )
-
-        super().__init__()
-
-        water_demand, efficiency = self.update_water_demand()
-        self.var.current_water_demand = water_demand
-        self.var.current_efficiency = efficiency
-
-        locations = np.load(self.model.files["binary"]["agents/households/locations"])[
-            "data"
-        ]
-        self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
-
-        self.var.locations = DynamicArray(locations, max_n=self.max_n)
-
-        sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
-        self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
-
-    def flood(self, flood_map, model_root, simulation_root, return_period=None):
-        # Check if a custom flood map is provided in the config
         custom_flood_map = self.config.get("hazards", {}).get("floods", {}).get("custom_flood_map")
         if custom_flood_map:
             flood_path = custom_flood_map
@@ -422,7 +425,7 @@ class Households(AgentBaseClass):
             region_projected.geometry, region_projected.crs
         )
 
-        def compute_damages_by_country(assets, curve, category_name):
+        def compute_damages_by_country(assets, curve, category_name, model_root, return_period=None):
             assets = assets.to_crs(flood_map_clipped.rio.crs)
 
             # Check for multiple geometry types
@@ -438,8 +441,23 @@ class Households(AgentBaseClass):
                     objects=assets, hazard=flood_map_clipped, curves=curve
                 )
                 assets["damages"] = damages
+                exposed_assets_count = (assets["damages"] > 0).sum()
+                print(assets)
+                print(f"exposed assets for {category_name} are: {exposed_assets_count}")
                 total_damages = damages.sum()
                 print(f"damages to {category_name} are: {total_damages}")
+
+                if return_period is not None:
+                    filename = f"damages_{category_name}_RP{int(return_period)}.gpkg"
+                else:
+                    filename = f"damages_{category_name}.gpkg"
+
+                file_path = join(model_root, filename)
+                print(file_path)
+                
+                # Save to GeoPackage
+                assets.to_file(file_path, driver="GPKG")
+                print(f"Saved assets to {file_path}")
 
                 split_assets = gpd.overlay(
                     assets,
@@ -522,24 +540,26 @@ class Households(AgentBaseClass):
 
         # Compute damages for each category
         total_damages_agriculture = compute_damages_by_country(
-            agriculture, self.var.agriculture_curve, "agriculture"
+            agriculture, self.var.agriculture_curve, "agriculture", model_root, return_period
         )
         total_damages_forest = compute_damages_by_country(
-            forest, self.var.forest_curve, "forest"
+            forest, self.var.forest_curve, "forest", model_root, return_period
         )
         total_damage_structure = compute_damages_by_country(
-            self.var.buildings, self.var.buildings_structure_curve, "building structure"
+            self.var.buildings, self.var.buildings_structure_curve, "building structure", model_root, return_period
         )
         total_damages_content = compute_damages_by_country(
             self.var.buildings_centroid,
             self.var.buildings_content_curve,
             "building content",
+            model_root,
+            return_period
         )
         total_damages_roads = compute_damages_by_country(
-            self.var.roads, self.var.road_curves, "roads"
+            self.var.roads, self.var.road_curves, "roads", model_root, return_period
         )
         total_damages_rail = compute_damages_by_country(
-            self.var.rail, self.var.rail_curve, "rail"
+            self.var.rail, self.var.rail_curve, "rail", model_root, return_period
         )
 
         # Calculate total flood damages

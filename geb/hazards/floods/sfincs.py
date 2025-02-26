@@ -259,9 +259,9 @@ class SFINCS:
             print("running cropland conversion scenario -- updating data catalog")
             updated_data_catalog["esa_worldcover"] = {
                 "data_type": "RasterDataset",
-                "path": "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion_reprojected.nc",
+                "path": "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion_renamed.nc",
                 "driver": "netcdf",
-                "crs": 4326,
+                "crs": 28992,
             }
         
         elif (
@@ -273,7 +273,7 @@ class SFINCS:
             print("running reforestation scenario -- updating data catalog")
             updated_data_catalog["esa_worldcover"] = {
                 "data_type": "RasterDataset",
-                "path": "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_renamed.nc",
+                "path": "/scistor/ivm/vbl220/PhD/reforestation_10km2_1_renamed.nc",
                 "driver": "netcdf",
                 "crs": 28992,
             }
