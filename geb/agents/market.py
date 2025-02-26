@@ -177,8 +177,8 @@ class Market(AgentBaseClass):
                 print("WARNING: Using static crop prices")
                 return np.full(
                     (
-                        len(self.var.cumulative_inflation_per_region),
-                        len(self.agents.crop_farmers.crop_ids),
+                        len(self.model.regions),
+                        len(self.agents.crop_farmers.var.crop_ids),
                     ),
                     self._crop_prices[1],
                 )
