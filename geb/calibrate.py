@@ -913,7 +913,9 @@ def get_irrigation_method_score(run_directory, individual, config):
             df_simulated_vict, df_observed_vict, fraction_name
         )
 
-    all_results = list(kge_results_nsw.values()) + list(kge_results_vict.values())
+    all_results = np.nan_to_num(
+        list(kge_results_nsw.values()) + list(kge_results_vict.values()), nan=-2.5
+    )
     kge = np.nanmean(all_results)
 
     print(
@@ -1139,6 +1141,7 @@ def get_water_use_score(run_directory, individual, config):
         os.path.join(config["calibration"]["path"], "KGE_water_use_log.csv"), "a"
     ) as myfile:
         myfile.write(str(individual.label) + "," + str(kge) + "\n")
+    return kge
 
 
 def get_observed_crops(run_directory, individual, config):
@@ -1293,7 +1296,7 @@ def get_crops_KGE(run_directory, individual, config):
         o = observed_filtered[crop_col].values
         kge_results[crop_col] = KGE_calculation(s, o)
 
-    kge_values = [val for val in kge_results.values() if not np.isnan(val)]
+    kge_values = [-2.5 if np.isnan(val) else val for val in kge_results.values()]
     if len(kge_values) > 0:
         kge = np.mean(kge_values)
     else:
