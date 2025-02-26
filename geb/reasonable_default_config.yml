@@ -46,9 +46,9 @@ agent_settings:
       size: 10 # nr of neighbors
     expected_utility:
       crop_switching: 
-        ruleset: base
+        ruleset: no-adaptation
       adaptation_sprinkler:
-        ruleset: base
+        ruleset: no-adaptation
         lifespan_base: 25
         lifespan_sprink_drip: 15
         loan_duration: 21
