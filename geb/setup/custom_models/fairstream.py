@@ -19,6 +19,13 @@ from scipy.stats import chi2_contingency
 
 from ..workflows.general import repeat_grid
 
+from geb.agents.crop_farmers import (
+    SURFACE_IRRIGATION_EQUIPMENT,
+    WELL_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION,
+    FIELD_EXPANSION_ADAPTATION,
+)
+
 
 class Survey:
     def __init__(self) -> None:
@@ -453,13 +460,6 @@ class fairSTREAMModel(GEBModel):
     ):
         n_farmers = self.binary["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
-
-        from geb.agents.crop_farmers import (
-            SURFACE_IRRIGATION_EQUIPMENT,
-            WELL_ADAPTATION,
-            IRRIGATION_EFFICIENCY_ADAPTATION,
-            FIELD_EXPANSION_ADAPTATION,
-        )
 
         # Set all farmers within command areas to canal irrigation
         adaptations = np.full(
