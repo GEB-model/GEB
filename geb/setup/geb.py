@@ -258,8 +258,6 @@ class GEBModel(GridModel):
         self,
         region: dict,
         sub_grid_factor: int,
-        hydrography_fn=None,
-        basin_index_fn=None,
         resolution_arcsec=30,
     ) -> xr.DataArray:
         """Creates a 2D regular grid or reads an existing grid.
@@ -279,19 +277,21 @@ class GEBModel(GridModel):
         sub_grid_factor : int
             GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
         """
-        assert hydrography_fn is None, "Please remove this parameter"
-        assert basin_index_fn is None, "Please remove this parameter"
 
         assert resolution_arcsec % 3 == 0, (
             "resolution_arcsec must be a multiple of 3 to align with MERIT"
         )
         assert sub_grid_factor >= 2
 
-        lon, lat = region["subbasin"][0][0], region["subbasin"][1][0]
+        if "subbasin" in region:
+            subbasin_id = region["subbasin"]
+        elif "outflow" in region:
+            lon, lat = region["outflow"][0][0], region["outflow"][1][0]
+            subbasin_id = get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
+        else:
+            raise ValueError("Region must be of kind [basin, subbasin].")
 
         river_graph = get_river_graph(self.data_catalog)
-
-        subbasin_id = get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
         subbasin_ids = get_upstream_subbasin_ids(river_graph, subbasin_id)
         subbasin_ids.add(subbasin_id)
 
@@ -309,41 +309,45 @@ class GEBModel(GridModel):
 
         self.set_geoms(subbasins, name="routing/subbasins")
 
+        xmin, ymin, xmax, ymax = subbasins.total_bounds
         hydrography = self.data_catalog.get_rasterdataset(
-            "merit_hydro", provider=self.data_provider
+            "merit_hydro",
+            provider=self.data_provider,
+            bbox=[
+                xmin,
+                ymin,
+                xmax,
+                ymax,
+            ],
+            buffer=10,
         )
 
         self.logger.info("Preparing 2D grid.")
-        kind, region = hydromt.workflows.parse_region(region, logger=self.logger)
-        if kind in ["basin", "subbasin"]:
+        if "outflow" in region:
             # get basin geometry
-            xmin, ymin, xmax, ymax = subbasins.total_bounds
-            geom, xy = hydromt.workflows.get_basin_geometry(
+            geom, _ = hydromt.workflows.get_basin_geometry(
                 ds=hydrography,
                 flwdir_name="dir",
-                kind=kind,
+                kind="subbasin",
                 logger=self.logger,
-                bounds=[
-                    xmin,
-                    ymin,
-                    xmax,
-                    ymax,
-                ],
-                buffer=10,
-                **region,
+                xy=(lon, lat),
             )
-            region.update(xy=xy)
+        elif "subbasin" in region:
+            geom = gpd.GeoDataFrame(
+                geometry=[
+                    subbasins[~subbasins["is_downstream_outflow_subbasin"]].union_all()
+                ],
+                crs=subbasins.crs,
+            )
         elif "geom" in region:
             geom = region["geom"]
             if geom.crs is None:
                 raise ValueError('Model region "geom" has no CRS')
             # merge regions when more than one geom is given
             if isinstance(geom, gpd.GeoDataFrame):
-                geom = gpd.GeoDataFrame(geometry=[geom.unary_union], crs=geom.crs)
+                geom = gpd.GeoDataFrame(geometry=[geom.union_all()], crs=geom.crs)
         else:
-            raise ValueError(
-                f"Region for grid must of kind [basin, subbasin], kind {kind} not understood."
-            )
+            raise ValueError
 
         # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
         # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
@@ -6176,7 +6180,7 @@ class GEBModel(GridModel):
 
         hydrodynamics_data_catalog = DataCatalog()
 
-        bounds = tuple(self.geoms["subbasins"].total_bounds)
+        bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
 
         for DEM_name in DEM:
             DEM_raster = self.data_catalog.get_rasterdataset(
@@ -6233,7 +6237,7 @@ class GEBModel(GridModel):
         # landcover
         esa_worldcover = self.data_catalog.get_rasterdataset(
             land_cover,
-            bbox=self.geoms["subbasins"].total_bounds,
+            bbox=bounds,
             buffer=200,  # 2 km buffer
         ).chunk({"x": XY_CHUNKSIZE, "y": XY_CHUNKSIZE})
         del esa_worldcover.attrs["_FillValue"]

@@ -417,21 +417,20 @@ def build(
         config["general"]["region"]["pour_point"] = config["general"]["pour_point"]
 
     region = config["general"]["region"]
-    if "basin" in region:
-        region_config = {"basin": region["basin"]}
-    elif "pour_point" in region:
-        pour_point = region["pour_point"]
+    if "subbasin" in region:
+        region_config = {"subbasin": region["subbasin"]}
+    elif "outflow" in region:
+        outflow = region["outflow"]
         region_config = {
-            "subbasin": [[pour_point[0]], [pour_point[1]]],
+            "outflow": [[outflow[0]], [outflow[1]]],
         }
     elif "geometry" in region:
-        raise NotImplementedError("Max bounds needs to be implemented")
         region_config = {
             "geom": region["geometry"],
         }
     else:
         raise ValueError(
-            "No region specified in config file, should be 'basin', 'pour_point' or 'geometry'."
+            "No region specified in config file, should be 'subbasin', 'outflow' or 'geometry'."
         )
 
     geb_model.build(

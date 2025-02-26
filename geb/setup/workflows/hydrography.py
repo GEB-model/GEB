@@ -46,6 +46,10 @@ def get_subbasin_id_from_coordinate(data_catalog, lon, lat):
         data_catalog.get_source("MERIT_Basins_cat").path,
         bbox=(lon, lat, lon, lat),
     )
+    if len(COMID) == 0:
+        raise ValueError(
+            f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.get_source('MERIT_Basins_cat').path}), ensure that the point is in a basin."
+        )
     assert len(COMID) == 1, "The point is not in a single basin"
     # get the COMID value from the GeoDataFrame
     return COMID["COMID"].values[0]

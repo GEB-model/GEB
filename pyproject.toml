@@ -12,7 +12,7 @@ authors = [
     {name = "Tim Busker", email = "tim.busker@vu.nl"},
 ]
 dependencies = [
-    "cdsapi>=0.7.4",
+    "cdsapi>=0.7.5",
     "cfgrib>=0.9.14",
     "damagescanner==0.8b1",
     "dask>=2024.6,<2024.12.0",  # this is pinned to lower version due to a chunking error. In the future, try to unpin this.
