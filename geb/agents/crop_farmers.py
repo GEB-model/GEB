@@ -589,6 +589,7 @@ class CropFarmers(AgentBaseClass):
             dtype=np.float32,
             fill_value=0,
         )
+        # note that this is NOT inflation corrected
         self.var.yearly_profits = DynamicArray(
             n=self.n,
             max_n=self.max_n,
@@ -597,6 +598,7 @@ class CropFarmers(AgentBaseClass):
             dtype=np.float32,
             fill_value=0,
         )
+        # note that this is NOT inflation corrected
         self.var.yearly_potential_profits = DynamicArray(
             n=self.n,
             max_n=self.max_n,
@@ -894,7 +896,10 @@ class CropFarmers(AgentBaseClass):
         ]  # Cultivation costs are set as a fraction of crop prices
         date_index, cultivation_costs_array = self.cultivation_costs
 
-        if "KGE_crops" in self.model.config["calibration"]["calibration_targets"]:
+        if (
+            "calibration" in self.model.config
+            and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
+        ):
             # Load price change factors 0 to 25 into a NumPy array
             factors = np.array(
                 [
@@ -1559,6 +1564,23 @@ class CropFarmers(AgentBaseClass):
         actual_profits = self.var.yearly_profits[
             harvesting_farmers_long, :HISTORICAL_PERIOD
         ]
+
+        # raise NotImplementedError("This function is not yet implemented")
+
+        # # Calculate the cumulative inflation from the start year to the current year for each farmer
+        # inflation_arrays = [
+        #     self.get_value_per_farmer_from_region_id(
+        #         self.inflation_rate, datetime(year, 1, 1)
+        #     )
+        #     for year in range(
+        #         self.model.config["general"]["spinup_time"].year + 1,
+        #         self.model.current_time.year + 1,
+        #     )
+        # ]
+
+        # # compute cumulative inflation for each farmer
+        # cumulative_inflation = np.prod(inflation_arrays, axis=0)
+
         drought_loss_historical[harvesting_farmers_long] = (
             (potential_profits - actual_profits) / potential_profits
         ) * 100
@@ -1858,25 +1880,9 @@ class CropFarmers(AgentBaseClass):
         # Ensure that all profit and potential profit values are non-negative
         assert (profit >= 0).all()
         assert (potential_profit >= 0).all()
-
-        # Calculate the cumulative inflation from the start year to the current year for each farmer
-        inflation_arrays = [
-            self.get_value_per_farmer_from_region_id(
-                self.inflation_rate, datetime(year, 1, 1)
-            )
-            for year in range(
-                self.model.config["general"]["spinup_time"].year + 1,
-                self.model.current_time.year + 1,
-            )
-        ]
-
-        # compute cumulative inflation for each farmer
-        cumulative_inflation = np.prod(inflation_arrays, axis=0)
         # Adjust yearly profits by the cumulative inflation for each harvesting farmer
-        self.var.yearly_profits[:, 0] += profit / cumulative_inflation
-        self.var.yearly_potential_profits[:, 0] += (
-            potential_profit / cumulative_inflation
-        )
+        self.var.yearly_profits[:, 0] += profit
+        self.var.yearly_potential_profits[:, 0] += potential_profit
 
     def calculate_yield_spei_relation_test_solo(self):
         import matplotlib
