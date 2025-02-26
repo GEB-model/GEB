@@ -1253,43 +1253,13 @@ class CropFarmers(AgentBaseClass):
             gpu=False,
         )
 
-        # For test purposes
-        self.alpha = 60
-        jingelic = "jingelic"
-
-        if jingelic in os.getcwd():
-            self.gauges = [
-                tuple(gauge) for gauge in self.model.config["general"]["gauges"]
-            ]
-        else:
-            self.gauges = [(143.3458, -34.8458), (147.229, -36.405), (147.711, -35.929)]
-
-        self.reservoirs = [
-            reservoir[0] for reservoir in self.model.config["general"]["reservoirs"]
+        self.soil_fluxes_names = [
+            "direct_runoff",
+            "groundwater_recharge",
+            "open_water_evaporation",
+            "actual_total_transpiration",
+            "actual_bare_soil_evaporation",
         ]
-
-        self.var.discharge_monthly = self.var.load_initial(
-            "discharge_monthly",
-            default=lambda: np.full(
-                (len(self.gauges), self.alpha), 0, dtype=np.float32
-            ),
-            gpu=False,
-        )
-        self.var.reservoir_monthly = self.var.load_initial(
-            "reservoir_monthly",
-            default=lambda: np.full(
-                self.alpha,
-                0,
-                dtype=np.float32,
-            ),
-            gpu=False,
-        )
-
-        self.var.water_price_monthly = self.var.load_initial(
-            "water_price_monthly",
-            default=lambda: np.full(12, 0, dtype=np.float32),
-            gpu=False,
-        )
 
         # Calibration factors
         self.intention_factor_neighbor = self.model.config["agent_settings"]["farmers"][
@@ -1314,13 +1284,9 @@ class CropFarmers(AgentBaseClass):
             "calibration"
         ]["irrigation_limit_adjustment"]
 
-        base_efficiency = self.model.config["agent_settings"]["calibration"][
+        self.base_efficiency = self.model.config["agent_settings"]["calibration"][
             "base_efficiency"
         ]
-
-        if base_efficiency == 1:
-            self.irrigation_efficiency[:] = 1
-            print("Warning: all irrigation efficiency set at 100")
 
         super().__init__()
 
@@ -1878,6 +1844,18 @@ class CropFarmers(AgentBaseClass):
             extra_dims_names=("index",),
         )
 
+        for var_name in self.soil_fluxes_names:
+            setattr(
+                self,
+                var_name,
+                AgentArray(
+                    n=self.n,
+                    max_n=self.max_n,
+                    dtype=np.float32,
+                    fill_value=0,
+                ),
+            )
+
         self.update_field_indices()
 
     @staticmethod
@@ -2190,6 +2168,29 @@ class CropFarmers(AgentBaseClass):
                 self.cumulative_water_deficit_m3[:, 365] = (
                     self.cumulative_water_deficit_m3[:, 364]
                 )
+
+    def save_agent_soil_balance(self):
+        for var_name in self.soil_fluxes_names:
+            # 1) Multiply by cell area
+            data_m3 = (
+                getattr(self.model.data.HRU, var_name) * self.model.data.HRU.cellArea
+            )
+
+            # 2) Clip negative values to zero
+            data_m3[data_m3 < 0] = 0
+
+            # 3) Aggregate by farmer
+            data_per_farmer = np.bincount(
+                self.var.land_owners[self.var.land_owners != -1],
+                weights=data_m3[self.var.land_owners != -1],
+            )
+
+            # 4) Assign to individual variable on self,
+            #    e.g. self.direct_runoff[:], self.groundwater_recharge[:], etc.
+            #    Make sure you've pre-created these arrays with the correct shape.
+            getattr(self, var_name)[:] = data_per_farmer
+
+        pass
 
     def abstract_water(
         self,
@@ -5232,6 +5233,9 @@ class CropFarmers(AgentBaseClass):
 
         if self.model.current_time.day == 1:
             self.water_price = self.determine_water_price_fixed.copy()  # $ / m3
+
+        if self.base_efficiency == 0.9:
+            self.irrigation_efficiency[:] = self.base_efficiency
 
         ## yearly actions
         if self.model.current_time.month == 7 and self.model.current_time.day == 1:
