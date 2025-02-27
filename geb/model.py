@@ -313,7 +313,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
-        self.sfincs.get_return_period_maps(force_overwrite=True)
+        self.sfincs.get_return_period_maps()
 
     @property
     def current_day_of_year(self) -> int:
