@@ -14,6 +14,7 @@ import json
 import rioxarray
 from rasterio.features import shapes
 from shapely.geometry import shape
+from .decision_module_flood import DecisionModule
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
@@ -52,9 +53,139 @@ class Households(AgentBaseClass):
             if "households" in self.model.config["agent_settings"]
             else {}
         )
-
+        self.decision_module = DecisionModule(self, model=None)
         if self.model.in_spinup:
             self.spinup()
+            self.assign_household_attributes()
+
+    def initiate_flood_risk_information(self):
+        """Initiate flood risk information for each household. This information is used in the decision module.
+        For now also only dummy data is created."""
+
+        # initiate array with return periods assessed in model
+        self.var.return_periods = np.array([10, 50, 100, 250])
+
+        # initiate array with damage factors without adaptation [dummy data for now]
+        damage_factors_no_adapt_rp100 = np.random.uniform(0.1, 0.5, self.n)
+        # scaling factor for other return periods
+        damage_factors_no_adapt_rp10 = damage_factors_no_adapt_rp100 * 0.5
+        damage_factors_no_adapt_rp50 = damage_factors_no_adapt_rp100 * 0.75
+        damage_factors_no_adapt_rp250 = np.maximum(
+            1, damage_factors_no_adapt_rp100 * 1.5
+        )
+
+        # combine arrays in singel multi-dimensional array
+        damage_factors_no_adapt = np.array(
+            [
+                damage_factors_no_adapt_rp10,
+                damage_factors_no_adapt_rp50,
+                damage_factors_no_adapt_rp100,
+                damage_factors_no_adapt_rp250,
+            ]
+        )
+
+        # assume property value equals wealth and that adaptation reduces damages with 20%
+        damages_do_not_adapt = damage_factors_no_adapt * self.var.wealth
+        damages_adapt = damages_do_not_adapt * 0.5
+        return damages_do_not_adapt, damages_adapt
+
+    def assign_household_attributes(self):
+        """Household locations are already sampled from population map in GEBModel.setup_population()
+        These are loaded in the spinup() method.
+        Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
+
+        # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
+        self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
+
+        # initiate array with household incomes [dummy data for now]
+        self.var.income = DynamicArray(
+            np.random.randint(16_000, 30_000, self.n), max_n=self.max_n
+        )
+
+        # initiate array with houshold wealth [dummy data for now]
+        self.var.wealth = DynamicArray(np.int64(self.var.income * 2.8))
+
+        # initiate array with risk perception [dummy data for now]
+        low_risk_perception = 0.01
+        high_risk_perception = 10
+        risk_perception = np.random.uniform(
+            low_risk_perception, high_risk_perception, self.n
+        )
+        self.var.risk_perception = DynamicArray(risk_perception, max_n=self.max_n)
+
+        # initiate array with risk aversion [fixed for now]
+        self.var.risk_aversion = DynamicArray(np.full(self.n, 1), max_n=self.max_n)
+
+        # initiate array with amenity value [dummy data for now]
+        amenity_premiums = np.random.uniform(0, 0.2, self.n)
+        self.var.amenity_value = DynamicArray(
+            amenity_premiums * self.var.wealth, max_n=self.max_n
+        )
+
+        # initiate array with time adapted
+        self.var.time_adapted = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )
+
+        # initiate array with adaptation costs
+        self.var.adaptation_costs = DynamicArray(
+            np.random.randint(10_000, 50_000, self.n), max_n=self.max_n
+        )
+
+    def decide_household_strategy(self):
+        # get dummy flood risk information
+        damages_do_not_adapt, damages_adapt = self.initiate_flood_risk_information()
+
+        EU_adapt = self.decision_module.calcEU_adapt(
+            geom_id="NoID",
+            n_agents=self.n,
+            wealth=self.var.wealth,
+            income=self.var.income,
+            expendature_cap=10,
+            amenity_value=self.var.amenity_value,
+            amenity_weight=1,
+            risk_perception=self.var.risk_perception,
+            expected_damages_adapt=damages_adapt,
+            adaptation_costs=self.var.adaptation_costs,
+            time_adapted=self.var.time_adapted,
+            loan_duration=20,
+            p_floods=1 / self.var.return_periods,
+            T=35,
+            r=0.03,
+            sigma=1,
+        )
+
+        EU_do_not_adapt = self.decision_module.calcEU_do_nothing(
+            geom_id="NoID",
+            n_agents=self.n,
+            wealth=self.var.wealth,
+            income=self.var.income,
+            expendature_cap=10,
+            amenity_value=self.var.amenity_value,
+            amenity_weight=1,
+            risk_perception=self.var.risk_perception,
+            expected_damages=damages_do_not_adapt,
+            adapted=self.var.adapted,
+            p_floods=1 / self.var.return_periods,
+            T=35,
+            r=0.03,
+            sigma=1,
+        )
+
+        # execute strategy
+        household_adapting = np.where(EU_adapt > EU_do_not_adapt)[0]
+        self.var.adapted[household_adapting] = 1
+        self.var.time_adapted[household_adapting] += 1
+
+        # print percentage of households that adapted
+        print(
+            f"Percentage of households that adapted: {len(household_adapting) / self.n * 100}%"
+        )
+
+    def calculate_utilities(self):
+        """Calculate the utility of each strategy: 1) do nothing, 2) implement dryfloodproofing, 3) relocate.
+        The utility is based on the expected damages and the costs of each strategy."""
+        pass
 
     def spinup(self):
         self.var = self.model.store.create_bucket("agents.households.var")
@@ -440,8 +571,8 @@ class Households(AgentBaseClass):
 
     def step(self) -> None:
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
-            return None
+            self.decide_household_strategy()
 
     @property
     def n(self):
-        return self.locations.shape[0]
+        return self.var.locations.shape[0]
