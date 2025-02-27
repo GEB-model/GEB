@@ -47,6 +47,12 @@ class Households(AgentBaseClass):
         self.agents = agents
         self.reduncancy = reduncancy
 
+        self.config = (
+            self.model.config["agent_settings"]["households"]
+            if "households" in self.model.config["agent_settings"]
+            else {}
+        )
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -433,7 +439,8 @@ class Households(AgentBaseClass):
         return self.var.current_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
-        return None
+        if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+            return None
 
     @property
     def n(self):

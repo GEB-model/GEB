@@ -31,6 +31,8 @@ agent_settings:
     irrigation_limit:
       limit: 10000  # previous tried 1700
       per: capita
+  households:
+    migrate: false
   farmers:
     ruleset: base
     base_management_yield_ratio: 1
