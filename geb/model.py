@@ -238,7 +238,9 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             run_name = "default"
 
         current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(self.config["general"]["end_time"])
+        end_time = self.create_datetime(
+            self.config["general"]["end_time"]
+        ) + datetime.timedelta(days=1)
 
         self._initialize(
             run_name=run_name,
