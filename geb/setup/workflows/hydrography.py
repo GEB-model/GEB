@@ -6,19 +6,25 @@ from rasterio.features import rasterize
 from shapely.geometry import LineString
 
 
-def get_upstream_subbasin_ids(river_graph, subbasin_id):
-    return nx.ancestors(river_graph, subbasin_id)
+def get_upstream_subbasin_ids(river_graph, subbasin_ids):
+    ancenstors = set()
+    for subbasin_id in subbasin_ids:
+        ancenstors |= nx.ancestors(river_graph, subbasin_id)
+    return ancenstors
 
 
-def get_downstream_subbasin(river_graph, subbasin_id):
-    downstream_node = list(river_graph.neighbors(subbasin_id))
-    if len(downstream_node) == 0:
-        return None
-    else:
-        assert len(downstream_node) == 1, (
-            "A subbasin has more than one downstream subbasin"
-        )
-        return downstream_node[0]
+def get_downstream_subbasins(river_graph, subbasin_ids):
+    downstream_nodes = []
+    for subbasin_id in subbasin_ids:
+        downstream_node = list(river_graph.neighbors(subbasin_id))
+        if len(downstream_node) == 0:
+            pass
+        else:
+            assert len(downstream_node) == 1, (
+                "A subbasin has more than one downstream subbasin"
+            )
+            downstream_nodes.append(downstream_node[0])
+    return downstream_nodes
 
 
 def get_river_graph(data_catalog):  # , reverse=False):
@@ -27,14 +33,23 @@ def get_river_graph(data_catalog):  # , reverse=False):
         columns=["COMID", "NextDownID"],
         ignore_geometry=True,
     )
-    # remove all rivers without downstream connection
-    river_network = river_network[river_network["NextDownID"] != 0]
 
-    river_network = river_network.itertuples(index=False, name=None)
-
-    # create a directed graph from the river network
+    # create a directed graph for the river network
     river_graph = nx.DiGraph()
-    river_graph.add_edges_from(river_network)
+
+    # add rivers with downstream connection
+    river_network_with_downstream_connection = river_network[
+        river_network["NextDownID"] != 0
+    ]
+    river_network_with_downstream_connection = (
+        river_network_with_downstream_connection.itertuples(index=False, name=None)
+    )
+    river_graph.add_edges_from(river_network_with_downstream_connection)
+
+    river_network_without_downstream_connection = river_network[
+        river_network["NextDownID"] == 0
+    ]
+    river_graph.add_nodes_from(river_network_without_downstream_connection["COMID"])
 
     return river_graph
 
@@ -56,7 +71,7 @@ def get_subbasin_id_from_coordinate(data_catalog, lon, lat):
     return COMID["COMID"].values[0]
 
 
-def get_subbasins(data_catalog, subbasin_ids):
+def get_subbasins_geometry(data_catalog, subbasin_ids):
     subbasins = gpd.read_file(
         data_catalog.get_source("MERIT_Basins_cat").path,
         sql=f"""SELECT * FROM cat_pfaf_MERIT_Hydro_v07_Basins_v01 WHERE COMID IN ({

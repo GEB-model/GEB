@@ -74,9 +74,9 @@ from .workflows.forcing import (
 from .workflows.hydrography import (
     get_upstream_subbasin_ids,
     get_subbasin_id_from_coordinate,
-    get_subbasins,
+    get_subbasins_geometry,
     get_river_graph,
-    get_downstream_subbasin,
+    get_downstream_subbasins,
     get_rivers,
     create_river_raster_from_river_lines,
     get_SWORD_translation_IDs_and_lenghts,
@@ -290,33 +290,40 @@ class GEBModel(GridModel):
         assert sub_grid_factor >= 2
 
         if "subbasin" in region:
-            subbasin_id = region["subbasin"]
+            source_subbasin_ids = region["subbasin"]
         elif "outflow" in region:
             lon, lat = region["outflow"][0][0], region["outflow"][1][0]
-            subbasin_id = get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
+            source_subbasin_ids = get_subbasin_id_from_coordinate(
+                self.data_catalog, lon, lat
+            )
         else:
             raise ValueError("Region must be of kind [basin, subbasin].")
 
+        # always make a list of the subbasin ids, such that the function always gets the same type of input
+        if not isinstance(source_subbasin_ids, list):
+            source_subbasin_ids = [source_subbasin_ids]
+
         river_graph = get_river_graph(self.data_catalog)
-        subbasin_ids = get_upstream_subbasin_ids(river_graph, subbasin_id)
-        subbasin_ids.add(subbasin_id)
+        subbasin_ids = get_upstream_subbasin_ids(river_graph, source_subbasin_ids)
+        subbasin_ids.update(source_subbasin_ids)
 
-        downstream_subbasin = get_downstream_subbasin(river_graph, subbasin_id)
-        if downstream_subbasin is not None:
-            subbasin_ids.add(downstream_subbasin)
+        downstream_subbasins = get_downstream_subbasins(
+            river_graph, source_subbasin_ids
+        )
+        subbasin_ids.update(downstream_subbasins)
 
-        subbasins = get_subbasins(self.data_catalog, subbasin_ids)
+        subbasins = get_subbasins_geometry(self.data_catalog, subbasin_ids)
         subbasins["is_downstream_outflow_subbasin"] = False
         subbasins["associated_upstream_basin"] = None
-        if downstream_subbasin is not None:
-            subbasins.loc[
-                subbasins["COMID"] == downstream_subbasin,
-                "is_downstream_outflow_subbasin",
-            ] = True
-            subbasins.loc[
-                subbasins["COMID"] == downstream_subbasin,
-                "associated_upstream_basin",
-            ] = subbasin_id
+
+        subbasins.loc[
+            subbasins["COMID"].isin(downstream_subbasins),
+            "is_downstream_outflow_subbasin",
+        ] = True
+        subbasins.loc[
+            subbasins["COMID"].isin(downstream_subbasins),
+            "associated_upstream_basin",
+        ] = downstream_subbasins
 
         self.set_geoms(subbasins, name="routing/subbasins")
 
@@ -5696,14 +5703,15 @@ class GEBModel(GridModel):
                 farmer_indices_in_region = farmers_cell_indices[irrigating_farmers_mask]
 
                 # Assign irrigation sources using np.random.choice
-                raise NotImplementedError(
-                    "Below must be corrected, when you encounter this, please fix it (or ask for help)"
-                )
-                adaptations[farmer_indices_in_region] = np.random.choice(
-                    [0, 1],
+                irrigation_equipment_per_farmer = np.random.choice(
+                    [SURFACE_IRRIGATION_EQUIPMENT, WELL_ADAPTATION],
                     size=len(farmer_indices_in_region),
                     p=probabilities,
                 )
+
+                adaptations[
+                    farmer_indices_in_region, irrigation_equipment_per_farmer
+                ] = 1
 
         self.set_binary(adaptations, name="agents/farmers/adaptations")
 
