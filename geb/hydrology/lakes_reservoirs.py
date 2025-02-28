@@ -509,7 +509,12 @@ class LakesReservoirs(object):
         return outflow_m3
 
     def routing(
-        self, step, evaporation_from_water_bodies_per_routing_step, discharge, runoff
+        self,
+        step,
+        n_routing_steps,
+        evaporation_from_water_bodies_per_routing_step,
+        discharge,
+        runoff,
     ):
         """
         Dynamic part to calculate outflow from lakes and reservoirs
@@ -524,9 +529,7 @@ class LakesReservoirs(object):
         if __debug__:
             prestorage = self.model.lakes_reservoirs.var.storage.copy()
 
-        runoff_m3 = (
-            runoff * self.grid.var.cellArea / self.model.routing.var.noRoutingSteps
-        )
+        runoff_m3 = runoff * self.grid.var.cellArea / n_routing_steps
         runoff_m3 = laketotal(runoff_m3, self.grid.var.waterBodyID, nan_class=-1)
 
         discharge_m3 = (

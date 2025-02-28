@@ -100,7 +100,6 @@ class Hydrology:
             groundwater_recharge,
             groundwater_abstraction,
             channel_abstraction,
-            openWaterEvap,
             returnFlow,
         ) = self.landcover.step()
         timer.new_split("Landcover")
@@ -114,7 +113,7 @@ class Hydrology:
         self.lakes_res_small.step()
         timer.new_split("Small waterbodies")
 
-        self.routing.step(openWaterEvap, channel_abstraction, returnFlow)
+        self.routing.step(channel_abstraction, returnFlow)
         timer.new_split("Routing")
 
         self.hillslope_erosion.step()

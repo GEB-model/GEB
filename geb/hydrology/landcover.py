@@ -551,6 +551,5 @@ class LandCover(object):
             groundwater_recharge,
             groundwater_abstraction_m3,
             channel_abstraction_m,
-            open_water_evaporation,
             return_flow,
         )
