@@ -92,4 +92,4 @@ fairstream = [
 ]
 
 [project.scripts]
-"geb" = "geb.cli:main"
+"geb" = "geb.cli:cli"
