@@ -18,10 +18,21 @@ general:
 hazards:
   floods:
     simulate: false
-    resolution: 200
-    nr_subgrid_pixels: 2
+    resolution: 150
+    nr_subgrid_pixels: 5
+    crs: auto
     gpu: false
     force_overwrite: true
+    return_periods:
+      - 2
+      - 5
+      - 10
+      - 25
+      - 50
+      - 100
+      - 250
+      - 500
+      - 1000
   damage:
     simulate: false
   erosion:
