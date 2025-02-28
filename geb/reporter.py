@@ -60,7 +60,7 @@ class hydrology_reporter(ABMReporter):
                             else:
                                 time = pd.date_range(
                                     start=self.model.current_time,
-                                    periods=self.model.n_timesteps + 1,
+                                    periods=self.model.n_timesteps,
                                     freq=self.model.timestep_length,
                                 )
                         else:
