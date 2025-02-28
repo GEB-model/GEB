@@ -1000,7 +1000,7 @@ class Soil(object):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("soil.var")
+        self.var = self.model.store.create_bucket("model.soil.var")
 
         # Soil properties
         self.HRU.var.soil_layer_height = self.HRU.compress(

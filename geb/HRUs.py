@@ -221,7 +221,7 @@ class Grid(BaseVariables):
     def __init__(self, data, model):
         self.data = data
         self.model = model
-        self.var = self.model.store.create_bucket("data.grid.var")
+        self.var = self.model.store.create_bucket("model.data.grid.var")
 
         self.scaling = 1
         mask, self.transform, self.crs = load_grid(
@@ -535,7 +535,7 @@ class HRUs(BaseVariables):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("data.HRU.var")
+        self.var = self.model.store.create_bucket("model.data.HRU.var")
 
         (
             self.var.land_use_type,

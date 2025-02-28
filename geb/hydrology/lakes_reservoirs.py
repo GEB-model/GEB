@@ -172,7 +172,7 @@ class LakesReservoirs(object):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("lakes_reservoirs.var")
+        self.var = self.model.store.create_bucket("model.lakes_reservoirs.var")
 
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped = self.grid.load(

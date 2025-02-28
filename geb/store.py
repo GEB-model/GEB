@@ -443,7 +443,7 @@ class Store:
 
             split_name = bucket_folder.name.split(".")
 
-            bucket_parent_class = attrgetter(".".join(split_name[:-1]))(self.model)
+            bucket_parent_class = attrgetter(".".join(split_name[:-1]))(self)
             setattr(bucket_parent_class, split_name[-1], bucket)
 
     @property

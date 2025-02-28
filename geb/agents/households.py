@@ -51,7 +51,7 @@ class Households(AgentBaseClass):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("agents.households.var")
+        self.var = self.model.store.create_bucket("model.agents.households.var")
 
         # Load buildings
         self.var.buildings = gpd.read_file(

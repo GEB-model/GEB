@@ -23,7 +23,6 @@ class Artists(honeybeesArtists):
             "data.HRU.var.land_use_type"  # set initial background iamge.
         )
         self.custom_plot = self.get_custom_plot()
-        self.set_variables()
 
     def draw_crop_farmers(
         self, model, agents, idx: int, color: str = "#ff0000"

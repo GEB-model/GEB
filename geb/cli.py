@@ -246,6 +246,7 @@ def run_model_with_method(
             DISPLAY_TIMESTEPS,
             model_params=model_params,
             port=None,
+            initialization_method=method,
         )
         server.launch(port=port, browser=no_browser)
 

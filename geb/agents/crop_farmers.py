@@ -229,7 +229,7 @@ class CropFarmers(AgentBaseClass):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("agents.crop_farmers.var")
+        self.var = self.model.store.create_bucket("model.agents.crop_farmers.var")
 
         self.var.crop_data_type, self.var.crop_data = load_crop_data(self.model.files)
         self.var.crop_ids = self.var.crop_data["name"].to_dict()
@@ -1720,7 +1720,7 @@ class CropFarmers(AgentBaseClass):
         else:
             index = self.cultivation_costs[0].get(self.model.current_time)
             cultivation_cost = self.cultivation_costs[1][index]
-            assert cultivation_cost.shape[0] == len(self.model.regions)
+            assert cultivation_cost.shape[0] == len(self.model.var.regions)
             assert cultivation_cost.shape[1] == len(self.var.crop_ids)
 
         # interest_rate = self.get_value_per_farmer_from_region_id(

@@ -102,7 +102,7 @@ class LandCover(object):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("landcover.var")
+        self.var = self.model.store.create_bucket("model.landcover.var")
         self.HRU.var.capriseindex = self.HRU.full_compressed(0, dtype=np.float32)
 
         self.grid.var.forest_kc_per_10_days = xr.open_dataset(

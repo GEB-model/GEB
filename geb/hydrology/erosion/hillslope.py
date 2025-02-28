@@ -224,7 +224,7 @@ class HillSlopeErosion:
         if not self.simulate:
             return None
 
-        self.var = self.model.store.create_bucket("hillslope_erosion.var")
+        self.var = self.model.store.create_bucket("model.hillslope_erosion.var")
 
         self.var.total_erosion = 0
 

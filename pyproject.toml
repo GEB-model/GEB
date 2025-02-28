@@ -19,7 +19,7 @@ dependencies = [
     "deap>=1.4.1",
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
-    "honeybees>=1.1.0",
+    "honeybees>=1.1.1",
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.1.0",
     "isimip-client>=1.0.1",
