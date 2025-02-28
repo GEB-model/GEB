@@ -512,7 +512,6 @@ class LakesReservoirs(object):
         self,
         step,
         n_routing_steps,
-        evaporation_from_water_bodies_per_routing_step,
         discharge,
         runoff,
     ):
@@ -528,6 +527,21 @@ class LakesReservoirs(object):
 
         if __debug__:
             prestorage = self.model.lakes_reservoirs.var.storage.copy()
+
+        if step == 0:
+            # average evaporation overeach lake
+            average_evaporation_per_water_body = np.bincount(
+                self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
+                weights=self.grid.var.EWRef[self.grid.var.waterBodyID != -1],
+            ) / np.bincount(self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1])
+            self.evaporation_from_water_bodies_per_routing_step = (
+                average_evaporation_per_water_body
+                * self.var.lake_area
+                / n_routing_steps
+            )
+            assert np.all(self.evaporation_from_water_bodies_per_routing_step >= 0.0), (
+                "evaporation_from_water_bodies_per_routing_step < 0.0"
+            )
 
         runoff_m3 = runoff * self.grid.var.cellArea / n_routing_steps
         runoff_m3 = laketotal(runoff_m3, self.grid.var.waterBodyID, nan_class=-1)
@@ -546,12 +560,13 @@ class LakesReservoirs(object):
             runoff_m3 + discharge_m3 + self.var.total_inflow_from_other_water_bodies
         )
 
-        # lakeEvaFactorC
-        evaporation = np.minimum(
-            evaporation_from_water_bodies_per_routing_step, self.var.storage
+        actual_evaporation_from_water_bodies_per_routing_step = np.minimum(
+            self.evaporation_from_water_bodies_per_routing_step, self.var.storage
         )  # evaporation is already in m3 per routing substep
-        evaporation[self.var.waterBodyTypC == OFF] = 0
-        self.var.storage -= evaporation
+        actual_evaporation_from_water_bodies_per_routing_step[
+            self.var.waterBodyTypC == OFF
+        ] = 0
+        self.var.storage -= actual_evaporation_from_water_bodies_per_routing_step
 
         outflow_lakes = self.routing_lakes(inflow_m3)
         outflow_reservoirs = self.routing_reservoirs(inflow_m3)
@@ -582,6 +597,8 @@ class LakesReservoirs(object):
         )
 
         # everything with is not going to another lake is output to river network
+        # this variable is named inflow_to_river_network in the routing
+        # module, because it is considered inflow there
         outflow_to_river_network = np.where(
             self.grid.var.waterBodyID != -1, 0, outflow_shifted_downstream
         )
@@ -602,13 +619,19 @@ class LakesReservoirs(object):
                 name="lakes and reservoirs",
                 how="cellwise",
                 influxes=[inflow_m3],
-                outfluxes=[outflow, evaporation],
+                outfluxes=[
+                    outflow,
+                    actual_evaporation_from_water_bodies_per_routing_step,
+                ],
                 prestorages=[prestorage],
                 poststorages=[self.var.storage],
                 tollerance=1,  # 1 m3
             )
 
-        return outflow_to_river_network, evaporation
+        return (
+            outflow_to_river_network,
+            actual_evaporation_from_water_bodies_per_routing_step,
+        )
 
     @property
     def reservoir_storage(self):
