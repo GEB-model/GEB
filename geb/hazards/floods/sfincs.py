@@ -34,7 +34,11 @@ from geb_hydrodynamics.estimate_discharge_for_return_periods import (
 class SFINCS:
     def __init__(self, model, config, n_timesteps=10):
         self.model = model
-        self.config = config
+        self.config = (
+            self.model.config["hazards"]["floods"]
+            if "floods" in self.model.config["hazards"]
+            else {}
+        )
         self.n_timesteps = n_timesteps
 
         self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
@@ -59,9 +63,7 @@ class SFINCS:
         elif "region" in event:
             return "region"
         else:
-            raise ValueError(
-                "Either 'basin_id' or 'region' must be specified in the event."
-            )
+            return "all"
 
     @property
     def data_catalogs(self):
@@ -163,12 +165,11 @@ class SFINCS:
         detailed_region = detailed_region.to_crs(4326)
         return detailed_region
 
-    def setup(self, event, config_fn="sfincs.yml", force_overwrite=False):
+    def setup(self, event):
         build_parameters = {}
 
-        if "basin_id" in event:
-            event_name = self.get_event_name(event)
-        elif "region" in event:
+        event_name = self.get_event_name(event)
+        if "region" in event:
             if event["region"] is None:
                 model_bbox = self.model.data.grid.bounds
                 build_parameters["bbox"] = (
@@ -179,11 +180,6 @@ class SFINCS:
                 )
             else:
                 raise NotImplementedError
-            event_name = self.get_event_name(event)
-        else:
-            raise ValueError(
-                "Either 'basin_id' or 'region' must be specified in the event."
-            )
 
         if (
             "simulate_coastal_floods" in self.model.config["general"]
@@ -197,20 +193,19 @@ class SFINCS:
 
         build_parameters.update(
             {
-                "config_fn": str(config_fn),
                 "model_root": self.sfincs_model_root(event_name),
                 "data_catalogs": self.data_catalogs,
                 "region": detailed_region,
-                "river_method": "default",
+                "rivers": self.rivers,
                 "depth_calculation": "power_law",
-                "discharge_ds": self.discharge_spinup_ds,
-                "discharge_name": "discharge_daily",
-                "uparea_ds": self.uparea_ds,
-                "uparea_name": "data",
+                "discharge": self.discharge_spinup_ds,
+                "resolution": self.config["resolution"],
+                "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
+                "crs": self.config["crs"],
             }
         )
         if (
-            force_overwrite
+            self.config["force_overwrite"]
             or not (self.sfincs_model_root(event_name) / "sfincs.inp").exists()
         ):
             build_sfincs(**build_parameters)
@@ -328,13 +323,14 @@ class SFINCS:
         return None
 
     def run_single_event(self, event, start_time, return_period=None):
-        self.setup(event, force_overwrite=False)
+        self.setup(event)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         event_name = self.get_event_name(event)
         run_sfincs_simulation(
             simulation_root=self.sfincs_simulation_root(event_name),
             model_root=self.sfincs_model_root(event_name),
+            gpu=False,
         )
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
@@ -365,37 +361,36 @@ class SFINCS:
         scaled_event["precipitation"] = sfincs_precipitation
         return scaled_event
 
-    def get_return_period_maps(self, config_fn="sfincs.yml", force_overwrite=True):
+    def get_return_period_maps(self):
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
         model_root = self.sfincs_model_root("entire_region")
-        if force_overwrite or not (model_root / "sfincs.inp").exists():
+        if self.config["force_overwrite"] or not (model_root / "sfincs.inp").exists():
             build_sfincs(
-                config_fn=str(config_fn),
                 model_root=model_root,
                 data_catalogs=self.data_catalogs,
                 region=gpd.read_file(self.model.files["geoms"]["region"]),
-                discharge_ds=self.discharge_spinup_ds,
-                uparea_ds=self.uparea_ds,
-                uparea_name="data",
-                discharge_name="discharge_daily",
-                river_method="default",
+                rivers=self.rivers,
+                discharge=self.discharge_spinup_ds,
+                resolution=self.config["resolution"],
+                nr_subgrid_pixels=self.config["nr_subgrid_pixels"],
+                crs=self.config["crs"],
                 depth_calculation="power_law",
                 mask_flood_plains=False,  # setting this to True sometimes leads to errors
             )
         estimate_discharge_for_return_periods(
             model_root,
-            discharge_ds=self.discharge_spinup_ds,
-            uparea_ds=self.uparea_ds,
-            data_catalogs=self.data_catalogs,
-            discharge_ds_varname="discharge_daily",
+            discharge=self.discharge_spinup_ds,
+            rivers=self.rivers,
+            return_periods=[2, 5, 10, 20, 50, 100, 250, 500, 1000],
         )
         run_sfincs_for_return_periods(
             model_root=model_root,
-            return_periods=[2, 100, 1000],
-            gpu=False,
+            # return_periods=[2, 100, 1000],
+            return_periods=[2],
+            gpu=self.config["gpu"],
             export_dir=self.model.report_folder / "flood_maps",
         )
 
@@ -467,7 +462,7 @@ class SFINCS:
     def discharge_spinup_ds(self):
         ds = xr.open_dataset(
             Path("report") / "spinup" / "discharge_daily.zarr.zip", engine="zarr"
-        )
+        )["discharge_daily"]
         # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
         # ds = ds.sel(time=slice(start_time, ds.time[-1]))
 
@@ -479,6 +474,10 @@ class SFINCS:
         #     )
 
         return ds
+
+    @property
+    def rivers(self):
+        return gpd.read_file(self.model.files["geoms"]["routing/rivers"])
 
     @property
     def uparea_ds(self):

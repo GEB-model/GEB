@@ -18,6 +18,10 @@ general:
 hazards:
   floods:
     simulate: false
+    resolution: 200
+    nr_subgrid_pixels: 2
+    gpu: false
+    force_overwrite: true
   damage:
     simulate: false
   erosion:

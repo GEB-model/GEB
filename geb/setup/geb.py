@@ -34,7 +34,7 @@ from dateutil.relativedelta import relativedelta
 from contextlib import contextmanager
 from calendar import monthrange
 from numcodecs import Blosc
-from scipy.ndimage import maximum_position
+from scipy.ndimage import maximum_position, minimum_position
 import pyflwdir
 
 from hydromt.models.model_grid import GridModel
@@ -307,11 +307,16 @@ class GEBModel(GridModel):
 
         subbasins = get_subbasins(self.data_catalog, subbasin_ids)
         subbasins["is_downstream_outflow_subbasin"] = False
+        subbasins["associated_upstream_basin"] = None
         if downstream_subbasin is not None:
             subbasins.loc[
                 subbasins["COMID"] == downstream_subbasin,
                 "is_downstream_outflow_subbasin",
             ] = True
+            subbasins.loc[
+                subbasins["COMID"] == downstream_subbasin,
+                "associated_upstream_basin",
+            ] = subbasin_id
 
         self.set_geoms(subbasins, name="routing/subbasins")
 
@@ -477,7 +482,9 @@ class GEBModel(GridModel):
         rivers = rivers[~((rivers["lengthkm"] < 1) & (rivers["maxup"] == 0))]
 
         rivers = rivers.join(
-            subbasins[["COMID", "is_downstream_outflow_subbasin"]].set_index("COMID"),
+            subbasins[
+                ["COMID", "is_downstream_outflow_subbasin", "associated_upstream_basin"]
+            ].set_index("COMID"),
             on="COMID",
             how="left",
         )
@@ -494,18 +501,49 @@ class GEBModel(GridModel):
             np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1])
         ) == set(np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1]))
 
-        forcing_points = maximum_position(
+        rivers["forcing_point_x"] = -1
+        rivers["forcing_point_y"] = -1
+
+        # here we find the forcing points for the rivers. This is for each river the most
+        # upstream point, being the one with the minimum upstrea area (but in the river)
+        forcing_points_upstream = minimum_position(
             upstream_area,
             COMID_IDs_raster_data,
             rivers[~rivers["is_downstream_outflow_subbasin"]].index,
         )
-        rivers["forcing_point_x"] = -1
         rivers.loc[
             rivers[~rivers["is_downstream_outflow_subbasin"]].index, "forcing_point_y"
-        ] = [y for y, _ in forcing_points]
+        ] = [y for y, _ in forcing_points_upstream]
         rivers.loc[
             rivers[~rivers["is_downstream_outflow_subbasin"]].index, "forcing_point_x"
-        ] = [x for _, x in forcing_points]
+        ] = [x for _, x in forcing_points_upstream]
+
+        # the downstream outflow subbasin is later used to set the river width at the outflow
+        # here it is best to use the discharge at the outflow. Therefore, we find
+        # the maximum position.
+        forcing_points_outflow = maximum_position(
+            upstream_area,
+            COMID_IDs_raster_data,
+            rivers[rivers["is_downstream_outflow_subbasin"]][
+                "associated_upstream_basin"
+            ],
+        )
+
+        rivers.loc[
+            rivers[rivers["is_downstream_outflow_subbasin"]].index, "forcing_point_y"
+        ] = [y for y, _ in forcing_points_outflow]
+        rivers.loc[
+            rivers[rivers["is_downstream_outflow_subbasin"]].index, "forcing_point_x"
+        ] = [x for _, x in forcing_points_outflow]
+
+        forcing_points = xr.full_like(outflow_elevation, -1, dtype=np.int32)
+        forcing_points.raster.set_nodata(-1)
+        forcing_points_data = np.full_like(outflow_elevation, -1, dtype=np.int32)
+        forcing_points_data[rivers["forcing_point_y"], rivers["forcing_point_x"]] = (
+            rivers.index
+        )
+        forcing_points.data = forcing_points_data
+        self.set_grid(forcing_points, name="routing/forcing_points")
 
         COMID_IDs_raster = xr.full_like(outflow_elevation, -1, dtype=np.int32)
         COMID_IDs_raster.raster.set_nodata(-1)
@@ -5658,7 +5696,10 @@ class GEBModel(GridModel):
                 farmer_indices_in_region = farmers_cell_indices[irrigating_farmers_mask]
 
                 # Assign irrigation sources using np.random.choice
-                irrigation_source[farmer_indices_in_region] = np.random.choice(
+                raise NotImplementedError(
+                    "Below must be corrected, when you encounter this, please fix it (or ask for help)"
+                )
+                adaptations[farmer_indices_in_region] = np.random.choice(
                     [0, 1],
                     size=len(farmer_indices_in_region),
                     p=probabilities,

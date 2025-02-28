@@ -238,7 +238,9 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             run_name = "default"
 
         current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(self.config["general"]["end_time"])
+        end_time = self.create_datetime(
+            self.config["general"]["end_time"]
+        ) + datetime.timedelta(days=1)
 
         self._initialize(
             run_name=run_name,
@@ -311,7 +313,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
-        self.sfincs.get_return_period_maps(force_overwrite=True)
+        self.sfincs.get_return_period_maps()
 
     @property
     def current_day_of_year(self) -> int:
