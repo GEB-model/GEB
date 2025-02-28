@@ -20,7 +20,7 @@ dependencies = [
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
     "honeybees>=1.1.0",
-    "hydromt==0.10.0",
+    "hydromt==0.10.1",
     "hydromt-sfincs>=1.1.0",
     "isimip-client>=1.0.1",
     "matplotlib>=3.9.2",

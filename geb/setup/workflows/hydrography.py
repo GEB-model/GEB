@@ -3,6 +3,7 @@ import numpy as np
 import xarray as xr
 import geopandas as gpd
 from rasterio.features import rasterize
+from shapely.geometry import LineString
 
 
 def get_upstream_subbasin_ids(river_graph, subbasin_id):
@@ -74,6 +75,10 @@ def get_rivers(data_catalog, subbasin_ids):
         })""",
     )
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
+    # reverse the river lines to have the downstream direction
+    rivers["geometry"] = rivers["geometry"].apply(
+        lambda x: LineString(list(x.coords)[::-1])
+    )
     return rivers
 
 
