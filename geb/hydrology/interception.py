@@ -53,7 +53,6 @@ class Interception(object):
     SnowMelt              total snow melt from all layers                                                   m
     interception_evaporation         simulated evaporation from water intercepted by vegetation                        m
     potential_transpiration      Potential transpiration (after removing of evaporation)                           m
-    actual_evapotranspiration              simulated evapotranspiration from soil, flooded area and vegetation               m
     snowEvap              total evaporation from snow for a snow layers                                     m
     ====================  ================================================================================  =========
     """
@@ -157,11 +156,9 @@ class Interception(object):
         water_area = np.where(self.HRU.var.land_use_type == OPEN_WATER)
         bio_area = np.where(self.HRU.var.land_use_type < SEALED)
 
-        self.HRU.var.interception_evaporation = self.HRU.full_compressed(
-            np.nan, dtype=np.float32
-        )
+        interception_evaporation = self.HRU.full_compressed(0, dtype=np.float32)
         # interception_evaporation evaporation from intercepted water (based on potential_transpiration)
-        self.HRU.var.interception_evaporation[bio_area] = np.minimum(
+        interception_evaporation[bio_area] = np.minimum(
             self.HRU.var.interceptStor[bio_area],
             potential_transpiration[bio_area]
             * np.nan_to_num(
@@ -171,7 +168,7 @@ class Interception(object):
             ** (2.0 / 3.0),
         )
 
-        self.HRU.var.interception_evaporation[sealed_area] = np.maximum(
+        interception_evaporation[sealed_area] = np.maximum(
             np.minimum(
                 self.HRU.var.interceptStor[sealed_area],
                 self.HRU.var.EWRef[sealed_area],
@@ -179,22 +176,14 @@ class Interception(object):
             self.HRU.full_compressed(0, dtype=np.float32)[sealed_area],
         )
 
-        self.HRU.var.interception_evaporation[water_area] = (
-            0  # never interception for water
-        )
+        interception_evaporation[water_area] = 0  # never interception for water
 
         # update interception storage and potential_transpiration
         self.HRU.var.interceptStor = (
-            self.HRU.var.interceptStor - self.HRU.var.interception_evaporation
+            self.HRU.var.interceptStor - interception_evaporation
         )
         potential_transpiration = np.maximum(
-            0, potential_transpiration - self.HRU.var.interception_evaporation
-        )
-
-        # update actual evaporation (after interception_evaporation)
-        # interception_evaporation is the first flux in ET, soil evapo and transpiration are added later
-        self.HRU.var.actual_evapotranspiration = (
-            self.HRU.var.interception_evaporation + self.HRU.var.snowEvap
+            0, potential_transpiration - interception_evaporation
         )
 
         if __debug__:
@@ -204,7 +193,7 @@ class Interception(object):
                 influxes=[self.HRU.var.Rain, self.HRU.var.SnowMelt],  # In
                 outfluxes=[
                     self.HRU.var.natural_available_water_infiltration,
-                    self.HRU.var.interception_evaporation,
+                    interception_evaporation,
                 ],  # Out
                 prestorages=[interceptStor_pre],  # prev storage
                 poststorages=[self.HRU.var.interceptStor],
@@ -212,4 +201,4 @@ class Interception(object):
             )
 
         assert not np.isnan(potential_transpiration[bio_area]).any()
-        return potential_transpiration
+        return potential_transpiration, interception_evaporation

@@ -39,7 +39,6 @@ class SealedWater(object):
     EWRef                 potential evaporation rate from water surface                                     m
     capillar              Simulated flow from groundwater to the third CWATM soil layer                     m
     availWaterInfiltrati  quantity of water reaching the soil after interception, more snowmelt             m
-    actual_evapotranspiration              simulated evapotranspiration from soil, flooded area and vegetation               m
     direct_runoff          Simulated surface runoff                                                          m
     open_water_evaporation         Simulated evaporation from open areas                                             m
     actual_bare_soil_evaporation       Simulated evaporation from the first soil layer                                   m
@@ -93,12 +92,6 @@ class SealedWater(object):
 
         # make sure that the runoff is still positive
         assert (direct_runoff[sealed_water_area] >= 0).all()
-
-        # open water evaporation is directly substracted from the river, lakes, reservoir
-        self.HRU.var.actual_evapotranspiration[sealed_water_area] = (
-            self.HRU.var.actual_evapotranspiration[sealed_water_area]
-            + open_water_evaporation[sealed_water_area]
-        )
 
         if __debug__:
             balance_check(

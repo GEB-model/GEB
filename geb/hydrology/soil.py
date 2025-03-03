@@ -1460,10 +1460,6 @@ class Soil(object):
         assert preferential_flow.dtype == np.float32
         assert runoff.dtype == np.float32
 
-        self.HRU.var.actual_evapotranspiration += actual_bare_soil_evaporation
-        self.HRU.var.actual_evapotranspiration += actual_total_transpiration
-        self.HRU.var.actual_evapotranspiration += open_water_evaporation
-
         if __debug__:
             assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
             assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
@@ -1502,14 +1498,14 @@ class Soil(object):
                     self.HRU.var.natural_available_water_infiltration[bioarea],
                     capillary_rise_from_groundwater[bioarea],
                     self.HRU.var.actual_irrigation_consumption[bioarea],
-                    self.HRU.var.snowEvap[bioarea],
-                    self.HRU.var.interception_evaporation[bioarea],
                 ],
                 outfluxes=[
                     runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    self.HRU.var.actual_evapotranspiration[bioarea],
+                    actual_total_transpiration[bioarea],
+                    actual_bare_soil_evaporation[bioarea],
+                    open_water_evaporation[bioarea],
                 ],
                 prestorages=[
                     w_pre[:, bioarea].sum(axis=0),

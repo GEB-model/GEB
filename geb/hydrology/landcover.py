@@ -366,8 +366,11 @@ class LandCover(object):
 
         timer.new_split("PET")
 
-        potential_transpiration_minus_interception_evaporation = (
-            self.model.interception.step(potential_transpiration)
+        (
+            potential_transpiration_minus_interception_evaporation,
+            interception_evaporation,
+        ) = self.model.interception.step(
+            potential_transpiration
         )  # first thing that evaporates is the intercepted water.
 
         timer.new_split("Interception")
@@ -410,10 +413,19 @@ class LandCover(object):
 
         timer.new_split("Sealed")
 
+        actual_evapotranspiration = (
+            actual_bare_soil_evaporation
+            + actual_total_transpiration
+            + open_water_evaporation
+            + interception_evaporation
+            + self.HRU.var.snowEvap  # ice should be included in the future
+            # + irrigation_loss_to_evaporation_m
+        )
+
         self.HRU.var.actual_evapotranspiration_crop_life[
             self.HRU.var.crop_map != -1
         ] += np.minimum(
-            self.HRU.var.actual_evapotranspiration[self.HRU.var.crop_map != -1],
+            actual_evapotranspiration[self.HRU.var.crop_map != -1],
             potential_evapotranspiration[self.HRU.var.crop_map != -1],
         )
         self.HRU.var.potential_evapotranspiration_crop_life[
@@ -427,20 +439,6 @@ class LandCover(object):
         assert not np.isnan(channel_abstraction_m).any()
         assert not np.isnan(open_water_evaporation).any()
 
-        total_evapotranspiration = (
-            self.HRU.var.actual_evapotranspiration
-            + actual_bare_soil_evaporation
-            + open_water_evaporation
-            + self.HRU.var.interception_evaporation
-            + self.HRU.var.snowEvap  # ice should be included in the future
-            + irrigation_loss_to_evaporation_m
-        )
-
-        self.model.data.grid.total_evapotranspiration_m3 = self.model.data.to_grid(
-            HRU_data=self.model.data.HRU.MtoM3(total_evapotranspiration),
-            fn="sum",
-        )
-
         if __debug__:
             balance_check(
                 name="landcover_1",
@@ -448,7 +446,7 @@ class LandCover(object):
                 influxes=[self.HRU.var.Rain, self.HRU.var.SnowMelt],
                 outfluxes=[
                     self.HRU.var.natural_available_water_infiltration,
-                    self.HRU.var.interception_evaporation,
+                    interception_evaporation,
                 ],
                 prestorages=[interceptStor_pre],
                 poststorages=[self.HRU.var.interceptStor],
@@ -471,9 +469,9 @@ class LandCover(object):
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
                 ],
-                prestorages=[w_pre.sum(axis=0), topwater_pre],
+                prestorages=[np.nansum(w_pre, axis=0), topwater_pre],
                 poststorages=[
-                    self.HRU.var.w.sum(axis=0),
+                    np.nansum(self.HRU.var.w, axis=0),
                     self.HRU.var.topwater,
                 ],
                 tollerance=1e-6,
@@ -483,13 +481,13 @@ class LandCover(object):
                 np.sum(self.HRU.var.SnowCoverS, axis=0)
                 / self.model.snowfrost.var.numberSnowLayers
                 + self.HRU.var.interceptStor
-                + self.HRU.var.w.sum(axis=0)
+                + np.nansum(self.HRU.var.w, axis=0)
                 + self.HRU.var.topwater
             )
             totalstorage_landcover_pre = (
                 np.sum(self.HRU.var.prevSnowCover, axis=0)
                 / self.model.snowfrost.var.numberSnowLayers
-                + w_pre.sum(axis=0)
+                + np.nansum(w_pre, axis=0)
                 + topwater_pre
                 + interceptStor_pre
             )
@@ -509,7 +507,7 @@ class LandCover(object):
                     actual_total_transpiration,
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
-                    self.HRU.var.interception_evaporation,
+                    interception_evaporation,
                     self.HRU.var.snowEvap,
                 ],
                 prestorages=[totalstorage_landcover_pre],
@@ -522,13 +520,14 @@ class LandCover(object):
                 how="cellwise",
                 influxes=[
                     self.HRU.var.precipitation_m_day,
+                    self.HRU.var.actual_irrigation_consumption,
                     capillar,
                 ],
                 outfluxes=[
-                    groundwater_recharge,
                     direct_runoff,
                     interflow,
-                    total_evapotranspiration,
+                    groundwater_recharge,
+                    actual_evapotranspiration,
                 ],
                 prestorages=[totalstorage_landcover_pre],
                 poststorages=[totalstorage_landcover],
