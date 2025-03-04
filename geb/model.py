@@ -284,7 +284,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         }
 
         self.var = self.store.create_bucket("model.var")
-        self.var.regions = gpd.read_file(self.files["geoms"]["areamaps/regions"])
+        self.var.regions = gpd.read_parquet(self.files["geoms"]["areamaps/regions"])
 
         self._initialize(
             run_name=run_name,

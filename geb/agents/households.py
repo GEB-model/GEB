@@ -54,7 +54,7 @@ class Households(AgentBaseClass):
         self.var = self.model.store.create_bucket("model.agents.households.var")
 
         # Load buildings
-        self.var.buildings = gpd.read_file(
+        self.var.buildings = gpd.read_parquet(
             self.model.files["geoms"]["assets/buildings"]
         )
         self.var.buildings["object_type"] = "building_structure"
@@ -64,12 +64,12 @@ class Households(AgentBaseClass):
         self.var.buildings_centroid["object_type"] = "building_content"
 
         # Load roads
-        self.var.roads = gpd.read_file(
+        self.var.roads = gpd.read_parquet(
             self.model.files["geoms"]["assets/roads"]
         ).rename(columns={"highway": "object_type"})
 
         # Load rail
-        self.var.rail = gpd.read_file(self.model.files["geoms"]["assets/rails"])
+        self.var.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
         self.var.rail["object_type"] = "rail"
 
         # Load maximum damages

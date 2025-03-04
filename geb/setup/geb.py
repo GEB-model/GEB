@@ -27,6 +27,7 @@ import geopandas as gpd
 import pyproj
 from affine import Affine
 from pyproj import CRS
+from rasterio.env import defenv
 import xarray as xr
 from dask.diagnostics import ProgressBar
 import xclim.indices as xci
@@ -36,6 +37,7 @@ from calendar import monthrange
 from numcodecs import Blosc
 from scipy.ndimage import value_indices
 import pyflwdir
+
 
 from hydromt.models.model_grid import GridModel
 from hydromt.data_catalog import DataCatalog
@@ -90,6 +92,14 @@ from geb.agents.crop_farmers import (
     IRRIGATION_EFFICIENCY_ADAPTATION,
     FIELD_EXPANSION_ADAPTATION,
 )
+
+# Set environment options for robustness
+GDAL_HTTP_ENV_OPTS = {
+    "GDAL_HTTP_MAX_RETRY": "10",  # Number of retry attempts
+    "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
+    "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
+}
+defenv(**GDAL_HTTP_ENV_OPTS)
 
 XY_CHUNKSIZE = 350
 
@@ -3037,6 +3047,11 @@ class GEBModel(GridModel):
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )
 
+        self.forcing["climate/tasmin"]["y"].attrs["standard_name"] = "latitude"
+        self.forcing["climate/tasmin"]["x"].attrs["standard_name"] = "longitude"
+        self.forcing["climate/tasmin"]["y"].attrs["units"] = "degrees_north"
+        self.forcing["climate/tasmin"]["x"].attrs["units"] = "degrees_east"
+
         pet = xci.potential_evapotranspiration(
             tasmin=self.forcing["climate/tasmin"],
             tasmax=self.forcing["climate/tasmax"],
@@ -3232,7 +3247,7 @@ class GEBModel(GridModel):
             self.geoms["areamaps/regions"],
             col_name="region_id",
             all_touched=True,
-        )
+        ).compute()
         self.set_region_subgrid(region_raster, name="areamaps/region_subgrid")
 
         region_subgrid_cell_area = xr.full_like(region_subgrid, np.nan)
@@ -3240,6 +3255,7 @@ class GEBModel(GridModel):
         region_subgrid_cell_area.data = calculate_cell_area(
             region_subgrid_cell_area.raster.transform, region_subgrid_cell_area.shape
         )
+        region_subgrid_cell_area = region_subgrid_cell_area.compute()
 
         # set the cell area for the region subgrid
         self.set_region_subgrid(
@@ -3263,7 +3279,9 @@ class GEBModel(GridModel):
         rivers = MERIT > river_threshold
         rivers = rivers.astype(np.int32)
         rivers.raster.set_nodata(-1)
-        rivers = rivers.raster.reproject_like(reprojected_land_use, method="nearest")
+        rivers = rivers.raster.reproject_like(
+            reprojected_land_use, method="nearest"
+        ).compute()
         self.set_region_subgrid(rivers, name="landcover/rivers")
 
         hydro_land_use = reprojected_land_use.raster.reclassify(
@@ -3291,6 +3309,7 @@ class GEBModel(GridModel):
         )  # set rivers to 5 (permanent water bodies)
         hydro_land_use.raster.set_nodata(-1)
 
+        hydro_land_use = hydro_land_use.compute()
         self.set_region_subgrid(
             hydro_land_use, name="landsurface/full_region_land_use_classes"
         )
@@ -3301,16 +3320,15 @@ class GEBModel(GridModel):
         cultivated_land.raster.set_crs(self.subgrid.raster.crs)
         cultivated_land.raster.set_nodata(-1)
 
+        cultivated_land = cultivated_land.compute()
         self.set_region_subgrid(
             cultivated_land, name="landsurface/full_region_cultivated_land"
         )
 
         hydro_land_use_region = hydro_land_use.isel(region_subgrid_slice)
-
         self.set_subgrid(hydro_land_use_region, name="landsurface/land_use_classes")
 
         cultivated_land_region = cultivated_land.isel(region_subgrid_slice)
-
         self.set_subgrid(cultivated_land_region, name="landsurface/cultivated_land")
 
     def setup_economic_data(
@@ -6565,12 +6583,10 @@ class GEBModel(GridModel):
                             "y": min(forcing.y.size, y_chunksize),
                             "x": min(forcing.x.size, x_chunksize),
                         }
-                        # forcing = forcing.chunk(chunksizes)
                     else:
                         chunksizes = {"time": min(forcing.time.size, time_chunksize)}
-                        # forcing = forcing.chunk(chunksizes)
 
-                    forcing.to_zarr(
+                    forcing.chunk(chunksizes).to_zarr(
                         tmp_file.name,
                         mode="w",
                         encoding={
@@ -6578,7 +6594,7 @@ class GEBModel(GridModel):
                                 "compressor": Blosc(
                                     cname="zstd",
                                     clevel=9,
-                                    shuffle=Blosc.BYTE_SHUFFLE
+                                    shuffle=Blosc.SHUFFLE
                                     if byteshuffle
                                     else Blosc.NOSHUFFLE,
                                 ),
@@ -6605,7 +6621,7 @@ class GEBModel(GridModel):
                             "compressor": Blosc(
                                 cname="zstd",
                                 clevel=9,
-                                shuffle=Blosc.BYTE_SHUFFLE
+                                shuffle=Blosc.SHUFFLE
                                 if byteshuffle
                                 else Blosc.NOSHUFFLE,
                             )
@@ -6620,7 +6636,7 @@ class GEBModel(GridModel):
                             "compressor": Blosc(
                                 cname="zstd",
                                 clevel=9,
-                                shuffle=Blosc.BYTE_SHUFFLE
+                                shuffle=Blosc.SHUFFLE
                                 if byteshuffle
                                 else Blosc.NOSHUFFLE,
                             )
@@ -6777,7 +6793,7 @@ class GEBModel(GridModel):
     def read_geoms(self):
         self.read_files()
         for name, fn in self.files["geoms"].items():
-            geom = gpd.read_file(Path(self.root, fn))
+            geom = gpd.read_parquet(Path(self.root, fn))
             self.set_geoms(geom, name=name, update=False)
 
     def read_binary(self):

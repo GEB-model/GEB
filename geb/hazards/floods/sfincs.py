@@ -72,7 +72,7 @@ class SFINCS:
         ]
 
     def get_utm_zone(self, region_file):
-        region = gpd.read_file(region_file)
+        region = gpd.read_parquet(region_file)
         # Calculate the central longitude of the dataset
         centroid = region.geometry.centroid
         central_lon = centroid.x.mean()  # Mean longitude of the dataset
