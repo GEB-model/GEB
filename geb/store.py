@@ -7,6 +7,8 @@ import geopandas as gpd
 
 import numpy as np
 
+from .HRUs import load_geom
+
 
 class DynamicArray:
     __slots__ = ["_data", "_n", "_extra_dims_names"]
@@ -382,7 +384,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    gpd.read_parquet(filename),
+                    load_geom(filename),
                 )
             elif filename.suffix == ".parquet":
                 setattr(

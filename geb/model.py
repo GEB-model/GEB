@@ -1,7 +1,6 @@
 import datetime
 import shutil
 from pathlib import Path
-import geopandas as gpd
 from typing import Union
 from time import time
 import copy
@@ -18,6 +17,7 @@ from geb.artists import Artists
 from geb.HRUs import Data
 from .hydrology import Hydrology
 from geb.hazards.driver import HazardDriver
+from .HRUs import load_geom
 
 
 class ABM(ABM_Model):
@@ -284,7 +284,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         }
 
         self.var = self.store.create_bucket("model.var")
-        self.var.regions = gpd.read_parquet(self.files["geoms"]["areamaps/regions"])
+        self.var.regions = load_geom(self.files["geoms"]["areamaps/regions"])
 
         self._initialize(
             run_name=run_name,

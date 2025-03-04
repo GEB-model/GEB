@@ -2,6 +2,7 @@
 from typing import Union
 from numba import njit
 import rasterio
+import geopandas as gpd
 import warnings
 import math
 from affine import Affine
@@ -68,6 +69,10 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
             return data
     else:
         raise ValueError("File format not supported.")
+
+
+def load_geom(filepath):
+    return gpd.read_parquet(filepath)
 
 
 @njit(cache=True)

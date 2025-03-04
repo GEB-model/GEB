@@ -6,9 +6,10 @@ import zarr
 import json
 import numpy as np
 import pandas as pd
-import geopandas as gpd
 import matplotlib.pyplot as plt
 from pyproj import CRS
+
+from ...HRUs import load_geom
 
 try:
     from geb_hydrodynamics.build_model import build_sfincs
@@ -72,7 +73,7 @@ class SFINCS:
         ]
 
     def get_utm_zone(self, region_file):
-        region = gpd.read_parquet(region_file)
+        region = load_geom(region_file)
         # Calculate the central longitude of the dataset
         centroid = region.geometry.centroid
         central_lon = centroid.x.mean()  # Mean longitude of the dataset
@@ -376,7 +377,7 @@ class SFINCS:
 
     @property
     def rivers(self):
-        return gpd.read_parquet(self.model.files["geoms"]["routing/rivers"])
+        return load_geom(self.model.files["geoms"]["routing/rivers"])
 
     @property
     def crs(self):
@@ -391,7 +392,7 @@ class SFINCS:
         return {
             "model_root": model_root,
             "data_catalogs": self.data_catalogs,
-            "region": gpd.read_file(self.model.files["geoms"]["routing/subbasins"]),
+            "region": load_geom(self.model.files["geoms"]["routing/subbasins"]),
             "DEM_config": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
