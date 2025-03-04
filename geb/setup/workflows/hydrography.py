@@ -13,18 +13,22 @@ def get_upstream_subbasin_ids(river_graph, subbasin_ids):
     return ancenstors
 
 
-def get_downstream_subbasins(river_graph, subbasin_ids):
-    downstream_nodes = []
-    for subbasin_id in subbasin_ids:
-        downstream_node = list(river_graph.neighbors(subbasin_id))
-        if len(downstream_node) == 0:
+def get_downstream_subbasins(river_graph, sink_subbasin_ids):
+    downstream_subbasins = {}
+    for subbasin_id in sink_subbasin_ids:
+        downstream_subbasin = list(river_graph.neighbors(subbasin_id))
+        if len(downstream_subbasin) == 0:
             pass
         else:
-            assert len(downstream_node) == 1, (
+            assert len(downstream_subbasin) == 1, (
                 "A subbasin has more than one downstream subbasin"
             )
-            downstream_nodes.append(downstream_node[0])
-    return downstream_nodes
+            downstream_subbasin = downstream_subbasin[0]
+            if downstream_subbasin not in downstream_subbasins:
+                downstream_subbasins[downstream_subbasin] = []
+            downstream_subbasins[downstream_subbasin].append(subbasin_id)
+
+    return downstream_subbasins
 
 
 def get_river_graph(data_catalog):  # , reverse=False):
@@ -69,6 +73,26 @@ def get_subbasin_id_from_coordinate(data_catalog, lon, lat):
     assert len(COMID) == 1, "The point is not in a single basin"
     # get the COMID value from the GeoDataFrame
     return COMID["COMID"].values[0]
+
+
+def get_sink_subbasin_id_for_geom(data_catalog, geom, river_graph):
+    basins = data_catalog.get_geodataframe("MERIT_Basins_cat", geom=geom)
+    COMID = basins["COMID"].tolist()
+
+    # create a subgraph containing only the selected subbasins
+    region_river_graph = river_graph.subgraph(COMID)
+
+    # get all subbasins with no downstream subbasin (out degree is 0)
+    # in the subgraph. These are the sink subbasins
+    sink_nodes = [
+        COMID_ID
+        for COMID_ID, out_degree in region_river_graph.out_degree(
+            region_river_graph.nodes
+        )
+        if out_degree == 0
+    ]
+
+    return sink_nodes
 
 
 def get_subbasins_geometry(data_catalog, subbasin_ids):

@@ -3,6 +3,7 @@ from collections import deque
 from datetime import datetime
 import xarray as xr
 import zarr
+import json
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -375,7 +376,7 @@ class SFINCS:
 
     @property
     def rivers(self):
-        return gpd.read_file(self.model.files["geoms"]["routing/rivers"])
+        return gpd.read_parquet(self.model.files["geoms"]["routing/rivers"])
 
     @property
     def crs(self):
@@ -385,10 +386,13 @@ class SFINCS:
         return crs
 
     def get_build_parameters(self, model_root):
+        with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
+            DEM_config = json.load(f)
         return {
             "model_root": model_root,
             "data_catalogs": self.data_catalogs,
             "region": gpd.read_file(self.model.files["geoms"]["routing/subbasins"]),
+            "DEM_config": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
             "resolution": self.config["resolution"],
