@@ -244,7 +244,7 @@ class HillSlopeErosion:
         self.HRU.var.cover = self.HRU.full_compressed(0, dtype=np.float32)
 
         self.HRU.var.slope = self.hydrology.data.to_HRU(
-            data=self.model.data.grid.load(
+            data=self.hydrology.data.grid.load(
                 self.model.files["grid"]["landsurface/topo/slope"]
             ),
             fn=None,

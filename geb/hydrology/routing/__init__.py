@@ -102,7 +102,7 @@ class Routing(object):
             _,
             self.grid.var.dirDown,
             self.grid.var.lendirDown,
-        ) = define_river_network(ldd, self.model.data.grid)
+        ) = define_river_network(ldd, self.hydrology.data.grid)
 
         self.grid.var.upstream_area_n_cells = upstreamArea(
             self.grid.var.dirDown,
@@ -188,7 +188,7 @@ class Routing(object):
 
         if __debug__:
             pre_channel_storage_m3 = self.grid.var.river_storage_m3.copy()
-            pre_storage = self.model.lakes_reservoirs.var.storage.copy()
+            pre_storage = self.hydrology.lakes_reservoirs.var.storage.copy()
 
         # riverbed infiltration (m3):
         # - current implementation based on Inge's principle (later, will be based on groundater head (MODFLOW) and can be negative)
@@ -272,7 +272,7 @@ class Routing(object):
             # this variable is named outflow_to_river_network in the lakes and reservoirs module
             # because it is outflow from the waterbodies to the river network
             inflow_to_river_network, waterbody_evaporation_m3_Dt = (
-                self.model.lakes_reservoirs.routing(
+                self.hydrology.lakes_reservoirs.routing(
                     step=subrouting_step,
                     n_routing_steps=self.var.n_routing_steps,
                     routing_step_length_seconds=self.var.routing_step_length_seconds,
@@ -377,13 +377,13 @@ class Routing(object):
                 prestorages=[pre_channel_storage_m3, pre_storage],
                 poststorages=[
                     self.grid.var.river_storage_m3,
-                    self.model.lakes_reservoirs.var.storage,
+                    self.hydrology.lakes_reservoirs.var.storage,
                 ],
                 name="routing_4",
                 tollerance=100,
             )
 
-            self.model.var.routing_loss = (
+            self.hydrology.var.routing_loss = (
                 evaporation_in_rivers_m3.sum()
                 + waterbody_evaporation_m3.sum()
                 + discharge_volume_at_outlets_m3.sum()

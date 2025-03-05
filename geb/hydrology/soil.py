@@ -1101,7 +1101,7 @@ class Soil(object):
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        natural_crop_groups = self.model.data.grid.load(
+        natural_crop_groups = self.hydrology.data.grid.load(
             self.model.files["grid"]["soil/cropgrp"]
         )
         self.HRU.var.natural_crop_groups = self.hydrology.data.to_HRU(
@@ -1221,10 +1221,12 @@ class Soil(object):
 
             from honeybees.library.raster import coord_to_pixel
 
-            px, py = coord_to_pixel(np.array([lon, lat]), gt=self.model.data.grid.gt)
+            px, py = coord_to_pixel(
+                np.array([lon, lat]), gt=self.model.hydrology.data.grid.gt
+            )
 
-            cell_ids = np.arange(self.model.data.grid.compressed_size)
-            cell_ids_map = self.model.data.grid.decompress(cell_ids, fillvalue=-1)
+            cell_ids = np.arange(self.hydrology.data.grid.compressed_size)
+            cell_ids_map = self.hydrology.data.grid.decompress(cell_ids, fillvalue=-1)
             cell_id = cell_ids_map[py, px]
 
             already_has_plantFATE_cell = False

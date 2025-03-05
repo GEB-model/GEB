@@ -146,14 +146,14 @@ class Artists(honeybeesArtists):
 
         add_vars(
             "data.grid.var",
-            compressed_size=self.model.data.grid.compressed_size,
+            compressed_size=self.hydrology.data.grid.compressed_size,
             dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
         )
         add_vars(
             "data.HRU.var",
-            compressed_size=self.model.data.HRU.compressed_size,
+            compressed_size=self.hydrology.data.HRU.compressed_size,
             dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
@@ -203,7 +203,7 @@ class Artists(honeybeesArtists):
             else:
                 array = attrgetter(self.background_variable)(self.model)
 
-            mask = self.model.data.HRU.mask
+            mask = self.hydrology.data.HRU.mask
         else:
             compressed_array, array = self.model.reporter.hydrology_reporter.get_array(
                 self.background_variable, decompress=True
@@ -238,9 +238,9 @@ class Artists(honeybeesArtists):
 
         if self.background_variable.startswith("agents.crop_farmers"):
             compressed_array = array.copy()
-            array = np.take(compressed_array, self.model.data.HRU.var.land_owners)
-            array[self.model.data.HRU.var.land_owners == -1] = options["nanvalue"]
-            array = self.model.data.HRU.decompress(array)
+            array = np.take(compressed_array, self.hydrology.data.HRU.var.land_owners)
+            array[self.hydrology.data.HRU.var.land_owners == -1] = options["nanvalue"]
+            array = self.hydrology.data.HRU.decompress(array)
 
         if options["type"] == "bool":
             minvalue, maxvalue = 0, 1

@@ -8,7 +8,6 @@ import numpy as np
 from dateutil.relativedelta import relativedelta
 
 from honeybees.library.helpers import timeprint
-from honeybees.area import Area
 from honeybees.model import Model as ABM_Model
 
 from geb.store import Store
@@ -21,12 +20,7 @@ from .HRUs import load_geom
 
 
 class ABM(ABM_Model):
-    def __init__(
-        self,
-        current_time,
-        timestep_length,
-        n_timesteps,
-    ) -> None:
+    def __init__(self, current_time, n_timesteps) -> None:
         """Initializes the agent-based model.
 
         Args:
@@ -38,9 +32,9 @@ class ABM(ABM_Model):
         ABM_Model.__init__(
             self,
             current_time,
-            timestep_length,
-            args=None,
+            self.timestep_length,
             n_timesteps=n_timesteps,
+            args=None,
         )
 
         self.agents = Agents(self)
@@ -140,7 +134,7 @@ class GEBModel(HazardDriver, ABM):
             HazardDriver.step(self, 1)
             ABM.step(self)
             if self.simulate_hydrology:
-                Hydrology.step(self)
+                self.hydrology.step()
 
             t1 = time()
             print(
@@ -183,24 +177,21 @@ class GEBModel(HazardDriver, ABM):
             self.config["general"]["spinup_time"], datetime.time(0)
         )
 
+        self.timestep_length = timestep_length
+
         if self.simulate_hydrology:
             self.hydrology = Hydrology(self)
 
         HazardDriver.__init__(self)
 
-        ABM.__init__(
-            self,
-            current_time,
-            timestep_length,
-            n_timesteps,
-        )
+        ABM.__init__(self, current_time, n_timesteps)
 
         if load_data_from_store:
             self.store.load()
 
         if self.simulate_hydrology:
-            self.groundwater.initalize_modflow_model()
-            self.soil.set_global_variables()
+            self.hydrology.groundwater.initalize_modflow_model()
+            self.hydrology.soil.set_global_variables()
 
         if report:
             self.reporter = Reporter(self)
@@ -285,7 +276,7 @@ class GEBModel(HazardDriver, ABM):
         # export discharge as zarr file for the hydrological model
         self.config["report_hydrology"] = {
             "discharge_daily": {
-                "varname": "data.grid.var.discharge",
+                "varname": "hydrology.data.grid.var.discharge",
                 "function": None,
                 "format": "zarr",
                 "single_file": True,

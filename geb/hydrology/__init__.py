@@ -49,8 +49,12 @@ class Hydrology:
         self.model = model
         self.data = Data(self.model, self)
 
-        self.DynamicResAndLakes = False
-        self.useSmallLakes = False
+        self.HRU = self.data.HRU
+        self.grid = self.data.grid
+
+        self.var = self.model.store.create_bucket("model.hydrology.var")
+
+        self.dynamic_water_bodies = False
         self.crop_factor_calibration_factor = 1
 
         self.potential_evapotranspiration = PotentialEvapotranspiration(
@@ -120,7 +124,7 @@ class Hydrology:
         self.hillslope_erosion.step()
         timer.new_split("Hill slope erosion")
 
-        if self.timing:
+        if self.model.timing:
             print(timer)
 
         if __debug__:
@@ -173,7 +177,7 @@ class Hydrology:
 
         # in the first timestep of the spinup, we don't have the storage of the
         # previous timestep, so we can't check the balance
-        if not self.current_timestep == 0 and self.in_spinup:
+        if not self.model.current_timestep == 0 and self.model.in_spinup:
             influx = (self.HRU.var.precipitation_m_day * self.HRU.var.cell_area).sum()
             outflux = (
                 self.HRU.var.actual_evapotranspiration * self.HRU.var.cell_area

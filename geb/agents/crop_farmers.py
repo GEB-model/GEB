@@ -192,7 +192,8 @@ class CropFarmers(AgentBaseClass):
             if "farmers" in self.model.config["agent_settings"]
             else {}
         )
-        self.HRU = model.data.HRU
+        self.HRU = model.hydrology.data.HRU
+        self.grid = model.hydrology.data.grid
         self.redundancy = reduncancy
         self.decision_module = DecisionModule(self)
 
@@ -292,11 +293,11 @@ class CropFarmers(AgentBaseClass):
         region_mask = load_grid(
             self.model.files["region_subgrid"]["areamaps/region_mask"]
         )
-        self.HRU_regions_map = np.zeros_like(self.model.data.HRU.mask, dtype=np.int8)
-        self.HRU_regions_map[~self.model.data.HRU.mask] = self.var.subdistrict_map[
+        self.HRU_regions_map = np.zeros_like(self.HRU.mask, dtype=np.int8)
+        self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
             region_mask == 0
         ]
-        self.HRU_regions_map = self.model.data.HRU.compress(self.HRU_regions_map)
+        self.HRU_regions_map = self.HRU.compress(self.HRU_regions_map)
 
         self.crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"
@@ -334,7 +335,7 @@ class CropFarmers(AgentBaseClass):
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
 
-        farms = self.model.data.farms
+        farms = self.model.hydrology.data.farms
 
         # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
         self.n = np.unique(farms[farms != -1]).size
@@ -729,7 +730,7 @@ class CropFarmers(AgentBaseClass):
         why_map = load_grid(self.model.files["grid"]["groundwater/why_map"])
 
         self.var.why_class[:] = sample_from_map(
-            why_map, self.var.locations.data, self.model.data.grid.gt
+            why_map, self.var.locations.data, self.grid.gt
         )
 
         ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
@@ -743,9 +744,9 @@ class CropFarmers(AgentBaseClass):
         )
 
         for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
-            GEV_grid = getattr(self.model.data.grid, varname)
+            GEV_grid = getattr(self.grid, varname)
             self.var.GEV_parameters[:, i] = sample_from_map(
-                GEV_grid, self.var.locations.data, self.model.data.grid.gt
+                GEV_grid, self.var.locations.data, self.grid.gt
             )
 
         self.var.risk_perc_min = DynamicArray(
@@ -874,15 +875,16 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
+        bounds = self.grid.bounds
         self.var.social_network[:] = find_neighbors(
             self.var.locations.data,
             radius=radius,
             n_neighbor=n_neighbor,
             bits=nbits,
-            minx=self.model.bounds[0],
-            maxx=self.model.bounds[1],
-            miny=self.model.bounds[2],
-            maxy=self.model.bounds[3],
+            minx=bounds[0],
+            miny=bounds[1],
+            maxx=bounds[2],
+            maxy=bounds[3],
         )
 
     def adjust_cultivation_costs(self):
@@ -967,8 +969,8 @@ class CropFarmers(AgentBaseClass):
 
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
-            self.model.data.HRU.var.ETRef - self.model.data.HRU.pr
-        ) * self.model.data.HRU.var.cell_area
+            self.HRU.var.ETRef - self.HRU.pr
+        ) * self.HRU.var.cell_area
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 
         water_deficit_day_m3_per_farmer = np.bincount(
@@ -1075,8 +1077,8 @@ class CropFarmers(AgentBaseClass):
             surface_irrigated=self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0,
             well_irrigated=self.var.adaptations[:, WELL_ADAPTATION] > 0,
             cell_area=cell_area,
-            HRU_to_grid=self.model.data.HRU.var.HRU_to_grid,
-            nearest_river_grid_cell=self.model.data.HRU.var.nearest_river_grid_cell,
+            HRU_to_grid=self.HRU.var.HRU_to_grid,
+            nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
             crop_map=self.HRU.var.crop_map,
             field_is_paddy_irrigated=self.field_is_paddy_irrigated,
             paddy_level=paddy_level,
@@ -1319,11 +1321,11 @@ class CropFarmers(AgentBaseClass):
             nofieldvalue = -1
         by_field = np.take(array, self.HRU.var.land_owners)
         by_field[self.HRU.var.land_owners == -1] = nofieldvalue
-        return self.model.data.HRU.decompress(by_field)
+        return self.HRU.decompress(by_field)
 
     @property
     def mask(self):
-        mask = self.model.data.HRU.mask.copy()
+        mask = self.HRU.mask.copy()
         mask[self.decompress(self.HRU.var.land_owners) == -1] = True
         return mask
 
@@ -1819,9 +1821,9 @@ class CropFarmers(AgentBaseClass):
             This method updates the `monthly_SPEI` attribute in place.
         """
         current_SPEI_per_farmer = sample_from_map(
-            array=self.model.data.grid.spei_uncompressed,
+            array=self.model.hydrology.data.grid.spei_uncompressed,
             coords=self.var.locations[harvesting_farmers],
-            gt=self.model.data.grid.gt,
+            gt=self.grid.gt,
         )
 
         full_size_SPEI_per_farmer = np.zeros_like(
@@ -3901,7 +3903,7 @@ class CropFarmers(AgentBaseClass):
     def groundwater_depth(self):
         groundwater_depth = get_farmer_groundwater_depth(
             self.n,
-            self.model.groundwater.groundwater_depth,
+            self.model.hydrology.groundwater.groundwater_depth,
             self.HRU.var.HRU_to_grid,
             self.var.field_indices,
             self.var.field_indices_by_farmer.data,

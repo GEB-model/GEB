@@ -15,8 +15,8 @@ class LiveStockFarmers(AgentBaseClass):
 
     def __init__(self, model, agents, reduncancy):
         self.model = model
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+        self.HRU = model.hydrology.data.HRU
+        self.grid = model.hydrology.data.grid
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["town_managers"]
@@ -60,18 +60,21 @@ class LiveStockFarmers(AgentBaseClass):
         water_consumption = (
             water_consumption.rio.set_crs(4326).rio.reproject(
                 4326,
-                shape=self.model.data.grid.shape,
-                transform=self.model.data.grid.transform,
+                shape=self.model.hydrology.data.grid.shape,
+                transform=self.model.hydrology.data.grid.transform,
             )
-            / (water_consumption.rio.transform().a / self.model.data.grid.transform.a)
+            / (
+                water_consumption.rio.transform().a
+                / self.model.hydrology.data.grid.transform.a
+            )
             ** 2
         )
         water_consumption = downscale_volume(
             water_consumption.rio.transform().to_gdal(),
-            self.model.data.grid.gt,
+            self.model.hydrology.data.grid.gt,
             water_consumption.values,
-            self.model.data.grid.mask,
-            self.model.data.grid_to_HRU_uncompressed,
+            self.model.hydrology.data.grid.mask,
+            self.model.hydrology.data.grid_to_HRU_uncompressed,
             downscale_mask,
             self.HRU.var.land_use_ratio,
         )

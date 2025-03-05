@@ -210,7 +210,7 @@ class PotentialEvapotranspiration(object):
             sfcWind=self.HRU.sfcWind,
         )
 
-        self.grid.var.EWRef = self.model.data.to_grid(
+        self.grid.var.EWRef = self.hydrology.data.to_grid(
             HRU_data=self.HRU.var.EWRef, fn="weightedmean"
         )
 

@@ -220,7 +220,7 @@ class LakesReservoirs(object):
         assert np.array_equal(self.var.water_body_data.index, self.var.waterBodyIDC)
 
         # change ldd: put pits in where lakes are:
-        ldd_LR = self.model.data.grid.decompress(
+        ldd_LR = self.hydrology.data.grid.decompress(
             np.where(self.grid.var.waterBodyID != -1, 5, self.grid.var.lddCompress),
             fillvalue=0,
         )
@@ -238,7 +238,7 @@ class LakesReservoirs(object):
             self.grid.var.lendirDown,
         ) = define_river_network(
             ldd_LR,
-            self.model.data.grid,
+            self.hydrology.data.grid,
         )
 
         self.var.waterBodyTypC = self.var.water_body_data["waterbody_type"].values
@@ -249,9 +249,6 @@ class LakesReservoirs(object):
         self.var.waterBodyTypC[self.var.waterBodyTypC == LAKE_CONTROL] = LAKE
 
         assert (np.isin(self.var.waterBodyTypC, [OFF, LAKE, RESERVOIR])).all()
-
-        self.reservoir_operators = self.model.agents.reservoir_operators
-        self.reservoir_operators.set_reservoir_data(self.var.water_body_data)
 
         self.var.lake_area = self.var.water_body_data["average_area"].values
         # a factor which increases evaporation from lake because of wind TODO: use wind to set this factor
@@ -417,8 +414,8 @@ class LakesReservoirs(object):
             # - 2 = reservoirs (regulated discharge)
             # - 1 = lakes (weirFormula)
             # - 0 = non lakes or reservoirs (e.g. wetland)
-            if self.model.DynamicResAndLakes:
-                raise NotImplementedError("DynamicResAndLakes not implemented yet")
+            if self.hydrology.dynamic_water_bodies:
+                raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
     def routing_lakes(self, inflow_m3, routing_step_length_seconds):
         """
@@ -526,7 +523,7 @@ class LakesReservoirs(object):
         """
 
         if __debug__:
-            prestorage = self.model.lakes_reservoirs.var.storage.copy()
+            prestorage = self.var.storage.copy()
 
         if step == 0:
             # average evaporation overeach lake

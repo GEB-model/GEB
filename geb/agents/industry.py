@@ -15,8 +15,8 @@ class Industry(AgentBaseClass):
 
     def __init__(self, model, agents):
         self.model = model
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+        self.HRU = model.hydrology.data.HRU
+        self.grid = model.hydrology.data.grid
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["industry"]
@@ -36,7 +36,7 @@ class Industry(AgentBaseClass):
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        downscale_mask = self.HRU.var.land_use_type != SEALED
+        downscale_mask = self.model.hydrology.data.HRU.var.land_use_type != SEALED
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         water_demand = (
@@ -49,17 +49,17 @@ class Industry(AgentBaseClass):
         water_demand = (
             water_demand.rio.set_crs(4326).rio.reproject(
                 4326,
-                shape=self.model.data.grid.shape,
-                transform=self.model.data.grid.transform,
+                shape=self.grid.shape,
+                transform=self.grid.transform,
             )
-            / (water_demand.rio.transform().a / self.model.data.grid.transform.a) ** 2
+            / (water_demand.rio.transform().a / self.grid.transform.a) ** 2
         )  # correct for change in cell size
         water_demand = downscale_volume(
             water_demand.rio.transform().to_gdal(),
-            self.model.data.grid.gt,
+            self.grid.gt,
             water_demand.values,
-            self.model.data.grid.mask,
-            self.model.data.grid_to_HRU_uncompressed,
+            self.grid.mask,
+            self.model.hydrology.data.grid_to_HRU_uncompressed,
             downscale_mask,
             self.HRU.var.land_use_ratio,
         )
@@ -75,18 +75,17 @@ class Industry(AgentBaseClass):
         water_consumption = (
             water_consumption.rio.set_crs(4326).rio.reproject(
                 4326,
-                shape=self.model.data.grid.shape,
-                transform=self.model.data.grid.transform,
+                shape=self.grid.shape,
+                transform=self.grid.transform,
             )
-            / (water_consumption.rio.transform().a / self.model.data.grid.transform.a)
-            ** 2
+            / (water_consumption.rio.transform().a / self.grid.transform.a) ** 2
         )
         water_consumption = downscale_volume(
             water_consumption.rio.transform().to_gdal(),
-            self.model.data.grid.gt,
+            self.grid.gt,
             water_consumption.values,
-            self.model.data.grid.mask,
-            self.model.data.grid_to_HRU_uncompressed,
+            self.grid.mask,
+            self.model.hydrology.data.grid_to_HRU_uncompressed,
             downscale_mask,
             self.HRU.var.land_use_ratio,
         )
@@ -100,7 +99,7 @@ class Industry(AgentBaseClass):
             where=water_demand != 0,
         )
 
-        efficiency = self.model.data.to_grid(HRU_data=efficiency, fn="max")
+        efficiency = self.model.hydrology.data.to_grid(HRU_data=efficiency, fn="max")
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()

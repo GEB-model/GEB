@@ -59,7 +59,7 @@ class Evaporation(object):
 
         # calculate potential bare soil evaporation
         potential_bare_soil_evaporation = (
-            self.model.crop_factor_calibration_factor * 0.2 * ETRef
+            self.hydrology.crop_factor_calibration_factor * 0.2 * ETRef
         )
 
         # calculate snow evaporation
@@ -74,7 +74,7 @@ class Evaporation(object):
         # calculate potential ET
         ##  self.HRU.var.potential_evapotranspiration total potential evapotranspiration for a reference crop for a land cover class [m]
         potential_evapotranspiration = (
-            self.model.crop_factor_calibration_factor * self.HRU.var.cropKC * ETRef
+            self.hydrology.crop_factor_calibration_factor * self.HRU.var.cropKC * ETRef
         )
 
         ## potential_transpiration: Transpiration for each land cover class

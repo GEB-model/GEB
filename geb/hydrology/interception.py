@@ -71,7 +71,7 @@ class Interception(object):
         self.HRU.var.minInterceptCap = self.HRU.full_compressed(
             np.nan, dtype=np.float32
         )
-        self.HRU.var.interception_storage = self.model.data.HRU.full_compressed(
+        self.HRU.var.interception_storage = self.hydrology.data.HRU.full_compressed(
             0, dtype=np.float32
         )
 
