@@ -3943,6 +3943,9 @@ class CropFarmers(AgentBaseClass):
         Then, farmers harvest and plant crops.
         """
 
+        if not self.model.simulate_hydrology:
+            return
+
         self.harvest()
         self.plant()
         self.water_abstraction_sum()

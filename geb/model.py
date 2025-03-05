@@ -253,6 +253,12 @@ class GEBModel(HazardDriver, ABM):
             load_data_from_store=True,
         )
 
+        for _ in range(self.n_timesteps):
+            self.step()
+
+        print("Model run finished, finalizing report...")
+        self.reporter.finalize()
+
     def spinup(self, initialize_only=False) -> None:
         """Run the model for the spinup period."""
         # set the start and end time for the spinup. The end of the spinup is the start of the actual model run

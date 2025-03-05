@@ -162,6 +162,8 @@ class Market(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
+        if not self.model.simulate_hydrology:
+            return
         self.track_production_and_price()
 
     @property
