@@ -25,8 +25,8 @@ class SmallLakesReservoirs(object):
         self.model = model
         self.hydrology = hydrology
 
-        self.HRU = hydrology.data.HRU
-        self.grid = hydrology.data.grid
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
 
         if self.model.in_spinup:
             self.spinup()

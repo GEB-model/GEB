@@ -39,7 +39,7 @@ from .lakes_reservoirs import LakesReservoirs
 from .erosion.hillslope import HillSlopeErosion
 
 
-class Hydrology:
+class Hydrology(Data):
     def __init__(self, model):
         """
         Init part of the initial part
@@ -47,10 +47,8 @@ class Hydrology:
         initialization of the hydrological modules
         """
         self.model = model
-        self.data = Data(self.model, self)
 
-        self.HRU = self.data.HRU
-        self.grid = self.data.grid
+        super().__init__(model)
 
         self.var = self.model.store.create_bucket("model.hydrology.var")
 
@@ -75,20 +73,7 @@ class Hydrology:
         self.hillslope_erosion = HillSlopeErosion(self.model, self)
 
     def step(self):
-        """
-        Dynamic part of CWATM
-        calls the dynamic part of the hydrological modules
-        Looping through time and space
-
-        Note:
-            if flags set the output on the screen can be changed e.g.
-
-            * v: no output at all
-            * l: time and first gauge discharge
-            * t: timing of different processes at the end
-        """
-
-        timer = TimingModule("CWatM")
+        timer = TimingModule("Hydrology")
 
         self.potential_evapotranspiration.step()
         timer.new_split("PET")

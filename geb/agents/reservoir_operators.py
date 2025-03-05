@@ -168,4 +168,4 @@ class ReservoirOperators(AgentBaseClass):
 
     @property
     def storage(self):
-        return self.hydrology.data.grid.storage
+        return self.hydrology.grid.storage

@@ -185,8 +185,8 @@ class PotentialEvapotranspiration(object):
         self.model = model
         self.hydrology = hydrology
 
-        self.HRU = hydrology.data.HRU
-        self.grid = hydrology.data.grid
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
 
         if self.model.in_spinup:
             self.spinup()
@@ -210,7 +210,7 @@ class PotentialEvapotranspiration(object):
             sfcWind=self.HRU.sfcWind,
         )
 
-        self.grid.var.EWRef = self.hydrology.data.to_grid(
+        self.grid.var.EWRef = self.hydrology.to_grid(
             HRU_data=self.HRU.var.EWRef, fn="weightedmean"
         )
 

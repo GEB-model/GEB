@@ -254,10 +254,8 @@ class Households(AgentBaseClass):
         flood_map = rioxarray.open_rasterio(flood_path)
 
         agriculture = from_landuse_raster_to_polygon(
-            self.hydrology.data.HRU.decompress(
-                self.hydrology.data.HRU.var.land_owners != -1
-            ),
-            self.hydrology.data.HRU.transform,
+            self.hydrology.HRU.decompress(self.hydrology.HRU.var.land_owners != -1),
+            self.hydrology.HRU.transform,
             self.model.crs,
         )
         agriculture["object_type"] = "agriculture"
@@ -275,10 +273,10 @@ class Households(AgentBaseClass):
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
-            self.hydrology.data.HRU.decompress(
-                self.hydrology.data.HRU.var.land_use_type == FOREST
+            self.hydrology.HRU.decompress(
+                self.hydrology.HRU.var.land_use_type == FOREST
             ),
-            self.hydrology.data.HRU.transform,
+            self.hydrology.HRU.transform,
             self.model.crs,
         )
         forest["object_type"] = "forest"
@@ -346,7 +344,7 @@ class Households(AgentBaseClass):
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """
-        downscale_mask = self.model.hydrology.data.HRU.var.land_use_type != SEALED
+        downscale_mask = self.model.hydrology.HRU.var.land_use_type != SEALED
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
         water_demand = (
             self.model.domestic_water_demand_ds.sel(
@@ -358,25 +356,22 @@ class Households(AgentBaseClass):
         water_demand = (
             water_demand.rio.set_crs(4326).rio.reproject(
                 4326,
-                shape=self.model.hydrology.data.grid.shape,
-                transform=self.model.hydrology.data.grid.transform,
+                shape=self.model.hydrology.grid.shape,
+                transform=self.model.hydrology.grid.transform,
             )
-            / (
-                water_demand.rio.transform().a
-                / self.model.hydrology.data.grid.transform.a
-            )
+            / (water_demand.rio.transform().a / self.model.hydrology.grid.transform.a)
             ** 2
         )
         water_demand = downscale_volume(
             water_demand.rio.transform().to_gdal(),
-            self.model.hydrology.data.grid.gt,
+            self.model.hydrology.grid.gt,
             water_demand.values,
-            self.model.hydrology.data.grid.mask,
-            self.model.hydrology.data.grid_to_HRU_uncompressed,
+            self.model.hydrology.grid.mask,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.hydrology.data.HRU.var.land_use_ratio,
+            self.model.hydrology.HRU.var.land_use_ratio,
         )
-        water_demand = self.model.hydrology.data.HRU.M3toM(water_demand)
+        water_demand = self.model.hydrology.HRU.M3toM(water_demand)
 
         water_consumption = (
             self.model.domestic_water_consumption_ds.sel(
@@ -388,25 +383,25 @@ class Households(AgentBaseClass):
         water_consumption = (
             water_consumption.rio.set_crs(4326).rio.reproject(
                 4326,
-                shape=self.model.hydrology.data.grid.shape,
-                transform=self.model.hydrology.data.grid.transform,
+                shape=self.model.hydrology.grid.shape,
+                transform=self.model.hydrology.grid.transform,
             )
             / (
                 water_consumption.rio.transform().a
-                / self.model.hydrology.data.grid.transform.a
+                / self.model.hydrology.grid.transform.a
             )
             ** 2
         )
         water_consumption = downscale_volume(
             water_consumption.rio.transform().to_gdal(),
-            self.model.hydrology.data.grid.gt,
+            self.model.hydrology.grid.gt,
             water_consumption.values,
-            self.model.hydrology.data.grid.mask,
-            self.model.hydrology.data.grid_to_HRU_uncompressed,
+            self.model.hydrology.grid.mask,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.hydrology.data.HRU.var.land_use_ratio,
+            self.model.hydrology.HRU.var.land_use_ratio,
         )
-        water_consumption = self.model.hydrology.data.HRU.M3toM(water_consumption)
+        water_consumption = self.model.hydrology.HRU.M3toM(water_consumption)
 
         efficiency = np.divide(
             water_consumption,
@@ -415,7 +410,7 @@ class Households(AgentBaseClass):
             where=water_demand != 0,
         )
 
-        efficiency = self.model.hydrology.data.to_grid(HRU_data=efficiency, fn="max")
+        efficiency = self.model.hydrology.to_grid(HRU_data=efficiency, fn="max")
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()

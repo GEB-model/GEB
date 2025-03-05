@@ -192,8 +192,8 @@ class CropFarmers(AgentBaseClass):
             if "farmers" in self.model.config["agent_settings"]
             else {}
         )
-        self.HRU = model.hydrology.data.HRU
-        self.grid = model.hydrology.data.grid
+        self.HRU = model.hydrology.HRU
+        self.grid = model.hydrology.grid
         self.redundancy = reduncancy
         self.decision_module = DecisionModule(self)
 
@@ -335,7 +335,7 @@ class CropFarmers(AgentBaseClass):
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
 
-        farms = self.model.hydrology.data.farms
+        farms = self.model.hydrology.farms
 
         # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
         self.n = np.unique(farms[farms != -1]).size
@@ -1821,7 +1821,7 @@ class CropFarmers(AgentBaseClass):
             This method updates the `monthly_SPEI` attribute in place.
         """
         current_SPEI_per_farmer = sample_from_map(
-            array=self.model.hydrology.data.grid.spei_uncompressed,
+            array=self.model.hydrology.grid.spei_uncompressed,
             coords=self.var.locations[harvesting_farmers],
             gt=self.grid.gt,
         )

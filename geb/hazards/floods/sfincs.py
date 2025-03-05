@@ -97,7 +97,7 @@ class SFINCS:
         event_name = self.get_event_name(event)
         if "region" in event:
             if event["region"] is None:
-                model_bbox = self.hydrology.data.grid.bounds
+                model_bbox = self.hydrology.grid.bounds
                 build_parameters["bbox"] = (
                     model_bbox[0] + 0.1,
                     model_bbox[1] + 0.1,
@@ -129,7 +129,7 @@ class SFINCS:
         if self.model.simulate_hydrology:
             n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
             substeps = self.discharge_per_timestep[0].shape[0]
-            discharge_grid = self.hydrology.data.grid.decompress(
+            discharge_grid = self.hydrology.grid.decompress(
                 np.vstack(self.discharge_per_timestep)
             )
 
@@ -155,8 +155,8 @@ class SFINCS:
                         freq=self.model.timestep_length / substeps,
                         inclusive="right",
                     ),
-                    "y": self.hydrology.data.grid.lat,
-                    "x": self.hydrology.data.grid.lon,
+                    "y": self.hydrology.grid.lat,
+                    "x": self.hydrology.grid.lon,
                 },
                 dims=["time", "y", "x"],
                 name="discharge",
@@ -172,14 +172,14 @@ class SFINCS:
                 inclusive="right",
             )
             discharge_grid = np.zeros(
-                shape=(len(time), *self.model.hydrology.data.grid.mask.shape)
+                shape=(len(time), *self.model.hydrology.grid.mask.shape)
             )
             discharge_grid = xr.DataArray(
                 data=discharge_grid,
                 coords={
                     "time": time,
-                    "y": self.hydrology.data.grid.lat,
-                    "x": self.hydrology.data.grid.lon,
+                    "y": self.hydrology.grid.lat,
+                    "x": self.hydrology.grid.lon,
                 },
                 dims=["time", "y", "x"],
                 name="discharge",
@@ -188,7 +188,7 @@ class SFINCS:
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
 
         # Convert the WKT string to a pyproj CRS object
-        crs_obj = CRS.from_wkt(self.hydrology.data.grid.crs)
+        crs_obj = CRS.from_wkt(self.hydrology.grid.crs)
 
         # Now you can safely call to_proj4() on the CRS object
         discharge_grid.raster.set_crs(crs_obj.to_proj4())
@@ -356,7 +356,7 @@ class SFINCS:
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
-            self.hydrology.data.grid.var.discharge_substep
+            self.hydrology.grid.var.discharge_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
     @property

@@ -276,7 +276,7 @@ class GEBModel(HazardDriver, ABM):
         # export discharge as zarr file for the hydrological model
         self.config["report_hydrology"] = {
             "discharge_daily": {
-                "varname": "hydrology.data.grid.var.discharge",
+                "varname": "hydrology.grid.var.discharge",
                 "function": None,
                 "format": "zarr",
                 "single_file": True,

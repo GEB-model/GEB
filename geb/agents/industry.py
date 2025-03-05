@@ -15,8 +15,8 @@ class Industry(AgentBaseClass):
 
     def __init__(self, model, agents):
         self.model = model
-        self.HRU = model.hydrology.data.HRU
-        self.grid = model.hydrology.data.grid
+        self.HRU = model.hydrology.HRU
+        self.grid = model.hydrology.grid
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["industry"]
@@ -36,7 +36,7 @@ class Industry(AgentBaseClass):
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        downscale_mask = self.model.hydrology.data.HRU.var.land_use_type != SEALED
+        downscale_mask = self.model.hydrology.HRU.var.land_use_type != SEALED
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         water_demand = (
@@ -59,7 +59,7 @@ class Industry(AgentBaseClass):
             self.grid.gt,
             water_demand.values,
             self.grid.mask,
-            self.model.hydrology.data.grid_to_HRU_uncompressed,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
             self.HRU.var.land_use_ratio,
         )
@@ -85,7 +85,7 @@ class Industry(AgentBaseClass):
             self.grid.gt,
             water_consumption.values,
             self.grid.mask,
-            self.model.hydrology.data.grid_to_HRU_uncompressed,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
             self.HRU.var.land_use_ratio,
         )
@@ -99,7 +99,7 @@ class Industry(AgentBaseClass):
             where=water_demand != 0,
         )
 
-        efficiency = self.model.hydrology.data.to_grid(HRU_data=efficiency, fn="max")
+        efficiency = self.model.hydrology.to_grid(HRU_data=efficiency, fn="max")
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()

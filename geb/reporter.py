@@ -126,7 +126,7 @@ class hydrology_reporter(ABMReporter):
 
                         zarr_group.create_dataset(
                             "y",
-                            data=self.hydrology.data.grid.lat,
+                            data=self.hydrology.grid.lat,
                             dtype="float64",
                         )
                         zarr_group["y"].attrs.update(
@@ -139,7 +139,7 @@ class hydrology_reporter(ABMReporter):
 
                         zarr_group.create_dataset(
                             "x",
-                            data=self.hydrology.data.grid.lon,
+                            data=self.hydrology.grid.lon,
                             dtype="float64",
                         )
                         zarr_group["x"].attrs.update(
@@ -154,13 +154,13 @@ class hydrology_reporter(ABMReporter):
                             name,
                             shape=(
                                 time.size,
-                                self.hydrology.data.grid.lat.size,
-                                self.hydrology.data.grid.lon.size,
+                                self.hydrology.grid.lat.size,
+                                self.hydrology.grid.lon.size,
                             ),
                             chunks=(
                                 1,
-                                self.hydrology.data.grid.lat.size,
-                                self.hydrology.data.grid.lon.size,
+                                self.hydrology.grid.lat.size,
+                                self.hydrology.grid.lon.size,
                             ),
                             dtype="float32",
                             compressor=compressor,
@@ -177,7 +177,7 @@ class hydrology_reporter(ABMReporter):
                             }
                         )
 
-                        crs = self.hydrology.data.grid.crs
+                        crs = self.hydrology.grid.crs
                         if not isinstance(crs, str):
                             crs = crs.to_string()
                         zarr_group.attrs["crs"] = crs
@@ -344,9 +344,9 @@ class hydrology_reporter(ABMReporter):
                                 assert not np.isnan(value)
                             elif function == "sample_coord":
                                 if conf["varname"].startswith("data.grid"):
-                                    gt = self.model.hydrology.data.grid.gt
+                                    gt = self.model.hydrology.grid.gt
                                 elif conf["varname"].startswith("data.HRU"):
-                                    gt = self.hydrology.data.HRU.gt
+                                    gt = self.hydrology.HRU.gt
                                 else:
                                     raise ValueError
                                 px, py = coord_to_pixel(

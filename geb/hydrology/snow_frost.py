@@ -81,14 +81,14 @@ class SnowFrost(object):
         self.model = model
         self.hydrology = hydrology
 
-        self.HRU = hydrology.data.HRU
-        self.grid = hydrology.data.grid
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
 
         if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.snowfrost.var")
+        self.var = self.model.store.create_bucket("model.hydrology.snowfrost.var")
         self.var.numberSnowLayers = 3  # default 3
         self.HRU.var.glaciertransportZone = (
             1.0  # default 1 -> highest zone is transported to middle zone
@@ -153,7 +153,7 @@ class SnowFrost(object):
         elevation_std = self.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation_STD"]
         )
-        elevation_std = self.hydrology.data.to_HRU(data=elevation_std, fn=None)
+        elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
 
         self.HRU.var.DeltaTSnow = elevation_std * TemperatureLapseRate
 
@@ -177,7 +177,7 @@ class SnowFrost(object):
         # initialize snowcovers as many as snow layers -> read them as SnowCover1 , SnowCover2 ...
         # SnowCover1 is the highest zone
         self.HRU.var.SnowCoverS = np.tile(
-            self.hydrology.data.to_HRU(
+            self.hydrology.to_HRU(
                 data=self.grid.full_compressed(0, dtype=np.float32),
                 fn=None,
             ),

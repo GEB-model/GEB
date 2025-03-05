@@ -989,14 +989,14 @@ class Soil(object):
         self.model = model
         self.hydrology = hydrology
 
-        self.HRU = hydrology.data.HRU
-        self.grid = hydrology.data.grid
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
 
         if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.soil.var")
+        self.var = self.model.store.create_bucket("model.hydrology.soil.var")
 
         # Soil properties
         self.HRU.var.soil_layer_height = self.HRU.compress(
@@ -1101,10 +1101,10 @@ class Soil(object):
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        natural_crop_groups = self.hydrology.data.grid.load(
+        natural_crop_groups = self.hydrology.grid.load(
             self.model.files["grid"]["soil/cropgrp"]
         )
-        self.HRU.var.natural_crop_groups = self.hydrology.data.to_HRU(
+        self.HRU.var.natural_crop_groups = self.hydrology.to_HRU(
             data=natural_crop_groups
         )
 
@@ -1122,7 +1122,7 @@ class Soil(object):
         elevation_std = self.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation_STD"]
         )
-        elevation_std = self.hydrology.data.to_HRU(data=elevation_std, fn=None)
+        elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
         arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)
 
         arnoBetaOro += self.model.config["parameters"][
@@ -1222,11 +1222,11 @@ class Soil(object):
             from honeybees.library.raster import coord_to_pixel
 
             px, py = coord_to_pixel(
-                np.array([lon, lat]), gt=self.model.hydrology.data.grid.gt
+                np.array([lon, lat]), gt=self.model.hydrology.grid.gt
             )
 
-            cell_ids = np.arange(self.hydrology.data.grid.compressed_size)
-            cell_ids_map = self.hydrology.data.grid.decompress(cell_ids, fillvalue=-1)
+            cell_ids = np.arange(self.hydrology.grid.compressed_size)
+            cell_ids_map = self.hydrology.grid.decompress(cell_ids, fillvalue=-1)
             cell_id = cell_ids_map[py, px]
 
             already_has_plantFATE_cell = False

@@ -164,14 +164,16 @@ class LakesReservoirs(object):
         self.model = model
         self.hydrology = hydrology
 
-        self.HRU = hydrology.data.HRU
-        self.grid = hydrology.data.grid
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
 
         if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.lakes_reservoirs.var")
+        self.var = self.model.store.create_bucket(
+            "model.hydrology.lakes_reservoirs.var"
+        )
 
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped = self.grid.load(
@@ -220,7 +222,7 @@ class LakesReservoirs(object):
         assert np.array_equal(self.var.water_body_data.index, self.var.waterBodyIDC)
 
         # change ldd: put pits in where lakes are:
-        ldd_LR = self.hydrology.data.grid.decompress(
+        ldd_LR = self.hydrology.grid.decompress(
             np.where(self.grid.var.waterBodyID != -1, 5, self.grid.var.lddCompress),
             fillvalue=0,
         )
@@ -238,7 +240,7 @@ class LakesReservoirs(object):
             self.grid.var.lendirDown,
         ) = define_river_network(
             ldd_LR,
-            self.hydrology.data.grid,
+            self.hydrology.grid,
         )
 
         self.var.waterBodyTypC = self.var.water_body_data["waterbody_type"].values

@@ -72,14 +72,14 @@ class Routing(object):
         self.model = model
         self.hydrology = hydrology
 
-        self.HRU = hydrology.data.HRU
-        self.grid = hydrology.data.grid
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
 
         if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.routing.var")
+        self.var = self.model.store.create_bucket("model.hydrology.routing.var")
 
         ldd = self.grid.load(
             self.model.files["grid"]["routing/ldd"],
@@ -102,7 +102,7 @@ class Routing(object):
             _,
             self.grid.var.dirDown,
             self.grid.var.lendirDown,
-        ) = define_river_network(ldd, self.hydrology.data.grid)
+        ) = define_river_network(ldd, self.hydrology.grid)
 
         self.grid.var.upstream_area_n_cells = upstreamArea(
             self.grid.var.dirDown,
