@@ -437,8 +437,9 @@ class Households(AgentBaseClass):
         return self.var.current_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
-        print("Thinking about adapting...")
-        print("Oh no, where is DYNAMO?")
+        if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+            print("Thinking about adapting...")
+            print("Oh no, where is DYNAMO?")
         return None
 
     @property
