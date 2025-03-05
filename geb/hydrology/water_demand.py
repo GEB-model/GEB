@@ -313,7 +313,7 @@ class WaterDemand:
             return_flow_irrigation_m,
             irrigation_loss_to_evaporation_m,
         ) = self.crop_farmers.abstract_water(
-            cell_area=self.HRU.var.cellArea,
+            cell_area=self.HRU.var.cell_area,
             paddy_level=paddy_level,
             readily_available_water=readily_available_water,
             critical_water_level=critical_water_level,
@@ -406,7 +406,7 @@ class WaterDemand:
                     self.model.data.grid.domestic_withdrawal_m3,
                     self.model.data.grid.industry_withdrawal_m3,
                     self.model.data.grid.livestock_withdrawal_m3,
-                    self.HRU.var.cellArea,
+                    self.HRU.var.cell_area,
                 ],
                 prestorages=[
                     available_channel_storage_m3_pre,
@@ -425,7 +425,7 @@ class WaterDemand:
 
         return (
             groundwater_abstraction_m3,
-            channel_abstraction_m3 / self.model.data.grid.var.cellArea,
+            channel_abstraction_m3 / self.model.data.grid.var.cell_area,
             return_flow,  # from all sources, re-added in routing
             irrigation_loss_to_evaporation_m,
         )

@@ -197,7 +197,7 @@ class BaseVariables:
         Returns:
             array: Data in cubic meters.
         """
-        return array * self.var.cellArea
+        return array * self.var.cell_area
 
     def M3toM(self, array: np.ndarray) -> np.ndarray:
         """Convert array from cubic meters to meters.
@@ -208,7 +208,7 @@ class BaseVariables:
         Returns:
             array: Data in meters.
         """
-        return array / self.var.cellArea
+        return array / self.var.cell_area
 
     def register_initial_data(self, name: str) -> None:
         """Register initial data."""
@@ -261,7 +261,7 @@ class Grid(BaseVariables):
 
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
-        self.var.cellArea = self.compress(self.cell_area_uncompressed)
+        self.var.cell_area = self.compress(self.cell_area_uncompressed)
 
         BaseVariables.__init__(self)
 
@@ -933,8 +933,8 @@ class Data:
         self.load_water_demand()
 
     def spinup(self):
-        self.HRU.var.cellArea = self.to_HRU(
-            data=self.grid.var.cellArea, fn="weightedsplit"
+        self.HRU.var.cell_area = self.to_HRU(
+            data=self.grid.var.cell_area, fn="weightedsplit"
         )
 
     def load_water_demand(self):
@@ -1092,8 +1092,8 @@ class Data:
         self.HRU.var.land_use_ratio = self.split_HRU_data(
             self.HRU.var.land_use_ratio, HRU, ratio=ratio
         )
-        self.HRU.var.cellArea = self.split_HRU_data(
-            self.HRU.var.cellArea, HRU, ratio=ratio
+        self.HRU.var.cell_area = self.split_HRU_data(
+            self.HRU.var.cell_area, HRU, ratio=ratio
         )
         self.HRU.var.crop_map = self.split_HRU_data(self.HRU.var.crop_map, HRU)
         self.HRU.var.crop_age_days_map = self.split_HRU_data(

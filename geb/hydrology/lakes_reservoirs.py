@@ -513,7 +513,7 @@ class LakesReservoirs(object):
         step,
         n_routing_steps,
         discharge,
-        runoff,
+        total_runoff,
     ):
         """
         Dynamic part to calculate outflow from lakes and reservoirs
@@ -543,8 +543,10 @@ class LakesReservoirs(object):
                 "evaporation_from_water_bodies_per_routing_step < 0.0"
             )
 
-        runoff_m3 = runoff * self.grid.var.cellArea / n_routing_steps
-        runoff_m3 = laketotal(runoff_m3, self.grid.var.waterBodyID, nan_class=-1)
+        total_runoff_m3 = total_runoff * self.grid.var.cell_area / n_routing_steps
+        total_runoff_m3 = laketotal(
+            total_runoff_m3, self.grid.var.waterBodyID, nan_class=-1
+        )
 
         discharge_m3 = (
             upstream1(self.grid.var.downstruct, discharge)
@@ -552,12 +554,14 @@ class LakesReservoirs(object):
         )
         discharge_m3 = laketotal(discharge_m3, self.grid.var.waterBodyID, nan_class=-1)
 
-        assert (runoff_m3 >= 0).all()
+        assert (total_runoff_m3 >= 0).all()
         assert (discharge_m3 >= 0).all()
         assert (self.var.total_inflow_from_other_water_bodies >= 0).all()
 
         inflow_m3 = (
-            runoff_m3 + discharge_m3 + self.var.total_inflow_from_other_water_bodies
+            total_runoff_m3
+            + discharge_m3
+            + self.var.total_inflow_from_other_water_bodies
         )
 
         actual_evaporation_from_water_bodies_per_routing_step = np.minimum(

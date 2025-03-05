@@ -134,21 +134,24 @@ class GroundWater:
             tollerance=100,  # 100 m3
         )
 
-        groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cellArea
+        groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
         channel_ratio = get_channel_ratio(
             river_length=self.grid.var.river_length,
             river_width=self.grid.var.river_width,
-            cell_area=self.grid.var.cellArea,
+            cell_area=self.grid.var.cell_area,
         )
 
+        # this is the capillary rise for the NEXT timestep
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
-        self.grid.var.baseflow = groundwater_drainage * channel_ratio
+        baseflow = groundwater_drainage * channel_ratio
 
         # capriseindex is 1 where capilary rise occurs
         self.model.data.HRU.capriseindex = self.model.data.to_HRU(
             data=np.float32(groundwater_drainage > 0)
         )
+
+        return baseflow
 
     @property
     def groundwater_content_m3(self):

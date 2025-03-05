@@ -116,7 +116,7 @@ class LandCover(object):
         """computing leakage from rivers"""
         riverbedExchangeM3 = (
             self.model.data.grid.leakageriver_factor
-            * self.HRU.var.cellArea
+            * self.HRU.var.cell_area
             * ((1 - self.HRU.var.capriseindex + 0.25) // 1)
         )
         riverbedExchangeM3[self.HRU.var.land_use_type != OPEN_WATER] = 0
@@ -166,7 +166,7 @@ class LandCover(object):
                         area_stor = np.sum(
                             np.where(
                                 self.model.data.grid.waterBodyID == lakeIDbyID[id],
-                                self.model.data.grid.cellArea,
+                                self.model.data.grid.cell_area,
                                 0,
                             )
                         )  # required to keep mass balance rigth
@@ -183,7 +183,7 @@ class LandCover(object):
                         area_stor = np.sum(
                             np.where(
                                 self.model.data.grid.waterBodyID == lakeIDbyID[id],
-                                self.model.data.grid.cellArea,
+                                self.model.data.grid.cell_area,
                                 0,
                             )
                         )  # required to keep mass balance rigth
@@ -240,7 +240,7 @@ class LandCover(object):
             self.model.data.grid.lakebedExchangeM3[discharge_point] = np.sum(
                 np.where(
                     self.model.data.grid.waterBodyID == lakeIDbyID[id],
-                    lakebedExchangeM * self.model.data.grid.cellArea,
+                    lakebedExchangeM * self.model.data.grid.cell_area,
                     0,
                 )
             )  # in m3
@@ -391,7 +391,7 @@ class LandCover(object):
 
         (
             interflow,
-            direct_runoff,
+            runoff,
             groundwater_recharge,
             open_water_evaporation,
             actual_total_transpiration,
@@ -402,14 +402,14 @@ class LandCover(object):
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
         )
-        assert not (direct_runoff < 0).any()
+        assert not (runoff < 0).any()
         timer.new_split("Soil")
 
-        direct_runoff = self.model.sealed_water.step(
-            capillar, open_water_evaporation, direct_runoff
+        runoff, open_water_evaporation = self.model.sealed_water.step(
+            capillar, open_water_evaporation, runoff
         )
-        self.HRU.var.direct_runoff = direct_runoff
-        assert not (direct_runoff < 0).any()
+
+        assert not (runoff < 0).any()
 
         timer.new_split("Sealed")
 
@@ -432,7 +432,7 @@ class LandCover(object):
             self.HRU.var.crop_map != -1
         ] += potential_evapotranspiration[self.HRU.var.crop_map != -1]
 
-        assert not (direct_runoff < 0).any()
+        assert not (runoff < 0).any()
         assert not np.isnan(interflow).any()
         assert not np.isnan(groundwater_recharge).any()
         assert not np.isnan(groundwater_abstraction_m3).any()
@@ -462,7 +462,7 @@ class LandCover(object):
                     self.HRU.var.actual_irrigation_consumption,
                 ],
                 outfluxes=[
-                    direct_runoff,
+                    runoff,
                     interflow,
                     groundwater_recharge,
                     actual_total_transpiration,
@@ -501,7 +501,7 @@ class LandCover(object):
                     capillar,
                 ],
                 outfluxes=[
-                    direct_runoff,
+                    runoff,
                     interflow,
                     groundwater_recharge,
                     actual_total_transpiration,
@@ -524,7 +524,7 @@ class LandCover(object):
                     capillar,
                 ],
                 outfluxes=[
-                    direct_runoff,
+                    runoff,
                     interflow,
                     groundwater_recharge,
                     actual_evapotranspiration,
@@ -546,7 +546,7 @@ class LandCover(object):
 
         return (
             self.model.data.to_grid(HRU_data=interflow, fn="weightedmean"),
-            self.model.data.to_grid(HRU_data=direct_runoff, fn="weightedmean"),
+            self.model.data.to_grid(HRU_data=runoff, fn="weightedmean"),
             groundwater_recharge,
             groundwater_abstraction_m3,
             channel_abstraction_m,

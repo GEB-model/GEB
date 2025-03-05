@@ -110,4 +110,4 @@ class SealedWater(object):
                 tollerance=1e-6,
             )
 
-        return direct_runoff
+        return direct_runoff, open_water_evaporation
