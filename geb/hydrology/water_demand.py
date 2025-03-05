@@ -341,7 +341,6 @@ class WaterDemand:
             )
 
         self.HRU.var.actual_irrigation_consumption = irrigation_water_consumption_m
-        irrigation_loss_to_evaporation_m = irrigation_loss_to_evaporation_m
 
         assert (self.HRU.var.actual_irrigation_consumption + 1e-5 >= 0).all()
 

@@ -22,7 +22,7 @@
 import os
 
 import numpy as np
-from geb.workflows import TimingModule
+from geb.workflows import TimingModule, balance_check
 
 from .potential_evapotranspiration import PotentialEvapotranspiration
 from .snow_frost import SnowFrost
@@ -47,6 +47,9 @@ class Hydrology:
         defines the mask map and the outlet points
         initialization of the hydrological modules
         """
+        self.HRU = self.data.HRU
+        self.grid = self.data.grid
+
         self.init_water_table_file = os.path.join(
             self.config["general"]["init_water_table"]
         )
@@ -122,6 +125,9 @@ class Hydrology:
         if self.timing:
             print(timer)
 
+        if __debug__:
+            self.water_balance()
+
     def finalize(self) -> None:
         """
         Finalize the model
@@ -164,3 +170,39 @@ class Hydrology:
         return np.array(
             (biomass_per_m2_per_HRU * land_use_ratios).sum() / land_use_ratios.sum()
         )
+
+    def water_balance(self):
+        current_storage = (
+            np.sum(self.HRU.var.SnowCoverS) / self.snowfrost.var.numberSnowLayers
+            + self.HRU.var.interception_storage.sum()
+            + np.nansum(self.HRU.var.w)
+            + self.HRU.var.topwater.sum()
+            + self.grid.var.river_storage_m3.sum()
+            + self.lakes_reservoirs.var.storage.sum()
+            + self.groundwater.groundwater_content_m3.sum()
+        )
+
+        # in the first timestep of the spinup, we don't have the storage of the
+        # previous timestep, so we can't check the balance
+        if not self.current_timestep == 0 and self.in_spinup:
+            influx = (self.HRU.var.precipitation_m_day * self.HRU.var.cell_area).sum()
+            outflux = (
+                self.HRU.var.actual_evapotranspiration * self.HRU.var.cell_area
+            ).sum() + self.var.routing_loss.sum()
+
+            balance_check(
+                name="total water balance",
+                how="sum",
+                influxes=[
+                    influx,
+                ],
+                outfluxes=[
+                    outflux,
+                ],
+                prestorages=[self.var.system_storage],
+                poststorages=[current_storage],
+                tollerance=100,
+            )
+
+        # update the storage for the next timestep
+        self.var.system_storage = current_storage

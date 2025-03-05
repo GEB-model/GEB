@@ -291,7 +291,7 @@ class LandCover(object):
         timer = TimingModule("Landcover")
 
         if __debug__:
-            interceptStor_pre = self.HRU.var.interceptStor.copy()
+            interception_storage_pre = self.HRU.var.interception_storage.copy()
             w_pre = self.HRU.var.w.copy()
             topwater_pre = self.HRU.var.topwater.copy()
 
@@ -413,19 +413,19 @@ class LandCover(object):
 
         timer.new_split("Sealed")
 
-        actual_evapotranspiration = (
+        self.HRU.var.actual_evapotranspiration = (
             actual_bare_soil_evaporation
             + actual_total_transpiration
             + open_water_evaporation
             + interception_evaporation
             + self.HRU.var.snowEvap  # ice should be included in the future
-            # + irrigation_loss_to_evaporation_m
+            + irrigation_loss_to_evaporation_m
         )
 
         self.HRU.var.actual_evapotranspiration_crop_life[
             self.HRU.var.crop_map != -1
         ] += np.minimum(
-            actual_evapotranspiration[self.HRU.var.crop_map != -1],
+            self.HRU.var.actual_evapotranspiration[self.HRU.var.crop_map != -1],
             potential_evapotranspiration[self.HRU.var.crop_map != -1],
         )
         self.HRU.var.potential_evapotranspiration_crop_life[
@@ -448,8 +448,8 @@ class LandCover(object):
                     self.HRU.var.natural_available_water_infiltration,
                     interception_evaporation,
                 ],
-                prestorages=[interceptStor_pre],
-                poststorages=[self.HRU.var.interceptStor],
+                prestorages=[interception_storage_pre],
+                poststorages=[self.HRU.var.interception_storage],
                 tollerance=1e-6,
             )
 
@@ -480,7 +480,7 @@ class LandCover(object):
             totalstorage_landcover = (
                 np.sum(self.HRU.var.SnowCoverS, axis=0)
                 / self.model.snowfrost.var.numberSnowLayers
-                + self.HRU.var.interceptStor
+                + self.HRU.var.interception_storage
                 + np.nansum(self.HRU.var.w, axis=0)
                 + self.HRU.var.topwater
             )
@@ -489,7 +489,7 @@ class LandCover(object):
                 / self.model.snowfrost.var.numberSnowLayers
                 + np.nansum(w_pre, axis=0)
                 + topwater_pre
-                + interceptStor_pre
+                + interception_storage_pre
             )
 
             balance_check(
@@ -522,12 +522,13 @@ class LandCover(object):
                     self.HRU.var.precipitation_m_day,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
+                    irrigation_loss_to_evaporation_m,  # irrigation loss is coming from external sources
                 ],
                 outfluxes=[
                     runoff,
                     interflow,
                     groundwater_recharge,
-                    actual_evapotranspiration,
+                    self.HRU.var.actual_evapotranspiration,
                 ],
                 prestorages=[totalstorage_landcover_pre],
                 poststorages=[totalstorage_landcover],

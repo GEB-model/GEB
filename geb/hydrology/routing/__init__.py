@@ -233,7 +233,7 @@ class Routing(object):
             # these are for balance checks, the sum of all routing steps
             side_flow_channel_m3 = 0
             evaporation_in_rivers_m3 = 0
-            waterbody_evaporation = 0
+            waterbody_evaporation_m3 = 0
             discharge_at_outlets = 0
 
         for subrouting_step in range(self.var.n_routing_steps):
@@ -268,7 +268,7 @@ class Routing(object):
 
             # this variable is named outflow_to_river_network in the lakes and reservoirs module
             # because it is outflow from the waterbodies to the river network
-            inflow_to_river_network, waterbody_evaporation_Dt = (
+            inflow_to_river_network, waterbody_evaporation_m3_Dt = (
                 self.model.lakes_reservoirs.routing(
                     step=subrouting_step,
                     n_routing_steps=self.var.n_routing_steps,
@@ -318,12 +318,15 @@ class Routing(object):
                     self.grid.var.lddCompress_LR == PIT
                 ].sum()
                 side_flow_channel_m3 += side_flow_channel_m3_Dt
-                waterbody_evaporation += waterbody_evaporation_Dt
+                waterbody_evaporation_m3 += waterbody_evaporation_m3_Dt
                 evaporation_in_rivers_m3 += evaporation_in_rivers_m3_Dt
 
         assert not np.isnan(self.grid.var.discharge).any()
 
         if __debug__:
+            discharge_volume_at_outlets_m3 = (
+                discharge_at_outlets * self.model.seconds_per_timestep
+            )
             # this check the last routing step, but that's okay
             balance_check(
                 how="sum",
@@ -353,7 +356,7 @@ class Routing(object):
             balance_check(
                 how="sum",
                 influxes=[side_flow_channel_m3],
-                outfluxes=[discharge_at_outlets * self.model.seconds_per_timestep],
+                outfluxes=[discharge_volume_at_outlets_m3],
                 prestorages=[pre_channel_storage_m3],
                 poststorages=[self.grid.var.river_storage_m3],
                 name="routing_3",
@@ -363,9 +366,9 @@ class Routing(object):
                 how="sum",
                 influxes=[total_runoff * self.grid.var.cell_area],
                 outfluxes=[
-                    discharge_at_outlets * self.model.seconds_per_timestep,
+                    discharge_volume_at_outlets_m3,
                     evaporation_in_rivers_m3,
-                    waterbody_evaporation,
+                    waterbody_evaporation_m3,
                 ],
                 prestorages=[pre_channel_storage_m3, pre_storage],
                 poststorages=[
@@ -374,4 +377,10 @@ class Routing(object):
                 ],
                 name="routing_4",
                 tollerance=100,
+            )
+
+            self.model.var.routing_loss = (
+                evaporation_in_rivers_m3.sum()
+                + waterbody_evaporation_m3.sum()
+                + discharge_volume_at_outlets_m3.sum()
             )

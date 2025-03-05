@@ -111,28 +111,19 @@ class GroundWater:
         groundwater_abstraction_m3[groundwater_abstraction_m3 < 0] = 0
         assert (groundwater_recharge >= 0).all()
 
-        groundwater_storage_pre = self.modflow.groundwater_content_m3
+        if __debug__:
+            groundwater_storage_pre = self.modflow.groundwater_content_m3
 
         self.modflow.set_recharge_m(groundwater_recharge)
         self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
         self.modflow.step()
 
-        drainage_m3 = self.modflow.drainage_m3
-        recharge_m3 = groundwater_recharge * self.modflow.area
-        groundwater_storage_post = self.modflow.groundwater_content_m3
-
-        balance_check(
-            name="groundwater",
-            how="sum",
-            influxes=[recharge_m3],
-            outfluxes=[
+        if __debug__:
+            self.balance_check(
+                groundwater_storage_pre,
+                groundwater_recharge,
                 groundwater_abstraction_m3,
-                drainage_m3,
-            ],
-            prestorages=[groundwater_storage_pre],
-            poststorages=[groundwater_storage_post],
-            tollerance=100,  # 100 m3
-        )
+            )
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
@@ -163,3 +154,23 @@ class GroundWater:
 
     def decompress(self, data):
         return self.model.data.grid.decompress(data)
+
+    def balance_check(
+        self, groundwater_storage_pre, groundwater_recharge, groundwater_abstraction_m3
+    ):
+        drainage_m3 = self.modflow.drainage_m3
+        recharge_m3 = groundwater_recharge * self.modflow.area
+        groundwater_storage_post = self.modflow.groundwater_content_m3
+
+        balance_check(
+            name="groundwater",
+            how="sum",
+            influxes=[recharge_m3],
+            outfluxes=[
+                groundwater_abstraction_m3,
+                drainage_m3,
+            ],
+            prestorages=[groundwater_storage_pre],
+            poststorages=[groundwater_storage_post],
+            tollerance=100,  # 100 m3
+        )
