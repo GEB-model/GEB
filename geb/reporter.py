@@ -400,9 +400,11 @@ class Reporter:
     def __init__(self, model):
         self.model = model
         self.abm_reporter = ABMReporter(model, folder=self.model.report_folder)
-        self.hydrology_reporter = hydrology_reporter(
-            model, folder=self.model.report_folder
-        )
+
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter = hydrology_reporter(
+                model, folder=self.model.report_folder
+            )
 
     @property
     def variables(self):
@@ -415,10 +417,12 @@ class Reporter:
     def step(self) -> None:
         """This function is called at the end of every timestep. This function only forwards the step function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.step()
-        self.hydrology_reporter.step()
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter.step()
 
     def finalize(self):
         """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.finalize()
-        self.hydrology_reporter.finalize()
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter.finalize()
         print("Reported data")

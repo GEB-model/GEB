@@ -79,7 +79,7 @@ class Routing(object):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.hydrology.routing.var")
+        self.var = self.model.store.create_bucket("hydrology.routing.var")
 
         ldd = self.grid.load(
             self.model.files["grid"]["routing/ldd"],

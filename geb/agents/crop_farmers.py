@@ -192,8 +192,10 @@ class CropFarmers(AgentBaseClass):
             if "farmers" in self.model.config["agent_settings"]
             else {}
         )
-        self.HRU = model.hydrology.HRU
-        self.grid = model.hydrology.grid
+        if self.model.simulate_hydrology:
+            self.HRU = model.hydrology.HRU
+            self.grid = model.hydrology.grid
+
         self.redundancy = reduncancy
         self.decision_module = DecisionModule(self)
 
@@ -230,7 +232,7 @@ class CropFarmers(AgentBaseClass):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.agents.crop_farmers.var")
+        self.var = self.model.store.create_bucket("agents.crop_farmers.var")
 
         self.var.crop_data_type, self.var.crop_data = load_crop_data(self.model.files)
         self.var.crop_ids = self.var.crop_data["name"].to_dict()

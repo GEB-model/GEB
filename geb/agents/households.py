@@ -45,11 +45,15 @@ class Households(AgentBaseClass):
         self.agents = agents
         self.reduncancy = reduncancy
 
+        if self.model.simulate_hydrology:
+            self.HRU = model.hydrology.HRU
+            self.grid = model.hydrology.grid
+
         if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.agents.households.var")
+        self.var = self.model.store.create_bucket("agents.households.var")
 
         # Load buildings
         self.var.buildings = gpd.read_parquet(
@@ -254,8 +258,8 @@ class Households(AgentBaseClass):
         flood_map = rioxarray.open_rasterio(flood_path)
 
         agriculture = from_landuse_raster_to_polygon(
-            self.hydrology.HRU.decompress(self.hydrology.HRU.var.land_owners != -1),
-            self.hydrology.HRU.transform,
+            self.HRU.decompress(self.HRU.var.land_owners != -1),
+            self.HRU.transform,
             self.model.crs,
         )
         agriculture["object_type"] = "agriculture"
@@ -273,10 +277,8 @@ class Households(AgentBaseClass):
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
-            self.hydrology.HRU.decompress(
-                self.hydrology.HRU.var.land_use_type == FOREST
-            ),
-            self.hydrology.HRU.transform,
+            self.HRU.decompress(self.HRU.var.land_use_type == FOREST),
+            self.HRU.transform,
             self.model.crs,
         )
         forest["object_type"] = "forest"

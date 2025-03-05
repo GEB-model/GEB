@@ -50,7 +50,7 @@ class Hydrology(Data):
 
         super().__init__(model)
 
-        self.var = self.model.store.create_bucket("model.hydrology.var")
+        self.var = self.model.store.create_bucket("hydrology.var")
 
         self.dynamic_water_bodies = False
         self.crop_factor_calibration_factor = 1
