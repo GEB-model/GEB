@@ -1557,32 +1557,41 @@ class CropFarmers(AgentBaseClass):
             (self.n, HISTORICAL_PERIOD), dtype=np.float32
         )
 
+        # Calculate the cumulative inflation from the start year to the current year for each farmer
+        # the base year is not important here as we are only interested in the relative change
+        cumulative_inflation_since_base_year = np.cumprod(
+            np.stack(
+                [
+                    self.get_value_per_farmer_from_region_id(
+                        self.inflation_rate,
+                        datetime(year, 1, 1),
+                        subset=harvesting_farmers_long,
+                    )
+                    for year in range(
+                        self.model.current_time.year + 1 - HISTORICAL_PERIOD,
+                        self.model.current_time.year + 1,
+                    )
+                ],
+                axis=1,
+            ),
+            axis=1,
+        )
+
         # Compute the percentage loss between potential and actual profits for harvesting farmers
-        potential_profits = self.var.yearly_potential_profits[
-            harvesting_farmers_long, :HISTORICAL_PERIOD
-        ]
-        actual_profits = self.var.yearly_profits[
-            harvesting_farmers_long, :HISTORICAL_PERIOD
-        ]
-
-        # raise NotImplementedError("This function is not yet implemented")
-
-        # # Calculate the cumulative inflation from the start year to the current year for each farmer
-        # inflation_arrays = [
-        #     self.get_value_per_farmer_from_region_id(
-        #         self.inflation_rate, datetime(year, 1, 1)
-        #     )
-        #     for year in range(
-        #         self.model.config["general"]["spinup_time"].year + 1,
-        #         self.model.current_time.year + 1,
-        #     )
-        # ]
-
-        # # compute cumulative inflation for each farmer
-        # cumulative_inflation = np.prod(inflation_arrays, axis=0)
+        potential_profits_inflation_corrected = (
+            self.var.yearly_potential_profits[
+                harvesting_farmers_long, :HISTORICAL_PERIOD
+            ]
+            / cumulative_inflation_since_base_year
+        )
+        actual_profits_inflation_corrected = (
+            self.var.yearly_profits[harvesting_farmers_long, :HISTORICAL_PERIOD]
+            / cumulative_inflation_since_base_year
+        )
 
         drought_loss_historical[harvesting_farmers_long] = (
-            (potential_profits - actual_profits) / potential_profits
+            (potential_profits_inflation_corrected - actual_profits_inflation_corrected)
+            / potential_profits_inflation_corrected
         ) * 100
 
         # Calculate the current and past average loss percentages
@@ -3801,27 +3810,32 @@ class CropFarmers(AgentBaseClass):
 
         # Adjust for inflation in separate array for export
         # Calculate the cumulative inflation from the start year to the current year for each farmer
-        inflation_arrays = [
-            self.get_value_per_farmer_from_region_id(
-                self.inflation_rate, datetime(year, 1, 1)
-            )
-            for year in range(
-                self.model.config["general"]["spinup_time"].year,
-                self.model.current_time.year + 1,
-            )
-        ]
-
-        cum_inflation = np.ones_like(inflation_arrays[0])
-        for inflation in inflation_arrays:
-            cum_inflation *= inflation
-
-        self.var.adjusted_annual_loan_cost = (
-            self.var.all_loans_annual_cost / cum_inflation[..., None, None]
+        cumulative_inflation = np.prod(
+            [
+                self.get_value_per_farmer_from_region_id(
+                    self.inflation_rate, datetime(year, 1, 1)
+                )
+                for year in range(
+                    self.model.config["general"]["spinup_time"].year,
+                    self.model.current_time.year + 1,
+                )
+            ],
+            axis=0,
         )
 
-    def get_value_per_farmer_from_region_id(self, data, time) -> np.ndarray:
+        self.var.adjusted_annual_loan_cost = (
+            self.var.all_loans_annual_cost / cumulative_inflation[..., None, None]
+        )
+
+    def get_value_per_farmer_from_region_id(
+        self, data, time, subset=None
+    ) -> np.ndarray:
         index = data[0].get(time)
-        unique_region_ids, inv = np.unique(self.var.region_id, return_inverse=True)
+        if subset is not None:
+            region_id = self.var.region_id[subset]
+        else:
+            region_id = self.var.region_id
+        unique_region_ids, inv = np.unique(region_id, return_inverse=True)
         values = np.full_like(unique_region_ids, np.nan, dtype=np.float32)
         for i, region_id in enumerate(unique_region_ids):
             values[i] = data[1][region_id][index]
