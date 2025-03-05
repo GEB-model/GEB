@@ -532,7 +532,7 @@ def share(working_directory, name):
 
     folders = ["input"]
     files = ["model.yml", "build.yml"]
-    optional_files = ["sfincs.yml", "update.yml", "data_catalog.yml"]
+    optional_files = ["update.yml", "data_catalog.yml"]
     zip_filename = f"{name}.zip"
     with zipfile.ZipFile(zip_filename, "w") as zipf:
         total_files = (
