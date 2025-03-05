@@ -67,7 +67,9 @@ class ReservoirOperators(AgentBaseClass):
         super().__init__()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("agents.reservoir_operators.var")
+        self.var = self.model.store.create_bucket(
+            "model.agents.reservoir_operators.var"
+        )
 
     def set_reservoir_data(self, water_body_data):
         self.reservoirs = water_body_data[water_body_data["waterbody_type"] == 2].copy()

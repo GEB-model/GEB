@@ -30,7 +30,7 @@ class Industry(AgentBaseClass):
             self.spinup()
 
     def spinup(self) -> None:
-        self.var = self.model.store.create_bucket("agents.industry.var")
+        self.var = self.model.store.create_bucket("model.agents.industry.var")
         water_demand, efficiency = self.update_water_demand()
         self.var.current_water_demand = water_demand
         self.var.current_efficiency = efficiency

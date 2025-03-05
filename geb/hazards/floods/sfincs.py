@@ -3,16 +3,13 @@ from collections import deque
 from datetime import datetime
 import xarray as xr
 import zarr
+import json
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-from hydromt_sfincs import SfincsModel
-import hydromt
-from shapely.geometry import Point
-from rasterio.features import shapes
-import math
 import matplotlib.pyplot as plt
+from pyproj import CRS
 
+from ...HRUs import load_geom
 
 try:
     from geb_hydrodynamics.build_model import build_sfincs
@@ -34,7 +31,11 @@ from geb_hydrodynamics.estimate_discharge_for_return_periods import (
 class SFINCS:
     def __init__(self, model, config, n_timesteps=10):
         self.model = model
-        self.config = config
+        self.config = (
+            self.model.config["hazards"]["floods"]
+            if "floods" in self.model.config["hazards"]
+            else {}
+        )
         self.n_timesteps = n_timesteps
 
         self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
@@ -59,9 +60,7 @@ class SFINCS:
         elif "region" in event:
             return "region"
         else:
-            raise ValueError(
-                "Either 'basin_id' or 'region' must be specified in the event."
-            )
+            return "all"
 
     @property
     def data_catalogs(self):
@@ -74,15 +73,15 @@ class SFINCS:
         ]
 
     def get_utm_zone(self, region_file):
-        region = gpd.read_file(region_file)
-        # Step 1: Calculate the central longitude of the dataset
+        region = load_geom(region_file)
+        # Calculate the central longitude of the dataset
         centroid = region.geometry.centroid
         central_lon = centroid.x.mean()  # Mean longitude of the dataset
 
-        # Step 2: Determine the UTM zone based on the longitude
+        # Determine the UTM zone based on the longitude
         utm_zone = int((central_lon + 180) // 6) + 1
 
-        # Step 3: Determine if the data is in the Northern or Southern Hemisphere
+        # Determine if the data is in the Northern or Southern Hemisphere
         # The EPSG code for UTM in the northern hemisphere is EPSG:326xx (xx = zone)
         # The EPSG code for UTM in the southern hemisphere is EPSG:327xx (xx = zone)
         if centroid.y.mean() > 0:
@@ -91,84 +90,11 @@ class SFINCS:
             utm_crs = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
-    def get_detailed_catchment_outline(self, region_file):
-        region = gpd.read_file(region_file)
-        utm_zone = self.get_utm_zone(region_file)
-        region = region.to_crs(utm_zone)
-        area = region.geometry.area.item()
-        area = area / 1000000
-        rounded_area = math.floor(area / 100) * 100  # Round down to nearest hundred
-
-        def vectorize(data, nodata, transform, crs, name="value"):
-            feats_gen = shapes(data, mask=data != nodata, transform=transform)
-            feats = [
-                {"geometry": geom, "properties": {name: val}} for geom, val in feats_gen
-            ]
-            gdf = gpd.GeoDataFrame.from_features(feats, crs=crs)
-            gdf[name] = gdf[name].astype(data.dtype)
-            return gdf
-
-        # Initialize datacatalog with all sfincs data
-        sf = SfincsModel(data_libs=self.data_catalogs)
-        merit_hydro = sf.data_catalog.get_rasterdataset(
-            "merit_hydro", variables=["flwdir"], geom=region, buffer=100
-        )  # get flow directions from merit hydro dataset
-        flw = hydromt.flw.flwdir_from_da(
-            merit_hydro, ftype="d8", check_ftype=True, mask=None
-        )  # Put it in the correct data type
-        min_area = rounded_area  # TODO:check whether this would work for other catchments as well
-        subbas, idxs_out = flw.subbasins_area(
-            min_area
-        )  # Extract basin based on minimum upstream area
-        catchment_outline = vectorize(
-            subbas.astype(np.int32),
-            nodata=0,
-            transform=flw.transform,
-            crs=4326,
-            name="basin",
-        )  # Vectorize the basin
-        catchment_outline = catchment_outline.to_crs(
-            utm_zone
-        )  # TODO: check if this is the correct crs
-
-        def extract_middle_basin(gdf):
-            # Calculate the centroid of each basin
-            gdf["centroid"] = gdf.geometry.centroid
-
-            # Calculate the geometric center (mean of centroids) of all basins
-            mean_x = gdf.centroid.x.mean()
-            mean_y = gdf.centroid.y.mean()
-            geometric_center = Point(mean_x, mean_y)
-
-            # Find the basin whose centroid is closest to the geometric center
-            gdf["distance_to_center"] = gdf.centroid.apply(
-                lambda x: x.distance(geometric_center)
-            )
-            middle_basin = gdf.loc[gdf["distance_to_center"].idxmin()]
-
-            # Return the middle basin as a new GeoDataFrame
-            middle_basin_gdf = gpd.GeoDataFrame([middle_basin], geometry="geometry")
-
-            # Remove the temporary columns before returning
-            middle_basin_gdf = middle_basin_gdf.drop(
-                columns=["centroid", "distance_to_center"]
-            )
-            middle_basin_gdf = middle_basin_gdf.set_crs(utm_zone)
-            return middle_basin_gdf
-
-        detailed_region = extract_middle_basin(
-            catchment_outline
-        )  # We're only interested in the basin which is in the middle
-        detailed_region.to_file("detailed_region.gpkg", driver="GPKG")
-        detailed_region = detailed_region.to_crs(4326)
-        return detailed_region
-
-    def setup(self, event, config_fn="sfincs.yml", force_overwrite=False):
+    def setup(self, event):
         build_parameters = {}
 
-        if "basin_id" in event:
-            event_name = self.get_event_name(event)
-        elif "region" in event:
+        event_name = self.get_event_name(event)
+        if "region" in event:
             if event["region"] is None:
                 model_bbox = self.model.data.grid.bounds
                 build_parameters["bbox"] = (
@@ -179,11 +105,6 @@ class SFINCS:
                 )
             else:
                 raise NotImplementedError
-            event_name = self.get_event_name(event)
-        else:
-            raise ValueError(
-                "Either 'basin_id' or 'region' must be specified in the event."
-            )
 
         if (
             "simulate_coastal_floods" in self.model.config["general"]
@@ -191,28 +112,13 @@ class SFINCS:
         ):
             build_parameters["simulate_coastal_floods"] = True
 
-        detailed_region = self.get_detailed_catchment_outline(
-            region_file=self.model.files["geoms"]["region"]
-        )
+        model_root = self.sfincs_model_root(event_name)
 
-        build_parameters.update(
-            {
-                "config_fn": str(config_fn),
-                "model_root": self.sfincs_model_root(event_name),
-                "data_catalogs": self.data_catalogs,
-                "region": detailed_region,
-                "river_method": "default",
-                "depth_calculation": "power_law",
-                "discharge_ds": self.discharge_spinup_ds,
-                "discharge_name": "discharge_daily",
-                "uparea_ds": self.uparea_ds,
-                "uparea_name": "data",
-            }
-        )
         if (
-            force_overwrite
+            self.config["force_overwrite"]
             or not (self.sfincs_model_root(event_name) / "sfincs.inp").exists()
         ):
+            build_parameters = self.get_build_parameters(model_root)
             build_sfincs(**build_parameters)
 
     def to_sfincs_datetime(self, dt: datetime):
@@ -280,8 +186,6 @@ class SFINCS:
 
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
 
-        from pyproj import CRS
-
         # Convert the WKT string to a pyproj CRS object
         crs_obj = CRS.from_wkt(self.model.data.grid.crs)
 
@@ -328,13 +232,14 @@ class SFINCS:
         return None
 
     def run_single_event(self, event, start_time, return_period=None):
-        self.setup(event, force_overwrite=False)
+        self.setup(event)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         event_name = self.get_event_name(event)
         run_sfincs_simulation(
             simulation_root=self.sfincs_simulation_root(event_name),
             model_root=self.sfincs_model_root(event_name),
+            gpu=False,
         )
         flood_map = read_flood_map(
             model_root=self.sfincs_model_root(event_name),
@@ -365,38 +270,28 @@ class SFINCS:
         scaled_event["precipitation"] = sfincs_precipitation
         return scaled_event
 
-    def get_return_period_maps(self, config_fn="sfincs.yml", force_overwrite=True):
+    def get_return_period_maps(self):
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
         model_root = self.sfincs_model_root("entire_region")
-        if force_overwrite or not (model_root / "sfincs.inp").exists():
+        if self.config["force_overwrite"] or not (model_root / "sfincs.inp").exists():
             build_sfincs(
-                config_fn=str(config_fn),
-                model_root=model_root,
-                data_catalogs=self.data_catalogs,
-                region=gpd.read_file(self.model.files["geoms"]["region"]),
-                discharge_ds=self.discharge_spinup_ds,
-                uparea_ds=self.uparea_ds,
-                uparea_name="data",
-                discharge_name="discharge_daily",
-                river_method="default",
-                depth_calculation="power_law",
-                mask_flood_plains=False,  # setting this to True sometimes leads to errors
+                **self.get_build_parameters(model_root),
             )
         estimate_discharge_for_return_periods(
             model_root,
-            discharge_ds=self.discharge_spinup_ds,
-            uparea_ds=self.uparea_ds,
-            data_catalogs=self.data_catalogs,
-            discharge_ds_varname="discharge_daily",
+            discharge=self.discharge_spinup_ds,
+            rivers=self.rivers,
+            return_periods=self.config["return_periods"],
         )
         run_sfincs_for_return_periods(
             model_root=model_root,
-            return_periods=[2, 100, 1000],
-            gpu=False,
+            return_periods=self.config["return_periods"],
+            gpu=self.config["gpu"],
             export_dir=self.model.report_folder / "flood_maps",
+            clean_working_dir=True,
         )
 
         if hasattr(self.model, "reporter"):
@@ -467,7 +362,7 @@ class SFINCS:
     def discharge_spinup_ds(self):
         ds = xr.open_dataset(
             Path("report") / "spinup" / "discharge_daily.zarr.zip", engine="zarr"
-        )
+        )["discharge_daily"]
         # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
         # ds = ds.sel(time=slice(start_time, ds.time[-1]))
 
@@ -481,6 +376,29 @@ class SFINCS:
         return ds
 
     @property
-    def uparea_ds(self):
-        uparea_path = self.model.files["grid"]["routing/upstream_area"]
-        return xr.open_dataset(uparea_path, engine="zarr") / 1e6  # m2 to km2
+    def rivers(self):
+        return load_geom(self.model.files["geoms"]["routing/rivers"])
+
+    @property
+    def crs(self):
+        crs = self.config["crs"]
+        if crs == "auto":
+            crs = self.get_utm_zone(self.model.files["geoms"]["region"])
+        return crs
+
+    def get_build_parameters(self, model_root):
+        with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
+            DEM_config = json.load(f)
+        return {
+            "model_root": model_root,
+            "data_catalogs": self.data_catalogs,
+            "region": load_geom(self.model.files["geoms"]["routing/subbasins"]),
+            "DEM_config": DEM_config,
+            "rivers": self.rivers,
+            "discharge": self.discharge_spinup_ds,
+            "resolution": self.config["resolution"],
+            "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
+            "crs": self.crs,
+            "depth_calculation": "power_law",
+            "mask_flood_plains": False,  # setting this to True sometimes leads to errors
+        }

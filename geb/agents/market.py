@@ -36,7 +36,7 @@ class Market(AgentBaseClass):
         )
 
     def spinup(self) -> None:
-        self.var = self.model.store.create_bucket("agents.market.var")
+        self.var = self.model.store.create_bucket("model.agents.market.var")
         with open(self.model.files["dict"]["economics/inflation_rates"], "r") as f:
             inflation = json.load(f)
             inflation["time"] = [int(time) for time in inflation["time"]]
@@ -177,7 +177,7 @@ class Market(AgentBaseClass):
                 print("WARNING: Using static crop prices")
                 return np.full(
                     (
-                        len(self.model.regions),
+                        len(self.model.var.regions),
                         len(self.agents.crop_farmers.var.crop_ids),
                     ),
                     self._crop_prices[1],

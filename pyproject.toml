@@ -19,7 +19,7 @@ dependencies = [
     "deap>=1.4.1",
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
-    "honeybees>=1.1.0",
+    "honeybees>=1.1.1",
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.1.0",
     "isimip-client>=1.0.1",
@@ -87,7 +87,7 @@ full = [
 
 fairstream = [
     "pgmpy>=0.1.24",
-    "daft>=0.1.2",
+    "daft-pgm>=0.1.4",
     "opt-einsum>=3.3.0",
 ]
 

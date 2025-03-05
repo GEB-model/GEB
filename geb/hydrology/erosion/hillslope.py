@@ -224,7 +224,7 @@ class HillSlopeErosion:
         if not self.simulate:
             return None
 
-        self.var = self.model.store.create_bucket("hillslope_erosion.var")
+        self.var = self.model.store.create_bucket("model.hillslope_erosion.var")
 
         self.var.total_erosion = 0
 
@@ -248,7 +248,7 @@ class HillSlopeErosion:
         )
 
         # Is correct? -> Does not seem to be correct. Should be "length" of the element. But what is that?
-        self.HRU.var.cell_length = np.sqrt(self.HRU.var.cellArea)
+        self.HRU.var.cell_length = np.sqrt(self.HRU.var.cell_area)
 
         # NOTE: water depth in field seems quite deep now, and is not variable.
         # perhaps this should be made more dynamic?
@@ -493,7 +493,7 @@ class HillSlopeErosion:
         )
         # redeposited_material = redeposited_material_clay + redeposited_material_silt + redeposited_material_sand  # Is D the total material deposited?
 
-        transported_material_kg = transported_material * self.HRU.var.cellArea  # kg
+        transported_material_kg = transported_material * self.HRU.var.cell_area  # kg
 
         self.var.total_erosion += transported_material_kg.sum()
 

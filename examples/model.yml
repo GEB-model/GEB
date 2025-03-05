@@ -19,7 +19,7 @@ general:
   gauges:
     - [5.728271, 50.887133]
   region:
-    pour_point:
+    outflow:
       [5.728271, 50.887133]
 
 calibration:
@@ -250,11 +250,6 @@ report_hydrology:
     varname: data.grid.discharge
     function: null
     format: zarr
-    single_file: true
-  discharge_daily:
-    varname: data.grid.discharge
-    function: sample_coord,73.98727,19.00464
-    format: csv
     single_file: true
 
 parameters:

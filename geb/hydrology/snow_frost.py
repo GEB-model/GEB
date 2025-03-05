@@ -92,7 +92,7 @@ class SnowFrost(object):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("snowfrost.var")
+        self.var = self.model.store.create_bucket("model.snowfrost.var")
         self.var.numberSnowLayers = 3  # default 3
         self.HRU.var.glaciertransportZone = (
             1.0  # default 1 -> highest zone is transported to middle zone

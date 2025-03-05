@@ -1,7 +1,6 @@
 import datetime
 import shutil
 from pathlib import Path
-import geopandas as gpd
 from typing import Union
 from time import time
 import copy
@@ -18,6 +17,7 @@ from geb.artists import Artists
 from geb.HRUs import Data
 from .hydrology import Hydrology
 from geb.hazards.driver import HazardDriver
+from .HRUs import load_geom
 
 
 class ABM(ABM_Model):
@@ -81,11 +81,9 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         self,
         config: dict,
         files: dict,
-        crs=4326,
         mode="w",
         timing=False,
     ):
-        self.crs = crs
         self.timing = timing
         self.mode = mode
 
@@ -97,8 +95,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             for key, value in data.items():
                 data[key] = Path(config["general"]["input_folder"]) / value
 
-        self.regions = gpd.read_file(self.files["geoms"]["areamaps/regions"])
         self.store = Store(self)
+        self.artists = Artists(self)
 
     def restore(self, store_location, timestep):
         self.store.load(store_location)
@@ -222,9 +220,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
 
         if report:
             self.reporter = Reporter(self)
-        self.artists = Artists(self)
 
-    def run(self) -> None:
+    def run(self, initialize_only=False) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
         if not self.store.path.exists():
             raise FileNotFoundError(
@@ -251,13 +248,16 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             load_data_from_store=True,
         )
 
+        if initialize_only:
+            return
+
         for _ in range(self.n_timesteps):
             self.step()
 
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
-    def spinup(self) -> None:
+    def spinup(self, initialize_only=False) -> None:
         """Run the model for the spinup period."""
         run_name = "spinup"
 
@@ -283,6 +283,9 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             }
         }
 
+        self.var = self.store.create_bucket("model.var")
+        self.var.regions = load_geom(self.files["geoms"]["areamaps/regions"])
+
         self._initialize(
             run_name=run_name,
             report=True,
@@ -291,6 +294,9 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             clean_report_folder=True,
             in_spinup=True,
         )
+
+        if initialize_only:
+            return
 
         for _ in range(self.n_timesteps):
             self.step()
@@ -313,7 +319,7 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
-        self.sfincs.get_return_period_maps(force_overwrite=True)
+        self.sfincs.get_return_period_maps()
 
     @property
     def current_day_of_year(self) -> int:
@@ -349,6 +355,10 @@ class GEBModel(HazardDriver, ABM, Hydrology):
     @property
     def report_folder(self):
         return Path(self.config["general"]["report_folder"]) / self.run_name
+
+    @property
+    def crs(self):
+        return 4326
 
     def close(self) -> None:
         """Finalizes the model."""

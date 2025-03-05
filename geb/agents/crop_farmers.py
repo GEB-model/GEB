@@ -229,7 +229,7 @@ class CropFarmers(AgentBaseClass):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("agents.crop_farmers.var")
+        self.var = self.model.store.create_bucket("model.agents.crop_farmers.var")
 
         self.var.crop_data_type, self.var.crop_data = load_crop_data(self.model.files)
         self.var.crop_ids = self.var.crop_data["name"].to_dict()
@@ -969,7 +969,7 @@ class CropFarmers(AgentBaseClass):
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
             self.model.data.HRU.var.ETRef - self.model.data.HRU.pr
-        ) * self.model.data.HRU.var.cellArea
+        ) * self.model.data.HRU.var.cell_area
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 
         water_deficit_day_m3_per_farmer = np.bincount(
@@ -1412,7 +1412,7 @@ class CropFarmers(AgentBaseClass):
             assert (yield_ratio_per_field >= 0).all()
 
             harvesting_farmer_fields = self.HRU.var.land_owners[harvest]
-            harvested_area = self.HRU.var.cellArea[harvest]
+            harvested_area = self.HRU.var.cell_area[harvest]
 
             harvested_crops = self.HRU.var.crop_map[harvest]
             max_yield_per_crop = np.take(
@@ -1720,7 +1720,7 @@ class CropFarmers(AgentBaseClass):
         else:
             index = self.cultivation_costs[0].get(self.model.current_time)
             cultivation_cost = self.cultivation_costs[1][index]
-            assert cultivation_cost.shape[0] == len(self.model.regions)
+            assert cultivation_cost.shape[0] == len(self.model.var.regions)
             assert cultivation_cost.shape[1] == len(self.var.crop_ids)
 
         # interest_rate = self.get_value_per_farmer_from_region_id(
@@ -3864,7 +3864,7 @@ class CropFarmers(AgentBaseClass):
         return self.field_size_per_farmer_numba(
             self.var.field_indices_by_farmer.data,
             self.var.field_indices,
-            self.HRU.var.cellArea,
+            self.HRU.var.cell_area,
         )
 
     @property
@@ -3895,7 +3895,7 @@ class CropFarmers(AgentBaseClass):
             self.HRU.var.HRU_to_grid,
             self.var.field_indices,
             self.var.field_indices_by_farmer.data,
-            self.HRU.var.cellArea,
+            self.HRU.var.cell_area,
         )
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth

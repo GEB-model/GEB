@@ -15,7 +15,8 @@ from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
 
-compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+# Define the compressor for zarr files
+compressor = Blosc(cname="zlib", clevel=9, shuffle=0)  # no shuffling is most efficient
 
 
 class hydrology_reporter(ABMReporter):
@@ -60,7 +61,7 @@ class hydrology_reporter(ABMReporter):
                             else:
                                 time = pd.date_range(
                                     start=self.model.current_time,
-                                    periods=self.model.n_timesteps + 1,
+                                    periods=self.model.n_timesteps,
                                     freq=self.model.timestep_length,
                                 )
                         else:

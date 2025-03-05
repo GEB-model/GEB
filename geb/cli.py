@@ -246,6 +246,7 @@ def run_model_with_method(
             DISPLAY_TIMESTEPS,
             model_params=model_params,
             port=None,
+            initialization_method=method,
         )
         server.launch(port=port, browser=no_browser)
 
@@ -383,9 +384,7 @@ def customize_data_catalog(data_catalogs):
         return data_catalogs
 
 
-@cli.command()
-@click_build_options()
-def build(
+def build_fn(
     data_catalog, config, build_config, custom_model, working_directory, data_provider
 ):
     """Build model."""
@@ -416,27 +415,16 @@ def build(
         config["general"]["region"] = {}
         config["general"]["region"]["pour_point"] = config["general"]["pour_point"]
 
-    region = config["general"]["region"]
-    if "subbasin" in region:
-        region_config = {"subbasin": region["subbasin"]}
-    elif "outflow" in region:
-        outflow = region["outflow"]
-        region_config = {
-            "outflow": [[outflow[0]], [outflow[1]]],
-        }
-    elif "geometry" in region:
-        region_config = {
-            "geom": region["geometry"],
-        }
-    else:
-        raise ValueError(
-            "No region specified in config file, should be 'subbasin', 'outflow' or 'geometry'."
-        )
-
     geb_model.build(
         opt=configread(build_config),
-        region=region_config,
+        region=config["general"]["region"],
     )
+
+
+@cli.command()
+@click_build_options()
+def build(*args, **kwargs):
+    build_fn(*args, **kwargs)
 
 
 @cli.command()

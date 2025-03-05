@@ -89,8 +89,8 @@ class RunoffConcentration(object):
     def spinup(self):
         pass
 
-    def step(self, interflow, directRunoff):
-        assert (directRunoff >= 0).all()
+    def step(self, interflow, baseflow, runoff):
+        assert (runoff >= 0).all()
         assert (interflow >= 0).all()
-        assert (self.grid.var.baseflow >= 0).all()
-        self.grid.var.runoff = directRunoff + interflow + self.grid.var.baseflow
+        assert (baseflow >= 0).all()
+        return interflow + baseflow + runoff

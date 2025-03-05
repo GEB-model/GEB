@@ -2,6 +2,7 @@
 from typing import Union
 from numba import njit
 import rasterio
+import geopandas as gpd
 import warnings
 import math
 from affine import Affine
@@ -68,6 +69,10 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
             return data
     else:
         raise ValueError("File format not supported.")
+
+
+def load_geom(filepath):
+    return gpd.read_parquet(filepath)
 
 
 @njit(cache=True)
@@ -192,7 +197,7 @@ class BaseVariables:
         Returns:
             array: Data in cubic meters.
         """
-        return array * self.var.cellArea
+        return array * self.var.cell_area
 
     def M3toM(self, array: np.ndarray) -> np.ndarray:
         """Convert array from cubic meters to meters.
@@ -203,7 +208,7 @@ class BaseVariables:
         Returns:
             array: Data in meters.
         """
-        return array / self.var.cellArea
+        return array / self.var.cell_area
 
     def register_initial_data(self, name: str) -> None:
         """Register initial data."""
@@ -221,7 +226,7 @@ class Grid(BaseVariables):
     def __init__(self, data, model):
         self.data = data
         self.model = model
-        self.var = self.model.store.create_bucket("data.grid.var")
+        self.var = self.model.store.create_bucket("model.data.grid.var")
 
         self.scaling = 1
         mask, self.transform, self.crs = load_grid(
@@ -256,7 +261,7 @@ class Grid(BaseVariables):
 
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
-        self.var.cellArea = self.compress(self.cell_area_uncompressed)
+        self.var.cell_area = self.compress(self.cell_area_uncompressed)
 
         BaseVariables.__init__(self)
 
@@ -535,7 +540,7 @@ class HRUs(BaseVariables):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("data.HRU.var")
+        self.var = self.model.store.create_bucket("model.data.HRU.var")
 
         (
             self.var.land_use_type,
@@ -928,8 +933,8 @@ class Data:
         self.load_water_demand()
 
     def spinup(self):
-        self.HRU.var.cellArea = self.to_HRU(
-            data=self.grid.var.cellArea, fn="weightedsplit"
+        self.HRU.var.cell_area = self.to_HRU(
+            data=self.grid.var.cell_area, fn="weightedsplit"
         )
 
     def load_water_demand(self):
@@ -1087,8 +1092,8 @@ class Data:
         self.HRU.var.land_use_ratio = self.split_HRU_data(
             self.HRU.var.land_use_ratio, HRU, ratio=ratio
         )
-        self.HRU.var.cellArea = self.split_HRU_data(
-            self.HRU.var.cellArea, HRU, ratio=ratio
+        self.HRU.var.cell_area = self.split_HRU_data(
+            self.HRU.var.cell_area, HRU, ratio=ratio
         )
         self.HRU.var.crop_map = self.split_HRU_data(self.HRU.var.crop_map, HRU)
         self.HRU.var.crop_age_days_map = self.split_HRU_data(

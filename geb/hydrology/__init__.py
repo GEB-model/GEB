@@ -96,25 +96,24 @@ class Hydrology:
 
         (
             interflow,
-            directRunoff,
+            runoff,
             groundwater_recharge,
             groundwater_abstraction,
             channel_abstraction,
-            openWaterEvap,
-            returnFlow,
+            return_flow,
         ) = self.landcover.step()
         timer.new_split("Landcover")
 
-        self.groundwater.step(groundwater_recharge, groundwater_abstraction)
+        baseflow = self.groundwater.step(groundwater_recharge, groundwater_abstraction)
         timer.new_split("GW")
 
-        self.runoff_concentration.step(interflow, directRunoff)
+        total_runoff = self.runoff_concentration.step(interflow, baseflow, runoff)
         timer.new_split("Runoff concentration")
 
         self.lakes_res_small.step()
         timer.new_split("Small waterbodies")
 
-        self.routing.step(openWaterEvap, channel_abstraction, returnFlow)
+        self.routing.step(total_runoff, channel_abstraction, return_flow)
         timer.new_split("Routing")
 
         self.hillslope_erosion.step()
