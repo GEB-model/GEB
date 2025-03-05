@@ -1,0 +1,119 @@
+inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
+
+###
+# This section contains several general model settings.
+general:
+  ###
+  # model start time (YYYY-MM-DD).
+  start_time: 2021-07-01
+  ###
+  # model end time (YYYY-MM-DD).
+  end_time: 2021-12-31
+  # end_time: 2030-01-01
+  ###
+  # start of the spinup time (YYYY-MM-DD).
+  # spinup_time: 1999-01-01
+  # spinup_time: 1980-01-01
+  spinup_time: 2001-01-01
+  # spinup_time: 2020-01-01
+  ###
+  # base folder where to report output data to
+  region:
+    subbasin: 23011134
+hazards:
+  floods:
+    simulate: true
+    resolution: 100
+    nr_subgrid_pixels: 5
+    flood_risk: false
+    gpu: false
+    force_overwrite: true
+    return_periods:
+      - 2
+      - 1000
+    events:
+      - start_time: 2021-07-11
+        end_time: 2021-07-20
+
+###
+# Here, you can configure which data should be saved from the model in the `report` folder. This should be formatted as follows:
+#
+# - **name**: name of the folder to which the data is saved.
+#
+#   - **type**: agent type e.g., farmer. Should be identical to attribute name in Agents class.
+#   - **function**: whether to use a function to parse the data. 'null' means the data is saved literally, 'mean' takes the mean etc. Options are given in honeybees's documentation`.
+#   - **varname**: attribute name of variable in agent class.
+#   - **format**: format to save to.
+#   - **initial_only**: if true only save the data for the first timestep.
+#   - **save**: save variable in model run, or export, or both (save/save+export/export).
+report:
+  # crop_sample:
+  #   type: crop_farmers.var
+  #   function: sample
+  #   varname: _crops
+  #   single_file: true
+  #   format: csv
+  # irrigated_per_district:
+  #   type: crop_farmers.var
+  #   function: mean
+  #   varname: irrigated
+  #   single_file: true
+  #   format: csv
+  #   groupby: tehsil
+  # crops_per_district:
+  #   type: crop_farmers.var
+  #   function: groupcount,0,1
+  #   varname: crops
+  #   single_file: true
+  #   format: csv
+  #   groupby: tehsil
+  field_size:
+    type: crop_farmers
+    function: null
+    varname: field_size_per_farmer
+    frequency:
+      every: month
+      day: 1
+    format: npz
+  activation_order:
+    type: crop_farmers
+    function: null
+    varname: activation_order_by_elevation
+    format: npz
+    frequency: initial
+  groundwater_depth:
+    type: crop_farmers
+    function: null
+    varname: groundwater_depth
+    format: npz
+  # profit:
+  #   type: crop_farmers.var
+  #   function: null
+  #   varname: "profit"
+  #   format: npz
+  # disposable_income:
+  #   type: crop_farmers.var
+  #   function: mean
+  #   varname: disposable_income
+  #   aggregate: true
+  #   format: csv
+  irrigation_efficiency:
+    type: crop_farmers.var
+    function: mean
+    varname: irrigation_efficiency
+    format: npz
+
+###
+# In this section you can configure what CWatM data is saved, such as the groundwater head in each timestep, as follows:
+#
+# - **name**: name of the folder to which the data is saved.
+#
+#   - **varname**: attribute name of CWatM data. Should be precededed by 'var.' for data from CWatM cells and 'HRU.' for data from hydrologial units..
+#   - **function**: whether to use a function to parse the data. For example, 'mean' takes the mean etc. Options are 'mean', 'sum', 'nanmean' and 'nansum'.
+#   - **format**: format to save to.
+report_hydrology:
+  discharge_daily:
+    varname: hydrology.grid.var.discharge
+    function: null
+    format: zarr
+    single_file: true
