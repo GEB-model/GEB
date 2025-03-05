@@ -29,16 +29,17 @@ from geb_hydrodynamics.estimate_discharge_for_return_periods import (
 
 
 class SFINCS:
-    def __init__(self, model, config, n_timesteps=10):
+    def __init__(self, model, n_timesteps=10):
         self.model = model
-        self.config = (
-            self.model.config["hazards"]["floods"]
-            if "floods" in self.model.config["hazards"]
-            else {}
-        )
-        self.n_timesteps = n_timesteps
-
-        self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
+        if self.model.simulate_hydrology:
+            self.hydrology = model.hydrology
+            self.config = (
+                self.model.config["hazards"]["floods"]
+                if "floods" in self.model.config["hazards"]
+                else {}
+            )
+            self.n_timesteps = n_timesteps
+            self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
@@ -96,7 +97,7 @@ class SFINCS:
         event_name = self.get_event_name(event)
         if "region" in event:
             if event["region"] is None:
-                model_bbox = self.model.data.grid.bounds
+                model_bbox = self.hydrology.grid.bounds
                 build_parameters["bbox"] = (
                     model_bbox[0] + 0.1,
                     model_bbox[1] + 0.1,
@@ -125,10 +126,10 @@ class SFINCS:
         return dt.strftime("%Y%m%d %H%M%S")
 
     def set_forcing(self, event, start_time):
-        if self.model.config["general"]["simulate_hydrology"]:
+        if self.model.simulate_hydrology:
             n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
             substeps = self.discharge_per_timestep[0].shape[0]
-            discharge_grid = self.model.data.grid.decompress(
+            discharge_grid = self.hydrology.grid.decompress(
                 np.vstack(self.discharge_per_timestep)
             )
 
@@ -154,8 +155,8 @@ class SFINCS:
                         freq=self.model.timestep_length / substeps,
                         inclusive="right",
                     ),
-                    "y": self.model.data.grid.lat,
-                    "x": self.model.data.grid.lon,
+                    "y": self.hydrology.grid.lat,
+                    "x": self.hydrology.grid.lon,
                 },
                 dims=["time", "y", "x"],
                 name="discharge",
@@ -171,14 +172,14 @@ class SFINCS:
                 inclusive="right",
             )
             discharge_grid = np.zeros(
-                shape=(len(time), *self.model.data.grid.mask.shape)
+                shape=(len(time), *self.model.hydrology.grid.mask.shape)
             )
             discharge_grid = xr.DataArray(
                 data=discharge_grid,
                 coords={
                     "time": time,
-                    "y": self.model.data.grid.lat,
-                    "x": self.model.data.grid.lon,
+                    "y": self.hydrology.grid.lat,
+                    "x": self.hydrology.grid.lon,
                 },
                 dims=["time", "y", "x"],
                 name="discharge",
@@ -187,7 +188,7 @@ class SFINCS:
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
 
         # Convert the WKT string to a pyproj CRS object
-        crs_obj = CRS.from_wkt(self.model.data.grid.crs)
+        crs_obj = CRS.from_wkt(self.hydrology.grid.crs)
 
         # Now you can safely call to_proj4() on the CRS object
         discharge_grid.raster.set_crs(crs_obj.to_proj4())
@@ -355,7 +356,7 @@ class SFINCS:
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
-            self.model.data.grid.var.discharge_substep
+            self.hydrology.grid.var.discharge_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
     @property

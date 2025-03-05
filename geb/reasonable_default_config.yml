@@ -9,10 +9,8 @@ general:
   original_data: ../../../original_data/
   preprocessing_folder: preprocessing/
   report_folder: report/
-  init_water_table: report/init/water_table.npy
   name: default
   export_inital_on_spinup: true
-  simulate_hydrology: true
   simulate_forest: false
 
 hazards:
@@ -125,7 +123,7 @@ report:
 
 report_hydrology:
   discharge_daily:
-    varname: data.grid.discharge
+    varname: hydrology.grid.discharge
     function: null
     format: zarr
     single_file: true

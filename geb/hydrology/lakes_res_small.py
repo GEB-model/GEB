@@ -21,14 +21,13 @@
 
 
 class SmallLakesReservoirs(object):
-    def __init__(self, model):
-        """
-        Initialize small lakes and reservoirs
-        Read parameters from maps e.g
-        area, location, initial average discharge, type: reservoir or lake) etc.
-        """
-        self.var = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
         if self.model.in_spinup:
             self.spinup()
 

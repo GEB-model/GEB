@@ -985,22 +985,18 @@ def kv_brakensiek(thetas, clay, sand):
 
 
 class Soil(object):
-    def __init__(self, model):
-        """
-
-        Notes:
-        - We don't consider that bedrock does not impede percolation in line with https://doi.org/10.1029/2018WR022920
-        which states that connection to the stream is the exception rather than the rule
-        A better implementation would be to consider travel distance. But this remains a topic for future work.
-        """
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
         if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.soil.var")
+        self.var = self.model.store.create_bucket("hydrology.soil.var")
 
         # Soil properties
         self.HRU.var.soil_layer_height = self.HRU.compress(
@@ -1105,10 +1101,10 @@ class Soil(object):
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        natural_crop_groups = self.model.data.grid.load(
+        natural_crop_groups = self.hydrology.grid.load(
             self.model.files["grid"]["soil/cropgrp"]
         )
-        self.HRU.var.natural_crop_groups = self.model.data.to_HRU(
+        self.HRU.var.natural_crop_groups = self.hydrology.to_HRU(
             data=natural_crop_groups
         )
 
@@ -1126,7 +1122,7 @@ class Soil(object):
         elevation_std = self.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation_STD"]
         )
-        elevation_std = self.model.data.to_HRU(data=elevation_std, fn=None)
+        elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
         arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)
 
         arnoBetaOro += self.model.config["parameters"][
@@ -1225,10 +1221,12 @@ class Soil(object):
 
             from honeybees.library.raster import coord_to_pixel
 
-            px, py = coord_to_pixel(np.array([lon, lat]), gt=self.model.data.grid.gt)
+            px, py = coord_to_pixel(
+                np.array([lon, lat]), gt=self.model.hydrology.grid.gt
+            )
 
-            cell_ids = np.arange(self.model.data.grid.compressed_size)
-            cell_ids_map = self.model.data.grid.decompress(cell_ids, fillvalue=-1)
+            cell_ids = np.arange(self.hydrology.grid.compressed_size)
+            cell_ids_map = self.hydrology.grid.decompress(cell_ids, fillvalue=-1)
             cell_id = cell_ids_map[py, px]
 
             already_has_plantFATE_cell = False

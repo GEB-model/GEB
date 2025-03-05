@@ -36,7 +36,7 @@ class Market(AgentBaseClass):
         )
 
     def spinup(self) -> None:
-        self.var = self.model.store.create_bucket("model.agents.market.var")
+        self.var = self.model.store.create_bucket("agents.market.var")
         with open(self.model.files["dict"]["economics/inflation_rates"], "r") as f:
             inflation = json.load(f)
             inflation["time"] = [int(time) for time in inflation["time"]]
@@ -162,6 +162,8 @@ class Market(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
+        if not self.model.simulate_hydrology:
+            return
         self.track_production_and_price()
 
     @property

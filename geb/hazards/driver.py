@@ -12,11 +12,11 @@ class HazardDriver:
     def initialize(self, longest_flood_event):
         from geb.hazards.floods.sfincs import SFINCS
 
-        self.sfincs = SFINCS(self, config=self.config, n_timesteps=longest_flood_event)
+        self.sfincs = SFINCS(self, n_timesteps=longest_flood_event)
 
     def step(self, step_size):
         if self.config["hazards"]["floods"]["simulate"]:
-            if self.config["general"]["simulate_hydrology"]:
+            if self.simulate_hydrology:
                 self.sfincs.save_discharge()
 
             for event in self.config["hazards"]["floods"]["events"]:
