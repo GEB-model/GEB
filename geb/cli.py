@@ -1,5 +1,7 @@
 import click
 import os
+import platform
+import subprocess
 import tempfile
 import sys
 import cProfile
@@ -182,9 +184,17 @@ def run_model_with_method(
     optimize,
 ):
     """Run model."""
-
+    # check if we need to run the model in optimized mode
+    # if the model is already running in optimized mode, we don't need to restart it
+    # or else we start an infinite loop
     if optimize and sys.flags.optimize == 0:
-        os.execv(sys.executable, ["python", "-O"] + sys.argv)
+        if platform.system() == "Windows":
+            # If the script is not a .py file, we need to add the .exe extension
+            if not sys.argv[0].endswith(".py"):
+                sys.argv[0] = sys.argv[0] + ".exe"
+            subprocess.run([sys.executable, "-O"] + sys.argv)
+        else:
+            os.execv(sys.executable, ["-O"] + sys.argv)
 
     # set the working directory
     os.chdir(working_directory)
