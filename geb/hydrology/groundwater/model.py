@@ -379,17 +379,17 @@ class ModFlowSimulation:
             nvert=len(vertices),
             vertices=vertices,
             cell2d=cell2d,
-            top=self.model.data.grid.decompress(
+            top=self.model.hydrology.grid.decompress(
                 self.layer_boundary_elevation[0]
             ).tolist(),
-            botm=self.model.data.grid.decompress(
+            botm=self.model.hydrology.grid.decompress(
                 self.layer_boundary_elevation[1:]
             ).tolist(),
             idomain=domain.tolist(),
         )
 
         # Node property flow
-        k = self.model.data.grid.decompress(hydraulic_conductivity)
+        k = self.model.hydrology.grid.decompress(hydraulic_conductivity)
 
         # Initial conditions
         flopy.mf6.ModflowGwfic(groundwater_flow, strt=np.full_like(k, np.nan))
@@ -403,8 +403,8 @@ class ModFlowSimulation:
             k=k,
         )
 
-        sy = self.model.data.grid.decompress(specific_yield)
-        ss = self.model.data.grid.decompress(specific_storage)
+        sy = self.model.hydrology.grid.decompress(specific_yield)
+        ss = self.model.hydrology.grid.decompress(specific_storage)
 
         # Storage
         flopy.mf6.ModflowGwfsto(

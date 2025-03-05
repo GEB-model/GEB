@@ -210,10 +210,6 @@ class BaseVariables:
         """
         return array / self.var.cell_area
 
-    def register_initial_data(self, name: str) -> None:
-        """Register initial data."""
-        self.data.initial_conditions.append(name)
-
 
 class Grid(BaseVariables):
     """This class is to store data in the 'normal' grid cells. This class works with compressed and uncompressed arrays. On initialization of the class, the mask of the study area is read from disk. This is the shape of any uncompressed array. Many values in this array, however, fall outside the stuy area as they are masked. Therefore, the array can be compressed by saving only the non-masked values.
@@ -226,7 +222,7 @@ class Grid(BaseVariables):
     def __init__(self, data, model):
         self.data = data
         self.model = model
-        self.var = self.model.store.create_bucket("model.data.grid.var")
+        self.var = self.model.store.create_bucket("hydrology.grid.var")
 
         self.scaling = 1
         mask, self.transform, self.crs = load_grid(
@@ -540,7 +536,7 @@ class HRUs(BaseVariables):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.data.HRU.var")
+        self.var = self.model.store.create_bucket("hydrology.HRU.var")
 
         (
             self.var.land_use_type,
@@ -922,14 +918,13 @@ class Data:
 
         self.farms = load_grid(self.model.files["subgrid"]["agents/farmers/farms"])
 
-        self.initial_conditions = []
-
         self.grid = Grid(self, model)
         self.HRU = HRUs(self, model)
         self.modflow = Modflow(self, model)
 
         if self.model.in_spinup:
             self.spinup()
+
         self.load_water_demand()
 
     def spinup(self):
@@ -1144,8 +1139,8 @@ class Data:
         self.HRU.var.minInterceptCap = self.split_HRU_data(
             self.HRU.var.minInterceptCap, HRU
         )
-        self.HRU.var.interceptStor = self.split_HRU_data(
-            self.HRU.var.interceptStor, HRU
+        self.HRU.var.interception_storage = self.split_HRU_data(
+            self.HRU.var.interception_storage, HRU
         )
         self.HRU.var.potential_evapotranspiration_crop_life = self.split_HRU_data(
             self.HRU.var.potential_evapotranspiration_crop_life, HRU

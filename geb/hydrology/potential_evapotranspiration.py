@@ -181,13 +181,13 @@ class PotentialEvapotranspiration(object):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model):
-        """
-        The constructor evaporationPot
-        """
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -210,7 +210,7 @@ class PotentialEvapotranspiration(object):
             sfcWind=self.HRU.sfcWind,
         )
 
-        self.grid.var.EWRef = self.model.data.to_grid(
+        self.grid.var.EWRef = self.hydrology.to_grid(
             HRU_data=self.HRU.var.EWRef, fn="weightedmean"
         )
 

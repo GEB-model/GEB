@@ -43,10 +43,13 @@ def from_landuse_raster_to_polygon(mask, transform, crs):
 class Households(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
         self.agents = agents
         self.reduncancy = reduncancy
+
+        if self.model.simulate_hydrology:
+            self.HRU = model.hydrology.HRU
+            self.grid = model.hydrology.grid
+
 
         self.config = (
             self.model.config["agent_settings"]["households"]
@@ -54,6 +57,7 @@ class Households(AgentBaseClass):
             else {}
         )
         self.decision_module = DecisionModule(self, model=None)
+
         if self.model.in_spinup:
             self.spinup()
             self.assign_household_attributes()
@@ -188,7 +192,7 @@ class Households(AgentBaseClass):
         pass
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("model.agents.households.var")
+        self.var = self.model.store.create_bucket("agents.households.var")
 
         # Load buildings
         self.var.buildings = gpd.read_parquet(
@@ -393,8 +397,8 @@ class Households(AgentBaseClass):
         flood_map = rioxarray.open_rasterio(flood_path)
 
         agriculture = from_landuse_raster_to_polygon(
-            self.model.data.HRU.decompress(self.model.data.HRU.var.land_owners != -1),
-            self.model.data.HRU.transform,
+            self.HRU.decompress(self.HRU.var.land_owners != -1),
+            self.HRU.transform,
             self.model.crs,
         )
         agriculture["object_type"] = "agriculture"
@@ -412,10 +416,8 @@ class Households(AgentBaseClass):
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
-            self.model.data.HRU.decompress(
-                self.model.data.HRU.var.land_use_type == FOREST
-            ),
-            self.model.data.HRU.transform,
+            self.HRU.decompress(self.HRU.var.land_use_type == FOREST),
+            self.HRU.transform,
             self.model.crs,
         )
         forest["object_type"] = "forest"
@@ -483,7 +485,7 @@ class Households(AgentBaseClass):
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """
-        downscale_mask = self.HRU.var.land_use_type != SEALED
+        downscale_mask = self.model.hydrology.HRU.var.land_use_type != SEALED
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
         water_demand = (
             self.model.domestic_water_demand_ds.sel(
@@ -495,21 +497,22 @@ class Households(AgentBaseClass):
         water_demand = (
             water_demand.rio.set_crs(4326).rio.reproject(
                 4326,
-                shape=self.model.data.grid.shape,
-                transform=self.model.data.grid.transform,
+                shape=self.model.hydrology.grid.shape,
+                transform=self.model.hydrology.grid.transform,
             )
-            / (water_demand.rio.transform().a / self.model.data.grid.transform.a) ** 2
+            / (water_demand.rio.transform().a / self.model.hydrology.grid.transform.a)
+            ** 2
         )
         water_demand = downscale_volume(
             water_demand.rio.transform().to_gdal(),
-            self.model.data.grid.gt,
+            self.model.hydrology.grid.gt,
             water_demand.values,
-            self.model.data.grid.mask,
-            self.model.data.grid_to_HRU_uncompressed,
+            self.model.hydrology.grid.mask,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.var.land_use_ratio,
+            self.model.hydrology.HRU.var.land_use_ratio,
         )
-        water_demand = self.model.data.HRU.M3toM(water_demand)
+        water_demand = self.model.hydrology.HRU.M3toM(water_demand)
 
         water_consumption = (
             self.model.domestic_water_consumption_ds.sel(
@@ -521,22 +524,25 @@ class Households(AgentBaseClass):
         water_consumption = (
             water_consumption.rio.set_crs(4326).rio.reproject(
                 4326,
-                shape=self.model.data.grid.shape,
-                transform=self.model.data.grid.transform,
+                shape=self.model.hydrology.grid.shape,
+                transform=self.model.hydrology.grid.transform,
             )
-            / (water_consumption.rio.transform().a / self.model.data.grid.transform.a)
+            / (
+                water_consumption.rio.transform().a
+                / self.model.hydrology.grid.transform.a
+            )
             ** 2
         )
         water_consumption = downscale_volume(
             water_consumption.rio.transform().to_gdal(),
-            self.model.data.grid.gt,
+            self.model.hydrology.grid.gt,
             water_consumption.values,
-            self.model.data.grid.mask,
-            self.model.data.grid_to_HRU_uncompressed,
+            self.model.hydrology.grid.mask,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.var.land_use_ratio,
+            self.model.hydrology.HRU.var.land_use_ratio,
         )
-        water_consumption = self.model.data.HRU.M3toM(water_consumption)
+        water_consumption = self.model.hydrology.HRU.M3toM(water_consumption)
 
         efficiency = np.divide(
             water_consumption,
@@ -545,7 +551,7 @@ class Households(AgentBaseClass):
             where=water_demand != 0,
         )
 
-        efficiency = self.model.data.to_grid(HRU_data=efficiency, fn="max")
+        efficiency = self.model.hydrology.to_grid(HRU_data=efficiency, fn="max")
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()
@@ -571,7 +577,10 @@ class Households(AgentBaseClass):
 
     def step(self) -> None:
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
-            self.decide_household_strategy()
+            print("Thinking about adapting...")
+            print("Oh no, where is DYNAMO?")
+        return None
+        # self.decide_household_strategy()
 
     @property
     def n(self):

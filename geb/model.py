@@ -5,28 +5,22 @@ from typing import Union
 from time import time
 import copy
 import numpy as np
+from dateutil.relativedelta import relativedelta
 
 from honeybees.library.helpers import timeprint
-from honeybees.area import Area
 from honeybees.model import Model as ABM_Model
 
 from geb.store import Store
 from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
-from geb.HRUs import Data
 from .hydrology import Hydrology
 from geb.hazards.driver import HazardDriver
 from .HRUs import load_geom
 
 
 class ABM(ABM_Model):
-    def __init__(
-        self,
-        current_time,
-        timestep_length,
-        n_timesteps,
-    ) -> None:
+    def __init__(self, current_time, n_timesteps) -> None:
         """Initializes the agent-based model.
 
         Args:
@@ -38,19 +32,11 @@ class ABM(ABM_Model):
         ABM_Model.__init__(
             self,
             current_time,
-            timestep_length,
-            args=None,
+            self.timestep_length,
             n_timesteps=n_timesteps,
+            args=None,
         )
 
-        study_area = {
-            "xmin": self.data.grid.bounds[0],
-            "xmax": self.data.grid.bounds[2],
-            "ymin": self.data.grid.bounds[1],
-            "ymax": self.data.grid.bounds[3],
-        }
-
-        self.area = Area(self, study_area)
         self.agents = Agents(self)
 
         # This variable is required for the batch runner. To stop the model
@@ -61,7 +47,7 @@ class ABM(ABM_Model):
         self.agents.step()
 
 
-class GEBModel(HazardDriver, ABM, Hydrology):
+class GEBModel(HazardDriver, ABM):
     """GEB parent class.
 
     Args:
@@ -147,8 +133,8 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             t0 = time()
             HazardDriver.step(self, 1)
             ABM.step(self)
-            if self.config["general"]["simulate_hydrology"]:
-                Hydrology.step(self)
+            if self.simulate_hydrology:
+                self.hydrology.step()
 
             t1 = time()
             print(
@@ -168,55 +154,44 @@ class GEBModel(HazardDriver, ABM, Hydrology):
 
     def _initialize(
         self,
-        run_name,
         report,
         current_time,
-        end_time,
+        n_timesteps,
+        timestep_length,
         in_spinup=False,
+        simulate_hydrology=True,
         clean_report_folder=False,
         load_data_from_store=False,
     ) -> None:
         """Initializes the model."""
-        self.run_name = run_name
         self.in_spinup = in_spinup
+        self.simulate_hydrology = simulate_hydrology
 
         # optionally clean report model at start of run
         if clean_report_folder:
             shutil.rmtree(self.report_folder, ignore_errors=True)
 
-        self.data = Data(self)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.spinup_start = datetime.datetime.combine(
             self.config["general"]["spinup_time"], datetime.time(0)
         )
 
-        timestep_length = datetime.timedelta(days=1)
-        self.seconds_per_timestep = timestep_length.total_seconds()
-        n_timesteps = (end_time - current_time) / timestep_length
-        assert n_timesteps.is_integer()
-        n_timesteps = int(n_timesteps)
-        assert n_timesteps > 0, "End time is before or identical to start time"
+        self.timestep_length = timestep_length
+
+        if self.simulate_hydrology:
+            self.hydrology = Hydrology(self)
 
         HazardDriver.__init__(self)
 
-        ABM.__init__(
-            self,
-            current_time,
-            timestep_length,
-            n_timesteps,
-        )
-
-        if self.config["general"]["simulate_hydrology"]:
-            Hydrology.__init__(
-                self,
-            )
+        ABM.__init__(self, current_time, n_timesteps)
 
         if load_data_from_store:
             self.store.load()
 
-        self.groundwater.initalize_modflow_model()
-        self.soil.set_global_variables()
+        if self.simulate_hydrology:
+            self.hydrology.groundwater.initalize_modflow_model()
+            self.hydrology.soil.set_global_variables()
 
         if report:
             self.reporter = Reporter(self)
@@ -228,22 +203,20 @@ class GEBModel(HazardDriver, ABM, Hydrology):
                 f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
             )
 
-        if "name" in self.config["general"]:
-            run_name = self.config["general"]["name"]
-        else:
-            print('No "name" specified in config file under general. Using "default".')
-            run_name = "default"
-
         current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(
-            self.config["general"]["end_time"]
-        ) + datetime.timedelta(days=1)
+        end_time = self.create_datetime(self.config["general"]["end_time"])
+
+        timestep_length = datetime.timedelta(days=1)
+        n_timesteps = (end_time + timestep_length - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
 
         self._initialize(
-            run_name=run_name,
             report=True,
             current_time=current_time,
-            end_time=end_time,
+            n_timesteps=n_timesteps,
+            timestep_length=timestep_length,
             clean_report_folder=True,
             load_data_from_store=True,
         )
@@ -257,18 +230,51 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
+    def run_yearly(self) -> None:
+        current_time = self.create_datetime(self.config["general"]["start_time"])
+        end_time = self.create_datetime(self.config["general"]["end_time"])
+
+        assert current_time.month == 1 and current_time.day == 1, (
+            "In yearly mode start time should be the first day of the year"
+        )
+        assert end_time.month == 12 and end_time.day == 31, (
+            "In yearly mode end time should be the last day of the year"
+        )
+
+        n_timesteps = end_time.year - current_time.year + 1
+
+        self._initialize(
+            report=True,
+            current_time=current_time,
+            n_timesteps=n_timesteps,
+            timestep_length=relativedelta(years=1),
+            simulate_hydrology=False,
+            clean_report_folder=True,
+            load_data_from_store=True,
+        )
+
+        for _ in range(self.n_timesteps):
+            self.step()
+
+        print("Model run finished, finalizing report...")
+        self.reporter.finalize()
+
     def spinup(self, initialize_only=False) -> None:
         """Run the model for the spinup period."""
-        run_name = "spinup"
-
         # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
         current_time = self.create_datetime(self.config["general"]["spinup_time"])
-        end_time = self.create_datetime(self.config["general"]["start_time"])
+        end_time_exclusive = self.create_datetime(self.config["general"]["start_time"])
 
-        if end_time.year - current_time.year < 10:
+        if end_time_exclusive.year - current_time.year < 10:
             print(
                 "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
             )
+
+        timestep_length = datetime.timedelta(days=1)
+        n_timesteps = (end_time_exclusive - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
 
         # turn off any reporting for the ABM
         self.config["report"] = {}
@@ -276,21 +282,21 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         # export discharge as zarr file for the hydrological model
         self.config["report_hydrology"] = {
             "discharge_daily": {
-                "varname": "data.grid.var.discharge",
+                "varname": "hydrology.grid.var.discharge",
                 "function": None,
                 "format": "zarr",
                 "single_file": True,
             }
         }
 
-        self.var = self.store.create_bucket("model.var")
+        self.var = self.store.create_bucket("var")
         self.var.regions = load_geom(self.files["geoms"]["areamaps/regions"])
 
         self._initialize(
-            run_name=run_name,
             report=True,
             current_time=current_time,
-            end_time=end_time,
+            n_timesteps=n_timesteps,
+            timestep_length=datetime.timedelta(days=1),
             clean_report_folder=True,
             in_spinup=True,
         )
@@ -308,14 +314,15 @@ class GEBModel(HazardDriver, ABM, Hydrology):
     def estimate_risk(self) -> None:
         """Estimate the risk of the model."""
         current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(self.config["general"]["end_time"])
+        self.config["general"]["name"] = "estimate_risk"
 
         self._initialize(
-            run_name="estimate_risk",
             report=False,
             current_time=current_time,
-            end_time=end_time,
+            n_timesteps=0,
+            timestep_length=relativedelta(years=1),
             load_data_from_store=True,
+            simulate_hydrology=False,
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
@@ -353,6 +360,19 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         return folder
 
     @property
+    def run_name(self):
+        if self.in_spinup:
+            return "spinup"
+        else:
+            if "name" in self.config["general"]:
+                return self.config["general"]["name"]
+            else:
+                print(
+                    'No "name" specified in config file under general. Using "default".'
+                )
+                return "default"
+
+    @property
     def report_folder(self):
         return Path(self.config["general"]["report_folder"]) / self.run_name
 
@@ -362,7 +382,11 @@ class GEBModel(HazardDriver, ABM, Hydrology):
 
     def close(self) -> None:
         """Finalizes the model."""
-        if self.mode == "w" and self.config["general"]["simulate_hydrology"]:
+        if (
+            self.mode == "w"
+            and hasattr(self, "simulate_hydrology")
+            and self.simulate_hydrology
+        ):
             Hydrology.finalize(self)
 
             from geb.workflows import all_async_readers

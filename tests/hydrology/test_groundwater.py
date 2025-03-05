@@ -62,7 +62,7 @@ class DummyGrid:
         return decompress(array, basin_mask)
 
 
-class DummyData:
+class DummyHydrology:
     def __init__(self):
         self.grid = DummyGrid()
 
@@ -70,7 +70,7 @@ class DummyData:
 class DummyModel:
     def __init__(self):
         self.simulation_root_spinup = tmp_folder / "modflow"
-        self.data = DummyData()
+        self.hydrology = DummyHydrology()
 
 
 default_params = {
