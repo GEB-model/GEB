@@ -31,13 +31,13 @@ from geb_hydrodynamics.estimate_discharge_for_return_periods import (
 class SFINCS:
     def __init__(self, model, n_timesteps=10):
         self.model = model
+        self.config = (
+            self.model.config["hazards"]["floods"]
+            if "floods" in self.model.config["hazards"]
+            else {}
+        )
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
-            self.config = (
-                self.model.config["hazards"]["floods"]
-                if "floods" in self.model.config["hazards"]
-                else {}
-            )
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 

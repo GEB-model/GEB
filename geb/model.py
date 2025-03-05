@@ -314,14 +314,15 @@ class GEBModel(HazardDriver, ABM):
     def estimate_risk(self) -> None:
         """Estimate the risk of the model."""
         current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(self.config["general"]["end_time"])
+        self.config["general"]["name"] = "estimate_risk"
 
         self._initialize(
-            run_name="estimate_risk",
             report=False,
             current_time=current_time,
-            end_time=end_time,
+            n_timesteps=0,
+            timestep_length=relativedelta(years=1),
             load_data_from_store=True,
+            simulate_hydrology=False,
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
@@ -381,7 +382,11 @@ class GEBModel(HazardDriver, ABM):
 
     def close(self) -> None:
         """Finalizes the model."""
-        if self.mode == "w" and self.simulate_hydrology:
+        if (
+            self.mode == "w"
+            and hasattr(self, "simulate_hydrology")
+            and self.simulate_hydrology
+        ):
             Hydrology.finalize(self)
 
             from geb.workflows import all_async_readers
