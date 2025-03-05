@@ -26,10 +26,13 @@ from ..routing import get_channel_ratio
 
 
 class GroundWater:
-    def __init__(self, model):
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -138,7 +141,7 @@ class GroundWater:
         baseflow = groundwater_drainage * channel_ratio
 
         # capriseindex is 1 where capilary rise occurs
-        self.model.data.HRU.capriseindex = self.model.data.to_HRU(
+        self.model.data.HRU.capriseindex = self.hydrology.data.to_HRU(
             data=np.float32(groundwater_drainage > 0)
         )
 

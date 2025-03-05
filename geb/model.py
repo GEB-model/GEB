@@ -15,7 +15,6 @@ from geb.store import Store
 from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
-from geb.HRUs import Data
 from .hydrology import Hydrology
 from geb.hazards.driver import HazardDriver
 from .HRUs import load_geom
@@ -44,14 +43,6 @@ class ABM(ABM_Model):
             n_timesteps=n_timesteps,
         )
 
-        study_area = {
-            "xmin": self.data.grid.bounds[0],
-            "xmax": self.data.grid.bounds[2],
-            "ymin": self.data.grid.bounds[1],
-            "ymax": self.data.grid.bounds[3],
-        }
-
-        self.area = Area(self, study_area)
         self.agents = Agents(self)
 
         # This variable is required for the batch runner. To stop the model
@@ -62,7 +53,7 @@ class ABM(ABM_Model):
         self.agents.step()
 
 
-class GEBModel(HazardDriver, ABM, Hydrology):
+class GEBModel(HazardDriver, ABM):
     """GEB parent class.
 
     Args:
@@ -186,12 +177,14 @@ class GEBModel(HazardDriver, ABM, Hydrology):
         if clean_report_folder:
             shutil.rmtree(self.report_folder, ignore_errors=True)
 
-        self.data = Data(self)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.spinup_start = datetime.datetime.combine(
             self.config["general"]["spinup_time"], datetime.time(0)
         )
+
+        if self.simulate_hydrology:
+            self.hydrology = Hydrology(self)
 
         HazardDriver.__init__(self)
 
@@ -202,16 +195,12 @@ class GEBModel(HazardDriver, ABM, Hydrology):
             n_timesteps,
         )
 
-        if self.simulate_hydrology:
-            Hydrology.__init__(
-                self,
-            )
-
         if load_data_from_store:
             self.store.load()
 
-        self.groundwater.initalize_modflow_model()
-        self.soil.set_global_variables()
+        if self.simulate_hydrology:
+            self.groundwater.initalize_modflow_model()
+            self.soil.set_global_variables()
 
         if report:
             self.reporter = Reporter(self)

@@ -45,9 +45,12 @@ class SealedWater(object):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model):
-        self.HRU = model.data.HRU
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
 
         if self.model.in_spinup:
             self.spinup()

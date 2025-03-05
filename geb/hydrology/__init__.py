@@ -19,10 +19,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-import os
-
 import numpy as np
 from geb.workflows import TimingModule, balance_check
+from geb.HRUs import Data
 
 from .potential_evapotranspiration import PotentialEvapotranspiration
 from .snow_frost import SnowFrost
@@ -41,36 +40,35 @@ from .erosion.hillslope import HillSlopeErosion
 
 
 class Hydrology:
-    def __init__(self):
+    def __init__(self, model):
         """
         Init part of the initial part
         defines the mask map and the outlet points
         initialization of the hydrological modules
         """
-        self.HRU = self.data.HRU
-        self.grid = self.data.grid
+        self.model = model
+        self.data = Data(self.model, self)
 
-        self.init_water_table_file = os.path.join(
-            self.config["general"]["init_water_table"]
-        )
         self.DynamicResAndLakes = False
         self.useSmallLakes = False
         self.crop_factor_calibration_factor = 1
 
-        self.potential_evapotranspiration = PotentialEvapotranspiration(self)
-        self.snowfrost = SnowFrost(self)
-        self.landcover = LandCover(self)
-        self.soil = Soil(self)
-        self.evaporation = Evaporation(self)
-        self.groundwater = GroundWater(self)
-        self.interception = Interception(self)
-        self.sealed_water = SealedWater(self)
-        self.runoff_concentration = RunoffConcentration(self)
-        self.lakes_res_small = SmallLakesReservoirs(self)
-        self.routing = Routing(self)
-        self.lakes_reservoirs = LakesReservoirs(self)
-        self.water_demand = WaterDemand(self)
-        self.hillslope_erosion = HillSlopeErosion(self)
+        self.potential_evapotranspiration = PotentialEvapotranspiration(
+            self.model, self
+        )
+        self.snowfrost = SnowFrost(self.model, self)
+        self.landcover = LandCover(self.model, self)
+        self.soil = Soil(self.model, self)
+        self.evaporation = Evaporation(self.model, self)
+        self.groundwater = GroundWater(self.model, self)
+        self.interception = Interception(self.model, self)
+        self.sealed_water = SealedWater(self.model, self)
+        self.runoff_concentration = RunoffConcentration(self.model, self)
+        self.lakes_res_small = SmallLakesReservoirs(self.model, self)
+        self.routing = Routing(self.model, self)
+        self.lakes_reservoirs = LakesReservoirs(self.model, self)
+        self.water_demand = WaterDemand(self.model, self)
+        self.hillslope_erosion = HillSlopeErosion(self.model, self)
 
     def step(self):
         """
@@ -140,15 +138,6 @@ class Hydrology:
             for plantFATE_model in self.model.plantFATE:
                 if plantFATE_model is not None:
                     plantFATE_model.finalize()
-
-    def export_water_table(self) -> None:
-        """Function to save required water table output to file."""
-        dirname = os.path.dirname(self.init_water_table_file)
-        os.makedirs(dirname, exist_ok=True)
-        np.save(
-            self.init_water_table_file,
-            self.groundwater.modflow.decompress(self.groundwater.modflow.head),
-        )
 
     @property
     def n_individuals_per_m2(self):

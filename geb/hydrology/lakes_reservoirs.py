@@ -160,13 +160,12 @@ def get_lake_outflow_and_storage(
 
 
 class LakesReservoirs(object):
-    def __init__(self, model):
-        """
-        Initialize water bodies
-        """
-
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
 
         if self.model.in_spinup:
             self.spinup()

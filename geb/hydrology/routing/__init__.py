@@ -66,13 +66,14 @@ class Routing(object):
     lddCompress           compressed river network (without missing values)                                 --
     routing_step_length_seconds             number of seconds per routing timestep                                            s
     discharge             discharge                                                                         m3/s
-    cell_area              Cell area [m²] of each simulated mesh
     """
 
-    def __init__(self, model):
-        self.grid = model.data.grid
-        self.HRU = model.data.HRU
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
 
         if self.model.in_spinup:
             self.spinup()

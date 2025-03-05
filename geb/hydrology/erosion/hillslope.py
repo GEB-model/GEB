@@ -211,10 +211,13 @@ class HillSlopeErosion:
     or event-based soil loss by considering the detachment and transport of soil
     particles separately."""
 
-    def __init__(self, model):
-        """The constructor erosion"""
-        self.HRU = model.data.HRU
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
+
         self.simulate = self.model.config["hazards"]["erosion"]["simulate"]
 
         if self.model.in_spinup:
@@ -240,7 +243,7 @@ class HillSlopeErosion:
         # need to see what this is.
         self.HRU.var.cover = self.HRU.full_compressed(0, dtype=np.float32)
 
-        self.HRU.var.slope = self.model.data.to_HRU(
+        self.HRU.var.slope = self.hydrology.data.to_HRU(
             data=self.model.data.grid.load(
                 self.model.files["grid"]["landsurface/topo/slope"]
             ),

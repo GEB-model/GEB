@@ -985,17 +985,13 @@ def kv_brakensiek(thetas, clay, sand):
 
 
 class Soil(object):
-    def __init__(self, model):
-        """
-
-        Notes:
-        - We don't consider that bedrock does not impede percolation in line with https://doi.org/10.1029/2018WR022920
-        which states that connection to the stream is the exception rather than the rule
-        A better implementation would be to consider travel distance. But this remains a topic for future work.
-        """
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -1108,7 +1104,7 @@ class Soil(object):
         natural_crop_groups = self.model.data.grid.load(
             self.model.files["grid"]["soil/cropgrp"]
         )
-        self.HRU.var.natural_crop_groups = self.model.data.to_HRU(
+        self.HRU.var.natural_crop_groups = self.hydrology.data.to_HRU(
             data=natural_crop_groups
         )
 
@@ -1126,7 +1122,7 @@ class Soil(object):
         elevation_std = self.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation_STD"]
         )
-        elevation_std = self.model.data.to_HRU(data=elevation_std, fn=None)
+        elevation_std = self.hydrology.data.to_HRU(data=elevation_std, fn=None)
         arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)
 
         arnoBetaOro += self.model.config["parameters"][

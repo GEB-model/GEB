@@ -77,16 +77,12 @@ class SnowFrost(object):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model):
-        """
-        Initial part of the snow and frost module
-
-        * loads all the parameters for the day-degree approach for rain, snow and snowmelt
-        * loads the parameter for frost
-        """
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
 
         if self.model.in_spinup:
             self.spinup()
@@ -157,7 +153,7 @@ class SnowFrost(object):
         elevation_std = self.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation_STD"]
         )
-        elevation_std = self.model.data.to_HRU(data=elevation_std, fn=None)
+        elevation_std = self.hydrology.data.to_HRU(data=elevation_std, fn=None)
 
         self.HRU.var.DeltaTSnow = elevation_std * TemperatureLapseRate
 
@@ -181,7 +177,7 @@ class SnowFrost(object):
         # initialize snowcovers as many as snow layers -> read them as SnowCover1 , SnowCover2 ...
         # SnowCover1 is the highest zone
         self.HRU.var.SnowCoverS = np.tile(
-            self.model.data.to_HRU(
+            self.hydrology.data.to_HRU(
                 data=self.grid.full_compressed(0, dtype=np.float32),
                 fn=None,
             ),

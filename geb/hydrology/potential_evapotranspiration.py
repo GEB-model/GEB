@@ -181,13 +181,13 @@ class PotentialEvapotranspiration(object):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model):
-        """
-        The constructor evaporationPot
-        """
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
+
         if self.model.in_spinup:
             self.spinup()
 

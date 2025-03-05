@@ -917,8 +917,9 @@ class Data:
         model: The GEB model.
     """
 
-    def __init__(self, model):
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
 
         self.farms = load_grid(self.model.files["subgrid"]["agents/farmers/farms"])
 

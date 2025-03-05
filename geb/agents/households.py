@@ -42,8 +42,6 @@ def from_landuse_raster_to_polygon(mask, transform, crs):
 class Households(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
         self.model = model
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
         self.agents = agents
         self.reduncancy = reduncancy
 

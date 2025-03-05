@@ -57,10 +57,13 @@ class Interception(object):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model):
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -122,7 +125,7 @@ class Interception(object):
         for cover in ALL_LAND_COVER_TYPES:
             coverType_indices = np.where(self.HRU.var.land_use_type == cover)
             if cover in (FOREST, GRASSLAND_LIKE):
-                interception_cover = self.model.data.to_HRU(
+                interception_cover = self.hydrology.data.to_HRU(
                     data=self.grid.var.interception[cover][
                         (self.model.current_day_of_year - 1) // 10
                     ],

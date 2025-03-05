@@ -35,15 +35,13 @@ from geb.workflows import TimingModule, balance_check
 
 
 class WaterDemand:
-    def __init__(self, model):
-        """
-        Initial part of the water demand module
-
-        Set the water allocation
-        """
+    def __init__(self, model, hydrology):
         self.model = model
-        self.grid = model.data.grid
-        self.HRU = model.data.HRU
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
+
         self.crop_farmers = model.agents.crop_farmers
         self.livestock_farmers = model.agents.livestock_farmers
         self.industry = model.agents.industry

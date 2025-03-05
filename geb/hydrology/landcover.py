@@ -91,12 +91,12 @@ def get_crop_kc_and_root_depths(
 
 
 class LandCover(object):
-    def __init__(self, model):
-        """ """
-        self.HRU = model.data.HRU
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
-        self.crop_farmers = model.agents.crop_farmers
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.data.HRU
+        self.grid = hydrology.data.grid
 
         if self.model.in_spinup:
             self.spinup()
@@ -340,7 +340,7 @@ class LandCover(object):
             & (self.HRU.var.land_owners != -1)
         ] = 0.05  # fallow land. The rooting depth
 
-        forest_cropCoefficientNC = self.model.data.to_HRU(
+        forest_cropCoefficientNC = self.hydrology.data.to_HRU(
             data=self.model.data.grid.compress(
                 self.grid.var.forest_kc_per_10_days[
                     (self.model.current_day_of_year - 1) // 10
@@ -385,7 +385,7 @@ class LandCover(object):
         timer.new_split("Demand")
 
         # Soil for forest, grassland, and irrigated land
-        capillar = self.model.data.to_HRU(
+        capillar = self.hydrology.data.to_HRU(
             data=self.model.data.grid.var.capillar, fn=None
         )
 
