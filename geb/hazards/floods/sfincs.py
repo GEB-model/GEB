@@ -4,6 +4,8 @@ from datetime import datetime
 import xarray as xr
 import zarr
 import json
+import platform
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -287,8 +289,16 @@ class SFINCS:
             rivers=self.rivers,
             return_periods=self.config["return_periods"],
         )
+        if platform.system() == "Windows":
+            # On Windoes, the working dir must be a subfolder of the model_root
+            working_dir = model_root / "working_dir"
+        else:
+            # For other systems we can use a temporary directory
+            working_dir = Path(os.getenv("TMPDIR", "/tmp"))
+
         run_sfincs_for_return_periods(
             model_root=model_root,
+            working_dir=working_dir,
             return_periods=self.config["return_periods"],
             gpu=self.config["gpu"],
             export_dir=self.model.report_folder / "flood_maps",
