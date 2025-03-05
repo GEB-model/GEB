@@ -64,7 +64,7 @@ class Routing(object):
     waterBodyID           lakes/reservoirs map with a single ID for each lake/reservoir                     --
     dirUp                 river network in upstream direction                                               --
     lddCompress           compressed river network (without missing values)                                 --
-    dtRouting             number of seconds per routing timestep                                            s
+    routing_step_length_seconds             number of seconds per routing timestep                                            s
     discharge             discharge                                                                         m3/s
     cell_area              Cell area [m²] of each simulated mesh
     """
@@ -141,7 +141,9 @@ class Routing(object):
         )
 
         # Corresponding sub-timestep (seconds)
-        self.var.dtRouting = self.model.seconds_per_timestep / self.var.n_routing_steps
+        self.var.routing_step_length_seconds = (
+            self.model.timestep_length.total_seconds() / self.var.n_routing_steps
+        )
 
         # for a river, the wetted perimeter can be approximated by the channel width
         river_wetted_perimeter = self.grid.var.river_width
@@ -272,6 +274,7 @@ class Routing(object):
                 self.model.lakes_reservoirs.routing(
                     step=subrouting_step,
                     n_routing_steps=self.var.n_routing_steps,
+                    routing_step_length_seconds=self.var.routing_step_length_seconds,
                     discharge=self.grid.var.discharge,
                     total_runoff=total_runoff,
                 )
@@ -285,7 +288,7 @@ class Routing(object):
             side_flow_channel_m2_Dt = (
                 side_flow_channel_m3_Dt
                 / self.grid.var.river_length
-                / self.var.dtRouting
+                / self.var.routing_step_length_seconds
             )
 
             self.grid.var.discharge = kinematic(
@@ -296,7 +299,7 @@ class Routing(object):
                 self.grid.var.dirupID,
                 self.grid.var.river_alpha,
                 self.var.river_beta,
-                self.var.dtRouting,
+                self.var.routing_step_length_seconds,
                 self.grid.var.river_length,
             )
 
@@ -325,7 +328,7 @@ class Routing(object):
 
         if __debug__:
             discharge_volume_at_outlets_m3 = (
-                discharge_at_outlets * self.model.seconds_per_timestep
+                discharge_at_outlets * self.model.timestep_length.total_seconds()
             )
             # this check the last routing step, but that's okay
             balance_check(

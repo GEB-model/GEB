@@ -16,7 +16,7 @@ class HazardDriver:
 
     def step(self, step_size):
         if self.config["hazards"]["floods"]["simulate"]:
-            if self.config["general"]["simulate_hydrology"]:
+            if self.simulate_hydrology:
                 self.sfincs.save_discharge()
 
             for event in self.config["hazards"]["floods"]["events"]:

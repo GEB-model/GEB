@@ -125,7 +125,7 @@ class SFINCS:
         return dt.strftime("%Y%m%d %H%M%S")
 
     def set_forcing(self, event, start_time):
-        if self.model.config["general"]["simulate_hydrology"]:
+        if self.model.simulate_hydrology:
             n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
             substeps = self.discharge_per_timestep[0].shape[0]
             discharge_grid = self.model.data.grid.decompress(

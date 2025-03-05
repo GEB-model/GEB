@@ -742,12 +742,11 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
-        if self.model.config["general"]["simulate_hydrology"]:
-            for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
-                GEV_grid = getattr(self.model.data.grid, varname)
-                self.var.GEV_parameters[:, i] = sample_from_map(
-                    GEV_grid, self.var.locations.data, self.model.data.grid.gt
-                )
+        for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
+            GEV_grid = getattr(self.model.data.grid, varname)
+            self.var.GEV_parameters[:, i] = sample_from_map(
+                GEV_grid, self.var.locations.data, self.model.data.grid.gt
+            )
 
         self.var.risk_perc_min = DynamicArray(
             n=self.n,
@@ -1288,31 +1287,28 @@ class CropFarmers(AgentBaseClass):
 
         TODO: Implement GAEZ crop stage function
         """
-        if self.model.config["general"]["simulate_hydrology"]:
-            if self.var.crop_data_type == "GAEZ":
-                yield_ratio = self.get_yield_ratio_numba_GAEZ(
-                    crop_map[harvest],
-                    actual_transpiration[harvest] / potential_transpiration[harvest],
-                    self.var.crop_data["KyT"].values,
-                )
-            elif self.var.crop_data_type == "MIRCA2000":
-                yield_ratio = self.get_yield_ratio_numba_MIRCA2000(
-                    crop_map[harvest],
-                    actual_transpiration[harvest] / potential_transpiration[harvest],
-                    self.var.crop_data["a"].values,
-                    self.var.crop_data["b"].values,
-                    self.var.crop_data["P0"].values,
-                    self.var.crop_data["P1"].values,
-                )
-                if np.any(yield_ratio == 0):
-                    pass
-            else:
-                raise ValueError(
-                    f"Unknown crop data type: {self.var.crop_data_type}, must be 'GAEZ' or 'MIRCA2000'"
-                )
-            assert not np.isnan(yield_ratio).any()
+        if self.var.crop_data_type == "GAEZ":
+            yield_ratio = self.get_yield_ratio_numba_GAEZ(
+                crop_map[harvest],
+                actual_transpiration[harvest] / potential_transpiration[harvest],
+                self.var.crop_data["KyT"].values,
+            )
+        elif self.var.crop_data_type == "MIRCA2000":
+            yield_ratio = self.get_yield_ratio_numba_MIRCA2000(
+                crop_map[harvest],
+                actual_transpiration[harvest] / potential_transpiration[harvest],
+                self.var.crop_data["a"].values,
+                self.var.crop_data["b"].values,
+                self.var.crop_data["P0"].values,
+                self.var.crop_data["P1"].values,
+            )
+            if np.any(yield_ratio == 0):
+                pass
         else:
-            yield_ratio = np.full_like(crop_map[harvest], 1, dtype=np.float32)
+            raise ValueError(
+                f"Unknown crop data type: {self.var.crop_data_type}, must be 'GAEZ' or 'MIRCA2000'"
+            )
+        assert not np.isnan(yield_ratio).any()
 
         return yield_ratio
 
