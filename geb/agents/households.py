@@ -67,7 +67,7 @@ class Households(AgentBaseClass):
         """Load flood maps for different return periods. This is quite ineffecient for RAM."""
 
         self.var.return_periods = np.array(
-            [1000, 2]
+            self.model.config["hazards"]["floods"]["return_periods"]
         )  # could also extract these from model config where return periods are defined.
 
         flood_maps = {}
@@ -119,11 +119,17 @@ class Households(AgentBaseClass):
         )
 
         # initiate array with risk perception [dummy data for now]
-        low_risk_perception = 0.01
-        high_risk_perception = 10
-        risk_perception = np.random.uniform(
-            low_risk_perception, high_risk_perception, self.n
-        )
+        self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["min"]
+        self.var.risk_perc_max = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["max"]
+        self.var.risk_decr = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["coef"]
+
+        risk_perception = np.full(self.n, self.var.risk_perc_min)
         self.var.risk_perception = DynamicArray(risk_perception, max_n=self.max_n)
 
         # initiate array with risk aversion [fixed for now]
@@ -138,6 +144,11 @@ class Households(AgentBaseClass):
         # initiate array with time adapted
         self.var.time_adapted = DynamicArray(
             np.zeros(self.n, np.int32), max_n=self.max_n
+        )
+
+        # initiate array with time since last flood
+        self.var.years_since_last_flood = DynamicArray(
+            np.full(self.n, 25, np.int32), max_n=self.max_n
         )
 
     def get_flood_risk_information(self):
@@ -193,16 +204,28 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def update_risk_perceptions(self):
-        pass
-        # self.var.time_since_flood += 1
+        # update timer
+        self.var.years_since_last_flood.data += 1
 
-        # if np.random.random() < 0.1:
-        #     self.var.risk_perception = np.random.uniform(0.01, 10, self.n)
+        # generate random flood (not based on actual modeled flood data, replace this later with events)
+        if np.random.random() < 0.2:
+            print("Flood event!")
+            self.var.years_since_last_flood.data = 0
+
+        self.var.risk_perception.data = (
+            self.var.risk_perc_max
+            * 1.6 ** (self.var.risk_decr * self.var.years_since_last_flood)
+            + self.var.risk_perc_min
+        )
 
     def decide_household_strategy(self):
-        # get dummy flood risk information
+        # update risk perceptions
+        self.update_risk_perceptions()
+
+        # get flood risk information
         damages_do_not_adapt, damages_adapt = self.get_flood_risk_information()
 
+        # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt(
             geom_id="NoID",
             n_agents=self.n,
