@@ -607,6 +607,7 @@ def abstract_water(
         if farmer_has_access_to_irrigation_water:
             irrigation_efficiency_farmer = irrigation_efficiency[farmer]
             fraction_irrigated_field_farmer = fraction_irrigated_field[farmer]
+            return_fraction_farmer = return_fraction[farmer]
 
             # Calculate the potential irrigation consumption for the farmer
             if field_is_paddy_irrigated[farmer_fields][0]:
@@ -738,7 +739,7 @@ def abstract_water(
                     assert water_consumption_m[field] >= 0
                     assert water_withdrawal_m[field] >= 0
                     assert 1 >= irrigation_efficiency_farmer >= 0
-                    assert 1 >= return_fraction >= 0
+                    assert 1 >= return_fraction_farmer >= 0
 
                     water_consumption_m[field] = (
                         water_withdrawal_m[field] * irrigation_efficiency_farmer
@@ -747,7 +748,7 @@ def abstract_water(
                         water_withdrawal_m[field] - water_consumption_m[field]
                     )
                     assert irrigation_loss_m >= 0
-                    returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
+                    returnFlowIrr_m[field] = irrigation_loss_m * return_fraction_farmer
                     addtoevapotrans_m[field] = (
                         irrigation_loss_m - returnFlowIrr_m[field]
                     )
@@ -1256,10 +1257,22 @@ class CropFarmers(AgentBaseClass):
         self.soil_fluxes_names = [
             "direct_runoff",
             "groundwater_recharge",
+            "return_flow_irrigation_m",
             "open_water_evaporation",
-            "actual_total_transpiration",
+            "irrigation_loss_to_evaporation_m",
             "actual_bare_soil_evaporation",
+            "actual_total_transpiration",
         ]
+
+        self.return_fraction_surface = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["return_fraction_surface"]
+        self.return_fraction_sprinkler = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["return_fraction_sprinkler"]
+        self.return_fraction_drip = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["return_fraction_drip"]
 
         # Calibration factors
         self.intention_factor_neighbor = self.model.config["agent_settings"]["farmers"][
@@ -1283,11 +1296,12 @@ class CropFarmers(AgentBaseClass):
         self.irrigation_limit_adjustment = self.model.config["agent_settings"][
             "calibration"
         ]["irrigation_limit_adjustment"]
-
         self.base_efficiency = self.model.config["agent_settings"]["calibration"][
             "base_efficiency"
         ]
-
+        self.allocation_reduction = self.model.config["agent_settings"]["calibration"][
+            "allocation_reduction"
+        ]
         super().__init__()
 
     def initiate(self) -> None:
@@ -1637,6 +1651,13 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0.50
         )
 
+        self.return_fraction = AgentArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.float32,
+            fill_value=self.return_fraction_surface,
+        )
+
         eff_vict = self.model.config["agent_settings"]["farmers"]["expected_utility"][
             "adaptation_sprinkler"
         ]["eff_vict"]
@@ -1666,6 +1687,13 @@ class CropFarmers(AgentBaseClass):
         )  # nsw
         self.adapted[:, 2][self.irrigation_efficiency == 0.70] = 1
         self.adapted[:, 3][self.irrigation_efficiency == 0.90] = 1
+
+        self.return_fraction[self.irrigation_efficiency == 0.70] = (
+            self.return_fraction_sprinkler
+        )
+        self.return_fraction[self.irrigation_efficiency == 0.90] = (
+            self.return_fraction_drip
+        )
 
         self.mean_irrigation_efficiency = np.mean(self.irrigation_efficiency)
 
@@ -2097,29 +2125,64 @@ class CropFarmers(AgentBaseClass):
             self.model.data.HRU.M3toM(additional_water_allocation)
         )  # daily water demand in m
 
-        has_irrigation_access = ~np.all(
-            self.yearly_abstraction_m3_by_farmer[:, 3, :] == 0, axis=1
+        groundwater_mask = self.farmer_class_water == 2
+        surface_water_mask = self.farmer_class_water == 0
+
+        vic_irrigating_farmers_gw = (aus_region_agents == 0) & groundwater_mask
+        nsw_irrigating_farmers_gw = (aus_region_agents == 1) & groundwater_mask
+        vic_irrigating_farmers_sw = (aus_region_agents == 0) & surface_water_mask
+        nsw_irrigating_farmers_sw = (aus_region_agents == 1) & surface_water_mask
+
+        total_field_size_vic_gw = self.field_size_per_farmer[
+            vic_irrigating_farmers_gw
+        ].sum()
+        total_field_size_nsw_gw = self.field_size_per_farmer[
+            nsw_irrigating_farmers_gw
+        ].sum()
+        total_field_size_vic_sw = self.field_size_per_farmer[
+            vic_irrigating_farmers_sw
+        ].sum()
+        total_field_size_nsw_sw = self.field_size_per_farmer[
+            nsw_irrigating_farmers_sw
+        ].sum()
+
+        field_size_fraction_vic_gw = (
+            self.field_size_per_farmer[vic_irrigating_farmers_gw]
+            / total_field_size_vic_gw
+        )
+        field_size_fraction_nsw_gw = (
+            self.field_size_per_farmer[nsw_irrigating_farmers_gw]
+            / total_field_size_nsw_gw
+        )
+        field_size_fraction_vic_sw = (
+            self.field_size_per_farmer[vic_irrigating_farmers_sw]
+            / total_field_size_vic_sw
+        )
+        field_size_fraction_nsw_sw = (
+            self.field_size_per_farmer[nsw_irrigating_farmers_sw]
+            / total_field_size_nsw_sw
         )
 
-        vic_irrigating_farmers = (aus_region_agents == 0) & has_irrigation_access
-        nsw_irrigating_farmers = (aus_region_agents == 1) & has_irrigation_access
-
-        total_field_size_vic = self.field_size_per_farmer[vic_irrigating_farmers].sum()
-        total_field_size_nsw = self.field_size_per_farmer[nsw_irrigating_farmers].sum()
-
-        field_size_fraction_vic = (
-            self.field_size_per_farmer[vic_irrigating_farmers] / total_field_size_vic
-        )
-        field_size_fraction_nsw = (
-            self.field_size_per_farmer[nsw_irrigating_farmers] / total_field_size_nsw
+        self.remaining_irrigation_limit_m3[vic_irrigating_farmers_gw] = (
+            crop_allocation_vic * field_size_fraction_vic_gw
+        ) * (
+            (np.count_nonzero(groundwater_mask) * 2)
+            / np.count_nonzero(surface_water_mask)
         )
 
-        self.remaining_irrigation_limit_m3[vic_irrigating_farmers] = (
-            crop_allocation_vic * field_size_fraction_vic
+        self.remaining_irrigation_limit_m3[nsw_irrigating_farmers_gw] = (
+            crop_allocation_nsw * field_size_fraction_nsw_gw
+        ) * (
+            (np.count_nonzero(groundwater_mask) * 2)
+            / np.count_nonzero(surface_water_mask)
         )
-        self.remaining_irrigation_limit_m3[nsw_irrigating_farmers] = (
-            crop_allocation_nsw * field_size_fraction_nsw
-        )
+
+        self.remaining_irrigation_limit_m3[vic_irrigating_farmers_sw] = (
+            crop_allocation_vic * field_size_fraction_vic_sw
+        ) * self.allocation_reduction
+        self.remaining_irrigation_limit_m3[nsw_irrigating_farmers_sw] = (
+            crop_allocation_nsw * field_size_fraction_nsw_sw
+        ) * self.allocation_reduction
 
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
@@ -2289,9 +2352,7 @@ class CropFarmers(AgentBaseClass):
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             groundwater_depth=groundwater_depth,
             farmer_command_area=self.farmer_command_area,
-            return_fraction=self.model.config["agent_settings"]["farmers"][
-                "return_fraction"
-            ],
+            return_fraction=self.return_fraction.data,
             well_depth=self.well_depth.data,
             remaining_irrigation_limit_m3=self.remaining_irrigation_limit_m3.data,
             cumulative_water_deficit_m3=self.cumulative_water_deficit_m3.data,
@@ -2385,12 +2446,24 @@ class CropFarmers(AgentBaseClass):
             assert returnFlowIrr_m.dtype == np.float32
             assert addtoevapotrans_m.dtype == np.float32
 
-        return (
-            water_withdrawal_m,
-            water_consumption_m,
-            returnFlowIrr_m,
-            addtoevapotrans_m,
-        )
+        if self.config["irrigating"] == "no-irrigating":
+            water_withdrawal_m[:] = (0,)
+            water_consumption_m[:] = (0,)
+            returnFlowIrr_m[:] = (0,)
+            addtoevapotrans_m[:] = (0,)
+            return (
+                water_withdrawal_m,
+                water_consumption_m,
+                returnFlowIrr_m,
+                addtoevapotrans_m,
+            )
+        else:
+            return (
+                water_withdrawal_m,
+                water_consumption_m,
+                returnFlowIrr_m,
+                addtoevapotrans_m,
+            )
 
     @staticmethod
     @njit(cache=True)
@@ -4000,6 +4073,7 @@ class CropFarmers(AgentBaseClass):
         m2_adaptation_costs,
         adaptation_type,
         efficiency,
+        return_fraction,
     ) -> None:
         """
         Handle the adaptation of farmers to irrigation wells.
@@ -4051,6 +4125,8 @@ class CropFarmers(AgentBaseClass):
         ) | ~has_irrigation_access
         self.adapted[expired_adaptations, adaptation_type] = 0
         self.time_adapted[expired_adaptations, adaptation_type] = -1
+        self.irrigation_efficiency[expired_adaptations] = 0.5
+        self.return_fraction[expired_adaptations] = self.return_fraction_surface
 
         adapted = self.adapted[:, adaptation_type].copy()
 
@@ -4124,6 +4200,7 @@ class CropFarmers(AgentBaseClass):
 
         # Update irrigation efficiency for farmers who adapted
         self.irrigation_efficiency[SEUT_adaptation_decision] = efficiency
+        self.return_fraction[SEUT_adaptation_decision] = return_fraction
 
         # Print the percentage of adapted households
         percentage_adapted = round(
@@ -5236,6 +5313,7 @@ class CropFarmers(AgentBaseClass):
 
         if self.base_efficiency == 0.9:
             self.irrigation_efficiency[:] = self.base_efficiency
+            self.return_fraction[:] = self.return_fraction_drip
 
         ## yearly actions
         if self.model.current_time.month == 7 and self.model.current_time.day == 1:
@@ -5353,10 +5431,20 @@ class CropFarmers(AgentBaseClass):
                         )
 
                         self.adapt_irrigation_efficiency(
-                            energy_cost, water_cost, m2_capital_cost_sprinkler, 2, 0.7
+                            energy_cost,
+                            water_cost,
+                            m2_capital_cost_sprinkler,
+                            2,
+                            0.7,
+                            self.return_fraction_sprinkler,
                         )
                         self.adapt_irrigation_efficiency(
-                            energy_cost, water_cost, m2_capital_cost_drip, 3, 0.9
+                            energy_cost,
+                            water_cost,
+                            m2_capital_cost_drip,
+                            3,
+                            0.9,
+                            self.return_fraction_drip,
                         )
                         self.mean_irrigation_efficiency = np.mean(
                             self.irrigation_efficiency

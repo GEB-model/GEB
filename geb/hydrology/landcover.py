@@ -445,6 +445,19 @@ class LandCover(object):
             fn="sum",
         )
 
+        # Recharge return
+        self.var.direct_runoff = directRunoff.copy()
+        self.var.groundwater_recharge = groundwater_recharge.copy()
+
+        # Evaporation loss
+        self.var.open_water_evaporation = open_water_evaporation.copy()
+        self.var.actual_bare_soil_evaporation = actual_bare_soil_evaporation.copy()
+
+        # Consumption
+        self.var.actual_total_transpiration = actual_total_transpiration.copy()
+
+        self.model.agents.crop_farmers.save_agent_soil_balance()
+
         if __debug__:
             balance_check(
                 name="landcover_1",

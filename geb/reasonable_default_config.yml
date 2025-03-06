@@ -32,6 +32,7 @@ agent_settings:
   #     per: capita
   farmers:
     ruleset: base
+    irrigating: base
     nearest_grid_cell_min_cells: 5
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
