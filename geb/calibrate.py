@@ -1066,7 +1066,6 @@ def get_water_use_score(run_directory, individual, config):
 
     # Parameters for irrigation water use
     parameters_water_use = [
-        "groundwater_irrigation",
         "channel_irrigation",
     ]
 
@@ -1076,9 +1075,7 @@ def get_water_use_score(run_directory, individual, config):
     )
 
     # Sum the two irrigation parameters
-    df_total_use = (
-        df_simulated[parameters_water_use[0]] + df_simulated[parameters_water_use[1]]
-    )
+    df_total_use = df_simulated[parameters_water_use[0]]
 
     # Convert negative/zero to NaN or filter them out
     df_total_use = df_total_use[df_total_use > 0]
