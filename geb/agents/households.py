@@ -57,28 +57,27 @@ class Households(AgentBaseClass):
             else {}
         )
         self.decision_module = DecisionModule(self, model=None)
+        self.load_flood_maps()  # xarray cannot be store in bucket
 
         if self.model.in_spinup:
             self.spinup()
-            self.load_flood_maps()
-            self.assign_household_attributes()
 
     def load_flood_maps(self):
-        """Load flood maps for different return periods. This is quite ineffecient for RAM."""
+        """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
 
-        self.var.return_periods = np.array(
+        self.return_periods = np.array(
             self.model.config["hazards"]["floods"]["return_periods"]
-        )  # could also extract these from model config where return periods are defined.
+        )
 
         flood_maps = {}
-        for return_period in self.var.return_periods:
+        for return_period in self.return_periods:
             flood_path = join(
                 "report", "estimate_risk", "flood_maps", f"{return_period}.tif"
             )
             print(f"using this flood map: {flood_path}")
             flood_maps[return_period] = rioxarray.open_rasterio(flood_path)
             flood_maps["crs"] = flood_maps[return_period].rio.crs
-        self.var.flood_maps = flood_maps
+        self.flood_maps = flood_maps
 
     def assign_household_attributes(self):
         """Household locations are already sampled from population map in GEBModel.setup_population()
@@ -151,17 +150,22 @@ class Households(AgentBaseClass):
             np.full(self.n, 25, np.int32), max_n=self.max_n
         )
 
-    def get_flood_risk_information(self):
-        """Initiate flood risk information for each household. This information is used in the decision module.
-        For now also only dummy data is created."""
-
-        households = gpd.GeoDataFrame(
+        # reproject households to flood maps and store in var bucket
+        household_points = gpd.GeoDataFrame(
             geometry=[Point(lon, lat) for lon, lat in self.var.locations.data],
             crs="EPSG:4326",
         )
-        households["maximum_damage"] = self.var.property_value.data
-        households["object_type"] = "building_content"  # this must match damage curves
-        households_reprojected = households.to_crs(self.var.flood_maps["crs"])
+        household_points["maximum_damage"] = self.var.property_value.data
+        household_points["object_type"] = (
+            "building_content"  # this must match damage curves  # this must match damage curves
+        )
+        self.var.household_points = household_points.to_crs(self.flood_maps["crs"])
+
+        print(f"Household attributes assigned for {self.n} households.")
+
+    def get_flood_risk_information(self):
+        """Initiate flood risk information for each household. This information is used in the decision module.
+        For now also only dummy data is created."""
 
         # create damage curves for adaptation
         buildings_content_curve_adapted = self.var.buildings_content_curve.copy()
@@ -173,20 +177,18 @@ class Households(AgentBaseClass):
         )
 
         # preallocate array for damages
-        damages_do_not_adapt = np.zeros(
-            (self.var.return_periods.size, self.n), np.float32
-        )
-        damages_adapt = np.zeros((self.var.return_periods.size, self.n), np.float32)
+        damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
 
-        for i, return_period in enumerate(self.var.return_periods):
+        for i, return_period in enumerate(self.return_periods):
             # get flood map
-            flood_map = self.var.flood_maps[return_period]
+            flood_map = self.flood_maps[return_period]
             # reproject_households_to_floodmap (should be done somewhere else, this is repetitive)
 
             # calculate damages household (assuming every household has its own building)
             damages_do_not_adapt[i, :] = np.array(
                 object_scanner(
-                    objects=households_reprojected,
+                    objects=self.var.household_points,
                     hazard=flood_map,
                     curves=self.var.buildings_content_curve,
                 )
@@ -195,7 +197,7 @@ class Households(AgentBaseClass):
             # calculate damages for adapted households
             damages_adapt[i, :] = np.array(
                 object_scanner(
-                    objects=households_reprojected,
+                    objects=self.var.household_points,
                     hazard=flood_map,
                     curves=buildings_content_curve_adapted,
                 )
@@ -219,6 +221,8 @@ class Households(AgentBaseClass):
         )
 
     def decide_household_strategy(self):
+        """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
+
         # update risk perceptions
         self.update_risk_perceptions()
 
@@ -239,7 +243,7 @@ class Households(AgentBaseClass):
             adaptation_costs=self.var.adaptation_costs,
             time_adapted=self.var.time_adapted,
             loan_duration=20,
-            p_floods=1 / self.var.return_periods,
+            p_floods=1 / self.return_periods,
             T=35,
             r=0.03,
             sigma=1,
@@ -256,7 +260,7 @@ class Households(AgentBaseClass):
             risk_perception=self.var.risk_perception,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted,
-            p_floods=1 / self.var.return_periods,
+            p_floods=1 / self.return_periods,
             T=35,
             r=0.03,
             sigma=1,
@@ -272,14 +276,7 @@ class Households(AgentBaseClass):
             f"Percentage of households that adapted: {len(household_adapting) / self.n * 100}%"
         )
 
-    def calculate_utilities(self):
-        """Calculate the utility of each strategy: 1) do nothing, 2) implement dryfloodproofing, 3) relocate.
-        The utility is based on the expected damages and the costs of each strategy."""
-        pass
-
-    def spinup(self):
-        self.var = self.model.store.create_bucket("agents.households.var")
-
+    def load_objects(self):
         # Load buildings
         self.var.buildings = gpd.read_parquet(
             self.model.files["geoms"]["assets/buildings"]
@@ -299,6 +296,7 @@ class Households(AgentBaseClass):
         self.var.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
         self.var.rail["object_type"] = "rail"
 
+    def load_max_damage_values(self):
         # Load maximum damages
         with open(
             self.model.files["dict"][
@@ -384,6 +382,7 @@ class Households(AgentBaseClass):
         ) as f:
             self.var.max_dam_agriculture = float(json.load(f)["maximum_damage"])
 
+    def load_damage_curves(self):
         # Load vulnerability curves
         road_curves = []
         road_types = [
@@ -456,6 +455,13 @@ class Households(AgentBaseClass):
         self.var.rail_curve = self.var.rail_curve.rename(
             columns={"damage_ratio": "rail"}
         )
+
+    def spinup(self):
+        self.var = self.model.store.create_bucket("agents.households.var")
+        self.load_objects()
+        self.load_max_damage_values()
+        self.load_damage_curves()
+        self.assign_household_attributes()
 
         super().__init__()
 
