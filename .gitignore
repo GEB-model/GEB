@@ -9,12 +9,11 @@ geb/hydrology/groundwater/bin
 tests/output/
 tests/tmp/
 examples/*
-!examples/build.yml
-!examples/model.yml
-!examples/update.yml
-!examples/data_catalog.yml
-!examples/reasonable_defaults
-!examples/reasonable_defaults/model.yml
+!examples/*
+examples/*/*
+!examples/*/build.yml
+!examples/*/model.yml
+!examples/*/update.yml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
