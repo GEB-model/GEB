@@ -4497,7 +4497,6 @@ class GEBModel(GridModel):
 
     def setup_household_characteristics(self, maximum_age=85):
         import gzip
-        from honeybees.library.raster import pixels_to_coords
 
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
@@ -4554,8 +4553,16 @@ class GEBModel(GridModel):
             # clip grid to model bounds
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
+            # get unique cells in grid
+            unique_grid_cells = np.unique(GLOPOP_GRID_region.values)
+
+            # subset GLOPOP_households_region to unique cells for quicker search
+            GLOPOP_S_region = GLOPOP_S_region[
+                GLOPOP_S_region["GRID_CELL"].isin(unique_grid_cells)
+            ]
+
             # create all households
-            GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])[:100]
+            GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
             n_households = GLOPOP_households_region.size
 
             # iterate over unique housholds and extract the variables we want
@@ -4570,11 +4577,12 @@ class GEBModel(GridModel):
                 household_characteristics[column] = np.full(
                     n_households, -1, dtype=np.int32
                 )
+
             # initiate indice tracker
             households_found = 0
 
             for HID in GLOPOP_households_region:
-                print(f"searching household {HID} of {n_households}")
+                print(f"searching household {households_found} of {n_households}")
                 household = GLOPOP_S_region[GLOPOP_S_region["HID"] == HID]
                 household_size = len(household)
                 if len(household) > 1:
