@@ -483,7 +483,7 @@ india_cencus:
 GDL_regions_v4:
   data_type: GeoDataFrame
   driver: vector
-  path: "geography/GDL/GDL Shapefiles V4.gpkg"
+  path: "/scistor/ivm/data_catalogue/admin/GDL_regions_v4.gpkg"
   meta:
     category: geography
     source_author: Global Data Lab
@@ -492,7 +492,11 @@ GDL_regions_v4:
     source_license: https://globaldatalab.org/termsofuse/
 GLOPOP-S:
   data_type: Dataset
-  path: /scistor/ivm/data_catalogue/population/synthpop_{region}.dat.gz
+  path: /scistor/ivm/data_catalogue/population/synthpop_{region}_grid.dat.gz
+GLOPOP-S_grid:
+  data_type: RasterDataset
+  driver: raster
+  path: /scistor/ivm/data_catalogue/population/{region}_grid_nr.tif
 esa_worldcover_2020_v100:
   crs: 4326
   data_type: RasterDataset

@@ -37,6 +37,7 @@ from calendar import monthrange
 from numcodecs import Blosc
 from scipy.ndimage import value_indices
 import pyflwdir
+import rioxarray
 
 
 from hydromt.models.model_grid import GridModel
@@ -4495,6 +4496,141 @@ class GEBModel(GridModel):
         self.setup_farmers(farmers)
 
     def setup_household_characteristics(self, maximum_age=85):
+        import gzip
+        from honeybees.library.raster import pixels_to_coords
+
+        # load GDL region within model domain
+        GDL_regions = self.data_catalog.get_geodataframe(
+            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+        )
+
+        # get path to GLOPOP
+        GLOPOP_S = self.data_catalog.get_source("GLOPOP-S")
+
+        # get path to GLOPOP grid
+        GLOPOP_S_GRID = self.data_catalog.get_source("GLOPOP-S_grid")
+
+        GLOPOP_S_attribute_names = [
+            "HID",
+            "RELATE_HEAD",
+            "INCOME",
+            "WEALTH",
+            "RURAL",
+            "AGE",
+            "GENDER",
+            "EDUC",
+            "HHTYPE",
+            "HHSIZE_CAT",
+            "AGRI_OWNERSHIP",
+            "FLOOR",
+            "WALL",
+            "ROOF",
+            "SOURCE",
+            "GRID_CELL",
+        ]
+
+        # create list of attibutes to include
+        attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
+        region_results = {}
+        # iterate over regions and sample agents from GLOPOP-S
+        for GDL_region in GDL_regions["GDLcode"]:
+            region_results[GDL_region] = {}
+
+            with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
+                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
+
+            n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
+            GLOPOP_S_region = pd.DataFrame(
+                np.reshape(
+                    GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
+                ).transpose(),
+                columns=GLOPOP_S_attribute_names,
+            )
+
+            # load grid
+            GLOPOP_GRID_region = rioxarray.open_rasterio(
+                GLOPOP_S_GRID.path.format(region=GDL_region)
+            )
+            # clip grid to model bounds
+            GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
+
+            # create all households
+            GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])[:100]
+            n_households = GLOPOP_households_region.size
+
+            # iterate over unique housholds and extract the variables we want
+            household_characteristics = {}
+            household_characteristics["sizes"] = np.full(
+                n_households, -1, dtype=np.int32
+            )
+            household_characteristics["locations"] = np.full(
+                (n_households, 2), -1, dtype=np.float32
+            )
+            for column in attributes_to_include:
+                household_characteristics[column] = np.full(
+                    n_households, -1, dtype=np.int32
+                )
+            # initiate indice tracker
+            households_found = 0
+
+            for HID in GLOPOP_households_region:
+                print(f"searching household {HID} of {n_households}")
+                household = GLOPOP_S_region[GLOPOP_S_region["HID"] == HID]
+                household_size = len(household)
+                if len(household) > 1:
+                    # if there are multiple people in the household
+                    # take first person as head of household (replace this with oldest person?)
+                    household = household.iloc[0]
+
+                GRID_CELL = int(household["GRID_CELL"])
+                if GRID_CELL in GLOPOP_GRID_region.values:
+                    for column in attributes_to_include:
+                        household_characteristics[column][households_found] = household[
+                            column
+                        ]
+                        household_characteristics["sizes"][households_found] = (
+                            household_size
+                        )
+
+                    # now find location of household
+                    idx_household = np.where(GLOPOP_GRID_region.values[0] == GRID_CELL)
+                    # get x and y from xarray
+                    x_y = np.concatenate(
+                        [
+                            GLOPOP_GRID_region.x.values[idx_household[1]],
+                            GLOPOP_GRID_region.y.values[idx_household[0]],
+                        ]
+                    )
+                    household_characteristics["locations"][households_found, :] = x_y
+                    households_found += 1
+
+                # clip away unused data:
+            for household_attribute in household_characteristics:
+                household_characteristics[household_attribute] = (
+                    household_characteristics[household_attribute][:households_found]
+                )
+
+            region_results[GDL_region] = household_characteristics
+
+        # concatenate all data
+        data_concatenated = {}
+        for household_attribute in household_characteristics:
+            data_concatenated[household_attribute] = np.concatenate(
+                [
+                    region_results[GDL_region][household_attribute]
+                    for GDL_region in region_results
+                ]
+            )
+        for household_attribute in household_characteristics:
+            self.set_binary(
+                data_concatenated[household_attribute],
+                name=f"agents/households/{household_attribute}",
+            )
+
+        self.write_binary()  # redundant?
+        return None
+
+    def setup_farmer_household_characteristics(self, maximum_age=85):
         import gzip
         from honeybees.library.raster import pixels_to_coords
 
