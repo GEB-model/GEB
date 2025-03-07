@@ -15,6 +15,10 @@ import rioxarray
 from rasterio.features import shapes
 from shapely.geometry import shape
 from .decision_module_flood import DecisionModule
+from shapely.geometry import Point
+import pyproj
+from honeybees.library.raster import sample_from_map
+from scipy import interpolate
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
@@ -50,53 +54,61 @@ class Households(AgentBaseClass):
             self.HRU = model.hydrology.HRU
             self.grid = model.hydrology.grid
 
-
         self.config = (
             self.model.config["agent_settings"]["households"]
             if "households" in self.model.config["agent_settings"]
             else {}
         )
         self.decision_module = DecisionModule(self, model=None)
+        self.load_flood_maps()  # xarray cannot be store in bucket
 
         if self.model.in_spinup:
             self.spinup()
-            self.assign_household_attributes()
 
-    def initiate_flood_risk_information(self):
-        """Initiate flood risk information for each household. This information is used in the decision module.
-        For now also only dummy data is created."""
+    def load_flood_maps(self):
+        """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
 
-        # initiate array with return periods assessed in model
-        self.var.return_periods = np.array([10, 50, 100, 250])
-
-        # initiate array with damage factors without adaptation [dummy data for now]
-        damage_factors_no_adapt_rp100 = np.random.uniform(0.1, 0.5, self.n)
-        # scaling factor for other return periods
-        damage_factors_no_adapt_rp10 = damage_factors_no_adapt_rp100 * 0.5
-        damage_factors_no_adapt_rp50 = damage_factors_no_adapt_rp100 * 0.75
-        damage_factors_no_adapt_rp250 = np.maximum(
-            1, damage_factors_no_adapt_rp100 * 1.5
+        self.return_periods = np.array(
+            self.model.config["hazards"]["floods"]["return_periods"]
         )
 
-        # combine arrays in singel multi-dimensional array
-        damage_factors_no_adapt = np.array(
-            [
-                damage_factors_no_adapt_rp10,
-                damage_factors_no_adapt_rp50,
-                damage_factors_no_adapt_rp100,
-                damage_factors_no_adapt_rp250,
-            ]
-        )
+        flood_maps = {}
+        for return_period in self.return_periods:
+            flood_path = join(
+                "report", "estimate_risk", "flood_maps", f"{return_period}.tif"
+            )
+            print(f"using this flood map: {flood_path}")
+            flood_maps[return_period] = rioxarray.open_rasterio(flood_path)
+        flood_maps["crs"] = flood_maps[return_period].rio.crs
 
-        # assume property value equals wealth and that adaptation reduces damages with 20%
-        damages_do_not_adapt = damage_factors_no_adapt * self.var.wealth
-        damages_adapt = damages_do_not_adapt * 0.5
-        return damages_do_not_adapt, damages_adapt
+        # now also get gdal transform
+        affine_transform = flood_maps[return_period].rio.transform()
+        gdal_geotransform = (
+            affine_transform.c,  # Top-left x
+            affine_transform.a,  # Pixel width
+            affine_transform.b,  # Rotation (0 if north-up)
+            affine_transform.f,  # Top-left y
+            affine_transform.d,  # Rotation (0 if north-up)
+            affine_transform.e,  # Pixel height (negative for north-up)
+        )
+        flood_maps["gdal_geotransform"] = gdal_geotransform
+        self.flood_maps = flood_maps
 
     def assign_household_attributes(self):
         """Household locations are already sampled from population map in GEBModel.setup_population()
         These are loaded in the spinup() method.
         Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
+
+        # load household locations
+        locations = np.load(self.model.files["binary"]["agents/households/locations"])[
+            "data"
+        ]
+        self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
+        self.var.locations = DynamicArray(locations, max_n=self.max_n)
+
+        # load household sizes
+        sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
+        self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
@@ -107,14 +119,31 @@ class Households(AgentBaseClass):
         )
 
         # initiate array with houshold wealth [dummy data for now]
-        self.var.wealth = DynamicArray(np.int64(self.var.income * 2.8))
+        self.var.wealth = DynamicArray(
+            np.int64(self.var.income.data * 2.8), max_n=self.max_n
+        )
+
+        # initiate array with property values (used as max damage) [dummy data for now]
+        self.var.property_value = DynamicArray(
+            np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
+        )
+        # initiate array with RANDOM adaptation costs [dummy data for now]
+        self.var.adaptation_costs = DynamicArray(
+            np.int64(self.var.property_value.data * 0.1), max_n=self.max_n
+        )
 
         # initiate array with risk perception [dummy data for now]
-        low_risk_perception = 0.01
-        high_risk_perception = 10
-        risk_perception = np.random.uniform(
-            low_risk_perception, high_risk_perception, self.n
-        )
+        self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["min"]
+        self.var.risk_perc_max = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["max"]
+        self.var.risk_decr = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["coef"]
+
+        risk_perception = np.full(self.n, self.var.risk_perc_min)
         self.var.risk_perception = DynamicArray(risk_perception, max_n=self.max_n)
 
         # initiate array with risk aversion [fixed for now]
@@ -131,29 +160,143 @@ class Households(AgentBaseClass):
             np.zeros(self.n, np.int32), max_n=self.max_n
         )
 
-        # initiate array with adaptation costs
-        self.var.adaptation_costs = DynamicArray(
-            np.random.randint(10_000, 50_000, self.n), max_n=self.max_n
+        # initiate array with time since last flood
+        self.var.years_since_last_flood = DynamicArray(
+            np.full(self.n, 25, np.int32), max_n=self.max_n
+        )
+
+        # reproject households to flood maps and store in var bucket
+        household_points = gpd.GeoDataFrame(
+            geometry=[Point(lon, lat) for lon, lat in self.var.locations.data],
+            crs="EPSG:4326",
+        )
+        household_points["maximum_damage"] = self.var.property_value.data
+        household_points["object_type"] = (
+            "building_content"  # this must match damage curves  # this must match damage curves
+        )
+        self.var.household_points = household_points.to_crs(self.flood_maps["crs"])
+
+        transformer = pyproj.Transformer.from_crs(
+            self.grid.crs, self.flood_maps["crs"], always_xy=True
+        )
+        locations[:, 0], locations[:, 1] = transformer.transform(
+            self.var.locations[:, 0], self.var.locations[:, 1]
+        )
+        self.var.locations_reprojected_to_flood_map = locations
+        print(f"Household attributes assigned for {self.n} households.")
+
+    def get_flood_risk_information_honeybees(self):
+        # preallocate array for damages
+        damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+
+        # load damage interpolators (cannot be store in bucket, therefor outside spinup)
+        if not hasattr(self, "buildings_content_curve_interpolator"):
+            self.create_damage_interpolators()
+
+        # loop over return periods
+        for i, return_period in enumerate(self.return_periods):
+            # get flood map
+            flood_map = self.flood_maps[return_period]
+
+            water_levels = sample_from_map(
+                flood_map.values[0],
+                self.var.locations_reprojected_to_flood_map.data,
+                self.flood_maps["gdal_geotransform"],
+            )
+
+            # cap water levels at damage curve max inundation
+            water_levels = np.minimum(
+                water_levels, self.buildings_content_curve_interpolator.x.max()
+            )
+
+            # interpolate damages
+            damages_do_not_adapt[i, :] = (
+                self.buildings_content_curve_interpolator(water_levels)
+                * self.var.property_value.data
+            )
+
+            damages_adapt[i, :] = (
+                self.buildings_content_curve_adapted_interpolator(water_levels)
+                * self.var.property_value.data
+            )
+
+        return damages_do_not_adapt, damages_adapt
+
+    def get_flood_risk_information_damage_scanner(self):
+        """Initiate flood risk information for each household. This information is used in the decision module.
+        For now also only dummy data is created."""
+
+        # preallocate array for damages
+        damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+
+        for i, return_period in enumerate(self.return_periods):
+            # get flood map
+            flood_map = self.flood_maps[return_period]
+            # reproject_households_to_floodmap (should be done somewhere else, this is repetitive)
+
+            # calculate damages household (assuming every household has its own building)
+            damages_do_not_adapt[i, :] = np.array(
+                object_scanner(
+                    objects=self.var.household_points,
+                    hazard=flood_map,
+                    curves=self.var.buildings_content_curve,
+                )
+            )
+
+            # calculate damages for adapted households
+            damages_adapt[i, :] = np.array(
+                object_scanner(
+                    objects=self.var.household_points,
+                    hazard=flood_map,
+                    curves=self.var.buildings_content_curve_adapted,
+                )
+            )
+
+        return damages_do_not_adapt, damages_adapt
+
+    def update_risk_perceptions(self):
+        # update timer
+        self.var.years_since_last_flood.data += 1
+
+        # generate random flood (not based on actual modeled flood data, replace this later with events)
+        if np.random.random() < 0.2:
+            print("Flood event!")
+            self.var.years_since_last_flood.data = 0
+
+        self.var.risk_perception.data = (
+            self.var.risk_perc_max
+            * 1.6 ** (self.var.risk_decr * self.var.years_since_last_flood)
+            + self.var.risk_perc_min
         )
 
     def decide_household_strategy(self):
-        # get dummy flood risk information
-        damages_do_not_adapt, damages_adapt = self.initiate_flood_risk_information()
+        """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
 
+        # update risk perceptions
+        self.update_risk_perceptions()
+
+        # get flood risk information
+        damages_do_not_adapt, damages_adapt = (
+            self.get_flood_risk_information_honeybees()
+        )
+
+        # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt(
             geom_id="NoID",
             n_agents=self.n,
-            wealth=self.var.wealth,
-            income=self.var.income,
-            expendature_cap=10,
-            amenity_value=self.var.amenity_value,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
+            expendature_cap=10,  # realy high for now
+            amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception,
+            risk_perception=self.var.risk_perception.data,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs,
-            time_adapted=self.var.time_adapted,
+            adaptation_costs=self.var.adaptation_costs.data,
+            time_adapted=self.var.time_adapted.data,
             loan_duration=20,
-            p_floods=1 / self.var.return_periods,
+            p_floods=1 / self.return_periods,
             T=35,
             r=0.03,
             sigma=1,
@@ -162,15 +305,15 @@ class Households(AgentBaseClass):
         EU_do_not_adapt = self.decision_module.calcEU_do_nothing(
             geom_id="NoID",
             n_agents=self.n,
-            wealth=self.var.wealth,
-            income=self.var.income,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
             expendature_cap=10,
-            amenity_value=self.var.amenity_value,
+            amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception,
+            risk_perception=self.var.risk_perception.data,
             expected_damages=damages_do_not_adapt,
-            adapted=self.var.adapted,
-            p_floods=1 / self.var.return_periods,
+            adapted=self.var.adapted.data,
+            p_floods=1 / self.return_periods,
             T=35,
             r=0.03,
             sigma=1,
@@ -186,14 +329,7 @@ class Households(AgentBaseClass):
             f"Percentage of households that adapted: {len(household_adapting) / self.n * 100}%"
         )
 
-    def calculate_utilities(self):
-        """Calculate the utility of each strategy: 1) do nothing, 2) implement dryfloodproofing, 3) relocate.
-        The utility is based on the expected damages and the costs of each strategy."""
-        pass
-
-    def spinup(self):
-        self.var = self.model.store.create_bucket("agents.households.var")
-
+    def load_objects(self):
         # Load buildings
         self.var.buildings = gpd.read_parquet(
             self.model.files["geoms"]["assets/buildings"]
@@ -213,6 +349,7 @@ class Households(AgentBaseClass):
         self.var.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
         self.var.rail["object_type"] = "rail"
 
+    def load_max_damage_values(self):
         # Load maximum damages
         with open(
             self.model.files["dict"][
@@ -298,7 +435,8 @@ class Households(AgentBaseClass):
         ) as f:
             self.var.max_dam_agriculture = float(json.load(f)["maximum_damage"])
 
-        # Load vulnerability curves
+    def load_damage_curves(self):
+        # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
         road_curves = []
         road_types = [
             ("residential", "damage_parameters/flood/road/residential/curve"),
@@ -363,6 +501,16 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "building_content"}
         )
 
+        # create damage curves for adaptation
+        buildings_content_curve_adapted = self.var.buildings_content_curve.copy()
+        buildings_content_curve_adapted.loc[0:1] = (
+            0  # assuming zero damages untill 1m water depth
+        )
+        buildings_content_curve_adapted.loc[1:] *= (
+            0.8  # assuming 80% damages above 1m water depth
+        )
+        self.var.buildings_content_curve_adapted = buildings_content_curve_adapted
+
         self.var.rail_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
         )
@@ -371,21 +519,31 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "rail"}
         )
 
+    def create_damage_interpolators(self):
+        # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
+        self.buildings_content_curve_interpolator = interpolate.interp1d(
+            x=self.var.buildings_content_curve.index,
+            y=self.var.buildings_content_curve["building_content"],
+            # fill_value="extrapolate",
+        )
+        self.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
+            x=self.var.buildings_content_curve_adapted.index,
+            y=self.var.buildings_content_curve_adapted["building_content"],
+            # fill_value="extrapolate",
+        )
+
+    def spinup(self):
+        self.var = self.model.store.create_bucket("agents.households.var")
+        self.load_objects()
+        self.load_max_damage_values()
+        self.load_damage_curves()
+        self.assign_household_attributes()
+
         super().__init__()
 
         water_demand, efficiency = self.update_water_demand()
         self.var.current_water_demand = water_demand
         self.var.current_efficiency = efficiency
-
-        locations = np.load(self.model.files["binary"]["agents/households/locations"])[
-            "data"
-        ]
-        self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
-
-        self.var.locations = DynamicArray(locations, max_n=self.max_n)
-
-        sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
-        self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
     def flood(self, flood_map, simulation_root, return_period=None):
         if return_period is not None:
@@ -578,9 +736,7 @@ class Households(AgentBaseClass):
     def step(self) -> None:
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
             print("Thinking about adapting...")
-            print("Oh no, where is DYNAMO?")
-        return None
-        # self.decide_household_strategy()
+            self.decide_household_strategy()
 
     @property
     def n(self):

@@ -46,6 +46,8 @@ setup_create_farms_simple:
 
 setup_household_characteristics:
 
+setup_farmer_household_characteristics:
+
 setup_crops_from_source:
   source: MIRCA2000
   
