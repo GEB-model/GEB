@@ -16,6 +16,9 @@ from rasterio.features import shapes
 from shapely.geometry import shape
 from .decision_module_flood import DecisionModule
 from shapely.geometry import Point
+import pyproj
+from honeybees.library.raster import sample_from_map
+from scipy import interpolate
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
@@ -76,7 +79,19 @@ class Households(AgentBaseClass):
             )
             print(f"using this flood map: {flood_path}")
             flood_maps[return_period] = rioxarray.open_rasterio(flood_path)
-            flood_maps["crs"] = flood_maps[return_period].rio.crs
+        flood_maps["crs"] = flood_maps[return_period].rio.crs
+
+        # now also get gdal transform
+        affine_transform = flood_maps[return_period].rio.transform()
+        gdal_geotransform = (
+            affine_transform.c,  # Top-left x
+            affine_transform.a,  # Pixel width
+            affine_transform.b,  # Rotation (0 if north-up)
+            affine_transform.f,  # Top-left y
+            affine_transform.d,  # Rotation (0 if north-up)
+            affine_transform.e,  # Pixel height (negative for north-up)
+        )
+        flood_maps["gdal_geotransform"] = gdal_geotransform
         self.flood_maps = flood_maps
 
     def assign_household_attributes(self):
@@ -161,20 +176,56 @@ class Households(AgentBaseClass):
         )
         self.var.household_points = household_points.to_crs(self.flood_maps["crs"])
 
+        transformer = pyproj.Transformer.from_crs(
+            self.grid.crs, self.flood_maps["crs"], always_xy=True
+        )
+        locations[:, 0], locations[:, 1] = transformer.transform(
+            self.var.locations[:, 0], self.var.locations[:, 1]
+        )
+        self.var.locations_reprojected_to_flood_map = locations
         print(f"Household attributes assigned for {self.n} households.")
 
-    def get_flood_risk_information(self):
+    def get_flood_risk_information_honeybees(self):
+        # preallocate array for damages
+        damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+
+        # load damage interpolators (cannot be store in bucket, therefor outside spinup)
+        if not hasattr(self, "buildings_content_curve_interpolator"):
+            self.create_damage_interpolators()
+
+        # loop over return periods
+        for i, return_period in enumerate(self.return_periods):
+            # get flood map
+            flood_map = self.flood_maps[return_period]
+
+            water_levels = sample_from_map(
+                flood_map.values[0],
+                self.var.locations_reprojected_to_flood_map.data,
+                self.flood_maps["gdal_geotransform"],
+            )
+
+            # cap water levels at damage curve max inundation
+            water_levels = np.minimum(
+                water_levels, self.buildings_content_curve_interpolator.x.max()
+            )
+
+            # interpolate damages
+            damages_do_not_adapt[i, :] = (
+                self.buildings_content_curve_interpolator(water_levels)
+                * self.var.property_value.data
+            )
+
+            damages_adapt[i, :] = (
+                self.buildings_content_curve_adapted_interpolator(water_levels)
+                * self.var.property_value.data
+            )
+
+        return damages_do_not_adapt, damages_adapt
+
+    def get_flood_risk_information_damage_scanner(self):
         """Initiate flood risk information for each household. This information is used in the decision module.
         For now also only dummy data is created."""
-
-        # create damage curves for adaptation
-        buildings_content_curve_adapted = self.var.buildings_content_curve.copy()
-        buildings_content_curve_adapted.loc[0:1] = (
-            0  # assuming zero damages untill 1m water depth
-        )
-        buildings_content_curve_adapted.loc[1:] *= (
-            0.8  # assuming 80% damages above 1m water depth
-        )
 
         # preallocate array for damages
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
@@ -199,7 +250,7 @@ class Households(AgentBaseClass):
                 object_scanner(
                     objects=self.var.household_points,
                     hazard=flood_map,
-                    curves=buildings_content_curve_adapted,
+                    curves=self.var.buildings_content_curve_adapted,
                 )
             )
 
@@ -227,21 +278,23 @@ class Households(AgentBaseClass):
         self.update_risk_perceptions()
 
         # get flood risk information
-        damages_do_not_adapt, damages_adapt = self.get_flood_risk_information()
+        damages_do_not_adapt, damages_adapt = (
+            self.get_flood_risk_information_honeybees()
+        )
 
         # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt(
             geom_id="NoID",
             n_agents=self.n,
-            wealth=self.var.wealth,
-            income=self.var.income,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
             expendature_cap=10,  # realy high for now
-            amenity_value=self.var.amenity_value,
+            amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception,
+            risk_perception=self.var.risk_perception.data,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs,
-            time_adapted=self.var.time_adapted,
+            adaptation_costs=self.var.adaptation_costs.data,
+            time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
             T=35,
@@ -252,14 +305,14 @@ class Households(AgentBaseClass):
         EU_do_not_adapt = self.decision_module.calcEU_do_nothing(
             geom_id="NoID",
             n_agents=self.n,
-            wealth=self.var.wealth,
-            income=self.var.income,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
             expendature_cap=10,
-            amenity_value=self.var.amenity_value,
+            amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception,
+            risk_perception=self.var.risk_perception.data,
             expected_damages=damages_do_not_adapt,
-            adapted=self.var.adapted,
+            adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
             T=35,
             r=0.03,
@@ -383,7 +436,7 @@ class Households(AgentBaseClass):
             self.var.max_dam_agriculture = float(json.load(f)["maximum_damage"])
 
     def load_damage_curves(self):
-        # Load vulnerability curves
+        # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
         road_curves = []
         road_types = [
             ("residential", "damage_parameters/flood/road/residential/curve"),
@@ -448,12 +501,35 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "building_content"}
         )
 
+        # create damage curves for adaptation
+        buildings_content_curve_adapted = self.var.buildings_content_curve.copy()
+        buildings_content_curve_adapted.loc[0:1] = (
+            0  # assuming zero damages untill 1m water depth
+        )
+        buildings_content_curve_adapted.loc[1:] *= (
+            0.8  # assuming 80% damages above 1m water depth
+        )
+        self.var.buildings_content_curve_adapted = buildings_content_curve_adapted
+
         self.var.rail_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
         )
         self.var.rail_curve.set_index("severity", inplace=True)
         self.var.rail_curve = self.var.rail_curve.rename(
             columns={"damage_ratio": "rail"}
+        )
+
+    def create_damage_interpolators(self):
+        # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
+        self.buildings_content_curve_interpolator = interpolate.interp1d(
+            x=self.var.buildings_content_curve.index,
+            y=self.var.buildings_content_curve["building_content"],
+            # fill_value="extrapolate",
+        )
+        self.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
+            x=self.var.buildings_content_curve_adapted.index,
+            y=self.var.buildings_content_curve_adapted["building_content"],
+            # fill_value="extrapolate",
         )
 
     def spinup(self):
