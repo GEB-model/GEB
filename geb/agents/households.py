@@ -737,7 +737,6 @@ class Households(AgentBaseClass):
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
             print("Thinking about adapting...")
             self.decide_household_strategy()
-        # self.decide_household_strategy()
 
     @property
     def n(self):
