@@ -95,9 +95,9 @@ def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
     )
 
 
-def estimate_outflow_height(lake_volume, lake_factor, lake_area, avg_outflow):
+def estimate_outflow_height(lake_storage, lake_factor, lake_area, avg_outflow):
     height_above_outflow = outflow_to_height_above_outflow(lake_factor, avg_outflow)
-    outflow_height = (lake_volume / lake_area) - height_above_outflow
+    outflow_height = (lake_storage / lake_area) - height_above_outflow
     outflow_height[outflow_height < 0] = 0
     return outflow_height
 
@@ -118,7 +118,7 @@ def get_lake_outflow_and_storage(
     dt : float
         Time step in seconds
     storage : float
-        Current storage volume in m3
+        Current storage in m3
     inflow : float
         Inflow to the lake in m3/s
     inflow_prev : float
@@ -137,7 +137,7 @@ def get_lake_outflow_and_storage(
     outflow : float
         New outflow from the lake in m3/s
     storage : float
-        New storage volume in m3
+        New storage in m3
 
     """
     storage += inflow_m3
@@ -254,10 +254,10 @@ class LakesReservoirs(object):
         # a factor which increases evaporation from lake because of wind TODO: use wind to set this factor
         self.var.lakeEvaFactor = self.model.config["parameters"]["lakeEvaFactor"]
 
-        self.var.volume = self.var.water_body_data["volume_total"].values
+        self.var.capacity = self.var.water_body_data["volume_total"].values
 
         self.var.total_inflow_from_other_water_bodies = np.zeros_like(
-            self.var.volume, dtype=np.float32
+            self.var.capacity, dtype=np.float32
         )
 
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
@@ -276,9 +276,10 @@ class LakesReservoirs(object):
             self.model.config["parameters"]["lakeAFactor"],
         )
 
-        self.var.storage = self.var.volume.copy()
+        # initialize storage with (full) capacity
+        self.var.storage = self.var.capacity.copy()
         self.var.outflow_height = estimate_outflow_height(
-            self.var.volume,
+            self.var.storage,
             self.var.lake_factor,
             self.var.lake_area,
             average_discharge,
@@ -460,7 +461,7 @@ class LakesReservoirs(object):
 
         return lake_outflow_m3
 
-    def routing_reservoirs(self, inflowC, routing_step_length_seconds):
+    def routing_reservoirs(self, inflowC, substep, routing_step_length_seconds):
         """
         Reservoir outflow
         :param inflowC: inflow to reservoirs
@@ -476,12 +477,24 @@ class LakesReservoirs(object):
         # New reservoir storage [m3] = plus inflow for this sub step
 
         outflow_m3_s = np.zeros(self.var.waterBodyIDC.size, dtype=np.float64)
+
+        is_command_area = self.HRU.var.reservoir_command_areas != -1
+
+        print("WARNING: Assuming irrigation demand equal to ETRef")
+        irrigation_demand_m3 = np.bincount(
+            self.HRU.var.reservoir_command_areas[is_command_area],
+            weights=self.HRU.var.ETRef[is_command_area]
+            * self.HRU.var.cell_area[is_command_area],
+        )
+
         outflow_m3_s[reservoirs] = (
-            self.model.agents.reservoir_operators.regulate_reservoir_outflow(
-                self.var.storage[reservoirs],
-                inflowC[reservoirs]
+            self.model.agents.reservoir_operators.regulate_reservoir_outflow_hanasaki(
+                storage_m3=self.var.storage[reservoirs],
+                inflow_m3_s=inflowC[reservoirs]
                 / routing_step_length_seconds,  # convert per timestep to per second
-                self.var.waterBodyIDC[reservoirs],
+                substep=substep,
+                irrigation_demand_m3=irrigation_demand_m3,
+                water_body_id=self.var.waterBodyIDC[reservoirs],
             )
         )
 
@@ -504,9 +517,9 @@ class LakesReservoirs(object):
 
         return outflow_m3
 
-    def routing(
+    def substep(
         self,
-        step,
+        substep,
         n_routing_steps,
         routing_step_length_seconds,
         discharge,
@@ -525,7 +538,7 @@ class LakesReservoirs(object):
         if __debug__:
             prestorage = self.var.storage.copy()
 
-        if step == 0:
+        if substep == 0:
             # average evaporation overeach lake
             average_evaporation_per_water_body = np.bincount(
                 self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
@@ -570,7 +583,7 @@ class LakesReservoirs(object):
 
         outflow_lakes = self.routing_lakes(inflow_m3, routing_step_length_seconds)
         outflow_reservoirs = self.routing_reservoirs(
-            inflow_m3, routing_step_length_seconds
+            inflow_m3, substep, routing_step_length_seconds
         )
 
         assert (outflow_reservoirs[outflow_lakes > 0] == 0).all()

@@ -272,8 +272,8 @@ class Routing(object):
             # this variable is named outflow_to_river_network in the lakes and reservoirs module
             # because it is outflow from the waterbodies to the river network
             inflow_to_river_network, waterbody_evaporation_m3_Dt = (
-                self.hydrology.lakes_reservoirs.routing(
-                    step=subrouting_step,
+                self.hydrology.lakes_reservoirs.substep(
+                    substep=subrouting_step,
                     n_routing_steps=self.var.n_routing_steps,
                     routing_step_length_seconds=self.var.routing_step_length_seconds,
                     discharge=self.grid.var.discharge,
