@@ -12,6 +12,8 @@ general:
   name: default
   export_inital_on_spinup: true
   simulate_forest: false
+  forecasts:
+    use: false
 
 hazards:
   floods:
@@ -45,7 +47,13 @@ agent_settings:
       limit: 10000  # previous tried 1700
       per: capita
   households:
-    migrate: false
+    expected_utility:
+      flood_risk_calculations:
+        risk_perception:
+          base: 1.6
+          coef: -2.5
+          max: 10
+          min: 0.01
   farmers:
     ruleset: base
     base_management_yield_ratio: 1
