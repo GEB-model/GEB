@@ -373,8 +373,12 @@ class GEBModel(HazardDriver, ABM_Model):
         self._multiverse_name = str(value) if value else None
 
     @property
+    def report_folder_root(self):
+        return Path(self.config["general"]["report_folder"])
+
+    @property
     def report_folder(self):
-        return Path(self.config["general"]["report_folder"]) / self.run_name
+        return self.report_folder_root / self.run_name
 
     @property
     def input_folder(self):

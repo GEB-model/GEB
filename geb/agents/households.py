@@ -8,10 +8,9 @@ from ..hydrology.landcover import (
     FOREST,
 )
 import pandas as pd
-from os.path import join
 from damagescanner.core import object_scanner
 import json
-import rioxarray
+import xarray as xr
 from rasterio.features import shapes
 from shapely.geometry import shape
 from .decision_module_flood import DecisionModule
@@ -74,24 +73,17 @@ class Households(AgentBaseClass):
 
         flood_maps = {}
         for return_period in self.return_periods:
-            flood_path = join(
-                "report", "estimate_risk", "flood_maps", f"{return_period}.tif"
+            file_path = (
+                self.model.report_folder_root
+                / "estimate_risk"
+                / "flood_maps"
+                / f"{return_period}.zarr.zip"
             )
-            print(f"using this flood map: {flood_path}")
-            flood_maps[return_period] = rioxarray.open_rasterio(flood_path)
+            flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
         flood_maps["crs"] = flood_maps[return_period].rio.crs
-
-        # now also get gdal transform
-        affine_transform = flood_maps[return_period].rio.transform()
-        gdal_geotransform = (
-            affine_transform.c,  # Top-left x
-            affine_transform.a,  # Pixel width
-            affine_transform.b,  # Rotation (0 if north-up)
-            affine_transform.f,  # Top-left y
-            affine_transform.d,  # Rotation (0 if north-up)
-            affine_transform.e,  # Pixel height (negative for north-up)
+        flood_maps["gdal_geotransform"] = (
+            flood_maps[return_period].rio.transform().to_gdal()
         )
-        flood_maps["gdal_geotransform"] = gdal_geotransform
         self.flood_maps = flood_maps
 
     def assign_household_attributes(self):
@@ -200,7 +192,7 @@ class Households(AgentBaseClass):
             flood_map = self.flood_maps[return_period]
 
             water_levels = sample_from_map(
-                flood_map.values[0],
+                flood_map.values,
                 self.var.locations_reprojected_to_flood_map.data,
                 self.flood_maps["gdal_geotransform"],
             )
