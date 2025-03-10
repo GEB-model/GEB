@@ -37,8 +37,6 @@ from calendar import monthrange
 from numcodecs import Blosc
 from scipy.ndimage import value_indices
 import pyflwdir
-import rioxarray
-
 
 from hydromt.models.model_grid import GridModel
 from hydromt.data_catalog import DataCatalog
@@ -47,7 +45,7 @@ from hydromt.data_adapter import (
     DatasetAdapter,
 )
 
-from honeybees.library.raster import sample_from_map
+from honeybees.library.raster import sample_from_map, pixels_to_coords
 from isimip_client.client import ISIMIPClient
 
 from .workflows.general import (
@@ -59,7 +57,7 @@ from .workflows.general import (
     bounds_are_within,
 )
 from .workflows.farmers import get_farm_locations, create_farms, get_farm_distribution
-from .workflows.population import generate_locations
+from .workflows.population import generate_locations, load_GLOPOP_S
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
 from .workflows.conversions import (
@@ -4496,60 +4494,20 @@ class GEBModel(GridModel):
         self.setup_farmers(farmers)
 
     def setup_household_characteristics(self, maximum_age=85):
-        import gzip
-
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
         )
-
-        # get path to GLOPOP
-        GLOPOP_S = self.data_catalog.get_source("GLOPOP-S")
-
-        # get path to GLOPOP grid
-        GLOPOP_S_GRID = self.data_catalog.get_source("GLOPOP-S_grid")
-
-        GLOPOP_S_attribute_names = [
-            "HID",
-            "RELATE_HEAD",
-            "INCOME",
-            "WEALTH",
-            "RURAL",
-            "AGE",
-            "GENDER",
-            "EDUC",
-            "HHTYPE",
-            "HHSIZE_CAT",
-            "AGRI_OWNERSHIP",
-            "FLOOR",
-            "WALL",
-            "ROOF",
-            "SOURCE",
-            "GRID_CELL",
-        ]
-
         # create list of attibutes to include
         attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
         region_results = {}
         # iterate over regions and sample agents from GLOPOP-S
         for GDL_region in GDL_regions["GDLcode"]:
             region_results[GDL_region] = {}
-
-            with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
-                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
-
-            n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
-            GLOPOP_S_region = pd.DataFrame(
-                np.reshape(
-                    GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
-                ).transpose(),
-                columns=GLOPOP_S_attribute_names,
+            GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
+                self.data_catalog, GDL_region
             )
 
-            # load grid
-            GLOPOP_GRID_region = rioxarray.open_rasterio(
-                GLOPOP_S_GRID.path.format(region=GDL_region)
-            )
             # clip grid to model bounds
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
@@ -4635,13 +4593,7 @@ class GEBModel(GridModel):
                 name=f"agents/households/{household_attribute}",
             )
 
-        self.write_binary()  # redundant?
-        return None
-
     def setup_farmer_household_characteristics(self, maximum_age=85):
-        import gzip
-        from honeybees.library.raster import pixels_to_coords
-
         n_farmers = self.binary["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -4682,27 +4634,6 @@ class GEBModel(GridModel):
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
 
-        # Load GLOPOP-S data. This is a binary file and has no proper loading in hydromt. So we use the data catalog to get the path and format the path with the regions and load it with NumPy
-        GLOPOP_S = self.data_catalog.get_source("GLOPOP-S")
-
-        GLOPOP_S_attribute_names = [
-            "HID",
-            "RELATE_HEAD",
-            "INCOME",
-            "WEALTH",
-            "RURAL",
-            "AGE",
-            "GENDER",
-            "EDUC",
-            "HHTYPE",
-            "HHSIZE_CAT",
-            "AGRI_OWNERSHIP",
-            "FLOOR",
-            "WALL",
-            "ROOF",
-            "SOURCE",
-        ]
-
         # Get list of unique GDL codes from farmer dataframe
         attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
 
@@ -4712,16 +4643,7 @@ class GEBModel(GridModel):
             )
 
         for GDL_region, farmers_GDL_region in GDL_region_per_farmer.groupby("GDLcode"):
-            with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
-                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
-
-            n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
-            GLOPOP_S_region = pd.DataFrame(
-                np.reshape(
-                    GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
-                ).transpose(),
-                columns=GLOPOP_S_attribute_names,
-            )
+            GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(
