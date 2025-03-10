@@ -38,7 +38,6 @@ from numcodecs import Blosc
 from scipy.ndimage import value_indices
 import pyflwdir
 
-
 from hydromt.models.model_grid import GridModel
 from hydromt.data_catalog import DataCatalog
 from hydromt.data_adapter import (
@@ -46,7 +45,7 @@ from hydromt.data_adapter import (
     DatasetAdapter,
 )
 
-from honeybees.library.raster import sample_from_map
+from honeybees.library.raster import sample_from_map, pixels_to_coords
 from isimip_client.client import ISIMIPClient
 
 from .workflows.general import (
@@ -58,7 +57,7 @@ from .workflows.general import (
     bounds_are_within,
 )
 from .workflows.farmers import get_farm_locations, create_farms, get_farm_distribution
-from .workflows.population import generate_locations
+from .workflows.population import generate_locations, load_GLOPOP_S
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
 from .workflows.conversions import (
@@ -302,7 +301,7 @@ class GEBModel(GridModel):
         if "subbasin" in region:
             sink_subbasin_ids = region["subbasin"]
         elif "outflow" in region:
-            lon, lat = region["outflow"][0][0], region["outflow"][1][0]
+            lon, lat = region["outflow"][0], region["outflow"][1]
             sink_subbasin_ids = get_subbasin_id_from_coordinate(
                 self.data_catalog, lon, lat
             )
@@ -3421,11 +3420,28 @@ class GEBModel(GridModel):
             #     region["ISO3"],
             #     convert_percent_to_ratio=True,
             # )
+            ISO3 = region["ISO3"]
+            if (
+                ISO3 == "AND"
+            ):  # for Andorra (not available in World Bank data), use Spain's data
+                self.logger.warning(
+                    "Andorra's economic data not available, using Spain's data"
+                )
+                ISO3 = "ESP"
+            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
+                self.logger.warning(
+                    "Liechtenstein's economic data not available, using Switzerland's data"
+                )
+                ISO3 = "CHE"
+
             local_inflation_rates = process_rates(
                 inflation_rates,
                 years_inflation_rates,
-                region["ISO3"],
+                ISO3,
                 convert_percent_to_ratio=True,
+            )
+            assert not np.isnan(local_inflation_rates).any(), (
+                f"Missing inflation rates for {region['ISO3']}"
             )
             inflation_rates_dict["data"][region_id] = (
                 np.array(local_inflation_rates) / np.array(USA_inflation_rates)
@@ -4495,9 +4511,106 @@ class GEBModel(GridModel):
         self.setup_farmers(farmers)
 
     def setup_household_characteristics(self, maximum_age=85):
-        import gzip
-        from honeybees.library.raster import pixels_to_coords
+        # load GDL region within model domain
+        GDL_regions = self.data_catalog.get_geodataframe(
+            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+        )
+        # create list of attibutes to include
+        attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
+        region_results = {}
+        # iterate over regions and sample agents from GLOPOP-S
+        for GDL_region in GDL_regions["GDLcode"]:
+            region_results[GDL_region] = {}
+            GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
+                self.data_catalog, GDL_region
+            )
 
+            # clip grid to model bounds
+            GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
+
+            # get unique cells in grid
+            unique_grid_cells = np.unique(GLOPOP_GRID_region.values)
+
+            # subset GLOPOP_households_region to unique cells for quicker search
+            GLOPOP_S_region = GLOPOP_S_region[
+                GLOPOP_S_region["GRID_CELL"].isin(unique_grid_cells)
+            ]
+
+            # create all households
+            GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
+            n_households = GLOPOP_households_region.size
+
+            # iterate over unique housholds and extract the variables we want
+            household_characteristics = {}
+            household_characteristics["sizes"] = np.full(
+                n_households, -1, dtype=np.int32
+            )
+            household_characteristics["locations"] = np.full(
+                (n_households, 2), -1, dtype=np.float32
+            )
+            for column in attributes_to_include:
+                household_characteristics[column] = np.full(
+                    n_households, -1, dtype=np.int32
+                )
+
+            # initiate indice tracker
+            households_found = 0
+
+            for HID in GLOPOP_households_region:
+                print(f"searching household {households_found} of {n_households}")
+                household = GLOPOP_S_region[GLOPOP_S_region["HID"] == HID]
+                household_size = len(household)
+                if len(household) > 1:
+                    # if there are multiple people in the household
+                    # take first person as head of household (replace this with oldest person?)
+                    household = household.iloc[0]
+
+                GRID_CELL = int(household["GRID_CELL"])
+                if GRID_CELL in GLOPOP_GRID_region.values:
+                    for column in attributes_to_include:
+                        household_characteristics[column][households_found] = household[
+                            column
+                        ]
+                        household_characteristics["sizes"][households_found] = (
+                            household_size
+                        )
+
+                    # now find location of household
+                    idx_household = np.where(GLOPOP_GRID_region.values[0] == GRID_CELL)
+                    # get x and y from xarray
+                    x_y = np.concatenate(
+                        [
+                            GLOPOP_GRID_region.x.values[idx_household[1]],
+                            GLOPOP_GRID_region.y.values[idx_household[0]],
+                        ]
+                    )
+                    household_characteristics["locations"][households_found, :] = x_y
+                    households_found += 1
+
+                # clip away unused data:
+            for household_attribute in household_characteristics:
+                household_characteristics[household_attribute] = (
+                    household_characteristics[household_attribute][:households_found]
+                )
+
+            region_results[GDL_region] = household_characteristics
+
+        # concatenate all data
+        data_concatenated = {}
+        for household_attribute in household_characteristics:
+            data_concatenated[household_attribute] = np.concatenate(
+                [
+                    region_results[GDL_region][household_attribute]
+                    for GDL_region in region_results
+                ]
+            )
+        for household_attribute in household_characteristics:
+            self.set_binary(
+                data_concatenated[household_attribute],
+                name=f"agents/households/{household_attribute}",
+            )
+
+    def setup_farmer_household_characteristics(self, maximum_age=85):
         n_farmers = self.binary["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -4538,27 +4651,6 @@ class GEBModel(GridModel):
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
 
-        # Load GLOPOP-S data. This is a binary file and has no proper loading in hydromt. So we use the data catalog to get the path and format the path with the regions and load it with NumPy
-        GLOPOP_S = self.data_catalog.get_source("GLOPOP-S")
-
-        GLOPOP_S_attribute_names = [
-            "HID",
-            "RELATE_HEAD",
-            "INCOME",
-            "WEALTH",
-            "RURAL",
-            "AGE",
-            "GENDER",
-            "EDUC",
-            "HHTYPE",
-            "HHSIZE_CAT",
-            "AGRI_OWNERSHIP",
-            "FLOOR",
-            "WALL",
-            "ROOF",
-            "SOURCE",
-        ]
-
         # Get list of unique GDL codes from farmer dataframe
         attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
 
@@ -4568,16 +4660,7 @@ class GEBModel(GridModel):
             )
 
         for GDL_region, farmers_GDL_region in GDL_region_per_farmer.groupby("GDLcode"):
-            with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
-                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
-
-            n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
-            GLOPOP_S_region = pd.DataFrame(
-                np.reshape(
-                    GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
-                ).transpose(),
-                columns=GLOPOP_S_attribute_names,
-            )
+            GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(

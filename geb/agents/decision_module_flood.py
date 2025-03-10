@@ -48,7 +48,7 @@ class DecisionModule:
         )
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
     def IterateThroughFlood(
         n_floods: int,
         wealth: np.ndarray,
