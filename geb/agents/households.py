@@ -545,15 +545,7 @@ class Households(AgentBaseClass):
         self.var.current_water_demand = water_demand
         self.var.current_efficiency = efficiency
 
-    def flood(self, flood_map, simulation_root, return_period=None):
-        if return_period is not None:
-            flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
-        else:
-            flood_path = join(simulation_root, "hmax.tif")
-
-        print(f"using this flood map: {flood_path}")
-        flood_map = rioxarray.open_rasterio(flood_path)
-
+    def flood(self, flood_map):
         agriculture = from_landuse_raster_to_polygon(
             self.HRU.decompress(self.HRU.var.land_owners != -1),
             self.HRU.transform,
