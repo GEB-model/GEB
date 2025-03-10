@@ -43,6 +43,11 @@ class SFINCS:
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
+        # set default precipitation file
+        self.precipitation_dataarray = xr.open_dataset(
+            self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
+        )["pr_hourly"]
+
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
         folder.mkdir(parents=True, exist_ok=True)
@@ -54,6 +59,8 @@ class SFINCS:
             / "simulations"
             / f"{self.model.current_time.strftime('%Y%m%dT%H%M%S')}"
         )
+        if self.model.multiverse_name:
+            folder = folder / self.model.multiverse_name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -93,7 +100,7 @@ class SFINCS:
             utm_crs = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
-    def setup(self, event):
+    def build(self, event):
         build_parameters = {}
 
         event_name = self.get_event_name(event)
@@ -200,20 +207,6 @@ class SFINCS:
         )
         discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
 
-        sfincs_precipitation = event.get("precipitation", None)
-
-        if sfincs_precipitation is None:
-            sfincs_precipitation = (
-                xr.open_dataset(
-                    self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
-                ).rename(pr_hourly="precip")["precip"]
-                * 3600
-            )  # convert from kg/m2/s to mm/h for
-            sfincs_precipitation.raster.set_crs(
-                4326
-            )  # TODO: Remove when this is added to hydromt_sfincs
-            sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
-
         event_name = self.get_event_name(event)
 
         update_sfincs_model_forcing(
@@ -225,53 +218,33 @@ class SFINCS:
             },
             forcing_method="precipitation",
             discharge_grid=discharge_grid,
-            precipitation_grid=sfincs_precipitation,
+            precipitation_grid=self.precipitation,
             data_catalogs=self.data_catalogs,
             uparea_discharge_grid=xr.open_dataset(
                 self.model.files["grid"]["routing/upstream_area"],
                 engine="zarr",
             ),  # .isel(band=0),
         )
-        return None
 
-    def run_single_event(self, event, start_time, return_period=None):
-        self.setup(event)
+    def run_single_event(self, event, start_time):
+        self.build(event)
+        model_root = self.sfincs_model_root(self.get_event_name(event))
+        simulation_root = self.sfincs_simulation_root(self.get_event_name(event))
+
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
-        event_name = self.get_event_name(event)
+
         run_sfincs_simulation(
-            simulation_root=self.sfincs_simulation_root(event_name),
-            model_root=self.sfincs_model_root(event_name),
+            simulation_root=simulation_root,
+            model_root=model_root,
             gpu=False,
         )
         flood_map = read_flood_map(
-            model_root=self.sfincs_model_root(event_name),
-            simulation_root=self.sfincs_simulation_root(event_name),
-            return_period=return_period,
+            model_root=model_root,
+            simulation_root=simulation_root,
         )  # xc, yc is for x and y in rotated grid`DD`
-        damages = self.flood(
-            flood_map=flood_map,
-            simulation_root=self.sfincs_simulation_root(event_name),
-            return_period=return_period,
-        )
+        damages = self.flood(flood_map=flood_map)
         return damages
-
-    def scale_event(self, event, scale_factor):
-        scaled_event = event.copy()
-        sfincs_precipitation = (
-            xr.open_dataset(
-                self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
-            ).rename(pr_hourly="precip")["precip"]
-            * 3600
-            * scale_factor
-        )  # convert from kg/m2/s to mm/h for
-        sfincs_precipitation.raster.set_crs(
-            4326
-        )  # TODO: Remove when this is added to hydromt_sfincs
-        sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
-
-        scaled_event["precipitation"] = sfincs_precipitation
-        return scaled_event
 
     def get_return_period_maps(self):
         # close the zarr store
@@ -324,16 +297,23 @@ class SFINCS:
             damages_list = []
             return_periods_list = []
             exceedence_probabilities_list = []
-            for index, row in scale_factors.iterrows():
+
+            default_precipitation = self.precipitation_dataarray
+
+            for _, row in scale_factors.iterrows():
                 return_period = row["return_period"]
                 exceedence_probability = row["exceedance_probability"]
                 scale_factor = row["scaling_factor"]
-                scaled_event = self.scale_event(event, scale_factor)
-                damages = self.run_single_event(scaled_event, start_time, return_period)
+
+                self.precipitation_dataarray = default_precipitation * scale_factor
+
+                damages = self.run_single_event(event, start_time)
 
                 damages_list.append(damages)
                 return_periods_list.append(return_period)
                 exceedence_probabilities_list.append(exceedence_probability)
+
+            self.precipitation_dataarray = default_precipitation
 
             print(damages_list)
             print(return_periods_list)
@@ -356,11 +336,9 @@ class SFINCS:
         else:
             self.run_single_event(event, start_time)
 
-    def flood(self, simulation_root, flood_map, return_period=None):
+    def flood(self, flood_map):
         damages = self.model.agents.households.flood(
-            simulation_root=simulation_root,
             flood_map=flood_map,
-            return_period=return_period,
         )
         return damages
 
@@ -389,6 +367,22 @@ class SFINCS:
     @property
     def rivers(self):
         return load_geom(self.model.files["geoms"]["routing/rivers"])
+
+    @property
+    def precipitation(self):
+        # convert from kg/m2/s to mm/h
+        pr = self.precipitation_dataarray * 3600
+        pr.raster.set_crs(4326)  # TODO: Remove when this is added to hydromt_sfincs
+        pr = pr.rio.set_crs(4326)
+        return pr
+
+    @property
+    def precipitation_dataarray(self):
+        return self._precipitation_dataarray
+
+    @precipitation_dataarray.setter
+    def precipitation_dataarray(self, dataarray):
+        self._precipitation_dataarray = dataarray
 
     @property
     def crs(self):

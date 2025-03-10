@@ -1,13 +1,11 @@
 import datetime
 import shutil
 from pathlib import Path
-from typing import Union
 from time import time
 import copy
-import numpy as np
 from dateutil.relativedelta import relativedelta
+import xarray as xr
 
-from honeybees.library.helpers import timeprint
 from honeybees.model import Model as ABM_Model
 
 from geb.store import Store
@@ -19,35 +17,7 @@ from geb.hazards.driver import HazardDriver
 from .HRUs import load_geom
 
 
-class ABM(ABM_Model):
-    def __init__(self, current_time, n_timesteps) -> None:
-        """Initializes the agent-based model.
-
-        Args:
-            config_path: Filepath of the YAML-configuration file.
-            args: Run arguments.
-            coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
-        """
-
-        ABM_Model.__init__(
-            self,
-            current_time,
-            self.timestep_length,
-            n_timesteps=n_timesteps,
-            args=None,
-        )
-
-        self.agents = Agents(self)
-
-        # This variable is required for the batch runner. To stop the model
-        # if some condition is met set running to False.
-        timeprint("Finished setup")
-
-    def step(self):
-        self.agents.step()
-
-
-class GEBModel(HazardDriver, ABM):
+class GEBModel(HazardDriver, ABM_Model):
     """GEB parent class.
 
     Args:
@@ -73,20 +43,22 @@ class GEBModel(HazardDriver, ABM):
         self.timing = timing
         self.mode = mode
 
+        self._multiverse_name = None
+
         self.config = self.setup_config(config)
 
         # make a deep copy to avoid issues when the model is initialized multiple times
         self.files = copy.deepcopy(files)
         for data in self.files.values():
             for key, value in data.items():
-                data[key] = Path(config["general"]["input_folder"]) / value
+                data[key] = self.input_folder / value
 
         self.store = Store(self)
         self.artists = Artists(self)
 
     def restore(self, store_location, timestep):
         self.store.load(store_location)
-        self.groundwater.modflow.restore(self.data.grid.var.heads)
+        self.hydrology.groundwater.modflow.restore(self.hydrology.grid.var.heads)
         self.current_timestep = timestep
 
     def multiverse(self):
@@ -97,57 +69,72 @@ class GEBModel(HazardDriver, ABM):
         store_location = self.simulation_root / "multiverse" / "forecast"
         self.store.save(store_location)
 
-        # perform one run of the multiverse
-        discharges_before_restore = []
-        for _ in range(10):
-            discharges_before_restore.append(self.data.grid.var.discharge.copy())
-            self.step()
+        precipitation_dataarray = self.sfincs.precipitation_dataarray
 
-        # restore the initial state of the multiverse
-        self.restore(store_location=store_location, timestep=store_timestep)
+        forecasts = xr.open_dataset(
+            self.input_folder
+            / "climate"
+            / "forecasts"
+            / f"{self.current_time.strftime('%Y%m%d')}.nc"
+        )
 
-        # again perform one run of the multiverse
-        discharges_after_restore = []
-        for _ in range(10):
-            discharges_after_restore.append(self.data.grid.var.discharge.copy())
-            self.step()
+        end_date = forecasts.time[-1].dt.date.item()
+        n_timesteps = (end_date - self.current_time.date()).days
 
-        # restore the initial state of the multiverse
-        self.restore(store_location=store_location, timestep=store_timestep)
+        for member in forecasts.member:
+            self.multiverse_name = member.item()
+            # self.sfincs.precipitation_dataarray = (
+            #     forecasts.sel(member=member).rename({"accum_precipitation": "precip"})
+            #     / 3600
+            # )
+            self.sfincs.precipitation_dataarray = (
+                precipitation_dataarray / 100 * member.item()
+            )
+            print(f"Running forecast member {member.item()}...")
+            for _ in range(n_timesteps):
+                self.step()
 
-        # check if the discharges are the same in both multiverses
-        assert np.array_equal(discharges_before_restore, discharges_after_restore)
+            # restore the initial state of the multiverse
+            self.restore(store_location=store_location, timestep=store_timestep)
 
-    def step(self, step_size: Union[int, str] = 1, report=True) -> None:
+        print("Forecast finished, restoring all conditions...")
+
+        # restore the precipitation dataarray, step out of the multiverse
+        self.sfincs.precipitation_dataarray = precipitation_dataarray
+        self.multiverse_name = None
+
+    def step(self, report=True) -> None:
         """
         Forward the model by the given the number of steps.
 
         Args:
             step_size: Number of steps the model should take. Can be integer or string `day`, `week`, `month`, `year`, `decade` or `century`.
         """
-        if isinstance(step_size, str):
-            n = self.parse_step_str(step_size)
-        else:
-            n = step_size
-        for _ in range(n):
-            t0 = time()
-            HazardDriver.step(self, 1)
-            ABM.step(self)
-            if self.simulate_hydrology:
-                self.hydrology.step()
+        # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
+        # and if the current date is in the list of forecast days
+        if (
+            self.config["general"]["forecasts"]["use"]
+            and not self.multiverse_name
+            and self.current_time.date() in self.config["general"]["forecasts"]["days"]
+        ):
+            self.multiverse()
 
-            t1 = time()
-            print(
-                f"{self.current_time} ({round(t1 - t0, 4)}s)",
-                flush=True,
-            )
+        t0 = time()
+        HazardDriver.step(self, 1)
+        self.agents.step()
+        if self.simulate_hydrology:
+            self.hydrology.step()
 
-            if report:
-                self.reporter.step()
+        t1 = time()
+        print(
+            f"{self.current_time} ({round(t1 - t0, 4)}s)",
+            flush=True,
+        )
 
-            # if self.current_timestep == 5:
-            #     self.multiverse()
-            self.current_timestep += 1
+        if report:
+            self.reporter.step()
+
+        self.current_timestep += 1
 
     def create_datetime(self, date):
         return datetime.datetime.combine(date, datetime.time(0))
@@ -176,15 +163,20 @@ class GEBModel(HazardDriver, ABM):
         self.spinup_start = datetime.datetime.combine(
             self.config["general"]["spinup_time"], datetime.time(0)
         )
-
         self.timestep_length = timestep_length
 
         if self.simulate_hydrology:
             self.hydrology = Hydrology(self)
 
         HazardDriver.__init__(self)
+        ABM_Model.__init__(
+            self,
+            current_time,
+            self.timestep_length,
+            n_timesteps=n_timesteps,
+        )
 
-        ABM.__init__(self, current_time, n_timesteps)
+        self.agents = Agents(self)
 
         if load_data_from_store:
             self.store.load()
@@ -373,8 +365,20 @@ class GEBModel(HazardDriver, ABM):
                 return "default"
 
     @property
+    def multiverse_name(self):
+        return self._multiverse_name
+
+    @multiverse_name.setter
+    def multiverse_name(self, value):
+        self._multiverse_name = str(value) if value else None
+
+    @property
     def report_folder(self):
         return Path(self.config["general"]["report_folder"]) / self.run_name
+
+    @property
+    def input_folder(self):
+        return Path(self.config["general"]["input_folder"])
 
     @property
     def crs(self):
