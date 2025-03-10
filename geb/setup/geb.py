@@ -302,7 +302,7 @@ class GEBModel(GridModel):
         if "subbasin" in region:
             sink_subbasin_ids = region["subbasin"]
         elif "outflow" in region:
-            lon, lat = region["outflow"][0][0], region["outflow"][1][0]
+            lon, lat = region["outflow"][0], region["outflow"][1]
             sink_subbasin_ids = get_subbasin_id_from_coordinate(
                 self.data_catalog, lon, lat
             )
