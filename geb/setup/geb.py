@@ -3420,11 +3420,28 @@ class GEBModel(GridModel):
             #     region["ISO3"],
             #     convert_percent_to_ratio=True,
             # )
+            ISO3 = region["ISO3"]
+            if (
+                ISO3 == "AND"
+            ):  # for Andorra (not available in World Bank data), use Spain's data
+                self.logger.warning(
+                    "Andorra's economic data not available, using Spain's data"
+                )
+                ISO3 = "ESP"
+            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
+                self.logger.warning(
+                    "Liechtenstein's economic data not available, using Switzerland's data"
+                )
+                ISO3 = "CHE"
+
             local_inflation_rates = process_rates(
                 inflation_rates,
                 years_inflation_rates,
-                region["ISO3"],
+                ISO3,
                 convert_percent_to_ratio=True,
+            )
+            assert not np.isnan(local_inflation_rates).any(), (
+                f"Missing inflation rates for {region['ISO3']}"
             )
             inflation_rates_dict["data"][region_id] = (
                 np.array(local_inflation_rates) / np.array(USA_inflation_rates)
