@@ -193,11 +193,7 @@ class WaterDemand:
         )
         available_reservoir_storage_m3[
             self.hydrology.lakes_reservoirs.var.waterBodyTypC == 2
-        ] = self.model.agents.reservoir_operators.get_available_water_reservoir_command_areas(
-            self.hydrology.lakes_reservoirs.var.storage[
-                self.hydrology.lakes_reservoirs.var.waterBodyTypC == 2
-            ]
-        )
+        ] = self.model.agents.reservoir_operators.get_available_water_reservoir_command_areas()
         return (
             self.grid.var.river_storage_m3.copy(),
             available_reservoir_storage_m3,

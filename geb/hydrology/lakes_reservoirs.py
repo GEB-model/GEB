@@ -461,7 +461,7 @@ class LakesReservoirs(object):
 
         return lake_outflow_m3
 
-    def routing_reservoirs(self, inflowC, substep, routing_step_length_seconds):
+    def routing_reservoirs(self, inflow_m3, substep, routing_step_length_seconds):
         """
         Reservoir outflow
         :param inflowC: inflow to reservoirs
@@ -473,41 +473,42 @@ class LakesReservoirs(object):
         reservoirs = self.var.waterBodyTypC == RESERVOIR
 
         # Reservoir inflow in [m3] per timestep
-        self.var.storage[reservoirs] += inflowC[reservoirs]
+        self.var.storage[reservoirs] += inflow_m3[reservoirs]
         # New reservoir storage [m3] = plus inflow for this sub step
 
-        outflow_m3_s = np.zeros(self.var.waterBodyIDC.size, dtype=np.float64)
+        outflow_m3 = np.zeros(self.var.waterBodyIDC.size, dtype=np.float64)
 
         is_command_area = self.HRU.var.reservoir_command_areas != -1
 
         print("WARNING: Assuming irrigation demand equal to ETRef")
-        irrigation_demand_m3 = np.bincount(
-            self.HRU.var.reservoir_command_areas[is_command_area],
-            weights=self.HRU.var.ETRef[is_command_area]
-            * self.HRU.var.cell_area[is_command_area],
+        irrigation_demand_m3 = (
+            np.bincount(
+                self.HRU.var.reservoir_command_areas[is_command_area],
+                weights=self.HRU.var.ETRef[is_command_area]
+                * self.HRU.var.cell_area[is_command_area],
+            )
+            / 24
         )
 
-        outflow_m3_s[reservoirs] = (
+        outflow_m3[reservoirs] = (
             self.model.agents.reservoir_operators.regulate_reservoir_outflow_hanasaki(
                 storage_m3=self.var.storage[reservoirs],
-                inflow_m3_s=inflowC[reservoirs]
-                / routing_step_length_seconds,  # convert per timestep to per second
+                inflow_m3=inflow_m3[reservoirs],
                 substep=substep,
                 irrigation_demand_m3=irrigation_demand_m3,
                 water_body_id=self.var.waterBodyIDC[reservoirs],
             )
         )
 
-        outflow_m3 = outflow_m3_s * routing_step_length_seconds
         assert (outflow_m3 <= self.var.storage).all()
 
         self.var.storage -= outflow_m3
 
-        inflow_reservoirs = np.zeros_like(inflowC)
-        inflow_reservoirs[reservoirs] = inflowC[reservoirs]
+        inflow_m3_reservoirs = np.zeros_like(inflow_m3)
+        inflow_m3_reservoirs[reservoirs] = inflow_m3[reservoirs]
         if __debug__:
             balance_check(
-                influxes=[inflow_reservoirs],  # In [m3/s]
+                influxes=[inflow_m3_reservoirs],  # In [m3/s]
                 outfluxes=[outflow_m3],
                 prestorages=[prestorage],
                 poststorages=[self.var.storage],
@@ -653,8 +654,16 @@ class LakesReservoirs(object):
         return self.var.storage[self.var.waterBodyTypC == RESERVOIR]
 
     @property
+    def reservoir_capacity(self):
+        return self.var.capacity[self.var.waterBodyTypC == RESERVOIR]
+
+    @property
     def lake_storage(self):
         return self.var.storage[self.var.waterBodyTypC == LAKE]
+
+    @property
+    def lake_capacity(self):
+        return self.var.capacity[self.var.waterBodyTypC == LAKE]
 
     def decompress(self, array):
         return array
