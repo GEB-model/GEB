@@ -104,6 +104,18 @@ class Households(AgentBaseClass):
         sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
+        # load age household head
+        age_household_head = np.load(
+            self.model.files["binary"]["agents/households/age_household_head"]
+        )["data"]
+        self.var.age_household_head = DynamicArray(age_household_head, max_n=self.max_n)
+
+        # load education level household head
+        education_level = np.load(
+            self.model.files["binary"]["agents/households/education_level"]
+        )["data"]
+        self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
+
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
@@ -177,7 +189,9 @@ class Households(AgentBaseClass):
             self.var.locations[:, 0], self.var.locations[:, 1]
         )
         self.var.locations_reprojected_to_flood_map = locations
-        print(f"Household attributes assigned for {self.n} households.")
+        print(
+            f"Household attributes assigned for {self.n} households with {self.population} people."
+        )
 
     def get_flood_risk_information_honeybees(self):
         # preallocate array for damages
@@ -732,3 +746,7 @@ class Households(AgentBaseClass):
     @property
     def n(self):
         return self.var.locations.shape[0]
+
+    @property
+    def population(self):
+        return self.var.sizes.data.sum()
