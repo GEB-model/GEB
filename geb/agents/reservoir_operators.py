@@ -68,6 +68,9 @@ class ReservoirOperators(AgentBaseClass):
 
     def spinup(self):
         self.var = self.model.store.create_bucket("agents.reservoir_operators.var")
+        self.set_reservoir_data(
+            self.model.hydrology.lakes_reservoirs.var.water_body_data
+        )
 
     def set_reservoir_data(self, water_body_data):
         self.reservoirs = water_body_data[water_body_data["waterbody_type"] == 2].copy()
@@ -163,4 +166,4 @@ class ReservoirOperators(AgentBaseClass):
 
     @property
     def storage(self):
-        return self.model.data.grid.storage
+        return self.hydrology.grid.storage

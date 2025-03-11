@@ -15,7 +15,8 @@ from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
 
-compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+# Define the compressor for zarr files
+compressor = Blosc(cname="zlib", clevel=9, shuffle=0)  # no shuffling is most efficient
 
 
 class hydrology_reporter(ABMReporter):
@@ -27,6 +28,7 @@ class hydrology_reporter(ABMReporter):
 
     def __init__(self, model, folder: str) -> None:
         self.model = model
+        self.hydrology = model.hydrology
 
         self.export_folder = folder
 
@@ -124,7 +126,7 @@ class hydrology_reporter(ABMReporter):
 
                         zarr_group.create_dataset(
                             "y",
-                            data=self.model.data.grid.lat,
+                            data=self.hydrology.grid.lat,
                             dtype="float64",
                         )
                         zarr_group["y"].attrs.update(
@@ -137,7 +139,7 @@ class hydrology_reporter(ABMReporter):
 
                         zarr_group.create_dataset(
                             "x",
-                            data=self.model.data.grid.lon,
+                            data=self.hydrology.grid.lon,
                             dtype="float64",
                         )
                         zarr_group["x"].attrs.update(
@@ -152,13 +154,13 @@ class hydrology_reporter(ABMReporter):
                             name,
                             shape=(
                                 time.size,
-                                self.model.data.grid.lat.size,
-                                self.model.data.grid.lon.size,
+                                self.hydrology.grid.lat.size,
+                                self.hydrology.grid.lon.size,
                             ),
                             chunks=(
                                 1,
-                                self.model.data.grid.lat.size,
-                                self.model.data.grid.lon.size,
+                                self.hydrology.grid.lat.size,
+                                self.hydrology.grid.lon.size,
                             ),
                             dtype="float32",
                             compressor=compressor,
@@ -175,7 +177,7 @@ class hydrology_reporter(ABMReporter):
                             }
                         )
 
-                        crs = self.model.data.grid.crs
+                        crs = self.hydrology.grid.crs
                         if not isinstance(crs, str):
                             crs = crs.to_string()
                         zarr_group.attrs["crs"] = crs
@@ -342,9 +344,9 @@ class hydrology_reporter(ABMReporter):
                                 assert not np.isnan(value)
                             elif function == "sample_coord":
                                 if conf["varname"].startswith("data.grid"):
-                                    gt = self.model.data.grid.gt
+                                    gt = self.model.hydrology.grid.gt
                                 elif conf["varname"].startswith("data.HRU"):
-                                    gt = self.model.data.HRU.gt
+                                    gt = self.hydrology.HRU.gt
                                 else:
                                     raise ValueError
                                 px, py = coord_to_pixel(
@@ -398,9 +400,11 @@ class Reporter:
     def __init__(self, model):
         self.model = model
         self.abm_reporter = ABMReporter(model, folder=self.model.report_folder)
-        self.hydrology_reporter = hydrology_reporter(
-            model, folder=self.model.report_folder
-        )
+
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter = hydrology_reporter(
+                model, folder=self.model.report_folder
+            )
 
     @property
     def variables(self):
@@ -413,10 +417,12 @@ class Reporter:
     def step(self) -> None:
         """This function is called at the end of every timestep. This function only forwards the step function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.step()
-        self.hydrology_reporter.step()
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter.step()
 
     def finalize(self):
         """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.finalize()
-        self.hydrology_reporter.finalize()
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter.finalize()
         print("Reported data")

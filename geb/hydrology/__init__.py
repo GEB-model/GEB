@@ -19,10 +19,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-import os
-
 import numpy as np
-from geb.workflows import TimingModule
+from geb.workflows import TimingModule, balance_check
+from geb.HRUs import Data
 
 from .potential_evapotranspiration import PotentialEvapotranspiration
 from .snow_frost import SnowFrost
@@ -40,50 +39,41 @@ from .lakes_reservoirs import LakesReservoirs
 from .erosion.hillslope import HillSlopeErosion
 
 
-class Hydrology:
-    def __init__(self):
+class Hydrology(Data):
+    def __init__(self, model):
         """
         Init part of the initial part
         defines the mask map and the outlet points
         initialization of the hydrological modules
         """
-        self.init_water_table_file = os.path.join(
-            self.config["general"]["init_water_table"]
-        )
-        self.DynamicResAndLakes = False
-        self.useSmallLakes = False
+        self.model = model
+
+        super().__init__(model)
+
+        self.var = self.model.store.create_bucket("hydrology.var")
+
+        self.dynamic_water_bodies = False
         self.crop_factor_calibration_factor = 1
 
-        self.potential_evapotranspiration = PotentialEvapotranspiration(self)
-        self.snowfrost = SnowFrost(self)
-        self.landcover = LandCover(self)
-        self.soil = Soil(self)
-        self.evaporation = Evaporation(self)
-        self.groundwater = GroundWater(self)
-        self.interception = Interception(self)
-        self.sealed_water = SealedWater(self)
-        self.runoff_concentration = RunoffConcentration(self)
-        self.lakes_res_small = SmallLakesReservoirs(self)
-        self.routing = Routing(self)
-        self.lakes_reservoirs = LakesReservoirs(self)
-        self.water_demand = WaterDemand(self)
-        self.hillslope_erosion = HillSlopeErosion(self)
+        self.potential_evapotranspiration = PotentialEvapotranspiration(
+            self.model, self
+        )
+        self.snowfrost = SnowFrost(self.model, self)
+        self.landcover = LandCover(self.model, self)
+        self.soil = Soil(self.model, self)
+        self.evaporation = Evaporation(self.model, self)
+        self.groundwater = GroundWater(self.model, self)
+        self.interception = Interception(self.model, self)
+        self.sealed_water = SealedWater(self.model, self)
+        self.runoff_concentration = RunoffConcentration(self.model, self)
+        self.lakes_res_small = SmallLakesReservoirs(self.model, self)
+        self.routing = Routing(self.model, self)
+        self.lakes_reservoirs = LakesReservoirs(self.model, self)
+        self.water_demand = WaterDemand(self.model, self)
+        self.hillslope_erosion = HillSlopeErosion(self.model, self)
 
     def step(self):
-        """
-        Dynamic part of CWATM
-        calls the dynamic part of the hydrological modules
-        Looping through time and space
-
-        Note:
-            if flags set the output on the screen can be changed e.g.
-
-            * v: no output at all
-            * l: time and first gauge discharge
-            * t: timing of different processes at the end
-        """
-
-        timer = TimingModule("CWatM")
+        timer = TimingModule("Hydrology")
 
         self.potential_evapotranspiration.step()
         timer.new_split("PET")
@@ -96,31 +86,34 @@ class Hydrology:
 
         (
             interflow,
-            directRunoff,
+            runoff,
             groundwater_recharge,
             groundwater_abstraction,
             channel_abstraction,
-            returnFlow,
+            return_flow,
         ) = self.landcover.step()
         timer.new_split("Landcover")
 
-        self.groundwater.step(groundwater_recharge, groundwater_abstraction)
+        baseflow = self.groundwater.step(groundwater_recharge, groundwater_abstraction)
         timer.new_split("GW")
 
-        self.runoff_concentration.step(interflow, directRunoff)
+        total_runoff = self.runoff_concentration.step(interflow, baseflow, runoff)
         timer.new_split("Runoff concentration")
 
         self.lakes_res_small.step()
         timer.new_split("Small waterbodies")
 
-        self.routing.step(channel_abstraction, returnFlow)
+        self.routing.step(total_runoff, channel_abstraction, return_flow)
         timer.new_split("Routing")
 
         self.hillslope_erosion.step()
         timer.new_split("Hill slope erosion")
 
-        if self.timing:
+        if self.model.timing:
             print(timer)
+
+        if __debug__:
+            self.water_balance()
 
     def finalize(self) -> None:
         """
@@ -134,15 +127,6 @@ class Hydrology:
             for plantFATE_model in self.model.plantFATE:
                 if plantFATE_model is not None:
                     plantFATE_model.finalize()
-
-    def export_water_table(self) -> None:
-        """Function to save required water table output to file."""
-        dirname = os.path.dirname(self.init_water_table_file)
-        os.makedirs(dirname, exist_ok=True)
-        np.save(
-            self.init_water_table_file,
-            self.groundwater.modflow.decompress(self.groundwater.modflow.head),
-        )
 
     @property
     def n_individuals_per_m2(self):
@@ -164,3 +148,39 @@ class Hydrology:
         return np.array(
             (biomass_per_m2_per_HRU * land_use_ratios).sum() / land_use_ratios.sum()
         )
+
+    def water_balance(self):
+        current_storage = (
+            np.sum(self.HRU.var.SnowCoverS) / self.snowfrost.var.numberSnowLayers
+            + self.HRU.var.interception_storage.sum()
+            + np.nansum(self.HRU.var.w)
+            + self.HRU.var.topwater.sum()
+            + self.grid.var.river_storage_m3.sum()
+            + self.lakes_reservoirs.var.storage.sum()
+            + self.groundwater.groundwater_content_m3.sum()
+        )
+
+        # in the first timestep of the spinup, we don't have the storage of the
+        # previous timestep, so we can't check the balance
+        if not self.model.current_timestep == 0 and self.model.in_spinup:
+            influx = (self.HRU.var.precipitation_m_day * self.HRU.var.cell_area).sum()
+            outflux = (
+                self.HRU.var.actual_evapotranspiration * self.HRU.var.cell_area
+            ).sum() + self.var.routing_loss.sum()
+
+            balance_check(
+                name="total water balance",
+                how="sum",
+                influxes=[
+                    influx,
+                ],
+                outfluxes=[
+                    outflux,
+                ],
+                prestorages=[self.var.system_storage],
+                poststorages=[current_storage],
+                tollerance=100,
+            )
+
+        # update the storage for the next timestep
+        self.var.system_storage = current_storage

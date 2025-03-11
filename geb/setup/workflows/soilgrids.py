@@ -53,7 +53,10 @@ def load_soilgrids(data_catalog, subgrid, region):
 
     ds = ds.raster.mask_nodata()  # set all nodata values to nan
 
-    ds = ds.raster.reproject_like(subgrid, method="bilinear")
+    # the resolution of the subgrid is (usually) much higher than the soilgrids data
+    # therefore we can do a nearest neighbor reproject. This also
+    # limits the size of the data in compressed format
+    ds = ds.raster.reproject_like(subgrid, method="nearest")
 
     ds["sand"] = interpolate_soil_layers(ds["sand"])
     ds["silt"] = interpolate_soil_layers(ds["silt"])

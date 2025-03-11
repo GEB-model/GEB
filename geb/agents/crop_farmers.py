@@ -192,7 +192,10 @@ class CropFarmers(AgentBaseClass):
             if "farmers" in self.model.config["agent_settings"]
             else {}
         )
-        self.HRU = model.data.HRU
+        if self.model.simulate_hydrology:
+            self.HRU = model.hydrology.HRU
+            self.grid = model.hydrology.grid
+
         self.redundancy = reduncancy
         self.decision_module = DecisionModule(self)
 
@@ -292,11 +295,11 @@ class CropFarmers(AgentBaseClass):
         region_mask = load_grid(
             self.model.files["region_subgrid"]["areamaps/region_mask"]
         )
-        self.HRU_regions_map = np.zeros_like(self.model.data.HRU.mask, dtype=np.int8)
-        self.HRU_regions_map[~self.model.data.HRU.mask] = self.var.subdistrict_map[
+        self.HRU_regions_map = np.zeros_like(self.HRU.mask, dtype=np.int8)
+        self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
             region_mask == 0
         ]
-        self.HRU_regions_map = self.model.data.HRU.compress(self.HRU_regions_map)
+        self.HRU_regions_map = self.HRU.compress(self.HRU_regions_map)
 
         self.crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"
@@ -334,7 +337,7 @@ class CropFarmers(AgentBaseClass):
         """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
 
-        farms = self.model.data.farms
+        farms = self.model.hydrology.farms
 
         # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
         self.n = np.unique(farms[farms != -1]).size
@@ -729,7 +732,7 @@ class CropFarmers(AgentBaseClass):
         why_map = load_grid(self.model.files["grid"]["groundwater/why_map"])
 
         self.var.why_class[:] = sample_from_map(
-            why_map, self.var.locations.data, self.model.data.grid.gt
+            why_map, self.var.locations.data, self.grid.gt
         )
 
         ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
@@ -742,12 +745,11 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
-        if self.model.config["general"]["simulate_hydrology"]:
-            for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
-                GEV_grid = getattr(self.model.data.grid, varname)
-                self.var.GEV_parameters[:, i] = sample_from_map(
-                    GEV_grid, self.var.locations.data, self.model.data.grid.gt
-                )
+        for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
+            GEV_grid = getattr(self.grid, varname)
+            self.var.GEV_parameters[:, i] = sample_from_map(
+                GEV_grid, self.var.locations.data, self.grid.gt
+            )
 
         self.var.risk_perc_min = DynamicArray(
             n=self.n,
@@ -875,15 +877,16 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
+        bounds = self.grid.bounds
         self.var.social_network[:] = find_neighbors(
             self.var.locations.data,
             radius=radius,
             n_neighbor=n_neighbor,
             bits=nbits,
-            minx=self.model.bounds[0],
-            maxx=self.model.bounds[1],
-            miny=self.model.bounds[2],
-            maxy=self.model.bounds[3],
+            minx=bounds[0],
+            miny=bounds[1],
+            maxx=bounds[2],
+            maxy=bounds[3],
         )
 
     def adjust_cultivation_costs(self):
@@ -968,8 +971,8 @@ class CropFarmers(AgentBaseClass):
 
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
-            self.model.data.HRU.var.ETRef - self.model.data.HRU.pr
-        ) * self.model.data.HRU.var.cellArea
+            self.HRU.var.ETRef - self.HRU.pr
+        ) * self.HRU.var.cell_area
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 
         water_deficit_day_m3_per_farmer = np.bincount(
@@ -1076,8 +1079,8 @@ class CropFarmers(AgentBaseClass):
             surface_irrigated=self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0,
             well_irrigated=self.var.adaptations[:, WELL_ADAPTATION] > 0,
             cell_area=cell_area,
-            HRU_to_grid=self.model.data.HRU.var.HRU_to_grid,
-            nearest_river_grid_cell=self.model.data.HRU.var.nearest_river_grid_cell,
+            HRU_to_grid=self.HRU.var.HRU_to_grid,
+            nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
             crop_map=self.HRU.var.crop_map,
             field_is_paddy_irrigated=self.field_is_paddy_irrigated,
             paddy_level=paddy_level,
@@ -1288,31 +1291,28 @@ class CropFarmers(AgentBaseClass):
 
         TODO: Implement GAEZ crop stage function
         """
-        if self.model.config["general"]["simulate_hydrology"]:
-            if self.var.crop_data_type == "GAEZ":
-                yield_ratio = self.get_yield_ratio_numba_GAEZ(
-                    crop_map[harvest],
-                    actual_transpiration[harvest] / potential_transpiration[harvest],
-                    self.var.crop_data["KyT"].values,
-                )
-            elif self.var.crop_data_type == "MIRCA2000":
-                yield_ratio = self.get_yield_ratio_numba_MIRCA2000(
-                    crop_map[harvest],
-                    actual_transpiration[harvest] / potential_transpiration[harvest],
-                    self.var.crop_data["a"].values,
-                    self.var.crop_data["b"].values,
-                    self.var.crop_data["P0"].values,
-                    self.var.crop_data["P1"].values,
-                )
-                if np.any(yield_ratio == 0):
-                    pass
-            else:
-                raise ValueError(
-                    f"Unknown crop data type: {self.var.crop_data_type}, must be 'GAEZ' or 'MIRCA2000'"
-                )
-            assert not np.isnan(yield_ratio).any()
+        if self.var.crop_data_type == "GAEZ":
+            yield_ratio = self.get_yield_ratio_numba_GAEZ(
+                crop_map[harvest],
+                actual_transpiration[harvest] / potential_transpiration[harvest],
+                self.var.crop_data["KyT"].values,
+            )
+        elif self.var.crop_data_type == "MIRCA2000":
+            yield_ratio = self.get_yield_ratio_numba_MIRCA2000(
+                crop_map[harvest],
+                actual_transpiration[harvest] / potential_transpiration[harvest],
+                self.var.crop_data["a"].values,
+                self.var.crop_data["b"].values,
+                self.var.crop_data["P0"].values,
+                self.var.crop_data["P1"].values,
+            )
+            if np.any(yield_ratio == 0):
+                pass
         else:
-            yield_ratio = np.full_like(crop_map[harvest], 1, dtype=np.float32)
+            raise ValueError(
+                f"Unknown crop data type: {self.var.crop_data_type}, must be 'GAEZ' or 'MIRCA2000'"
+            )
+        assert not np.isnan(yield_ratio).any()
 
         return yield_ratio
 
@@ -1323,11 +1323,11 @@ class CropFarmers(AgentBaseClass):
             nofieldvalue = -1
         by_field = np.take(array, self.HRU.var.land_owners)
         by_field[self.HRU.var.land_owners == -1] = nofieldvalue
-        return self.model.data.HRU.decompress(by_field)
+        return self.HRU.decompress(by_field)
 
     @property
     def mask(self):
-        mask = self.model.data.HRU.mask.copy()
+        mask = self.HRU.mask.copy()
         mask[self.decompress(self.HRU.var.land_owners) == -1] = True
         return mask
 
@@ -1412,7 +1412,7 @@ class CropFarmers(AgentBaseClass):
             assert (yield_ratio_per_field >= 0).all()
 
             harvesting_farmer_fields = self.HRU.var.land_owners[harvest]
-            harvested_area = self.HRU.var.cellArea[harvest]
+            harvested_area = self.HRU.var.cell_area[harvest]
 
             harvested_crops = self.HRU.var.crop_map[harvest]
             max_yield_per_crop = np.take(
@@ -1557,32 +1557,41 @@ class CropFarmers(AgentBaseClass):
             (self.n, HISTORICAL_PERIOD), dtype=np.float32
         )
 
+        # Calculate the cumulative inflation from the start year to the current year for each farmer
+        # the base year is not important here as we are only interested in the relative change
+        cumulative_inflation_since_base_year = np.cumprod(
+            np.stack(
+                [
+                    self.get_value_per_farmer_from_region_id(
+                        self.inflation_rate,
+                        datetime(year, 1, 1),
+                        subset=harvesting_farmers_long,
+                    )
+                    for year in range(
+                        self.model.current_time.year + 1 - HISTORICAL_PERIOD,
+                        self.model.current_time.year + 1,
+                    )
+                ],
+                axis=1,
+            ),
+            axis=1,
+        )
+
         # Compute the percentage loss between potential and actual profits for harvesting farmers
-        potential_profits = self.var.yearly_potential_profits[
-            harvesting_farmers_long, :HISTORICAL_PERIOD
-        ]
-        actual_profits = self.var.yearly_profits[
-            harvesting_farmers_long, :HISTORICAL_PERIOD
-        ]
-
-        # raise NotImplementedError("This function is not yet implemented")
-
-        # # Calculate the cumulative inflation from the start year to the current year for each farmer
-        # inflation_arrays = [
-        #     self.get_value_per_farmer_from_region_id(
-        #         self.inflation_rate, datetime(year, 1, 1)
-        #     )
-        #     for year in range(
-        #         self.model.config["general"]["spinup_time"].year + 1,
-        #         self.model.current_time.year + 1,
-        #     )
-        # ]
-
-        # # compute cumulative inflation for each farmer
-        # cumulative_inflation = np.prod(inflation_arrays, axis=0)
+        potential_profits_inflation_corrected = (
+            self.var.yearly_potential_profits[
+                harvesting_farmers_long, :HISTORICAL_PERIOD
+            ]
+            / cumulative_inflation_since_base_year
+        )
+        actual_profits_inflation_corrected = (
+            self.var.yearly_profits[harvesting_farmers_long, :HISTORICAL_PERIOD]
+            / cumulative_inflation_since_base_year
+        )
 
         drought_loss_historical[harvesting_farmers_long] = (
-            (potential_profits - actual_profits) / potential_profits
+            (potential_profits_inflation_corrected - actual_profits_inflation_corrected)
+            / potential_profits_inflation_corrected
         ) * 100
 
         # Calculate the current and past average loss percentages
@@ -1720,7 +1729,7 @@ class CropFarmers(AgentBaseClass):
         else:
             index = self.cultivation_costs[0].get(self.model.current_time)
             cultivation_cost = self.cultivation_costs[1][index]
-            assert cultivation_cost.shape[0] == len(self.model.regions)
+            assert cultivation_cost.shape[0] == len(self.model.var.regions)
             assert cultivation_cost.shape[1] == len(self.var.crop_ids)
 
         # interest_rate = self.get_value_per_farmer_from_region_id(
@@ -1814,9 +1823,9 @@ class CropFarmers(AgentBaseClass):
             This method updates the `monthly_SPEI` attribute in place.
         """
         current_SPEI_per_farmer = sample_from_map(
-            array=self.model.data.grid.spei_uncompressed,
+            array=self.model.hydrology.grid.spei_uncompressed,
             coords=self.var.locations[harvesting_farmers],
-            gt=self.model.data.grid.gt,
+            gt=self.grid.gt,
         )
 
         full_size_SPEI_per_farmer = np.zeros_like(
@@ -3801,27 +3810,32 @@ class CropFarmers(AgentBaseClass):
 
         # Adjust for inflation in separate array for export
         # Calculate the cumulative inflation from the start year to the current year for each farmer
-        inflation_arrays = [
-            self.get_value_per_farmer_from_region_id(
-                self.inflation_rate, datetime(year, 1, 1)
-            )
-            for year in range(
-                self.model.config["general"]["spinup_time"].year,
-                self.model.current_time.year + 1,
-            )
-        ]
-
-        cum_inflation = np.ones_like(inflation_arrays[0])
-        for inflation in inflation_arrays:
-            cum_inflation *= inflation
-
-        self.var.adjusted_annual_loan_cost = (
-            self.var.all_loans_annual_cost / cum_inflation[..., None, None]
+        cumulative_inflation = np.prod(
+            [
+                self.get_value_per_farmer_from_region_id(
+                    self.inflation_rate, datetime(year, 1, 1)
+                )
+                for year in range(
+                    self.model.config["general"]["spinup_time"].year,
+                    self.model.current_time.year + 1,
+                )
+            ],
+            axis=0,
         )
 
-    def get_value_per_farmer_from_region_id(self, data, time) -> np.ndarray:
+        self.var.adjusted_annual_loan_cost = (
+            self.var.all_loans_annual_cost / cumulative_inflation[..., None, None]
+        )
+
+    def get_value_per_farmer_from_region_id(
+        self, data, time, subset=None
+    ) -> np.ndarray:
         index = data[0].get(time)
-        unique_region_ids, inv = np.unique(self.var.region_id, return_inverse=True)
+        if subset is not None:
+            region_id = self.var.region_id[subset]
+        else:
+            region_id = self.var.region_id
+        unique_region_ids, inv = np.unique(region_id, return_inverse=True)
         values = np.full_like(unique_region_ids, np.nan, dtype=np.float32)
         for i, region_id in enumerate(unique_region_ids):
             values[i] = data[1][region_id][index]
@@ -3864,7 +3878,7 @@ class CropFarmers(AgentBaseClass):
         return self.field_size_per_farmer_numba(
             self.var.field_indices_by_farmer.data,
             self.var.field_indices,
-            self.HRU.var.cellArea,
+            self.HRU.var.cell_area,
         )
 
     @property
@@ -3891,11 +3905,11 @@ class CropFarmers(AgentBaseClass):
     def groundwater_depth(self):
         groundwater_depth = get_farmer_groundwater_depth(
             self.n,
-            self.model.groundwater.groundwater_depth,
+            self.model.hydrology.groundwater.groundwater_depth,
             self.HRU.var.HRU_to_grid,
             self.var.field_indices,
             self.var.field_indices_by_farmer.data,
-            self.HRU.var.cellArea,
+            self.HRU.var.cell_area,
         )
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth
@@ -3928,6 +3942,9 @@ class CropFarmers(AgentBaseClass):
 
         Then, farmers harvest and plant crops.
         """
+
+        if not self.model.simulate_hydrology:
+            return
 
         self.harvest()
         self.plant()

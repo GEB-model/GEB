@@ -162,6 +162,8 @@ class Market(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
+        if not self.model.simulate_hydrology:
+            return
         self.track_production_and_price()
 
     @property
@@ -177,7 +179,7 @@ class Market(AgentBaseClass):
                 print("WARNING: Using static crop prices")
                 return np.full(
                     (
-                        len(self.model.regions),
+                        len(self.model.var.regions),
                         len(self.agents.crop_farmers.var.crop_ids),
                     ),
                     self._crop_prices[1],

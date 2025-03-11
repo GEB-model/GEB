@@ -4,9 +4,9 @@ setup_grid:
 setup_cell_area:
 
 setup_regions_and_land_use:
-  region_database: gadm_level1
+  region_database: GADM_level1
   ISO3_column: GID_0
-  unique_region_id: UID
+  
   river_threshold: 100
 
 setup_economic_data:
@@ -45,6 +45,8 @@ setup_irrigation_sources:
 setup_create_farms_simple:
 
 setup_household_characteristics:
+
+setup_farmer_household_characteristics:
 
 setup_crops_from_source:
   source: MIRCA2000

@@ -1,5 +1,7 @@
 import click
 import os
+import platform
+import subprocess
 import tempfile
 import sys
 import cProfile
@@ -182,9 +184,17 @@ def run_model_with_method(
     optimize,
 ):
     """Run model."""
-
+    # check if we need to run the model in optimized mode
+    # if the model is already running in optimized mode, we don't need to restart it
+    # or else we start an infinite loop
     if optimize and sys.flags.optimize == 0:
-        os.execv(sys.executable, ["python", "-O"] + sys.argv)
+        if platform.system() == "Windows":
+            # If the script is not a .py file, we need to add the .exe extension
+            if not sys.argv[0].endswith(".py"):
+                sys.argv[0] = sys.argv[0] + ".exe"
+            subprocess.run([sys.executable, "-O"] + sys.argv)
+        else:
+            os.execv(sys.executable, ["-O"] + sys.argv)
 
     # set the working directory
     os.chdir(working_directory)
@@ -246,6 +256,7 @@ def run_model_with_method(
             DISPLAY_TIMESTEPS,
             model_params=model_params,
             port=None,
+            initialization_method=method,
         )
         server.launch(port=port, browser=no_browser)
 
@@ -383,9 +394,7 @@ def customize_data_catalog(data_catalogs):
         return data_catalogs
 
 
-@cli.command()
-@click_build_options()
-def build(
+def build_fn(
     data_catalog, config, build_config, custom_model, working_directory, data_provider
 ):
     """Build model."""
@@ -406,37 +415,16 @@ def build(
 
     geb_model = get_model(custom_model)(**arguments)
 
-    # TODO: remove pour_point option in future versions
-    if "pour_point" in config["general"]:
-        assert "region" not in config
-        warnings.warn(
-            "The `pour_point` option is deprecated and will be removed in future versions. Please use `region.pour_point` instead.",
-            DeprecationWarning,
-        )
-        config["general"]["region"] = {}
-        config["general"]["region"]["pour_point"] = config["general"]["pour_point"]
-
-    region = config["general"]["region"]
-    if "subbasin" in region:
-        region_config = {"subbasin": region["subbasin"]}
-    elif "outflow" in region:
-        outflow = region["outflow"]
-        region_config = {
-            "outflow": [[outflow[0]], [outflow[1]]],
-        }
-    elif "geometry" in region:
-        region_config = {
-            "geom": region["geometry"],
-        }
-    else:
-        raise ValueError(
-            "No region specified in config file, should be 'subbasin', 'outflow' or 'geometry'."
-        )
-
     geb_model.build(
         opt=configread(build_config),
-        region=region_config,
+        region=config["general"]["region"],
     )
+
+
+@cli.command()
+@click_build_options()
+def build(*args, **kwargs):
+    build_fn(*args, **kwargs)
 
 
 @cli.command()
@@ -534,7 +522,7 @@ def share(working_directory, name):
 
     folders = ["input"]
     files = ["model.yml", "build.yml"]
-    optional_files = ["sfincs.yml", "update.yml", "data_catalog.yml"]
+    optional_files = ["update.yml", "data_catalog.yml"]
     zip_filename = f"{name}.zip"
     with zipfile.ZipFile(zip_filename, "w") as zipf:
         total_files = (

@@ -160,19 +160,18 @@ def get_lake_outflow_and_storage(
 
 
 class LakesReservoirs(object):
-    def __init__(self, model):
-        """
-        Initialize water bodies
-        """
-
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
 
         if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("lakes_reservoirs.var")
+        self.var = self.model.store.create_bucket("hydrology.lakes_reservoirs.var")
 
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped = self.grid.load(
@@ -221,7 +220,7 @@ class LakesReservoirs(object):
         assert np.array_equal(self.var.water_body_data.index, self.var.waterBodyIDC)
 
         # change ldd: put pits in where lakes are:
-        ldd_LR = self.model.data.grid.decompress(
+        ldd_LR = self.hydrology.grid.decompress(
             np.where(self.grid.var.waterBodyID != -1, 5, self.grid.var.lddCompress),
             fillvalue=0,
         )
@@ -239,7 +238,7 @@ class LakesReservoirs(object):
             self.grid.var.lendirDown,
         ) = define_river_network(
             ldd_LR,
-            self.model.data.grid,
+            self.hydrology.grid,
         )
 
         self.var.waterBodyTypC = self.var.water_body_data["waterbody_type"].values
@@ -250,9 +249,6 @@ class LakesReservoirs(object):
         self.var.waterBodyTypC[self.var.waterBodyTypC == LAKE_CONTROL] = LAKE
 
         assert (np.isin(self.var.waterBodyTypC, [OFF, LAKE, RESERVOIR])).all()
-
-        self.reservoir_operators = self.model.agents.reservoir_operators
-        self.reservoir_operators.set_reservoir_data(self.var.water_body_data)
 
         self.var.lake_area = self.var.water_body_data["average_area"].values
         # a factor which increases evaporation from lake because of wind TODO: use wind to set this factor
@@ -418,10 +414,10 @@ class LakesReservoirs(object):
             # - 2 = reservoirs (regulated discharge)
             # - 1 = lakes (weirFormula)
             # - 0 = non lakes or reservoirs (e.g. wetland)
-            if self.model.DynamicResAndLakes:
-                raise NotImplementedError("DynamicResAndLakes not implemented yet")
+            if self.hydrology.dynamic_water_bodies:
+                raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
-    def routing_lakes(self, inflow_m3):
+    def routing_lakes(self, inflow_m3, routing_step_length_seconds):
         """
         Lake routine to calculate lake outflow
         :param inflowC: inflow to lakes and reservoirs [m3]
@@ -442,7 +438,7 @@ class LakesReservoirs(object):
                 self.var.storage[lakes],
                 height_above_outflow,
             ) = get_lake_outflow_and_storage(
-                self.model.routing.var.dtRouting,
+                routing_step_length_seconds,
                 self.var.storage[lakes],
                 inflow_m3[lakes],
                 self.var.lake_factor[lakes],
@@ -464,7 +460,7 @@ class LakesReservoirs(object):
 
         return lake_outflow_m3
 
-    def routing_reservoirs(self, inflowC):
+    def routing_reservoirs(self, inflowC, routing_step_length_seconds):
         """
         Reservoir outflow
         :param inflowC: inflow to reservoirs
@@ -484,12 +480,12 @@ class LakesReservoirs(object):
             self.model.agents.reservoir_operators.regulate_reservoir_outflow(
                 self.var.storage[reservoirs],
                 inflowC[reservoirs]
-                / self.model.routing.var.dtRouting,  # convert per timestep to per second
+                / routing_step_length_seconds,  # convert per timestep to per second
                 self.var.waterBodyIDC[reservoirs],
             )
         )
 
-        outflow_m3 = outflow_m3_s * self.model.routing.var.dtRouting
+        outflow_m3 = outflow_m3_s * routing_step_length_seconds
         assert (outflow_m3 <= self.var.storage).all()
 
         self.var.storage -= outflow_m3
@@ -512,8 +508,9 @@ class LakesReservoirs(object):
         self,
         step,
         n_routing_steps,
+        routing_step_length_seconds,
         discharge,
-        runoff,
+        total_runoff,
     ):
         """
         Dynamic part to calculate outflow from lakes and reservoirs
@@ -526,7 +523,7 @@ class LakesReservoirs(object):
         """
 
         if __debug__:
-            prestorage = self.model.lakes_reservoirs.var.storage.copy()
+            prestorage = self.var.storage.copy()
 
         if step == 0:
             # average evaporation overeach lake
@@ -534,42 +531,47 @@ class LakesReservoirs(object):
                 self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
                 weights=self.grid.var.EWRef[self.grid.var.waterBodyID != -1],
             ) / np.bincount(self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1])
-            self.evaporation_from_water_bodies_per_routing_step = (
+            self.evaporation_from_water_bodies_per_routing_step_m3 = (
                 average_evaporation_per_water_body
                 * self.var.lake_area
                 / n_routing_steps
             )
-            assert np.all(self.evaporation_from_water_bodies_per_routing_step >= 0.0), (
-                "evaporation_from_water_bodies_per_routing_step < 0.0"
-            )
+            assert np.all(
+                self.evaporation_from_water_bodies_per_routing_step_m3 >= 0.0
+            ), "evaporation_from_water_bodies_per_routing_step_m3 < 0.0"
 
-        runoff_m3 = runoff * self.grid.var.cellArea / n_routing_steps
-        runoff_m3 = laketotal(runoff_m3, self.grid.var.waterBodyID, nan_class=-1)
+        total_runoff_m3 = total_runoff * self.grid.var.cell_area / n_routing_steps
+        total_runoff_m3 = laketotal(
+            total_runoff_m3, self.grid.var.waterBodyID, nan_class=-1
+        )
 
         discharge_m3 = (
-            upstream1(self.grid.var.downstruct, discharge)
-            * self.model.routing.var.dtRouting
+            upstream1(self.grid.var.downstruct, discharge) * routing_step_length_seconds
         )
         discharge_m3 = laketotal(discharge_m3, self.grid.var.waterBodyID, nan_class=-1)
 
-        assert (runoff_m3 >= 0).all()
+        assert (total_runoff_m3 >= 0).all()
         assert (discharge_m3 >= 0).all()
         assert (self.var.total_inflow_from_other_water_bodies >= 0).all()
 
         inflow_m3 = (
-            runoff_m3 + discharge_m3 + self.var.total_inflow_from_other_water_bodies
+            total_runoff_m3
+            + discharge_m3
+            + self.var.total_inflow_from_other_water_bodies
         )
 
-        actual_evaporation_from_water_bodies_per_routing_step = np.minimum(
-            self.evaporation_from_water_bodies_per_routing_step, self.var.storage
+        actual_evaporation_from_water_bodies_per_routing_step_m3 = np.minimum(
+            self.evaporation_from_water_bodies_per_routing_step_m3, self.var.storage
         )  # evaporation is already in m3 per routing substep
-        actual_evaporation_from_water_bodies_per_routing_step[
+        actual_evaporation_from_water_bodies_per_routing_step_m3[
             self.var.waterBodyTypC == OFF
         ] = 0
-        self.var.storage -= actual_evaporation_from_water_bodies_per_routing_step
+        self.var.storage -= actual_evaporation_from_water_bodies_per_routing_step_m3
 
-        outflow_lakes = self.routing_lakes(inflow_m3)
-        outflow_reservoirs = self.routing_reservoirs(inflow_m3)
+        outflow_lakes = self.routing_lakes(inflow_m3, routing_step_length_seconds)
+        outflow_reservoirs = self.routing_reservoirs(
+            inflow_m3, routing_step_length_seconds
+        )
 
         assert (outflow_reservoirs[outflow_lakes > 0] == 0).all()
 
@@ -621,7 +623,7 @@ class LakesReservoirs(object):
                 influxes=[inflow_m3],
                 outfluxes=[
                     outflow,
-                    actual_evaporation_from_water_bodies_per_routing_step,
+                    actual_evaporation_from_water_bodies_per_routing_step_m3,
                 ],
                 prestorages=[prestorage],
                 poststorages=[self.var.storage],
@@ -630,7 +632,7 @@ class LakesReservoirs(object):
 
         return (
             outflow_to_river_network,
-            actual_evaporation_from_water_bodies_per_routing_step,
+            actual_evaporation_from_water_bodies_per_routing_step_m3,
         )
 
     @property

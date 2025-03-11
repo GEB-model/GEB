@@ -211,10 +211,13 @@ class HillSlopeErosion:
     or event-based soil loss by considering the detachment and transport of soil
     particles separately."""
 
-    def __init__(self, model):
-        """The constructor erosion"""
-        self.HRU = model.data.HRU
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
         self.simulate = self.model.config["hazards"]["erosion"]["simulate"]
 
         if self.model.in_spinup:
@@ -224,7 +227,9 @@ class HillSlopeErosion:
         if not self.simulate:
             return None
 
-        self.var = self.model.store.create_bucket("hillslope_erosion.var")
+        self.var = self.model.store.create_bucket(
+            "model.hydrology.hillslope_erosion.var"
+        )
 
         self.var.total_erosion = 0
 
@@ -240,15 +245,15 @@ class HillSlopeErosion:
         # need to see what this is.
         self.HRU.var.cover = self.HRU.full_compressed(0, dtype=np.float32)
 
-        self.HRU.var.slope = self.model.data.to_HRU(
-            data=self.model.data.grid.load(
+        self.HRU.var.slope = self.hydrology.to_HRU(
+            data=self.hydrology.grid.load(
                 self.model.files["grid"]["landsurface/topo/slope"]
             ),
             fn=None,
         )
 
         # Is correct? -> Does not seem to be correct. Should be "length" of the element. But what is that?
-        self.HRU.var.cell_length = np.sqrt(self.HRU.var.cellArea)
+        self.HRU.var.cell_length = np.sqrt(self.HRU.var.cell_area)
 
         # NOTE: water depth in field seems quite deep now, and is not variable.
         # perhaps this should be made more dynamic?
@@ -493,7 +498,7 @@ class HillSlopeErosion:
         )
         # redeposited_material = redeposited_material_clay + redeposited_material_silt + redeposited_material_sand  # Is D the total material deposited?
 
-        transported_material_kg = transported_material * self.HRU.var.cellArea  # kg
+        transported_material_kg = transported_material * self.HRU.var.cell_area  # kg
 
         self.var.total_erosion += transported_material_kg.sum()
 

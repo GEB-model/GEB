@@ -66,31 +66,21 @@ class RunoffConcentration(object):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model):
-        """
-        Initial part of the  runoff concentration module
-
-        Setting the peak time for:
-
-        * surface runoff = 3
-        * interflow = 4
-        * baseflow = 5
-
-        based on the slope the concentration time for each land cover type is calculated
-
-        Note:
-            only if option **includeRunoffConcentration** is TRUE
-        """
-        self.grid = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
         if self.model.in_spinup:
             self.spinup()
 
     def spinup(self):
         pass
 
-    def step(self, interflow, directRunoff):
-        assert (directRunoff >= 0).all()
+    def step(self, interflow, baseflow, runoff):
+        assert (runoff >= 0).all()
         assert (interflow >= 0).all()
-        assert (self.grid.var.baseflow >= 0).all()
-        self.grid.var.runoff = directRunoff + interflow + self.grid.var.baseflow
+        assert (baseflow >= 0).all()
+        return interflow + baseflow + runoff

@@ -9,11 +9,11 @@ general:
   original_data: ../../../original_data/
   preprocessing_folder: preprocessing/
   report_folder: report/
-  init_water_table: report/init/water_table.npy
   name: default
   export_inital_on_spinup: true
-  simulate_hydrology: true
   simulate_forest: false
+  forecasts:
+    use: false
 
 hazards:
   floods:
@@ -46,6 +46,14 @@ agent_settings:
     irrigation_limit:
       limit: 10000  # previous tried 1700
       per: capita
+  households:
+    expected_utility:
+      flood_risk_calculations:
+        risk_perception:
+          base: 1.6
+          coef: -2.5
+          max: 10
+          min: 0.01
   farmers:
     ruleset: base
     base_management_yield_ratio: 1
@@ -125,7 +133,7 @@ report:
 
 report_hydrology:
   discharge_daily:
-    varname: data.grid.discharge
+    varname: hydrology.grid.discharge
     function: null
     format: zarr
     single_file: true

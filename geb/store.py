@@ -7,6 +7,8 @@ import geopandas as gpd
 
 import numpy as np
 
+from .HRUs import load_geom
+
 
 class DynamicArray:
     __slots__ = ["_data", "_n", "_extra_dims_names"]
@@ -382,7 +384,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    gpd.read_parquet(filename),
+                    load_geom(filename),
                 )
             elif filename.suffix == ".parquet":
                 setattr(
@@ -443,7 +445,13 @@ class Store:
 
             split_name = bucket_folder.name.split(".")
 
-            bucket_parent_class = attrgetter(".".join(split_name[:-1]))(self.model)
+            if not self.model.simulate_hydrology and split_name[0] == "hydrology":
+                continue
+
+            if len(split_name) == 1:
+                bucket_parent_class = self.model
+            else:
+                bucket_parent_class = attrgetter(".".join(split_name[:-1]))(self.model)
             setattr(bucket_parent_class, split_name[-1], bucket)
 
     @property
