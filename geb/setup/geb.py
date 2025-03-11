@@ -4510,14 +4510,33 @@ class GEBModel(GridModel):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
-    def setup_household_characteristics(self, maximum_age=85):
+    def setup_household_characteristics(self, maximum_age=85, v=True):
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
         )
-        # create list of attibutes to include
-        attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
+        # create list of attibutes to include (and include name to store to)
+        attributes_to_include = {
+            "HHSIZE_CAT": "household_type",
+            "AGE": "age_household_head",
+            "EDUC": "education_level",
+            "WEALTH": "wealth_indice",
+            "RURAL": "rural",
+        }
         region_results = {}
+
+        # get age class to age (head of household) mapping
+        age_class_to_age = {
+            1: (0, 4),
+            2: (5, 14),
+            3: (15, 24),
+            4: (25, 34),
+            5: (35, 44),
+            6: (45, 54),
+            7: (55, 64),
+            8: (66, maximum_age + 1),
+        }
+
         # iterate over regions and sample agents from GLOPOP-S
         for GDL_region in GDL_regions["GDLcode"]:
             region_results[GDL_region] = {}
@@ -4553,45 +4572,41 @@ class GEBModel(GridModel):
                     n_households, -1, dtype=np.int32
                 )
 
-            # initiate indice tracker
-            households_found = 0
-
-            for HID in GLOPOP_households_region:
-                print(f"searching household {households_found} of {n_households}")
+            for i, HID in enumerate(GLOPOP_households_region):
+                if v:
+                    print(f"searching household {i} of {n_households}")
                 household = GLOPOP_S_region[GLOPOP_S_region["HID"] == HID]
                 household_size = len(household)
                 if len(household) > 1:
                     # if there are multiple people in the household
-                    # take first person as head of household (replace this with oldest person?)
-                    household = household.iloc[0]
+                    # take head household
+                    household = household[household["RELATE_HEAD"] == 1]
 
                 GRID_CELL = int(household["GRID_CELL"])
-                if GRID_CELL in GLOPOP_GRID_region.values:
-                    for column in attributes_to_include:
-                        household_characteristics[column][households_found] = household[
-                            column
-                        ]
-                        household_characteristics["sizes"][households_found] = (
-                            household_size
-                        )
-
-                    # now find location of household
-                    idx_household = np.where(GLOPOP_GRID_region.values[0] == GRID_CELL)
-                    # get x and y from xarray
-                    x_y = np.concatenate(
-                        [
-                            GLOPOP_GRID_region.x.values[idx_household[1]],
-                            GLOPOP_GRID_region.y.values[idx_household[0]],
-                        ]
-                    )
-                    household_characteristics["locations"][households_found, :] = x_y
-                    households_found += 1
-
-                # clip away unused data:
-            for household_attribute in household_characteristics:
-                household_characteristics[household_attribute] = (
-                    household_characteristics[household_attribute][:households_found]
+                assert GRID_CELL in GLOPOP_GRID_region.values, (
+                    f"{HID} should in in GLOPOP for this region"
                 )
+                for column in attributes_to_include:
+                    if column == "AGE":
+                        age_range = age_class_to_age[household[column].values[0]]
+                        age_household_head = np.random.randint(
+                            age_range[0], age_range[1]
+                        )
+                        household_characteristics[column][i] = age_household_head
+                    else:
+                        household_characteristics[column][i] = household[column]
+                        household_characteristics["sizes"][i] = household_size
+
+                # now find location of household
+                idx_household = np.where(GLOPOP_GRID_region.values[0] == GRID_CELL)
+                # get x and y from xarray
+                x_y = np.concatenate(
+                    [
+                        GLOPOP_GRID_region.x.values[idx_household[1]],
+                        GLOPOP_GRID_region.y.values[idx_household[0]],
+                    ]
+                )
+                household_characteristics["locations"][i, :] = x_y
 
             region_results[GDL_region] = household_characteristics
 
@@ -4604,11 +4619,18 @@ class GEBModel(GridModel):
                     for GDL_region in region_results
                 ]
             )
-        for household_attribute in household_characteristics:
-            self.set_binary(
-                data_concatenated[household_attribute],
-                name=f"agents/households/{household_attribute}",
-            )
+
+            # and store to binary
+            if household_attribute in attributes_to_include:
+                self.set_binary(
+                    data_concatenated[household_attribute],
+                    name=f"agents/households/{attributes_to_include[household_attribute]}",
+                )
+            else:
+                self.set_binary(
+                    data_concatenated[household_attribute],
+                    name=f"agents/households/{household_attribute}",
+                )
 
     def setup_farmer_household_characteristics(self, maximum_age=85):
         n_farmers = self.binary["agents/farmers/id"].size
