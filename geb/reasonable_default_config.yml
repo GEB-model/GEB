@@ -9,17 +9,33 @@ general:
   original_data: ../../../original_data/
   preprocessing_folder: preprocessing/
   report_folder: report/
-  initial_conditions_folder: initial/
-  init_water_table: report/init/water_table.npy
   name: default
   export_inital_on_spinup: true
-  simulate_hydrology: true
   simulate_forest: false
+  forecasts:
+    use: false
 
 hazards:
   floods:
     simulate: false
+    resolution: 150
+    nr_subgrid_pixels: 5
+    crs: auto
+    gpu: false
+    force_overwrite: true
+    return_periods:
+      - 2
+      - 5
+      - 10
+      - 25
+      - 50
+      - 100
+      - 250
+      - 500
+      - 1000
   damage:
+    simulate: false
+  erosion:
     simulate: false
 
 agent_settings:
@@ -30,6 +46,14 @@ agent_settings:
     irrigation_limit:
       limit: 10000  # previous tried 1700
       per: capita
+  households:
+    expected_utility:
+      flood_risk_calculations:
+        risk_perception:
+          base: 1.6
+          coef: -2.5
+          max: 10
+          min: 0.01
   farmers:
     ruleset: base
     base_management_yield_ratio: 1
@@ -45,12 +69,14 @@ agent_settings:
       size: 10 # nr of neighbors
     expected_utility:
       crop_switching: 
-        ruleset: base
+        ruleset: no-adaptation
       adaptation_sprinkler:
-        ruleset: base
-        lifespan: 20
+        ruleset: no-adaptation
+        lifespan_base: 25
+        lifespan_sprink_drip: 15
         loan_duration: 21
         decision_horizon: 20
+        m2_cost: 1
       adaptation_irrigation_expansion:
         ruleset: no-adaptation
       adaptation_well:
@@ -107,7 +133,7 @@ report:
 
 report_hydrology:
   discharge_daily:
-    varname: data.grid.discharge
+    varname: hydrology.grid.discharge
     function: null
     format: zarr
     single_file: true

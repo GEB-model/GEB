@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 import calendar
 import numpy as np
-
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
 from .general import downscale_volume, AgentBaseClass
 from ..hydrology.landcover import SEALED
 
@@ -20,27 +15,31 @@ class Industry(AgentBaseClass):
 
     def __init__(self, model, agents):
         self.model = model
+
+        if self.model.simulate_hydrology:
+            self.HRU = model.hydrology.HRU
+            self.grid = model.hydrology.grid
+
         self.agents = agents
         self.config = (
-            self.model.config["agent_settings"]["town_managers"]
-            if "town_managers" in self.model.config["agent_settings"]
+            self.model.config["agent_settings"]["industry"]
+            if "industry" in self.model.config["agent_settings"]
             else {}
         )
 
         AgentBaseClass.__init__(self)
 
-        water_demand, efficiency = self.update_water_demand()
-        self.current_water_demand = water_demand
-        self.current_efficiency = efficiency
+        if self.model.in_spinup:
+            self.spinup()
 
-    def initiate(self) -> None:
-        pass
+    def spinup(self) -> None:
+        self.var = self.model.store.create_bucket("agents.industry.var")
+        water_demand, efficiency = self.update_water_demand()
+        self.var.current_water_demand = water_demand
+        self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        downscale_mask = self.model.data.HRU.land_use_type != SEALED
-        if self.model.use_gpu:
-            downscale_mask = downscale_mask.get()
-
+        downscale_mask = self.model.hydrology.HRU.var.land_use_type != SEALED
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         water_demand = (
@@ -50,23 +49,24 @@ class Industry(AgentBaseClass):
             * 1_000_000
             / days_in_year
         )
-        water_demand = water_demand.rio.set_crs(4326).rio.reproject(
-            4326,
-            shape=self.model.data.grid.shape,
-            transform=self.model.data.grid.transform,
-        )
+        water_demand = (
+            water_demand.rio.set_crs(4326).rio.reproject(
+                4326,
+                shape=self.grid.shape,
+                transform=self.grid.transform,
+            )
+            / (water_demand.rio.transform().a / self.grid.transform.a) ** 2
+        )  # correct for change in cell size
         water_demand = downscale_volume(
             water_demand.rio.transform().to_gdal(),
-            self.model.data.grid.gt,
+            self.grid.gt,
             water_demand.values,
-            self.model.data.grid.mask,
-            self.model.data.grid_to_HRU_uncompressed,
+            self.grid.mask,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.land_use_ratio,
+            self.HRU.var.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_demand = cp.array(water_demand)
-        water_demand = self.model.data.HRU.M3toM(water_demand)
+        water_demand = self.HRU.M3toM(water_demand)
 
         water_consumption = (
             self.model.industry_water_consumption_ds.sel(
@@ -75,23 +75,25 @@ class Industry(AgentBaseClass):
             * 1_000_000
             / days_in_year
         )
-        water_consumption = water_consumption.rio.set_crs(4326).rio.reproject(
-            4326,
-            shape=self.model.data.grid.shape,
-            transform=self.model.data.grid.transform,
+        water_consumption = (
+            water_consumption.rio.set_crs(4326).rio.reproject(
+                4326,
+                shape=self.grid.shape,
+                transform=self.grid.transform,
+            )
+            / (water_consumption.rio.transform().a / self.grid.transform.a) ** 2
         )
         water_consumption = downscale_volume(
             water_consumption.rio.transform().to_gdal(),
-            self.model.data.grid.gt,
+            self.grid.gt,
             water_consumption.values,
-            self.model.data.grid.mask,
-            self.model.data.grid_to_HRU_uncompressed,
+            self.grid.mask,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.land_use_ratio,
+            self.HRU.var.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_consumption = cp.array(water_consumption)
-        water_consumption = self.model.data.HRU.M3toM(water_consumption)
+
+        water_consumption = self.HRU.M3toM(water_consumption)
 
         efficiency = np.divide(
             water_consumption,
@@ -100,11 +102,11 @@ class Industry(AgentBaseClass):
             where=water_demand != 0,
         )
 
-        efficiency = self.model.data.to_grid(HRU_data=efficiency, fn="max")
+        efficiency = self.model.hydrology.to_grid(HRU_data=efficiency, fn="max")
 
         assert (efficiency <= 1).all()
         assert (efficiency >= 0).all()
-        self.last_water_demand_update = self.model.current_time
+        self.var.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
 
     def water_demand(self):
@@ -113,14 +115,16 @@ class Industry(AgentBaseClass):
             in self.model.industry_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
-            self.current_water_demand = water_demand
-            self.current_efficiency = efficiency
+            self.var.current_water_demand = water_demand
+            self.var.current_efficiency = efficiency
 
-        assert (self.model.current_time - self.last_water_demand_update).days < 366, (
+        assert (
+            self.model.current_time - self.var.last_water_demand_update
+        ).days < 366, (
             "Water demand has not been updated for over a year. "
             "Please check the industry water demand datasets."
         )
-        return self.current_water_demand, self.current_efficiency
+        return self.var.current_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
         """This function is run each timestep."""

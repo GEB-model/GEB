@@ -22,8 +22,8 @@ class Government(AgentBaseClass):
 
         AgentBaseClass.__init__(self)
 
-    def initiate(self) -> None:
-        pass
+    def spinup(self) -> None:
+        self.var = self.model.store.create_bucket("agents.government.var")
 
     def provide_subsidies(self) -> None:
         if "subsidies" not in self.config:
@@ -47,11 +47,11 @@ class Government(AgentBaseClass):
             return None
         irrigation_limit = self.config["irrigation_limit"]
         if irrigation_limit["per"] == "capita":
-            self.agents.crop_farmers.irrigation_limit_m3[:] = (
-                self.agents.crop_farmers.household_size * irrigation_limit["limit"]
+            self.agents.crop_farmers.var.irrigation_limit_m3[:] = (
+                self.agents.crop_farmers.var.household_size * irrigation_limit["limit"]
             )
         elif irrigation_limit["per"] == "area":  # limit per m2 of field
-            self.agents.crop_farmers.irrigation_limit_m3[:] = (
+            self.agents.crop_farmers.var.irrigation_limit_m3[:] = (
                 self.agents.crop_farmers.field_size_per_farmer
                 * irrigation_limit["limit"]
             )

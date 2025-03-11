@@ -2,11 +2,6 @@
 import calendar
 import numpy as np
 from .general import downscale_volume, AgentBaseClass
-
-try:
-    import cupy as cp
-except (ModuleNotFoundError, ImportError):
-    pass
 from ..hydrology.landcover import GRASSLAND_LIKE
 
 
@@ -20,6 +15,11 @@ class LiveStockFarmers(AgentBaseClass):
 
     def __init__(self, model, agents, reduncancy):
         self.model = model
+
+        if self.model.simulate_hydrology:
+            self.HRU = model.hydrology.HRU
+            self.grid = model.hydrology.grid
+
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["town_managers"]
@@ -29,12 +29,14 @@ class LiveStockFarmers(AgentBaseClass):
 
         AgentBaseClass.__init__(self)
 
-        water_demand, efficiency = self.update_water_demand()
-        self.current_water_demand = water_demand
-        self.current_efficiency = efficiency
+        if self.model.in_spinup:
+            self.spinup()
 
-    def initiate(self) -> None:
-        pass
+    def spinup(self) -> None:
+        self.var = self.model.store.create_bucket("agents.livestock_farmers.var")
+        water_demand, efficiency = self.update_water_demand()
+        self.var.current_water_demand = water_demand
+        self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
         """
@@ -45,12 +47,9 @@ class LiveStockFarmers(AgentBaseClass):
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         # grassland/non-irrigated land that is not owned by a crop farmer
-        if self.model.use_gpu:
-            land_use_type = self.model.data.HRU.land_use_type.get()
-        else:
-            land_use_type = self.model.data.HRU.land_use_type
+        land_use_type = self.HRU.var.land_use_type
         downscale_mask = (land_use_type != GRASSLAND_LIKE) | (
-            self.model.data.HRU.land_owners != -1
+            self.HRU.var.land_owners != -1
         )
 
         # transform from mio m3 per year to m3/day
@@ -61,27 +60,33 @@ class LiveStockFarmers(AgentBaseClass):
             * 1_000_000
             / days_in_year
         )
-        water_consumption = water_consumption.rio.set_crs(4326).rio.reproject(
-            4326,
-            shape=self.model.data.grid.shape,
-            transform=self.model.data.grid.transform,
+        water_consumption = (
+            water_consumption.rio.set_crs(4326).rio.reproject(
+                4326,
+                shape=self.model.hydrology.grid.shape,
+                transform=self.model.hydrology.grid.transform,
+            )
+            / (
+                water_consumption.rio.transform().a
+                / self.model.hydrology.grid.transform.a
+            )
+            ** 2
         )
         water_consumption = downscale_volume(
             water_consumption.rio.transform().to_gdal(),
-            self.model.data.grid.gt,
+            self.model.hydrology.grid.gt,
             water_consumption.values,
-            self.model.data.grid.mask,
-            self.model.data.grid_to_HRU_uncompressed,
+            self.model.hydrology.grid.mask,
+            self.model.hydrology.grid_to_HRU_uncompressed,
             downscale_mask,
-            self.model.data.HRU.land_use_ratio,
+            self.HRU.var.land_use_ratio,
         )
-        if self.model.use_gpu:
-            water_consumption = cp.array(water_consumption)
-        water_consumption = self.model.data.HRU.M3toM(water_consumption)
+
+        water_consumption = self.HRU.M3toM(water_consumption)
 
         efficiency = 1.0
         water_demand = water_consumption / efficiency
-        self.last_water_demand_update = self.model.current_time
+        self.var.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
 
     def water_demand(self):
@@ -90,14 +95,16 @@ class LiveStockFarmers(AgentBaseClass):
             in self.model.livestock_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
-            self.current_water_demand = water_demand
-            self.current_efficiency = efficiency
+            self.var.current_water_demand = water_demand
+            self.var.current_efficiency = efficiency
 
-        assert (self.model.current_time - self.last_water_demand_update).days < 366, (
+        assert (
+            self.model.current_time - self.var.last_water_demand_update
+        ).days < 366, (
             "Water demand has not been updated for over a year. "
             "Please check the livestock water demand datasets."
         )
-        return self.current_water_demand, self.current_efficiency
+        return self.var.current_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
         """This function is run each timestep."""

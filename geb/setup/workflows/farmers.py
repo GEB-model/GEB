@@ -203,9 +203,9 @@ def fit_n_farms_to_sizes(n, estimate, farm_sizes, mean, offset):
 
 
 def get_farm_distribution(n, x0, x1, mean, offset, logger=None):
-    assert (
-        x0 * n <= n * mean + offset <= x1 * n
-    ), f"There is no solution for this problem. The total farm size (incl. offset) is larger or smaller than possible with min (x0) and max (x1) farm size. n: {n}, x0: {x0}, x1: {x1}, mean: {mean}, offset: {offset}"  # make sure there is a solution to the problem.
+    assert x0 * n <= n * mean + offset <= x1 * n, (
+        f"There is no solution for this problem. The total farm size (incl. offset) is larger or smaller than possible with min (x0) and max (x1) farm size. n: {n}, x0: {x0}, x1: {x1}, mean: {mean}, offset: {offset}"
+    )  # make sure there is a solution to the problem.
 
     target_area = n * mean + offset
 
@@ -215,9 +215,9 @@ def get_farm_distribution(n, x0, x1, mean, offset, logger=None):
 
     largest_possible_farm = x0 + (target_area - n * x0)
     x1 = min(x1, largest_possible_farm)
-    assert (
-        x0 * n <= n * mean + offset <= x1 * n
-    ), f"There is no solution for this problem. The total farm size (incl. offset) is larger or smaller than possible with min (x0) and max (x1) farm size. n: {n}, x0: {x0}, x1: {x1}, mean: {mean}, offset: {offset}"  # make sure there is a solution to the problem.
+    assert x0 * n <= n * mean + offset <= x1 * n, (
+        f"There is no solution for this problem. The total farm size (incl. offset) is larger or smaller than possible with min (x0) and max (x1) farm size. n: {n}, x0: {x0}, x1: {x1}, mean: {mean}, offset: {offset}"
+    )  # make sure there is a solution to the problem.
 
     farm_sizes = np.arange(x0, x1 + 1)
     n_farm_sizes = farm_sizes.size
@@ -293,9 +293,9 @@ def get_farm_distribution(n, x0, x1, mean, offset, logger=None):
                     estimate[i] = estimate[i + 1] * growth_factor
                 estimate /= estimate.sum() / n
 
-            assert (
-                estimate >= 0
-            ).all(), f"Some numbers are negative; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}"
+            assert (estimate >= 0).all(), (
+                f"Some numbers are negative; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}"
+            )
 
             estimated_area = (estimate * farm_sizes).sum()
 

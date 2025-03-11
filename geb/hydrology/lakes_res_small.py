@@ -21,61 +21,18 @@
 
 
 class SmallLakesReservoirs(object):
-    """
-    Small LAKES AND RESERVOIRS
-
-    Note:
-
-        Calculate water retention in lakes and reservoirs
-
-        Using the **Modified Puls approach** to calculate retention of a lake
-        See also: LISFLOOD manual Annex 3 (Burek et al. 2013)
-
-
-    **Global variables**
-
-    ====================  ================================================================================  =========
-    Variable [self.var]   Description                                                                       Unit
-    ====================  ================================================================================  =========
-    EWRef                 potential evaporation rate from water surface                                     m
-    load_initial
-    waterbalance_module
-    seconds_per_timestep                 number of seconds per timestep (default = 86400)                                  s
-    lakeEvaFactor         a factor which increases evaporation from lake because of wind                    --
-    Invseconds_per_timestep
-    runoff
-    cellArea              Cell area [m²] of each simulated mesh
-    smallpart
-    smalllakeArea
-    smalllakeDis0
-    smalllakeA
-    smalllakeFactor
-    smalllakeFactorSqr
-    smalllakeInflowOld
-    smalllakeVolumeM3
-    smalllakeOutflow
-    smalllakeLevel
-    smalllakeStorage
-    minsmalllakeVolumeM3
-    preSmalllakeStorage
-    smallLakeIn
-    smallevapWaterBody
-    smallLakeout
-    smallLakeDiff
-    smallrunoffDiff
-    ====================  ================================================================================  =========
-
-    **Functions**
-    """
-
-    def __init__(self, model):
-        """
-        Initialize small lakes and reservoirs
-        Read parameters from maps e.g
-        area, location, initial average discharge, type: reservoir or lake) etc.
-        """
-        self.var = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
+        if self.model.in_spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
 
     def step(self):
         pass

@@ -11,16 +11,12 @@ from honeybees.library.raster import coord_to_pixel
 from pathlib import Path
 from numcodecs import Blosc
 import zarr.hierarchy
-
-try:
-    import cupy as cp
-except ImportError:
-    cp = np
 from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
 
-compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+# Define the compressor for zarr files
+compressor = Blosc(cname="zlib", clevel=9, shuffle=0)  # no shuffling is most efficient
 
 
 class hydrology_reporter(ABMReporter):
@@ -32,6 +28,7 @@ class hydrology_reporter(ABMReporter):
 
     def __init__(self, model, folder: str) -> None:
         self.model = model
+        self.hydrology = model.hydrology
 
         self.export_folder = folder
 
@@ -65,7 +62,7 @@ class hydrology_reporter(ABMReporter):
                             else:
                                 time = pd.date_range(
                                     start=self.model.current_time,
-                                    periods=self.model.n_timesteps + 1,
+                                    periods=self.model.n_timesteps,
                                     freq=self.model.timestep_length,
                                 )
                         else:
@@ -129,7 +126,7 @@ class hydrology_reporter(ABMReporter):
 
                         zarr_group.create_dataset(
                             "y",
-                            data=self.model.data.grid.lat,
+                            data=self.hydrology.grid.lat,
                             dtype="float64",
                         )
                         zarr_group["y"].attrs.update(
@@ -142,7 +139,7 @@ class hydrology_reporter(ABMReporter):
 
                         zarr_group.create_dataset(
                             "x",
-                            data=self.model.data.grid.lon,
+                            data=self.hydrology.grid.lon,
                             dtype="float64",
                         )
                         zarr_group["x"].attrs.update(
@@ -157,13 +154,13 @@ class hydrology_reporter(ABMReporter):
                             name,
                             shape=(
                                 time.size,
-                                self.model.data.grid.lat.size,
-                                self.model.data.grid.lon.size,
+                                self.hydrology.grid.lat.size,
+                                self.hydrology.grid.lon.size,
                             ),
                             chunks=(
                                 1,
-                                self.model.data.grid.lat.size,
-                                self.model.data.grid.lon.size,
+                                self.hydrology.grid.lat.size,
+                                self.hydrology.grid.lon.size,
                             ),
                             dtype="float32",
                             compressor=compressor,
@@ -180,7 +177,7 @@ class hydrology_reporter(ABMReporter):
                             }
                         )
 
-                        crs = self.model.data.grid.crs
+                        crs = self.hydrology.grid.crs
                         if not isinstance(crs, str):
                             crs = crs.to_string()
                         zarr_group.attrs["crs"] = crs
@@ -202,7 +199,9 @@ class hydrology_reporter(ABMReporter):
         Returns:
             decompressed_array: The decompressed array.
         """
-        return attrgetter(".".join(attr.split(".")[:-1]))(self.model).decompress(array)
+        return attrgetter(".".join(attr.split(".")[:-1]).replace(".var", ""))(
+            self.model
+        ).decompress(array)
 
     def get_array(self, attr: str, decompress: bool = False) -> np.ndarray:
         """This function retrieves a NumPy array from the model based the name of the variable. Optionally decompresses the array.
@@ -237,7 +236,7 @@ class hydrology_reporter(ABMReporter):
             decompressed_array = self.decompress(attr, array)
             return array, decompressed_array
 
-        assert isinstance(array, (np.ndarray, cp.ndarray))
+        assert isinstance(array, np.ndarray)
 
         return array
 
@@ -283,7 +282,7 @@ class hydrology_reporter(ABMReporter):
             elif conf["format"] == "csv":
                 fn += ".csv"
                 fp = os.path.join(folder, fn)
-                if isinstance(value, (np.ndarray, cp.ndarray)):
+                if isinstance(value, np.ndarray):
                     value = value.tolist()
                 if isinstance(value, (float, int)):
                     value = [value]
@@ -345,23 +344,27 @@ class hydrology_reporter(ABMReporter):
                                 assert not np.isnan(value)
                             elif function == "sample_coord":
                                 if conf["varname"].startswith("data.grid"):
-                                    gt = self.model.data.grid.gt
+                                    gt = self.model.hydrology.grid.gt
                                 elif conf["varname"].startswith("data.HRU"):
-                                    gt = self.model.data.HRU.gt
+                                    gt = self.hydrology.HRU.gt
                                 else:
                                     raise ValueError
-                                x, y = coord_to_pixel(
+                                px, py = coord_to_pixel(
                                     (float(args[0]), float(args[1])), gt
                                 )
                                 decompressed_array = self.decompress(
                                     conf["varname"], array
                                 )
-                                value = decompressed_array[y, x]
+                                try:
+                                    value = decompressed_array[py, px]
+                                except IndexError as e:
+                                    index_error = f"{e}. Most likely the coordinate ({args[0]},{args[1]}) is outside the model domain."
+                                    raise IndexError(index_error)
                             else:
                                 raise ValueError(f"Function {function} not recognized")
                     self.report_value(name, value, conf)
 
-    def report(self) -> None:
+    def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for name, values in self.variables.items():
             if self.model.config["report_hydrology"][name]["format"] == "zarr":
@@ -397,9 +400,11 @@ class Reporter:
     def __init__(self, model):
         self.model = model
         self.abm_reporter = ABMReporter(model, folder=self.model.report_folder)
-        self.hydrology_reporter = hydrology_reporter(
-            model, folder=self.model.report_folder
-        )
+
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter = hydrology_reporter(
+                model, folder=self.model.report_folder
+            )
 
     @property
     def variables(self):
@@ -412,10 +417,12 @@ class Reporter:
     def step(self) -> None:
         """This function is called at the end of every timestep. This function only forwards the step function to the reporter for the ABM model and CWatM."""
         self.abm_reporter.step()
-        self.hydrology_reporter.step()
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter.step()
 
-    def report(self):
+    def finalize(self):
         """At the end of the model run, all previously collected data is reported to disk. This function only forwards the report function to the reporter for the ABM model and CWatM."""
-        self.abm_reporter.report()
-        self.hydrology_reporter.report()
+        self.abm_reporter.finalize()
+        if self.model.simulate_hydrology:
+            self.hydrology_reporter.finalize()
         print("Reported data")

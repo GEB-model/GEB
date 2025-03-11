@@ -21,7 +21,7 @@ class TownManagers(AgentBaseClass):
 
         AgentBaseClass.__init__(self)
 
-    def initiate(self) -> None:
+    def spinup(self) -> None:
         return
 
     def step(self) -> None:

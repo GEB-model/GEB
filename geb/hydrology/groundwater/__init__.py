@@ -22,85 +22,91 @@
 import numpy as np
 from .model import ModFlowSimulation
 from geb.workflows import balance_check
+from ..routing import get_channel_ratio
 
 
 class GroundWater:
-    def __init__(self, model):
-        self.var = model.data.grid
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
 
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
+        if self.model.in_spinup:
+            self.spinup()
+
+    def spinup(self):
         # load hydraulic conductivity (md-1)
-        hydraulic_conductivity = self.model.data.grid.load(
+        self.grid.var.hydraulic_conductivity = self.hydrology.grid.load(
             self.model.files["grid"]["groundwater/hydraulic_conductivity"],
             layer=None,
         )
 
-        specific_yield = self.model.data.grid.load(
+        self.grid.var.specific_yield = self.hydrology.grid.load(
             self.model.files["grid"]["groundwater/specific_yield"],
             layer=None,
         )
 
-        layer_boundary_elevation = self.model.data.grid.load(
+        self.grid.var.layer_boundary_elevation = self.hydrology.grid.load(
             self.model.files["grid"]["groundwater/layer_boundary_elevation"],
             layer=None,
         )
 
-        # recession_coefficient = self.model.data.grid.load(
+        # recession_coefficient = self.hydrology.grid.load(
         #     self.model.files["grid"]["groundwater/recession_coefficient"],
         # )
 
-        elevation = self.model.data.grid.load(
+        self.grid.var.elevation = self.hydrology.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation"]
         )
 
-        assert hydraulic_conductivity.shape == specific_yield.shape
-
-        self.var.channel_ratio = self.var.load(
-            self.model.files["grid"]["routing/kinematic/channel_ratio"]
+        assert (
+            self.grid.var.hydraulic_conductivity.shape
+            == self.grid.var.specific_yield.shape
         )
 
-        self.var.leakageriver_factor = 0.001  # in m/day
-        self.var.leakagelake_factor = 0.001  # in m/day
+        self.grid.var.leakageriver_factor = 0.001  # in m/day
+        self.grid.var.leakagelake_factor = 0.001  # in m/day
 
         self.initial_water_table_depth = 2
 
         def get_initial_head():
-            heads = self.model.data.grid.load(
+            heads = self.hydrology.grid.load(
                 self.model.files["grid"]["groundwater/heads"], layer=None
-            )
+            ).astype(np.float64)  # modflow is an exception, it needs double precision
             heads = np.where(
                 ~np.isnan(heads),
                 heads,
-                layer_boundary_elevation[1:] + 0.1,
+                self.grid.var.layer_boundary_elevation[1:] + 0.1,
             )
             heads = np.where(
-                heads > layer_boundary_elevation[1:],
+                heads > self.grid.var.layer_boundary_elevation[1:],
                 heads,
-                layer_boundary_elevation[1:] + 0.1,
+                self.grid.var.layer_boundary_elevation[1:] + 0.1,
             )
             return heads
 
-        self.var.heads = self.model.data.grid.load_initial(
-            "heads",
-            default=get_initial_head,
-        )
+        self.grid.var.heads = get_initial_head()
 
+        self.grid.var.capillar = self.grid.full_compressed(0, dtype=np.float32)
+
+    def heads_update_callback(self, heads):
+        self.hydrology.grid.var.heads = heads
+
+    def initalize_modflow_model(self):
         self.modflow = ModFlowSimulation(
             self.model,
-            topography=elevation,
-            gt=self.model.data.grid.gt,
-            ndays=self.model.n_timesteps,
-            specific_storage=np.zeros_like(specific_yield),
-            specific_yield=specific_yield,
-            layer_boundary_elevation=layer_boundary_elevation,
-            basin_mask=self.model.data.grid.mask,
-            heads=self.var.heads,
-            hydraulic_conductivity=hydraulic_conductivity,
+            topography=self.grid.var.elevation,
+            gt=self.model.hydrology.grid.gt,
+            specific_storage=np.zeros_like(self.grid.var.specific_yield),
+            specific_yield=self.grid.var.specific_yield,
+            layer_boundary_elevation=self.grid.var.layer_boundary_elevation,
+            basin_mask=self.model.hydrology.grid.mask,
+            heads=self.grid.var.heads,
+            hydraulic_conductivity=self.grid.var.hydraulic_conductivity,
             verbose=False,
-        )
-
-        self.var.capillar = self.var.load_initial(
-            "capillar", default=lambda: self.var.full_compressed(0, dtype=np.float32)
+            heads_update_callback=self.heads_update_callback,
         )
 
     def step(self, groundwater_recharge, groundwater_abstraction_m3):
@@ -108,12 +114,53 @@ class GroundWater:
         groundwater_abstraction_m3[groundwater_abstraction_m3 < 0] = 0
         assert (groundwater_recharge >= 0).all()
 
-        groundwater_storage_pre = self.modflow.groundwater_content_m3
+        if __debug__:
+            groundwater_storage_pre = self.modflow.groundwater_content_m3
 
         self.modflow.set_recharge_m(groundwater_recharge)
         self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
         self.modflow.step()
 
+        if __debug__:
+            self.balance_check(
+                groundwater_storage_pre,
+                groundwater_recharge,
+                groundwater_abstraction_m3,
+            )
+
+        groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
+
+        channel_ratio = get_channel_ratio(
+            river_length=self.grid.var.river_length,
+            river_width=self.grid.var.river_width,
+            cell_area=self.grid.var.cell_area,
+        )
+
+        # this is the capillary rise for the NEXT timestep
+        self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
+        baseflow = groundwater_drainage * channel_ratio
+
+        # capriseindex is 1 where capilary rise occurs
+        self.hydrology.HRU.capriseindex = self.hydrology.to_HRU(
+            data=np.float32(groundwater_drainage > 0)
+        )
+
+        return baseflow
+
+    @property
+    def groundwater_content_m3(self):
+        return self.modflow.groundwater_content_m3.astype(np.float32)
+
+    @property
+    def groundwater_depth(self):
+        return self.modflow.groundwater_depth.astype(np.float32)
+
+    def decompress(self, data):
+        return self.hydrology.grid.decompress(data)
+
+    def balance_check(
+        self, groundwater_storage_pre, groundwater_recharge, groundwater_abstraction_m3
+    ):
         drainage_m3 = self.modflow.drainage_m3
         recharge_m3 = groundwater_recharge * self.modflow.area
         groundwater_storage_post = self.modflow.groundwater_content_m3
@@ -130,25 +177,3 @@ class GroundWater:
             poststorages=[groundwater_storage_post],
             tollerance=100,  # 100 m3
         )
-
-        groundwater_drainage = self.modflow.drainage_m3 / self.var.cellArea
-
-        self.var.capillar = groundwater_drainage * (1 - self.var.channel_ratio)
-        self.var.baseflow = groundwater_drainage * self.var.channel_ratio
-        self.var.heads = self.modflow.heads
-
-        # capriseindex is 1 where capilary rise occurs
-        self.model.data.HRU.capriseindex = self.model.data.to_HRU(
-            data=np.float32(groundwater_drainage > 0)
-        )
-
-    @property
-    def groundwater_content_m3(self):
-        return self.modflow.groundwater_content_m3
-
-    @property
-    def groundwater_depth(self):
-        return self.modflow.groundwater_depth
-
-    def decompress(self, data):
-        return self.model.data.grid.decompress(data)

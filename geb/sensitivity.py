@@ -143,24 +143,6 @@ def run_model(args):
             with open(config_path, "w") as f:
                 yaml.dump(template, f)
 
-            # acquire lock to check and set GPU usage
-            lock.acquire()
-            if current_gpu_use_count.value < n_gpu_spots:
-                use_gpu = int(
-                    current_gpu_use_count.value
-                    / config["calibration"]["DEAP"]["models_per_gpu"]
-                )
-                current_gpu_use_count.value += 1
-                print(
-                    f"Using 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}"
-                )
-            else:
-                use_gpu = False
-                print(
-                    f"Not using GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}"
-                )
-            lock.release()
-
             def run_model_scenario(scenario):
                 # build the command to run the script, including the use of a GPU if specified
                 command = [
@@ -171,8 +153,7 @@ def run_model(args):
                     "--scenario",
                     scenario,
                 ]
-                if use_gpu is not False:
-                    command.extend(["--GPU", "--gpu_device", use_gpu])
+
                 print(command, flush=True)
 
                 # run the command and capture the output and errors
@@ -225,14 +206,6 @@ def run_model(args):
 
             return_code = run_model_scenario(config["sensitivity"]["scenario"])
             if return_code == 0:
-                # release the GPU if it was used
-                if use_gpu is not False:
-                    lock.acquire()
-                    current_gpu_use_count.value -= 1
-                    lock.release()
-                    print(
-                        f"Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}"
-                    )
                 with open(os.path.join(run_directory, "done.txt"), "w") as f:
                     f.write("done")
                 break

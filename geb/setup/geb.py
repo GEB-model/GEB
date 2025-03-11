@@ -1,3 +1,9 @@
+"""This module contains the main setup for the GEB model.
+
+Notes:
+- All prices are in nominal USD (face value) for their respective years. That means that the prices are not adjusted for inflation.
+"""
+
 from tqdm import tqdm
 from pathlib import Path
 import hydromt.workflows
@@ -21,6 +27,7 @@ import geopandas as gpd
 import pyproj
 from affine import Affine
 from pyproj import CRS
+from rasterio.env import defenv
 import xarray as xr
 from dask.diagnostics import ProgressBar
 import xclim.indices as xci
@@ -28,18 +35,17 @@ from dateutil.relativedelta import relativedelta
 from contextlib import contextmanager
 from calendar import monthrange
 from numcodecs import Blosc
-
+from scipy.ndimage import value_indices
 import pyflwdir
 
 from hydromt.models.model_grid import GridModel
 from hydromt.data_catalog import DataCatalog
 from hydromt.data_adapter import (
-    GeoDataFrameAdapter,
     RasterDatasetAdapter,
     DatasetAdapter,
 )
 
-from honeybees.library.raster import sample_from_map
+from honeybees.library.raster import sample_from_map, pixels_to_coords
 from isimip_client.client import ISIMIPClient
 
 from .workflows.general import (
@@ -51,7 +57,7 @@ from .workflows.general import (
     bounds_are_within,
 )
 from .workflows.farmers import get_farm_locations, create_farms, get_farm_distribution
-from .workflows.population import generate_locations
+from .workflows.population import generate_locations, load_GLOPOP_S
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
 from .workflows.conversions import (
@@ -66,6 +72,33 @@ from .workflows.forcing import (
     download_ERA5,
     open_ERA5,
 )
+from .workflows.hydrography import (
+    get_upstream_subbasin_ids,
+    get_subbasin_id_from_coordinate,
+    get_sink_subbasin_id_for_geom,
+    get_subbasins_geometry,
+    get_river_graph,
+    get_downstream_subbasins,
+    get_rivers,
+    create_river_raster_from_river_lines,
+    get_SWORD_translation_IDs_and_lenghts,
+    get_SWORD_river_widths,
+)
+
+from geb.agents.crop_farmers import (
+    SURFACE_IRRIGATION_EQUIPMENT,
+    WELL_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION,
+    FIELD_EXPANSION_ADAPTATION,
+)
+
+# Set environment options for robustness
+GDAL_HTTP_ENV_OPTS = {
+    "GDAL_HTTP_MAX_RETRY": "10",  # Number of retry attempts
+    "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
+    "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
+}
+defenv(**GDAL_HTTP_ENV_OPTS)
 
 XY_CHUNKSIZE = 350
 
@@ -80,9 +113,6 @@ else:
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
 logger = logging.getLogger(__name__)
-# Define the compressor using Blosc (e.g., Zstandard compression)
-
-compressor = Blosc(cname="lz4", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
 
 def create_grid_cell_id_array(area_fraction_da):
@@ -241,8 +271,6 @@ class GEBModel(GridModel):
         self,
         region: dict,
         sub_grid_factor: int,
-        hydrography_fn=None,
-        basin_index_fn=None,
         resolution_arcsec=30,
     ) -> xr.DataArray:
         """Creates a 2D regular grid or reads an existing grid.
@@ -262,49 +290,95 @@ class GEBModel(GridModel):
         sub_grid_factor : int
             GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
         """
-        assert hydrography_fn is None, "Please remove this parameter"
-        assert basin_index_fn is None, "Please remove this parameter"
 
-        assert (
-            resolution_arcsec % 3 == 0
-        ), "resolution_arcsec must be a multiple of 3 to align with MERIT"
+        assert resolution_arcsec % 3 == 0, (
+            "resolution_arcsec must be a multiple of 3 to align with MERIT"
+        )
         assert sub_grid_factor >= 2
 
+        river_graph = get_river_graph(self.data_catalog)
+
+        if "subbasin" in region:
+            sink_subbasin_ids = region["subbasin"]
+        elif "outflow" in region:
+            lon, lat = region["outflow"][0], region["outflow"][1]
+            sink_subbasin_ids = get_subbasin_id_from_coordinate(
+                self.data_catalog, lon, lat
+            )
+        elif "admin" in region:
+            admin_regions = self.data_catalog.get_geodataframe(
+                region["admin"]["source"]
+            )
+            admin_regions = admin_regions[
+                admin_regions[region["admin"]["column"]] == region["admin"]["key"]
+            ]
+            sink_subbasin_ids = get_sink_subbasin_id_for_geom(
+                self.data_catalog, admin_regions, river_graph
+            )
+        else:
+            raise ValueError(f"Region {region} not understood.")
+
+        # always make a list of the subbasin ids, such that the function always gets the same type of input
+        if not isinstance(sink_subbasin_ids, (list, set)):
+            sink_subbasin_ids = [sink_subbasin_ids]
+
+        subbasin_ids = get_upstream_subbasin_ids(river_graph, sink_subbasin_ids)
+        subbasin_ids.update(sink_subbasin_ids)
+
+        downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
+        subbasin_ids.update(downstream_subbasins)
+
+        subbasins = get_subbasins_geometry(self.data_catalog, subbasin_ids).set_index(
+            "COMID"
+        )
+        subbasins["is_downstream_outflow_subbasin"] = pd.Series(
+            True, index=downstream_subbasins
+        ).reindex(subbasins.index, fill_value=False)
+
+        subbasins["associated_upstream_basins"] = pd.Series(
+            downstream_subbasins.values(), index=downstream_subbasins
+        ).reindex(subbasins.index, fill_value=[])
+
+        self.set_geoms(subbasins, name="routing/subbasins")
+
+        xmin, ymin, xmax, ymax = subbasins.total_bounds
         hydrography = self.data_catalog.get_rasterdataset(
-            "merit_hydro", provider=self.data_provider
+            "merit_hydro",
+            bbox=[
+                xmin,
+                ymin,
+                xmax,
+                ymax,
+            ],
+            buffer=10,
         )
 
         self.logger.info("Preparing 2D grid.")
-        kind, region = hydromt.workflows.parse_region(region, logger=self.logger)
-        if kind in ["basin", "subbasin"]:
+        if "outflow" in region:
             # get basin geometry
-            max_bounds = region["max_bounds"]
-            region.pop("max_bounds")
-            geom, xy = hydromt.workflows.get_basin_geometry(
+            geom, _ = hydromt.workflows.get_basin_geometry(
                 ds=hydrography,
                 flwdir_name="dir",
-                kind=kind,
+                kind="subbasin",
                 logger=self.logger,
-                bounds=[
-                    max_bounds["xmin"],
-                    max_bounds["ymin"],
-                    max_bounds["xmax"],
-                    max_bounds["ymax"],
-                ],
-                **region,
+                xy=(lon, lat),
             )
-            region.update(xy=xy)
+        elif "subbasin" in region or "admin" in region:
+            geom = gpd.GeoDataFrame(
+                geometry=[
+                    subbasins[~subbasins["is_downstream_outflow_subbasin"]].union_all()
+                ],
+                crs=subbasins.crs,
+            )
         elif "geom" in region:
             geom = region["geom"]
             if geom.crs is None:
                 raise ValueError('Model region "geom" has no CRS')
             # merge regions when more than one geom is given
             if isinstance(geom, gpd.GeoDataFrame):
-                geom = gpd.GeoDataFrame(geometry=[geom.unary_union], crs=geom.crs)
+                geom = gpd.GeoDataFrame(geometry=[geom.union_all()], crs=geom.crs)
         else:
-            raise ValueError(
-                f"Region for grid must of kind [basin, subbasin], kind {kind} not understood."
-            )
+            raise ValueError(f"Region {region} not understood.")
 
         # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
         # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
@@ -335,9 +409,6 @@ class GEBModel(GridModel):
         )
 
         scale_factor = resolution_arcsec // 3
-        self.set_dict(
-            {"hydrography_scale_factor": scale_factor}, name="hydrography_scale_factor"
-        )
 
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
         flow_raster_upscaled, idxs_out = flow_raster.upscale(
@@ -367,13 +438,31 @@ class GEBModel(GridModel):
 
         # outflow elevation
         outflow_elevation = elevation_coarsened.min()
-        self.set_grid(outflow_elevation, name="routing/kinematic/outflow_elevation")
+        self.set_grid(outflow_elevation, name="routing/outflow_elevation")
+
+        mask = xr.full_like(outflow_elevation, False, dtype=bool)
+        # we use the inverted mask, that is True outside the study area
+        mask.data = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
+        self.set_grid(mask, name="areamaps/grid_mask")
+
+        slope = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        slope.raster.set_nodata(np.nan)
+        slope_data = pyflwdir.dem.slope(
+            elevation.values,
+            nodata=np.nan,
+            latlon=True,
+            transform=elevation.raster.transform,
+        )
+        # set slope to zero on the mask boundary
+        slope_data[np.isnan(slope_data) & (~mask.data)] = 0
+        slope.data = slope_data
+        self.set_grid(slope, name="landsurface/topo/slope")
 
         # flow direction
         ldd = xr.full_like(outflow_elevation, 255, dtype=np.uint8)
         ldd.raster.set_nodata(255)
         ldd.data = flow_raster_upscaled.to_array(ftype="ldd")
-        self.set_grid(ldd, name="routing/kinematic/ldd")
+        self.set_grid(ldd, name="routing/ldd")
 
         # upstream area
         upstream_area = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
@@ -383,17 +472,17 @@ class GEBModel(GridModel):
         )
         upstream_area_data[upstream_area_data == -9999.0] = np.nan
         upstream_area.data = upstream_area_data
-        self.set_grid(upstream_area, name="routing/kinematic/upstream_area")
+        self.set_grid(upstream_area, name="routing/upstream_area")
 
-        # channel length
-        channel_length = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
-        channel_length.raster.set_nodata(np.nan)
-        channel_length_data = flow_raster.subgrid_rivlen(
+        # river length
+        river_length = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        river_length.raster.set_nodata(np.nan)
+        river_length_data = flow_raster.subgrid_rivlen(
             idxs_out, unit="m", direction="down"
         )
-        channel_length_data[channel_length_data == -9999.0] = np.nan
-        channel_length.data = channel_length_data
-        self.set_grid(channel_length, name="routing/kinematic/channel_length")
+        river_length_data[river_length_data == -9999.0] = np.nan
+        river_length.data = river_length_data
+        self.set_grid(river_length, name="routing/river_length")
 
         # river slope
         river_slope = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
@@ -403,13 +492,73 @@ class GEBModel(GridModel):
         river_slope.data = river_slope_data
         self.set_grid(
             river_slope,
-            name="routing/kinematic/channel_slope",
+            name="routing/river_slope",
         )
 
-        mask = xr.full_like(outflow_elevation, False, dtype=bool)
-        # we use the inverted mask, that is True outside the study area
-        mask.data = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
-        self.set_grid(mask, name="areamaps/grid_mask")
+        # river width
+        rivers = get_rivers(self.data_catalog, subbasin_ids).set_index("COMID")
+
+        # remove all rivers that are both shorter than 1 km and have no upstream river
+        rivers = rivers[~((rivers["lengthkm"] < 1) & (rivers["maxup"] == 0))]
+
+        rivers = rivers.join(
+            subbasins[["is_downstream_outflow_subbasin", "associated_upstream_basins"]],
+            how="left",
+        )
+
+        COMID_IDs_raster_data = create_river_raster_from_river_lines(
+            rivers, idxs_out, hydrography
+        )
+
+        assert set(
+            np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1])
+        ) == set(np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1]))
+
+        # Derive the xy coordinates of the river network. Here the coordinates
+        # are the PIXEL coordinates for the coarse drainage network.
+        rivers["hydrography_xy"] = [[]] * len(rivers)
+        xy_per_river_segment = value_indices(COMID_IDs_raster_data, ignore_value=-1)
+        for COMID, (ys, xs) in xy_per_river_segment.items():
+            upstream_area = upstream_area_data[ys, xs]
+            up_to_downstream_ids = np.argsort(upstream_area)
+            ys = ys[up_to_downstream_ids]
+            xs = xs[up_to_downstream_ids]
+            rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys))
+
+        COMID_IDs_raster = xr.full_like(outflow_elevation, -1, dtype=np.int32)
+        COMID_IDs_raster.raster.set_nodata(-1)
+        COMID_IDs_raster.data = COMID_IDs_raster_data
+        self.set_grid(COMID_IDs_raster, name="routing/COMID_IDs")
+
+        SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lenghts(
+            self.data_catalog, rivers
+        )
+
+        SWORD_river_widths = get_SWORD_river_widths(self.data_catalog, SWORD_reach_IDs)
+        MINIMUM_RIVER_WIDTH = 3.0
+        rivers["width"] = np.nansum(
+            SWORD_river_widths * SWORD_reach_lengths, axis=0
+        ) / np.nansum(SWORD_reach_lengths, axis=0)
+        # ensure that all rivers with a SWORD ID have a width
+        assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
+
+        # set initial width guess where width is not available from SWORD
+        rivers.loc[rivers["width"].isnull(), "width"] = (
+            rivers[rivers["width"].isnull()]["uparea"] / 10
+        )
+        rivers["width"] = rivers["width"].clip(lower=float(MINIMUM_RIVER_WIDTH))
+
+        self.set_geoms(rivers, name="routing/rivers")
+
+        river_width_data = np.vectorize(
+            lambda ID: rivers["width"].to_dict().get(ID, float(MINIMUM_RIVER_WIDTH))
+        )(COMID_IDs_raster).astype(np.float32)
+
+        river_width = xr.full_like(outflow_elevation, np.nan, dtype=np.float32)
+        river_width.raster.set_nodata(np.nan)
+        assert river_width_data.dtype == np.float32
+        river_width.data = river_width_data
+        self.set_grid(river_width, name="routing/river_width")
 
         dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
 
@@ -426,9 +575,6 @@ class GEBModel(GridModel):
             lazy=True,
         )
         submask.data = repeat_grid(mask.data, sub_grid_factor)
-
-        assert bounds_are_within(submask.raster.bounds, mask.raster.bounds)
-        assert bounds_are_within(mask.raster.bounds, submask.raster.bounds)
 
         self.set_subgrid(submask, name=submask.name)
 
@@ -560,9 +706,9 @@ class GEBModel(GridModel):
         """
         self.logger.info("Preparing crops data")
 
-        assert source in (
-            "MIRCA2000",
-        ), f"crop_variables_source {source} not understood, must be 'MIRCA2000'"
+        assert source in ("MIRCA2000",), (
+            f"crop_variables_source {source} not understood, must be 'MIRCA2000'"
+        )
         if crop_specifier is None:
             crop_data = {
                 "data": (
@@ -743,6 +889,21 @@ class GEBModel(GridModel):
                             f"No crop price data available for crop {crop_name}"
                         )
 
+            # Extract the crop names from the dictionary and convert them to lowercase
+            crop_names = [
+                crop["name"].lower()
+                for idx, crop in self.dict["crops/crop_data"]["data"].items()
+            ]
+
+            # Filter the columns of the data DataFrame
+            data = data[
+                [
+                    col
+                    for col in data.columns
+                    if col.lower() in crop_names or col == "_crop_price_inflation"
+                ]
+            ]
+
             data = self.inter_and_extrapolate_prices(
                 prices_plus_crop_price_inflation, unique_regions
             )
@@ -750,18 +911,15 @@ class GEBModel(GridModel):
             total_years = data.index.get_level_values("year").unique()
 
             if project_past_until_year:
-                assert (
-                    total_years[0] > project_past_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
+                assert total_years[0] > project_past_until_year, (
+                    f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
+                )
             if project_future_until_year:
-                assert (
-                    total_years[-1] < project_future_until_year
-                ), f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
+                assert total_years[-1] < project_future_until_year, (
+                    f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
+                )
 
-            if (
-                project_past_until_year is not None
-                or project_future_until_year is not None
-            ):
+            if project_past_until_year or project_future_until_year:
                 data = self.process_additional_years(
                     costs=data,
                     total_years=total_years,
@@ -852,20 +1010,45 @@ class GEBModel(GridModel):
                 },
                 index=pd.to_datetime(data["time"]),
             )
+            # compute mean price per year, using start day as index
+            data = data.resample("AS").mean()
+            # extend dataframe to include start and end years
             data = data.reindex(
-                columns=pd.MultiIndex.from_product(
+                index=pd.date_range(
+                    start=datetime(project_past_until_year, 1, 1),
+                    end=datetime(project_future_until_year, 1, 1),
+                    freq="YS",
+                )
+            )
+            # only use year identifier as index
+            data.index = data.index.year
+
+            data = data.reindex(
+                index=pd.MultiIndex.from_product(
                     [
                         self.geoms["areamaps/regions"]["region_id"],
-                        data.columns,
-                    ]
+                        data.index,
+                    ],
+                    names=["region_id", "date"],
                 ),
                 level=1,
             )
+
+            data = self.determine_price_variability(
+                data, self.geoms["areamaps/regions"]
+            )
+
+            data = self.inter_and_extrapolate_prices(
+                data, self.geoms["areamaps/regions"]
+            )
+
             data = {
                 "type": "time_series",
-                "time": data.index.tolist(),
+                "time": data.xs(
+                    data.index.get_level_values(0)[0], level=0
+                ).index.tolist(),
                 "data": {
-                    str(region_id): data[region_id].to_dict(orient="list")
+                    str(region_id): data.loc[region_id].to_dict(orient="list")
                     for region_id in self.geoms["areamaps/regions"]["region_id"]
                 },
             }
@@ -909,9 +1092,6 @@ class GEBModel(GridModel):
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
         4. Drops the 'ISO3' column before returning the updated DataFrame.
         """
-
-        if "economics/ppp_conversion_rates" not in self.dict:
-            raise ValueError("Please run setup_economic_data first")
 
         # create a copy of the data to avoid using data that was adjusted in this function
         data_out = None
@@ -979,23 +1159,6 @@ class GEBModel(GridModel):
         data_out = data_out.dropna(axis=0, how="all")
 
         return data_out
-
-    def convert_price_using_ppp(
-        self, price_source_LCU, ppp_factor_source, ppp_factor_target
-    ):
-        """
-        Convert a price from one country's LCU to another's using PPP conversion factors.
-
-        Parameters:
-        - price_source_LCU (float): Array of the prices in the source country's local currency units (LCU).
-        - ppp_factor_source (float): The PPP conversion factor for the source country.
-        - ppp_factor_target (float): The PPP conversion factor for the target country.
-
-        Returns:
-        - float: The price in the target country's local currency units (LCU).
-        """
-        price_target_LCU = (price_source_LCU / ppp_factor_source) * ppp_factor_target
-        return price_target_LCU
 
     def determine_price_variability(self, costs, unique_regions):
         """
@@ -1066,21 +1229,6 @@ class GEBModel(GridModel):
         4. Filters and updates the original data with the computed averages.
         5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
         """
-
-        # Extract the crop names from the dictionary and convert them to lowercase
-        crop_names = [
-            crop["name"].lower()
-            for idx, crop in self.dict["crops/crop_data"]["data"].items()
-        ]
-
-        # Filter the columns of the data DataFrame
-        data = data[
-            [
-                col
-                for col in data.columns
-                if col.lower() in crop_names or col == "_crop_price_inflation"
-            ]
-        ]
 
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in unique_regions.iterrows():
@@ -1162,9 +1310,9 @@ class GEBModel(GridModel):
         start_year,
         end_year,
     ):
-        assert (
-            end_year != start_year
-        ), "extra processed years must not be the same as data years"
+        assert end_year != start_year, (
+            "extra processed years must not be the same as data years"
+        )
 
         if end_year < start_year:
             operator = "div"
@@ -1208,6 +1356,8 @@ class GEBModel(GridModel):
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
         project_future_until_year: Optional[int] = False,
+        project_past_until_year: Optional[int] = False,
+        translate_crop_names: Optional[Dict[str, str]] = None,
     ):
         """
         Sets up the cultivation costs for the model.
@@ -1221,7 +1371,10 @@ class GEBModel(GridModel):
         """
         self.logger.info("Preparing cultivation costs")
         cultivation_costs = self.process_crop_data(
-            cultivation_costs, project_future_until_year=project_future_until_year
+            crop_prices=cultivation_costs,
+            project_future_until_year=project_future_until_year,
+            project_past_until_year=project_past_until_year,
+            translate_crop_names=translate_crop_names,
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
@@ -1260,21 +1413,19 @@ class GEBModel(GridModel):
         -----
         This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
         and topography of the grid. It first calculates the upstream area of each cell in the grid using the
-        `routing/kinematic/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
+        `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
 
             C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
 
         where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
 
-        The resulting Manning's coefficient is then set as the `routing/kinematic/mannings` attribute of the grid using the
+        The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
         `set_grid()` method.
         """
         self.logger.info("Setting up Manning's coefficient")
-        a = (2 * self.grid["areamaps/cell_area"]) / self.grid[
-            "routing/kinematic/upstream_area"
-        ]
+        a = (2 * self.grid["areamaps/cell_area"]) / self.grid["routing/upstream_area"]
         a = xr.where(a < 1, a, 1, keep_attrs=True)
-        b = self.grid["routing/kinematic/outflow_elevation"] / 2000
+        b = self.grid["routing/outflow_elevation"] / 2000
         b = xr.where(b < 1, b, 1, keep_attrs=True)
 
         mannings = hydromt.raster.full(
@@ -1282,150 +1433,20 @@ class GEBModel(GridModel):
             nodata=np.nan,
             dtype=np.float32,
             crs=self.crs,
-            name="routing/kinematic/mannings",
+            name="routing/mannings",
             lazy=True,
         )
         mannings.data = 0.025 + 0.015 * a + 0.030 * b
         self.set_grid(mannings, mannings.name)
 
-    def setup_channel_width(self, minimum_width: float) -> None:
-        """
-        Sets up the channel width for the model.
-
-        Parameters
-        ----------
-        minimum_width : float
-            The minimum channel width in meters.
-
-        Notes
-        -----
-        This method sets up the channel width for the model by calculating the width of each channel based on the upstream
-        area of each cell in the grid. It first retrieves the upstream area of each cell from the `routing/kinematic/upstream_area`
-        attribute of the grid, and then calculates the channel width using the formula:
-
-            W = A / 500
-
-        where W is the channel width, and A is the upstream area of the cell. The resulting channel width is then set as
-        the `routing/kinematic/channel_width` attribute of the grid using the `set_grid()` method.
-
-        Additionally, this method sets a minimum channel width by replacing any channel width values that are less than the
-        minimum width with the minimum width.
-        """
-        self.logger.info("Setting up channel width")
-        channel_width_data = self.grid["routing/kinematic/upstream_area"] / 500
-        channel_width_data = xr.where(
-            channel_width_data > minimum_width,
-            channel_width_data,
-            minimum_width,
-            keep_attrs=True,
-        )
-
-        channel_width = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="routing/kinematic/channel_width",
-            lazy=True,
-            crs=self.crs,
-        )
-        channel_width.data = channel_width_data
-
-        self.set_grid(channel_width, channel_width.name)
+    def setup_river_width(self, minimum_width: float) -> None:
+        raise ValueError("setup_river_width not needed anymore, please remove")
 
     def setup_channel_depth(self) -> None:
-        """
-        Sets up the channel depth for the model.
-
-        Raises
-        ------
-        AssertionError
-            If the upstream area of any cell in the grid is less than or equal to zero.
-
-        Notes
-        -----
-        This method sets up the channel depth for the model by calculating the depth of each channel based on the upstream
-        area of each cell in the grid. It first retrieves the upstream area of each cell from the `routing/kinematic/upstream_area`
-        attribute of the grid, and then calculates the channel depth using the formula:
-
-            D = 0.27 * A ** 0.26
-
-        where D is the channel depth, and A is the upstream area of the cell. The resulting channel depth is then set as
-        the `routing/kinematic/channel_depth` attribute of the grid using the `set_grid()` method.
-
-        Additionally, this method raises an `AssertionError` if the upstream area of any cell in the grid is less than or
-        equal to zero. This is done to ensure that the upstream area is a positive value, which is required for the channel
-        depth calculation to be valid.
-        """
-        self.logger.info("Setting up channel depth")
-        assert (
-            (self.grid["routing/kinematic/upstream_area"] > 0)
-            | self.grid["areamaps/grid_mask"]
-        ).all()
-        channel_depth_data = 0.27 * self.grid["routing/kinematic/upstream_area"] ** 0.26
-        channel_depth = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="routing/kinematic/channel_depth",
-            lazy=True,
-            crs=self.crs,
-        )
-        channel_depth.data = channel_depth_data
-        self.set_grid(channel_depth, channel_depth.name)
+        raise ValueError("setup_channel_depth not needed anymore, please remove")
 
     def setup_channel_ratio(self) -> None:
-        """
-        Sets up the channel ratio for the model.
-
-        Raises
-        ------
-        AssertionError
-            If the channel length of any cell in the grid is less than or equal to zero, or if the channel ratio of any
-            cell in the grid is less than zero.
-
-        Notes
-        -----
-        This method sets up the channel ratio for the model by calculating the ratio of the channel area to the cell area
-        for each cell in the grid. It first retrieves the channel width and length from the `routing/kinematic/channel_width`
-        and `routing/kinematic/channel_length` attributes of the grid, and then calculates the channel area using the
-        product of the width and length. It then calculates the channel ratio by dividing the channel area by the cell area
-        retrieved from the `areamaps/cell_area` attribute of the grid.
-
-        The resulting channel ratio is then set as the `routing/kinematic/channel_ratio` attribute of the grid using the
-        `set_grid()` method. Any channel ratio values that are greater than 1 are replaced with 1 (i.e., the whole cell is a channel).
-
-        Additionally, this method raises an `AssertionError` if the channel length of any cell in the grid is less than or
-        equal to zero, or if the channel ratio of any cell in the grid is less than zero. These checks are done to ensure
-        that the channel length and ratio are positive values, which are required for the channel ratio calculation to be
-        valid.
-        """
-        self.logger.info("Setting up channel ratio")
-        assert (
-            (self.grid["routing/kinematic/channel_length"] > 0)  # inside mask
-            | self.grid["areamaps/grid_mask"]  # or is masked
-            | (
-                self.grid["routing/kinematic/ldd"] == 5
-            )  # or there is a pit in the river network
-        ).all()
-        channel_area = (
-            self.grid["routing/kinematic/channel_width"]
-            * self.grid["routing/kinematic/channel_length"]
-        )
-        channel_ratio_data = channel_area / self.grid["areamaps/cell_area"]
-        channel_ratio_data = xr.where(
-            channel_ratio_data < 1, channel_ratio_data, 1, keep_attrs=True
-        )
-        assert ((channel_ratio_data >= 0) | ~self.grid["areamaps/grid_mask"]).all()
-        channel_ratio = hydromt.raster.full(
-            self.grid.raster.coords,
-            nodata=np.nan,
-            dtype=np.float32,
-            name="routing/kinematic/channel_ratio",
-            lazy=True,
-            crs=self.crs,
-        )
-        channel_ratio.data = channel_ratio_data
-        self.set_grid(channel_ratio, channel_ratio.name)
+        raise ValueError("setup_channel_ratio not needed anymore, please remove")
 
     def setup_elevation(self) -> None:
         raise ValueError("setup_elevation not needed anymore, please remove")
@@ -1456,20 +1477,20 @@ class GEBModel(GridModel):
 
         self.logger.info("Setting up soil parameters")
         (
-            hydraulic_conductivity,
-            bubbling_pressure_cm,
-            lambda_,
-            thetas,
-            thetar,
+            sand,
+            silt,
+            clay,
+            bulk_density,
+            soil_organic_carbon,
             soil_layer_height,
-        ) = load_soilgrids(self.data_catalog, self.grid, self.region)
+        ) = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 
-        self.set_grid(hydraulic_conductivity, name="soil/hydraulic_conductivity")
-        self.set_grid(bubbling_pressure_cm, name="soil/bubbling_pressure_cm")
-        self.set_grid(lambda_, name="soil/lambda")
-        self.set_grid(thetas, name="soil/thetas")
-        self.set_grid(thetar, name="soil/thetar")
-        self.set_grid(soil_layer_height, name="soil/soil_layer_height")
+        self.set_subgrid(sand, name="soil/sand")
+        self.set_subgrid(silt, name="soil/silt")
+        self.set_subgrid(clay, name="soil/clay")
+        self.set_subgrid(bulk_density, name="soil/bulk_density")
+        self.set_subgrid(soil_organic_carbon, name="soil/soil_organic_carbon")
+        self.set_subgrid(soil_layer_height, name="soil/soil_layer_height")
 
         soil_ds = self.data_catalog.get_rasterdataset(
             "cwatm_soil_5min", bbox=self.bounds, buffer=10
@@ -1701,9 +1722,9 @@ class GEBModel(GridModel):
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
         assert "volume_total" in waterbodies.columns, "volume_total is required"
-        assert (
-            "average_discharge" in waterbodies.columns
-        ), "average_discharge is required"
+        assert "average_discharge" in waterbodies.columns, (
+            "average_discharge is required"
+        )
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_table(waterbodies, name="routing/lakesreservoirs/basin_lakes_data")
 
@@ -2107,9 +2128,9 @@ class GEBModel(GridModel):
 
         if data_source == "isimip":
             if resolution_arcsec == 30:
-                assert (
-                    forcing == "chelsa-w5e5"
-                ), "Only chelsa-w5e5 is supported for 30 arcsec resolution"
+                assert forcing == "chelsa-w5e5", (
+                    "Only chelsa-w5e5 is supported for 30 arcsec resolution"
+                )
                 # download source data from ISIMIP
                 self.logger.info("setting up forcing data")
                 high_res_variables = ["pr", "rsds", "tas", "tasmax", "tasmin"]
@@ -2152,7 +2173,7 @@ class GEBModel(GridModel):
             mask = self.grid["areamaps/grid_mask"]
 
             files = download_ERA5(
-                folder=Path(self.root).parent / "preprocessing" / "climate" / "ERA5",
+                folder=self.preprocessing_dir / "climate" / "ERA5",
                 variables=[
                     "total_precipitation",
                     "surface_solar_radiation_downwards",
@@ -2183,7 +2204,9 @@ class GEBModel(GridModel):
             # ensure no negative values for precipitation, which may arise due to float precision
             pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
             pr_hourly.name = "pr_hourly"
-            self.set_forcing(pr_hourly, name="climate/pr_hourly")
+            self.set_forcing(
+                pr_hourly, name="climate/pr_hourly", time_chunksize=7 * 24
+            )  # weekly chunk size
             pr = pr_hourly.resample(time="D").mean()  # get daily mean
             pr = pr.raster.reproject_like(mask, method="average")
             pr.name = "pr"
@@ -2242,7 +2265,7 @@ class GEBModel(GridModel):
                 "units": "K",
             }
             tas_reprojected.name = "tas"
-            self.set_forcing(tas_reprojected, name="climate/tas")
+            self.set_forcing(tas_reprojected, name="climate/tas", byteshuffle=True)
 
             tasmax = hourly_tas_reprojected.resample(time="D").max()
             tasmax.attrs = {
@@ -2251,7 +2274,7 @@ class GEBModel(GridModel):
                 "units": "K",
             }
             tasmax.name = "tasmax"
-            self.set_forcing(tasmax, name="climate/tasmax")
+            self.set_forcing(tasmax, name="climate/tasmax", byteshuffle=True)
 
             tasmin = hourly_tas_reprojected.resample(time="D").min()
             tasmin.attrs = {
@@ -2260,7 +2283,7 @@ class GEBModel(GridModel):
                 "units": "K",
             }
             tasmin.name = "tasmin"
-            self.set_forcing(tasmin, name="climate/tasmin")
+            self.set_forcing(tasmin, name="climate/tasmin", byteshuffle=True)
 
             dew_point_tas = open_ERA5(
                 files,
@@ -2296,7 +2319,7 @@ class GEBModel(GridModel):
                 mask, method="average"
             )
             relative_humidity.name = "hurs"
-            self.set_forcing(relative_humidity, name="climate/hurs")
+            self.set_forcing(relative_humidity, name="climate/hurs", byteshuffle=True)
 
             pressure = open_ERA5(files, "sp", xy_chunksize=XY_CHUNKSIZE)
             pressure = reproject_and_apply_lapse_rate_pressure(pressure, DEM, mask)
@@ -2307,7 +2330,7 @@ class GEBModel(GridModel):
             }
             pressure = pressure.resample(time="D").mean()
             pressure.name = "ps"
-            self.set_forcing(pressure, name="climate/ps")
+            self.set_forcing(pressure, name="climate/ps", byteshuffle=True)
 
             u_wind = open_ERA5(
                 files,
@@ -2330,7 +2353,7 @@ class GEBModel(GridModel):
             }
             wind_speed = wind_speed.raster.reproject_like(mask, method="average")
             wind_speed.name = "sfcwind"
-            self.set_forcing(wind_speed, name="climate/sfcwind")
+            self.set_forcing(wind_speed, name="climate/sfcwind", byteshuffle=True)
 
         elif data_source == "cmip":
             raise NotImplementedError("CMIP forcing data is not yet supported")
@@ -2454,6 +2477,7 @@ class GEBModel(GridModel):
 
             var = var.rename({"lon": "x", "lat": "y"})
             if variable_name in ("tas", "tasmin", "tasmax", "ps"):
+                byteshuffle = True
                 DEM = self.data_catalog.get_rasterdataset(
                     "fabdem",
                     bbox=var.raster.bounds,
@@ -2471,9 +2495,12 @@ class GEBModel(GridModel):
                 else:
                     raise ValueError
             else:
+                byteshuffle = False
                 var = self.interpolate(var, "linear")
             self.logger.info(f"Completed {variable_name}")
-            self.set_forcing(var, name=f"climate/{variable_name}")
+            self.set_forcing(
+                var, name=f"climate/{variable_name}", byteshuffle=byteshuffle
+            )
 
         for variable in variables:
             download_variable(variable, forcing, ssp, starttime, endtime)
@@ -2581,13 +2608,7 @@ class GEBModel(GridModel):
         start_year = starttime.year
         end_year = endtime.year
 
-        chelsa_folder = (
-            Path(self.root).parent
-            / "preprocessing"
-            / "climate"
-            / "chelsa-bioclim+"
-            / "hurs"
-        )
+        chelsa_folder = self.preprocessing_dir / "climate" / "chelsa-bioclim+" / "hurs"
         chelsa_folder.mkdir(parents=True, exist_ok=True)
 
         self.logger.info(
@@ -2642,9 +2663,9 @@ class GEBModel(GridModel):
                 w5e5_regridded = (
                     regridder(w5e5_30min_sel, output_chunks=(-1, -1)) * 0.01
                 )  # convert to fraction
-                assert (
-                    w5e5_regridded >= 0.1
-                ).all(), "too low values in relative humidity"
+                assert (w5e5_regridded >= 0.1).all(), (
+                    "too low values in relative humidity"
+                )
                 assert (w5e5_regridded <= 1).all(), "relative humidity > 1"
 
                 w5e5_regridded_mean = w5e5_regridded.mean(
@@ -2689,7 +2710,7 @@ class GEBModel(GridModel):
                 )
 
         hurs_output = hurs_output.rename({"lon": "x", "lat": "y"})
-        self.set_forcing(hurs_output, "climate/hurs")
+        self.set_forcing(hurs_output, "climate/hurs", byteshuffle=True)
 
     def setup_longwave_isimip_30arcsec(self, starttime: date, endtime: date):
         """
@@ -2809,7 +2830,7 @@ class GEBModel(GridModel):
 
         lw_fine.name = "rlds"
         lw_fine = self.snap_to_grid(lw_fine, self.grid)
-        self.set_forcing(lw_fine, name="climate/rlds")
+        self.set_forcing(lw_fine, name="climate/rlds", byteshuffle=False)
 
     def setup_pressure_isimip_30arcsec(self, starttime: date, endtime: date):
         """
@@ -2878,7 +2899,7 @@ class GEBModel(GridModel):
         pressure.data = pressure_30_min_regridded_corr
 
         pressure = self.snap_to_grid(pressure, self.grid)
-        self.set_forcing(pressure, name="climate/ps")
+        self.set_forcing(pressure, name="climate/ps", byteshuffle=True)
 
     def setup_wind_isimip_30arcsec(self, starttime: date, endtime: date):
         """
@@ -2970,7 +2991,7 @@ class GEBModel(GridModel):
         wind_output_clipped.name = "sfcwind"
 
         wind_output_clipped = self.snap_to_grid(wind_output_clipped, self.grid)
-        self.set_forcing(wind_output_clipped, "climate/sfcwind")
+        self.set_forcing(wind_output_clipped, "climate/sfcwind", byteshuffle=True)
 
     def setup_SPEI(
         self,
@@ -3024,6 +3045,11 @@ class GEBModel(GridModel):
                 f"water data does not cover the entire calibration period, forcing data covers from {forcing_start_date} to {forcing_end_date}, "
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )
+
+        self.forcing["climate/tasmin"]["y"].attrs["standard_name"] = "latitude"
+        self.forcing["climate/tasmin"]["x"].attrs["standard_name"] = "longitude"
+        self.forcing["climate/tasmin"]["y"].attrs["units"] = "degrees_north"
+        self.forcing["climate/tasmin"]["x"].attrs["units"] = "degrees_east"
 
         pet = xci.potential_evapotranspiration(
             tasmin=self.forcing["climate/tasmin"],
@@ -3117,8 +3143,8 @@ class GEBModel(GridModel):
 
     def setup_regions_and_land_use(
         self,
-        region_database="gadm_level1",
-        unique_region_id="UID",
+        region_database="GADM_level1",
+        unique_region_id="GID_1",
         ISO3_column="GID_0",
         river_threshold=100,
         land_cover="esa_worldcover_2021_v200",
@@ -3131,7 +3157,7 @@ class GEBModel(GridModel):
         Parameters
         ----------
         region_database : str, optional
-            The name of the region database to use. Default is 'gadm_level1'.
+            The name of the region database to use. Default is 'GADM_level1'.
         unique_region_id : str, optional
             The name of the column in the region database that contains the unique region ID. Default is 'UID',
             which is the unique identifier for the GADM database.
@@ -3157,14 +3183,14 @@ class GEBModel(GridModel):
             geom=self.region,
             predicate="intersects",
         ).rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
+        assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
+            f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
+        )
 
         assert bounds_are_within(
             self.region.total_bounds,
             regions.to_crs(self.region.crs).total_bounds,
         )
-        assert np.issubdtype(
-            regions["region_id"].dtype, np.integer
-        ), "Region ID must be integer"
 
         region_id_mapping = {
             i: region_id for region_id, i in enumerate(regions["region_id"])
@@ -3172,9 +3198,9 @@ class GEBModel(GridModel):
         regions["region_id"] = regions["region_id"].map(region_id_mapping)
         self.set_dict(region_id_mapping, name="areamaps/region_id_mapping")
 
-        assert (
-            "ISO3" in regions.columns
-        ), f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
+        assert "ISO3" in regions.columns, (
+            f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
+        )
 
         self.set_geoms(regions, name="areamaps/regions")
 
@@ -3220,7 +3246,7 @@ class GEBModel(GridModel):
             self.geoms["areamaps/regions"],
             col_name="region_id",
             all_touched=True,
-        )
+        ).compute()
         self.set_region_subgrid(region_raster, name="areamaps/region_subgrid")
 
         region_subgrid_cell_area = xr.full_like(region_subgrid, np.nan)
@@ -3228,6 +3254,7 @@ class GEBModel(GridModel):
         region_subgrid_cell_area.data = calculate_cell_area(
             region_subgrid_cell_area.raster.transform, region_subgrid_cell_area.shape
         )
+        region_subgrid_cell_area = region_subgrid_cell_area.compute()
 
         # set the cell area for the region subgrid
         self.set_region_subgrid(
@@ -3240,7 +3267,6 @@ class GEBModel(GridModel):
             variables=["upg"],
             bbox=region_subgrid.rio.bounds(),
             buffer=300,  # 3 km buffer
-            provider=self.data_provider,
         )
         # There is a half degree offset in MERIT data
         MERIT = MERIT.assign_coords(
@@ -3252,7 +3278,9 @@ class GEBModel(GridModel):
         rivers = MERIT > river_threshold
         rivers = rivers.astype(np.int32)
         rivers.raster.set_nodata(-1)
-        rivers = rivers.raster.reproject_like(reprojected_land_use, method="nearest")
+        rivers = rivers.raster.reproject_like(
+            reprojected_land_use, method="nearest"
+        ).compute()
         self.set_region_subgrid(rivers, name="landcover/rivers")
 
         hydro_land_use = reprojected_land_use.raster.reclassify(
@@ -3280,6 +3308,7 @@ class GEBModel(GridModel):
         )  # set rivers to 5 (permanent water bodies)
         hydro_land_use.raster.set_nodata(-1)
 
+        hydro_land_use = hydro_land_use.compute()
         self.set_region_subgrid(
             hydro_land_use, name="landsurface/full_region_land_use_classes"
         )
@@ -3290,16 +3319,15 @@ class GEBModel(GridModel):
         cultivated_land.raster.set_crs(self.subgrid.raster.crs)
         cultivated_land.raster.set_nodata(-1)
 
+        cultivated_land = cultivated_land.compute()
         self.set_region_subgrid(
             cultivated_land, name="landsurface/full_region_cultivated_land"
         )
 
         hydro_land_use_region = hydro_land_use.isel(region_subgrid_slice)
-
         self.set_subgrid(hydro_land_use_region, name="landsurface/land_use_classes")
 
         cultivated_land_region = cultivated_land.isel(region_subgrid_slice)
-
         self.set_subgrid(cultivated_land_region, name="landsurface/cultivated_land")
 
     def setup_economic_data(
@@ -3325,29 +3353,22 @@ class GEBModel(GridModel):
         assert (
             not project_future_until_year
             or project_future_until_year > reference_start_year
-        ), f"project_future_until_year ({project_future_until_year}) must be larger than reference_start_year ({reference_start_year})"
-
-        lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
-        inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
-
-        ppp_conversion_rates = self.data_catalog.get_dataframe("wb_ppp_conversion_rate")
-        lcu_per_usd_conversion_rates = self.data_catalog.get_dataframe(
-            "lcu_per_usd_conversion_rate"
+        ), (
+            f"project_future_until_year ({project_future_until_year}) must be larger than reference_start_year ({reference_start_year})"
         )
+
+        # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
+        inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
+        price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
             columns_to_keep = additional_cols + [
-                col for col in df.columns if "YR" in col
+                col
+                for col in df.columns
+                if col.isnumeric() and 1900 <= int(col) <= 3000
             ]
             filtered_df = df[columns_to_keep]
-
-            # Rename columns to just the year or keep the original name for specified columns
-            filtered_df.columns = additional_cols + [
-                col.split(" ")[0]
-                for col in filtered_df.columns
-                if col not in additional_cols
-            ]
             return filtered_df
 
         def extract_years(df):
@@ -3359,54 +3380,75 @@ class GEBModel(GridModel):
             ]
 
         # Assuming dataframes for PPP and LCU per USD have been initialized
-        ppp_filtered = filter_and_rename(
-            ppp_conversion_rates, ["Country Name", "Country Code"]
+        price_ratio_filtered = filter_and_rename(
+            price_ratio, ["Country Name", "Country Code"]
         )
-        lcu_per_usd_filtered = filter_and_rename(
-            lcu_per_usd_conversion_rates, ["Country Name", "Country Code"]
-        )
-        years_ppp_conversion_rates = extract_years(ppp_filtered)
-        years_lcu_per_usd_conversion_rates = extract_years(lcu_per_usd_filtered)
-
-        ppp_conversion_rates_dict = {"time": years_ppp_conversion_rates, "data": {}}
-        lcu_per_usd_conversion_rates_dict = {
-            "time": years_lcu_per_usd_conversion_rates,
-            "data": {},
-        }
+        years_price_ratio = extract_years(price_ratio_filtered)
+        price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
 
         # Assume lending_rates and inflation_rates are available
-        years_lending_rates = extract_years(lending_rates)
+        # years_lending_rates = extract_years(lending_rates)
         years_inflation_rates = extract_years(inflation_rates)
 
-        lending_rates_dict = {"time": years_lending_rates, "data": {}}
+        # lending_rates_dict = {"time": years_lending_rates, "data": {}}
         inflation_rates_dict = {"time": years_inflation_rates, "data": {}}
+
+        # Create a helper to process rates and assert single row data
+        def process_rates(df, rate_cols, ISO3, convert_percent_to_ratio=False):
+            filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
+            assert len(filtered_data) == 1, (
+                f"Expected one row for {ISO3}, got {len(filtered_data)}"
+            )
+            if convert_percent_to_ratio:
+                return (filtered_data.iloc[0] / 100 + 1).tolist()
+            return filtered_data.iloc[0].tolist()
+
+        USA_inflation_rates = process_rates(
+            inflation_rates,
+            years_inflation_rates,
+            "USA",
+            convert_percent_to_ratio=True,
+        )
 
         for _, region in self.geoms["areamaps/regions"].iterrows():
             region_id = str(region["region_id"])
-            ISO3 = region["ISO3"]
-
-            # Create a helper to process rates and assert single row data
-            def process_rates(df, rate_cols, convert_percent=False):
-                filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
-                assert (
-                    len(filtered_data) == 1
-                ), f"Expected one row for {ISO3}, got {len(filtered_data)}"
-                if convert_percent:
-                    return (filtered_data.iloc[0] / 100 + 1).tolist()
-                return filtered_data.iloc[0].tolist()
 
             # Store data in dictionaries
-            ppp_conversion_rates_dict["data"][region_id] = process_rates(
-                ppp_filtered, years_ppp_conversion_rates
+            # lending_rates_dict["data"][region_id] = process_rates(
+            #     lending_rates,
+            #     years_lending_rates,
+            #     region["ISO3"],
+            #     convert_percent_to_ratio=True,
+            # )
+            ISO3 = region["ISO3"]
+            if (
+                ISO3 == "AND"
+            ):  # for Andorra (not available in World Bank data), use Spain's data
+                self.logger.warning(
+                    "Andorra's economic data not available, using Spain's data"
+                )
+                ISO3 = "ESP"
+            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
+                self.logger.warning(
+                    "Liechtenstein's economic data not available, using Switzerland's data"
+                )
+                ISO3 = "CHE"
+
+            local_inflation_rates = process_rates(
+                inflation_rates,
+                years_inflation_rates,
+                ISO3,
+                convert_percent_to_ratio=True,
             )
-            lcu_per_usd_conversion_rates_dict["data"][region_id] = process_rates(
-                lcu_per_usd_filtered, years_lcu_per_usd_conversion_rates
+            assert not np.isnan(local_inflation_rates).any(), (
+                f"Missing inflation rates for {region['ISO3']}"
             )
-            lending_rates_dict["data"][region_id] = process_rates(
-                lending_rates, years_lending_rates, True
-            )
-            inflation_rates_dict["data"][region_id] = process_rates(
-                inflation_rates, years_inflation_rates, True
+            inflation_rates_dict["data"][region_id] = (
+                np.array(local_inflation_rates) / np.array(USA_inflation_rates)
+            ).tolist()
+
+            price_ratio_dict["data"][region_id] = process_rates(
+                price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
         if project_future_until_year:
@@ -3414,9 +3456,9 @@ class GEBModel(GridModel):
             inflation_rates = pd.DataFrame(
                 inflation_rates_dict["data"], index=inflation_rates_dict["time"]
             ).dropna()
-            lending_rates = pd.DataFrame(
-                lending_rates_dict["data"], index=lending_rates_dict["time"]
-            ).dropna()
+            # lending_rates = pd.DataFrame(
+            #     lending_rates_dict["data"], index=lending_rates_dict["time"]
+            # ).dropna()
 
             inflation_rates.index = inflation_rates.index.astype(int)
             # extend inflation rates to future
@@ -3430,26 +3472,22 @@ class GEBModel(GridModel):
             inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
             inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
 
-            lending_rates.index = lending_rates.index.astype(int)
+            # lending_rates.index = lending_rates.index.astype(int)
             # extend lending rates to future
-            mean_lending_rate_since_reference_year = lending_rates.loc[
-                reference_start_year:
-            ].mean(axis=0)
-            lending_rates = lending_rates.reindex(
-                range(lending_rates.index.min(), project_future_until_year + 1)
-            ).fillna(mean_lending_rate_since_reference_year)
+            # mean_lending_rate_since_reference_year = lending_rates.loc[
+            #     reference_start_year:
+            # ].mean(axis=0)
+            # lending_rates = lending_rates.reindex(
+            #     range(lending_rates.index.min(), project_future_until_year + 1)
+            # ).fillna(mean_lending_rate_since_reference_year)
 
-            # convert back to dictionary
-            lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
-            lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
+            # # convert back to dictionary
+            # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
+            # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
 
         self.set_dict(inflation_rates_dict, name="economics/inflation_rates")
-        self.set_dict(lending_rates_dict, name="economics/lending_rates")
-        self.set_dict(ppp_conversion_rates_dict, name="economics/ppp_conversion_rates")
-        self.set_dict(
-            lcu_per_usd_conversion_rates_dict,
-            name="economics/lcu_per_usd_conversion_rates",
-        )
+        # self.set_dict(lending_rates_dict, name="economics/lending_rates")
+        self.set_dict(price_ratio_dict, name="economics/price_ratio")
 
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
@@ -3539,6 +3577,93 @@ class GEBModel(GridModel):
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"economics/{price_type}")
 
+    def setup_irrigation_prices_by_reference_year(
+        self,
+        operation_surface: float,
+        operation_sprinkler: float,
+        operation_drip: float,
+        capital_cost_surface: float,
+        capital_cost_sprinkler: float,
+        capital_cost_drip: float,
+        reference_year: int,
+        start_year: int,
+        end_year: int,
+    ):
+        """
+        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+
+        Parameters
+        ----------
+        well_price : float
+            The price of a well in the reference year.
+        upkeep_price_per_m2 : float
+            The upkeep price per square meter of a well in the reference year.
+        reference_year : int
+            The reference year for the well prices and upkeep prices.
+        start_year : int
+            The start year for the well prices and upkeep prices.
+        end_year : int
+            The end year for the well prices and upkeep prices.
+
+        Notes
+        -----
+        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
+        retrieves the inflation rates data from the `economics/inflation_rates` dictionary. It then creates dictionaries to
+        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
+        data dimension.
+
+        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+        resulting prices are stored in the dictionaries with the region ID as the key.
+
+        The resulting well prices and upkeep prices data are set as dictionary with names of the form
+        'economics/well_prices' and 'economics/upkeep_prices_well_per_m2', respectively.
+        """
+        self.logger.info("Setting up well prices by reference year")
+
+        # Retrieve the inflation rates data
+        inflation_rates = self.dict["economics/inflation_rates"]
+        regions = list(inflation_rates["data"].keys())
+
+        # Create a dictionary to store the various types of prices with their initial reference year values
+        price_types = {
+            "operation_cost_surface": operation_surface,
+            "operation_cost_sprinkler": operation_sprinkler,
+            "operation_cost_drip": operation_drip,
+            "capital_cost_surface": capital_cost_surface,
+            "capital_cost_sprinkler": capital_cost_sprinkler,
+            "capital_cost_drip": capital_cost_drip,
+        }
+
+        # Iterate over each price type and calculate the prices across years for each region
+        for price_type, initial_price in price_types.items():
+            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
+
+            for region in regions:
+                prices = pd.Series(index=range(start_year, end_year + 1))
+                prices.loc[reference_year] = initial_price
+
+                # Forward calculation from the reference year
+                for year in range(reference_year + 1, end_year + 1):
+                    prices.loc[year] = (
+                        prices[year - 1]
+                        * inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year))
+                        ]
+                    )
+                # Backward calculation from the reference year
+                for year in range(reference_year - 1, start_year - 1, -1):
+                    prices.loc[year] = (
+                        prices[year + 1]
+                        / inflation_rates["data"][region][
+                            inflation_rates["time"].index(str(year + 1))
+                        ]
+                    )
+
+                prices_dict["data"][region] = prices.tolist()
+
+            # Set the calculated prices in the appropriate dictionary
+            self.set_dict(prices_dict, name=f"economics/{price_type}")
+
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,
@@ -3581,23 +3706,13 @@ class GEBModel(GridModel):
 
         # Retrieve the inflation rates data
         inflation_rates = self.dict["economics/inflation_rates"]
-        ppp_conversion_rates = self.dict["economics/ppp_conversion_rates"]
+        price_ratio = self.dict["economics/price_ratio"]
 
-        full_years_array_ppp = np.array(ppp_conversion_rates["time"], dtype=str)
-        years_index_ppp = np.isin(full_years_array_ppp, str(reference_year))
-        source_conversion_rates = 1  # US ppp is 1
-
-        electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
-        electricity_rates["ISO3"] = electricity_rates["Country"].map(
-            SUPERWELL_NAME_TO_ISO3
-        )
-        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
         # Create a dictionary to store the various types of prices with their initial reference year values
         price_types = {
             "why_10": WHY_10,
             "why_20": WHY_20,
             "why_30": WHY_30,
-            "electricity_cost": electricity_rates,
         }
 
         # Iterate over each price type and calculate the prices across years for each region
@@ -3608,18 +3723,11 @@ class GEBModel(GridModel):
                 region_id = str(region["region_id"])
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
+                price_ratio_region_year = price_ratio["data"][region_id][
+                    price_ratio["time"].index(str(reference_year))
+                ]
 
-                target_conversion_rates = np.array(
-                    ppp_conversion_rates["data"][region_id], dtype=float
-                )[years_index_ppp]
-
-                prices.loc[reference_year] = self.convert_price_using_ppp(
-                    initial_price[region["ISO3"]]
-                    if isinstance(initial_price, dict)
-                    else initial_price,
-                    source_conversion_rates,
-                    target_conversion_rates,
-                )
+                prices.loc[reference_year] = price_ratio_region_year * initial_price
 
                 # Forward calculation from the reference year
                 for year in range(reference_year + 1, end_year + 1):
@@ -3629,6 +3737,7 @@ class GEBModel(GridModel):
                             inflation_rates["time"].index(str(year))
                         ]
                     )
+
                 # Backward calculation from the reference year
                 for year in range(reference_year - 1, start_year - 1, -1):
                     prices.loc[year] = (
@@ -3642,6 +3751,46 @@ class GEBModel(GridModel):
 
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"economics/{price_type}")
+
+        electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
+        electricity_rates["ISO3"] = electricity_rates["Country"].map(
+            SUPERWELL_NAME_TO_ISO3
+        )
+        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
+
+        electricity_rates_dict = {
+            "time": list(range(start_year, end_year + 1)),
+            "data": {},
+        }
+
+        for _, region in self.geoms["areamaps/regions"].iterrows():
+            region_id = str(region["region_id"])
+
+            prices = pd.Series(index=range(start_year, end_year + 1))
+            prices.loc[reference_year] = electricity_rates[region["ISO3"]]
+
+            # Forward calculation from the reference year
+            for year in range(reference_year + 1, end_year + 1):
+                prices.loc[year] = (
+                    prices[year - 1]
+                    * inflation_rates["data"][region_id][
+                        inflation_rates["time"].index(str(year))
+                    ]
+                )
+
+            # Backward calculation from the reference year
+            for year in range(reference_year - 1, start_year - 1, -1):
+                prices.loc[year] = (
+                    prices[year + 1]
+                    / inflation_rates["data"][region_id][
+                        inflation_rates["time"].index(str(year + 1))
+                    ]
+                )
+
+            electricity_rates_dict["data"][region_id] = prices.tolist()
+
+        # Set the calculated prices in the appropriate dictionary
+        self.set_dict(electricity_rates_dict, name="economics/electricity_cost")
 
     def setup_drip_irrigation_prices_by_reference_year(
         self,
@@ -3850,13 +3999,7 @@ class GEBModel(GridModel):
         See the `setup_farmers` method for more information on how the farmer data is set up in the model.
         """
         if path is None:
-            path = (
-                Path(self.root).parent
-                / "preprocessing"
-                / "agents"
-                / "farmers"
-                / "farmers.csv"
-            )
+            path = self.preprocessing_dir / "agents" / "farmers" / "farmers.csv"
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
@@ -3985,7 +4128,7 @@ class GEBModel(GridModel):
         )
 
         # Save the concatenated DataArrays as NetCDF files
-        save_dir = Path(self.root).parent / "preprocessing" / "crops" / "MIRCA2000"
+        save_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
         save_dir.mkdir(parents=True, exist_ok=True)
 
         output_filename = save_dir / "crop_area_fraction_all_years.nc"
@@ -4043,9 +4186,9 @@ class GEBModel(GridModel):
             }
         else:
             assert size_class_boundaries is not None
-            assert (
-                farm_size_donor_countries is None
-            ), "farm_size_donor_countries is only used for lowder data"
+            assert farm_size_donor_countries is None, (
+                "farm_size_donor_countries is only used for lowder data"
+            )
 
         cultivated_land = (
             self.region_subgrid["landsurface/full_region_cultivated_land"]
@@ -4057,9 +4200,9 @@ class GEBModel(GridModel):
 
         regions_shapes = self.geoms["areamaps/regions"]
         if data_source == "lowder":
-            assert (
-                country_iso3_column in regions_shapes.columns
-            ), f"Region database must contain {country_iso3_column} column ({self.data_catalog['gadm_level1'].path})"
+            assert country_iso3_column in regions_shapes.columns, (
+                f"Region database must contain {country_iso3_column} column ({self.data_catalog['GADM_level1'].path})"
+            )
 
             farm_sizes_per_region = (
                 self.data_catalog.get_dataframe("lowder_farm_sizes")
@@ -4078,9 +4221,9 @@ class GEBModel(GridModel):
             farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
                 COUNTRY_NAME_TO_ISO3
             )
-            assert (
-                not farm_sizes_per_region["ISO3"].isna().any()
-            ), f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
+            assert not farm_sizes_per_region["ISO3"].isna().any(), (
+                f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
+            )
         else:
             # load data source
             farm_sizes_per_region = pd.read_excel(
@@ -4134,9 +4277,9 @@ class GEBModel(GridModel):
                 region_farm_sizes = farm_sizes_per_region.loc[
                     (farm_sizes_per_region["ISO3"] == country_ISO3)
                 ].drop(["Country", "Census Year", "Total"], axis=1)
-                assert (
-                    len(region_farm_sizes) == 2
-                ), f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
+                assert len(region_farm_sizes) == 2, (
+                    f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
+                )
 
                 # Extract holdings and agricultural area data
                 region_n_holdings = (
@@ -4368,9 +4511,106 @@ class GEBModel(GridModel):
         self.setup_farmers(farmers)
 
     def setup_household_characteristics(self, maximum_age=85):
-        import gzip
-        from honeybees.library.raster import pixels_to_coords
+        # load GDL region within model domain
+        GDL_regions = self.data_catalog.get_geodataframe(
+            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+        )
+        # create list of attibutes to include
+        attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
+        region_results = {}
+        # iterate over regions and sample agents from GLOPOP-S
+        for GDL_region in GDL_regions["GDLcode"]:
+            region_results[GDL_region] = {}
+            GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
+                self.data_catalog, GDL_region
+            )
 
+            # clip grid to model bounds
+            GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
+
+            # get unique cells in grid
+            unique_grid_cells = np.unique(GLOPOP_GRID_region.values)
+
+            # subset GLOPOP_households_region to unique cells for quicker search
+            GLOPOP_S_region = GLOPOP_S_region[
+                GLOPOP_S_region["GRID_CELL"].isin(unique_grid_cells)
+            ]
+
+            # create all households
+            GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
+            n_households = GLOPOP_households_region.size
+
+            # iterate over unique housholds and extract the variables we want
+            household_characteristics = {}
+            household_characteristics["sizes"] = np.full(
+                n_households, -1, dtype=np.int32
+            )
+            household_characteristics["locations"] = np.full(
+                (n_households, 2), -1, dtype=np.float32
+            )
+            for column in attributes_to_include:
+                household_characteristics[column] = np.full(
+                    n_households, -1, dtype=np.int32
+                )
+
+            # initiate indice tracker
+            households_found = 0
+
+            for HID in GLOPOP_households_region:
+                print(f"searching household {households_found} of {n_households}")
+                household = GLOPOP_S_region[GLOPOP_S_region["HID"] == HID]
+                household_size = len(household)
+                if len(household) > 1:
+                    # if there are multiple people in the household
+                    # take first person as head of household (replace this with oldest person?)
+                    household = household.iloc[0]
+
+                GRID_CELL = int(household["GRID_CELL"])
+                if GRID_CELL in GLOPOP_GRID_region.values:
+                    for column in attributes_to_include:
+                        household_characteristics[column][households_found] = household[
+                            column
+                        ]
+                        household_characteristics["sizes"][households_found] = (
+                            household_size
+                        )
+
+                    # now find location of household
+                    idx_household = np.where(GLOPOP_GRID_region.values[0] == GRID_CELL)
+                    # get x and y from xarray
+                    x_y = np.concatenate(
+                        [
+                            GLOPOP_GRID_region.x.values[idx_household[1]],
+                            GLOPOP_GRID_region.y.values[idx_household[0]],
+                        ]
+                    )
+                    household_characteristics["locations"][households_found, :] = x_y
+                    households_found += 1
+
+                # clip away unused data:
+            for household_attribute in household_characteristics:
+                household_characteristics[household_attribute] = (
+                    household_characteristics[household_attribute][:households_found]
+                )
+
+            region_results[GDL_region] = household_characteristics
+
+        # concatenate all data
+        data_concatenated = {}
+        for household_attribute in household_characteristics:
+            data_concatenated[household_attribute] = np.concatenate(
+                [
+                    region_results[GDL_region][household_attribute]
+                    for GDL_region in region_results
+                ]
+            )
+        for household_attribute in household_characteristics:
+            self.set_binary(
+                data_concatenated[household_attribute],
+                name=f"agents/households/{household_attribute}",
+            )
+
+    def setup_farmer_household_characteristics(self, maximum_age=85):
         n_farmers = self.binary["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -4408,32 +4648,8 @@ class GEBModel(GridModel):
             locations, GDL_regions, how="left", predicate="within"
         )
 
-        GDL_region_per_farmer.to_file("GDL.gpkg")
-        locations.to_file("locatons.gpkg")
-
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
-
-        # Load GLOPOP-S data. This is a binary file and has no proper loading in hydromt. So we use the data catalog to get the path and format the path with the regions and load it with NumPy
-        GLOPOP_S = self.data_catalog.get_source("GLOPOP-S")
-
-        GLOPOP_S_attribute_names = [
-            "HID",
-            "RELATE_HEAD",
-            "INCOME",
-            "WEALTH",
-            "RURAL",
-            "AGE",
-            "GENDER",
-            "EDUC",
-            "HHTYPE",
-            "HHSIZE_CAT",
-            "AGRI_OWNERSHIP",
-            "FLOOR",
-            "WALL",
-            "ROOF",
-            "SOURCE",
-        ]
 
         # Get list of unique GDL codes from farmer dataframe
         attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
@@ -4444,16 +4660,7 @@ class GEBModel(GridModel):
             )
 
         for GDL_region, farmers_GDL_region in GDL_region_per_farmer.groupby("GDLcode"):
-            with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
-                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
-
-            n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
-            GLOPOP_S_region = pd.DataFrame(
-                np.reshape(
-                    GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
-                ).transpose(),
-                columns=GLOPOP_S_attribute_names,
-            )
+            GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(
@@ -4872,6 +5079,22 @@ class GEBModel(GridModel):
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_binary(interest_rate, name="agents/farmers/interest_rate")
 
+    def setup_farmer_crop_calendar_multirun(
+        self,
+        year=2000,
+        reduce_crops=False,
+        replace_base=False,
+        export=False,
+    ):
+        years = [2000, 2005, 2010, 2015]
+        nr_runs = 20
+
+        for year_nr in years:
+            for run in range(nr_runs):
+                self.setup_farmer_crop_calendar(
+                    year_nr, reduce_crops, replace_base, export
+                )
+
     def setup_farmer_crop_calendar(
         self,
         year=2000,
@@ -4900,7 +5123,7 @@ class GEBModel(GridModel):
         )
 
         farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(year)
-        self.setup_farmer_irrigation_source(is_irrigated)
+        self.setup_farmer_irrigation_source(is_irrigated, year)
 
         crop_calendar_per_farmer = np.zeros((n_farmers, 3, 4), dtype=np.int32)
         for mirca_unit in np.unique(farmer_mirca_units):
@@ -4913,9 +5136,9 @@ class GEBModel(GridModel):
                 crop_rotation_matrix = crop_rotation[1]
                 starting_days = crop_rotation_matrix[:, 2]
                 starting_days = starting_days[starting_days != -1]
-                assert (
-                    np.unique(starting_days).size == starting_days.size
-                ), "ensure all starting days are unique"
+                assert np.unique(starting_days).size == starting_days.size, (
+                    "ensure all starting days are unique"
+                )
                 # TODO: Add check to ensure crop calendars are not overlapping.
                 cropping_calenders_crop_rotation.append(crop_rotation_matrix)
             area_per_crop_rotation = np.array(area_per_crop_rotation)
@@ -4976,208 +5199,286 @@ class GEBModel(GridModel):
                         :, [0, 2, 3, 4]
                     ]
 
-            # Define constants for crop IDs
-            WHEAT = 0
-            MAIZE = 1
-            RICE = 2
-            BARLEY = 3
-            RYE = 4
-            MILLET = 5
-            SORGHUM = 6
-            SOYBEANS = 7
-            SUNFLOWER = 8
-            POTATOES = 9
-            CASSAVA = 10
-            SUGAR_CANE = 11
-            SUGAR_BEETS = 12
-            OIL_PALM = 13
-            RAPESEED = 14
-            GROUNDNUTS = 15
-            # PULSES = 16
-            # CITRUS = 17
-            # # DATE_PALM = 18
-            # # GRAPES = 19
-            # COTTON = 20
-            COCOA = 21
-            COFFEE = 22
-            OTHERS_PERENNIAL = 23
-            FODDER_GRASSES = 24
-            OTHERS_ANNUAL = 25
-            WHEAT_DROUGHT = 26
-            WHEAT_FLOOD = 27
-            MAIZE_DROUGHT = 28
-            MAIZE_FLOOD = 29
-            RICE_DROUGHT = 30
-            RICE_FLOOD = 31
-            SOYBEANS_DROUGHT = 32
-            SOYBEANS_FLOOD = 33
-            POTATOES_DROUGHT = 34
-            POTATOES_FLOOD = 35
+        # Define constants for crop IDs
+        WHEAT = 0
+        MAIZE = 1
+        RICE = 2
+        BARLEY = 3
+        RYE = 4
+        MILLET = 5
+        SORGHUM = 6
+        SOYBEANS = 7
+        SUNFLOWER = 8
+        POTATOES = 9
+        CASSAVA = 10
+        SUGAR_CANE = 11
+        SUGAR_BEETS = 12
+        OIL_PALM = 13
+        RAPESEED = 14
+        GROUNDNUTS = 15
+        # PULSES = 16
+        # CITRUS = 17
+        # # DATE_PALM = 18
+        # # GRAPES = 19
+        # COTTON = 20
+        COCOA = 21
+        COFFEE = 22
+        OTHERS_PERENNIAL = 23
+        FODDER_GRASSES = 24
+        OTHERS_ANNUAL = 25
+        WHEAT_DROUGHT = 26
+        WHEAT_FLOOD = 27
+        MAIZE_DROUGHT = 28
+        MAIZE_FLOOD = 29
+        RICE_DROUGHT = 30
+        RICE_FLOOD = 31
+        SOYBEANS_DROUGHT = 32
+        SOYBEANS_FLOOD = 33
+        POTATOES_DROUGHT = 34
+        POTATOES_FLOOD = 35
 
-            # Manual replacement of certain crops
-            def replace_crop(
-                crop_calendar_per_farmer, crop_values, replaced_crop_values
-            ):
-                # Find the most common crop value among the given crop_values
-                crop_instances = crop_calendar_per_farmer[:, :, 0][
-                    np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
-                ]
+        # Manual replacement of certain crops
+        def replace_crop(crop_calendar_per_farmer, crop_values, replaced_crop_values):
+            # Find the most common crop value among the given crop_values
+            crop_instances = crop_calendar_per_farmer[:, :, 0][
+                np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+            ]
 
-                # if none of the crops are present, no need to replace anything
-                if crop_instances.size == 0:
-                    return crop_calendar_per_farmer
-
-                crops, crop_counts = np.unique(crop_instances, return_counts=True)
-                most_common_crop = crops[np.argmax(crop_counts)]
-
-                # Determine if there are multiple cropping versions of this crop and assign it to the most common
-                new_crop_types = crop_calendar_per_farmer[
-                    (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
-                    :,
-                    :,
-                ]
-                unique_rows, counts = np.unique(
-                    new_crop_types, axis=0, return_counts=True
-                )
-                max_index = np.argmax(counts)
-                crop_replacement = unique_rows[max_index]
-
-                for replaced_crop in replaced_crop_values:
-                    # Check where to be replaced crop is
-                    crop_mask = (
-                        crop_calendar_per_farmer[:, :, 0] == replaced_crop
-                    ).any(axis=1)
-                    # Replace the crop
-                    crop_calendar_per_farmer[crop_mask] = crop_replacement
-
+            # if none of the crops are present, no need to replace anything
+            if crop_instances.size == 0:
                 return crop_calendar_per_farmer
 
-            def insert_other_variant_crop(
+            crops, crop_counts = np.unique(crop_instances, return_counts=True)
+            most_common_crop = crops[np.argmax(crop_counts)]
+
+            # Determine if there are multiple cropping versions of this crop and assign it to the most common
+            new_crop_types = crop_calendar_per_farmer[
+                (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
+                :,
+                :,
+            ]
+            unique_rows, counts = np.unique(new_crop_types, axis=0, return_counts=True)
+            max_index = np.argmax(counts)
+            crop_replacement = unique_rows[max_index]
+
+            crop_replacement_only_crops = crop_replacement[
+                crop_replacement[:, -1] != -1
+            ]
+            if crop_replacement_only_crops.shape[0] > 1:
+                assert (
+                    np.unique(crop_replacement_only_crops[:, [1, 3]], axis=0).shape[0]
+                    == crop_replacement_only_crops.shape[0]
+                )
+
+            for replaced_crop in replaced_crop_values:
+                # Check where to be replaced crop is
+                crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(
+                    axis=1
+                )
+                # Replace the crop
+                crop_calendar_per_farmer[crop_mask] = crop_replacement
+
+            return crop_calendar_per_farmer
+
+        def unify_crop_variants(crop_calendar_per_farmer, target_crop):
+            # Create a mask for all entries whose first value == target_crop
+            mask = crop_calendar_per_farmer[..., 0] == target_crop
+
+            # If the crop does not appear at all, nothing to do
+            if not np.any(mask):
+                return crop_calendar_per_farmer
+
+            # Extract only the rows/entries that match the target crop
+            crop_entries = crop_calendar_per_farmer[mask]
+
+            # Among these crop rows, find unique variants and their counts
+            # (axis=0 ensures we treat each row/entry as a unit)
+            unique_variants, variant_counts = np.unique(
+                crop_entries, axis=0, return_counts=True
+            )
+
+            # The most common variant is the unique variant with the highest count
+            most_common_variant = unique_variants[np.argmax(variant_counts)]
+
+            # Replace all the target_crop rows with the most common variant
+            crop_calendar_per_farmer[mask] = most_common_variant
+
+            return crop_calendar_per_farmer
+
+        def insert_other_variant_crop(
+            crop_calendar_per_farmer, base_crops, resistant_crops
+        ):
+            # find crop rotation mask
+            base_crop_rotation_mask = (
+                crop_calendar_per_farmer[:, :, 0] == base_crops
+            ).any(axis=1)
+
+            # Find the indices of the crops to be replaced
+            indices = np.where(base_crop_rotation_mask)[0]
+
+            # Shuffle the indices to randomize the selection
+            np.random.shuffle(indices)
+
+            # Determine the number of crops for each category (stay same, first resistant, last resistant)
+            n = len(indices)
+            n_same = n // 3
+            n_first_resistant = (n // 3) + (
+                n % 3 > 0
+            )  # Ensuring we account for rounding issues
+
+            # Assign the new values
+            crop_calendar_per_farmer[indices[:n_same], 0, 0] = base_crops
+            crop_calendar_per_farmer[
+                indices[n_same : n_same + n_first_resistant], 0, 0
+            ] = resistant_crops[0]
+            crop_calendar_per_farmer[indices[n_same + n_first_resistant :], 0, 0] = (
+                resistant_crops[1]
+            )
+
+            return crop_calendar_per_farmer
+
+        # Reduces certain crops of the same GCAM category to the one that is most common in that region
+        # First line checks which crop is most common, second denotes which crops will be replaced by the most common one
+        if reduce_crops:
+            # Conversion based on the classification in table S1 by Yoon, J., Voisin, N., Klassert, C., Thurber, T., & Xu, W. (2024).
+            # Representing farmer irrigated crop area adaptation in a large-scale hydrological model. Hydrology and Earth
+            # System Sciences, 28(4), 899–916. https://doi.org/10.5194/hess-28-899-2024
+
+            # Replace fodder with the most common grain crop
+            most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
+            replaced_value = [FODDER_GRASSES]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change the grain crops to one
+            most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
+            replaced_value = [BARLEY, RYE, MILLET, SORGHUM]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change other annual / misc to one
+            most_common_check = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
+            replaced_value = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change oils to one
+            most_common_check = [SOYBEANS, SUNFLOWER, RAPESEED]
+            replaced_value = [SOYBEANS, SUNFLOWER, RAPESEED]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change tubers to one
+            most_common_check = [POTATOES, CASSAVA]
+            replaced_value = [POTATOES, CASSAVA]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Reduce sugar crops to one
+            most_common_check = [SUGAR_CANE, SUGAR_BEETS]
+            replaced_value = [SUGAR_CANE, SUGAR_BEETS]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            # Change perennial to annual, otherwise counted double in esa dataset
+            most_common_check = [OIL_PALM, OTHERS_PERENNIAL]
+            replaced_value = [OIL_PALM, OTHERS_PERENNIAL]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
+            unique_rows = np.unique(crop_calendar_per_farmer, axis=0)
+            values = unique_rows[:, 0, 0]
+            unique_values, counts = np.unique(values, return_counts=True)
+
+            # this part asserts that the crop calendar is correctly set up
+            # particulary that no two crops are planted at the same time
+            for farmer_crop_calender in crop_calendar_per_farmer:
+                farmer_crop_calender = farmer_crop_calender[
+                    farmer_crop_calender[:, -1] != -1
+                ]
+                if farmer_crop_calender.shape[0] > 1:
+                    assert (
+                        np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
+                        == farmer_crop_calender.shape[0]
+                    )
+
+            # duplicates = unique_values[counts > 1]
+            # if len(duplicates) > 0:
+            #     for duplicate in duplicates:
+            #         crop_calendar_per_farmer = unify_crop_variants(
+            #             crop_calendar_per_farmer, duplicate
+            #         )
+
+            # this part asserts that the crop calendar is correctly set up
+            # particulary that no two crops are planted at the same time
+            for farmer_crop_calender in crop_calendar_per_farmer:
+                farmer_crop_calender = farmer_crop_calender[
+                    farmer_crop_calender[:, -1] != -1
+                ]
+                if farmer_crop_calender.shape[0] > 1:
+                    assert (
+                        np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
+                        == farmer_crop_calender.shape[0]
+                    )
+
+        if replace_base:
+            base_crops = [WHEAT]
+            resistant_crops = [WHEAT_DROUGHT, WHEAT_FLOOD]
+
+            crop_calendar_per_farmer = insert_other_variant_crop(
                 crop_calendar_per_farmer, base_crops, resistant_crops
-            ):
-                # find crop rotation mask
-                base_crop_rotation_mask = (
-                    crop_calendar_per_farmer[:, :, 0] == base_crops
-                ).any(axis=1)
+            )
 
-                # Find the indices of the crops to be replaced
-                indices = np.where(base_crop_rotation_mask)[0]
+            base_crops = [MAIZE]
+            resistant_crops = [MAIZE_DROUGHT, MAIZE_FLOOD]
 
-                # Shuffle the indices to randomize the selection
-                np.random.shuffle(indices)
+            crop_calendar_per_farmer = insert_other_variant_crop(
+                crop_calendar_per_farmer, base_crops, resistant_crops
+            )
 
-                # Determine the number of crops for each category (stay same, first resistant, last resistant)
-                n = len(indices)
-                n_same = n // 3
-                n_first_resistant = (n // 3) + (
-                    n % 3 > 0
-                )  # Ensuring we account for rounding issues
+            base_crops = [RICE]
+            resistant_crops = [RICE_DROUGHT, RICE_FLOOD]
 
-                # Assign the new values
-                crop_calendar_per_farmer[indices[:n_same], 0, 0] = base_crops
-                crop_calendar_per_farmer[
-                    indices[n_same : n_same + n_first_resistant], 0, 0
-                ] = resistant_crops[0]
-                crop_calendar_per_farmer[
-                    indices[n_same + n_first_resistant :], 0, 0
-                ] = resistant_crops[1]
+            crop_calendar_per_farmer = insert_other_variant_crop(
+                crop_calendar_per_farmer, base_crops, resistant_crops
+            )
 
-                return crop_calendar_per_farmer
+            base_crops = [SOYBEANS]
+            resistant_crops = [SOYBEANS_DROUGHT, SOYBEANS_FLOOD]
 
-            # Reduces certain crops of the same GCAM category to the one that is most common in that region
-            # First line checks which crop is most common, second denotes which crops will be replaced by the most common one
-            if reduce_crops:
-                # Conversion based on the classification in table S1 by Yoon, J., Voisin, N., Klassert, C., Thurber, T., & Xu, W. (2024).
-                # Representing farmer irrigated crop area adaptation in a large-scale hydrological model. Hydrology and Earth
-                # System Sciences, 28(4), 899–916. https://doi.org/10.5194/hess-28-899-2024
+            crop_calendar_per_farmer = insert_other_variant_crop(
+                crop_calendar_per_farmer, base_crops, resistant_crops
+            )
 
-                # Replace fodder with the most common grain crop
-                most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
-                replaced_value = [FODDER_GRASSES]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
+            base_crops = [POTATOES]
+            resistant_crops = [POTATOES_DROUGHT, POTATOES_FLOOD]
 
-                # Change the grain crops to one
-                most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
-                replaced_value = [BARLEY, RYE, MILLET, SORGHUM]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
+            crop_calendar_per_farmer = insert_other_variant_crop(
+                crop_calendar_per_farmer, base_crops, resistant_crops
+            )
 
-                # Change other annual / misc to one
-                most_common_check = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
-                replaced_value = [GROUNDNUTS, COCOA, COFFEE, OTHERS_ANNUAL]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
+        assert crop_calendar_per_farmer[:, :, 3].max() == 0
 
-                # Change oils to one
-                most_common_check = [SOYBEANS, SUNFLOWER, RAPESEED]
-                replaced_value = [SOYBEANS, SUNFLOWER, RAPESEED]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-                # Change tubers to one
-                most_common_check = [POTATOES, CASSAVA]
-                replaced_value = [POTATOES, CASSAVA]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-                # Reduce sugar crops to one
-                most_common_check = [SUGAR_CANE, SUGAR_BEETS]
-                replaced_value = [SUGAR_CANE, SUGAR_BEETS]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-                # Change perennial to annual, otherwise counted double in esa dataset
-                most_common_check = [OIL_PALM, OTHERS_PERENNIAL]
-                replaced_value = [OTHERS_ANNUAL]
-                crop_calendar_per_farmer = replace_crop(
-                    crop_calendar_per_farmer, most_common_check, replaced_value
-                )
-
-            if replace_base:
-                base_crops = [WHEAT]
-                resistant_crops = [WHEAT_DROUGHT, WHEAT_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-                base_crops = [MAIZE]
-                resistant_crops = [MAIZE_DROUGHT, MAIZE_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-                base_crops = [RICE]
-                resistant_crops = [RICE_DROUGHT, RICE_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-                base_crops = [SOYBEANS]
-                resistant_crops = [SOYBEANS_DROUGHT, SOYBEANS_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
-                )
-
-                base_crops = [POTATOES]
-                resistant_crops = [POTATOES_DROUGHT, POTATOES_FLOOD]
-
-                crop_calendar_per_farmer = insert_other_variant_crop(
-                    crop_calendar_per_farmer, base_crops, resistant_crops
+        # this part asserts that the crop calendar is correctly set up
+        # particulary that no two crops are planted at the same time
+        for farmer_crop_calender in crop_calendar_per_farmer:
+            farmer_crop_calender = farmer_crop_calender[
+                farmer_crop_calender[:, -1] != -1
+            ]
+            if farmer_crop_calender.shape[0] > 1:
+                assert (
+                    np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
+                    == farmer_crop_calender.shape[0]
                 )
 
         self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
-        assert crop_calendar_per_farmer[:, :, 3].max() == 0
         self.set_binary(
             np.full_like(is_irrigated, 1, dtype=np.int32),
             name="agents/farmers/crop_calendar_rotation_years",
@@ -5185,7 +5486,7 @@ class GEBModel(GridModel):
 
     def assign_crops_irrigation_farmers(self, year=2000):
         # Define the directory and file paths
-        data_dir = Path(self.root).parent / "preprocessing" / "crops" / "MIRCA2000"
+        data_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
         crop_area_file = data_dir / "crop_area_fraction_all_years.nc"
         crop_irr_fraction_file = data_dir / "crop_irrigated_fraction_all_years.nc"
 
@@ -5345,13 +5646,13 @@ class GEBModel(GridModel):
                     # Set irrigation status to True for these farmers
                     farmer_irrigated[overall_farmer_indices] = True
 
-        assert not (
-            farmer_crops == -1
-        ).any(), "Error: some farmers have no crops assigned"
+        assert not (farmer_crops == -1).any(), (
+            "Error: some farmers have no crops assigned"
+        )
 
         return farmer_crops, farmer_irrigated
 
-    def setup_farmer_irrigation_source(self, irrigating_farmers):
+    def setup_farmer_irrigation_source(self, irrigating_farmers, year):
         fraction_sw_irrigation = "aeisw"
         fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
             f"global_irrigation_area_{fraction_sw_irrigation}",
@@ -5395,8 +5696,22 @@ class GEBModel(GridModel):
             fraction_gw_irrigation_data.raster.transform.to_gdal(),
         )
 
-        # Initialize the irrigation_source array
-        irrigation_source = np.full(n_farmers, -1, dtype=np.int32)
+        adaptations = np.full(
+            (
+                n_farmers,
+                max(
+                    [
+                        SURFACE_IRRIGATION_EQUIPMENT,
+                        WELL_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION,
+                        FIELD_EXPANSION_ADAPTATION,
+                    ]
+                )
+                + 1,
+            ),
+            -1,
+            dtype=np.int32,
+        )
 
         for i in range(n_cells):
             farmers_cell_mask = farmer_cells == i  # Boolean mask for farmers in cell i
@@ -5455,15 +5770,17 @@ class GEBModel(GridModel):
                 farmer_indices_in_region = farmers_cell_indices[irrigating_farmers_mask]
 
                 # Assign irrigation sources using np.random.choice
-                irrigation_source[farmer_indices_in_region] = np.random.choice(
-                    [0, 1],
+                irrigation_equipment_per_farmer = np.random.choice(
+                    [SURFACE_IRRIGATION_EQUIPMENT, WELL_ADAPTATION],
                     size=len(farmer_indices_in_region),
                     p=probabilities,
                 )
 
-        # Update the irrigation_source attribute or return it as needed
-        self.set_binary(irrigation_source, name="agents/farmers/irrigation_source")
-        self.set_binary(irrigating_farmers, name="agents/farmers/irrigating_farmers")
+                adaptations[
+                    farmer_indices_in_region, irrigation_equipment_per_farmer
+                ] = 1
+
+        self.set_binary(adaptations, name="agents/farmers/adaptations")
 
     def setup_population(self):
         populaton_map = self.data_catalog.get_rasterdataset(
@@ -5515,7 +5832,7 @@ class GEBModel(GridModel):
         if isinstance(feature_types, str):
             feature_types = [feature_types]
 
-        OSM_data_dir = Path(self.root).parent / "preprocessing" / "osm"
+        OSM_data_dir = self.preprocessing_dir / "osm"
         OSM_data_dir.mkdir(exist_ok=True, parents=True)
 
         if source == "geofabrik":
@@ -5695,9 +6012,7 @@ class GEBModel(GridModel):
         assert (starttime is None) == (endtime is None)
 
         client = ISIMIPClient()
-        download_path = (
-            Path(self.root).parent / "preprocessing" / "climate" / forcing / variable
-        )
+        download_path = self.preprocessing_dir / "climate" / forcing / variable
         download_path.mkdir(parents=True, exist_ok=True)
 
         # Code to get data from disk rather than server.
@@ -5846,7 +6161,9 @@ class GEBModel(GridModel):
                         max_file_path_length = os.pathconf("/", "PC_PATH_MAX")
                     assert (
                         len(str(download_path / new_file_name)) <= max_file_path_length
-                    ), f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
+                    ), (
+                        f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
+                    )
                     zip_ref.extract(file_name, path=download_path)
             # remove zip file
             (
@@ -5928,55 +6245,24 @@ class GEBModel(GridModel):
         self,
         land_cover="esa_worldcover_2021_v200",
         include_coastal=True,
-        DEM=["fabdem", "gebco"],
+        DEMs=[{"elevtn": "fabdem", "zmin": 0.001}, {"elevtn": "gebco"}],
     ):
-        if isinstance(DEM, str):
-            DEM = [DEM]
+        assert isinstance(DEMs, list)
 
         hydrodynamics_data_catalog = DataCatalog()
 
-        # hydrobasins
-        hydrobasins = self.data_catalog.get_geodataframe(
-            "hydrobasins_8",
-            geom=self.region,
-            predicate="intersects",
-        )
-        self.set_geoms(hydrobasins, name="hydrodynamics/hydrobasins")
+        bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
 
-        hydrodynamics_data_catalog.add_source(
-            "hydrobasins_level_8",
-            GeoDataFrameAdapter(
-                path=Path(self.root) / "hydrodynamics" / "hydrobasins.gpkg",
-                meta=self.data_catalog.get_source("hydrobasins_8").meta,
-            ),  # hydromt likes absolute paths
-        )
-
-        bounds = tuple(hydrobasins.total_bounds)
-
-        gcn250 = self.data_catalog.get_rasterdataset(
-            "gcn250", bbox=bounds, buffer=100, variables=["cn_avg"]
-        )
-        gcn250.name = "gcn250"
-        self.set_forcing(gcn250, name="hydrodynamics/gcn250")
-
-        hydrodynamics_data_catalog.add_source(
-            "gcn250",
-            RasterDatasetAdapter(
-                path=Path(self.root) / "hydrodynamics" / "gcn250.zarr.zip",
-                meta=self.data_catalog.get_source("gcn250").meta,
-                driver="zarr",
-            ),  # hydromt likes absolute paths
-        )
-
-        for DEM_name in DEM:
+        self.set_dict(DEMs, name="hydrodynamics/DEM_config")
+        for DEM in DEMs:
             DEM_raster = self.data_catalog.get_rasterdataset(
-                DEM_name,
+                DEM["elevtn"],
                 bbox=bounds,
                 buffer=100,
-                variables=["elevation"],
                 single_var_as_array=False,
             ).compute()
-            DEM_raster = DEM_raster.rename({"elevation": "elevtn"})
+            assert len(DEM_raster.data_vars) == 1
+            DEM_raster = DEM_raster.rename({list(DEM_raster.data_vars)[0]: "elevtn"})
 
             # hydromt-sfincs requires the data to be a Dataset. This code here makes
             # data with only one variable a Dataarray, which is not supported in hydromt-sfincs
@@ -5984,67 +6270,31 @@ class GEBModel(GridModel):
             # be considered a Dataset
             DEM_raster["_dummy"] = 0
             self.set_forcing(
-                DEM_raster, name=f"hydrodynamics/DEM/{DEM_name}", split_dataset=False
+                DEM_raster,
+                name=f"hydrodynamics/DEM/{DEM['elevtn']}",
+                split_dataset=False,
+                byteshuffle=True,
             )
 
             hydrodynamics_data_catalog.add_source(
-                DEM_name,
+                DEM["elevtn"],
                 RasterDatasetAdapter(
                     path=Path(self.root)
                     / "hydrodynamics"
                     / "DEM"
-                    / f"{DEM_name}.zarr.zip",
-                    meta=self.data_catalog.get_source(DEM_name).meta,
+                    / f"{DEM['elevtn']}.zarr.zip",
+                    crs=self.data_catalog.get_source(
+                        DEM["elevtn"]
+                    ).crs,  # perhaps set crs in dataset itself
+                    meta=self.data_catalog.get_source(DEM["elevtn"]).meta,
                     driver="zarr",
                 ),  # hydromt likes absolute paths
             )
 
-        # merit hydro
-        merit_hydro = self.data_catalog.get_rasterdataset(
-            "merit_hydro",
-            bbox=bounds,
-            buffer=100,
-            variables=["uparea", "flwdir", "elevtn"],
-            provider=self.data_provider,
-        )
-        del merit_hydro["flwdir"].attrs["_FillValue"]
-        self.set_forcing(
-            merit_hydro, name="hydrodynamics/merit_hydro", split_dataset=False
-        )
-
-        hydrodynamics_data_catalog.add_source(
-            "merit_hydro",
-            RasterDatasetAdapter(
-                path=Path(self.root) / "hydrodynamics" / "merit_hydro.zarr.zip",
-                meta=self.data_catalog.get_source("merit_hydro").meta,
-                driver="zarr",
-            ),  # hydromt likes absolute paths
-        )
-
-        # river centerlines
-        river_centerlines = self.data_catalog.get_geodataframe(
-            "river_centerlines_MERIT_Basins",
-            bbox=bounds,
-            predicate="intersects",
-        )
-        self.set_geoms(river_centerlines, name="hydrodynamics/river_centerlines")
-
-        hydrodynamics_data_catalog.add_source(
-            "river_centerlines_MERIT_Basins",
-            GeoDataFrameAdapter(
-                path=Path(self.root)
-                / "hydrodynamics"
-                / "river_centerlines.gpkg",  # hydromt likes absolute paths
-                meta=self.data_catalog.get_source(
-                    "river_centerlines_MERIT_Basins"
-                ).meta,
-            ),
-        )
-
         # landcover
         esa_worldcover = self.data_catalog.get_rasterdataset(
             land_cover,
-            geom=self.geoms["areamaps/regions"],
+            bbox=bounds,
             buffer=200,  # 2 km buffer
         ).chunk({"x": XY_CHUNKSIZE, "y": XY_CHUNKSIZE})
         del esa_worldcover.attrs["_FillValue"]
@@ -6052,7 +6302,10 @@ class GEBModel(GridModel):
         esa_worldcover = esa_worldcover.to_dataset()
         esa_worldcover["_dummy"] = 0
         self.set_forcing(
-            esa_worldcover, name="hydrodynamics/esa_worldcover", split_dataset=False
+            esa_worldcover,
+            name="hydrodynamics/esa_worldcover",
+            split_dataset=False,
+            byteshuffle=False,
         )
 
         hydrodynamics_data_catalog.add_source(
@@ -6085,9 +6338,9 @@ class GEBModel(GridModel):
 
             water_levels = water_levels.sel(stations=station_ids).compute()
 
-            assert (
-                len(water_levels.stations) > 0
-            ), "No stations found in the region. If no stations should be set, set include_coastal=False"
+            assert len(water_levels.stations) > 0, (
+                "No stations found in the region. If no stations should be set, set include_coastal=False"
+            )
 
             path = self.set_forcing(
                 water_levels,
@@ -6095,6 +6348,7 @@ class GEBModel(GridModel):
                 split_dataset=False,
                 is_spatial_dataset=False,
                 time_chunksize=24 * 6,  # 10 minute data
+                byteshuffle=True,
             )
             hydrodynamics_data_catalog.add_source(
                 "waterlevel",
@@ -6279,7 +6533,9 @@ class GEBModel(GridModel):
             # Build the encoding dictionary for the data variable
             encoding = {
                 grid.name: {
-                    "compressor": compressor,
+                    "compressor": Blosc(
+                        cname="zstd", clevel=9, shuffle=Blosc.NOSHUFFLE
+                    ),  # no shuffling is most efficient,
                     # Only specify chunks if the grid was not already chunked
                     **({"chunks": data_chunks} if grid.chunks is None else {}),
                 }
@@ -6310,8 +6566,9 @@ class GEBModel(GridModel):
             if grid.dtype == bool:
                 grid = grid.astype(np.uint8)
                 grid = grid.rio.set_nodata(255)
-            # also export to tif for easier visualization
-            grid.rio.to_raster(filepath.with_suffix(".tif"))
+            grid.rio.to_raster(
+                filepath.with_suffix(".tif"), compress="DEFLATE", zlevel=9
+            )
 
     def write_grid(self):
         self._assert_write_mode
@@ -6328,7 +6585,12 @@ class GEBModel(GridModel):
                 continue
             grid["spatial_ref"] = self.subgrid.spatial_ref
             self._write_grid(
-                grid, var, self.files["subgrid"], self.is_updated["subgrid"]
+                grid,
+                var,
+                self.files["subgrid"],
+                self.is_updated["subgrid"],
+                XY_CHUNKSIZE * self.subgrid_factor,
+                XY_CHUNKSIZE * self.subgrid_factor,
             )
 
     def write_region_subgrid(self):
@@ -6342,6 +6604,8 @@ class GEBModel(GridModel):
                 var,
                 self.files["region_subgrid"],
                 self.is_updated["region_subgrid"],
+                XY_CHUNKSIZE * self.subgrid_factor,
+                XY_CHUNKSIZE * self.subgrid_factor,
             )
 
     def write_MERIT_grid(self):
@@ -6360,6 +6624,7 @@ class GEBModel(GridModel):
         forcing,
         y_chunksize=XY_CHUNKSIZE,
         x_chunksize=XY_CHUNKSIZE,
+        byteshuffle=False,
         time_chunksize=1,
         is_spatial_dataset=True,
     ) -> None:
@@ -6374,7 +6639,7 @@ class GEBModel(GridModel):
             dst_file.unlink()
         dst_file.parent.mkdir(parents=True, exist_ok=True)
 
-        if is_spatial_dataset:
+        if is_spatial_dataset and forcing.rio.crs is None:
             forcing = forcing.rio.write_crs(self.crs).rio.write_coordinate_system()
 
         if isinstance(forcing, xr.DataArray):
@@ -6393,25 +6658,29 @@ class GEBModel(GridModel):
             if "time" in forcing.dims:
                 with ProgressBar(dt=10):  # print progress bar every 10 seconds
                     if is_spatial_dataset:
-                        assert (
-                            forcing.dims[1] == "y" and forcing.dims[2] == "x"
-                        ), "y and x dimensions must be second and third, otherwise xarray will not chunk correctly"
+                        assert forcing.dims[1] == "y" and forcing.dims[2] == "x", (
+                            "y and x dimensions must be second and third, otherwise xarray will not chunk correctly"
+                        )
                         chunksizes = {
                             "time": min(forcing.time.size, time_chunksize),
                             "y": min(forcing.y.size, y_chunksize),
                             "x": min(forcing.x.size, x_chunksize),
                         }
-                        # forcing = forcing.chunk(chunksizes)
                     else:
                         chunksizes = {"time": min(forcing.time.size, time_chunksize)}
-                        # forcing = forcing.chunk(chunksizes)
 
-                    forcing.to_zarr(
+                    forcing.chunk(chunksizes).to_zarr(
                         tmp_file.name,
                         mode="w",
                         encoding={
                             forcing.name: {
-                                "compressor": compressor,
+                                "compressor": Blosc(
+                                    cname="zstd",
+                                    clevel=9,
+                                    shuffle=Blosc.SHUFFLE
+                                    if byteshuffle
+                                    else Blosc.NOSHUFFLE,
+                                ),
                                 "chunks": (
                                     (
                                         chunksizes[dim]
@@ -6430,13 +6699,32 @@ class GEBModel(GridModel):
             else:
                 if isinstance(forcing, xr.DataArray):
                     name = forcing.name
-                    encoding = {forcing.name: {"compressor": compressor}}
-                elif isinstance(forcing, xr.Dataset):
-                    assert (
-                        len(forcing.data_vars) > 0
-                    ), "forcing must have more than one variable or name must be set"
                     encoding = {
-                        var: {"compressor": compressor} for var in forcing.data_vars
+                        forcing.name: {
+                            "compressor": Blosc(
+                                cname="zstd",
+                                clevel=9,
+                                shuffle=Blosc.SHUFFLE
+                                if byteshuffle
+                                else Blosc.NOSHUFFLE,
+                            )
+                        }
+                    }
+                elif isinstance(forcing, xr.Dataset):
+                    assert len(forcing.data_vars) > 0, (
+                        "forcing must have more than one variable or name must be set"
+                    )
+                    encoding = {
+                        var: {
+                            "compressor": Blosc(
+                                cname="zstd",
+                                clevel=9,
+                                shuffle=Blosc.SHUFFLE
+                                if byteshuffle
+                                else Blosc.NOSHUFFLE,
+                            )
+                        }
+                        for var in forcing.data_vars
                     }
                 else:
                     raise ValueError("forcing must be a DataArray or Dataset")
@@ -6522,8 +6810,8 @@ class GEBModel(GridModel):
                     with open(output_path, "w") as f:
                         json.dump(data, f, default=convert_timestamp_to_string)
 
-    def write_geoms(self, fn: str = "{name}.gpkg", **kwargs) -> None:
-        """Write model geometries to a vector file (by default gpkg) at <root>/<fn>
+    def write_geoms(self, fn: str = "{name}.geoparquet", **kwargs) -> None:
+        """Write model geometries to a vector file (by default geoparquet) at <root>/<fn>
 
         key-word arguments are passed to :py:meth:`geopandas.GeoDataFrame.to_file`
 
@@ -6538,8 +6826,6 @@ class GEBModel(GridModel):
             return
         else:
             self._assert_write_mode
-            if "driver" not in kwargs:
-                kwargs.update(driver="GPKG")
             for name, gdf in self._geoms.items():
                 if self.is_updated["geoms"][name]["updated"]:
                     self.logger.debug(f"Writing file {fn.format(name=name)}")
@@ -6548,7 +6834,7 @@ class GEBModel(GridModel):
                     if not os.path.isdir(os.path.dirname(_fn)):
                         os.makedirs(os.path.dirname(_fn))
                     self.is_updated["geoms"][name]["filename"] = _fn
-                    gdf.to_file(_fn, **kwargs)
+                    gdf.to_parquet(_fn, **kwargs)
 
     def set_table(self, table, name, update=True):
         self.is_updated["table"][name] = {"updated": update}
@@ -6590,7 +6876,7 @@ class GEBModel(GridModel):
     def read_geoms(self):
         self.read_files()
         for name, fn in self.files["geoms"].items():
-            geom = gpd.read_file(Path(self.root, fn))
+            geom = gpd.read_parquet(Path(self.root, fn))
             self.set_geoms(geom, name=name, update=False)
 
     def read_binary(self):
@@ -6703,6 +6989,7 @@ class GEBModel(GridModel):
         x_chunksize=XY_CHUNKSIZE,
         y_chunksize=XY_CHUNKSIZE,
         time_chunksize=1,
+        byteshuffle=False,
         is_spatial_dataset=True,
         split_dataset=True,
         *args,
@@ -6719,6 +7006,7 @@ class GEBModel(GridModel):
                 y_chunksize=y_chunksize,
                 time_chunksize=time_chunksize,
                 is_spatial_dataset=is_spatial_dataset,
+                byteshuffle=byteshuffle,
             )
             self.is_updated["forcing"][name]["updated"] = False
         super().set_forcing(
@@ -6786,7 +7074,6 @@ class GEBModel(GridModel):
                     assert grid[dvar].shape == data[dvar].shape
                     assert (grid[dvar].y.values == data[dvar].y.values).all()
                     assert (grid[dvar].x.values == data[dvar].x.values).all()
-                    assert data.dims == grid.dims
                     grid = grid.drop_vars(dvar)
 
                 assert CRS.from_wkt(data.spatial_ref.crs_wkt) == CRS.from_wkt(
@@ -6844,5 +7131,5 @@ class GEBModel(GridModel):
         return subgrid_factor
 
     @property
-    def hydrography_scale_factor(self):
-        return self.dict["hydrography_scale_factor"]["hydrography_scale_factor"]
+    def preprocessing_dir(self):
+        return Path(self.root).parent / "preprocessing"

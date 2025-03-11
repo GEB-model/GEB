@@ -1,5 +1,7 @@
 import click
 import os
+import platform
+import subprocess
 import tempfile
 import sys
 import cProfile
@@ -105,7 +107,7 @@ def create_logger(fp):
 @click.group()
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
-def main(ctx):  # , quiet, verbose):
+def cli(ctx):  # , quiet, verbose):
     """Command line interface for GEB."""
     if ctx.obj is None:
         ctx.obj = {}
@@ -133,17 +135,6 @@ def click_run_options():
             "-wd",
             default=".",
             help="Working directory for model.",
-        )
-        @click.option(
-            "--use_gpu",
-            is_flag=True,
-            help="Whether a GPU can be used to run the model. This requires CuPy to be installed.",
-        )
-        @click.option(
-            "--gpu_device",
-            type=int,
-            default=0,
-            help="""Specify the GPU to use (zero-indexed).""",
         )
         @click.option(
             "--gui",
@@ -181,11 +172,9 @@ def click_run_options():
     return decorator
 
 
-def run_model(
-    spinup,
-    gpu_device,
+def run_model_with_method(
+    method,
     profiling,
-    use_gpu,
     config,
     working_directory,
     gui,
@@ -195,17 +184,21 @@ def run_model(
     optimize,
 ):
     """Run model."""
-
+    # check if we need to run the model in optimized mode
+    # if the model is already running in optimized mode, we don't need to restart it
+    # or else we start an infinite loop
     if optimize and sys.flags.optimize == 0:
-        os.execv(sys.executable, ["python", "-O"] + sys.argv)
+        if platform.system() == "Windows":
+            # If the script is not a .py file, we need to add the .exe extension
+            if not sys.argv[0].endswith(".py"):
+                sys.argv[0] = sys.argv[0] + ".exe"
+            subprocess.run([sys.executable, "-O"] + sys.argv)
+        else:
+            os.execv(sys.executable, ["-O"] + sys.argv)
 
     # set the working directory
     os.chdir(working_directory)
 
-    if use_gpu:
-        pass
-
-    MODEL_NAME = "GEB"
     config = parse_config(config)
 
     files = parse_config(
@@ -217,9 +210,6 @@ def run_model(
     model_params = {
         "config": config,
         "files": files,
-        "use_gpu": use_gpu,
-        "gpu_device": gpu_device,
-        "spinup": spinup,
         "timing": timing,
     }
 
@@ -229,8 +219,7 @@ def run_model(
             profile.enable()
 
         with GEBModel(**model_params) as model:
-            model.run()
-            model.report()
+            getattr(model, method)()
 
         if profiling:
             profile.disable()
@@ -254,41 +243,44 @@ def run_model(
             print("Profiling not available for browser version")
         server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
         if "draw" in config and "plot" in config["draw"] and config["draw"]["plot"]:
-            server_elements = server_elements
-            +[ChartModule(series) for series in config["draw"]["plot"]]
+            server_elements = server_elements + [
+                ChartModule(series) for series in config["draw"]["plot"]
+            ]
 
         DISPLAY_TIMESTEPS = ["day", "week", "month", "year"]
 
         server = ModularServer(
-            MODEL_NAME,
+            "GEB",
             GEBModel,
             server_elements,
             DISPLAY_TIMESTEPS,
             model_params=model_params,
             port=None,
+            initialization_method=method,
         )
         server.launch(port=port, browser=no_browser)
 
-    if use_gpu:
-        from numba import cuda
 
-        device = cuda.get_current_device()
-        device.reset()
-
-
-@main.command()
+@cli.command()
 @click_run_options()
 def run(*args, **kwargs):
-    run_model(spinup=False, *args, **kwargs)
+    run_model_with_method(method="run", *args, **kwargs)
 
 
-@main.command()
+@cli.command()
 @click_run_options()
 def spinup(*args, **kwargs):
-    run_model(spinup=True, *args, **kwargs)
+    run_model_with_method(method="spinup", *args, **kwargs)
 
 
-@main.command()
+@cli.command()
+@click.argument("method", required=True)
+@click_run_options()
+def exec(method, *args, **kwargs):
+    run_model_with_method(method=method, *args, **kwargs)
+
+
+@cli.command()
 @click_config
 @click.option(
     "--working-directory", "-wd", default=".", help="Working directory for model."
@@ -300,7 +292,7 @@ def calibrate(config, working_directory):
     geb_calibrate(config, working_directory)
 
 
-@main.command()
+@cli.command()
 @click_config
 @click.option(
     "--working-directory", "-wd", default=".", help="Working directory for model."
@@ -312,7 +304,7 @@ def sensitivity(config, working_directory):
     geb_sensitivity_analysis(config, working_directory)
 
 
-@main.command()
+@cli.command()
 @click_config
 @click.option(
     "--working-directory", "-wd", default=".", help="Working directory for model."
@@ -402,9 +394,7 @@ def customize_data_catalog(data_catalogs):
         return data_catalogs
 
 
-@main.command()
-@click_build_options()
-def build(
+def build_fn(
     data_catalog, config, build_config, custom_model, working_directory, data_provider
 ):
     """Build model."""
@@ -425,42 +415,19 @@ def build(
 
     geb_model = get_model(custom_model)(**arguments)
 
-    # TODO: remove pour_point option in future versions
-    if "pour_point" in config["general"]:
-        assert "region" not in config
-        warnings.warn(
-            "The `pour_point` option is deprecated and will be removed in future versions. Please use `region.pour_point` instead.",
-            DeprecationWarning,
-        )
-        config["general"]["region"] = {}
-        config["general"]["region"]["pour_point"] = config["general"]["pour_point"]
-
-    region = config["general"]["region"]
-    if "basin" in region:
-        region_config = {"basin": region["basin"], "max_bounds": region["max_bounds"]}
-    elif "pour_point" in region:
-        pour_point = region["pour_point"]
-        region_config = {
-            "subbasin": [[pour_point[0]], [pour_point[1]]],
-            "max_bounds": region["max_bounds"],
-        }
-    elif "geometry" in region:
-        raise NotImplementedError("Max bounds needs to be implemented")
-        region_config = {
-            "geom": region["geometry"],
-        }
-    else:
-        raise ValueError(
-            "No region specified in config file, should be 'basin', 'pour_point' or 'geometry'."
-        )
-
     geb_model.build(
         opt=configread(build_config),
-        region=region_config,
+        region=config["general"]["region"],
     )
 
 
-@main.command()
+@cli.command()
+@click_build_options()
+def build(*args, **kwargs):
+    build_fn(*args, **kwargs)
+
+
+@cli.command()
 @click_build_options()
 @click.option("--model", "-m", default="../base", help="Folder for base model.")
 def alter(
@@ -499,7 +466,7 @@ def alter(
     )
 
 
-@main.command()
+@cli.command()
 @click_build_options(build_config="update.yml")
 def update(
     data_catalog, config, build_config, custom_model, working_directory, data_provider
@@ -525,7 +492,7 @@ def update(
     geb_model.update(opt=configread(build_config))
 
 
-@main.command()
+@cli.command()
 def evaluate():
     """Evaluate model."""
     raise NotImplementedError
@@ -543,7 +510,7 @@ def evaluate():
     default="model",
     help="Working directory for model.",
 )
-@main.command()
+@cli.command()
 def share(working_directory, name):
     """Share model."""
 
@@ -555,7 +522,7 @@ def share(working_directory, name):
 
     folders = ["input"]
     files = ["model.yml", "build.yml"]
-    optional_files = ["sfincs.yml", "update.yml", "data_catalog.yml"]
+    optional_files = ["update.yml", "data_catalog.yml"]
     zip_filename = f"{name}.zip"
     with zipfile.ZipFile(zip_filename, "w") as zipf:
         total_files = (
@@ -596,4 +563,4 @@ def share(working_directory, name):
 
 
 if __name__ == "__main__":
-    main()
+    cli()

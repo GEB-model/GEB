@@ -26,23 +26,20 @@ class Evaporation(object):
     """
     Evaporation module
     Calculate potential evaporation and pot. transpiration
-
-
-    **Global variables**
-
-    ====================  ================================================================================  =========
-    Variable [self.var]   Description                                                                       Unit
-    ====================  ================================================================================  =========
-    cropKC                crop coefficient for each of the 4 different land cover types (forest, irrigated  --
-    ====================  ================================================================================  =========
-
-    **Functions**
     """
 
-    def __init__(self, model):
-        """The constructor evaporation"""
-        self.var = model.data.HRU
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
+        if self.model.in_spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
 
     def step(self, ETRef):
         """
@@ -62,22 +59,22 @@ class Evaporation(object):
 
         # calculate potential bare soil evaporation
         potential_bare_soil_evaporation = (
-            self.model.crop_factor_calibration_factor * 0.2 * ETRef
+            self.hydrology.crop_factor_calibration_factor * 0.2 * ETRef
         )
 
         # calculate snow evaporation
-        self.var.snowEvap = np.minimum(
-            self.var.SnowMelt, potential_bare_soil_evaporation
+        self.HRU.var.snowEvap = np.minimum(
+            self.HRU.var.SnowMelt, potential_bare_soil_evaporation
         )
-        self.var.SnowMelt = self.var.SnowMelt - self.var.snowEvap
+        self.HRU.var.SnowMelt = self.HRU.var.SnowMelt - self.HRU.var.snowEvap
         potential_bare_soil_evaporation = (
-            potential_bare_soil_evaporation - self.var.snowEvap
+            potential_bare_soil_evaporation - self.HRU.var.snowEvap
         )
 
         # calculate potential ET
-        ##  self.var.potential_evapotranspiration total potential evapotranspiration for a reference crop for a land cover class [m]
+        ##  self.HRU.var.potential_evapotranspiration total potential evapotranspiration for a reference crop for a land cover class [m]
         potential_evapotranspiration = (
-            self.model.crop_factor_calibration_factor * self.var.cropKC * ETRef
+            self.hydrology.crop_factor_calibration_factor * self.HRU.var.cropKC * ETRef
         )
 
         ## potential_transpiration: Transpiration for each land cover class
@@ -85,7 +82,7 @@ class Evaporation(object):
             0.0,
             potential_evapotranspiration
             - potential_bare_soil_evaporation
-            - self.var.snowEvap,
+            - self.HRU.var.snowEvap,
         )
 
         return (

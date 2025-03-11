@@ -9,6 +9,17 @@ from pathlib import Path
 from numba import config
 import faulthandler
 
+
+if __debug__:
+    import numba
+
+    # By default, instead of causing an IndexError, accessing an out-of-bound index
+    # of an array in a Numba-compiled function will return invalid values or lead
+    # to an access violation error (it’s reading from invalid memory locations).
+    # Setting BOUNDSCHECK to 1 will enable bounds checking for all array accesses
+    numba.config.BOUNDSCHECK = 1
+
+
 os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
 # os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
 

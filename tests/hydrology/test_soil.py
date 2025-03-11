@@ -116,7 +116,9 @@ def test_soil_moisture_potential_inverse(pf_value):
     # Assert that the original and calculated capillary suctions are approximately equal
     assert np.isclose(
         capillary_suction, capillary_suction_calculated, atol=tolerance
-    ), f"Capillary suction mismatch at pF {pf_value}: original {capillary_suction}, calculated {capillary_suction_calculated}"
+    ), (
+        f"Capillary suction mismatch at pF {pf_value}: original {capillary_suction}, calculated {capillary_suction_calculated}"
+    )
 
 
 def test_get_fraction_easily_available_soil_water():

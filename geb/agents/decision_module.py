@@ -163,8 +163,8 @@ class DecisionModule:
         return EU_do_nothing_array
 
     @staticmethod
-    @njit(cache=True, parallel=True)
-    def calcEU_adapt(
+    @njit(cache=True)
+    def calcEU_adapt_numba(
         expenditure_cap: float,
         loan_duration: int,
         n_agents: int,
@@ -220,7 +220,7 @@ class DecisionModule:
         # Identify agents able to afford the adaptation and that have not yet adapted
         unconstrained_mask = (
             (profits_no_event * expenditure_cap > total_annual_costs)
-            & (adapted == 0)
+            & (~adapted)
             & extra_constraint
         )
 
@@ -309,6 +309,10 @@ class DecisionModule:
                 EU_adapt[i] = -np.inf
 
         return EU_adapt
+
+    def calcEU_adapt(self, **kwargs):
+        assert kwargs["adapted"].dtype == bool
+        return self.calcEU_adapt_numba(**kwargs)
 
     @staticmethod
     def calcEU_adapt_vectorized(

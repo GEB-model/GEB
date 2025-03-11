@@ -168,6 +168,9 @@ def balance_check(
             store -= endStorage
         balance = income + store - out
 
+        if np.isnan(balance).any():
+            raise ValueError("Balance check failed, NaN values found.")
+
         if balance.size == 0:
             return True
         elif np.abs(balance).max() > tollerance:

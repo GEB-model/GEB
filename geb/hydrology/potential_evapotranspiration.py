@@ -179,34 +179,42 @@ class PotentialEvapotranspiration(object):
     ETRef                 potential evapotranspiration rate from reference crop                             m
     EWRef                 potential evaporation rate from water surface                                     m
     ====================  ================================================================================  =========
-
-    **Functions**
     """
 
-    def __init__(self, model):
-        """
-        The constructor evaporationPot
-        """
-        self.var = model.data.HRU
+    def __init__(self, model, hydrology):
         self.model = model
+        self.hydrology = hydrology
+
+        self.HRU = hydrology.HRU
+        self.grid = hydrology.grid
+
+        if self.model.in_spinup:
+            self.spinup()
+
+    def spinup(self):
+        pass
 
     def step(self):
         """
         Dynamic part of the potential evaporation module
         Based on Penman Monteith - FAO 56
         """
-        self.var.ETRef, self.var.EWRef = PET(
-            tas=self.var.tas,
-            tasmin=self.var.tasmin,
-            tasmax=self.var.tasmax,
-            hurs=self.var.hurs,
-            ps=self.var.ps,
-            rlds=self.var.rlds,
-            rsds=self.var.rsds,
-            sfcWind=self.var.sfcWind,
+        self.HRU.var.ETRef, self.HRU.var.EWRef = PET(
+            tas=self.HRU.tas,
+            tasmin=self.HRU.tasmin,
+            tasmax=self.HRU.tasmax,
+            hurs=self.HRU.hurs,
+            ps=self.HRU.ps,
+            rlds=self.HRU.rlds,
+            rsds=self.HRU.rsds,
+            sfcWind=self.HRU.sfcWind,
         )
 
-        assert self.var.ETRef.dtype == np.float32
-        assert self.var.EWRef.dtype == np.float32
+        self.grid.var.EWRef = self.hydrology.to_grid(
+            HRU_data=self.HRU.var.EWRef, fn="weightedmean"
+        )
+
+        assert self.HRU.var.ETRef.dtype == np.float32
+        assert self.HRU.var.EWRef.dtype == np.float32
 
         self.model.agents.crop_farmers.save_water_deficit()
