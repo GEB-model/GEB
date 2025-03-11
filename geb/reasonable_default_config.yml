@@ -47,6 +47,7 @@ agent_settings:
       limit: 10000  # previous tried 1700
       per: capita
   households:
+    adapt: false
     expected_utility:
       flood_risk_calculations:
         risk_perception:

@@ -59,7 +59,9 @@ class Households(AgentBaseClass):
             else {}
         )
         self.decision_module = DecisionModule(self, model=None)
-        self.load_flood_maps()  # xarray cannot be store in bucket
+
+        if self.config["adapt"]:
+            self.load_flood_maps()
 
         if self.model.in_spinup:
             self.spinup()
@@ -529,7 +531,8 @@ class Households(AgentBaseClass):
         self.load_objects()
         self.load_max_damage_values()
         self.load_damage_curves()
-        self.assign_household_attributes()
+        if self.config["adapt"]:
+            self.assign_household_attributes()
 
         super().__init__()
 
@@ -718,7 +721,11 @@ class Households(AgentBaseClass):
         return self.var.current_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
-        if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+        if (
+            self.config["adapt"]
+            and self.model.current_time.month == 1
+            and self.model.current_time.day == 1
+        ):
             print("Thinking about adapting...")
             self.decide_household_strategy()
 
