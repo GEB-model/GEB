@@ -94,38 +94,8 @@ class ReservoirOperators(AgentBaseClass):
             )
         )
 
-        self.var.reservoir_capacity = DynamicArray(
-            self.var.active_reservoirs["volume_total"].values
-        )
-        self.var.flood_volume = DynamicArray(
-            self.var.active_reservoirs["volume_flood"].values
-        )
         self.var.dis_avg = DynamicArray(
             self.var.active_reservoirs["average_discharge"].values
-        )
-        self.var.norm_limit_ratio = DynamicArray(
-            self.var.flood_volume / self.var.reservoir_capacity
-        )
-        self.var.cons_limit_ratio = DynamicArray(
-            np.full(len(self.var.active_reservoirs), 0.02, dtype=np.float32)
-        )
-        self.var.flood_limit_ratio = DynamicArray(
-            np.full(len(self.var.active_reservoirs), 1.0, dtype=np.float32)
-        )
-
-        self.var.minQC = DynamicArray(
-            self.model.config["agent_settings"]["reservoir_operators"]["MinOutflowQ"]
-            * self.var.dis_avg
-        )
-        self.var.normQC = DynamicArray(
-            self.model.config["agent_settings"]["reservoir_operators"]["NormalOutflowQ"]
-            * self.var.dis_avg
-        )
-        self.var.nondmgQC = DynamicArray(
-            self.model.config["agent_settings"]["reservoir_operators"][
-                "NonDamagingOutflowQ"
-            ]
-            * self.var.dis_avg
         )
 
         # set the storage at the beginning of the year
@@ -148,12 +118,15 @@ class ReservoirOperators(AgentBaseClass):
         )
 
         # Create arrays for n year moving averages of mean total inflow and mean irrigation demand.
-        self.var.multi_year_monthly_total_inflow = np.tile(
-            total_monthly_inflow[:, np.newaxis, np.newaxis],
-            (1, 12, RESERVOIR_MEMORY_YEARS),
+        self.var.multi_year_monthly_total_inflow = np.full(
+            (self.storage.size, 12, RESERVOIR_MEMORY_YEARS), np.nan, dtype=np.float32
         )
+
         # set this hydrological year to 0 so that we can start counting
-        self.var.multi_year_monthly_total_inflow[:, :, 0] = 0
+        self.var.multi_year_monthly_total_inflow[..., 0] = 0
+        self.var.multi_year_monthly_total_inflow[..., 1] = total_monthly_inflow[
+            :, np.newaxis
+        ]
 
         self.var.multi_year_monthly_total_irrigation = (
             self.var.multi_year_monthly_total_inflow
@@ -162,9 +135,9 @@ class ReservoirOperators(AgentBaseClass):
         self.var.months_since_start_hydrological_year = np.zeros_like(
             self.storage, dtype=np.float32
         )  # Number of months in new hydrological year for each reservoir
-        self.var.hydrological_year_counter = np.zeros_like(
-            self.storage, dtype=np.int32
-        )  # Number of hydrological years for each reservoir
+        self.var.hydrological_year_counter = (
+            0  # Number of hydrological years for each reservoir
+        )
 
         self.var.irr_demand_area_yesterday = np.zeros_like(
             self.storage, dtype=np.float32
@@ -172,39 +145,6 @@ class ReservoirOperators(AgentBaseClass):
         self.var.irr_demand_area = np.zeros_like(self.storage, dtype=np.float32)
         # Set variables for abstraction
         self.var.release_for_abstraction = np.zeros_like(self.storage, dtype=np.float32)
-
-    def yearly_reservoir_calculations(self):
-        """
-        Function stores yearly parameters and updates at the end of a hydrological year (1st month where monthly inflow < mtifl).
-        Updates are only performed for those reservoirs that enter a new hydrological year.
-        """
-        # Declare storage for begin of new year.
-        self.S_begin_yr[self.new_yr_condition] = self.Sini_resv[
-            self.new_yr_condition
-        ].copy()
-        # Calculate mean total inflow and irrigation demand from last year.
-        temp_mtifl = (
-            self.new_mtifl[self.new_yr_condition] / self.nt_y[self.new_yr_condition]
-        )
-        temp_irrmean = (
-            self.new_irrmean[self.new_yr_condition] / self.nt_y[self.new_yr_condition]
-        )
-        # Calculate mean total inflow and mean irrigation demand based on 20 year moving average.
-        # 1. Shift matrices 1 year to the right, and fill the first column with zeroes (new year)
-        self._shift_and_reset_matrix_mask(self.mtifl_20yr, self.new_yr_condition)
-        self._shift_and_reset_matrix_mask(self.irrmean_20yr, self.new_yr_condition)
-        # 2. Insert the mean inflow and irrigation demand from last year.
-        self.mtifl_20yr[self.new_yr_condition, 0] = temp_mtifl
-        self.irrmean_20yr[self.new_yr_condition, 0] = temp_irrmean
-        # 3. Calculate the new 20 year mean inflow and irrigation demand. All zeroes are ignored, so that the mean is only calculated over years that have run.
-        self.mtifl = np.nanmean(self.mtifl_20yr, axis=1)
-        self.irrmean = np.nanmean(self.irrmean_20yr, axis=1)
-        # Reset variables for next year.
-        self.new_mtifl[self.new_yr_condition] = 0
-        self.new_irrmean[self.new_yr_condition] = 0
-        self.n_months_in_new_year[self.new_yr_condition] = 0
-        self.nt_y[self.new_yr_condition] = 0
-        return
 
     def check_for_new_operational_year(self, month_number: int):
         # First calculate the monthly mean inflow.
@@ -248,14 +188,6 @@ class ReservoirOperators(AgentBaseClass):
     def regulate_reservoir_outflow_hanasaki(
         self, inflow_m3, substep, irrigation_demand_m3, water_body_id
     ):
-        """
-        Management module, that manages reservoir outflow per day, based on Hanasaki protocol (Hanasaki et al., 2006).
-        Input variables:                                                               Units
-        inflow:         channel inflow value                                           (m^3/s)
-        pot_irrConsumption_m_per_cell: irrigation consumption per cell in meters       (m/day)
-        irr_demand:     irrigation demand per command area                             (m^3/s)
-        All other necessary variables defined in initiate_agents().
-        """
         current_month_index = self.model.current_time.month - 1
 
         # add the inflow to the multi_year_monthly_total_inflow, use the current month
@@ -267,20 +199,18 @@ class ReservoirOperators(AgentBaseClass):
 
         # get the long term inflow across all time. Do not consider the current month as
         # it is not yet complete.
-        long_term_monthly_inflow_m3 = self.var.multi_year_monthly_total_inflow[
-            ..., 1:
-        ].mean(axis=(1, 2))
+        long_term_monthly_inflow_m3 = np.nanmean(
+            self.var.multi_year_monthly_total_inflow[..., 1:], axis=(1, 2)
+        )
 
         # get the long term inflow for this month. Do not consider the current month as
         # it is not yet complete.
-        long_term_monthly_inflow_this_month_m3 = (
-            self.var.multi_year_monthly_total_inflow[:, current_month_index, 1:].mean(
-                axis=1
-            )
+        long_term_monthly_inflow_this_month_m3 = np.nanmean(
+            self.var.multi_year_monthly_total_inflow[:, current_month_index, 1:], axis=1
         )
 
-        long_term_monthly_irrigation_demand_m3 = (
-            self.var.multi_year_monthly_total_irrigation[..., 1:].mean(axis=(1, 2))
+        long_term_monthly_irrigation_demand_m3 = np.nanmean(
+            self.var.multi_year_monthly_total_irrigation[..., 1:], axis=(1, 2)
         )
 
         reservoir_release_m3 = np.full_like(self.storage, np.nan, dtype=np.float32)
@@ -399,7 +329,7 @@ class ReservoirOperators(AgentBaseClass):
         )
 
         provisional_release[irrigation_dominant_reservoirs] = (
-            long_term_monthly_inflow_this_month_m3[irrigation_dominant_reservoirs]
+            long_term_monthly_inflow_m3[irrigation_dominant_reservoirs]
             / n_monthly_substeps
             * (
                 M
@@ -484,85 +414,8 @@ class ReservoirOperators(AgentBaseClass):
         Rflood_final[cond2] = temp3 + temp4
         return Rflood_final
 
-    def reservoir_water_balance(self, Qin, Qout, Sin, cpa, mtifl, alpha, cond_all):
-        """Re-adjusts release to ensure minimal environmental flow, and prevent overflow and negative storage;
-        and computes the storage level after release for all reservoir types.
-        Qin = inflow into reservoir (m3/s)
-        Qout = release from reservoir (m3/s)
-        Sin = initial storage (m^3)
-        cpa = reservoir capacity (m^3)
-        mtifl = annual mean total annual inflow (m^3/s)
-        alpha = reservoir capacity reduction factor
-        dt = time step (hour)
-        cond_all = mask selecting all reservoir types.
-        """
-        # inputs
-        Qin_ = Qin[cond_all]
-        Qout_ = Qout[cond_all]
-        Sin_ = Sin[cond_all]
-        cpa_ = cpa[cond_all]
-        mtifl_month = mtifl[cond_all]
-        dt = 3600  # convert from seconds to hour
-        # final storage and release initialization
-        Nx = len(cond_all)
-        Rfinal = np.zeros(
-            [
-                Nx,
-            ]
-        )  # final release
-        Sfinal = np.zeros(
-            [
-                Nx,
-            ]
-        )  # final storage
-        ###### WATER BALANCE CALCULATIONS ######
-        # 1. Environmental flow: Qout must be at least 10% of the mean monthly inflow.
-        diff_rt = Qout_ - (mtifl_month * 0.1)
-        indx_rt = np.where(diff_rt < 0)[0]
-        Qout_[indx_rt] = 0.1 * mtifl_month[indx_rt]
-        # Check for change in storage.
-        dsdt_resv = (Qin_ - Qout_) * dt
-        Stemp = Sin_ + dsdt_resv
-        # 2. condition a : storage > capacity | Storage can not be larger than reservoir capacity, so remove overflow.
-        Sa = Stemp > (alpha * cpa_)
-        if Sa.any():
-            Sfinal[Sa] = alpha[Sa] * cpa_[Sa]  # Storage is set at full level.
-            Rspill = (
-                (Stemp[Sa] - (alpha[Sa] * cpa_[Sa])) / dt
-            )  # Spilling is determined as earlier storage level minus maximum capacity.
-            Rfinal[Sa] = (
-                Qout_[Sa] + Rspill
-            )  # Calculate new release rate: Earlier determined outflow + spilling.
-        # 3. condition b : storage <= 0 | StSorage can not be smaller than 10% of reservoir capacity, so remove the outflow that results in too low capacity.
-        Sb = Stemp < (0.1 * self.cpa * alpha)
-        if Sb.any():
-            Sfinal[Sb] = (
-                0.1 * self.cpa[Sb] * alpha[Sb]
-            )  # Final storage is then 10% of effective capacity.
-            Rfinal[Sb] = (
-                ((Stemp[Sb] - Sfinal[Sb]) / dt) + Qin_[Sb]
-            )  # Add negative storage to inflow, to lower final outflow and prevent negative storage.
-            print("Storage before water balance correction:", Stemp)
-            print("Storage after water balance correction:", Sfinal[Sb])
-        # 4. condition c : Storage > 0 & Storage < total capacity | the reverse of condition a and b.
-        Sc = (Stemp > 0) & (Stemp <= alpha * cpa_)
-        if Sc.any():
-            # Assign temporary storage and outflow as final storage and release, for all reservoirs that do have proper storage levels.
-            Sfinal[Sc] = Stemp[Sc]
-            Rfinal[Sc] = Qout_[Sc]
-        return Rfinal, Sfinal
-
-    def get_available_water_reservoir_command_areas(self, reservoir_storage_m3):
-        self.date = self.model.current_time
-        if "ruleset" in self.config and self.config["ruleset"] == "new_module":
-            self.available_water_for_abstraction = self.release_for_abstraction.copy()
-        elif "ruleset" in self.config and self.config["ruleset"] == "no_dams":
-            self.available_water_for_abstraction = 0
-        else:  # Use the old module
-            self.available_water_for_abstraction = (
-                self.reservoir_release_factors * reservoir_storage_m3
-            )
-        return self.available_water_for_abstraction * 3600
+    def get_available_water_reservoir_command_areas(self):
+        return 0
 
     def regulate_reservoir_outflow_staged(self, reservoirStorageM3, inflow):
         """Regulate the outflow of the reservoirs.
@@ -596,13 +449,34 @@ class ReservoirOperators(AgentBaseClass):
 
         return reservoir_outflow
 
-    def get_available_water_reservoir_command_areas(self):
-        return self.var.reservoir_release_factors * self.storage
-
     def step(self) -> None:
-        if self.model.current_time.day == 1 and self.model.current_time.month == 6:
+        # operational year should start after the end of the rainy season
+        if self.model.current_time.day == 1 and self.model.current_time.month == 10:
             self.var.new_hydrological_year = np.ones_like(self.storage, dtype=bool)
+
+            # in the second year, we want to discard the default data that was estimated
+            # from external sources
+            if self.var.hydrological_year_counter == 1:
+                self.var.multi_year_monthly_total_inflow[..., 1] = np.nan
+                self.var.multi_year_monthly_total_irrigation[..., 1] = np.nan
+
+            # in the first year, we don't want to save the data, because we don't have a full year yet
+            # so no shifting should be done
+            if self.var.hydrological_year_counter > 0:
+                self.var.multi_year_monthly_total_inflow[..., 1:] = (
+                    self.var.multi_year_monthly_total_inflow[..., 0:-1]
+                )
+
+                self.var.multi_year_monthly_total_irrigation[..., 1:] = (
+                    self.var.multi_year_monthly_total_irrigation[..., 0:-1]
+                )
+
+            # always reset the counters for the next year
+            self.var.multi_year_monthly_total_inflow[..., 0] = 0
+            self.var.multi_year_monthly_total_irrigation[..., 0] = 0
+
             self.var.hydrological_year_counter += 1
+            self.var.storage_year_start = self.storage.copy()
         else:
             self.var.new_hydrological_year = np.zeros_like(self.storage, dtype=bool)
 
