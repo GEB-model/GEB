@@ -4520,7 +4520,7 @@ class GEBModel(GridModel):
             "HHSIZE_CAT": "household_type",
             "AGE": "age_household_head",
             "EDUC": "education_level",
-            "WEALTH": "wealth_indice",
+            "WEALTH_INDEX": "wealth_index",
             "RURAL": "rural",
         }
         region_results = {}
@@ -4554,6 +4554,11 @@ class GEBModel(GridModel):
             GLOPOP_S_region = GLOPOP_S_region[
                 GLOPOP_S_region["GRID_CELL"].isin(unique_grid_cells)
             ]
+
+            # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefor we combine these.)
+            GLOPOP_S_region["WEALTH_INDEX"] = (
+                GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
+            )
 
             # create all households
             GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
