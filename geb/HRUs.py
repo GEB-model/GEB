@@ -9,7 +9,6 @@ from affine import Affine
 import xarray as xr
 import zarr
 import numpy as np
-import zarr.convenience
 from geb.workflows import AsyncForcingReader
 from scipy.spatial import cKDTree
 
