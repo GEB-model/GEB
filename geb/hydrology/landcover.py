@@ -20,7 +20,7 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-import xarray as xr
+import zarr
 from numba import njit
 from geb.workflows import TimingModule, balance_check
 
@@ -105,12 +105,15 @@ class LandCover(object):
         self.var = self.model.store.create_bucket("hydrology.landcover.var")
         self.HRU.var.capriseindex = self.HRU.full_compressed(0, dtype=np.float32)
 
-        self.grid.var.forest_kc_per_10_days = xr.open_dataset(
+        store = zarr.storage.ZipStore(
             self.model.files["forcing"][
                 "landcover/forest/cropCoefficientForest_10days"
             ],
-            engine="zarr",
-        )["cropCoefficientForest_10days"].values
+            mode="r",
+        )
+        self.grid.var.forest_kc_per_10_days = zarr.open_group(store, mode="r")[
+            "cropCoefficientForest_10days"
+        ][:]
 
     def water_body_exchange(self, groundwater_recharge):
         """computing leakage from rivers"""

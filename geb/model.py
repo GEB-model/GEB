@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 from time import time
 import copy
+import numpy as np
 from dateutil.relativedelta import relativedelta
 import xarray as xr
 
@@ -328,6 +329,15 @@ class GEBModel(HazardDriver, ABM_Model):
             day: current day of the year.
         """
         return self.current_time.timetuple().tm_yday
+
+    @property
+    def current_time_unix_s(self) -> int:
+        """Gets the current time in unix seconds.
+
+        Returns:
+            time: current time in unix seconds.
+        """
+        return np.datetime64(self.current_time, "s").astype(np.int64).item()
 
     @property
     def simulation_root(self) -> Path:

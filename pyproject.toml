@@ -21,13 +21,13 @@ dependencies = [
     "geopandas>=1.0.1",
     "honeybees>=1.1.1",
     "hydromt==0.10.1",
-    "hydromt-sfincs>=1.1.0",
+    "hydromt-sfincs @ git+https://github.com/Deltares/hydromt_sfincs.git",
     "isimip-client>=1.0.1",
     "matplotlib>=3.9.2",
     "nest_asyncio>=1.6.0",
     "networkx",
     "numba>=0.61.0",
-    "numpy<2",
+    "numpy>=2.1",
     "openpyxl>=3.1.2",
     "pyarrow>=17.0.0",
     "pybind11>=2.13.4",
@@ -50,7 +50,7 @@ dependencies = [
     "xclim>=0.52.0",
     "xesmf>=0.8.4",
     "xmipy>=1.5.0",
-    "zarr>=2.18.2,<3",
+    "zarr>=3.0.5",
 ]
 requires-python = ">=3.12, <3.14"
 readme = "README.md"

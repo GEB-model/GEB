@@ -43,10 +43,15 @@ class SFINCS:
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
+        store = zarr.storage.ZipStore(
+            self.model.files["forcing"]["climate/pr_hourly"],
+            mode="r",
+        )
+
         # set default precipitation file
-        self.precipitation_dataarray = xr.open_dataset(
-            self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
-        )["pr_hourly"]
+        self.precipitation_dataarray = xr.open_dataset(store, engine="zarr")[
+            "pr_hourly"
+        ]
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)

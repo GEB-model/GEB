@@ -19,8 +19,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+import zarr
 import numpy as np
-import xarray as xr
 from geb.workflows import balance_check
 
 from .landcover import (
@@ -96,15 +96,17 @@ class Interception(object):
             (len(ALL_LAND_COVER_TYPES), 37, 1),
         )
         for cover_name, cover in (("forest", FOREST), ("grassland", GRASSLAND_LIKE)):
-            ds = xr.open_dataset(
+            store = zarr.storage.ZipStore(
                 self.model.files["forcing"][
                     f"landcover/{cover_name}/interceptCap{cover_name.title()}_10days"
                 ],
-                engine="zarr",
+                mode="r",
             )
 
             self.grid.var.interception[cover] = self.grid.compress(
-                ds[f"interceptCap{cover_name.title()}_10days"].values
+                zarr.open_group(store, mode="r")[
+                    f"interceptCap{cover_name.title()}_10days"
+                ][:]
             )
 
     def step(self, potential_transpiration):

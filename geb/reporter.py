@@ -9,14 +9,9 @@ import numpy as np
 import re
 from honeybees.library.raster import coord_to_pixel
 from pathlib import Path
-from numcodecs import Blosc
-import zarr.hierarchy
 from operator import attrgetter
 
 from honeybees.reporter import Reporter as ABMReporter
-
-# Define the compressor for zarr files
-compressor = Blosc(cname="zlib", clevel=9, shuffle=0)  # no shuffling is most efficient
 
 
 class hydrology_reporter(ABMReporter):
@@ -106,15 +101,20 @@ class hydrology_reporter(ABMReporter):
                                     f"WARNING: None of the time ranges for {name} are in the simulation period."
                                 )
 
-                        zarr_store = zarr.ZipStore(zarr_path)
+                        zarr_store = zarr.storage.ZipStore(zarr_path, mode="w")
                         zarr_group = zarr.open_group(zarr_store, mode="w")
 
-                        zarr_group.create_dataset(
-                            "time",
-                            data=np.array(time, dtype="datetime64[ns]"),
-                            dtype="datetime64[ns]",
+                        time = (
+                            np.array(time, dtype="datetime64[ns]")
+                            .astype("datetime64[s]")
+                            .astype(np.int64)
                         )
-
+                        time_group = zarr_group.create_array(
+                            "time",
+                            shape=time.shape,
+                            dtype=time.dtype,
+                        )
+                        time_group[:] = time
                         zarr_group["time"].attrs.update(
                             {
                                 "standard_name": "time",
@@ -124,11 +124,12 @@ class hydrology_reporter(ABMReporter):
                             }
                         )
 
-                        zarr_group.create_dataset(
+                        y_group = zarr_group.create_array(
                             "y",
-                            data=self.hydrology.grid.lat,
-                            dtype="float64",
+                            shape=self.hydrology.grid.lat.shape,
+                            dtype=self.hydrology.grid.lat.dtype,
                         )
+                        y_group[:] = self.hydrology.grid.lat
                         zarr_group["y"].attrs.update(
                             {
                                 "standard_name": "latitude",
@@ -137,11 +138,12 @@ class hydrology_reporter(ABMReporter):
                             }
                         )
 
-                        zarr_group.create_dataset(
+                        x_group = zarr_group.create_array(
                             "x",
-                            data=self.hydrology.grid.lon,
-                            dtype="float64",
+                            shape=self.hydrology.grid.lon.shape,
+                            dtype=self.hydrology.grid.lon.dtype,
                         )
+                        x_group[:] = self.hydrology.grid.lon
                         zarr_group["x"].attrs.update(
                             {
                                 "standard_name": "longitude",
@@ -150,7 +152,7 @@ class hydrology_reporter(ABMReporter):
                             }
                         )
 
-                        zarr_data = zarr_group.create_dataset(
+                        zarr_data = zarr_group.create_array(
                             name,
                             shape=(
                                 time.size,
@@ -162,8 +164,12 @@ class hydrology_reporter(ABMReporter):
                                 self.hydrology.grid.lat.size,
                                 self.hydrology.grid.lon.size,
                             ),
-                            dtype="float32",
-                            compressor=compressor,
+                            dtype=np.float32,
+                            compressor=zarr.codecs.BloscCodec(
+                                cname="zlib",
+                                clevel=9,
+                                shuffle=zarr.codecs.BloscShuffle.shuffle,
+                            ),
                             fill_value=np.nan,
                         )
 
@@ -255,11 +261,11 @@ class hydrology_reporter(ABMReporter):
         if conf["format"] == "zarr":
             zarr_group = zarr.open_group(self.variables[name])
             if (
-                np.isin(np.datetime64(self.model.current_time), zarr_group.time)
+                np.isin(self.model.current_time_unix_s, zarr_group["time"][:])
                 and value is not None
             ):
                 time_index = np.where(
-                    zarr_group.time[:] == np.datetime64(self.model.current_time)
+                    zarr_group["time"][:] == self.model.current_time_unix_s
                 )[0].item()
                 if "substeps" in conf:
                     time_index_start = np.where(time_index)[0][0]

@@ -6,6 +6,7 @@ import cftime
 import zarr
 import numpy as np
 import pandas as pd
+import zarr.storage
 
 all_async_readers = []
 
@@ -47,13 +48,14 @@ class AsyncForcingReader:
     def __init__(self, filepath, variable_name):
         self.filepath = filepath
 
-        self.ds = zarr.open_consolidated(self.filepath, mode="r")
+        store = zarr.storage.ZipStore(self.filepath, mode="r")
+        self.ds = zarr.open_group(store, mode="r")
         self.var = self.ds[variable_name]
 
         self.datetime_index = cftime.num2date(
-            self.ds.time[:],
-            units=self.ds.time.attrs.get("units"),
-            calendar=self.ds.time.attrs.get("calendar"),
+            self.ds["time"][:],
+            units=self.ds["time"].attrs.get("units"),
+            calendar=self.ds["time"].attrs.get("calendar"),
         )
         self.datetime_index = pd.DatetimeIndex(
             pd.to_datetime([obj.isoformat() for obj in self.datetime_index])
