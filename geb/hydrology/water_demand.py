@@ -29,6 +29,7 @@ from .soil import (
     get_crop_group_number,
 )
 from .landcover import PADDY_IRRIGATED, NON_PADDY_IRRIGATED
+from .lakes_reservoirs import RESERVOIR
 from geb.HRUs import load_grid
 
 from geb.workflows import TimingModule, balance_check
@@ -186,13 +187,13 @@ class WaterDemand:
         )
         assert (
             self.hydrology.lakes_reservoirs.var.waterBodyIDC.size
-            == self.hydrology.lakes_reservoirs.var.waterBodyTypC.size
+            == self.hydrology.lakes_reservoirs.var.water_body_type.size
         )
         available_reservoir_storage_m3 = np.zeros_like(
             self.hydrology.lakes_reservoirs.var.storage
         )
         available_reservoir_storage_m3[
-            self.hydrology.lakes_reservoirs.var.waterBodyTypC == 2
+            self.hydrology.lakes_reservoirs.var.water_body_type == RESERVOIR
         ] = self.model.agents.reservoir_operators.get_available_water_reservoir_command_areas()
         return (
             self.grid.var.river_storage_m3.copy(),
@@ -355,11 +356,11 @@ class WaterDemand:
             available_reservoir_storage_m3_pre - available_reservoir_storage_m3
         )
         assert (
-            self.hydrology.lakes_reservoirs.var.waterBodyTypC[
+            self.hydrology.lakes_reservoirs.var.water_body_type[
                 np.where(reservoir_abstraction_m3 > 0)
             ]
-            == 2
-        ).all()
+            == RESERVOIR
+        ).all(), "Reservoir abstraction should only be from reservoirs"
 
         # Abstract water from reservoir
         self.hydrology.lakes_reservoirs.var.storage -= reservoir_abstraction_m3

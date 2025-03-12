@@ -246,7 +246,7 @@ class ReservoirOperators(AgentBaseClass):
         return
 
     def regulate_reservoir_outflow_hanasaki(
-        self, storage_m3, inflow_m3, substep, irrigation_demand_m3, water_body_id
+        self, inflow_m3, substep, irrigation_demand_m3, water_body_id
     ):
         """
         Management module, that manages reservoir outflow per day, based on Hanasaki protocol (Hanasaki et al., 2006).
@@ -256,10 +256,14 @@ class ReservoirOperators(AgentBaseClass):
         irr_demand:     irrigation demand per command area                             (m^3/s)
         All other necessary variables defined in initiate_agents().
         """
-
-        # get the historic inflow for this month, and calculate the mean for each reservoir
-
         current_month_index = self.model.current_time.month - 1
+
+        # add the inflow to the multi_year_monthly_total_inflow, use the current month
+        self.var.multi_year_monthly_total_inflow[:, current_month_index, 0] += inflow_m3
+        # add the irrigation demand to the multi_year_monthly_total_irrigation, use the current month
+        self.var.multi_year_monthly_total_irrigation[:, current_month_index, 0] += (
+            irrigation_demand_m3
+        )
 
         # get the long term inflow across all time. Do not consider the current month as
         # it is not yet complete.
@@ -279,7 +283,7 @@ class ReservoirOperators(AgentBaseClass):
             self.var.multi_year_monthly_total_irrigation[..., 1:].mean(axis=(1, 2))
         )
 
-        reservoir_release_m3 = np.full_like(storage_m3, np.nan, dtype=np.float32)
+        reservoir_release_m3 = np.full_like(self.storage, np.nan, dtype=np.float32)
         # Calculate reservoir release for each reservoir type in m3/s. Only execute if there are reservoirs of that type.
         irrigation_reservoirs = self.var.reservoir_purpose == IRRIGATION_RESERVOIR
         if np.any(irrigation_reservoirs):
@@ -295,19 +299,10 @@ class ReservoirOperators(AgentBaseClass):
                 )
             )
         if np.any(self.var.reservoir_purpose == FLOOD_RESERVOIR):
-            raise NotImplementedError()
-            reservoir_release_m3[self.var.reservoir_purpose == FLOOD_RESERVOIR] = (
-                self.get_flood_control_reservoir_release(
-                    self.cpa,
-                    self.condF,
-                    Qin_resv,
-                    self.S_begin_yr,
-                    self.mtifl,
-                    self.alpha,
-                )
-            )
+            raise NotImplementedError
 
-        self.reservoir_water_balance(
+        assert (reservoir_release_m3 >= 0).all()
+        reservoir_release_m3 = self.release_corrections(
             inflow_m3,
             reservoir_release_m3,
             self.storage,
@@ -315,17 +310,14 @@ class ReservoirOperators(AgentBaseClass):
             long_term_monthly_inflow_m3,
             self.var.alpha,
         )
+        assert (reservoir_release_m3 >= 0).all()
 
-        # add the inflow to the multi_year_monthly_total_inflow, use the current month
-        self.var.multi_year_monthly_total_inflow[:, current_month_index, 0] += inflow_m3
-        # add the irrigation demand to the multi_year_monthly_total_irrigation, use the current month
-        self.var.multi_year_monthly_total_irrigation[:, current_month_index, 0] += (
-            irrigation_demand_m3
-        )
+        self.storage = self.storage - reservoir_release_m3 + inflow_m3
+        assert (self.storage >= 0).all()
 
         return reservoir_release_m3
 
-    def reservoir_water_balance(
+    def release_corrections(
         self,
         inflow_m3,
         reservoir_release_m3,
@@ -333,74 +325,40 @@ class ReservoirOperators(AgentBaseClass):
         capacity_m3,
         long_term_monthly_inflow_m3,
         alpha,
-        cond_all,
     ):
-        """Re-adjusts release to ensure minimal environmental flow, and prevent overflow and negative storage;
-        and computes the storage level after release for all reservoir types.
-        Qin = inflow into reservoir (m3/s)
-        Qout = release from reservoir (m3/s)
-        Sin = initial storage (m^3)
-        cpa = reservoir capacity (m^3)
-        mtifl = annual mean total annual inflow (m^3/s)
-        alpha = reservoir capacity reduction factor
-        dt = time step (hour)
-        cond_all = mask selecting all reservoir types.
-        """
-        # inputs
-        Qin_ = Qin[cond_all]
-        Qout_ = Qout[cond_all]
-        Sin_ = Sin[cond_all]
-        cpa_ = cpa[cond_all]
-        mtifl_month = mtifl[cond_all]
-        dt = 3600  # convert from seconds to hour
-        # final storage and release initialization
-        Nx = len(cond_all)
-        Rfinal = np.zeros(
-            [
-                Nx,
-            ]
-        )  # final release
-        Sfinal = np.zeros(
-            [
-                Nx,
-            ]
-        )  # final storage
-        ###### WATER BALANCE CALCULATIONS ######
-        # 1. Environmental flow: Qout must be at least 10% of the mean monthly inflow.
-        diff_rt = Qout_ - (mtifl_month * 0.1)
-        indx_rt = np.where(diff_rt < 0)[0]
-        Qout_[indx_rt] = 0.1 * mtifl_month[indx_rt]
-        # Check for change in storage.
-        dsdt_resv = (Qin_ - Qout_) * dt
-        Stemp = Sin_ + dsdt_resv
-        # 2. condition a : storage > capacity | Storage can not be larger than reservoir capacity, so remove overflow.
-        Sa = Stemp > (alpha * cpa_)
-        if Sa.any():
-            Sfinal[Sa] = alpha[Sa] * cpa_[Sa]  # Storage is set at full level.
-            Rspill = (
-                (Stemp[Sa] - (alpha[Sa] * cpa_[Sa])) / dt
-            )  # Spilling is determined as earlier storage level minus maximum capacity.
-            Rfinal[Sa] = (
-                Qout_[Sa] + Rspill
-            )  # Calculate new release rate: Earlier determined outflow + spilling.
-        # 3. condition b : storage <= 0 | StSorage can not be smaller than 10% of reservoir capacity, so remove the outflow that results in too low capacity.
-        Sb = Stemp < (0.1 * self.cpa * alpha)
-        if Sb.any():
-            Sfinal[Sb] = (
-                0.1 * self.cpa[Sb] * alpha[Sb]
-            )  # Final storage is then 10% of effective capacity.
-            Rfinal[Sb] = (
-                ((Stemp[Sb] - Sfinal[Sb]) / dt) + Qin_[Sb]
-            )  # Add negative storage to inflow, to lower final outflow and prevent negative storage.
-            print("Storage before water balance correction:", Stemp)
-            print("Storage after water balance correction:", Sfinal[Sb])
-        # 4. condition c : Storage > 0 & Storage < total capacity | the reverse of condition a and b.
-        Sc = (Stemp > 0) & (Stemp <= alpha * cpa_)
-        if Sc.any():
-            # Assign temporary storage and outflow as final storage and release, for all reservoirs that do have proper storage levels.
-            Sfinal[Sc] = Stemp[Sc]
-            Rfinal[Sc] = Qout_[Sc]
-        return Rfinal, Sfinal
+        # release is at least 10% of the mean monthly inflow (environmental flow)
+        reservoir_release_m3 = np.minimum(
+            reservoir_release_m3, long_term_monthly_inflow_m3 * 0.1
+        )
+
+        assert (reservoir_release_m3 >= 0).all()
+
+        # get provisional storage given inflow and release
+        provisional_storage_m3 = storage_m3 + (inflow_m3 - reservoir_release_m3)
+
+        # release any over capacity
+        normal_capacity = alpha * capacity_m3
+        over_capacity = provisional_storage_m3 - normal_capacity
+        reservoir_release_m3 = np.where(
+            over_capacity > 0,
+            reservoir_release_m3 + over_capacity,
+            reservoir_release_m3,
+        )
+
+        assert (reservoir_release_m3 >= 0).all()
+
+        # storage can never drop below 10% of the capacity
+        minimum_storage_m3 = 0.1 * capacity_m3
+        reservoir_release_m3 = np.where(
+            provisional_storage_m3 < minimum_storage_m3,
+            np.maximum(storage_m3 + inflow_m3 - minimum_storage_m3, 0),
+            reservoir_release_m3,
+        )
+
+        assert (reservoir_release_m3 >= 0).all()
+        assert (storage_m3 + inflow_m3 - reservoir_release_m3 >= 0).all()
+
+        return reservoir_release_m3
 
     def get_irrigation_reservoir_release(
         self,
@@ -652,6 +610,14 @@ class ReservoirOperators(AgentBaseClass):
     def storage(self):
         return self.model.hydrology.lakes_reservoirs.reservoir_storage
 
+    @storage.setter
+    def storage(self, value):
+        self.model.hydrology.lakes_reservoirs.reservoir_storage = value
+
     @property
     def capacity(self):
         return self.model.hydrology.lakes_reservoirs.reservoir_capacity
+
+    @capacity.setter
+    def capacity(self, value):
+        self.model.hydrology.lakes_reservoirs.reservoir_capacity = value
