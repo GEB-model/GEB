@@ -1,9 +1,13 @@
+import calendar
+
 import numpy as np
 from .general import AgentBaseClass
 from ..store import DynamicArray
 
 from numba import njit
 
+
+from ..hydrology.lakes_reservoirs import RESERVOIR
 
 IRRIGATION_RESERVOIR = 1
 FLOOD_RESERVOIR = 2
@@ -82,7 +86,7 @@ class ReservoirOperators(AgentBaseClass):
 
         assert (self.reservoirs["volume_total"] > 0).all()
         self.var.active_reservoirs = self.reservoirs[
-            self.reservoirs["waterbody_type"] == 2
+            self.reservoirs["waterbody_type"] == RESERVOIR
         ]
 
         self.var.reservoir_release_factors = DynamicArray(
@@ -100,7 +104,6 @@ class ReservoirOperators(AgentBaseClass):
 
         # set the storage at the beginning of the year
         self.var.storage_year_start = self.storage.copy()
-        self.var.storage_day_start = self.storage.copy()
 
         # set all reservoirs to a capacity reduction factor of 0.85 (Hanasaki et al., 2006)
         # https://doi.org/10.1016/j.jhydrol.2005.11.011
@@ -132,61 +135,12 @@ class ReservoirOperators(AgentBaseClass):
             self.var.multi_year_monthly_total_inflow
         ) * 0.25
 
-        self.var.months_since_start_hydrological_year = np.zeros_like(
-            self.storage, dtype=np.float32
-        )  # Number of months in new hydrological year for each reservoir
         self.var.hydrological_year_counter = (
             0  # Number of hydrological years for each reservoir
         )
 
-        self.var.irr_demand_area_yesterday = np.zeros_like(
-            self.storage, dtype=np.float32
-        )  # Total irrigation demand from yesterday.
-        self.var.irr_demand_area = np.zeros_like(self.storage, dtype=np.float32)
-        # Set variables for abstraction
-        self.var.release_for_abstraction = np.zeros_like(self.storage, dtype=np.float32)
-
-    def check_for_new_operational_year(self, month_number: int):
-        # First calculate the monthly mean inflow.
-        self.n_months_in_new_year += 1
-        self.monthly_infl = self.monthly_infl / self.nt_m
-        # Insert the monthly mean inflow into a matrix, that for each month stores the mean inflow for the last 20 years.
-        # 0. Shift the 20 yrs mean inflow month matrix and  the mean monthly inflow matrix for the selected month.
-        # 1. Add the monthly mean inflow to the n-1th row of the 20 year monthly mean inflow matrix, where n is the number of the month.
-        # 2. Calculate the 20 year monthly mean inflow.
-        # 3. Insert the new 20 year monthly mean inflow into the mean monthly inflow matrix.
-        month_nr_idx = (
-            month_number - 2
-        )  # month number is first day of new month but, needs to be 0 indexed and the previous month.
-        self._shift_and_reset_matrix_mask(self.monthly_infl_20yrs[:, month_nr_idx, :])
-        self.monthly_infl_20yrs[:, month_nr_idx, 0] = self.monthly_infl
-        self.mtifl_month_20yrs[:, month_nr_idx] = np.nanmean(
-            self.monthly_infl_20yrs[:, month_nr_idx, :], axis=1
-        )
-        # # PRINT important variables.
-        # print(
-        #     "Long-term mean total inflow in this month is: ",
-        #     self.mtifl_month_20yrs[:, month_nr_idx],
-        # )
-        # print(
-        #     "Average total irrigation demand this year: ",
-        #     np.sum(self.new_irrmean / self.nt_y),
-        # )
-        # Then check if this leads to a new operational year. If so, calculate yearly averages and
-        # storage at begining of the year. Only check for new operational year if more than 8 months have passed. If 14th month has passed it is always a new year.
-        # self.new_yr_condition = (
-        #     self.mtifl_month_20yrs[:, month_nr_idx] < self.mtifl
-        # ) & (self.n_months_in_new_year > 8) | (self.n_months_in_new_year == 15)
-        self.new_yr_condition = self.n_months_in_new_year == 15
-        if np.any(self.new_yr_condition):
-            self.yearly_reservoir_calculations()
-        # Reset the monthly mean inflow to zero for the next month.
-        self.monthly_infl = np.zeros((self.N,), dtype="f8")
-        self.nt_m = 0
-        return
-
     def regulate_reservoir_outflow_hanasaki(
-        self, inflow_m3, substep, irrigation_demand_m3, water_body_id
+        self, inflow_m3, irrigation_demand_m3, n_routing_steps
     ):
         current_month_index = self.model.current_time.month - 1
 
@@ -197,20 +151,44 @@ class ReservoirOperators(AgentBaseClass):
             irrigation_demand_m3
         )
 
+        days_in_month = calendar.monthrange(
+            self.model.current_time.year, self.model.current_time.month
+        )[1]
+
+        n_monthly_substeps = n_routing_steps * days_in_month
+
+        month_weights = np.array(
+            [31, 28.2425, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], dtype=np.float32
+        )
+        month_weights = np.broadcast_to(month_weights, (5, 12))[..., np.newaxis].repeat(
+            self.var.history_fill_index - 1, axis=2
+        )
+
         # get the long term inflow across all time. Do not consider the current month as
         # it is not yet complete.
-        long_term_monthly_inflow_m3 = np.nanmean(
-            self.var.multi_year_monthly_total_inflow[..., 1:], axis=(1, 2)
+        long_term_monthly_inflow_m3 = np.average(
+            self.var.multi_year_monthly_total_inflow[
+                ..., 1 : self.var.history_fill_index
+            ],
+            axis=(1, 2),
+            weights=month_weights,
         )
 
         # get the long term inflow for this month. Do not consider the current month as
         # it is not yet complete.
-        long_term_monthly_inflow_this_month_m3 = np.nanmean(
-            self.var.multi_year_monthly_total_inflow[:, current_month_index, 1:], axis=1
+        long_term_monthly_inflow_this_month_m3 = np.average(
+            self.var.multi_year_monthly_total_inflow[
+                :, current_month_index, 1 : self.var.history_fill_index
+            ],
+            axis=1,
         )
 
-        long_term_monthly_irrigation_demand_m3 = np.nanmean(
-            self.var.multi_year_monthly_total_irrigation[..., 1:], axis=(1, 2)
+        long_term_monthly_irrigation_demand_m3 = np.average(
+            self.var.multi_year_monthly_total_irrigation[
+                ..., 1 : self.var.history_fill_index
+            ],
+            axis=(1, 2),
+            weights=month_weights,
         )
 
         reservoir_release_m3 = np.full_like(self.storage, np.nan, dtype=np.float32)
@@ -226,8 +204,10 @@ class ReservoirOperators(AgentBaseClass):
                     irrigation_demand_m3[irrigation_reservoirs],
                     long_term_monthly_irrigation_demand_m3[irrigation_reservoirs],
                     self.var.alpha[irrigation_reservoirs],
+                    n_monthly_substeps,
                 )
             )
+
         if np.any(self.var.reservoir_purpose == FLOOD_RESERVOIR):
             raise NotImplementedError
 
@@ -299,6 +279,7 @@ class ReservoirOperators(AgentBaseClass):
         current_irrigation_demand_m3,
         long_term_monthly_irrigation_demand_m3,
         alpha,
+        n_monthly_substeps,
     ):
         """
         https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py
@@ -306,8 +287,6 @@ class ReservoirOperators(AgentBaseClass):
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
         M = 0.5
-
-        n_monthly_substeps = 24 * 30  # 24 routing steps in 30 days
 
         ratio_long_term_demand_to_inflow = (
             long_term_monthly_irrigation_demand_m3 / long_term_monthly_inflow_m3
@@ -452,8 +431,6 @@ class ReservoirOperators(AgentBaseClass):
     def step(self) -> None:
         # operational year should start after the end of the rainy season
         if self.model.current_time.day == 1 and self.model.current_time.month == 10:
-            self.var.new_hydrological_year = np.ones_like(self.storage, dtype=bool)
-
             # in the second year, we want to discard the default data that was estimated
             # from external sources
             if self.var.hydrological_year_counter == 1:
@@ -477,8 +454,8 @@ class ReservoirOperators(AgentBaseClass):
 
             self.var.hydrological_year_counter += 1
             self.var.storage_year_start = self.storage.copy()
-        else:
-            self.var.new_hydrological_year = np.zeros_like(self.storage, dtype=bool)
+
+        self.var.history_fill_index = max(self.var.hydrological_year_counter, 2)
 
     @property
     def storage(self):

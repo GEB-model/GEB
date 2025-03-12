@@ -446,7 +446,7 @@ class LakesReservoirs(object):
 
         return lake_outflow_m3
 
-    def routing_reservoirs(self, inflow_m3, substep, routing_step_length_seconds):
+    def routing_reservoirs(self, inflow_m3, n_routing_steps):
         """
         Reservoir outflow
         :param inflowC: inflow to reservoirs
@@ -471,15 +471,14 @@ class LakesReservoirs(object):
                 weights=self.HRU.var.ETRef[is_command_area]
                 * self.HRU.var.cell_area[is_command_area],
             )
-            / 24
+            / n_routing_steps
         )
 
         outflow_m3 = (
             self.model.agents.reservoir_operators.regulate_reservoir_outflow_hanasaki(
                 inflow_m3=inflow_m3[reservoirs],
-                substep=substep,
                 irrigation_demand_m3=irrigation_demand_m3,
-                water_body_id=self.var.waterBodyIDC[reservoirs],
+                n_routing_steps=n_routing_steps,
             )
         )
 
@@ -561,7 +560,7 @@ class LakesReservoirs(object):
 
         outflow = self.routing_lakes(inflow_m3, routing_step_length_seconds)
         outflow[self.var.water_body_type == RESERVOIR] = self.routing_reservoirs(
-            inflow_m3, substep, routing_step_length_seconds
+            inflow_m3, n_routing_steps
         )
 
         if outflow.size > 0:
@@ -668,4 +667,4 @@ class LakesReservoirs(object):
             if self.hydrology.dynamic_water_bodies:
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
-        print(self.reservoir_storage)
+        # print((self.reservoir_storage / self.reservoir_capacity * 100).astype(int))
