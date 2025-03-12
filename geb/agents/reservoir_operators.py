@@ -142,6 +142,9 @@ class ReservoirOperators(AgentBaseClass):
     def regulate_reservoir_outflow_hanasaki(
         self, inflow_m3, irrigation_demand_m3, n_routing_steps
     ):
+        if inflow_m3.size == 0:
+            return np.zeros_like(inflow_m3)
+
         current_month_index = self.model.current_time.month - 1
 
         # add the inflow to the multi_year_monthly_total_inflow, use the current month
