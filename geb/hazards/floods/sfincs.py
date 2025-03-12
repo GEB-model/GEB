@@ -225,10 +225,7 @@ class SFINCS:
             discharge_grid=discharge_grid,
             precipitation_grid=self.precipitation,
             data_catalogs=self.data_catalogs,
-            uparea_discharge_grid=xr.open_dataset(
-                self.model.files["grid"]["routing/upstream_area"],
-                engine="zarr",
-            ),  # .isel(band=0),
+            uparea_discharge_grid=None,
         )
 
     def run_single_event(self, event, start_time):

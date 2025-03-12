@@ -115,7 +115,7 @@ class hydrology_reporter(ABMReporter):
                             dtype=time.dtype,
                         )
                         time_group[:] = time
-                        zarr_group["time"].attrs.update(
+                        time_group.attrs.update(
                             {
                                 "standard_name": "time",
                                 "units": "seconds since 1970-01-01T00:00:00",
@@ -130,7 +130,7 @@ class hydrology_reporter(ABMReporter):
                             dtype=self.hydrology.grid.lat.dtype,
                         )
                         y_group[:] = self.hydrology.grid.lat
-                        zarr_group["y"].attrs.update(
+                        y_group.attrs.update(
                             {
                                 "standard_name": "latitude",
                                 "units": "degrees_north",
@@ -144,7 +144,7 @@ class hydrology_reporter(ABMReporter):
                             dtype=self.hydrology.grid.lon.dtype,
                         )
                         x_group[:] = self.hydrology.grid.lon
-                        zarr_group["x"].attrs.update(
+                        x_group.attrs.update(
                             {
                                 "standard_name": "longitude",
                                 "units": "degrees_east",
