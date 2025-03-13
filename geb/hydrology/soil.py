@@ -985,18 +985,22 @@ def kv_brakensiek(thetas, clay, sand):
 
 
 class Soil(object):
-    def __init__(self, model, hydrology):
+    def __init__(self, model):
+        """
+
+        Notes:
+        - We don't consider that bedrock does not impede percolation in line with https://doi.org/10.1029/2018WR022920
+        which states that connection to the stream is the exception rather than the rule
+        A better implementation would be to consider travel distance. But this remains a topic for future work.
+        """
+        self.HRU = model.data.HRU
+        self.grid = model.data.grid
         self.model = model
-        self.hydrology = hydrology
-
-        self.HRU = hydrology.HRU
-        self.grid = hydrology.grid
-
-        if self.model.in_spinup:
+        if self.model.spinup:
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("hydrology.soil.var")
+        self.var = self.model.store.create_bucket("soil.var")
 
         # Soil properties
         self.HRU.var.soil_layer_height = self.HRU.compress(
@@ -1021,21 +1025,21 @@ class Soil(object):
             ),
             method="mean",
         )
-        self.HRU.var.sand = self.HRU.compress(
+        sand = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/sand"],
                 layer=None,
             ),
             method="mean",
         )
-        self.HRU.var.silt = self.HRU.compress(
+        silt = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/silt"],
                 layer=None,
             ),
             method="mean",
         )
-        self.HRU.var.clay = self.HRU.compress(
+        clay = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/clay"],
                 layer=None,
@@ -1043,24 +1047,22 @@ class Soil(object):
             method="mean",
         )
 
-        is_top_soil = np.zeros_like(self.HRU.var.clay, dtype=bool)
+        is_top_soil = np.zeros_like(clay, dtype=bool)
         is_top_soil[0:3] = True
 
         thetas = thetas_toth(
             soil_organic_carbon=soil_organic_carbon,
             bulk_density=bulk_density,
             is_top_soil=is_top_soil,
-            clay=self.HRU.var.clay,
-            silt=self.HRU.var.silt,
+            clay=clay,
+            silt=silt,
         )
-        thetar = thetar_brakensiek(
-            sand=self.HRU.var.sand, clay=self.HRU.var.clay, thetas=thetas
-        )
+        thetar = thetar_brakensiek(sand=sand, clay=clay, thetas=thetas)
         self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
-            clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
+            clay=clay, sand=sand, thetas=thetas
         )
         self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
-            sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
+            sand=sand, thetas=thetas, clay=clay
         )
 
         # θ saturation, field capacity, wilting point and residual moisture content
@@ -1095,18 +1097,19 @@ class Soil(object):
         # for paddy irrigation flooded paddy fields
         self.HRU.var.topwater = self.HRU.full_compressed(0, dtype=np.float32)
 
-        self.HRU.var.ksat = kv_brakensiek(
-            thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand
-        )
+        self.HRU.var.ksat = kv_brakensiek(thetas=thetas, clay=clay, sand=sand)
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        natural_crop_groups = self.hydrology.grid.load(
+        natural_crop_groups = self.model.data.grid.load(
             self.model.files["grid"]["soil/cropgrp"]
         )
-        self.HRU.var.natural_crop_groups = self.hydrology.to_HRU(
+        self.HRU.var.natural_crop_groups = self.model.data.to_HRU(
             data=natural_crop_groups
         )
+
+        self.HRU.var.is_hedgerow = np.zeros_like(self.HRU.var.natural_crop_groups, dtype=bool)
+        self.HRU.var.is_hedgerow[100] = True
 
         # ------------ Preferential Flow constant ------------------------------------------
         self.var.preferential_flow_constant = float(
@@ -1122,7 +1125,7 @@ class Soil(object):
         elevation_std = self.grid.load(
             self.model.files["grid"]["landsurface/topo/elevation_STD"]
         )
-        elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
+        elevation_std = self.model.data.to_HRU(data=elevation_std, fn=None)
         arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)
 
         arnoBetaOro += self.model.config["parameters"][
@@ -1160,7 +1163,7 @@ class Soil(object):
             ini_file = out_dir / "p_daily.ini"
 
             yaml["> STRINGS"]["outDir"] = out_dir
-            if self.model.in_spinup is True:
+            if self.model.spinup is True:
                 original_state_file = (
                     Path("input")
                     / "plantFATE_initialization"
@@ -1221,12 +1224,10 @@ class Soil(object):
 
             from honeybees.library.raster import coord_to_pixel
 
-            px, py = coord_to_pixel(
-                np.array([lon, lat]), gt=self.model.hydrology.grid.gt
-            )
+            px, py = coord_to_pixel(np.array([lon, lat]), gt=self.model.data.grid.gt)
 
-            cell_ids = np.arange(self.hydrology.grid.compressed_size)
-            cell_ids_map = self.hydrology.grid.decompress(cell_ids, fillvalue=-1)
+            cell_ids = np.arange(self.model.data.grid.compressed_size)
+            cell_ids_map = self.model.data.grid.decompress(cell_ids, fillvalue=-1)
             cell_id = cell_ids_map[py, px]
 
             already_has_plantFATE_cell = False
@@ -1458,6 +1459,10 @@ class Soil(object):
         assert preferential_flow.dtype == np.float32
         assert runoff.dtype == np.float32
 
+        self.HRU.var.actual_evapotranspiration += actual_bare_soil_evaporation
+        self.HRU.var.actual_evapotranspiration += actual_total_transpiration
+        self.HRU.var.actual_evapotranspiration += open_water_evaporation
+
         if __debug__:
             assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
             assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
@@ -1496,14 +1501,14 @@ class Soil(object):
                     self.HRU.var.natural_available_water_infiltration[bioarea],
                     capillary_rise_from_groundwater[bioarea],
                     self.HRU.var.actual_irrigation_consumption[bioarea],
+                    self.HRU.var.snowEvap[bioarea],
+                    self.HRU.var.interception_evaporation[bioarea],
                 ],
                 outfluxes=[
                     runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    actual_total_transpiration[bioarea],
-                    actual_bare_soil_evaporation[bioarea],
-                    open_water_evaporation[bioarea],
+                    self.HRU.var.actual_evapotranspiration[bioarea],
                 ],
                 prestorages=[
                     w_pre[:, bioarea].sum(axis=0),
@@ -1531,7 +1536,7 @@ class Soil(object):
 
         return (
             interflow,
-            runoff,
+            direct_runoff,
             groundwater_recharge,
             open_water_evaporation,
             actual_total_transpiration,
