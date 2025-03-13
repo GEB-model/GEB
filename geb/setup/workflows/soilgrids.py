@@ -24,78 +24,134 @@
 
 import xarray as xr
 import numpy as np
+from pyresample import geometry
+from pyresample.resampler import resample_blocks
+from pyresample.gradient import (
+    gradient_resampler_indices_block,
+    block_bilinear_interpolator,
+    block_nn_interpolator,
+)
 
 
-def interpolate_soil_layers(ds):
-    assert ds.ndim == 3
-    for layer in range(ds.shape[0]):
-        ds[layer] = ds[layer].raster.interpolate_na("nearest")
-    return ds
+def get_area_definition(da):
+    return geometry.AreaDefinition(
+        area_id="",
+        description="",
+        proj_id="",
+        projection=da.rio.crs.to_proj4(),
+        width=da.x.size,
+        height=da.y.size,
+        area_extent=da.rio.bounds(),
+    )
+
+
+def _fill_in_coords(target_coords, source_coords, data_dims):
+    x_coord, y_coord = target_coords["x"], target_coords["y"]
+    coords = []
+    for key in data_dims:
+        if key == "x":
+            coords.append(x_coord)
+        elif key == "y":
+            coords.append(y_coord)
+        else:
+            coords.append(source_coords[key])
+    return coords
+
+
+def resample_chunked(source, target, method="bilinear"):
+    if method == "nearest_neighbour":
+        interpolator = block_nn_interpolator
+    elif method == "bilinear":
+        interpolator = block_bilinear_interpolator
+    else:
+        raise ValueError(
+            f"Unknown method: {method}, must be 'bilinear' or 'nearest_neighbour'"
+        )
+
+    source_geo = get_area_definition(source)
+    target_geo = get_area_definition(target)
+
+    indices = resample_blocks(
+        gradient_resampler_indices_block,
+        source_geo,
+        [],
+        target_geo,
+        chunk_size=(2, *target.chunks),
+        dtype=np.float64,
+    )
+
+    resampled_data = resample_blocks(
+        interpolator,
+        source_geo,
+        [source.data],
+        target_geo,
+        dst_arrays=[indices],
+        chunk_size=(*source.data.shape[:-2], *target.chunks),
+        dtype=source.dtype,
+        fill_value=source.attrs["_FillValue"],
+    )
+
+    # Convert result back to xarray DataArray
+    da = xr.DataArray(
+        resampled_data,
+        dims=source.dims,
+        coords=_fill_in_coords(target.coords, source.coords, source.dims),
+        name=source.name,
+        attrs=source.attrs.copy(),
+    )
+    da.rio.set_crs(source.rio.crs)
+    return da
 
 
 def load_soilgrids(data_catalog, subgrid, region):
-    variables = ["bdod", "clay", "silt", "sand", "soc"]
+    variables = ["bdod", "clay", "silt", "soc"]
     layers = ["0-5cm", "5-15cm", "15-30cm", "30-60cm", "60-100cm", "100-200cm"]
 
+    subgrid_mask = subgrid["areamaps/sub_grid_mask"]
+    subgrid_mask = subgrid_mask.rio.set_crs(4326)
+
     ds = []
-    for variable in variables:
+    for variable_name in variables:
         variable_layers = []
         for i, layer in enumerate(layers, start=1):
             da = data_catalog.get_rasterdataset(
-                f"soilgrids_2020_{variable}_{layer}", geom=region
+                f"soilgrids_2020_{variable_name}_{layer}", geom=region, buffer=30
             ).compute()
-            da.name = f"{variable}_{i}"
+            da = da.raster.interpolate_na("nearest")
+            da.name = f"{variable_name}_{i}"
             variable_layers.append(da)
-        ds_variable = xr.concat(variable_layers, dim="soil_layers", compat="equals")
-        ds_variable.name = variable
+        ds_variable = xr.concat(variable_layers, dim="soil_layer", compat="equals")
+        ds_variable = ds_variable.chunk({"x": 30, "y": 30})
+        ds_variable = ds_variable.raster.mask_nodata()
+        ds_variable = resample_chunked(
+            ds_variable,
+            subgrid_mask,
+            method="nearest_neighbour",
+        )
+        ds_variable = ds_variable.where(~subgrid_mask, ds_variable.attrs["_FillValue"])
+        ds_variable = ds_variable.rio.set_crs(4326)
+        ds_variable.name = variable_name
         ds.append(ds_variable)
+
     ds = xr.merge(ds, join="exact")
 
-    ds = ds.raster.mask_nodata()  # set all nodata values to nan
-
-    # the resolution of the subgrid is (usually) much higher than the soilgrids data
-    # therefore we can do a nearest neighbor reproject. This also
-    # limits the size of the data in compressed format
-    ds = ds.raster.reproject_like(subgrid, method="nearest")
-
-    ds["sand"] = interpolate_soil_layers(ds["sand"])
-    ds["silt"] = interpolate_soil_layers(ds["silt"])
-    ds["clay"] = interpolate_soil_layers(ds["clay"])
-    ds["bdod"] = interpolate_soil_layers(ds["bdod"])
-    ds["soc"] = interpolate_soil_layers(ds["soc"])
-
-    total = ds["sand"] + ds["clay"] + ds["silt"]
-    assert total.min() >= 99.8
-    assert total.max() <= 100.2
-
-    ds["sand"] = ds["sand"] / total * 100
-    ds["clay"] = ds["clay"] / total * 100
-    ds["silt"] = ds["silt"] / total * 100
-
     # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
-    is_top_soil = np.zeros_like(ds["sand"], dtype=bool)
+    is_top_soil = xr.full_like(ds["silt"], fill_value=False, dtype=bool)
     is_top_soil[0:3] = True
-    is_top_soil = xr.DataArray(
-        is_top_soil, dims=ds["sand"].dims, coords=ds["sand"].coords
-    )
     ds["is_top_soil"] = is_top_soil
 
-    depth_to_bedrock = data_catalog.get_rasterdataset(
-        "soilgrids_2017_BDTICM", geom=region
-    )
-    depth_to_bedrock = depth_to_bedrock.raster.mask_nodata()
-    depth_to_bedrock = depth_to_bedrock.raster.reproject_like(
-        subgrid, method="bilinear"
-    ).raster.interpolate_na("nearest")
+    # depth_to_bedrock = data_catalog.get_rasterdataset(
+    #     "soilgrids_2017_BDTICM", geom=region
+    # )
+    # depth_to_bedrock = depth_to_bedrock.raster.mask_nodata()
+    # depth_to_bedrock = depth_to_bedrock.raster.reproject_like(
+    #     subgrid, method="bilinear"
+    # ).raster.interpolate_na("nearest")
 
-    soil_layer_height = xr.DataArray(
-        np.zeros(ds["sand"].shape, dtype=np.float32),
-        dims=ds["sand"].dims,
-        coords=ds["sand"].coords,
-    )
+    soil_layer_height = xr.full_like(ds["silt"], fill_value=0.0, dtype=np.float32)
     for layer, height in enumerate((0.05, 0.10, 0.15, 0.30, 0.40, 1.00)):
         soil_layer_height[layer] = height
+    ds["height"] = soil_layer_height
 
-    assert (soil_layer_height.sum(axis=0) == 2.0).all()
-
-    return ds["sand"], ds["silt"], ds["clay"], ds["bdod"], ds["soc"], soil_layer_height
+    ds.raster.set_crs(4326)
+    return ds.rio.set_crs(4326)

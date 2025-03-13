@@ -28,6 +28,7 @@ import pyproj
 from affine import Affine
 from pyproj import CRS
 from rasterio.env import defenv
+import zarr
 import xarray as xr
 from dask.diagnostics import ProgressBar
 import xclim.indices as xci
@@ -227,6 +228,7 @@ class GEBModel(GridModel):
             "region_subgrid": {},
             "MERIT_grid": {},
         }
+        self.file_handles = {}
 
     @property
     def subgrid(self):
@@ -1476,28 +1478,19 @@ class GEBModel(GridModel):
         """
 
         self.logger.info("Setting up soil parameters")
-        (
-            sand,
-            silt,
-            clay,
-            bulk_density,
-            soil_organic_carbon,
-            soil_layer_height,
-        ) = load_soilgrids(self.data_catalog, self.subgrid, self.region)
+        ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 
-        self.set_subgrid(sand, name="soil/sand")
-        self.set_subgrid(silt, name="soil/silt")
-        self.set_subgrid(clay, name="soil/clay")
-        self.set_subgrid(bulk_density, name="soil/bulk_density")
-        self.set_subgrid(soil_organic_carbon, name="soil/soil_organic_carbon")
-        self.set_subgrid(soil_layer_height, name="soil/soil_layer_height")
+        self.set_subgrid(ds["silt"], name="soil/silt")
+        self.set_subgrid(ds["clay"], name="soil/clay")
+        self.set_subgrid(ds["bdod"], name="soil/bulk_density")
+        self.set_subgrid(ds["soc"], name="soil/soil_organic_carbon")
+        self.set_subgrid(ds["height"], name="soil/soil_layer_height")
 
-        soil_ds = self.data_catalog.get_rasterdataset(
-            "cwatm_soil_5min", bbox=self.bounds, buffer=10
-        )
+        # soil_ds = self.data_catalog.get_rasterdataset(
+        #     "cwatm_soil_5min", bbox=self.bounds, buffer=10
+        # )
 
-        ds = soil_ds["cropgrp"]
-        self.set_grid(self.interpolate(ds, "linear"), name="soil/cropgrp")
+        # self.set_grid(self.interpolate(soil_ds["cropgrp"], "linear"), name="soil/cropgrp")
 
     def setup_land_use_parameters(self, interpolation_method="nearest") -> None:
         """
@@ -6533,8 +6526,10 @@ class GEBModel(GridModel):
             # Build the encoding dictionary for the data variable
             encoding = {
                 grid.name: {
-                    "compressor": Blosc(
-                        cname="zstd", clevel=9, shuffle=Blosc.NOSHUFFLE
+                    "compressor": zarr.codecs.BloscCodec(
+                        cname="zlib",
+                        clevel=9,
+                        shuffle=zarr.codecs.BloscShuffle.shuffle,
                     ),  # no shuffling is most efficient,
                     # Only specify chunks if the grid was not already chunked
                     **({"chunks": data_chunks} if grid.chunks is None else {}),
@@ -6552,9 +6547,10 @@ class GEBModel(GridModel):
                 # Include coordinate in encoding without specifying chunks
                 encoding[coord] = {}
 
+            ds = zarr.storage.ZipStore(filepath, mode="w")
             # Now write to Zarr
             grid.to_zarr(
-                filepath,
+                ds,
                 mode="w",
                 encoding=encoding,
             )
@@ -6899,32 +6895,10 @@ class GEBModel(GridModel):
             self.set_dict(d, name=name, update=False)
 
     def _read_grid(self, fn: str, name: str) -> xr.Dataset:
-        if fn.endswith(".zarr.zip"):
-            engine = "zarr"
-            da = xr.load_dataset(
-                Path(self.root) / fn, mask_and_scale=False, engine=engine
-            )
-            da = da.rename({"data": name})
-        elif fn.endswith(".tif"):
-            da = xr.load_dataset(Path(self.root) / fn, mask_and_scale=False)
-            da = da.rename(  # deleted decode_cf=False
-                {"band_data": name}
-            )
-            if "band" in da.dims and da.band.size == 1:
-                # drop band dimension
-                da = da.squeeze("band")
-                # drop band coordinate
-                da = da.drop_vars("band")
-            da.x.attrs = {
-                "long_name": "latitude of grid cell center",
-                "units": "degrees_north",
-            }
-            da.y.attrs = {
-                "long_name": "longitude of grid cell center",
-                "units": "degrees_east",
-            }
-        else:
-            raise ValueError(f"Unsupported file format: {fn}")
+        store = zarr.storage.ZipStore(Path(self.root) / fn, mode="r")
+        da = xr.open_dataarray(store, chunks={}, mask_and_scale=False, engine="zarr")
+        self.file_handles[name] = store, da
+        da.name = name
         return da
 
     def read_grid(self) -> None:
@@ -6950,7 +6924,8 @@ class GEBModel(GridModel):
     def read_forcing(self) -> None:
         self.read_files()
         for name, fn in self.files["forcing"].items():
-            with xr.open_dataset(Path(self.root) / fn, chunks={}, engine="zarr") as ds:
+            store = zarr.storage.ZipStore(Path(self.root) / fn, mode="r")
+            with xr.open_dataset(store, chunks={}, engine="zarr") as ds:
                 data_vars = set(ds.data_vars)
                 data_vars.discard("spatial_ref")
                 if len(data_vars) == 1:
