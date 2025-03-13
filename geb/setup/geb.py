@@ -1486,11 +1486,13 @@ class GEBModel(GridModel):
         self.set_subgrid(ds["soc"], name="soil/soil_organic_carbon")
         self.set_subgrid(ds["height"], name="soil/soil_layer_height")
 
-        # soil_ds = self.data_catalog.get_rasterdataset(
-        #     "cwatm_soil_5min", bbox=self.bounds, buffer=10
-        # )
+        soil_ds = self.data_catalog.get_rasterdataset(
+            "cwatm_soil_5min", bbox=self.bounds, buffer=10
+        )
 
-        # self.set_grid(self.interpolate(soil_ds["cropgrp"], "linear"), name="soil/cropgrp")
+        self.set_grid(
+            self.interpolate(soil_ds["cropgrp"], "linear"), name="soil/cropgrp"
+        )
 
     def setup_land_use_parameters(self, interpolation_method="nearest") -> None:
         """
