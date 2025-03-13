@@ -135,11 +135,6 @@ def load_soilgrids(data_catalog, subgrid, region):
 
     ds = xr.merge(ds, join="exact")
 
-    # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
-    is_top_soil = xr.full_like(ds["silt"], fill_value=False, dtype=bool)
-    is_top_soil[0:3] = True
-    ds["is_top_soil"] = is_top_soil
-
     # depth_to_bedrock = data_catalog.get_rasterdataset(
     #     "soilgrids_2017_BDTICM", geom=region
     # )
