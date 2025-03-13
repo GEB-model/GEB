@@ -1021,13 +1021,6 @@ class Soil(object):
             ),
             method="mean",
         )
-        self.HRU.var.sand = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["soil/sand"],
-                layer=None,
-            ),
-            method="mean",
-        )
         self.HRU.var.silt = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/silt"],
@@ -1043,6 +1036,10 @@ class Soil(object):
             method="mean",
         )
 
+        # calculate sand content based on silt and clay content (together they should sum to 100%)
+        self.HRU.var.sand = 100 - self.HRU.var.silt - self.HRU.var.clay
+
+        # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
         is_top_soil = np.zeros_like(self.HRU.var.clay, dtype=bool)
         is_top_soil[0:3] = True
 
