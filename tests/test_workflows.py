@@ -1,4 +1,5 @@
 import numpy as np
+import zarr
 import pandas as pd
 from datetime import date
 import xarray as xr
@@ -6,19 +7,15 @@ from time import time, sleep
 from geb.workflows import (
     AsyncForcingReader,
 )
-from numcodecs import Blosc
-
 from .testconfig import tmp_folder
-
-compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
 
 def zarr_file(varname):
     size = 1000
     # Create a temporary zarr file for testing
-    zarr = tmp_folder / f"{varname}.zarr.zip"
-    if zarr.exists():
-        zarr.unlink()
+    file_path = tmp_folder / f"{varname}.zarr.zip"
+    if file_path.exists():
+        file_path.unlink()
 
     periods = 100
 
@@ -33,18 +30,17 @@ def zarr_file(varname):
         coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)},
     )
 
+    store = zarr.storage.ZipStore(file_path, mode="w")
     ds.to_zarr(
-        zarr,
+        store,
         mode="w",
         encoding={
             varname: {
-                # "compressor": compressor,
                 "chunks": (1, size, size),
             }
         },
-        # zarr_version=3,
     )
-    return zarr
+    return file_path
 
 
 def test_read_timestep():

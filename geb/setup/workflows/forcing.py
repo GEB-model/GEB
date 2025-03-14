@@ -6,6 +6,8 @@ import concurrent.futures
 import pandas as pd
 from datetime import date, timedelta
 
+from .io import to_zarr, open_zarr
+
 
 def reproject_and_apply_lapse_rate_temperature(T, DEM, grid_mask, lapse_rate=-0.0065):
     DEM.raster.mask_nodata().fillna(
@@ -85,7 +87,7 @@ def reproject_and_apply_lapse_rate_pressure(
     return pressure_grid
 
 
-def download_ERA5(
+def _download_ERA5(
     folder,
     variables: list,
     starttime: date,
@@ -131,7 +133,7 @@ def download_ERA5(
                 try:
                     request = {
                         "product_type": "reanalysis",
-                        "format": "grib",
+                        "format": "netcdf",
                         "download_format": "unarchived",
                         "variable": variables,
                         "year": [f"{month_start.year}"],
@@ -192,77 +194,79 @@ def download_ERA5(
     return files
 
 
-def open_ERA5(files, variable, xy_chunksize):
-    def preprocess(ds):
-        # drop all variables except the variable of interest
-        valid_time = (ds["time"] + ds["step"]).values.flatten()
-        da = ds[variable].stack(valid_time=("time", "step"))
-        da = da.assign_coords(valid_time=("valid_time", valid_time))
-        da = da.rename({"valid_time": "time"})
-        da = da.isel(time=slice(23, -1))
-        return da
+def download_ERA5(folder, variable, starttime, endtime, bounds):
+    output_fn = folder / f"{variable}.zarr.zip"
+    if output_fn.exists():
+        da = open_zarr(output_fn)
+    else:
+        folder.mkdir(parents=True, exist_ok=True)
+        da = xr.open_dataset(
+            "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+            storage_options={"client_kwargs": {"trust_env": True}},
+            chunks={},
+            engine="zarr",
+        )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
+        da = da.sel(
+            time=slice(starttime, endtime),
+            latitude=slice(bounds[3], bounds[1]),
+            longitude=slice(bounds[0], bounds[2]),
+        )
+        da = da.isel(time=slice(1, None))
 
-    ds = xr.open_mfdataset(
-        files,
-        compat="equals",  # all values and dimensions must be the same,
-        combine_attrs="drop_conflicts",  # drop conflicting attributes
-        engine="cfgrib",
-        preprocess=preprocess,
-    ).rio.set_crs(4326)
+        da = to_zarr(
+            da,
+            folder / f"{variable}.zarr.zip",
+            time_chunksize=24,
+        )
+    return da
 
-    assert "time" in ds.dims
-    assert "latitude" in ds.dims
-    assert "longitude" in ds.dims
 
+def process_ERA5(variable, folder, starttime, endtime, bounds):
+    da = download_ERA5(folder, variable, starttime, endtime, bounds)
     # assert that time is monotonically increasing with a constant step size
     assert (
-        ds.time.diff("time").astype(np.int64)
-        == (ds.time[1] - ds.time[0]).astype(np.int64)
+        da.time.diff("time").astype(np.int64)
+        == (da.time[1] - da.time[0]).astype(np.int64)
     ).all(), "time is not monotonically increasing with a constant step size"
 
+    da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
     # remove first time step.
-    # This is an accumulation from the previous day and thus cannot be calculated
-    ds = ds.isel(time=slice(1, None))
-    ds = ds.chunk({"time": 24, "latitude": xy_chunksize, "longitude": xy_chunksize})
+    # This from the previous day and thus cannot be calculated
+    # da = da.isel(time=slice(1, None))
+    # da = da.chunk({"time": 24, "latitude": "auto", "longitude": xy_chunksize})
     # reorder dimensitons in the order of time, latitude, longitude
-    ds = ds.transpose("time", "latitude", "longitude")
+    # ds = ds.transpose("time", "latitude", "longitude")
     # the ERA5 grid is sometimes not exactly regular. The offset is very minor
     # therefore we snap the grid to a regular grid, to save huge computational time
     # for a infenitesimal loss in accuracy
-    ds = ds.assign_coords(
-        latitude=np.linspace(
-            ds["latitude"][0].item(),
-            ds["latitude"][-1].item(),
-            ds["latitude"].size,
-            endpoint=True,
-        ),
-        longitude=np.linspace(
-            ds["longitude"][0].item(),
-            ds["longitude"][-1].item(),
-            ds["longitude"].size,
-            endpoint=True,
-        ),
-    )
+    # ds = ds.assign_coords(
+    #     latitude=np.linspace(
+    #         ds["latitude"][0].item(),
+    #         ds["latitude"][-1].item(),
+    #         ds["latitude"].size,
+    #         endpoint=True,
+    #     ),
+    #     longitude=np.linspace(
+    #         ds["longitude"][0].item(),
+    #         ds["longitude"][-1].item(),
+    #         ds["longitude"].size,
+    #         endpoint=True,
+    #     ),
+    # )
 
-    ds.raster.set_crs(4326)
+    # ds.raster.set_crs(4326)
     # the last few months of data may come from ERA5T (expver 5) instead of ERA5 (expver 1)
     # if so, combine that dimension
-    if "expver" in ds.dims:
-        ds = ds.sel(expver=1).combine_first(ds.sel(expver=5))
+    # if "expver" in ds.dims:
+    #     ds = ds.sel(expver=1).combine_first(ds.sel(expver=5))
 
-    # assert there is only one data variable
-    assert len(ds.data_vars) == 1
+    if da.attrs["GRIB_stepType"] == "accum":
 
-    # select the variable and rename longitude and latitude variable
-    ds = ds[list(ds.data_vars)[0]].rename({"longitude": "x", "latitude": "y"})
-
-    if ds.attrs["GRIB_stepType"] == "accum":
-
-        def xr_ERA5_accumulation_to_hourly(ds, dim):
+        def xr_ERA5_accumulation_to_hourly(da, dim):
             # Identify the axis number for the given dimension
-            assert ds.time.dt.hour[0] == 1, "First time step must be at 1 UTC"
+            assert da.time.dt.hour[0] == 1, "First time step must be at 1 UTC"
             # All chunksizes must be divisible by 24, except the last one
-            assert all(chunksize % 24 == 0 for chunksize in ds.chunksizes["time"][:-1])
+            assert all(chunksize % 24 == 0 for chunksize in da.chunksizes["time"][:-1])
 
             def diff_with_prepend(data, dim):
                 # Assert dimension is a multiple of 24
@@ -273,12 +277,12 @@ def open_ERA5(files, variable, xy_chunksize):
             # Apply the custom diff function using apply_ufunc
             return xr.apply_ufunc(
                 diff_with_prepend,  # The function to apply
-                ds,  # The DataArray or Dataset to which the function will be applied
+                da,  # The DataArray or Dataset to which the function will be applied
                 kwargs={
-                    "dim": ds.get_axis_num(dim)
+                    "dim": da.get_axis_num(dim)
                 },  # Additional arguments for the function
                 dask="parallelized",  # Enable parallelized computation
-                output_dtypes=[ds.dtype],  # Specify the output data type
+                output_dtypes=[da.dtype],  # Specify the output data type
                 keep_attrs=True,  # Keep the attributes of the input DataArray or Dataset
             )
 
@@ -288,10 +292,13 @@ def open_ERA5(files, variable, xy_chunksize):
         # runoff accumulated from day=D, time=0 to day=D, time=12. The maximum accumulation is over 24 hours,
         # i.e., from day=D, time=0 to day=D+1,time=0 (step=24).
         # forecasts are the difference between the current and previous time step
-        hourly = xr_ERA5_accumulation_to_hourly(ds, "time")
-    elif ds.attrs["GRIB_stepType"] == "instant":
-        hourly = ds
+        da = xr_ERA5_accumulation_to_hourly(da, "time")
+    elif da.attrs["GRIB_stepType"] == "instant":
+        da = da
     else:
         raise NotImplementedError
 
-    return hourly
+    da = da.rio.set_crs(4326)
+    da.raster.set_crs(4326)
+
+    return da

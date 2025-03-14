@@ -653,6 +653,10 @@ class LakesReservoirs(object):
     def lake_capacity(self, value):
         self.var.capacity[self.var.water_body_type == LAKE] = value
 
+    @property
+    def reservoir_fill_percentage(self):
+        return self.reservoir_storage / self.reservoir_capacity * 100
+
     def decompress(self, array):
         return array
 
@@ -667,4 +671,4 @@ class LakesReservoirs(object):
             if self.hydrology.dynamic_water_bodies:
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
-        # print((self.reservoir_storage / self.reservoir_capacity * 100).astype(int))
+        print(self.reservoir_fill_percentage.astype(int))

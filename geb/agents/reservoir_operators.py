@@ -15,44 +15,6 @@ FLOOD_RESERVOIR = 2
 RESERVOIR_MEMORY_YEARS = 20
 
 
-@njit(cache=True)
-def regulate_reservoir_outflow(
-    current_storage,
-    volume,
-    inflow,
-    minQ,
-    normQ,
-    nondmgQ,
-    conservative_limit_ratio,
-    normal_limit_ratio,
-    flood_limit_ratio,
-):
-    day_to_sec = 1 / (24 * 60 * 60)
-    outflow = np.zeros_like(current_storage)
-    for i in range(current_storage.size):
-        fill = current_storage[i] / volume[i]
-        if fill <= conservative_limit_ratio[i] * 2:
-            outflow[i] = min(minQ[i], current_storage[i] * day_to_sec)
-        elif fill <= normal_limit_ratio[i]:
-            outflow[i] = minQ[i] + (normQ[i] - minQ[i]) * (
-                fill - 2 * conservative_limit_ratio[i]
-            ) / (normal_limit_ratio[i] - 2 * conservative_limit_ratio[i])
-        elif fill <= flood_limit_ratio[i]:
-            outflow[i] = normQ[i] + (
-                (fill - normal_limit_ratio[i])
-                / (flood_limit_ratio[i] - normal_limit_ratio[i])
-            ) * (nondmgQ[i] - normQ[i])
-        else:
-            outflow[i] = max(
-                max(
-                    (fill - flood_limit_ratio[i] - 0.01) * volume[i] * day_to_sec,
-                    min(nondmgQ[i], np.maximum(inflow[i], normQ[i])),
-                ),
-                inflow[i],
-            )
-    return outflow
-
-
 class ReservoirOperators(AgentBaseClass):
     """This class is used to simulate the government.
 
@@ -289,7 +251,7 @@ class ReservoirOperators(AgentBaseClass):
         """
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
-        M = 0.5
+        M = 0.1
 
         ratio_long_term_demand_to_inflow = (
             long_term_monthly_irrigation_demand_m3 / long_term_monthly_inflow_m3
@@ -399,40 +361,10 @@ class ReservoirOperators(AgentBaseClass):
     def get_available_water_reservoir_command_areas(self):
         return 0
 
-    def regulate_reservoir_outflow_staged(self, reservoirStorageM3, inflow):
-        """Regulate the outflow of the reservoirs.
-
-        Args:
-            reservoirStorageM3C: The current storage of the reservoirs in m3.
-            inflowC: The inflow of the reservoirs (m/s).
-            waterBodyIDs: The IDs of the water bodies.
-            delta_t: The time step in seconds.
-
-        Returns:
-            The outflow of the reservoirs (m/s).
-
-        """
-        # make outflow same as inflow for a setting without a reservoir
-        if "ruleset" in self.config and self.config["ruleset"] == "no-human-influence":
-            return inflow.copy()
-
-        reservoir_outflow = regulate_reservoir_outflow(
-            reservoirStorageM3,
-            self.var.reservoir_capacity.data,
-            inflow,
-            self.var.minQC.data,
-            self.var.normQC.data,
-            self.var.nondmgQC.data,
-            self.var.cons_limit_ratio.data,
-            self.var.norm_limit_ratio.data,
-            self.var.flood_limit_ratio.data,
-        )
-        assert (reservoir_outflow >= 0).all()
-
-        return reservoir_outflow
-
     def step(self) -> None:
         # operational year should start after the end of the rainy season
+        # this could also maybe be determined based on the start of the irrigation season
+        # thus crop calendars
         if self.model.current_time.day == 1 and self.model.current_time.month == 10:
             # in the second year, we want to discard the default data that was estimated
             # from external sources
