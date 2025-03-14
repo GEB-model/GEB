@@ -227,7 +227,7 @@ class Government(AgentBaseClass):
             # new_grassland_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion.nc"
 
             # Open dataset and explicitly select `esa_worldcover`
-            to_grasland = xr.open_dataset(self.model.files["forcing"]["hydrodynamics/esa_worldcover_cropland_scenario"], engine="netcdf4")["esa_worldcover"]
+            to_grasland = xr.open_dataset(self.model.files["forcing"]["hydrodynamics/esa_worldcover_cropland_scenario"], engine="netcdf4")["lulc"]
 
             # Convert to a spatially-aware raster dataset
             to_grasland = to_grasland.rio.write_crs("EPSG:28992").squeeze()
