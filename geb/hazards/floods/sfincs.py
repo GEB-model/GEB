@@ -259,7 +259,7 @@ class SFINCS:
             print("running cropland conversion scenario -- updating data catalog")
             updated_data_catalog["esa_worldcover"] = {
                 "data_type": "RasterDataset",
-                "path": "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion_renamed.nc",
+                "path": "esa_worldcover_cropland_scenario.nc",
                 "driver": "netcdf",
                 "crs": 28992,
             }
@@ -273,7 +273,7 @@ class SFINCS:
             print("running reforestation scenario -- updating data catalog")
             updated_data_catalog["esa_worldcover"] = {
                 "data_type": "RasterDataset",
-                "path": "/scistor/ivm/vbl220/PhD/reforestation_10km2_1_renamed.nc",
+                "path": "esa_worldcover_reforestation.nc",
                 "driver": "netcdf",
                 "crs": 28992,
             }
@@ -568,6 +568,7 @@ class SFINCS:
         )
 
     def run(self, event):
+        print("lets run")
         start_time = event["start_time"]
 
         if self.model.config["hazards"]["floods"]["flood_risk"]:
@@ -601,6 +602,34 @@ class SFINCS:
                 y=inverted_damage_list, x=inverted_exceedence_probabilities_list
             )  # np.trapezoid or np.trapz -> depends on np version
             print(f"expected annual damage is: {expected_annual_damage}")
+        
+        # elif self.model.config["hazards"]["floods"]["custom_flood_map"]:
+        # print("running with custom flood map")
+        #     # flood_map = "custom_flood_map"
+        #     # event_name = self.get_event_name(event)
+        #     # model_root =  self.sfincs_model_root(event_name)
+        #     # simulation_root=self.sfincs_simulation_root(event_name)
+        #     # print("variables are set -- time to run")
+        #     # damages = self.model.agents.households.flood(   
+        #     #     model_root=model_root,
+        #     #     simulation_root=simulation_root,
+        #     #     flood_map=flood_map,
+        #     #     return_period=None)
+        #     # print("we have the damages")
+        # # self.setup(event)
+        # # self.set_forcing(event, start_time)
+        # # self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
+        # event_name = self.get_event_name(event)
+        # return_period = None
+        # flood_map = "custommap"
+        # print("about the start damages")
+        # damages = self.flood(
+        #         flood_map=flood_map,
+        #         model_root=self.sfincs_model_root(event_name),
+        #         simulation_root=self.sfincs_simulation_root(event_name),
+        #         return_period=return_period,
+        #     )
+        # print("damages done")
 
         else:
             self.run_single_event(event, start_time)

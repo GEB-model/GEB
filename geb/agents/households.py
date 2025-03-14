@@ -361,33 +361,48 @@ class Households(AgentBaseClass):
                 self.var.max_dam_buildings_content
             )
 
-        custom_flood_map = self.config.get("hazards", {}).get("floods", {}).get("custom_flood_map")
+        custom_flood_map =  self.config.get("custom_flood_map")
+
+        print(f"custom_flood_map value: {custom_flood_map}")  # Debugging line
+
         if custom_flood_map:
-            flood_path = custom_flood_map
-            flood_map = rioxarray.open_rasterio(flood_path)
-            flood_map = flood_map.rio.write_crs(28992)
-
-        elif return_period is not None:
-            flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
-            flood_map = rioxarray.open_rasterio(flood_path)
-
+            flood_map_final = rioxarray.open_rasterio(custom_flood_map).rio.write_crs(28992)
+            print("using custom flood map")
         else:
-            flood_path = join(simulation_root, "hmax.tif")
-            flood_map = rioxarray.open_rasterio(flood_path)
+            flood_filename = f"hmax RP {int(return_period)}.tif" if return_period else "hmax.tif"
+            print(f"using this flood map: {flood_filename}")
+            flood_map = rioxarray.open_rasterio(join(simulation_root, flood_filename))
+            
+            # Remove rivers from flood map
+            rivers_path = join(model_root, "rivers.gpkg")
+            rivers = gpd.read_file(rivers_path)
+            rivers.set_crs(epsg=4326, inplace=True)
+            rivers_projected = rivers.to_crs(flood_map.rio.crs)
+            rivers_projected["geometry"] = rivers_projected.buffer(
+                rivers_projected["rivwth"] / 2
+            )
+            rivers_mask = flood_map.raster.geometry_mask(
+                gdf=rivers_projected, all_touched=True
+            )
+            flood_map = flood_map.where(~rivers_mask)
+            flood_map = flood_map.fillna(0)
+            flood_map = flood_map.where(flood_map != 0, np.nan)
 
-        print(f"using this flood map: {flood_path}")
-
-        # Remove rivers from flood map
-        rivers_path = join(model_root, "rivers.gpkg")
-        rivers = gpd.read_file(rivers_path)
-        rivers.set_crs(epsg=4326, inplace=True)
-        rivers_projected = rivers.to_crs(flood_map.rio.crs)
-        rivers_projected["geometry"] = rivers_projected.buffer(
-            rivers_projected["rivwth"] / 2
-        )
-        rivers_mask = flood_map.raster.geometry_mask(
-            gdf=rivers_projected, all_touched=True
-        )
+            # Clip the flood map to the region for which we want to know the damages
+            # region_path = "/scistor/ivm/vbl220/PhD/damages_region.gpkg"
+            region = gpd.read_file(self.model.files["geoms"][
+                    "damages_region_geul"
+                ])
+            region_projected = region.to_crs(flood_map.rio.crs)
+            flood_map_final = flood_map.rio.clip(
+                region_projected.geometry, region_projected.crs
+            )
+    
+        #         flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
+        #     flood_map = rioxarray.open_rasterio(flood_path)
+        # else:
+        #     flood_path = join(simulation_root, "hmax.tif")
+        #     flood_map = rioxarray.open_rasterio(flood_path)
 
         # Load landuse and make turn into polygons
         agriculture = from_landuse_raster_to_polygon(
@@ -397,8 +412,7 @@ class Households(AgentBaseClass):
         )
         agriculture["object_type"] = "agriculture"
         agriculture["maximum_damage"] = self.var.max_dam_agriculture
-
-        agriculture = agriculture.to_crs(flood_map.rio.crs)
+        agriculture = agriculture.to_crs(flood_map_final.rio.crs)
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
@@ -410,24 +424,15 @@ class Households(AgentBaseClass):
         )
         forest["object_type"] = "forest"
         forest["maximum_damage"] = self.var.max_dam_forest
-
-        forest = forest.to_crs(flood_map.rio.crs)
-
-        flood_map = flood_map.where(~rivers_mask)
-        flood_map = flood_map.fillna(0)
-        flood_map = flood_map.where(flood_map != 0, np.nan)
-
-        # Clip the flood map to the region for which we want to know the damages
-        region_path = "/scistor/ivm/vbl220/PhD/damages_region.gpkg"
-        region = gpd.read_file(region_path)
-        region_projected = region.to_crs(flood_map.rio.crs)
-        flood_map_clipped = flood_map.rio.clip(
-            region_projected.geometry, region_projected.crs
-        )
+        forest = forest.to_crs(flood_map_final.rio.crs)
 
         def compute_damages_by_country(assets, curve, category_name, model_root, return_period=None):
-            assets = assets.to_crs(flood_map_clipped.rio.crs)
-
+            assets = assets.to_crs(flood_map_final.rio.crs)
+            
+            # Ensure the "damage" folder exists
+            damage_folder = join(model_root, "damage")
+            os.makedirs(damage_folder, exist_ok=True)
+            
             # Check for multiple geometry types
             geometry_types = assets.geometry.geom_type.unique()
             print(f"Geometry types in {category_name}: {geometry_types}")
@@ -435,14 +440,10 @@ class Households(AgentBaseClass):
             if "MultiPolygon" in geometry_types:
                 assets = assets.explode(index_parts=False).reset_index(drop=True)
 
-            # If only one geometry type, proceed normally
             if len(geometry_types) == 1:
-                damages = object_scanner(
-                    objects=assets, hazard=flood_map_clipped, curves=curve
-                )
+                damages = object_scanner(objects=assets, hazard=flood_map_final, curves=curve)
                 assets["damages"] = damages
                 exposed_assets_count = (assets["damages"] > 0).sum()
-                print(assets)
                 print(f"exposed assets for {category_name} are: {exposed_assets_count}")
                 total_damages = damages.sum()
                 print(f"damages to {category_name} are: {total_damages}")
@@ -452,7 +453,7 @@ class Households(AgentBaseClass):
                 else:
                     filename = f"damages_{category_name}.gpkg"
 
-                file_path = join(model_root, filename)
+                file_path = join(damage_folder, filename)
                 print(file_path)
                 
                 # Save to GeoPackage
@@ -460,119 +461,68 @@ class Households(AgentBaseClass):
                 print(f"Saved assets to {file_path}")
 
                 split_assets = gpd.overlay(
-                    assets,
-                    gdf_filtered_countries,
-                    how="intersection",
-                    keep_geom_type=True,
+                    assets, gdf_filtered_countries, how="intersection", keep_geom_type=True
                 )
                 unmatched_assets = split_assets[split_assets["COUNTRY"].isnull()]
 
                 for country in selection_countries:
                     country_assets = split_assets[split_assets["COUNTRY"] == country]
                     if not country_assets.empty:
-                        country_assets = country_assets.to_crs(
-                            flood_map_clipped.rio.crs
-                        )
+                        country_assets = country_assets.to_crs(flood_map_final.rio.crs)
                         country_damages = object_scanner(
-                            objects=country_assets,
-                            hazard=flood_map_clipped,
-                            curves=curve,
+                            objects=country_assets, hazard=flood_map_final, curves=curve
                         ).sum()
-                        print(
-                            f"damages to {category_name} ({country}): {country_damages}"
-                        )
+                        print(f"damages to {category_name} ({country}): {country_damages}")
 
                 return total_damages
+            
+            # If multiple geometry types, process each separately
+            total_damages = 0
+            for geom_type in geometry_types:
+                print(f"Processing geometry type: {geom_type}")
+                subset = assets[assets.geometry.geom_type == geom_type]
+                
+                damages = object_scanner(objects=subset, hazard=flood_map_final, curves=curve)
+                subset_damages = damages.sum()
+                total_damages += subset_damages
+                print(f"damages to {category_name} ({geom_type}) are: {subset_damages}")
 
-            # If multiple geometry types, split and process each separately
-            if len(geometry_types) > 1:
-                total_damages = 0
-                for geom_type in geometry_types:
-                    print(f"Processing geometry type: {geom_type}")
-                    subset = assets[assets.geometry.geom_type == geom_type]
+                split_assets = gpd.overlay(subset, gdf_filtered_countries, how="intersection")
+                unmatched_assets = split_assets[split_assets["COUNTRY"].isnull()]
+                print(f"Unmatched assets for {geom_type}: {unmatched_assets}")
 
-                    # Process subset as usual
-                    damages = object_scanner(
-                        objects=subset, hazard=flood_map_clipped, curves=curve
-                    )
-                    subset_damages = damages.sum()
-                    total_damages += subset_damages
-                    print(
-                        f"damages to {category_name} ({geom_type}) are: {subset_damages}"
-                    )
+                for country in selection_countries:
+                    country_assets = split_assets[split_assets["COUNTRY"] == country]
+                    if not country_assets.empty:
+                        country_assets = country_assets.to_crs(flood_map_final.rio.crs)
+                        country_damages = object_scanner(
+                            objects=country_assets, hazard=flood_map_final, curves=curve
+                        ).sum()
+                        print(f"damages to {category_name} ({country}, {geom_type}): {country_damages}")
 
-                    # Perform overlay for this subset
-                    split_assets = gpd.overlay(
-                        subset, gdf_filtered_countries, how="intersection"
-                    )
-                    unmatched_assets = split_assets[split_assets["COUNTRY"].isnull()]
-                    print(f"Unmatched assets for {geom_type}: {unmatched_assets}")
-
-                    for country in selection_countries:
-                        country_assets = split_assets[
-                            split_assets["COUNTRY"] == country
-                        ]
-                        if not country_assets.empty:
-                            country_assets = country_assets.to_crs(
-                                flood_map_clipped.rio.crs
-                            )
-                            country_damages = object_scanner(
-                                objects=country_assets,
-                                hazard=flood_map_clipped,
-                                curves=curve,
-                            ).sum()
-                            print(
-                                f"damages to {category_name} ({country}, {geom_type}): {country_damages}"
-                            )
-                print(
-                    f"Total damages to {category_name} (all geometry types): {total_damages}"
-                )
-                return total_damages
+            print(f"Total damages to {category_name} (all geometry types): {total_damages}")
+            return total_damages
 
         # Filter countries
-        all_countries = gpd.read_file("/scistor/ivm/vbl220/PhD/Europe_merged.shp")
+        all_countries = gpd.read_file(self.model.files["geoms"]["europe"])
         selection_countries = ["Netherlands", "Belgium", "Germany"]
-        gdf_filtered_countries = all_countries[
-            all_countries["COUNTRY"].isin(selection_countries)
-        ]
-        if self.var.buildings.crs != flood_map.rio.crs:
-            gdf_filtered_countries = gdf_filtered_countries.to_crs(flood_map.rio.crs)
+        gdf_filtered_countries = all_countries[all_countries["COUNTRY"].isin(selection_countries)]
+        if self.var.buildings.crs != flood_map_final.rio.crs:
+            gdf_filtered_countries = gdf_filtered_countries.to_crs(flood_map_final.rio.crs)
 
         # Compute damages for each category
-        total_damages_agriculture = compute_damages_by_country(
-            agriculture, self.var.agriculture_curve, "agriculture", model_root, return_period
-        )
-        total_damages_forest = compute_damages_by_country(
-            forest, self.var.forest_curve, "forest", model_root, return_period
-        )
-        total_damage_structure = compute_damages_by_country(
-            self.var.buildings, self.var.buildings_structure_curve, "building structure", model_root, return_period
-        )
-        total_damages_content = compute_damages_by_country(
-            self.var.buildings_centroid,
-            self.var.buildings_content_curve,
-            "building content",
-            model_root,
-            return_period
-        )
-        total_damages_roads = compute_damages_by_country(
-            self.var.roads, self.var.road_curves, "roads", model_root, return_period
-        )
-        total_damages_rail = compute_damages_by_country(
-            self.var.rail, self.var.rail_curve, "rail", model_root, return_period
-        )
+        total_damages_agriculture = compute_damages_by_country(agriculture, self.var.agriculture_curve, "agriculture", model_root, return_period)
+        total_damages_forest = compute_damages_by_country(forest, self.var.forest_curve, "forest", model_root, return_period)
+        total_damage_structure = compute_damages_by_country(self.var.buildings, self.var.buildings_structure_curve, "building structure", model_root, return_period)
+        total_damages_content = compute_damages_by_country(self.var.buildings_centroid, self.var.buildings_content_curve, "building content", model_root, return_period)
+        total_damages_roads = compute_damages_by_country(self.var.roads, self.var.road_curves, "roads", model_root, return_period)
+        total_damages_rail = compute_damages_by_country(self.var.rail, self.var.rail_curve, "rail", model_root, return_period)
 
         # Calculate total flood damages
         total_flood_damages = (
-            total_damage_structure
-            + total_damages_content
-            + total_damages_roads
-            + total_damages_rail
-            + total_damages_forest
-            + total_damages_agriculture
+            total_damage_structure + total_damages_content + total_damages_roads + total_damages_rail + total_damages_forest + total_damages_agriculture
         )
-        print(f"the total flood damages are: {total_flood_damages}")
-        return total_flood_damages
+        print(f"The total flood damages are: {total_flood_damages}")
 
     def update_water_demand(self):
         """

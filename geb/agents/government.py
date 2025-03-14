@@ -93,10 +93,10 @@ class Government(AgentBaseClass):
         if self.model.current_timestep == 1:
             print("running the reforestation scenario")
             # load reforestation map
-            forest_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_new4.nc"
+            # forest_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_new4.nc"
 
             # Open dataset and explicitly select `esa_worldcover`
-            to_forest = xr.open_dataset(forest_path)["esa_worldcover"]
+            to_forest = xr.open_dataset(self.model.files["forcing"]["hydrodynamics/esa_worldcover_reforestation_scenario"])["esa_worldcover"]
 
             # Convert to a spatially-aware raster dataset
             to_forest = to_forest.rio.write_crs("EPSG:28992").squeeze()
@@ -110,7 +110,6 @@ class Government(AgentBaseClass):
             # Debug information
             print(f"Shape: {to_forest.shape}, Dtype: {to_forest.dtype}")
             print(f"Min: {data.min()}, Max: {data.max()}")
-
 
             y_coords = to_forest.coords["y"].values
             x_coords = to_forest.coords["x"].values
@@ -187,7 +186,6 @@ class Government(AgentBaseClass):
                 np.concatenate([new_forest_HRUs, HRUs_removed_farmers])
             )
            
-           
             print("loading soil parameter input files")
           
             self.HRU.var.soil_organic_carbon = self.HRU.compress(
@@ -226,10 +224,10 @@ class Government(AgentBaseClass):
             print("running the cropland to grassland conversion scenario")
 
             # Load scenario 
-            new_grassland_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion.nc"
+            # new_grassland_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion.nc"
 
             # Open dataset and explicitly select `esa_worldcover`
-            to_grasland = xr.open_dataset(new_grassland_path, engine="netcdf4")["esa_worldcover"]
+            to_grasland = xr.open_dataset(self.model.files["forcing"]["hydrodynamics/esa_worldcover_cropland_scenario"], engine="netcdf4")["esa_worldcover"]
 
             # Convert to a spatially-aware raster dataset
             to_grasland = to_grasland.rio.write_crs("EPSG:28992").squeeze()
