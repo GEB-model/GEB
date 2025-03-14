@@ -1,27 +1,3 @@
-# --------------------------------------------------------------------------------
-# This file contains code that has been adapted from an original source available
-# in a public repository under the GNU General Public License. The original code
-# has been modified to fit the specific needs of this project.
-#
-# Original source repository: https://github.com/Deltares/hydromt_wflow/
-# Files:
-# - https://github.com/Deltares/hydromt_wflow/blob/main/hydromt_wflow/workflows/ptf.py
-# - https://github.com/Deltares/hydromt_wflow/blob/main/hydromt_wflow/workflows/soilgrids.py
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-# --------------------------------------------------------------------------------
-
 import xarray as xr
 import numpy as np
 from pyresample import geometry
@@ -110,6 +86,8 @@ def load_soilgrids(data_catalog, subgrid, region):
     subgrid_mask = subgrid["areamaps/sub_grid_mask"]
     subgrid_mask = subgrid_mask.rio.set_crs(4326)
 
+    print(subgrid_mask.chunks, "subgrid chunks")
+
     ds = []
     for variable_name in variables:
         variable_layers = []
@@ -132,9 +110,10 @@ def load_soilgrids(data_catalog, subgrid, region):
         ds_variable = ds_variable.rio.set_crs(4326)
         ds_variable.name = variable_name
         ds.append(ds_variable)
+        print("done", variable_name, ds_variable.chunks)
 
     ds = xr.merge(ds, join="exact")
-
+    print("merging")
     # depth_to_bedrock = data_catalog.get_rasterdataset(
     #     "soilgrids_2017_BDTICM", geom=region
     # )
@@ -147,6 +126,6 @@ def load_soilgrids(data_catalog, subgrid, region):
     for layer, height in enumerate((0.05, 0.10, 0.15, 0.30, 0.40, 1.00)):
         soil_layer_height[layer] = height
     ds["height"] = soil_layer_height
-
+    print("height done", ds["height"].chunks)
     ds.raster.set_crs(4326)
     return ds.rio.set_crs(4326)

@@ -206,10 +206,13 @@ def download_ERA5(folder, variable, starttime, endtime, bounds):
             chunks={},
             engine="zarr",
         )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
+
+        da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+
         da = da.sel(
             time=slice(starttime, endtime),
-            latitude=slice(bounds[3], bounds[1]),
-            longitude=slice(bounds[0], bounds[2]),
+            y=slice(bounds[3], bounds[1]),
+            x=slice(bounds[0], bounds[2]),
         )
         da = da.isel(time=slice(1, None))
 
@@ -229,7 +232,6 @@ def process_ERA5(variable, folder, starttime, endtime, bounds):
         == (da.time[1] - da.time[0]).astype(np.int64)
     ).all(), "time is not monotonically increasing with a constant step size"
 
-    da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
     # remove first time step.
     # This from the previous day and thus cannot be calculated
     # da = da.isel(time=slice(1, None))

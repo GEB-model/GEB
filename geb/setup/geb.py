@@ -16,7 +16,6 @@ import requests
 import time
 import random
 import zipfile
-import shutil
 import tempfile
 import json
 from urllib.parse import urlparse
@@ -28,14 +27,12 @@ import pyproj
 from affine import Affine
 from pyproj import CRS
 from rasterio.env import defenv
-import zarr
 import xarray as xr
 from dask.diagnostics import ProgressBar
 import xclim.indices as xci
 from dateutil.relativedelta import relativedelta
 from contextlib import contextmanager
 from calendar import monthrange
-from numcodecs import Blosc
 from scipy.ndimage import value_indices
 import pyflwdir
 
@@ -48,8 +45,6 @@ from hydromt.data_adapter import (
 
 from honeybees.library.raster import sample_from_map, pixels_to_coords
 from isimip_client.client import ISIMIPClient
-import zarr.codecs
-import zarr.storage
 
 from .workflows.general import (
     repeat_grid,
@@ -72,7 +67,6 @@ from .workflows.conversions import (
 from .workflows.forcing import (
     reproject_and_apply_lapse_rate_temperature,
     reproject_and_apply_lapse_rate_pressure,
-    download_ERA5,
     process_ERA5,
 )
 from .workflows.hydrography import (
@@ -231,7 +225,6 @@ class GEBModel(GridModel):
             "region_subgrid": {},
             "MERIT_grid": {},
         }
-        self.file_handles = {}
 
     @property
     def subgrid(self):
@@ -2165,43 +2158,16 @@ class GEBModel(GridModel):
                     "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
                 )
         elif data_source == "era5":
-            # # Create a thread pool and map the set_forcing function to the variables
-            # # Wait for all threads to complete
-            # concurrent.futures.wait(futures)
-            mask = self.grid["areamaps/grid_mask"]
-
-            # ds = download_ERA5(
-            #     folder=self.preprocessing_dir / "climate" / "ERA5",
-            #     variables=[
-            #         "tp",
-            #         # "surface_solar_radiation_downwards",
-            #         # "surface_thermal_radiation_downwards",
-            #         # "2m_temperature",
-            #         # "2m_dewpoint_temperature",
-            #         # "surface_pressure",
-            #         # "10m_u_component_of_wind",
-            #         # "10m_v_component_of_wind",
-            #     ],
-            #     starttime=starttime,
-            #     endtime=endtime,
-            #     bounds=mask.raster.bounds,
-            #     # logger=self.logger,
-            # )
+            target = self.grid["areamaps/grid_mask"]
+            target.raster.set_crs(4326)
 
             download_args = {
                 "folder": self.preprocessing_dir / "climate" / "ERA5",
                 "starttime": starttime,
                 "endtime": endtime,
-                "bounds": mask.raster.bounds,
+                "bounds": target.raster.bounds,
             }
 
-            # pr_hourly = process_ERA5(
-            #     "tp",  # total_precipitation
-            #     start_date=starttime,
-            #     end_date=endtime,
-            #     bounds=mask.raster.bounds,
-            #     xy_chunksize=XY_CHUNKSIZE,
-            # )
             pr_hourly = process_ERA5(
                 "tp",  # total_precipitation
                 **download_args,
@@ -2214,13 +2180,12 @@ class GEBModel(GridModel):
             }
             # ensure no negative values for precipitation, which may arise due to float precision
             pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-            pr_hourly.name = "climate/pr_hourly"
             self.set_forcing(
                 pr_hourly, name="climate/pr_hourly", time_chunksize=7 * 24
             )  # weekly chunk size
 
             pr = pr_hourly.resample(time="D").mean()  # get daily mean
-            pr = pr.raster.reproject_like(mask, method="average")
+            pr = pr.raster.reproject_like(target, method="average")
             self.set_forcing(pr, name="climate/pr")
 
             hourly_rsds = process_ERA5(
@@ -2236,14 +2201,12 @@ class GEBModel(GridModel):
                 "units": "W m-2",
             }
 
-            rsds = rsds.raster.reproject_like(mask, method="average")
-            rsds.name = "rsds"
+            rsds = rsds.raster.reproject_like(target, method="average")
             self.set_forcing(rsds, name="climate/rsds")
 
             hourly_rlds = process_ERA5(
-                files,
                 "strd",  # surface_thermal_radiation_downwards
-                xy_chunksize=XY_CHUNKSIZE,
+                **download_args,
             )
             rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
             rlds.attrs = {
@@ -2251,11 +2214,10 @@ class GEBModel(GridModel):
                 "long_name": "Surface Downwelling Longwave Radiation",
                 "units": "W m-2",
             }
-            rlds = rlds.raster.reproject_like(mask, method="average")
-            rlds.name = "rlds"
+            rlds = rlds.raster.reproject_like(target, method="average")
             self.set_forcing(rlds, name="climate/rlds")
 
-            hourly_tas = process_ERA5(files, "t2m", xy_chunksize=XY_CHUNKSIZE)
+            hourly_tas = process_ERA5("t2m", **download_args)
 
             DEM = self.data_catalog.get_rasterdataset(
                 "fabdem",
@@ -2265,7 +2227,7 @@ class GEBModel(GridModel):
             )
 
             hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-                hourly_tas, DEM, mask
+                hourly_tas, DEM, target
             )
 
             tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
@@ -2274,7 +2236,6 @@ class GEBModel(GridModel):
                 "long_name": "Near-Surface Air Temperature",
                 "units": "K",
             }
-            tas_reprojected.name = "tas"
             self.set_forcing(tas_reprojected, name="climate/tas", byteshuffle=True)
 
             tasmax = hourly_tas_reprojected.resample(time="D").max()
@@ -2283,7 +2244,6 @@ class GEBModel(GridModel):
                 "long_name": "Daily Maximum Near-Surface Air Temperature",
                 "units": "K",
             }
-            tasmax.name = "tasmax"
             self.set_forcing(tasmax, name="climate/tasmax", byteshuffle=True)
 
             tasmin = hourly_tas_reprojected.resample(time="D").min()
@@ -2292,16 +2252,14 @@ class GEBModel(GridModel):
                 "long_name": "Daily Minimum Near-Surface Air Temperature",
                 "units": "K",
             }
-            tasmin.name = "tasmin"
             self.set_forcing(tasmin, name="climate/tasmin", byteshuffle=True)
 
             dew_point_tas = process_ERA5(
-                files,
                 "d2m",
-                xy_chunksize=XY_CHUNKSIZE,
+                **download_args,
             )
             dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-                dew_point_tas, DEM, mask
+                dew_point_tas, DEM, target
             )
 
             water_vapour_pressure = 0.6108 * np.exp(
@@ -2326,33 +2284,29 @@ class GEBModel(GridModel):
             }
             relative_humidity = relative_humidity.resample(time="D").mean()
             relative_humidity = relative_humidity.raster.reproject_like(
-                mask, method="average"
+                target, method="average"
             )
-            relative_humidity.name = "hurs"
             self.set_forcing(relative_humidity, name="climate/hurs", byteshuffle=True)
 
-            pressure = process_ERA5(files, "sp", xy_chunksize=XY_CHUNKSIZE)
-            pressure = reproject_and_apply_lapse_rate_pressure(pressure, DEM, mask)
+            pressure = process_ERA5("sp", **download_args)
+            pressure = reproject_and_apply_lapse_rate_pressure(pressure, DEM, target)
             pressure.attrs = {
                 "standard_name": "surface_air_pressure",
                 "long_name": "Surface Air Pressure",
                 "units": "Pa",
             }
             pressure = pressure.resample(time="D").mean()
-            pressure.name = "ps"
             self.set_forcing(pressure, name="climate/ps", byteshuffle=True)
 
             u_wind = process_ERA5(
-                files,
                 "u10",
-                xy_chunksize=XY_CHUNKSIZE,
+                **download_args,
             )
             u_wind = u_wind.resample(time="D").mean()
 
             v_wind = process_ERA5(
-                files,
                 "v10",
-                xy_chunksize=XY_CHUNKSIZE,
+                **download_args,
             )
             v_wind = v_wind.resample(time="D").mean()
             wind_speed = np.sqrt(u_wind**2 + v_wind**2)
@@ -2361,8 +2315,7 @@ class GEBModel(GridModel):
                 "long_name": "Near-Surface Wind Speed",
                 "units": "m s-1",
             }
-            wind_speed = wind_speed.raster.reproject_like(mask, method="average")
-            wind_speed.name = "sfcwind"
+            wind_speed = wind_speed.raster.reproject_like(target, method="average")
             self.set_forcing(wind_speed, name="climate/sfcwind", byteshuffle=True)
 
         elif data_source == "cmip":
@@ -6354,7 +6307,6 @@ class GEBModel(GridModel):
                 water_levels,
                 name="hydrodynamics/waterlevel",
                 split_dataset=False,
-                is_spatial_dataset=False,
                 time_chunksize=24 * 6,  # 10 minute data
                 byteshuffle=True,
             )
@@ -6487,7 +6439,6 @@ class GEBModel(GridModel):
             discharge_data,
             name="observations/discharge",
             split_dataset=False,
-            is_spatial_dataset=False,
             time_chunksize=1e99,  # no chunking
         )
 
@@ -6502,73 +6453,12 @@ class GEBModel(GridModel):
     ):
         if is_updated[var]["updated"]:
             self.logger.info(f"Writing {var}")
-            filename = var + ".zarr.zip"
-            files[var] = filename
-            is_updated[var]["filename"] = filename
-            filepath = Path(self.root, filename)
-            filepath.parent.mkdir(parents=True, exist_ok=True)
+            zarr_folder = var + ".zarr"
+            files[var] = zarr_folder
+            is_updated[var]["filename"] = zarr_folder
+            filepath = Path(self.root, zarr_folder)
 
-            if grid.dtype == "float64":
-                grid = grid.astype("float32")
-
-            # zarr cannot handle / in variable names
-            grid.name = "data"
-            assert hasattr(grid, "spatial_ref")
-
-            # Rechunk data variable if needed
-            if grid.chunks is None:
-                # Grid is not chunked, specify chunks and chunk the grid
-                chunksizes = {
-                    "y": min(grid.y.size, y_chunksize),
-                    "x": min(grid.x.size, x_chunksize),
-                }
-                chunks_tuple = tuple(
-                    (
-                        chunksizes[dim]
-                        if dim in chunksizes
-                        else max(getattr(grid, dim).size, 1)
-                    )
-                    for dim in grid.dims
-                )
-                grid = grid.chunk(chunksizes)
-                data_chunks = chunks_tuple
-            else:
-                # Grid is already chunked; use existing chunks
-                data_chunks = tuple(
-                    s[0] if len(set(s)) == 1 else s for s in grid.chunks
-                )
-
-            # Build the encoding dictionary for the data variable
-            encoding = {
-                grid.name: {
-                    "compressor": zarr.codecs.BloscCodec(
-                        cname="zlib",
-                        clevel=9,
-                        shuffle=zarr.codecs.BloscShuffle.shuffle,
-                    ),  # no shuffling is most efficient,
-                    # Only specify chunks if the grid was not already chunked
-                    **({"chunks": data_chunks} if grid.chunks is None else {}),
-                }
-            }
-
-            # **Compute coordinate variables to avoid chunking issues**
-            for coord in grid.coords:
-                coord_da = grid.coords[coord]
-                if coord_da.ndim > 0 and coord_da.chunks is not None:
-                    # Option 1: Rechunk the coordinate variable to match data variable
-                    # grid.coords[coord] = coord_da.rechunk(data_chunks[-coord_da.ndim:])
-                    # Option 2: Compute the coordinate variable (since it's small)
-                    grid.coords[coord] = coord_da.compute()
-                # Include coordinate in encoding without specifying chunks
-                encoding[coord] = {}
-
-            ds = zarr.storage.ZipStore(filepath, mode="w")
-            # Now write to Zarr
-            grid.to_zarr(
-                ds,
-                mode="w",
-                encoding=encoding,
-            )
+            to_zarr(grid, filepath, x_chunksize=x_chunksize, y_chunksize=y_chunksize)
 
             # rasterio does not support boolean data, which is why
             # we convert it to uint8 before writing. These files are
@@ -6594,7 +6484,6 @@ class GEBModel(GridModel):
         for var, grid in self.subgrid.items():
             if var == "spatial_ref":
                 continue
-            grid["spatial_ref"] = self.subgrid.spatial_ref
             self._write_grid(
                 grid,
                 var,
@@ -6624,7 +6513,6 @@ class GEBModel(GridModel):
         for var, grid in self.MERIT_grid.items():
             if var == "spatial_ref":
                 continue
-            grid["spatial_ref"] = self.MERIT_grid.spatial_ref
             self._write_grid(
                 grid, var, self.files["MERIT_grid"], self.is_updated["MERIT_grid"]
             )
@@ -6635,143 +6523,19 @@ class GEBModel(GridModel):
         forcing,
         y_chunksize=XY_CHUNKSIZE,
         x_chunksize=XY_CHUNKSIZE,
-        byteshuffle=False,
         time_chunksize=1,
-        is_spatial_dataset=True,
+        byteshuffle=False,
     ) -> None:
         self.logger.info(f"Write {var}")
 
-        destination = var + ".zarr.zip"
+        destination = var + ".zarr"
         self.files["forcing"][var] = destination
         self.is_updated["forcing"][var]["filename"] = destination
 
         dst_file = Path(self.root, destination)
-
-        return to_zarr(forcing, dst_file)
-
-        if dst_file.exists():
-            dst_file.unlink()
-        dst_file.parent.mkdir(parents=True, exist_ok=True)
-
-        if is_spatial_dataset and forcing.rio.crs is None:
-            forcing = forcing.rio.write_crs(self.crs).rio.write_coordinate_system()
-
-        if isinstance(forcing, xr.DataArray):
-            # if data is float64, convert to float32
-            if forcing.dtype == np.float64:
-                forcing = forcing.astype(np.float32)
-        elif isinstance(forcing, xr.Dataset):
-            for var in forcing.data_vars:
-                if forcing[var].dtype == np.float64:
-                    forcing[var] = forcing[var].astype(np.float32)
-        else:
-            raise ValueError("forcing must be a DataArray or Dataset")
-
-        # write netcdf to temporary file
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_file = Path(tmp_dir) / "data.zarr.zip"
-            with zarr.storage.ZipStore(tmp_file, mode="w") as store:
-                if "time" in forcing.dims:
-                    with ProgressBar(dt=10):  # print progress bar every 10 seconds
-                        if is_spatial_dataset:
-                            assert forcing.dims[1] == "y" and forcing.dims[2] == "x", (
-                                "y and x dimensions must be second and third, otherwise xarray will not chunk correctly"
-                            )
-                            chunksizes = {
-                                "time": min(forcing.time.size, time_chunksize),
-                                "y": min(forcing.y.size, y_chunksize),
-                                "x": min(forcing.x.size, x_chunksize),
-                            }
-                        else:
-                            chunksizes = {
-                                "time": min(forcing.time.size, time_chunksize)
-                            }
-
-                        forcing.chunk(chunksizes).to_zarr(
-                            store,
-                            mode="w",
-                            encoding={
-                                forcing.name: {
-                                    "compressor": zarr.codecs.BloscCodec(
-                                        cname="zstd",
-                                        clevel=9,
-                                        shuffle=zarr.codecs.BloscShuffle.shuffle
-                                        if byteshuffle
-                                        else zarr.codecs.BloscShuffle.noshuffle,
-                                    ),
-                                    "chunks": (
-                                        (
-                                            chunksizes[dim]
-                                            if dim in chunksizes
-                                            else max(getattr(forcing, dim).size, 1)
-                                        )
-                                        for dim in forcing.dims
-                                    ),
-                                }
-                            },
-                        )
-
-            # move file to final location
-            shutil.copy(tmp_file, dst_file)
-        store = zarr.storage.ZipStore(dst_file, mode="r")
-        return xr.open_dataset(store, chunks={}, engine="zarr")[forcing.name]
-        # else:
-        #     if isinstance(forcing, xr.DataArray):
-        #         name = forcing.name
-        #         encoding = {
-        #             forcing.name: {
-        #                 "compressor": Blosc(
-        #                     cname="zstd",
-        #                     clevel=9,
-        #                     shuffle=zarr.codecs.BloscShuffle.shuffle
-        #                     if byteshuffle
-        #                     else zarr.codecs.BloscShuffle.noshuffle,
-        #                 )
-        #             }
-        #         }
-        #     elif isinstance(forcing, xr.Dataset):
-        #         assert len(forcing.data_vars) > 0, (
-        #             "forcing must have more than one variable or name must be set"
-        #         )
-        #         encoding = {
-        #             var: {
-        #                 "compressor": Blosc(
-        #                     cname="zstd",
-        #                     clevel=9,
-        #                     shuffle=zarr.codecs.BloscShuffle.shuffle
-        #                     if byteshuffle
-        #                     else zarr.codecs.BloscShuffle.noshuffle,
-        #                 )
-        #             }
-        #             for var in forcing.data_vars
-        #         }
-        #     else:
-        #         raise ValueError("forcing must be a DataArray or Dataset")
-        #     forcing.to_zarr(
-        #         tmp_file.name,
-        #         mode="w",
-        #         encoding=encoding,
-        #     )
-
-        #     if isinstance(forcing, xr.DataArray):
-        #         # also export to tif for easier visualization
-        #         forcing.rio.to_raster(dst_file.with_suffix(".tif"))
-        #     elif (
-        #         isinstance(forcing, xr.Dataset) and len(forcing.data_vars) == 1
-        #     ):
-        #         # also export to tif for easier visualization, but only if there is one variable
-        #         forcing[list(forcing.data_vars)[0]].rio.to_raster(
-        #             dst_file.with_suffix(".tif")
-        #         )
-
-        #     # move file to final location
-        #     shutil.copy(tmp_file.name, dst_file)
-
-        #     ds = xr.open_dataset(dst_file, chunks={}, engine="zarr")
-        #     if isinstance(forcing, xr.DataArray):
-        #         return ds[name]
-        #     else:
-        #         return ds
+        return to_zarr(
+            forcing, dst_file, x_chunksize, y_chunksize, time_chunksize, byteshuffle
+        )
 
     def write_forcing(self) -> None:
         self._assert_write_mode
@@ -6920,9 +6684,7 @@ class GEBModel(GridModel):
             self.set_dict(d, name=name, update=False)
 
     def _read_grid(self, fn: str, name: str) -> xr.Dataset:
-        store = zarr.storage.ZipStore(Path(self.root) / fn, mode="r")
-        da = xr.open_dataarray(store, chunks={}, engine="zarr")
-        self.file_handles[name] = store, da
+        da = open_zarr(Path(self.root) / fn)
         da.name = name
         return da
 
@@ -6984,13 +6746,12 @@ class GEBModel(GridModel):
         y_chunksize=XY_CHUNKSIZE,
         time_chunksize=1,
         byteshuffle=False,
-        is_spatial_dataset=True,
         *args,
         **kwargs,
     ):
         assert isinstance(data, xr.DataArray)
-        data.name = name
         self.is_updated["forcing"][name] = {"updated": update}
+        data.name = name
         if update and write:
             data = self.write_forcing_to_zarr(
                 name,
@@ -6998,7 +6759,6 @@ class GEBModel(GridModel):
                 x_chunksize=x_chunksize,
                 y_chunksize=y_chunksize,
                 time_chunksize=time_chunksize,
-                is_spatial_dataset=is_spatial_dataset,
                 byteshuffle=byteshuffle,
             )
             self.is_updated["forcing"][name]["updated"] = False
@@ -7008,8 +6768,8 @@ class GEBModel(GridModel):
     def _set_grid(
         self,
         grid,
-        data: Union[xr.DataArray, xr.Dataset, np.ndarray],
-        name: Optional[str] = None,
+        data: xr.DataArray,
+        name: str,
     ):
         """Add data to grid.
 
@@ -7019,64 +6779,19 @@ class GEBModel(GridModel):
         ----------
         data: xarray.DataArray or xarray.Dataset
             new map layer to add to grid
-        name: str, optional
+        name: str
             Name of new map layer, this is used to overwrite the name of a DataArray
             and ignored if data is a Dataset
         """
-        assert grid is not None
-        # NOTE: variables in a dataset are not longer renamed as used to be the case in
-        # set_staticmaps
-        name_required = isinstance(data, np.ndarray) or (
-            isinstance(data, xr.DataArray) and data.name is None
-        )
-        if name is None and name_required:
-            raise ValueError(f"Unable to set {type(data).__name__} data without a name")
-        if isinstance(data, np.ndarray):
-            if data.shape != grid.raster.shape:
-                raise ValueError("Shape of data and grid maps do not match")
-            data = xr.DataArray(dims=grid.raster.dims, data=data, name=name)
-        if isinstance(data, xr.DataArray):
-            if name is not None:  # rename
-                data.name = name
-            data = data.to_dataset()
-        elif not isinstance(data, xr.Dataset):
-            raise ValueError(f"cannot set data of type {type(data).__name__}")
 
-        if len(grid.data_vars) > 0:
-            data = self.snap_to_grid(data, grid)
-        # force read in r+ mode
-        if len(grid) == 0:  # trigger init / read
-            # copy spatial reference from data
-            grid["spatial_ref"] = data["spatial_ref"]
-            var = data[name]
-            if "spatial_ref" in data[name].coords:
-                grid[name] = var.drop_vars("spatial_ref")
-            else:
-                grid[name] = var
-            # copy attributes from data
-            grid[name].attrs = data[name].attrs
-        else:
-            for dvar in data.data_vars:
-                if dvar == "spatial_ref":
-                    continue
-                if dvar in grid:
-                    if self._read:
-                        self.logger.warning(f"Replacing grid map: {dvar}")
-                    assert grid[dvar].shape == data[dvar].shape
-                    assert (grid[dvar].y.values == data[dvar].y.values).all()
-                    assert (grid[dvar].x.values == data[dvar].x.values).all()
-                    grid = grid.drop_vars(dvar)
+        assert isinstance(data, xr.DataArray)
 
-                assert CRS.from_wkt(data.spatial_ref.crs_wkt) == CRS.from_wkt(
-                    grid.spatial_ref.crs_wkt
-                )
-                var = data[dvar]
-                var.raster.set_crs(grid.raster.crs)
-                if "spatial_ref" in var.coords:
-                    var = var.drop_vars("spatial_ref")
+        if name in grid:
+            if self._read:
+                self.logger.warning(f"Replacing grid map: {name}")
+            grid = grid.drop_vars(name)
 
-                grid[dvar] = var
-                grid[dvar].attrs = data[dvar].attrs
+        grid[name] = data
 
         return grid
 
