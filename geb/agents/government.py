@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
-import rioxarray
 from .general import AgentBaseClass
 import geopandas as gpd
 import rasterio
 import xarray as xr
-import rioxarray
 import numpy as np
 from rasterio.features import rasterize
 from rasterio.features import shapes
 from shapely.geometry import shape
-import numpy as np
 from ..hydrology.landcover import (
     FOREST,
     GRASSLAND_LIKE,
