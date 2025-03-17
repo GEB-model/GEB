@@ -1543,7 +1543,7 @@ class Soil(object):
             w_pre = self.HRU.var.w.copy()
             topwater_pre = self.HRU.var.topwater.copy()
 
-        if not self.model.spinup and self.model.config["plantFATE"]["new_forest"] and self.model.current_timestep == 1:
+        if not self.model.spinup and self.model.config["general"]["simulate_forest"] and self.model.config["plantFATE"]["new_forest"] and self.model.current_timestep == 1:
             import geopandas as gpd
             from rasterio.features import rasterize
             from shapely.geometry import shape
@@ -1717,17 +1717,19 @@ class Soil(object):
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
-        plantfate_transpiration = np.zeros(len(self.plantFATE_forest_RUs))
-        plantfate_bare_soil_evaporation = np.zeros(len(self.plantFATE_forest_RUs))
-        plantfate_transpiration_by_layer = np.zeros_like(
-            self.HRU.var.w
-        )
-        plantfate_biomass = np.zeros(len(self.plantFATE_forest_RUs))
-        plantfate_co2 = np.zeros(len(self.plantFATE_forest_RUs))
-        plantfate_num_ind = np.zeros(len(self.plantFATE_forest_RUs))
+        # if self.model.config["general"]["simulate_forest"]:
+
 
         # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
         if self.model.config["general"]["simulate_forest"]:
+            plantfate_transpiration = np.zeros(len(self.plantFATE_forest_RUs))
+            plantfate_bare_soil_evaporation = np.zeros(len(self.plantFATE_forest_RUs))
+            plantfate_transpiration_by_layer = np.zeros_like(
+                self.HRU.var.w
+            )
+            plantfate_biomass = np.zeros(len(self.plantFATE_forest_RUs))
+            plantfate_co2 = np.zeros(len(self.plantFATE_forest_RUs))
+            plantfate_num_ind = np.zeros(len(self.plantFATE_forest_RUs))
             # import multiprocessing
             #
             # print(plantfate_transpiration[self.plantFATE_forest_RUs])
@@ -1756,16 +1758,19 @@ class Soil(object):
             #     p.join()
             #
             # print(plantfate_transpiration[self.plantFATE_forest_RUs])
+            actual_total_transpiration += plantfate_transpiration
+            self.HRU.var.w -= plantfate_transpiration_by_layer
+
+            self.model.data.grid.plantFATE_biomass = self.model.data.to_grid(HRU_data=plantfate_biomass,
+                                                                             fn="weightedmean")
+            self.model.data.grid.plantFATE_NPP = self.model.data.to_grid(HRU_data=plantfate_co2, fn="weightedmean")
+            self.model.data.grid.plantFATE_num_ind = self.model.data.to_grid(HRU_data=plantfate_num_ind,
+                                                                             fn="weightedmean")
 
 
         # actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
             # print(plantfate_bare_soil_evaporation)
-        actual_total_transpiration += plantfate_transpiration
-        self.HRU.var.w -= plantfate_transpiration_by_layer
 
-        self.model.data.grid.plantFATE_biomass = self.model.data.to_grid(HRU_data=plantfate_biomass, fn="weightedmean")
-        self.model.data.grid.plantFATE_NPP = self.model.data.to_grid(HRU_data=plantfate_co2, fn="weightedmean")
-        self.model.data.grid.plantFATE_num_ind = self.model.data.to_grid(HRU_data=plantfate_num_ind, fn="weightedmean")
 
 
         timer.new_split("Evapotranspiration")
@@ -1777,8 +1782,8 @@ class Soil(object):
             self.HRU.var.land_use_type, dtype=np.float32
         )
 
-        # assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
-        # assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
         for _ in range(n_substeps):
             (
@@ -1806,8 +1811,8 @@ class Soil(object):
             direct_runoff += direct_runoff_substep
             groundwater_recharge[bioarea] += groundwater_recharge_substep[bioarea]
 
-        # assert (self.var.w[:, bioarea] <= self.ws[:, bioarea]).all()
-        # assert (self.var.w[:, bioarea] >= self.wres[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
         timer.new_split("Vertical transport")
 
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
@@ -1886,15 +1891,16 @@ class Soil(object):
             # print(self.var.w[0:len(self.var.w), self.plantFATE_forest_RUs])
             # print(self.wres[0:len(self.wres), self.plantFATE_forest_RUs])
             #
-            # assert (
-            #     actual_total_transpiration[self.plantFATE_forest_RUs]
-            #     <= potential_transpiration[self.plantFATE_forest_RUs] + 1e-7
-            # ).all()
-            #
-            # assert (
-            #     actual_total_transpiration[bioarea]
-            #     <= potential_transpiration[bioarea] + 1e-7
-            # ).all()
+            if self.model.config["general"]["simulate_forest"]:
+                assert (
+                    actual_total_transpiration[self.plantFATE_forest_RUs]
+                    <= potential_transpiration[self.plantFATE_forest_RUs] + 1e-7
+                ).all()
+
+            assert (
+                actual_total_transpiration[bioarea]
+                <= potential_transpiration[bioarea] + 1e-7
+            ).all()
             assert (
                 actual_bare_soil_evaporation[bioarea]
                 <= potential_bare_soil_evaporation[bioarea] + 1e-7
