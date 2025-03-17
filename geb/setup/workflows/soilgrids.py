@@ -86,15 +86,17 @@ def load_soilgrids(data_catalog, subgrid, region):
     subgrid_mask = subgrid["areamaps/sub_grid_mask"]
     subgrid_mask = subgrid_mask.rio.set_crs(4326)
 
-    print(subgrid_mask.chunks, "subgrid chunks")
-
     ds = []
     for variable_name in variables:
         variable_layers = []
         for i, layer in enumerate(layers, start=1):
-            da = data_catalog.get_rasterdataset(
-                f"soilgrids_2020_{variable_name}_{layer}", geom=region, buffer=30
-            ).compute()
+            da = (
+                data_catalog.get_rasterdataset(
+                    f"soilgrids_2020_{variable_name}_{layer}", geom=region, buffer=30
+                )
+                .astype(np.float32)
+                .compute()
+            )
             da = da.raster.interpolate_na("nearest")
             da.name = f"{variable_name}_{i}"
             variable_layers.append(da)
@@ -110,10 +112,8 @@ def load_soilgrids(data_catalog, subgrid, region):
         ds_variable = ds_variable.rio.set_crs(4326)
         ds_variable.name = variable_name
         ds.append(ds_variable)
-        print("done", variable_name, ds_variable.chunks)
 
     ds = xr.merge(ds, join="exact")
-    print("merging")
     # depth_to_bedrock = data_catalog.get_rasterdataset(
     #     "soilgrids_2017_BDTICM", geom=region
     # )
@@ -126,6 +126,5 @@ def load_soilgrids(data_catalog, subgrid, region):
     for layer, height in enumerate((0.05, 0.10, 0.15, 0.30, 0.40, 1.00)):
         soil_layer_height[layer] = height
     ds["height"] = soil_layer_height
-    print("height done", ds["height"].chunks)
     ds.raster.set_crs(4326)
     return ds.rio.set_crs(4326)

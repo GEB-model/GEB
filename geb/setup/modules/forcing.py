@@ -6,7 +6,7 @@ import concurrent.futures
 import pandas as pd
 from datetime import date, timedelta
 
-from .io import to_zarr, open_zarr
+from ...workflows.io import to_zarr, open_zarr
 
 
 def reproject_and_apply_lapse_rate_temperature(T, DEM, grid_mask, lapse_rate=-0.0065):
@@ -194,8 +194,8 @@ def _download_ERA5(
     return files
 
 
-def download_ERA5(folder, variable, starttime, endtime, bounds):
-    output_fn = folder / f"{variable}.zarr.zip"
+def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
+    output_fn = folder / f"{variable}.zarr"
     if output_fn.exists():
         da = open_zarr(output_fn)
     else:
@@ -216,16 +216,17 @@ def download_ERA5(folder, variable, starttime, endtime, bounds):
         )
         da = da.isel(time=slice(1, None))
 
+        logger.info(f"Downloading ERA5 {variable} to {output_fn}")
         da = to_zarr(
             da,
-            folder / f"{variable}.zarr.zip",
+            output_fn,
             time_chunksize=24,
         )
     return da
 
 
-def process_ERA5(variable, folder, starttime, endtime, bounds):
-    da = download_ERA5(folder, variable, starttime, endtime, bounds)
+def process_ERA5(variable, folder, starttime, endtime, bounds, logger):
+    da = download_ERA5(folder, variable, starttime, endtime, bounds, logger)
     # assert that time is monotonically increasing with a constant step size
     assert (
         da.time.diff("time").astype(np.int64)
@@ -304,3 +305,8 @@ def process_ERA5(variable, folder, starttime, endtime, bounds):
     da.raster.set_crs(4326)
 
     return da
+
+
+class Forcing:
+    def __init__(self):
+        pass

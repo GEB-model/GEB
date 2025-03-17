@@ -28,7 +28,7 @@ def calculate_cell_area(affine_transform, shape):
         distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
     )
     height_m = distance_1_degree_latitude * abs(affine_transform.e)
-    return width_m * height_m
+    return (width_m * height_m).astype(np.float32)
 
 
 def clip_with_grid(ds, mask):
