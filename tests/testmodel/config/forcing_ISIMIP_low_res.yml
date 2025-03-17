@@ -1,0 +1,8 @@
+setup_forcing:
+  data_source: isimip
+  starttime: 2000-01-01
+  endtime: 2003-12-31
+  resolution_arcsec: 1800
+  # forcing: gswp3-w5e5
+  forcing: gfdl-esm4
+  ssp: ssp370
