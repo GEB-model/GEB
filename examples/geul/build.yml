@@ -1,6 +1,8 @@
 setup_grid:
   sub_grid_factor: 20
 
+setup_elevation:
+
 setup_cell_area:
 
 setup_regions_and_land_use:
