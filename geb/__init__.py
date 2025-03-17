@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from numba import config
 import faulthandler
+import xarray as xr
 
 
 if __debug__:
@@ -23,7 +24,6 @@ if __debug__:
 os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
 # os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
 
-
 if platform.system() != "Windows":
     # Modify LD_LIBRARY_PATH on Unix-like systems (Linux, macOS)
     import tbb  # noqa: F401
@@ -34,6 +34,10 @@ if platform.system() != "Windows":
 
 # set threading layer to tbb, this is much faster than other threading layers
 config.THREADING_LAYER = "tbb"
+
+# xarray uses bottleneck for some operations to speed up computations
+# however, some implementations are numerically unstable, so we disable it
+xr.set_options(use_bottleneck=False)
 
 # set environment variable for GEB package directory
 os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
