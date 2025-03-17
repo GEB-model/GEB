@@ -15,16 +15,14 @@ dependencies = [
     "cdsapi>=0.7.5",
     "cfgrib>=0.9.14",
     "damagescanner==0.8b1",
-    "dask>=2024.6,<2024.12.0",  # this is pinned to lower version due to a chunking error. In the future, try to unpin this.
+    "dask>=2024.6,<2024.12.0", # Pinned due to chunking error, unpin when resolved.
     "deap>=1.4.1",
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
     "honeybees>=1.1.1",
     "hydromt==0.10.1",
-    "hydromt-sfincs @ git+https://github.com/Deltares/hydromt_sfincs.git",
     "isimip-client>=1.0.1",
-    "matplotlib>=3.9.2",
-    "nest_asyncio>=1.6.0",
+    "nest_asyncio>=1.6.0",  # for GUI in 
     "networkx",
     "numba>=0.61.0",
     "numpy>=2.1",
@@ -41,22 +39,20 @@ dependencies = [
     "rioxarray>=0.17.0",
     "ruff",
     "s3fs>=2023.6.0",
-    "SALib>=1.4.8",
+    "SALib>=1.4.8",  # for sensitivity analysis
     "scipy>=1.14.0",
     "setuptools>=75.8.0",
-    "seaborn>=0.13.2",
     "tbb4py>=2021.13.1",
     "tqdm>=4.66.1",
     "xarray>=2024.3.0",
     "xclim>=0.52.0",
-    "xesmf>=0.8.4",
     "xmipy>=1.5.0",
     "zarr>=3.0.5",
+    "click>=8.1.8",
 ]
 requires-python = ">=3.12, <3.14"
 readme = "README.md"
 classifiers = [
-    # https://pypi.python.org/pypi?%3Aaction=list_classifiers
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
@@ -64,16 +60,19 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dynamic = ['version', 'description']
+dynamic = ["version", "description"]
+
+[tool.uv]
+required-environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'win32'",
+]
 
 [tool.flit.module]
 name = "geb"
 
 [project.optional-dependencies]
-dev = [
-    "pytest",
-    "ruff",
-]
+dev = []
 docs = [
     "sphinx<8",
     "sphinx-autodoc-typehints",
@@ -83,15 +82,8 @@ docs = [
     "sphinxcontrib-autoyaml",
     "pypandoc",
 ]
-
-full = [
-]
-
-fairstream = [
-    "pgmpy>=0.1.24",
-    "daft-pgm>=0.1.4",
-    "opt-einsum>=3.3.0",
-]
+full = []
+fairstream = ["pgmpy>=0.1.24", "daft-pgm>=0.1.4", "opt-einsum>=3.3.0"]
 
 [project.scripts]
-"geb" = "geb.cli:cli"
+geb = "geb.cli:cli"
