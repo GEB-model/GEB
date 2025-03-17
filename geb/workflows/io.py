@@ -19,6 +19,7 @@ all_async_readers = []
 def open_zarr(zarr_folder):
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
+    # consolidated metadata is off-spec for zarr, therefore we set it to False
     da = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
@@ -133,7 +134,7 @@ def to_zarr(
             "mode": "w",
             "encoding": encoding,
             "zarr_version": zarr_version,
-            "consolidated": False,
+            "consolidated": False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
         }
 
         if progress:
