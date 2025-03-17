@@ -185,7 +185,7 @@ class GEBModel(GridModel, Forcing):
         self._region_subgrid = None
 
         self.table = {}
-        self.binary = {}
+        self.array = {}
         self.dict = {}
 
         self.files = {
@@ -194,7 +194,7 @@ class GEBModel(GridModel, Forcing):
             "grid": {},
             "dict": {},
             "table": {},
-            "binary": {},
+            "array": {},
             "subgrid": {},
             "region_subgrid": {},
         }
@@ -2830,7 +2830,7 @@ class GEBModel(GridModel, Forcing):
         If `irrigation_sources` is provided, the method sets the `irrigation_source` column of the `farmers` DataFrame to
         the corresponding IDs.
 
-        Finally, the method sets the binary data for each column of the `farmers` DataFrame as agents data in the model
+        Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
         with names of the form 'agents/farmers/{column}'.
         """
         regions = self.geoms["areamaps/regions"]
@@ -2910,8 +2910,8 @@ class GEBModel(GridModel, Forcing):
         subgrid_farms_in_study_area_[:] = subgrid_farms_in_study_area
         self.set_subgrid(subgrid_farms_in_study_area_, name="agents/farmers/farms")
 
-        self.set_binary(farmers.index.values, name="agents/farmers/id")
-        self.set_binary(farmers["region_id"].values, name="agents/farmers/region_id")
+        self.set_array(farmers.index.values, name="agents/farmers/id")
+        self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
     def setup_farmers_from_csv(self, path=None):
         """
@@ -3536,13 +3536,13 @@ class GEBModel(GridModel, Forcing):
                 ]
             )
         for household_attribute in household_characteristics:
-            self.set_binary(
+            self.set_array(
                 data_concatenated[household_attribute],
                 name=f"agents/households/{household_attribute}",
             )
 
     def setup_farmer_household_characteristics(self, maximum_age=85):
-        n_farmers = self.binary["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
         # get farmer locations
@@ -3701,15 +3701,15 @@ class GEBModel(GridModel, Forcing):
         assert (GDL_region_per_farmer["AGE"] != -1).all()
         assert (GDL_region_per_farmer["EDUC"] != -1).all()
 
-        self.set_binary(
+        self.set_array(
             GDL_region_per_farmer["HHSIZE_CAT"].values,
             name="agents/farmers/household_size",
         )
-        self.set_binary(
+        self.set_array(
             GDL_region_per_farmer["AGE"].values,
             name="agents/farmers/age_household_head",
         )
-        self.set_binary(
+        self.set_array(
             GDL_region_per_farmer["EDUC"].values,
             name="agents/farmers/education_level",
         )
@@ -3807,7 +3807,7 @@ class GEBModel(GridModel, Forcing):
         self,
         interest_rate=0.05,
     ):
-        n_farmers = self.binary["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/id"].size
 
         preferences_global = self.create_preferences()
         preferences_global.rename(
@@ -3877,7 +3877,7 @@ class GEBModel(GridModel, Forcing):
         # Map to corresponding region
         data_reset = data.reset_index(level="region_id")
         data = data_reset.set_index("region_id")
-        region_ids = self.binary["agents/farmers/region_id"]
+        region_ids = self.array["agents/farmers/region_id"]
 
         # Set gains and losses
         gains_array = pd.Series(region_ids).map(data["Gains"]).to_numpy()
@@ -3887,8 +3887,8 @@ class GEBModel(GridModel, Forcing):
         discount_array = pd.Series(region_ids).map(data["Discount"]).to_numpy()
         discount_std = pd.Series(region_ids).map(data["Discount_std"]).to_numpy()
 
-        education_levels = self.binary["agents/farmers/education_level"]
-        age = self.binary["agents/farmers/age_household_head"]
+        education_levels = self.array["agents/farmers/education_level"]
+        age = self.array["agents/farmers/age_household_head"]
 
         def normalize(array):
             return (array - np.min(array)) / (np.max(array) - np.min(array))
@@ -3932,14 +3932,14 @@ class GEBModel(GridModel, Forcing):
             [gains_array_with_variation, losses_array_with_variation], axis=0
         )
 
-        self.set_binary(neutral_risk_aversion, name="agents/farmers/risk_aversion")
-        self.set_binary(
+        self.set_array(neutral_risk_aversion, name="agents/farmers/risk_aversion")
+        self.set_array(
             gains_array_with_variation, name="agents/farmers/risk_aversion_gains"
         )
-        self.set_binary(
+        self.set_array(
             losses_array_with_variation, name="agents/farmers/risk_aversion_losses"
         )
-        self.set_binary(intention_factor, name="agents/farmers/intention_factor")
+        self.set_array(intention_factor, name="agents/farmers/intention_factor")
 
         # discount rate
         discount_rate_variation_factor = ((2 / 6) * normalize(education_levels)) + (
@@ -3955,13 +3955,13 @@ class GEBModel(GridModel, Forcing):
         discount_rate_with_variation = np.clip(
             discount_array + discount_rate_variation, 0, 2
         )
-        self.set_binary(
+        self.set_array(
             discount_rate_with_variation,
             name="agents/farmers/discount_rate",
         )
 
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
-        self.set_binary(interest_rate, name="agents/farmers/interest_rate")
+        self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
     def setup_farmer_crop_calendar_multirun(
         self,
@@ -3985,7 +3985,7 @@ class GEBModel(GridModel, Forcing):
         reduce_crops=False,
         replace_base=False,
     ):
-        n_farmers = self.binary["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/id"].size
 
         MIRCA_unit_grid = self.data_catalog.get_rasterdataset(
             "MIRCA2000_unit_grid", bbox=self.bounds, buffer=2
@@ -4362,8 +4362,8 @@ class GEBModel(GridModel, Forcing):
                     == farmer_crop_calender.shape[0]
                 )
 
-        self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
-        self.set_binary(
+        self.set_array(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
+        self.set_array(
             np.full_like(is_irrigated, 1, dtype=np.int32),
             name="agents/farmers/crop_calendar_rotation_years",
         )
@@ -4439,7 +4439,7 @@ class GEBModel(GridModel, Forcing):
             irrigated_fraction_2000.raster.transform.to_gdal(),
         )
 
-        n_farmers = self.binary["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/id"].size
 
         # Prepare empty crop arrays
         farmer_crops = np.full(n_farmers, -1, dtype=np.int32)
@@ -4562,7 +4562,7 @@ class GEBModel(GridModel, Forcing):
         )
 
         n_cells = grid_id_da.max().item()
-        n_farmers = self.binary["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/id"].size
 
         farmer_cells = sample_from_map(
             grid_id_da.values,
@@ -4664,7 +4664,7 @@ class GEBModel(GridModel, Forcing):
                     farmer_indices_in_region, irrigation_equipment_per_farmer
                 ] = 1
 
-        self.set_binary(adaptations, name="agents/farmers/adaptations")
+        self.set_array(adaptations, name="agents/farmers/adaptations")
 
     def setup_population(self):
         populaton_map = self.data_catalog.get_rasterdataset(
@@ -4695,8 +4695,8 @@ class GEBModel(GridModel, Forcing):
         # plt.scatter(sample_locatons[:, 0], sample_locatons[:, 1], c=z, s=100)
         # plt.savefig('population.png')
 
-        self.set_binary(sizes, name="agents/households/sizes")
-        self.set_binary(locations, name="agents/households/locations")
+        self.set_array(sizes, name="agents/households/sizes")
+        self.set_array(locations, name="agents/households/locations")
 
         return None
 
@@ -5350,6 +5350,7 @@ class GEBModel(GridModel, Forcing):
     def _write_grid(
         self,
         grid,
+        grid_name,
         var,
         files,
         is_updated,
@@ -5358,10 +5359,10 @@ class GEBModel(GridModel, Forcing):
     ):
         if is_updated[var]["updated"]:
             self.logger.info(f"Writing {var}")
-            zarr_folder = var + ".zarr"
+            zarr_folder = Path(grid_name) / (var + ".zarr")
             files[var] = zarr_folder
             is_updated[var]["filename"] = zarr_folder
-            filepath = Path(self.root, zarr_folder)
+            filepath = self.root / zarr_folder
 
             to_zarr(
                 grid,
@@ -5377,7 +5378,9 @@ class GEBModel(GridModel, Forcing):
             grid["spatial_ref"] = self.grid.spatial_ref
             if var == "spatial_ref":
                 continue
-            self._write_grid(grid, var, self.files["grid"], self.is_updated["grid"])
+            self._write_grid(
+                grid, "grid", var, self.files["grid"], self.is_updated["grid"]
+            )
 
     def write_subgrid(self):
         self._assert_write_mode
@@ -5386,6 +5389,7 @@ class GEBModel(GridModel, Forcing):
                 continue
             self._write_grid(
                 grid,
+                "subgrid",
                 var,
                 self.files["subgrid"],
                 self.is_updated["subgrid"],
@@ -5400,6 +5404,7 @@ class GEBModel(GridModel, Forcing):
                 continue
             self._write_grid(
                 grid,
+                "region_subgrid",
                 var,
                 self.files["region_subgrid"],
                 self.is_updated["region_subgrid"],
@@ -5418,7 +5423,7 @@ class GEBModel(GridModel, Forcing):
     ) -> None:
         self.logger.info(f"Write {var}")
 
-        destination = var + ".zarr"
+        destination = Path("forcing") / (var + ".zarr")
         self.files["forcing"][var] = destination
         self.is_updated["forcing"][var]["filename"] = destination
 
@@ -5447,7 +5452,7 @@ class GEBModel(GridModel, Forcing):
             self._assert_write_mode
             for name, data in self.table.items():
                 if self.is_updated["table"][name]["updated"]:
-                    fn = os.path.join(name + ".parquet")
+                    fn = Path("table") / (name + ".parquet")
                     self.logger.info(f"Writing file {fn}")
                     self.files["table"][name] = fn
                     self.is_updated["table"][name]["filename"] = fn
@@ -5456,17 +5461,17 @@ class GEBModel(GridModel, Forcing):
                     fp.parent.mkdir(parents=True, exist_ok=True)
                     data.to_parquet(fp, engine="pyarrow")
 
-    def write_binary(self):
-        if len(self.binary) == 0:
+    def write_array(self):
+        if len(self.array) == 0:
             self.logger.info("No table data found, skip writing.")
         else:
             self._assert_write_mode
-            for name, data in self.binary.items():
-                if self.is_updated["binary"][name]["updated"]:
-                    fn = os.path.join(name + ".npz")
+            for name, data in self.array.items():
+                if self.is_updated["array"][name]["updated"]:
+                    fn = Path("array") / (name + ".npz")
                     self.logger.info(f"Writing file {fn}")
-                    self.files["binary"][name] = fn
-                    self.is_updated["binary"][name]["filename"] = fn
+                    self.files["array"][name] = fn
+                    self.is_updated["array"][name]["filename"] = fn
                     self.logger.info(f"Writing file {fn}")
                     fp = Path(self.root, fn)
                     fp.parent.mkdir(parents=True, exist_ok=True)
@@ -5521,9 +5526,9 @@ class GEBModel(GridModel, Forcing):
         self.is_updated["table"][name] = {"updated": update}
         self.table[name] = table
 
-    def set_binary(self, data, name, update=True):
-        self.is_updated["binary"][name] = {"updated": update}
-        self.binary[name] = data
+    def set_array(self, data, name, update=True):
+        self.is_updated["array"][name] = {"updated": update}
+        self.array[name] = data
 
     def set_dict(self, data, name, update=True):
         self.is_updated["dict"][name] = {"updated": update}
@@ -5535,7 +5540,7 @@ class GEBModel(GridModel, Forcing):
 
     def write(self):
         self.write_geoms()
-        self.write_binary()
+        self.write_array()
         self.write_table()
         self.write_dict()
 
@@ -5559,11 +5564,11 @@ class GEBModel(GridModel, Forcing):
             geom = gpd.read_parquet(Path(self.root, fn))
             self.set_geoms(geom, name=name, update=False)
 
-    def read_binary(self):
+    def read_array(self):
         self.read_files()
-        for name, fn in self.files["binary"].items():
-            binary = np.load(Path(self.root, fn))["data"]
-            self.set_binary(binary, name=name, update=False)
+        for name, fn in self.files["array"].items():
+            array = np.load(Path(self.root, fn))["data"]
+            self.set_array(array, name=name, update=False)
 
     def read_table(self):
         self.read_files()
@@ -5609,7 +5614,7 @@ class GEBModel(GridModel, Forcing):
             self.read_files()
 
             self.read_geoms()
-            self.read_binary()
+            self.read_array()
             self.read_table()
             self.read_dict()
 
