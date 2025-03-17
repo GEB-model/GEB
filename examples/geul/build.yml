@@ -1,5 +1,5 @@
 setup_grid:
-  sub_grid_factor: 20
+  subgrid_factor: 20
 
 setup_elevation:
 

@@ -177,48 +177,44 @@ class Forcing:
         pass
 
     def set_pr_hourly(self, pr_hourly, *args, **kwargs):
-        self.set_forcing(
+        self.set_other(
             pr_hourly, name="climate/pr_hourly", *args, **kwargs, time_chunksize=7 * 24
         )
 
     def set_pr(self, pr, *args, **kwargs):
-        self.set_forcing(pr, name="climate/pr", *args, **kwargs)
+        self.set_other(pr, name="climate/pr", *args, **kwargs)
 
     def set_rsds(self, rsds, *args, **kwargs):
-        self.set_forcing(rsds, name="climate/rsds", *args, **kwargs)
+        self.set_other(rsds, name="climate/rsds", *args, **kwargs)
 
     def set_rlds(self, rlds, *args, **kwargs):
-        self.set_forcing(rlds, name="climate/rlds", *args, **kwargs)
+        self.set_other(rlds, name="climate/rlds", *args, **kwargs)
 
     def set_tas(self, tas, *args, **kwargs):
-        self.set_forcing(tas, name="climate/tas", *args, **kwargs, byteshuffle=True)
+        self.set_other(tas, name="climate/tas", *args, **kwargs, byteshuffle=True)
 
     def set_tasmax(self, tasmax, *args, **kwargs):
-        self.set_forcing(
-            tasmax, name="climate/tasmax", *args, **kwargs, byteshuffle=True
-        )
+        self.set_other(tasmax, name="climate/tasmax", *args, **kwargs, byteshuffle=True)
 
     def set_tasmin(self, tasmin, *args, **kwargs):
-        self.set_forcing(
-            tasmin, name="climate/tasmin", *args, **kwargs, byteshuffle=True
-        )
+        self.set_other(tasmin, name="climate/tasmin", *args, **kwargs, byteshuffle=True)
 
     def set_hurs(self, hurs, *args, **kwargs):
-        self.set_forcing(hurs, name="climate/hurs", *args, **kwargs, byteshuffle=True)
+        self.set_other(hurs, name="climate/hurs", *args, **kwargs, byteshuffle=True)
 
     def set_ps(self, ps, *args, **kwargs):
-        self.set_forcing(ps, name="climate/ps", *args, **kwargs, byteshuffle=True)
+        self.set_other(ps, name="climate/ps", *args, **kwargs, byteshuffle=True)
 
     def set_sfcwind(self, sfcwind, *args, **kwargs):
-        self.set_forcing(
+        self.set_other(
             sfcwind, name="climate/sfcwind", *args, **kwargs, byteshuffle=True
         )
 
     def set_SPEI(self, SPEI, *args, **kwargs):
-        self.set_forcing(SPEI, name="climate/SPEI", *args, **kwargs, byteshuffle=True)
+        self.set_other(SPEI, name="climate/SPEI", *args, **kwargs, byteshuffle=True)
 
     def setup_forcing_era5(self, starttime, endtime):
-        target = self.grid["areamaps/grid_mask"]
+        target = self.grid["mask"]
         target.raster.set_crs(4326)
 
         download_args = {
@@ -263,7 +259,7 @@ class Forcing:
         }
 
         rsds = rsds.raster.reproject_like(target, method="average")
-        self.set(rsds)
+        self.set_rsds(rsds)
 
         hourly_rlds = process_ERA5(
             "strd",  # surface_thermal_radiation_downwards
@@ -463,7 +459,7 @@ class Forcing:
                 starttime, endtime, resolution_arcsec, forcing, ssp
             )
         elif data_source == "era5":
-            self.setup_forcing_era5(starttime, endtime, resolution_arcsec, forcing, ssp)
+            self.setup_forcing_era5(starttime, endtime)
         elif data_source == "cmip":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
@@ -568,7 +564,7 @@ class Forcing:
                 == (ds.time[1] - ds.time[0]).astype(np.int64)
             ).all(), "time is not monotonically increasing with a constant step size"
 
-            mask = self.grid["areamaps/grid_mask"]
+            mask = self.grid["mask"]
             mask.raster.set_crs(4326)
             var = var.rename({"lon": "x", "lat": "y"})
             if variable_name in ("tas", "tasmin", "tasmax", "ps"):
@@ -713,7 +709,7 @@ class Forcing:
         hurs_ds_30sec["time"] = pd.date_range(hurs_time[0], hurs_time[-1], freq="MS")
 
         hurs_output = self.full_like(
-            self.forcing["climate/tas"], fill_value=np.nan, nodata=np.nan
+            self.other["climate/tas"], fill_value=np.nan, nodata=np.nan
         )
         hurs_output.attrs = {
             "units": "%",
@@ -837,7 +833,7 @@ class Forcing:
             buffer=1,
         ).rlds  # some buffer to avoid edge effects / errors in ISIMIP API
 
-        target = self.forcing["climate/hurs"]
+        target = self.other["climate/hurs"]
         target.raster.set_crs(4326)
 
         hurs_coarse_regridded = hurs_coarse.raster.reproject_like(
@@ -851,8 +847,8 @@ class Forcing:
             target, method="bilinear"
         )
 
-        hurs_fine = self.forcing["climate/hurs"]
-        tas_fine = self.forcing["climate/tas"]
+        hurs_fine = self.other["climate/hurs"]
+        tas_fine = self.other["climate/tas"]
 
         # now ready for calculation:
         es_coarse = es0 * np.exp(
@@ -934,7 +930,7 @@ class Forcing:
             buffer=1,
         ).psl  # some buffer to avoid edge effects / errors in ISIMIP API
 
-        target = self.forcing["climate/hurs"]
+        target = self.other["climate/hurs"]
         target.raster.set_crs(4326)
 
         orography = self.download_isimip(
@@ -996,7 +992,7 @@ class Forcing:
         global_wind_atlas = self.data_catalog.get_rasterdataset(
             "global_wind_atlas", bbox=self.grid.raster.bounds, buffer=10
         )
-        target = self.grid["areamaps/grid_mask"]
+        target = self.grid["mask"]
         target.raster.set_crs(4326)
 
         global_wind_atlas_regridded = global_wind_atlas.raster.reproject_like(
@@ -1087,42 +1083,42 @@ class Forcing:
 
         # assert input data have the same coordinates
         assert np.array_equal(
-            self.forcing["climate/pr"].x, self.forcing["climate/tasmin"].x
+            self.other["climate/pr"].x, self.other["climate/tasmin"].x
         )
         assert np.array_equal(
-            self.forcing["climate/pr"].x, self.forcing["climate/tasmax"].x
+            self.other["climate/pr"].x, self.other["climate/tasmax"].x
         )
         assert np.array_equal(
-            self.forcing["climate/pr"].y, self.forcing["climate/tasmin"].y
+            self.other["climate/pr"].y, self.other["climate/tasmin"].y
         )
         assert np.array_equal(
-            self.forcing["climate/pr"].y, self.forcing["climate/tasmax"].y
+            self.other["climate/pr"].y, self.other["climate/tasmax"].y
         )
-        if not self.forcing[
+        if not self.other[
             "climate/pr"
-        ].time.min().dt.date <= calibration_period_start and self.forcing[
+        ].time.min().dt.date <= calibration_period_start and self.other[
             "climate/pr"
         ].time.max().dt.date >= calibration_period_end - timedelta(days=1):
-            forcing_start_date = self.forcing["climate/pr"].time.min().dt.date.item()
-            forcing_end_date = self.forcing["climate/pr"].time.max().dt.date.item()
+            forcing_start_date = self.other["climate/pr"].time.min().dt.date.item()
+            forcing_end_date = self.other["climate/pr"].time.max().dt.date.item()
             raise AssertionError(
                 f"water data does not cover the entire calibration period, forcing data covers from {forcing_start_date} to {forcing_end_date}, "
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )
 
-        self.forcing["climate/tasmin"]["y"].attrs["standard_name"] = "latitude"
-        self.forcing["climate/tasmin"]["x"].attrs["standard_name"] = "longitude"
-        self.forcing["climate/tasmin"]["y"].attrs["units"] = "degrees_north"
-        self.forcing["climate/tasmin"]["x"].attrs["units"] = "degrees_east"
+        self.other["climate/tasmin"]["y"].attrs["standard_name"] = "latitude"
+        self.other["climate/tasmin"]["x"].attrs["standard_name"] = "longitude"
+        self.other["climate/tasmin"]["y"].attrs["units"] = "degrees_north"
+        self.other["climate/tasmin"]["x"].attrs["units"] = "degrees_east"
 
         pet = xci.potential_evapotranspiration(
-            tasmin=self.forcing["climate/tasmin"],
-            tasmax=self.forcing["climate/tasmax"],
+            tasmin=self.other["climate/tasmin"],
+            tasmax=self.other["climate/tasmax"],
             method="BR65",
         ).astype(np.float32)
 
         # Compute the potential evapotranspiration
-        water_budget = xci.water_budget(pr=self.forcing["climate/pr"], evspsblpot=pet)
+        water_budget = xci.water_budget(pr=self.other["climate/pr"], evspsblpot=pet)
 
         water_budget = water_budget.resample(time="MS").mean(keep_attrs=True)
 

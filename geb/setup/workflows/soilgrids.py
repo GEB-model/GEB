@@ -83,7 +83,7 @@ def load_soilgrids(data_catalog, subgrid, region):
     variables = ["bdod", "clay", "silt", "soc"]
     layers = ["0-5cm", "5-15cm", "15-30cm", "30-60cm", "60-100cm", "100-200cm"]
 
-    subgrid_mask = subgrid["areamaps/sub_grid_mask"]
+    subgrid_mask = subgrid["mask"]
     subgrid_mask = subgrid_mask.rio.set_crs(4326)
 
     ds = []
@@ -126,5 +126,4 @@ def load_soilgrids(data_catalog, subgrid, region):
     for layer, height in enumerate((0.05, 0.10, 0.15, 0.30, 0.40, 1.00)):
         soil_layer_height[layer] = height
     ds["height"] = soil_layer_height
-    ds.raster.set_crs(4326)
-    return ds.rio.set_crs(4326)
+    return ds

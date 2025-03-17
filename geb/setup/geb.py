@@ -29,6 +29,7 @@ from dateutil.relativedelta import relativedelta
 from contextlib import contextmanager
 from scipy.ndimage import value_indices
 import pyflwdir
+import rasterio
 
 from hydromt.exceptions import NoDataException
 from hydromt.models.model_grid import GridModel
@@ -81,7 +82,7 @@ from geb.agents.crop_farmers import (
     IRRIGATION_EFFICIENCY_ADAPTATION,
     FIELD_EXPANSION_ADAPTATION,
 )
-from geb.hydrology.lakes_reservoirs import LAKE, RESERVOIR
+from geb.hydrology.lakes_reservoirs import RESERVOIR
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
@@ -187,9 +188,10 @@ class GEBModel(GridModel, Forcing):
         self.table = {}
         self.array = {}
         self.dict = {}
+        self.other = {}
 
         self.files = {
-            "forcing": {},
+            "other": {},
             "geoms": {},
             "grid": {},
             "dict": {},
@@ -205,9 +207,14 @@ class GEBModel(GridModel, Forcing):
         """Model static gridded data as xarray.Dataset."""
         if self._subgrid is None:
             self._subgrid = xr.Dataset()
-            if self._read:
-                self.read_subgrid()
         return self._subgrid
+
+    @property
+    def grid(self):
+        """Model static gridded data as xarray.Dataset."""
+        if self._grid is None:
+            self._grid = xr.Dataset()
+        return self._grid
 
     @subgrid.setter
     def subgrid(self, value):
@@ -218,8 +225,6 @@ class GEBModel(GridModel, Forcing):
         """Model static gridded data as xarray.Dataset."""
         if self._region_subgrid is None:
             self._region_subgrid = xr.Dataset()
-            if self._read:
-                self.read_region_subgrid()
         return self._region_subgrid
 
     @region_subgrid.setter
@@ -229,7 +234,7 @@ class GEBModel(GridModel, Forcing):
     def setup_grid(
         self,
         region: dict,
-        sub_grid_factor: int,
+        subgrid_factor: int,
         resolution_arcsec=30,
     ) -> xr.DataArray:
         """Creates a 2D regular grid or reads an existing grid.
@@ -246,14 +251,14 @@ class GEBModel(GridModel, Forcing):
             * {'basin': [x, y]}
 
             Region must be of kind [basin, subbasin].
-        sub_grid_factor : int
+        subgrid_factor : int
             GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
         """
 
         assert resolution_arcsec % 3 == 0, (
             "resolution_arcsec must be a multiple of 3 to align with MERIT"
         )
-        assert sub_grid_factor >= 2
+        assert subgrid_factor >= 2
 
         river_graph = get_river_graph(self.data_catalog)
 
@@ -346,9 +351,6 @@ class GEBModel(GridModel, Forcing):
             f"Approximate basin size in km2: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)}"
         )
 
-        # Add region and grid to model
-        self.set_geoms(geom, name="region")
-
         hydrography = hydrography.raster.clip_geom(
             geom,
             align=resolution_arcsec
@@ -366,6 +368,7 @@ class GEBModel(GridModel, Forcing):
             latlon=True,  # hydrography is specified in latlon
             mask=hydrography.mask,  # this mask is True within study area
         )
+        hydrography = hydrography.drop_vars(["mask"])
 
         scale_factor = resolution_arcsec // 3
 
@@ -384,26 +387,40 @@ class GEBModel(GridModel, Forcing):
             )
         )
 
-        # elevation
+        # elevation (we only set this later, because it has to be done after setting the mask)
         elevation = elevation_coarsened.mean()
-        self.set_grid(elevation, name="landsurface/topo/elevation")
+
+        flow_mask = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
+
+        mask_geom = list(
+            rasterio.features.shapes(
+                flow_mask.astype(np.uint8),
+                mask=~flow_mask,
+                connectivity=4,
+                transform=elevation.rio.transform(),
+            ),
+        )
+        assert len(mask_geom) == 1, "Basin mask is not contiguous"
+        mask_geom = gpd.GeoDataFrame.from_features(
+            [{"geometry": mask_geom[0][0], "properties": {}}], crs=hydrography.rio.crs
+        )
+
+        self.set_geoms(mask_geom, name="mask")
+
+        mask = self.full_like(elevation, fill_value=False, nodata=None, dtype=bool)
+        # we use the inverted mask, that is True outside the study area
+        mask.data = flow_mask
+        self.set_grid(mask, name="mask")
+        self.set_grid(elevation, name="landsurface/elevation")
 
         self.set_grid(
             elevation_coarsened.std(),
-            name="landsurface/topo/elevation_standard_deviation",
+            name="landsurface/elevation_standard_deviation",
         )
 
         # outflow elevation
         outflow_elevation = elevation_coarsened.min()
         self.set_grid(outflow_elevation, name="routing/outflow_elevation")
-
-        mask = self.full_like(
-            outflow_elevation, fill_value=False, nodata=False, dtype=bool
-        )
-        mask.attrs["_FillValue"] = None
-        # we use the inverted mask, that is True outside the study area
-        mask.data = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
-        self.set_grid(mask, name="areamaps/grid_mask")
 
         slope = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
@@ -418,7 +435,7 @@ class GEBModel(GridModel, Forcing):
         # set slope to zero on the mask boundary
         slope_data[np.isnan(slope_data) & (~mask.data)] = 0
         slope.data = slope_data
-        self.set_grid(slope, name="landsurface/topo/slope")
+        self.set_grid(slope, name="landsurface/slope")
 
         # flow direction
         ldd = self.full_like(
@@ -498,7 +515,7 @@ class GEBModel(GridModel, Forcing):
             outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
         )
         COMID_IDs_raster.data = COMID_IDs_raster_data
-        self.set_grid(COMID_IDs_raster, name="routing/COMID_IDs")
+        self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
         SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lenghts(
             self.data_catalog, rivers
@@ -530,20 +547,20 @@ class GEBModel(GridModel, Forcing):
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
 
-        dst_transform = mask.raster.transform * Affine.scale(1 / sub_grid_factor)
+        dst_transform = mask.raster.transform * Affine.scale(1 / subgrid_factor)
 
         submask = xr.DataArray(
-            data=repeat_grid(mask.data, sub_grid_factor),
+            data=repeat_grid(mask.data, subgrid_factor),
             coords={
                 "y": dst_transform.f
-                + np.arange(mask.raster.shape[0] * sub_grid_factor) * dst_transform.e,
+                + np.arange(mask.raster.shape[0] * subgrid_factor) * dst_transform.e,
                 "x": dst_transform.c
-                + np.arange(mask.raster.shape[1] * sub_grid_factor) * dst_transform.a,
+                + np.arange(mask.raster.shape[1] * subgrid_factor) * dst_transform.a,
             },
             attrs={"_FillValue": None},
         )
 
-        self.set_subgrid(submask, name="areamaps/sub_grid_mask")
+        self.set_subgrid(submask, name="mask")
 
     def setup_elevation(self):
         DEM = self.data_catalog.get_rasterdataset(
@@ -551,12 +568,12 @@ class GEBModel(GridModel, Forcing):
             bbox=self.bounds,
             buffer=100,
         ).raster.mask_nodata()
-        target = self.subgrid["areamaps/sub_grid_mask"]
+        target = self.subgrid["mask"]
         target.raster.set_crs(4326)
         DEM = DEM.raster.reproject_like(target, method="average")
         self.set_subgrid(
             DEM,
-            name="landsurface/topo/sub_grid_elevation",
+            name="landsurface/elevation",
         )
 
     def setup_cell_area(self) -> None:
@@ -571,17 +588,17 @@ class GEBModel(GridModel, Forcing):
         Notes
         -----
         This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
-        retrieves the grid mask from the `areamaps/grid_mask` attribute of the grid, and then calculates the cell area
-        using the `calculate_cell_area()` function. The resulting cell area map is then set as the `areamaps/cell_area`
+        retrieves the grid mask from the `mask` attribute of the grid, and then calculates the cell area
+        using the `calculate_cell_area()` function. The resulting cell area map is then set as the `cell_area`
         attribute of the grid.
 
         Additionally, this method sets up a subgrid for the cell area map by creating a new grid with the same extent as
         the subgrid, and then repeating the cell area values from the main grid to the subgrid using the `repeat_grid()`
         function, and correcting for the subgrid factor. Thus, every subgrid cell within a grid cell has the same value.
-        The resulting subgrid cell area map is then set as the `areamaps/sub_cell_area` attribute of the subgrid.
+        The resulting subgrid cell area map is then set as the `cell_area` attribute of the subgrid.
         """
         self.logger.info("Preparing cell area map.")
-        mask = self.grid["areamaps/grid_mask"].compute()
+        mask = self.grid["mask"].compute()
 
         cell_area = self.full_like(
             mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
@@ -589,10 +606,10 @@ class GEBModel(GridModel, Forcing):
 
         cell_area.data = calculate_cell_area(mask.rio.transform(), mask.shape)
         cell_area = cell_area.where(~mask, cell_area.attrs["_FillValue"])
-        self.set_grid(cell_area, name="areamaps/cell_area")
+        self.set_grid(cell_area, name="cell_area")
 
         sub_cell_area = self.full_like(
-            self.subgrid["areamaps/sub_grid_mask"],
+            self.subgrid["mask"],
             fill_value=np.nan,
             nodata=np.nan,
             dtype=np.float32,
@@ -601,7 +618,7 @@ class GEBModel(GridModel, Forcing):
         sub_cell_area.data = (
             repeat_grid(cell_area.data, self.subgrid_factor) / self.subgrid_factor**2
         )
-        self.set_subgrid(sub_cell_area, name="areamaps/sub_cell_area")
+        self.set_subgrid(sub_cell_area, name="cell_area")
 
     def setup_cell_area_map(self) -> None:
         self.logger.warn(
@@ -777,7 +794,7 @@ class GEBModel(GridModel, Forcing):
             ] = "EU_MidWest"
             assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
-            ISO3_codes_region = self.geoms["areamaps/regions"]["ISO3"].unique()
+            ISO3_codes_region = self.geoms["regions"]["ISO3"].unique()
             GLOBIOM_regions_region = GLOBIOM_regions[
                 GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
             ]["Region37"].unique()
@@ -820,11 +837,11 @@ class GEBModel(GridModel, Forcing):
             duplicates = donor_data.index.duplicated(keep=False)
             if duplicates.any():
                 # Data is subnational
-                unique_regions = self.geoms["areamaps/regions"]
+                unique_regions = self.geoms["regions"]
             else:
                 # Data is national
                 unique_regions = (
-                    self.geoms["areamaps/regions"].groupby("ISO3").first().reset_index()
+                    self.geoms["regions"].groupby("ISO3").first().reset_index()
                 )
                 national_data = True
 
@@ -918,13 +935,13 @@ class GEBModel(GridModel, Forcing):
             if national_data:
                 unique_regions = data.index.get_level_values("region_id").unique()
                 iso3_codes = (
-                    self.geoms["areamaps/regions"]
+                    self.geoms["regions"]
                     .set_index("region_id")
                     .loc[unique_regions]["ISO3"]
                 )
                 iso3_to_representative_region_id = dict(zip(iso3_codes, unique_regions))
 
-            for _, region in self.geoms["areamaps/regions"].iterrows():
+            for _, region in self.geoms["regions"].iterrows():
                 region_dict = {}
                 region_id = region["region_id"]
                 region_iso3 = region["ISO3"]
@@ -1001,7 +1018,7 @@ class GEBModel(GridModel, Forcing):
             data = data.reindex(
                 index=pd.MultiIndex.from_product(
                     [
-                        self.geoms["areamaps/regions"]["region_id"],
+                        self.geoms["regions"]["region_id"],
                         data.index,
                     ],
                     names=["region_id", "date"],
@@ -1009,13 +1026,9 @@ class GEBModel(GridModel, Forcing):
                 level=1,
             )
 
-            data = self.determine_price_variability(
-                data, self.geoms["areamaps/regions"]
-            )
+            data = self.determine_price_variability(data, self.geoms["regions"])
 
-            data = self.inter_and_extrapolate_prices(
-                data, self.geoms["areamaps/regions"]
-            )
+            data = self.inter_and_extrapolate_prices(data, self.geoms["regions"])
 
             data = {
                 "type": "time_series",
@@ -1024,7 +1037,7 @@ class GEBModel(GridModel, Forcing):
                 ).index.tolist(),
                 "data": {
                     str(region_id): data.loc[region_id].to_dict(orient="list")
-                    for region_id in self.geoms["areamaps/regions"]["region_id"]
+                    for region_id in self.geoms["regions"]["region_id"]
                 },
             }
 
@@ -1164,14 +1177,16 @@ class GEBModel(GridModel, Forcing):
             years_with_no_crop_inflation_data = costs.loc[
                 region_id, "_crop_price_inflation"
             ]
-            region_inflation_rates = self.dict["economics/inflation_rates"]["data"][
-                str(region["region_id"])
-            ]
+            region_inflation_rates = self.dict["socioeconomics/inflation_rates"][
+                "data"
+            ][str(region["region_id"])]
 
             for year, crop_inflation_rate in years_with_no_crop_inflation_data.items():
                 if np.isnan(crop_inflation_rate):
                     year_inflation_rate = region_inflation_rates[
-                        self.dict["economics/inflation_rates"]["time"].index(str(year))
+                        self.dict["socioeconomics/inflation_rates"]["time"].index(
+                            str(year)
+                        )
                     ]
                     costs.at[(region_id, year), "_crop_price_inflation"] = (
                         year_inflation_rate
@@ -1253,7 +1268,7 @@ class GEBModel(GridModel, Forcing):
     def process_additional_years(
         self, costs, total_years, unique_regions, lower_bound=None, upper_bound=None
     ):
-        inflation = self.dict["economics/inflation_rates"]
+        inflation = self.dict["socioeconomics/inflation_rates"]
         for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
 
@@ -1398,7 +1413,7 @@ class GEBModel(GridModel, Forcing):
         `set_grid()` method.
         """
         self.logger.info("Setting up Manning's coefficient")
-        a = (2 * self.grid["areamaps/cell_area"]) / self.grid["routing/upstream_area"]
+        a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
         a = xr.where(a < 1, a, 1, keep_attrs=True)
         b = self.grid["routing/outflow_elevation"] / 2000
         b = xr.where(b < 1, b, 1, keep_attrs=True)
@@ -1447,7 +1462,7 @@ class GEBModel(GridModel, Forcing):
 
         self.set_grid(self.interpolate(crop_group, "linear"), name="soil/crop_group")
 
-    def setup_land_use_parameters(self, interpolation_method="nearest") -> None:
+    def setup_land_use_parameters(self) -> None:
         """
         Sets up the land use parameters for the model.
 
@@ -1482,6 +1497,10 @@ class GEBModel(GridModel, Forcing):
         where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
         """
         self.logger.info("Setting up land use parameters")
+
+        target = self.grid["mask"]
+        target.raster.set_crs(4326)
+
         for land_use_type, land_use_type_netcdf_name, simple_name in (
             ("forest", "Forest", "forest"),
             ("grassland", "Grassland", "grassland"),
@@ -1495,15 +1514,21 @@ class GEBModel(GridModel, Forcing):
 
             parameter = f"cropCoefficient{land_use_type_netcdf_name}_10days"
             crop_coefficient = land_use_ds[parameter].raster.mask_nodata()
-            self.set_forcing(
-                self.interpolate(crop_coefficient, interpolation_method),
+            crop_coefficient = crop_coefficient.raster.reproject_like(
+                target, method="nearest"
+            )
+            self.set_grid(
+                crop_coefficient,
                 name=f"landcover/{simple_name}/crop_coefficient",
             )
             if land_use_type in ("forest", "grassland"):
                 parameter = f"interceptCap{land_use_type_netcdf_name}_10days"
                 interception_capacity = land_use_ds[parameter].raster.mask_nodata()
-                self.set_forcing(
-                    self.interpolate(interception_capacity, interpolation_method),
+                interception_capacity = interception_capacity.raster.reproject_like(
+                    target, method="nearest"
+                )
+                self.set_grid(
+                    interception_capacity,
                     name=f"landcover/{simple_name}/interception_capacity",
                 )
 
@@ -1520,7 +1545,7 @@ class GEBModel(GridModel, Forcing):
         This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
         specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
         grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
-        of the model with names of the form 'routing/lakesreservoirs/{grid_name}'.
+        of the model with names of the form 'waterbodies/{grid_name}'.
 
         The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
         command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
@@ -1530,7 +1555,7 @@ class GEBModel(GridModel, Forcing):
 
         TODO: Make the reservoir command area data optional.
 
-        The resulting waterbody data is set as a table in the model with the name 'routing/lakesreservoirs/basin_lakes_data'.
+        The resulting waterbody data is set as a table in the model with the name 'waterbodies/waterbody_data'.
         """
         self.logger.info("Setting up waterbodies")
         dtypes = {
@@ -1574,12 +1599,8 @@ class GEBModel(GridModel, Forcing):
                 crs=self.crs,
             )
             waterbodies = waterbodies.astype(dtypes)
-            water_body_id = xr.zeros_like(
-                self.grid["areamaps/grid_mask"], dtype=np.int32
-            )
-            sub_water_body_id = xr.zeros_like(
-                self.subgrid["areamaps/sub_grid_mask"], dtype=np.int32
-            )
+            water_body_id = xr.zeros_like(self.grid["mask"], dtype=np.int32)
+            sub_water_body_id = xr.zeros_like(self.subgrid["mask"], dtype=np.int32)
         else:
             water_body_id = self.grid.raster.rasterize(
                 waterbodies,
@@ -1599,10 +1620,8 @@ class GEBModel(GridModel, Forcing):
         water_body_id.attrs["_FillValue"] = -1
         sub_water_body_id.attrs["_FillValue"] = -1
 
-        self.set_grid(water_body_id, name="routing/lakesreservoirs/water_body_id")
-        self.set_subgrid(
-            sub_water_body_id, name="routing/lakesreservoirs/sub_water_body_id"
-        )
+        self.set_grid(water_body_id, name="waterbodies/water_body_id")
+        self.set_subgrid(sub_water_body_id, name="waterbodies/sub_water_body_id")
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
@@ -1625,7 +1644,7 @@ class GEBModel(GridModel, Forcing):
                     all_touched=True,
                     dtype=np.int32,
                 ),
-                name="routing/lakesreservoirs/command_areas",
+                name="waterbodies/command_area",
             )
             self.set_subgrid(
                 self.subgrid.raster.rasterize(
@@ -1635,7 +1654,7 @@ class GEBModel(GridModel, Forcing):
                     all_touched=True,
                     dtype=np.int32,
                 ),
-                name="routing/lakesreservoirs/subcommand_areas",
+                name="waterbodies/subcommand_areas",
             )
 
             # set all lakes with command area to reservoir
@@ -1644,22 +1663,20 @@ class GEBModel(GridModel, Forcing):
             ] = RESERVOIR
         else:
             command_areas = self.full_like(
-                self.grid["areamaps/grid_mask"],
+                self.grid["mask"],
                 fill_value=-1,
                 nodata=-1,
                 dtype=np.int32,
             )
             subcommand_areas = self.full_like(
-                self.subgrid["areamaps/sub_grid_mask"],
+                self.subgrid["mask"],
                 fill_value=-1,
                 nodata=-1,
                 dtype=np.int32,
             )
 
-            self.set_grid(command_areas, name="routing/lakesreservoirs/command_areas")
-            self.set_subgrid(
-                subcommand_areas, name="routing/lakesreservoirs/subcommand_areas"
-            )
+            self.set_grid(command_areas, name="waterbodies/command_area")
+            self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
 
         if custom_reservoir_capacity:
             custom_reservoir_capacity = self.data_catalog.get_dataframe(
@@ -1683,7 +1700,7 @@ class GEBModel(GridModel, Forcing):
             "average_discharge is required"
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
-        self.set_table(waterbodies, name="routing/lakesreservoirs/basin_lakes_data")
+        self.set_table(waterbodies, name="waterbodies/waterbody_data")
 
     def setup_water_demand(self, starttime, endtime, ssp):
         """
@@ -1733,10 +1750,9 @@ class GEBModel(GridModel, Forcing):
 
             assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
             ds = ds.sel(time=slice(starttime, endtime)).compute()
+            ds = ds.rename({"lat": "y", "lon": "x"})
             ds.attrs["_FillValue"] = np.nan
-            self.set_forcing(
-                ds.rename({"lat": "y", "lon": "x"}), name=f"water_demand/{name}"
-            )
+            self.set_other(ds, name=f"water_demand/{name}")
 
         set(
             "domestic_water_demand",
@@ -1804,7 +1820,7 @@ class GEBModel(GridModel, Forcing):
         self.logger.info("Setting up MODFLOW")
 
         aquifer_top_elevation = (
-            self.grid["landsurface/topo/elevation"].raster.mask_nodata().compute()
+            self.grid["landsurface/elevation"].raster.mask_nodata().compute()
         )
         aquifer_top_elevation.raster.set_crs(4326)
         self.set_grid(aquifer_top_elevation, name="groundwater/aquifer_top_elevation")
@@ -1976,7 +1992,7 @@ class GEBModel(GridModel, Forcing):
             )
             # load digital elevation model that was used for globgm
 
-            dem = self.grid["landsurface/topo/elevation"].raster.mask_nodata()
+            dem = self.grid["landsurface/elevation"].raster.mask_nodata()
 
             # heads
             head_upper_layer = self.data_catalog.get_rasterdataset(
@@ -2021,14 +2037,14 @@ class GEBModel(GridModel, Forcing):
 
         elif intial_heads_source == "Fan":
             # Load in the starting groundwater depth
-            region_continent = np.unique(self.geoms["areamaps/regions"]["CONTINENT"])
+            region_continent = np.unique(self.geoms["regions"]["CONTINENT"])
             assert (
                 np.size(region_continent) == 1
             )  # Transcontinental basins should not be possible
 
             if (
-                np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Asia"
-                or np.unique(self.geoms["areamaps/regions"]["CONTINENT"])[0] == "Europe"
+                np.unique(self.geoms["regions"]["CONTINENT"])[0] == "Asia"
+                or np.unique(self.geoms["regions"]["CONTINENT"])[0] == "Europe"
             ):
                 region_continent = "Eurasia"
             else:
@@ -2101,7 +2117,7 @@ class GEBModel(GridModel, Forcing):
         land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
         identified and set as a grid in the model.
 
-        The resulting grids are set as attributes of the model with names of the form 'areamaps/{grid_name}' or
+        The resulting grids are set as attributes of the model with names of the form '{grid_name}' or
         'landsurface/{grid_name}'.
         """
         self.logger.info("Preparing regions and land use data.")
@@ -2123,20 +2139,18 @@ class GEBModel(GridModel, Forcing):
             i: region_id for region_id, i in enumerate(regions["region_id"])
         }
         regions["region_id"] = regions["region_id"].map(region_id_mapping)
-        self.set_dict(region_id_mapping, name="areamaps/region_id_mapping")
+        self.set_dict(region_id_mapping, name="region_id_mapping")
 
         assert "ISO3" in regions.columns, (
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
         )
 
-        self.set_geoms(regions, name="areamaps/regions")
+        self.set_geoms(regions, name="regions")
 
-        resolution_x, resolution_y = self.subgrid[
-            "areamaps/sub_grid_mask"
-        ].rio.resolution()
+        resolution_x, resolution_y = self.subgrid["mask"].rio.resolution()
 
-        regions_bounds = self.geoms["areamaps/regions"].total_bounds
-        mask_bounds = self.grid["areamaps/grid_mask"].raster.bounds
+        regions_bounds = self.geoms["regions"].total_bounds
+        mask_bounds = self.grid["mask"].raster.bounds
 
         # The bounds should be set to a bit larger than the regions to avoid edge effects
         # and also larger than the mask, to ensure that the entire grid is covered.
@@ -2146,8 +2160,8 @@ class GEBModel(GridModel, Forcing):
         pad_maxy = max(regions_bounds[3], mask_bounds[3]) + abs(resolution_y) / 2.0
 
         # TODO: Is there a better way to do this?
-        region_subgrid, region_subgrid_slice = pad_xy(
-            self.subgrid["areamaps/sub_grid_mask"].rio,
+        region_mask, region_subgrid_slice = pad_xy(
+            self.subgrid["mask"].rio,
             pad_minx,
             pad_miny,
             pad_maxx,
@@ -2155,29 +2169,29 @@ class GEBModel(GridModel, Forcing):
             return_slice=True,
             constant_values=1,
         )
-        region_subgrid.attrs["_FillValue"] = None
-        self.set_region_subgrid(region_subgrid, name="areamaps/region_mask")
+        region_mask.attrs["_FillValue"] = None
+        self.set_region_subgrid(region_mask, name="mask")
 
         land_use = self.data_catalog.get_rasterdataset(
             land_cover,
-            geom=self.geoms["areamaps/regions"],
+            geom=self.geoms["regions"],
             buffer=200,  # 2 km buffer
         )
-        region_subgrid.raster.set_crs(4326)
+        region_mask.raster.set_crs(4326)
         reprojected_land_use = land_use.raster.reproject_like(
-            region_subgrid, method="nearest"
+            region_mask, method="nearest"
         )
 
-        region_raster = reprojected_land_use.raster.rasterize(
-            self.geoms["areamaps/regions"],
+        region_ids = reprojected_land_use.raster.rasterize(
+            self.geoms["regions"],
             col_name="region_id",
             all_touched=True,
         ).compute()
-        region_raster.attrs["_FillValue"] = -1
-        self.set_region_subgrid(region_raster, name="areamaps/region_subgrid")
+        region_ids.attrs["_FillValue"] = -1
+        self.set_region_subgrid(region_ids, name="subgrid")
 
         region_subgrid_cell_area = self.full_like(
-            region_subgrid, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+            region_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
 
         region_subgrid_cell_area.data = calculate_cell_area(
@@ -2188,13 +2202,13 @@ class GEBModel(GridModel, Forcing):
         # set the cell area for the region subgrid
         self.set_region_subgrid(
             region_subgrid_cell_area,
-            name="areamaps/region_cell_area_subgrid",
+            name="cell_area",
         )
 
         MERIT = self.data_catalog.get_rasterdataset(
             "merit_hydro",
             variables=["upg"],
-            bbox=region_subgrid.rio.bounds(),
+            bbox=region_mask.rio.bounds(),
             buffer=300,  # 3 km buffer
         )
         # There is a half degree offset in MERIT data
@@ -2282,7 +2296,7 @@ class GEBModel(GridModel, Forcing):
         The data is then stored in the dictionaries with the region ID as the key.
 
         The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
-        'economics/lending_rates' and 'economics/inflation_rates', respectively.
+        'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
         """
         self.logger.info("Setting up economic data")
         assert (
@@ -2345,7 +2359,7 @@ class GEBModel(GridModel, Forcing):
             convert_percent_to_ratio=True,
         )
 
-        for _, region in self.geoms["areamaps/regions"].iterrows():
+        for _, region in self.geoms["regions"].iterrows():
             region_id = str(region["region_id"])
 
             # Store data in dictionaries
@@ -2420,9 +2434,9 @@ class GEBModel(GridModel, Forcing):
             # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
             # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
 
-        self.set_dict(inflation_rates_dict, name="economics/inflation_rates")
-        # self.set_dict(lending_rates_dict, name="economics/lending_rates")
-        self.set_dict(price_ratio_dict, name="economics/price_ratio")
+        self.set_dict(inflation_rates_dict, name="socioeconomics/inflation_rates")
+        # self.set_dict(lending_rates_dict, name="socioeconomics/lending_rates")
+        self.set_dict(price_ratio_dict, name="socioeconomics/price_ratio")
 
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
@@ -2457,7 +2471,7 @@ class GEBModel(GridModel, Forcing):
         Notes
         -----
         This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `economics/inflation_rates` dictionary. It then creates dictionaries to
+        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
         store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
         data dimension.
 
@@ -2465,12 +2479,12 @@ class GEBModel(GridModel, Forcing):
         resulting prices are stored in the dictionaries with the region ID as the key.
 
         The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'economics/well_prices' and 'economics/upkeep_prices_well_per_m2', respectively.
+        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
         self.logger.info("Setting up well prices by reference year")
 
         # Retrieve the inflation rates data
-        inflation_rates = self.dict["economics/inflation_rates"]
+        inflation_rates = self.dict["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
 
         # Create a dictionary to store the various types of prices with their initial reference year values
@@ -2510,7 +2524,7 @@ class GEBModel(GridModel, Forcing):
                 prices_dict["data"][region] = prices.tolist()
 
             # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"economics/{price_type}")
+            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
     def setup_irrigation_prices_by_reference_year(
         self,
@@ -2543,7 +2557,7 @@ class GEBModel(GridModel, Forcing):
         Notes
         -----
         This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `economics/inflation_rates` dictionary. It then creates dictionaries to
+        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
         store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
         data dimension.
 
@@ -2551,12 +2565,12 @@ class GEBModel(GridModel, Forcing):
         resulting prices are stored in the dictionaries with the region ID as the key.
 
         The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'economics/well_prices' and 'economics/upkeep_prices_well_per_m2', respectively.
+        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
         self.logger.info("Setting up well prices by reference year")
 
         # Retrieve the inflation rates data
-        inflation_rates = self.dict["economics/inflation_rates"]
+        inflation_rates = self.dict["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
 
         # Create a dictionary to store the various types of prices with their initial reference year values
@@ -2597,7 +2611,7 @@ class GEBModel(GridModel, Forcing):
                 prices_dict["data"][region] = prices.tolist()
 
             # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"economics/{price_type}")
+            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
     def setup_well_prices_by_reference_year_global(
         self,
@@ -2627,7 +2641,7 @@ class GEBModel(GridModel, Forcing):
         Notes
         -----
         This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `economics/inflation_rates` dictionary. It then creates dictionaries to
+        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
         store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
         data dimension.
 
@@ -2635,13 +2649,13 @@ class GEBModel(GridModel, Forcing):
         resulting prices are stored in the dictionaries with the region ID as the key.
 
         The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'economics/well_prices' and 'economics/upkeep_prices_well_per_m2', respectively.
+        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
         self.logger.info("Setting up well prices by reference year")
 
         # Retrieve the inflation rates data
-        inflation_rates = self.dict["economics/inflation_rates"]
-        price_ratio = self.dict["economics/price_ratio"]
+        inflation_rates = self.dict["socioeconomics/inflation_rates"]
+        price_ratio = self.dict["socioeconomics/price_ratio"]
 
         # Create a dictionary to store the various types of prices with their initial reference year values
         price_types = {
@@ -2654,7 +2668,7 @@ class GEBModel(GridModel, Forcing):
         for price_type, initial_price in price_types.items():
             prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
 
-            for _, region in self.geoms["areamaps/regions"].iterrows():
+            for _, region in self.geoms["regions"].iterrows():
                 region_id = str(region["region_id"])
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
@@ -2685,7 +2699,7 @@ class GEBModel(GridModel, Forcing):
                 prices_dict["data"][region_id] = prices.tolist()
 
             # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"economics/{price_type}")
+            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
         electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
         electricity_rates["ISO3"] = electricity_rates["Country"].map(
@@ -2698,7 +2712,7 @@ class GEBModel(GridModel, Forcing):
             "data": {},
         }
 
-        for _, region in self.geoms["areamaps/regions"].iterrows():
+        for _, region in self.geoms["regions"].iterrows():
             region_id = str(region["region_id"])
 
             prices = pd.Series(index=range(start_year, end_year + 1))
@@ -2725,7 +2739,7 @@ class GEBModel(GridModel, Forcing):
             electricity_rates_dict["data"][region_id] = prices.tolist()
 
         # Set the calculated prices in the appropriate dictionary
-        self.set_dict(electricity_rates_dict, name="economics/electricity_cost")
+        self.set_dict(electricity_rates_dict, name="socioeconomics/electricity_cost")
 
     def setup_drip_irrigation_prices_by_reference_year(
         self,
@@ -2759,7 +2773,7 @@ class GEBModel(GridModel, Forcing):
         self.logger.info("Setting up well prices by reference year")
 
         # Retrieve the inflation rates data
-        inflation_rates = self.dict["economics/inflation_rates"]
+        inflation_rates = self.dict["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
 
         # Create a dictionary to store the various types of prices with their initial reference year values
@@ -2795,7 +2809,7 @@ class GEBModel(GridModel, Forcing):
                 prices_dict["data"][region] = prices.tolist()
 
             # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"economics/{price_type}")
+            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
     def setup_farmers(self, farmers):
         """
@@ -2813,7 +2827,7 @@ class GEBModel(GridModel, Forcing):
         Notes
         -----
         This method sets up the farmers data for GEB. It first retrieves the region data from the
-        `areamaps/regions` and `areamaps/region_subgrid` grids. It then creates a `farms` grid with the same shape as the
+        `regions` and `subgrid` grids. It then creates a `farms` grid with the same shape as the
         `region_subgrid` grid, with a value of -1 for each cell.
 
         For each region, the method clips the `cultivated_land` grid to the region and creates farms for the region using
@@ -2833,8 +2847,8 @@ class GEBModel(GridModel, Forcing):
         Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
         with names of the form 'agents/farmers/{column}'.
         """
-        regions = self.geoms["areamaps/regions"]
-        regions_raster = self.region_subgrid["areamaps/region_subgrid"].compute()
+        regions = self.geoms["regions"]
+        regions_raster = self.region_subgrid["subgrid"].compute()
         full_region_cultivated_land = self.region_subgrid[
             "landsurface/full_region_cultivated_land"
         ].compute()
@@ -2868,7 +2882,7 @@ class GEBModel(GridModel, Forcing):
 
         cut_farms = np.unique(
             xr.where(
-                self.region_subgrid["areamaps/region_mask"],
+                self.region_subgrid["mask"],
                 farms.copy().values,
                 -1,
                 keep_attrs=True,
@@ -2877,9 +2891,7 @@ class GEBModel(GridModel, Forcing):
         cut_farm_indices = cut_farms[cut_farms != -1]
 
         assert farms.min() >= -1  # -1 is nodata value, all farms should be positive
-        subgrid_farms = farms.raster.clip_bbox(
-            self.subgrid["areamaps/sub_grid_mask"].raster.bounds
-        )
+        subgrid_farms = farms.raster.clip_bbox(self.subgrid["mask"].raster.bounds)
 
         subgrid_farms_in_study_area = xr.where(
             np.isin(subgrid_farms, cut_farm_indices), -1, subgrid_farms, keep_attrs=True
@@ -2902,14 +2914,14 @@ class GEBModel(GridModel, Forcing):
         assert farmers.iloc[-1].name == subgrid_farms_in_study_area.max()
 
         subgrid_farms_in_study_area_ = self.full_like(
-            self.subgrid["areamaps/sub_grid_mask"],
+            self.subgrid["mask"],
             fill_value=-1,
             nodata=-1,
             dtype=np.int32,
         )
         subgrid_farms_in_study_area_[:] = subgrid_farms_in_study_area
-        self.set_subgrid(subgrid_farms_in_study_area_, name="agents/farmers/farms")
 
+        self.set_subgrid(subgrid_farms_in_study_area_, name="agents/farmers/farms")
         self.set_array(farmers.index.values, name="agents/farmers/id")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
@@ -3126,10 +3138,10 @@ class GEBModel(GridModel, Forcing):
             .astype(bool)
             .compute()
         )
-        regions_grid = self.region_subgrid["areamaps/region_subgrid"].compute()
-        cell_area = self.region_subgrid["areamaps/region_cell_area_subgrid"].compute()
+        regions_grid = self.region_subgrid["subgrid"].compute()
+        cell_area = self.region_subgrid["cell_area"].compute()
 
-        regions_shapes = self.geoms["areamaps/regions"]
+        regions_shapes = self.geoms["regions"]
         if data_source == "lowder":
             assert country_iso3_column in regions_shapes.columns, (
                 f"Region database must contain {country_iso3_column} column ({self.data_catalog['GADM_level1'].path})"
@@ -3832,7 +3844,7 @@ class GEBModel(GridModel, Forcing):
         )
         assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
-        ISO3_codes_region = self.geoms["areamaps/regions"]["ISO3"].unique()
+        ISO3_codes_region = self.geoms["regions"]["ISO3"].unique()
         GLOBIOM_regions_region = GLOBIOM_regions[
             GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
         ]["Region37"].unique()
@@ -3868,7 +3880,7 @@ class GEBModel(GridModel, Forcing):
         # Drop crops with no data at all for these regions
         donor_data = donor_data.dropna(axis=1, how="all")
 
-        unique_regions = self.geoms["areamaps/regions"]
+        unique_regions = self.geoms["regions"]
 
         data = self.donate_and_receive_crop_prices(
             donor_data, unique_regions, GLOBIOM_regions
@@ -5144,7 +5156,7 @@ class GEBModel(GridModel, Forcing):
                 bbox=bounds,
                 buffer=100,
             ).raster.mask_nodata()
-            self.set_forcing(
+            self.set_other(
                 DEM_raster,
                 name=f"hydrodynamics/DEM/{DEM['elevtn']}",
                 byteshuffle=True,
@@ -5171,7 +5183,7 @@ class GEBModel(GridModel, Forcing):
             bbox=bounds,
             buffer=200,  # 2 km buffer
         )
-        self.set_forcing(
+        self.set_other(
             esa_worldcover,
             name="hydrodynamics/esa_worldcover",
             byteshuffle=False,
@@ -5211,7 +5223,7 @@ class GEBModel(GridModel, Forcing):
                 "No stations found in the region. If no stations should be set, set include_coastal=False"
             )
 
-            path = self.set_forcing(
+            path = self.set_other(
                 water_levels,
                 name="hydrodynamics/waterlevel",
                 time_chunksize=24 * 6,  # 10 minute data
@@ -5278,9 +5290,8 @@ class GEBModel(GridModel, Forcing):
 
         hydrodynamics_data_catalog.to_yml(
             hydrodynamics_data_catalog,
-            Path(self.root) / "hydrodynamics" / "data_catalog.yml",
+            Path(self.root) / "other" / "hydrodynamics" / "data_catalog.yml",
         )
-        return None
 
     def setup_damage_parameters(self, parameters):
         for hazard, hazard_parameters in parameters.items():
@@ -5341,7 +5352,7 @@ class GEBModel(GridModel, Forcing):
                 )
             )
         discharge_data = xr.concat(discharge_data, dim="pixel")
-        self.set_forcing(
+        self.set_other(
             discharge_data,
             name="observations/discharge",
             time_chunksize=1e99,  # no chunking
@@ -5412,10 +5423,10 @@ class GEBModel(GridModel, Forcing):
                 XY_CHUNKSIZE * self.subgrid_factor,
             )
 
-    def write_forcing_to_zarr(
+    def write_other_to_zarr(
         self,
         var,
-        forcing,
+        da,
         y_chunksize=XY_CHUNKSIZE,
         x_chunksize=XY_CHUNKSIZE,
         time_chunksize=1,
@@ -5423,13 +5434,13 @@ class GEBModel(GridModel, Forcing):
     ) -> None:
         self.logger.info(f"Write {var}")
 
-        destination = Path("forcing") / (var + ".zarr")
-        self.files["forcing"][var] = destination
-        self.is_updated["forcing"][var]["filename"] = destination
+        destination = Path("other") / (var + ".zarr")
+        self.files["other"][var] = destination
+        self.is_updated["other"][var]["filename"] = destination
 
         dst_file = Path(self.root, destination)
         return to_zarr(
-            forcing,
+            da,
             dst_file,
             x_chunksize=x_chunksize,
             y_chunksize=y_chunksize,
@@ -5438,12 +5449,12 @@ class GEBModel(GridModel, Forcing):
             crs=4326,
         )
 
-    def write_forcing(self) -> None:
+    def write_other(self) -> None:
         self._assert_write_mode
-        for var in self.forcing:
-            forcing = self.forcing[var]
-            if self.is_updated["forcing"][var]["updated"]:
-                self.write_forcing_to_zarr(var, forcing)
+        for var in self.other:
+            da = self.other[var]
+            if self.is_updated["other"][var]["updated"]:
+                self.write_other_to_zarr(var, da)
 
     def write_table(self):
         if len(self.table) == 0:
@@ -5454,9 +5465,10 @@ class GEBModel(GridModel, Forcing):
                 if self.is_updated["table"][name]["updated"]:
                     fn = Path("table") / (name + ".parquet")
                     self.logger.info(f"Writing file {fn}")
+
                     self.files["table"][name] = fn
                     self.is_updated["table"][name]["filename"] = fn
-                    self.logger.info(f"Writing file {fn}")
+
                     fp = Path(self.root, fn)
                     fp.parent.mkdir(parents=True, exist_ok=True)
                     data.to_parquet(fp, engine="pyarrow")
@@ -5470,9 +5482,10 @@ class GEBModel(GridModel, Forcing):
                 if self.is_updated["array"][name]["updated"]:
                     fn = Path("array") / (name + ".npz")
                     self.logger.info(f"Writing file {fn}")
+
                     self.files["array"][name] = fn
                     self.is_updated["array"][name]["filename"] = fn
-                    self.logger.info(f"Writing file {fn}")
+
                     fp = Path(self.root, fn)
                     fp.parent.mkdir(parents=True, exist_ok=True)
                     np.savez_compressed(fp, data=data)
@@ -5487,26 +5500,18 @@ class GEBModel(GridModel, Forcing):
             self._assert_write_mode
             for name, data in self.dict.items():
                 if self.is_updated["dict"][name]["updated"]:
-                    fn = os.path.join(name + ".json")
+                    fn = Path("dict") / (name + ".json")
+                    self.logger.info(f"Writing file {fn}")
+
                     self.files["dict"][name] = fn
                     self.is_updated["dict"][name]["filename"] = fn
-                    self.logger.info(f"Writing file {fn}")
-                    output_path = Path(self.root) / fn
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(output_path, "w") as f:
+
+                    fp = Path(self.root) / fn
+                    fp.parent.mkdir(parents=True, exist_ok=True)
+                    with open(fp, "w") as f:
                         json.dump(data, f, default=convert_timestamp_to_string)
 
-    def write_geoms(self, fn: str = "{name}.geoparquet", **kwargs) -> None:
-        """Write model geometries to a vector file (by default geoparquet) at <root>/<fn>
-
-        key-word arguments are passed to :py:meth:`geopandas.GeoDataFrame.to_file`
-
-        Parameters
-        ----------
-        fn : str, optional
-            filename relative to model root and should contain a {name} placeholder,
-            by default 'geoms/{name}.gpkg'
-        """
+    def write_geoms(self) -> None:
         if len(self._geoms) == 0:
             self.logger.info("No geoms data found, skip writing.")
             return
@@ -5514,13 +5519,15 @@ class GEBModel(GridModel, Forcing):
             self._assert_write_mode
             for name, gdf in self._geoms.items():
                 if self.is_updated["geoms"][name]["updated"]:
-                    self.logger.info(f"Writing file {fn.format(name=name)}")
-                    self.files["geoms"][name] = fn.format(name=name)
-                    _fn = os.path.join(self.root, fn.format(name=name))
-                    if not os.path.isdir(os.path.dirname(_fn)):
-                        os.makedirs(os.path.dirname(_fn))
-                    self.is_updated["geoms"][name]["filename"] = _fn
-                    gdf.to_parquet(_fn, **kwargs)
+                    fn = Path("geom") / (name + ".geoparquet")
+                    self.logger.info(f"Writing file {fn}")
+
+                    self.files["geoms"][name] = fn
+                    self.is_updated["geoms"][name]["filename"] = fn
+
+                    fp = self.root / fn
+                    fp.parent.mkdir(parents=True, exist_ok=True)
+                    gdf.to_parquet(fp)
 
     def set_table(self, table, name, update=True):
         self.is_updated["table"][name] = {"updated": update}
@@ -5548,7 +5555,7 @@ class GEBModel(GridModel, Forcing):
         self.write_subgrid()
         self.write_region_subgrid()
 
-        self.write_forcing()
+        self.write_other()
 
         self.write_files()
 
@@ -5583,30 +5590,30 @@ class GEBModel(GridModel, Forcing):
                 d = json.load(f)
             self.set_dict(d, name=name, update=False)
 
-    def _read_grid(self, fn: str, name: str) -> xr.Dataset:
+    def _read_grid(self, fn) -> xr.Dataset:
         da = open_zarr(Path(self.root) / fn)
         return da
 
     def read_grid(self) -> None:
         for name, fn in self.files["grid"].items():
-            data = self._read_grid(fn, name=name)
+            data = self._read_grid(fn)
             self.set_grid(data, name=name, update=False)
 
     def read_subgrid(self) -> None:
         for name, fn in self.files["subgrid"].items():
-            data = self._read_grid(fn, name=name)
+            data = self._read_grid(fn)
             self.set_subgrid(data, name=name, update=False)
 
     def read_region_subgrid(self) -> None:
         for name, fn in self.files["region_subgrid"].items():
-            data = self._read_grid(fn, name=name)
+            data = self._read_grid(fn)
             self.set_region_subgrid(data, name=name, update=False)
 
-    def read_forcing(self) -> None:
+    def read_other(self) -> None:
         self.read_files()
-        for name, fn in self.files["forcing"].items():
+        for name, fn in self.files["other"].items():
             da = open_zarr(Path(self.root) / fn)
-            self.set_forcing(da, name=name, update=False)
+            self.set_other(da, name=name, update=False)
         return None
 
     def read(self):
@@ -5618,18 +5625,18 @@ class GEBModel(GridModel, Forcing):
             self.read_table()
             self.read_dict()
 
-            self.read_grid()
             self.read_subgrid()
+            self.read_grid()
             self.read_region_subgrid()
 
-            self.read_forcing()
+            self.read_other()
 
     def set_geoms(self, geoms, name, update=True):
         self.is_updated["geoms"][name] = {"updated": update}
         super().set_geoms(geoms, name=name)
         return self.geoms[name]
 
-    def set_forcing(
+    def set_other(
         self,
         data,
         name: str,
@@ -5639,13 +5646,11 @@ class GEBModel(GridModel, Forcing):
         y_chunksize=XY_CHUNKSIZE,
         time_chunksize=1,
         byteshuffle=False,
-        *args,
-        **kwargs,
     ):
         assert isinstance(data, xr.DataArray)
-        self.is_updated["forcing"][name] = {"updated": update}
+        self.is_updated["other"][name] = {"updated": update}
         if update and write:
-            data = self.write_forcing_to_zarr(
+            data = self.write_other_to_zarr(
                 name,
                 data,
                 x_chunksize=x_chunksize,
@@ -5653,9 +5658,9 @@ class GEBModel(GridModel, Forcing):
                 time_chunksize=time_chunksize,
                 byteshuffle=byteshuffle,
             )
-            self.is_updated["forcing"][name]["updated"] = False
-        super().set_forcing(data, name=name, *args, **kwargs)
-        return self.files["forcing"][name]
+            self.is_updated["other"][name]["updated"] = False
+        self.forcing[name] = data
+        return self.files["other"][name]
 
     def _set_grid(
         self,
@@ -5683,9 +5688,17 @@ class GEBModel(GridModel, Forcing):
                 self.logger.warning(f"Replacing grid map: {name}")
             grid = grid.drop_vars(name)
 
-        if len(grid) != 0:
+        if len(grid) == 0:
+            assert name == "mask"
+            assert data.dtype == bool
+        else:
             assert np.array_equal(data.x.values, grid.x.values)
             assert np.array_equal(data.y.values, grid.y.values)
+
+            data = xr.where(
+                ~grid["mask"], data, data.attrs["_FillValue"], keep_attrs=True
+            )
+
         grid[name] = data
 
         return grid
@@ -5694,7 +5707,7 @@ class GEBModel(GridModel, Forcing):
         self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
     ) -> None:
         self.is_updated["grid"][name] = {"updated": update}
-        super().set_grid(data, name=name)
+        self._set_grid(self.grid, data, name=name)
         return self.grid[name]
 
     def set_subgrid(
@@ -5723,6 +5736,10 @@ class GEBModel(GridModel, Forcing):
         subgrid_factor = self.subgrid.dims["x"] // self.grid.dims["x"]
         assert subgrid_factor == self.subgrid.dims["y"] // self.grid.dims["y"]
         return subgrid_factor
+
+    @property
+    def region(self):
+        return self.geoms["mask"]
 
     @property
     def preprocessing_dir(self):
