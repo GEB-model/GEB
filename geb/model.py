@@ -403,7 +403,7 @@ class GEBModel(HazardDriver, ABM_Model):
         ):
             Hydrology.finalize(self)
 
-            from geb.workflows import all_async_readers
+            from geb.workflows.io import all_async_readers
 
             for reader in all_async_readers:
                 reader.close()

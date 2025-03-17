@@ -105,14 +105,12 @@ class LandCover(object):
         self.var = self.model.store.create_bucket("hydrology.landcover.var")
         self.HRU.var.capriseindex = self.HRU.full_compressed(0, dtype=np.float32)
 
-        store = zarr.storage.ZipStore(
-            self.model.files["forcing"][
-                "landcover/forest/cropCoefficientForest_10days"
-            ],
-            mode="r",
+        store = zarr.storage.LocalStore(
+            self.model.files["forcing"]["landcover/forest/crop_coefficient"],
+            read_only=True,
         )
         self.grid.var.forest_kc_per_10_days = zarr.open_group(store, mode="r")[
-            "cropCoefficientForest_10days"
+            "crop_coefficient"
         ][:]
 
     def water_body_exchange(self, groundwater_recharge):

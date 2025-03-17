@@ -180,14 +180,9 @@ class hydrology_reporter(ABMReporter):
                                 "units": "unknown",
                                 "long_name": name,
                                 "_ARRAY_DIMENSIONS": ["time", "y", "x"],
+                                "_CRS": self.hydrology.grid.crs,
                             }
                         )
-
-                        crs = self.hydrology.grid.crs
-                        if not isinstance(crs, str):
-                            crs = crs.to_string()
-                        zarr_group.attrs["crs"] = crs
-
                         self.variables[name] = zarr_store
 
                     else:

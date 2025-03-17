@@ -96,17 +96,15 @@ class Interception(object):
             (len(ALL_LAND_COVER_TYPES), 37, 1),
         )
         for cover_name, cover in (("forest", FOREST), ("grassland", GRASSLAND_LIKE)):
-            store = zarr.storage.ZipStore(
+            store = zarr.storage.LocalStore(
                 self.model.files["forcing"][
-                    f"landcover/{cover_name}/interceptCap{cover_name.title()}_10days"
+                    f"landcover/{cover_name}/interception_capacity"
                 ],
-                mode="r",
+                read_only=True,
             )
 
             self.grid.var.interception[cover] = self.grid.compress(
-                zarr.open_group(store, mode="r")[
-                    f"interceptCap{cover_name.title()}_10days"
-                ][:]
+                zarr.open_group(store, mode="r")["interception_capacity"][:]
             )
 
     def step(self, potential_transpiration):

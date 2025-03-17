@@ -175,7 +175,7 @@ class LakesReservoirs(object):
 
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped = self.grid.load(
-            self.model.files["grid"]["routing/lakesreservoirs/lakesResID"]
+            self.model.files["grid"]["routing/lakesreservoirs/water_body_id"]
         )
         waterBodyID_unmapped[waterBodyID_unmapped == OFF] = -1
 
@@ -671,4 +671,4 @@ class LakesReservoirs(object):
             if self.hydrology.dynamic_water_bodies:
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
-        print(self.reservoir_fill_percentage.astype(int))
+        # print(self.reservoir_fill_percentage.astype(int))

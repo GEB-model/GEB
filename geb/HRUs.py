@@ -45,14 +45,14 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
                 return data, src.transform, src.crs
             else:
                 return data
-    elif filepath.suffixes == [".zarr", ".zip"]:
-        store = zarr.storage.ZipStore(filepath, mode="r")
-        ds = zarr.open_group(store, mode="r")
-        data = ds["data"][:]
+    elif filepath.suffix == ".zarr":
+        store = zarr.storage.LocalStore(filepath, read_only=True)
+        group = zarr.open_group(store, mode="r")
+        data = group[filepath.stem][:]
         data = data.astype(np.float32) if data.dtype == np.float64 else data
         if return_transform_and_crs:
-            x = ds["x"][:]
-            y = ds["y"][:]
+            x = group["x"][:]
+            y = group["y"][:]
             x_diff = np.diff(x[:]).mean()
             y_diff = np.diff(y[:]).mean()
             transform = Affine(
@@ -63,7 +63,7 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
                 e=y_diff,
                 f=y[0] - y_diff / 2,
             )
-            wkt = ds["spatial_ref"].attrs["spatial_ref"]
+            wkt = group[filepath.stem].attrs["_CRS"]
             return data, transform, wkt
         else:
             return data
@@ -73,6 +73,16 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
 
 def load_geom(filepath):
     return gpd.read_parquet(filepath)
+
+
+def load_forcing_xr(filepath):
+    return xr.open_dataset(
+        zarr.storage.LocalStore(
+            filepath,
+            read_only=True,
+        ),
+        engine="zarr",
+    )
 
 
 @njit(cache=True)
@@ -933,40 +943,20 @@ class Data:
         )
 
     def load_water_demand(self):
-        self.model.domestic_water_consumption_ds = xr.open_dataset(
-            zarr.storage.ZipStore(
-                self.model.files["forcing"]["water_demand/domestic_water_consumption"],
-                mode="r",
-            ),
-            engine="zarr",
+        self.model.domestic_water_consumption_ds = load_forcing_xr(
+            self.model.files["forcing"]["water_demand/domestic_water_consumption"]
         )
-        self.model.domestic_water_demand_ds = xr.open_dataset(
-            zarr.storage.ZipStore(
-                self.model.files["forcing"]["water_demand/domestic_water_demand"],
-                mode="r",
-            ),
-            engine="zarr",
+        self.model.domestic_water_demand_ds = load_forcing_xr(
+            self.model.files["forcing"]["water_demand/domestic_water_demand"]
         )
-        self.model.industry_water_consumption_ds = xr.open_dataset(
-            zarr.storage.ZipStore(
-                self.model.files["forcing"]["water_demand/industry_water_consumption"],
-                mode="r",
-            ),
-            engine="zarr",
+        self.model.industry_water_consumption_ds = load_forcing_xr(
+            self.model.files["forcing"]["water_demand/industry_water_consumption"]
         )
-        self.model.industry_water_demand_ds = xr.open_dataset(
-            zarr.storage.ZipStore(
-                self.model.files["forcing"]["water_demand/industry_water_demand"],
-                mode="r",
-            ),
-            engine="zarr",
+        self.model.industry_water_demand_ds = load_forcing_xr(
+            self.model.files["forcing"]["water_demand/industry_water_demand"]
         )
-        self.model.livestock_water_consumption_ds = xr.open_dataset(
-            zarr.storage.ZipStore(
-                self.model.files["forcing"]["water_demand/livestock_water_consumption"],
-                mode="r",
-            ),
-            engine="zarr",
+        self.model.livestock_water_consumption_ds = load_forcing_xr(
+            self.model.files["forcing"]["water_demand/livestock_water_consumption"]
         )
 
     def to_HRU(self, *, data=None, fn=None):

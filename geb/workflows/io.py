@@ -37,6 +37,7 @@ def to_zarr(
     time_chunks_per_shard=30,
     byteshuffle=True,
     filters=[],
+    progress=True,
 ):
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
@@ -127,15 +128,20 @@ def to_zarr(
         for coord in da.coords:
             encoding[coord] = {"compressors": None}
 
-        # start writing after 10 seconds, and update every 0.1 seconds
-        with ProgressBar(minimum=10, dt=10):
-            store = da.to_zarr(
-                tmp_zarr,
-                mode="w",
-                encoding=encoding,
-                zarr_version=zarr_version,
-                consolidated=False,
-            )
+        arguments = {
+            "store": tmp_zarr,
+            "mode": "w",
+            "encoding": encoding,
+            "zarr_version": zarr_version,
+            "consolidated": False,
+        }
+
+        if progress:
+            # start writing after 10 seconds, and update every 0.1 seconds
+            with ProgressBar(minimum=10, dt=0.1):
+                store = da.to_zarr(**arguments)
+        else:
+            store = da.to_zarr(**arguments)
 
         store.close()
 
@@ -157,7 +163,7 @@ class AsyncForcingReader:
     def __init__(self, filepath, variable_name):
         self.filepath = filepath
 
-        store = zarr.storage.ZipStore(self.filepath, mode="r")
+        store = zarr.storage.LocalStore(self.filepath, read_only=True)
         self.ds = zarr.open_group(store, mode="r")
         self.var = self.ds[variable_name]
 

@@ -43,9 +43,9 @@ class SFINCS:
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
-        store = zarr.storage.ZipStore(
+        store = zarr.storage.LocalStore(
             self.model.files["forcing"]["climate/pr_hourly"],
-            mode="r",
+            read_only=True,
         )
 
         # set default precipitation file

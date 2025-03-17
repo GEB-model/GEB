@@ -216,7 +216,7 @@ class CropFarmers(AgentBaseClass):
         self.why_30 = load_economic_data(self.model.files["dict"]["economics/why_30"])
 
         self.elevation_subgrid = load_grid(
-            self.model.files["MERIT_grid"]["landsurface/topo/subgrid_elevation"],
+            self.model.files["subgrid"]["landsurface/topo/sub_grid_elevation"],
             return_transform_and_crs=True,
         )
 
@@ -402,6 +402,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
+        # TODO: Sample elevation based on farmer location
         self.var.elevation = DynamicArray(
             input_array=sample_from_map(
                 self.elevation_subgrid[0],
