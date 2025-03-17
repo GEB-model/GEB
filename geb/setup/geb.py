@@ -182,6 +182,7 @@ class GEBModel(GridModel, Forcing):
         self.epsg = epsg
         self.data_provider = data_provider
 
+        self._grid = None
         self._subgrid = None
         self._region_subgrid = None
 
@@ -397,7 +398,7 @@ class GEBModel(GridModel, Forcing):
                 flow_mask.astype(np.uint8),
                 mask=~flow_mask,
                 connectivity=4,
-                transform=elevation.rio.transform(),
+                transform=elevation.rio.transform(recalc=True),
             ),
         )
         assert len(mask_geom) == 1, "Basin mask is not contiguous"
@@ -430,7 +431,7 @@ class GEBModel(GridModel, Forcing):
             elevation.values,
             nodata=np.nan,
             latlon=True,
-            transform=elevation.raster.transform,
+            transform=elevation.rio.transform(recalc=True),
         )
         # set slope to zero on the mask boundary
         slope_data[np.isnan(slope_data) & (~mask.data)] = 0
@@ -441,7 +442,6 @@ class GEBModel(GridModel, Forcing):
         ldd = self.full_like(
             outflow_elevation, fill_value=255, nodata=255, dtype=np.uint8
         )
-        ldd.raster.set_nodata(255)
         ldd.data = flow_raster_upscaled.to_array(ftype="ldd")
         self.set_grid(ldd, name="routing/ldd")
 
@@ -449,7 +449,6 @@ class GEBModel(GridModel, Forcing):
         upstream_area = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        upstream_area.raster.set_nodata(np.nan)
         upstream_area_data = flow_raster_upscaled.upstream_area(unit="m2").astype(
             np.float32
         )
@@ -461,7 +460,6 @@ class GEBModel(GridModel, Forcing):
         river_length = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        river_length.raster.set_nodata(np.nan)
         river_length_data = flow_raster.subgrid_rivlen(
             idxs_out, unit="m", direction="down"
         )
@@ -547,7 +545,9 @@ class GEBModel(GridModel, Forcing):
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
 
-        dst_transform = mask.raster.transform * Affine.scale(1 / subgrid_factor)
+        dst_transform = mask.rio.transform(recalc=True) * Affine.scale(
+            1 / subgrid_factor
+        )
 
         submask = xr.DataArray(
             data=repeat_grid(mask.data, subgrid_factor),
@@ -2195,7 +2195,8 @@ class GEBModel(GridModel, Forcing):
         )
 
         region_subgrid_cell_area.data = calculate_cell_area(
-            region_subgrid_cell_area.raster.transform, region_subgrid_cell_area.shape
+            region_subgrid_cell_area.rio.transform(recalc=True),
+            region_subgrid_cell_area.shape,
         )
         region_subgrid_cell_area = region_subgrid_cell_area.compute()
 
@@ -3500,7 +3501,8 @@ class GEBModel(GridModel, Forcing):
             households_found = 0
 
             for HID in GLOPOP_households_region:
-                print(f"searching household {households_found} of {n_households}")
+                if not households_found % 1000:
+                    print(f"searching household {households_found} of {n_households}")
                 household = GLOPOP_S_region[GLOPOP_S_region["HID"] == HID]
                 household_size = len(household)
                 if len(household) > 1:
@@ -3530,7 +3532,9 @@ class GEBModel(GridModel, Forcing):
                     household_characteristics["locations"][households_found, :] = x_y
                     households_found += 1
 
-                # clip away unused data:
+            print(f"searching household {households_found} of {n_households}")
+
+            # clip away unused data:
             for household_attribute in household_characteristics:
                 household_characteristics[household_attribute] = (
                     household_characteristics[household_attribute][:households_found]
@@ -3577,7 +3581,9 @@ class GEBModel(GridModel, Forcing):
             np.bincount(farms_flattened, vertical_index) / np.bincount(farms_flattened)
         ).astype(int)
 
-        locations = pixels_to_coords(pixels + 0.5, farms.raster.transform.to_gdal())
+        locations = pixels_to_coords(
+            pixels + 0.5, farms.rio.transform(recalc=True).to_gdal()
+        )
         locations = gpd.GeoDataFrame(
             geometry=gpd.points_from_xy(locations[:, 0], locations[:, 1]),
             crs="EPSG:4326",
@@ -4015,7 +4021,7 @@ class GEBModel(GridModel, Forcing):
         farmer_mirca_units = sample_from_map(
             MIRCA_unit_grid.values,
             farmer_locations,
-            MIRCA_unit_grid.raster.transform.to_gdal(),
+            MIRCA_unit_grid.rio.transform(recalc=True).to_gdal(),
         )
 
         farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(year)
@@ -4437,18 +4443,18 @@ class GEBModel(GridModel, Forcing):
         farmer_cells = sample_from_map(
             grid_id_da.values,
             farmer_locations,
-            grid_id_da.raster.transform.to_gdal(),
+            grid_id_da.rio.transform(recalc=True).to_gdal(),
         )
 
         crop_area_fractions = sample_from_map(
             area_fraction_2000.values,
             farmer_locations,
-            area_fraction_2000.raster.transform.to_gdal(),
+            area_fraction_2000.rio.transform(recalc=True).to_gdal(),
         )
         crop_irrigated_fractions = sample_from_map(
             irrigated_fraction_2000.values,
             farmer_locations,
-            irrigated_fraction_2000.raster.transform.to_gdal(),
+            irrigated_fraction_2000.rio.transform(recalc=True).to_gdal(),
         )
 
         n_farmers = self.array["agents/farmers/id"].size
@@ -4579,17 +4585,17 @@ class GEBModel(GridModel, Forcing):
         farmer_cells = sample_from_map(
             grid_id_da.values,
             farmer_locations,
-            grid_id_da.raster.transform.to_gdal(),
+            grid_id_da.rio.transform(recalc=True).to_gdal(),
         )
         fraction_sw_irrigation_farmers = sample_from_map(
             fraction_sw_irrigation_data.values,
             farmer_locations,
-            fraction_sw_irrigation_data.raster.transform.to_gdal(),
+            fraction_sw_irrigation_data.rio.transform(recalc=True).to_gdal(),
         )
         fraction_gw_irrigation_farmers = sample_from_map(
             fraction_gw_irrigation_data.values,
             farmer_locations,
-            fraction_gw_irrigation_data.raster.transform.to_gdal(),
+            fraction_gw_irrigation_data.rio.transform(recalc=True).to_gdal(),
         )
 
         adaptations = np.full(
@@ -4687,7 +4693,7 @@ class GEBModel(GridModel, Forcing):
 
         locations, sizes = generate_locations(
             population=populaton_map_values,
-            geotransform=populaton_map.raster.transform.to_gdal(),
+            geotransform=populaton_map.rio.transform(recalc=True).to_gdal(),
             mean_household_size=5,
         )
 
@@ -5324,7 +5330,7 @@ class GEBModel(GridModel, Forcing):
         self.set_table(risk_scaling_factors, name="hydrodynamics/risk_scaling_factors")
 
     def setup_discharge_observations(self, files):
-        transform = self.grid.raster.transform
+        transform = self.grid.rio.transform(recalc=True)
 
         discharge_data = []
         for i, file in enumerate(files):
@@ -5558,6 +5564,7 @@ class GEBModel(GridModel, Forcing):
         self.write_other()
 
         self.write_files()
+        self.logger.info("Done")
 
     def read_files(self):
         files_is_empty = all(len(v) == 0 for v in self.files.values())
@@ -5659,7 +5666,7 @@ class GEBModel(GridModel, Forcing):
                 byteshuffle=byteshuffle,
             )
             self.is_updated["other"][name]["updated"] = False
-        self.forcing[name] = data
+        self.other[name] = data
         return self.files["other"][name]
 
     def _set_grid(

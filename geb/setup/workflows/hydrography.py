@@ -36,7 +36,12 @@ def get_river_graph(data_catalog):  # , reverse=False):
         data_catalog.get_source("MERIT_Basins_riv").path,
         columns=["COMID", "NextDownID"],
         ignore_geometry=True,
-        # bbox=(3.68, 49.82, 8.22, 51.66),  # bbox for the Geul (potentail speedup for when developing)
+        # bbox=(
+        #     3.68,
+        #     49.82,
+        #     8.22,
+        #     51.66,
+        # ),  # bbox for the Geul (potentail speedup for when developing)
     )
 
     # create a directed graph for the river network

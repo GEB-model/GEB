@@ -1163,7 +1163,7 @@ class Forcing:
 
             with tempfile.TemporaryDirectory() as tmp_spei_folder:
                 tmp_spei_file = Path(tmp_spei_folder) / "tmp_spei_file.zarr"
-                self.logger.info("Calculating SPEI and to temporary file...")
+                self.logger.info("Calculating SPEI and exporting to temporary file...")
                 SPEI = to_zarr(
                     SPEI,
                     tmp_spei_file,
