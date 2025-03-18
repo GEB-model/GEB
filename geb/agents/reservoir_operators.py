@@ -4,9 +4,6 @@ import numpy as np
 from .general import AgentBaseClass
 from ..store import DynamicArray
 
-from numba import njit
-
-
 from ..hydrology.lakes_reservoirs import RESERVOIR
 
 IRRIGATION_RESERVOIR = 1
