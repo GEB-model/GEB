@@ -102,14 +102,14 @@ class Households(AgentBaseClass):
         Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
 
         # load household locations
-        locations = np.load(self.model.files["binary"]["agents/households/locations"])[
+        locations = np.load(self.model.files["array"]["agents/households/locations"])[
             "data"
         ]
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
         self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
         # load household sizes
-        sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
+        sizes = np.load(self.model.files["array"]["agents/households/sizes"])["data"]
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]

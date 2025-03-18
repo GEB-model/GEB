@@ -236,7 +236,7 @@ class Grid(BaseVariables):
 
         self.scaling = 1
         mask, self.transform, self.crs = load_grid(
-            self.model.files["grid"]["areamaps/grid_mask"],
+            self.model.files["grid"]["mask"],
             return_transform_and_crs=True,
         )
         self.mask = mask.astype(bool)
@@ -261,9 +261,7 @@ class Grid(BaseVariables):
         assert math.isclose(self.transform.a, -self.transform.e)
         self.cell_size = self.transform.a
 
-        self.cell_area_uncompressed = load_grid(
-            self.model.files["grid"]["areamaps/cell_area"]
-        )
+        self.cell_area_uncompressed = load_grid(self.model.files["grid"]["cell_area"])
 
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
@@ -365,7 +363,7 @@ class Grid(BaseVariables):
 
     def load_forcing_ds(self, name):
         reader = AsyncForcingReader(
-            self.model.files["forcing"][f"climate/{name}"],
+            self.model.files["other"][f"climate/{name}"],
             name,
         )
         assert reader.ds["y"][0] > reader.ds["y"][-1]
@@ -514,7 +512,7 @@ class HRUs(BaseVariables):
         self.data = data
         self.model = model
 
-        subgrid_mask = load_grid(self.model.files["subgrid"]["areamaps/sub_grid_mask"])
+        subgrid_mask = load_grid(self.model.files["subgrid"]["mask"])
         submask_height, submask_width = subgrid_mask.shape
 
         self.scaling = submask_height // self.data.grid.shape[0]
@@ -944,19 +942,19 @@ class Data:
 
     def load_water_demand(self):
         self.model.domestic_water_consumption_ds = load_forcing_xr(
-            self.model.files["forcing"]["water_demand/domestic_water_consumption"]
+            self.model.files["other"]["water_demand/domestic_water_consumption"]
         )
         self.model.domestic_water_demand_ds = load_forcing_xr(
-            self.model.files["forcing"]["water_demand/domestic_water_demand"]
+            self.model.files["other"]["water_demand/domestic_water_demand"]
         )
         self.model.industry_water_consumption_ds = load_forcing_xr(
-            self.model.files["forcing"]["water_demand/industry_water_consumption"]
+            self.model.files["other"]["water_demand/industry_water_consumption"]
         )
         self.model.industry_water_demand_ds = load_forcing_xr(
-            self.model.files["forcing"]["water_demand/industry_water_demand"]
+            self.model.files["other"]["water_demand/industry_water_demand"]
         )
         self.model.livestock_water_consumption_ds = load_forcing_xr(
-            self.model.files["forcing"]["water_demand/livestock_water_consumption"]
+            self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
 
     def to_HRU(self, *, data=None, fn=None):

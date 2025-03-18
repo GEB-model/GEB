@@ -151,7 +151,7 @@ class SnowFrost(object):
         TemperatureLapseRate = 0.0065
 
         elevation_std = self.grid.load(
-            self.model.files["grid"]["landsurface/topo/elevation_standard_deviation"]
+            self.model.files["grid"]["landsurface/elevation_standard_deviation"]
         )
         elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
 
