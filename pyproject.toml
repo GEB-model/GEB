@@ -8,7 +8,10 @@ authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
     {name = "Maurice Kalthof", email = "w.m.l.kalthof@vu.nl"},
     {name = "Veerle Bril", email = "v.c.bril@vu.nl"},
+    {name = "Lars Tierolf", email = "lars.tierolf@vu.nl"},
+    {name = "Tarun Sadana", email = "t.sadana@vu.nl"},
     {name = "Tim Busker", email = "tim.busker@vu.nl"},
+    {name = "Rafaella Oliveira", email = "r.gouveialoureirooliveira@vu.nl"},
 ]
 dependencies = [
     "cdsapi>=0.7.5",
