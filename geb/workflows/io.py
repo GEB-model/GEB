@@ -48,7 +48,7 @@ def to_zarr(
     assert "longitudes" not in da.dims, "longitudes should be x"
     assert "latitudes" not in da.dims, "latitudes should be y"
 
-    if "x" in da.dims and "y" in da.dims:
+    if "y" in da.dims and "x" in da.dims:
         assert da.dims[-2] == "y", "y should be the second last dimension"
         assert da.dims[-1] == "x", "x should be the last dimension"
 

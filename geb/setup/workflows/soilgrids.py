@@ -44,6 +44,8 @@ def resample_chunked(source, target, method="bilinear"):
             f"Unknown method: {method}, must be 'bilinear' or 'nearest_neighbour'"
         )
 
+    assert target.dims == ("y", "x")
+
     source_geo = get_area_definition(source)
     target_geo = get_area_definition(target)
 
@@ -98,9 +100,13 @@ def load_soilgrids(data_catalog, subgrid, region):
                 .compute()
             )
             da = da.raster.interpolate_na("nearest")
-            da.name = f"{variable_name}_{i}"
+            da.assign_coords(soil_layer=i)
             variable_layers.append(da)
-        ds_variable = xr.concat(variable_layers, dim="soil_layer", compat="equals")
+        ds_variable = xr.concat(
+            variable_layers,
+            dim=xr.Variable("soil_layer", [1, 2, 3, 4, 5, 6]),
+            compat="equals",
+        )
         ds_variable = ds_variable.chunk({"x": 30, "y": 30})
         ds_variable = ds_variable.raster.mask_nodata()
         ds_variable = resample_chunked(
@@ -113,7 +119,7 @@ def load_soilgrids(data_catalog, subgrid, region):
         ds_variable.name = variable_name
         ds.append(ds_variable)
 
-    ds = xr.merge(ds, join="exact")
+    ds = xr.merge(ds, join="exact").transpose("soil_layer", "y", "x")
     # depth_to_bedrock = data_catalog.get_rasterdataset(
     #     "soilgrids_2017_BDTICM", geom=region
     # )

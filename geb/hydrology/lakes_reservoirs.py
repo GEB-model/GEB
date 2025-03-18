@@ -175,7 +175,7 @@ class LakesReservoirs(object):
 
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped = self.grid.load(
-            self.model.files["grid"]["routing/lakesreservoirs/water_body_id"]
+            self.model.files["grid"]["waterbodies/water_body_id"]
         )
         waterBodyID_unmapped[waterBodyID_unmapped == OFF] = -1
 
@@ -303,7 +303,7 @@ class LakesReservoirs(object):
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
         water_body_data = pd.read_parquet(
-            self.model.files["table"]["routing/lakesreservoirs/basin_lakes_data"],
+            self.model.files["table"]["waterbodies/waterbody_data"],
         )
         # drop all data that is not in the original ids
         waterbody_original_ids_compressed = np.unique(waterbody_original_ids)

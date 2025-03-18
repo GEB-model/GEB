@@ -455,7 +455,7 @@ class Grid(BaseVariables):
     @property
     def spei_uncompressed(self):
         if not hasattr(self, "spei_ds"):
-            self.spei_ds = self.load_forcing_ds("spei")
+            self.spei_ds = self.load_forcing_ds("SPEI")
 
         current_time = self.model.current_time
 

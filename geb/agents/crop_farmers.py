@@ -202,22 +202,23 @@ class CropFarmers(AgentBaseClass):
         super().__init__()
 
         self.inflation_rate = load_economic_data(
-            self.model.files["dict"]["economics/inflation_rates"]
+            self.model.files["dict"]["socioeconomics/inflation_rates"]
         )
         # self.lending_rate = load_economic_data(
-        #     self.model.files["dict"]["economics/lending_rates"]
+        #     self.model.files["dict"]["socioeconomics/lending_rates"]
         # )
         self.electricity_cost = load_economic_data(
-            self.model.files["dict"]["economics/electricity_cost"]
+            self.model.files["dict"]["socioeconomics/electricity_cost"]
         )
 
-        self.why_10 = load_economic_data(self.model.files["dict"]["economics/why_10"])
-        self.why_20 = load_economic_data(self.model.files["dict"]["economics/why_20"])
-        self.why_30 = load_economic_data(self.model.files["dict"]["economics/why_30"])
-
-        self.elevation_subgrid = load_grid(
-            self.model.files["subgrid"]["landsurface/topo/sub_grid_elevation"],
-            return_transform_and_crs=True,
+        self.why_10 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_10"]
+        )
+        self.why_20 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_20"]
+        )
+        self.why_30 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_30"]
         )
 
         self.crop_prices = load_regional_crop_data_from_dict(
@@ -290,11 +291,9 @@ class CropFarmers(AgentBaseClass):
 
         # load map of all subdistricts
         self.var.subdistrict_map = load_grid(
-            self.model.files["region_subgrid"]["areamaps/region_subgrid"]
+            self.model.files["region_subgrid"]["region_ids"]
         )
-        region_mask = load_grid(
-            self.model.files["region_subgrid"]["areamaps/region_mask"]
-        )
+        region_mask = load_grid(self.model.files["region_subgrid"]["mask"])
         self.HRU_regions_map = np.zeros_like(self.HRU.mask, dtype=np.int8)
         self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
             region_mask == 0
@@ -401,16 +400,7 @@ class CropFarmers(AgentBaseClass):
             max_n=self.max_n,
         )
 
-        # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
-        # TODO: Sample elevation based on farmer location
-        self.var.elevation = DynamicArray(
-            input_array=sample_from_map(
-                self.elevation_subgrid[0],
-                self.var.locations.data,
-                self.elevation_subgrid[1].to_gdal(),
-            ),
-            max_n=self.max_n,
-        )
+        self.var.elevation = self.get_farmer_elevation()
 
         self.var.crop_calendar = DynamicArray(
             n=self.n,
@@ -4254,3 +4244,15 @@ class CropFarmers(AgentBaseClass):
     @n.setter
     def n(self, value):
         self.var._n = value
+
+    def get_farmer_elevation(self):
+        # get elevation per farmer
+        elevation_subgrid = load_grid(
+            self.model.files["subgrid"]["landsurface/elevation"],
+        )
+        decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)
+        mask = decompressed_land_owners != -1
+        return np.bincount(
+            decompressed_land_owners[mask],
+            weights=elevation_subgrid[mask],
+        ) / np.bincount(decompressed_land_owners[mask])

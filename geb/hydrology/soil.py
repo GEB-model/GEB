@@ -1000,58 +1000,38 @@ class Soil(object):
 
         # Soil properties
         self.HRU.var.soil_layer_height = self.HRU.compress(
-            np.moveaxis(
-                load_grid(
-                    self.model.files["subgrid"]["soil/soil_layer_height"],
-                    layer=None,
-                ),
-                -1,
-                0,
+            load_grid(
+                self.model.files["subgrid"]["soil/soil_layer_height"],
+                layer=None,
             ),
             method="mean",
         )
 
         soil_organic_carbon = self.HRU.compress(
-            np.moveaxis(
-                load_grid(
-                    self.model.files["subgrid"]["soil/soil_organic_carbon"],
-                    layer=None,
-                ),
-                -1,
-                0,
+            load_grid(
+                self.model.files["subgrid"]["soil/soil_organic_carbon"],
+                layer=None,
             ),
             method="mean",
         )
         bulk_density = self.HRU.compress(
-            np.moveaxis(
-                load_grid(
-                    self.model.files["subgrid"]["soil/bulk_density"],
-                    layer=None,
-                ),
-                -1,
-                0,
+            load_grid(
+                self.model.files["subgrid"]["soil/bulk_density"],
+                layer=None,
             ),
             method="mean",
         )
         self.HRU.var.silt = self.HRU.compress(
-            np.moveaxis(
-                load_grid(
-                    self.model.files["subgrid"]["soil/silt"],
-                    layer=None,
-                ),
-                -1,
-                0,
+            load_grid(
+                self.model.files["subgrid"]["soil/silt"],
+                layer=None,
             ),
             method="mean",
         )
         self.HRU.var.clay = self.HRU.compress(
-            np.moveaxis(
-                load_grid(
-                    self.model.files["subgrid"]["soil/clay"],
-                    layer=None,
-                ),
-                -1,
-                0,
+            load_grid(
+                self.model.files["subgrid"]["soil/clay"],
+                layer=None,
             ),
             method="mean",
         )

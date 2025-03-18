@@ -1880,7 +1880,9 @@ class GEBModel(GridModel, Forcing):
                     relative_bottom_top_layer,
                     relative_bottom_bottom_layer,
                 ],
-                dim="boundary",
+                dim=xr.Variable(
+                    "boundary", ["relative_top", "boundary", "relative_bottom"]
+                ),
                 compat="equals",
             )
         else:
@@ -1892,10 +1894,11 @@ class GEBModel(GridModel, Forcing):
                     ),
                     relative_bottom_bottom_layer,
                 ],
-                dim="boundary",
+                dim=xr.Variable("boundary", ["relative_top", "relative_bottom"]),
                 compat="equals",
             )
 
+        aquifer_top_elevation.raster.set_crs(4326)
         layer_boundary_elevation = (
             relative_layer_boundary_elevation.raster.reproject_like(
                 aquifer_top_elevation, method="bilinear"
@@ -1924,7 +1927,7 @@ class GEBModel(GridModel, Forcing):
         if two_layers:
             hydraulic_conductivity = xr.concat(
                 [hydraulic_conductivity, hydraulic_conductivity],
-                dim="layer",
+                dim=xr.Variable("layer", ["upper", "lower"]),
                 compat="equals",
             )
         else:
@@ -1943,7 +1946,9 @@ class GEBModel(GridModel, Forcing):
 
         if two_layers:
             specific_yield = xr.concat(
-                [specific_yield, specific_yield], dim="layer", compat="equals"
+                [specific_yield, specific_yield],
+                dim=xr.Variable("layer", ["upper", "lower"]),
+                compat="equals",
             )
         else:
             specific_yield = specific_yield.expand_dims(layer=["upper"])
@@ -2019,7 +2024,9 @@ class GEBModel(GridModel, Forcing):
             if two_layers:
                 # combine upper and lower layer head in one dataarray
                 heads = xr.concat(
-                    [head_upper_layer, head_lower_layer], dim="layer", compat="equals"
+                    [head_upper_layer, head_lower_layer],
+                    dim=xr.Variable("layer", ["upper", "lower"]),
+                    compat="equals",
                 )
             else:
                 heads = head_lower_layer.expand_dims(layer=["upper"])
@@ -2177,7 +2184,7 @@ class GEBModel(GridModel, Forcing):
             all_touched=True,
         )
         region_ids.attrs["_FillValue"] = -1
-        region_ids = self.set_region_subgrid(region_ids, name="subgrid")
+        region_ids = self.set_region_subgrid(region_ids, name="region_ids")
 
         region_subgrid_cell_area = self.full_like(
             region_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
@@ -5557,14 +5564,19 @@ class GEBModel(GridModel, Forcing):
             # when updating, it is possible that the mask already exists.
             if name != "mask":
                 # if the mask exists, mask the data, saving some valuable space on disk
-                data = xr.where(
+                data_ = xr.where(
                     ~grid["mask"], data, data.attrs["_FillValue"], keep_attrs=True
                 )
+                # depending on the order of the dimensions, xr.where may change the dimension order
+                # so we change it back
+                data = data_.transpose(*data.dims)
 
         if write:
+            fn = Path(grid_name) / (name + ".zarr")
+            self.logger.info(f"Writing file {fn}")
             data = to_zarr(
                 data,
-                path=self.root / grid_name / (name + ".zarr"),
+                path=self.root / fn,
                 x_chunksize=x_chunksize,
                 y_chunksize=y_chunksize,
                 crs=4326,

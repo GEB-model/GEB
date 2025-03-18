@@ -48,9 +48,7 @@ class WaterDemand:
 
     def spinup(self):
         reservoir_command_areas = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["routing/lakesreservoirs/subcommand_areas"]
-            ),
+            load_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
             method="last",
         )
 
