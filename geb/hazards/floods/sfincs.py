@@ -44,7 +44,7 @@ class SFINCS:
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
         store = zarr.storage.LocalStore(
-            self.model.files["forcing"]["climate/pr_hourly"],
+            self.model.files["other"]["climate/pr_hourly"],
             read_only=True,
         )
 

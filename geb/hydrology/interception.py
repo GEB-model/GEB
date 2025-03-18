@@ -97,7 +97,7 @@ class Interception(object):
         )
         for cover_name, cover in (("forest", FOREST), ("grassland", GRASSLAND_LIKE)):
             store = zarr.storage.LocalStore(
-                self.model.files["forcing"][
+                self.model.files["other"][
                     f"landcover/{cover_name}/interception_capacity"
                 ],
                 read_only=True,

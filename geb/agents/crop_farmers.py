@@ -375,14 +375,14 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
         self.var.risk_aversion[:] = np.load(
-            self.model.files["binary"]["agents/farmers/risk_aversion"]
+            self.model.files["array"]["agents/farmers/risk_aversion"]
         )["data"]
 
         self.var.discount_rate = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
         self.var.discount_rate[:] = np.load(
-            self.model.files["binary"]["agents/farmers/discount_rate"]
+            self.model.files["array"]["agents/farmers/discount_rate"]
         )["data"]
 
         self.var.intention_factor = DynamicArray(
@@ -390,12 +390,12 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.intention_factor[:] = np.load(
-            self.model.files["binary"]["agents/farmers/intention_factor"]
+            self.model.files["array"]["agents/farmers/intention_factor"]
         )["data"]
 
         # Load the region_code of each farmer.
         self.var.region_id = DynamicArray(
-            input_array=np.load(self.model.files["binary"]["agents/farmers/region_id"])[
+            input_array=np.load(self.model.files["array"]["agents/farmers/region_id"])[
                 "data"
             ],
             max_n=self.max_n,
@@ -421,7 +421,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=-1,
         )  # first dimension is the farmers, second is the rotation, third is the crop, planting and growing length
         self.var.crop_calendar[:] = np.load(
-            self.model.files["binary"]["agents/farmers/crop_calendar"]
+            self.model.files["array"]["agents/farmers/crop_calendar"]
         )["data"]
         # assert self.var.crop_calendar[:, :, 0].max() < len(self.var.crop_ids)
 
@@ -432,7 +432,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
         self.var.crop_calendar_rotation_years[:] = np.load(
-            self.model.files["binary"]["agents/farmers/crop_calendar_rotation_years"]
+            self.model.files["array"]["agents/farmers/crop_calendar_rotation_years"]
         )["data"]
 
         self.var.current_crop_calendar_rotation_year_index = DynamicArray(
@@ -448,7 +448,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.adaptations = DynamicArray(
-            np.load(self.model.files["binary"]["agents/farmers/adaptations"])["data"],
+            np.load(self.model.files["array"]["agents/farmers/adaptations"])["data"],
             max_n=self.max_n,
             extra_dims_names=("adaptation_type",),
         )
@@ -624,7 +624,7 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1
         )
         self.var.household_size[:] = np.load(
-            self.model.files["binary"]["agents/farmers/household_size"]
+            self.model.files["array"]["agents/farmers/household_size"]
         )["data"]
 
         self.var.yield_ratios_drought_event = DynamicArray(

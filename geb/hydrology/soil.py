@@ -1000,38 +1000,58 @@ class Soil(object):
 
         # Soil properties
         self.HRU.var.soil_layer_height = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["soil/soil_layer_height"],
-                layer=None,
+            np.moveaxis(
+                load_grid(
+                    self.model.files["subgrid"]["soil/soil_layer_height"],
+                    layer=None,
+                ),
+                -1,
+                0,
             ),
             method="mean",
         )
 
         soil_organic_carbon = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["soil/soil_organic_carbon"],
-                layer=None,
+            np.moveaxis(
+                load_grid(
+                    self.model.files["subgrid"]["soil/soil_organic_carbon"],
+                    layer=None,
+                ),
+                -1,
+                0,
             ),
             method="mean",
         )
         bulk_density = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["soil/bulk_density"],
-                layer=None,
+            np.moveaxis(
+                load_grid(
+                    self.model.files["subgrid"]["soil/bulk_density"],
+                    layer=None,
+                ),
+                -1,
+                0,
             ),
             method="mean",
         )
         self.HRU.var.silt = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["soil/silt"],
-                layer=None,
+            np.moveaxis(
+                load_grid(
+                    self.model.files["subgrid"]["soil/silt"],
+                    layer=None,
+                ),
+                -1,
+                0,
             ),
             method="mean",
         )
         self.HRU.var.clay = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["soil/clay"],
-                layer=None,
+            np.moveaxis(
+                load_grid(
+                    self.model.files["subgrid"]["soil/clay"],
+                    layer=None,
+                ),
+                -1,
+                0,
             ),
             method="mean",
         )
@@ -1117,7 +1137,7 @@ class Soil(object):
         # b = max( (oh - o0)/(oh + omax), 0.01)
         # oh: the standard deviation of orography, o0: minimum std dev, omax: max std dev
         elevation_std = self.grid.load(
-            self.model.files["grid"]["landsurface/topo/elevation_standard_deviation"]
+            self.model.files["grid"]["landsurface/elevation_standard_deviation"]
         )
         elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
         arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)

@@ -283,7 +283,7 @@ class GEBModel(HazardDriver, ABM_Model):
         }
 
         self.var = self.store.create_bucket("var")
-        self.var.regions = load_geom(self.files["geoms"]["areamaps/regions"])
+        self.var.regions = load_geom(self.files["geoms"]["regions"])
 
         self._initialize(
             report=True,
