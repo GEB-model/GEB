@@ -488,7 +488,7 @@ def update(
 
     geb_model = get_model(custom_model)(**arguments)
     geb_model.read()
-    geb_model.update(opt=configread(build_config))
+    geb_model.update(model_out=input_folder, opt=configread(build_config))
 
 
 @cli.command()

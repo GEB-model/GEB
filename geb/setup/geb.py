@@ -11,10 +11,10 @@ from datetime import datetime
 from typing import Union, Dict, List, Optional
 import logging
 import os
+import inspect
 import math
 import requests
 import time
-from copy import deepcopy
 import zipfile
 import json
 from urllib.parse import urlparse
@@ -99,6 +99,10 @@ os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 logger = logging.getLogger(__name__)
 
 
+def convert_timestamp_to_string(timestamp):
+    return timestamp.isoformat()
+
+
 def create_grid_cell_id_array(area_fraction_da):
     # Get the sizes of the spatial dimensions
     ny, nx = area_fraction_da.sizes["y"], area_fraction_da.sizes["x"]
@@ -179,6 +183,7 @@ class GEBModel(GridModel, Forcing):
         )
         Forcing.__init__(self)
 
+        self.root = root
         self.epsg = epsg
         self.data_provider = data_provider
 
@@ -201,7 +206,6 @@ class GEBModel(GridModel, Forcing):
             "subgrid": {},
             "region_subgrid": {},
         }
-        self.is_updated = deepcopy(self.files)
 
     @property
     def subgrid(self):
@@ -397,7 +401,7 @@ class GEBModel(GridModel, Forcing):
             rasterio.features.shapes(
                 flow_mask.astype(np.uint8),
                 mask=~flow_mask,
-                connectivity=4,
+                connectivity=8,
                 transform=elevation.rio.transform(recalc=True),
             ),
         )
@@ -560,7 +564,8 @@ class GEBModel(GridModel, Forcing):
             attrs={"_FillValue": None},
         )
 
-        self.set_subgrid(submask, name="mask")
+        submask = self.set_subgrid(submask, name="mask")
+        return None
 
     def setup_elevation(self):
         DEM = self.data_catalog.get_rasterdataset(
@@ -598,7 +603,7 @@ class GEBModel(GridModel, Forcing):
         The resulting subgrid cell area map is then set as the `cell_area` attribute of the subgrid.
         """
         self.logger.info("Preparing cell area map.")
-        mask = self.grid["mask"].compute()
+        mask = self.grid["mask"]
 
         cell_area = self.full_like(
             mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
@@ -1749,7 +1754,7 @@ class GEBModel(GridModel, Forcing):
             )
 
             assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
-            ds = ds.sel(time=slice(starttime, endtime)).compute()
+            ds = ds.sel(time=slice(starttime, endtime))
             ds = ds.rename({"lat": "y", "lon": "x"})
             ds.attrs["_FillValue"] = np.nan
             self.set_other(ds, name=f"water_demand/{name}")
@@ -1819,22 +1824,18 @@ class GEBModel(GridModel, Forcing):
         """
         self.logger.info("Setting up MODFLOW")
 
-        aquifer_top_elevation = (
-            self.grid["landsurface/elevation"].raster.mask_nodata().compute()
-        )
+        aquifer_top_elevation = self.grid["landsurface/elevation"].raster.mask_nodata()
         aquifer_top_elevation.raster.set_crs(4326)
-        self.set_grid(aquifer_top_elevation, name="groundwater/aquifer_top_elevation")
+        aquifer_top_elevation = self.set_grid(
+            aquifer_top_elevation, name="groundwater/aquifer_top_elevation"
+        )
 
         # load total thickness
-        total_thickness = (
-            self.data_catalog.get_rasterdataset(
-                "total_groundwater_thickness_globgm",
-                bbox=self.bounds,
-                buffer=2,
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .compute()
-        )
+        total_thickness = self.data_catalog.get_rasterdataset(
+            "total_groundwater_thickness_globgm",
+            bbox=self.bounds,
+            buffer=2,
+        ).rename({"lon": "x", "lat": "y"})
 
         total_thickness = np.clip(
             total_thickness,
@@ -1842,15 +1843,11 @@ class GEBModel(GridModel, Forcing):
             maximum_thickness_confined_layer,
         )
 
-        confining_layer = (
-            self.data_catalog.get_rasterdataset(
-                "thickness_confining_layer_globgm",
-                bbox=self.bounds,
-                buffer=2,
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .compute()
-        )
+        confining_layer = self.data_catalog.get_rasterdataset(
+            "thickness_confining_layer_globgm",
+            bbox=self.bounds,
+            buffer=2,
+        ).rename({"lon": "x", "lat": "y"})
 
         if not (confining_layer == 0).all() and not force_one_layer:  # two-layer-model
             two_layers = True
@@ -1885,7 +1882,7 @@ class GEBModel(GridModel, Forcing):
                 ],
                 dim="boundary",
                 compat="equals",
-            ).compute()
+            )
         else:
             relative_bottom_bottom_layer = -total_thickness
             relative_layer_boundary_elevation = xr.concat(
@@ -1897,7 +1894,7 @@ class GEBModel(GridModel, Forcing):
                 ],
                 dim="boundary",
                 compat="equals",
-            ).compute()
+            )
 
         layer_boundary_elevation = (
             relative_layer_boundary_elevation.raster.reproject_like(
@@ -1911,15 +1908,11 @@ class GEBModel(GridModel, Forcing):
         )
 
         # load hydraulic conductivity
-        hydraulic_conductivity = (
-            self.data_catalog.get_rasterdataset(
-                "hydraulic_conductivity_globgm",
-                bbox=self.bounds,
-                buffer=2,
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .compute()
-        )
+        hydraulic_conductivity = self.data_catalog.get_rasterdataset(
+            "hydraulic_conductivity_globgm",
+            bbox=self.bounds,
+            buffer=2,
+        ).rename({"lon": "x", "lat": "y"})
 
         # because
         hydraulic_conductivity_log = np.log(hydraulic_conductivity)
@@ -1983,13 +1976,9 @@ class GEBModel(GridModel, Forcing):
             )
 
             # loading the globgm with fixed coordinates
-            dem_globgm = (
-                self.data_catalog.get_rasterdataset(
-                    dem_globgm, geom=self.region, variables=["dem_average"], buffer=2
-                )
-                .rename({"lon": "x", "lat": "y"})
-                .compute()
-            )
+            dem_globgm = self.data_catalog.get_rasterdataset(
+                dem_globgm, geom=self.region, variables=["dem_average"], buffer=2
+            ).rename({"lon": "x", "lat": "y"})
             # load digital elevation model that was used for globgm
 
             dem = self.grid["landsurface/elevation"].raster.mask_nodata()
@@ -1999,7 +1988,7 @@ class GEBModel(GridModel, Forcing):
                 "head_upper_globgm",
                 bbox=self.bounds,
                 buffer=2,
-            ).compute()
+            )
 
             head_upper_layer = head_upper_layer.raster.mask_nodata()
             relative_head_upper_layer = head_upper_layer - dem_globgm
@@ -2012,7 +2001,7 @@ class GEBModel(GridModel, Forcing):
                 "head_lower_globgm",
                 bbox=self.bounds,
                 buffer=2,
-            ).compute()
+            )
             head_lower_layer = head_lower_layer.raster.mask_nodata()
             relative_head_lower_layer = head_lower_layer - dem_globgm
             relative_head_lower_layer = relative_head_lower_layer.raster.reproject_like(
@@ -2170,7 +2159,7 @@ class GEBModel(GridModel, Forcing):
             constant_values=1,
         )
         region_mask.attrs["_FillValue"] = None
-        self.set_region_subgrid(region_mask, name="mask")
+        region_mask = self.set_region_subgrid(region_mask, name="mask")
 
         land_use = self.data_catalog.get_rasterdataset(
             land_cover,
@@ -2186,9 +2175,9 @@ class GEBModel(GridModel, Forcing):
             self.geoms["regions"],
             col_name="region_id",
             all_touched=True,
-        ).compute()
+        )
         region_ids.attrs["_FillValue"] = -1
-        self.set_region_subgrid(region_ids, name="subgrid")
+        region_ids = self.set_region_subgrid(region_ids, name="subgrid")
 
         region_subgrid_cell_area = self.full_like(
             region_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
@@ -2198,7 +2187,6 @@ class GEBModel(GridModel, Forcing):
             region_subgrid_cell_area.rio.transform(recalc=True),
             region_subgrid_cell_area.shape,
         )
-        region_subgrid_cell_area = region_subgrid_cell_area.compute()
 
         # set the cell area for the region subgrid
         self.set_region_subgrid(
@@ -2221,11 +2209,10 @@ class GEBModel(GridModel, Forcing):
         # Assume all cells with at least x upstream cells are rivers.
         rivers = MERIT > river_threshold
         rivers = rivers.astype(np.int32)
-        rivers.raster.set_nodata(-1)
-        rivers = rivers.raster.reproject_like(
-            reprojected_land_use, method="nearest"
-        ).compute()
-        self.set_region_subgrid(rivers, name="landcover/rivers")
+        rivers.attrs["_FillValue"] = 0
+        rivers = rivers.raster.reproject_like(reprojected_land_use, method="nearest")
+        rivers = rivers.astype(bool)
+        rivers = self.set_region_subgrid(rivers, name="landcover/rivers")
 
         full_region_land_use_classes = reprojected_land_use.raster.reclassify(
             pd.DataFrame.from_dict(
@@ -2250,25 +2237,19 @@ class GEBModel(GridModel, Forcing):
         full_region_land_use_classes = xr.where(
             rivers != 1, full_region_land_use_classes, 5, keep_attrs=True
         )  # set rivers to 5 (permanent water bodies)
-        full_region_land_use_classes.raster.set_nodata(-1)
 
-        full_region_land_use_classes = full_region_land_use_classes.compute()
-        self.set_region_subgrid(
+        full_region_land_use_classes = self.set_region_subgrid(
             full_region_land_use_classes,
             name="landsurface/full_region_land_use_classes",
         )
 
         cultivated_land_full_region = xr.where(
             (full_region_land_use_classes == 1) & (reprojected_land_use == 40),
-            1,
-            0,
-            keep_attrs=True,
+            True,
+            False,
         )
-        cultivated_land_full_region.raster.set_crs(self.subgrid.raster.crs)
-        cultivated_land_full_region.raster.set_nodata(-1)
-
-        cultivated_land_full_region = cultivated_land_full_region.compute()
-        self.set_region_subgrid(
+        cultivated_land_full_region.attrs["_FillValue"] = False
+        cultivated_land_full_region = self.set_region_subgrid(
             cultivated_land_full_region, name="landsurface/full_region_cultivated_land"
         )
 
@@ -2849,10 +2830,10 @@ class GEBModel(GridModel, Forcing):
         with names of the form 'agents/farmers/{column}'.
         """
         regions = self.geoms["regions"]
-        regions_raster = self.region_subgrid["subgrid"].compute()
+        regions_raster = self.region_subgrid["subgrid"]
         full_region_cultivated_land = self.region_subgrid[
             "landsurface/full_region_cultivated_land"
-        ].compute()
+        ]
 
         farms = self.full_like(regions_raster, fill_value=-1, nodata=-1)
         for region_id in regions["region_id"]:
@@ -2877,7 +2858,7 @@ class GEBModel(GridModel, Forcing):
             farms[bounds] = xr.where(
                 region_clip, farms_region, farms.isel(bounds), keep_attrs=True
             )
-            farms = farms.compute()  # perhaps this helps with memory issues?
+            # farms = farms.compute()  # perhaps this helps with memory issues?
 
         farmers = farmers.drop("area_n_cells", axis=1)
 
@@ -3134,13 +3115,10 @@ class GEBModel(GridModel, Forcing):
                 "farm_size_donor_countries is only used for lowder data"
             )
 
-        cultivated_land = (
-            self.region_subgrid["landsurface/full_region_cultivated_land"]
-            .astype(bool)
-            .compute()
-        )
-        regions_grid = self.region_subgrid["subgrid"].compute()
-        cell_area = self.region_subgrid["cell_area"].compute()
+        cultivated_land = self.region_subgrid["landsurface/full_region_cultivated_land"]
+        assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
+        regions_grid = self.region_subgrid["subgrid"]
+        cell_area = self.region_subgrid["cell_area"]
 
         regions_shapes = self.geoms["regions"]
         if data_source == "lowder":
@@ -5223,7 +5201,7 @@ class GEBModel(GridModel, Forcing):
                 self.bounds[1] - 0.1 : self.bounds[3] + 0.1,
             ].index.values
 
-            water_levels = water_levels.sel(stations=station_ids).compute()
+            water_levels = water_levels.sel(stations=station_ids)
 
             assert len(water_levels.stations) > 0, (
                 "No stations found in the region. If no stations should be set, set include_coastal=False"
@@ -5364,71 +5342,6 @@ class GEBModel(GridModel, Forcing):
             time_chunksize=1e99,  # no chunking
         )
 
-    def _write_grid(
-        self,
-        grid,
-        grid_name,
-        var,
-        files,
-        is_updated,
-        y_chunksize=XY_CHUNKSIZE,
-        x_chunksize=XY_CHUNKSIZE,
-    ):
-        if is_updated[var]["updated"]:
-            self.logger.info(f"Writing {var}")
-            zarr_folder = Path(grid_name) / (var + ".zarr")
-            files[var] = zarr_folder
-            is_updated[var]["filename"] = zarr_folder
-            filepath = self.root / zarr_folder
-
-            to_zarr(
-                grid,
-                filepath,
-                x_chunksize=x_chunksize,
-                y_chunksize=y_chunksize,
-                crs=4326,
-            )
-
-    def write_grid(self):
-        self._assert_write_mode
-        for var, grid in self.grid.items():
-            grid["spatial_ref"] = self.grid.spatial_ref
-            if var == "spatial_ref":
-                continue
-            self._write_grid(
-                grid, "grid", var, self.files["grid"], self.is_updated["grid"]
-            )
-
-    def write_subgrid(self):
-        self._assert_write_mode
-        for var, grid in self.subgrid.items():
-            if var == "spatial_ref":
-                continue
-            self._write_grid(
-                grid,
-                "subgrid",
-                var,
-                self.files["subgrid"],
-                self.is_updated["subgrid"],
-                XY_CHUNKSIZE * self.subgrid_factor,
-                XY_CHUNKSIZE * self.subgrid_factor,
-            )
-
-    def write_region_subgrid(self):
-        self._assert_write_mode
-        for var, grid in self.region_subgrid.items():
-            if var == "spatial_ref":
-                continue
-            self._write_grid(
-                grid,
-                "region_subgrid",
-                var,
-                self.files["region_subgrid"],
-                self.is_updated["region_subgrid"],
-                XY_CHUNKSIZE * self.subgrid_factor,
-                XY_CHUNKSIZE * self.subgrid_factor,
-            )
-
     def write_other_to_zarr(
         self,
         var,
@@ -5442,7 +5355,6 @@ class GEBModel(GridModel, Forcing):
 
         destination = Path("other") / (var + ".zarr")
         self.files["other"][var] = destination
-        self.is_updated["other"][var]["filename"] = destination
 
         dst_file = Path(self.root, destination)
         return to_zarr(
@@ -5455,115 +5367,59 @@ class GEBModel(GridModel, Forcing):
             crs=4326,
         )
 
-    def write_other(self) -> None:
-        self._assert_write_mode
-        for var in self.other:
-            da = self.other[var]
-            if self.is_updated["other"][var]["updated"]:
-                self.write_other_to_zarr(var, da)
-
-    def write_table(self):
-        if len(self.table) == 0:
-            self.logger.info("No table data found, skip writing.")
-        else:
-            self._assert_write_mode
-            for name, data in self.table.items():
-                if self.is_updated["table"][name]["updated"]:
-                    fn = Path("table") / (name + ".parquet")
-                    self.logger.info(f"Writing file {fn}")
-
-                    self.files["table"][name] = fn
-                    self.is_updated["table"][name]["filename"] = fn
-
-                    fp = Path(self.root, fn)
-                    fp.parent.mkdir(parents=True, exist_ok=True)
-                    data.to_parquet(fp, engine="pyarrow")
-
-    def write_array(self):
-        if len(self.array) == 0:
-            self.logger.info("No table data found, skip writing.")
-        else:
-            self._assert_write_mode
-            for name, data in self.array.items():
-                if self.is_updated["array"][name]["updated"]:
-                    fn = Path("array") / (name + ".npz")
-                    self.logger.info(f"Writing file {fn}")
-
-                    self.files["array"][name] = fn
-                    self.is_updated["array"][name]["filename"] = fn
-
-                    fp = Path(self.root, fn)
-                    fp.parent.mkdir(parents=True, exist_ok=True)
-                    np.savez_compressed(fp, data=data)
-
-    def write_dict(self):
-        def convert_timestamp_to_string(timestamp):
-            return timestamp.isoformat()
-
-        if len(self.dict) == 0:
-            self.logger.info("No table data found, skip writing.")
-        else:
-            self._assert_write_mode
-            for name, data in self.dict.items():
-                if self.is_updated["dict"][name]["updated"]:
-                    fn = Path("dict") / (name + ".json")
-                    self.logger.info(f"Writing file {fn}")
-
-                    self.files["dict"][name] = fn
-                    self.is_updated["dict"][name]["filename"] = fn
-
-                    fp = Path(self.root) / fn
-                    fp.parent.mkdir(parents=True, exist_ok=True)
-                    with open(fp, "w") as f:
-                        json.dump(data, f, default=convert_timestamp_to_string)
-
-    def write_geoms(self) -> None:
-        if len(self._geoms) == 0:
-            self.logger.info("No geoms data found, skip writing.")
-            return
-        else:
-            self._assert_write_mode
-            for name, gdf in self._geoms.items():
-                if self.is_updated["geoms"][name]["updated"]:
-                    fn = Path("geom") / (name + ".geoparquet")
-                    self.logger.info(f"Writing file {fn}")
-
-                    self.files["geoms"][name] = fn
-                    self.is_updated["geoms"][name]["filename"] = fn
-
-                    fp = self.root / fn
-                    fp.parent.mkdir(parents=True, exist_ok=True)
-                    gdf.to_parquet(fp)
-
-    def set_table(self, table, name, update=True):
-        self.is_updated["table"][name] = {"updated": update}
+    def set_table(self, table, name, write=True):
         self.table[name] = table
+        if write:
+            fn = Path("table") / (name + ".parquet")
+            self.logger.info(f"Writing file {fn}")
 
-    def set_array(self, data, name, update=True):
-        self.is_updated["array"][name] = {"updated": update}
+            self.files["table"][name] = fn
+
+            fp = Path(self.root, fn)
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            table.to_parquet(fp, engine="pyarrow")
+
+    def set_array(self, data, name, write=True):
         self.array[name] = data
 
-    def set_dict(self, data, name, update=True):
-        self.is_updated["dict"][name] = {"updated": update}
+        if write:
+            fn = Path("array") / (name + ".npz")
+            self.logger.info(f"Writing file {fn}")
+            self.files["array"][name] = fn
+            fp = Path(self.root, fn)
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(fp, data=data)
+
+    def set_dict(self, data, name, write=True):
         self.dict[name] = data
 
-    def write_files(self):
-        with open(Path(self.root, "files.json"), "w") as f:
-            json.dump(self.files, f, indent=4, cls=PathEncoder)
+        if write:
+            fn = Path("dict") / (name + ".json")
+            self.logger.info(f"Writing file {fn}")
+
+            self.files["dict"][name] = fn
+
+            fp = Path(self.root) / fn
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            with open(fp, "w") as f:
+                json.dump(data, f, default=convert_timestamp_to_string)
+
+    def set_geoms(self, geoms, name, write=True):
+        self.geoms[name] = geoms
+
+        if write:
+            fn = Path("geom") / (name + ".geoparquet")
+            self.logger.info(f"Writing file {fn}")
+            self.files["geoms"][name] = fn
+            fp = self.root / fn
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            geoms.to_parquet(fp)
+
+        return self.geoms[name]
 
     def write(self):
-        self.write_geoms()
-        self.write_array()
-        self.write_table()
-        self.write_dict()
-
-        self.write_grid()
-        self.write_subgrid()
-        self.write_region_subgrid()
-
-        self.write_other()
-
-        self.write_files()
+        with open(Path(self.root, "files.json"), "w") as f:
+            json.dump(self.files, f, indent=4, cls=PathEncoder)
         self.logger.info("Done")
 
     def read_files(self):
@@ -5576,26 +5432,26 @@ class GEBModel(GridModel, Forcing):
         self.read_files()
         for name, fn in self.files["geoms"].items():
             geom = gpd.read_parquet(Path(self.root, fn))
-            self.set_geoms(geom, name=name, update=False)
+            self.set_geoms(geom, name=name, write=False)
 
     def read_array(self):
         self.read_files()
         for name, fn in self.files["array"].items():
             array = np.load(Path(self.root, fn))["data"]
-            self.set_array(array, name=name, update=False)
+            self.set_array(array, name=name, write=False)
 
     def read_table(self):
         self.read_files()
         for name, fn in self.files["table"].items():
             table = pd.read_parquet(Path(self.root, fn))
-            self.set_table(table, name=name, update=False)
+            self.set_table(table, name=name, write=False)
 
     def read_dict(self):
         self.read_files()
         for name, fn in self.files["dict"].items():
             with open(Path(self.root, fn), "r") as f:
                 d = json.load(f)
-            self.set_dict(d, name=name, update=False)
+            self.set_dict(d, name=name, write=False)
 
     def _read_grid(self, fn) -> xr.Dataset:
         da = open_zarr(Path(self.root) / fn)
@@ -5604,23 +5460,23 @@ class GEBModel(GridModel, Forcing):
     def read_grid(self) -> None:
         for name, fn in self.files["grid"].items():
             data = self._read_grid(fn)
-            self.set_grid(data, name=name, update=False)
+            self.set_grid(data, name=name, write=False)
 
     def read_subgrid(self) -> None:
         for name, fn in self.files["subgrid"].items():
             data = self._read_grid(fn)
-            self.set_subgrid(data, name=name, update=False)
+            self.set_subgrid(data, name=name, write=False)
 
     def read_region_subgrid(self) -> None:
         for name, fn in self.files["region_subgrid"].items():
             data = self._read_grid(fn)
-            self.set_region_subgrid(data, name=name, update=False)
+            self.set_region_subgrid(data, name=name, write=False)
 
     def read_other(self) -> None:
         self.read_files()
         for name, fn in self.files["other"].items():
             da = open_zarr(Path(self.root) / fn)
-            self.set_other(da, name=name, update=False)
+            self.set_other(da, name=name, write=False)
         return None
 
     def read(self):
@@ -5638,16 +5494,10 @@ class GEBModel(GridModel, Forcing):
 
             self.read_other()
 
-    def set_geoms(self, geoms, name, update=True):
-        self.is_updated["geoms"][name] = {"updated": update}
-        super().set_geoms(geoms, name=name)
-        return self.geoms[name]
-
     def set_other(
         self,
         data,
         name: str,
-        update=True,
         write=True,
         x_chunksize=XY_CHUNKSIZE,
         y_chunksize=XY_CHUNKSIZE,
@@ -5655,8 +5505,7 @@ class GEBModel(GridModel, Forcing):
         byteshuffle=False,
     ):
         assert isinstance(data, xr.DataArray)
-        self.is_updated["other"][name] = {"updated": update}
-        if update and write:
+        if write:
             data = self.write_other_to_zarr(
                 name,
                 data,
@@ -5665,15 +5514,18 @@ class GEBModel(GridModel, Forcing):
                 time_chunksize=time_chunksize,
                 byteshuffle=byteshuffle,
             )
-            self.is_updated["other"][name]["updated"] = False
         self.other[name] = data
         return self.files["other"][name]
 
     def _set_grid(
         self,
+        grid_name,
         grid,
         data: xr.DataArray,
         name: str,
+        write,
+        x_chunksize=XY_CHUNKSIZE,
+        y_chunksize=XY_CHUNKSIZE,
     ):
         """Add data to grid.
 
@@ -5696,39 +5548,56 @@ class GEBModel(GridModel, Forcing):
             grid = grid.drop_vars(name)
 
         if len(grid) == 0:
-            assert name == "mask"
+            assert name == "mask", "First grid layer must be mask"
             assert data.dtype == bool
         else:
             assert np.array_equal(data.x.values, grid.x.values)
             assert np.array_equal(data.y.values, grid.y.values)
 
-            data = xr.where(
-                ~grid["mask"], data, data.attrs["_FillValue"], keep_attrs=True
+            # when updating, it is possible that the mask already exists.
+            if name != "mask":
+                # if the mask exists, mask the data, saving some valuable space on disk
+                data = xr.where(
+                    ~grid["mask"], data, data.attrs["_FillValue"], keep_attrs=True
+                )
+
+        if write:
+            data = to_zarr(
+                data,
+                path=self.root / grid_name / (name + ".zarr"),
+                x_chunksize=x_chunksize,
+                y_chunksize=y_chunksize,
+                crs=4326,
             )
+            self.files[grid_name][name] = Path(grid_name) / (name + ".zarr")
 
         grid[name] = data
-
         return grid
 
     def set_grid(
-        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
+        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, write=True
     ) -> None:
-        self.is_updated["grid"][name] = {"updated": update}
-        self._set_grid(self.grid, data, name=name)
+        self._set_grid("grid", self.grid, data, write=write, name=name)
         return self.grid[name]
 
     def set_subgrid(
-        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
+        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, write=True
     ) -> None:
-        self.is_updated["subgrid"][name] = {"updated": update}
-        self.subgrid = self._set_grid(self.subgrid, data, name=name)
+        self.subgrid = self._set_grid(
+            "subgrid", self.subgrid, data, write=write, name=name
+        )
         return self.subgrid[name]
 
     def set_region_subgrid(
-        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, update=True
+        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, write=True
     ) -> None:
-        self.is_updated["region_subgrid"][name] = {"updated": update}
-        self.region_subgrid = self._set_grid(self.region_subgrid, data, name=name)
+        self.region_subgrid = self._set_grid(
+            "region_subgrid",
+            self.region_subgrid,
+            data,
+            write=write,
+            name=name,
+        )
         return self.region_subgrid[name]
 
     def set_alternate_root(self, root, mode):
@@ -5749,6 +5618,14 @@ class GEBModel(GridModel, Forcing):
         return self.geoms["mask"]
 
     @property
+    def root(self):
+        return self._root
+
+    @root.setter
+    def root(self, root):
+        self._root = Path(root).absolute()
+
+    @property
     def preprocessing_dir(self):
         return Path(self.root).parent / "preprocessing"
 
@@ -5758,3 +5635,182 @@ class GEBModel(GridModel, Forcing):
             "_FillValue": nodata,
         }
         return ds
+
+    def _check_get_opt(self, opt):
+        """Check all opt keys and raise sensible error messages if unknown."""
+        for method in opt.keys():
+            m = method.strip("0123456789")
+            if not callable(getattr(self, m, None)):
+                raise ValueError(f'Model {self._NAME} has no method "{method}"')
+        return opt
+
+    def _run_log_method(self, method, *args, **kwargs):
+        """Log method parameters before running a method."""
+        method = method.strip("0123456789")
+        func = getattr(self, method)
+        signature = inspect.signature(func)
+        # combine user and default options
+        params = {}
+        for i, (k, v) in enumerate(signature.parameters.items()):
+            if k in ["args", "kwargs"]:
+                if k == "args":
+                    params[k] = args[i:]
+                else:
+                    params.update(**kwargs)
+            else:
+                v = kwargs.get(k, v.default)
+                if len(args) > i:
+                    v = args[i]
+                params[k] = v
+        # log options
+        for k, v in params.items():
+            if v is not inspect._empty:
+                self.logger.info(f"{method}.{k}: {v}")
+        return func(*args, **kwargs)
+
+    def build(
+        self,
+        region: Optional[dict] = None,
+        write: Optional[bool] = True,
+        opt: Optional[dict] = None,
+    ):
+        r"""Single method to build a model from scratch based on settings in `opt`.
+
+        Methods will be run one by one based on the order of appearance in `opt`
+        (.ini configuration file). All model methods are supported including
+        setup\_\*, read\_\* and write\_\* methods.
+
+        If a write\_\* option is listed in `opt` (ini file) the full writing of the
+        model at the end of the update process is skipped.
+
+        Parameters
+        ----------
+        region: dict
+            Description of model region. See :py:meth:`~hydromt.workflows.parse_region`
+            for all options.
+        write: bool, optional
+            Write complete model after executing all methods in opt, by default True.
+        opt: dict, optional
+            Model build configuration. The configuration can be parsed from a
+            .ini file using :py:meth:`~hydromt.config.configread`.
+            This is a nested dictionary where the first-level keys are the names
+            of model specific methods and the second-level contain
+            argument-value pairs of the method.
+
+            .. code-block:: text
+
+                {
+                    <name of method1>: {
+                        <argument1>: <value1>, <argument2>: <value2>
+                    },
+                    <name of method2>: {
+                        ...
+                    }
+                }
+
+        """
+        opt = opt or {}
+        opt = self._check_get_opt(opt)
+
+        # merge cli region and res arguments with opt
+        if region is not None:
+            if self._CLI_ARGS["region"] not in opt:
+                opt = {self._CLI_ARGS["region"]: {}, **opt}
+            opt[self._CLI_ARGS["region"]].update(region=region)
+
+        # then loop over other methods
+        for method in opt:
+            # if any write_* functions are present in opt, skip the final self.write()
+            if method.startswith("write_"):
+                write = False
+            kwargs = {} if opt[method] is None else opt[method]
+            self._run_log_method(method, **kwargs)
+
+        # write
+        if write:
+            self.write()
+
+    def update(
+        self,
+        model_out,
+        write: Optional[bool] = True,
+        opt: Optional[Dict] = None,
+        forceful_overwrite: bool = False,
+    ):
+        r"""Single method to update a model based the settings in `opt`.
+
+        Methods will be run one by one based on the order of appearance in `opt`
+        (ini configuration file).
+
+        All model methods are supported including setup\_\*, read\_\* and write\_\* methods.
+        If a write\_\* option is listed in `opt` (ini file) the full writing of the model
+        at the end of the update process is skipped.
+
+        Parameters
+        ----------
+        model_out: str, path, optional
+            Destination folder to write the model schematization after updating
+            the model. If None the updated model components are overwritten in the
+            current model schematization if these exist. By default None.
+        write: bool, optional
+            Write the updated model schematization to disk. By default True.
+        opt: dict, optional
+            Model build configuration. The configuration can be parsed from a
+            .ini file using :py:meth:`~hydromt.config.configread`.
+            This is a nested dictionary where the first-level keys
+            are the names of model specific methods and
+            the second-level contain argument-value pairs of the method.
+
+            .. code-block:: text
+
+                {
+                    <name of method1>: {
+                        <argument1>: <value1>, <argument2>: <value2>
+                    },
+                    <name of method2>: {
+                        ...
+                    }
+                }
+          forceful_overwrite:
+            Force open files to close when attempting to write them. In the case you
+            try to write to a file that's already opened. The output will be written
+            to a temporary file in case the original file cannot be written to.
+        """
+        opt = opt or {}
+        opt = self._check_get_opt(opt)
+
+        # read current model
+        if not self._write:
+            if model_out is None:
+                raise ValueError(
+                    '"model_out" directory required when updating in "read-only" mode'
+                )
+            self.read()
+            if forceful_overwrite:
+                self.set_root(model_out, mode="w+")
+            else:
+                self.set_root(model_out, mode="w")
+
+        # check if model has a region
+        if self.region is None:
+            raise ValueError("Model region not found, setup model using `build` first.")
+
+        # remove setup_basemaps from options and throw warning
+        method = self._CLI_ARGS["region"]
+        if method in opt:
+            opt.pop(method)  # remove from opt
+            self.logger.warning(f'"{method}" can only be called when building a model.')
+
+        # loop over other methods from ini file
+        for method in opt:
+            # if any write_* functions are present in opt, skip the final self.write()
+            if method.startswith("write_"):
+                write = False
+            kwargs = {} if opt[method] is None else opt[method]
+            self._run_log_method(method, **kwargs)
+
+        # write
+        if write:
+            self.write()
+
+        self._cleanup(forceful_overwrite=forceful_overwrite)

@@ -25,6 +25,10 @@ def open_zarr(zarr_folder):
     )
     assert len(da.data_vars) == 1, "Only one data variable is supported"
     da = da[list(da.data_vars)[0]]
+
+    if da.dtype == bool and "_FillValue" not in da.attrs:
+        da.attrs["_FillValue"] = None
+
     return da
 
 
@@ -45,22 +49,21 @@ def to_zarr(
     assert "latitudes" not in da.dims, "latitudes should be y"
     assert da.dtype != np.float64, "should be float32"
 
-    assert "_FillValue" in da.attrs, "Fill value must be set"
     if da.dtype == bool:
-        assert da.attrs["_FillValue"] in (True, False, None), (
-            f"Fill value must be bool or None, not {da.attrs['_FillValue']}"
-        )
-        if (
-            da.attrs["_FillValue"] is None
-        ):  # for masks fill value can be None, but must be set
-            del da.attrs["_FillValue"]
+        assert "_FillValue" not in da.attrs or da.attrs["_FillValue"] in (
+            True,
+            False,
+            None,
+        ), f"Fill value must be bool or None, not {da.attrs['_FillValue']}"
     # for integer types, fill value must not be nan
     elif np.issubdtype(da.dtype, np.integer):
+        assert "_FillValue" in da.attrs, "Fill value must be set"
         assert ~np.isnan(da.attrs["_FillValue"]), (
             f"Fill value must not be nan, not {da.attrs['_FillValue']}"
         )
     # for float types, fill value must be nan
     else:
+        assert "_FillValue" in da.attrs, "Fill value must be set"
         assert np.isnan(da.attrs["_FillValue"]), (
             f"Fill value must be nan, not {da.attrs['_FillValue']}"
         )
