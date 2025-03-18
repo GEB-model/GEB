@@ -4,7 +4,6 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "geb"
-dist-name = "geb"
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
     {name = "Maurice Kalthof", email = "w.m.l.kalthof@vu.nl"},
