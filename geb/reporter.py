@@ -40,7 +40,7 @@ class hydrology_reporter(ABMReporter):
                         assert (
                             "single_file" in config and config["single_file"] is True
                         ), "Only single_file=True is supported for zarr format."
-                        zarr_path = Path(self.export_folder, name + ".zarr.zip")
+                        zarr_path = Path(self.export_folder, name + ".zarr")
                         config["path"] = str(zarr_path)
                         if zarr_path.exists():
                             zarr_path.unlink()
@@ -101,7 +101,7 @@ class hydrology_reporter(ABMReporter):
                                     f"WARNING: None of the time ranges for {name} are in the simulation period."
                                 )
 
-                        zarr_store = zarr.storage.ZipStore(zarr_path, mode="w")
+                        zarr_store = zarr.storage.LocalStore(zarr_path, read_only=False)
                         zarr_group = zarr.open_group(zarr_store, mode="w")
 
                         time = (
@@ -113,6 +113,7 @@ class hydrology_reporter(ABMReporter):
                             "time",
                             shape=time.shape,
                             dtype=time.dtype,
+                            dimension_names=["time"],
                         )
                         time_group[:] = time
                         time_group.attrs.update(
@@ -120,7 +121,6 @@ class hydrology_reporter(ABMReporter):
                                 "standard_name": "time",
                                 "units": "seconds since 1970-01-01T00:00:00",
                                 "calendar": "gregorian",
-                                "_ARRAY_DIMENSIONS": ["time"],
                             }
                         )
 
@@ -128,13 +128,13 @@ class hydrology_reporter(ABMReporter):
                             "y",
                             shape=self.hydrology.grid.lat.shape,
                             dtype=self.hydrology.grid.lat.dtype,
+                            dimension_names=["y"],
                         )
                         y_group[:] = self.hydrology.grid.lat
                         y_group.attrs.update(
                             {
                                 "standard_name": "latitude",
                                 "units": "degrees_north",
-                                "_ARRAY_DIMENSIONS": ["y"],
                             }
                         )
 
@@ -142,13 +142,13 @@ class hydrology_reporter(ABMReporter):
                             "x",
                             shape=self.hydrology.grid.lon.shape,
                             dtype=self.hydrology.grid.lon.dtype,
+                            dimension_names=["x"],
                         )
                         x_group[:] = self.hydrology.grid.lon
                         x_group.attrs.update(
                             {
                                 "standard_name": "longitude",
                                 "units": "degrees_east",
-                                "_ARRAY_DIMENSIONS": ["x"],
                             }
                         )
 
@@ -171,6 +171,7 @@ class hydrology_reporter(ABMReporter):
                                 shuffle=zarr.codecs.BloscShuffle.shuffle,
                             ),
                             fill_value=np.nan,
+                            dimension_names=["time", "y", "x"],
                         )
 
                         zarr_data.attrs.update(
@@ -179,7 +180,6 @@ class hydrology_reporter(ABMReporter):
                                 "coordinates": "time y x",
                                 "units": "unknown",
                                 "long_name": name,
-                                "_ARRAY_DIMENSIONS": ["time", "y", "x"],
                                 "_CRS": self.hydrology.grid.crs,
                             }
                         )
