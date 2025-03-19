@@ -326,14 +326,14 @@ hydro_lakes:
   unit_mult:
     average_area: 1_000_000
     volume_total: 1_000_000
-reservoir_command_areas:
+reservoir_command_areas_krishna:
   crs: 4326
   data_type: GeoDataFrame
   driver: vector
   path: command_areas/command_areas_with_ids.gpkg
   rename:
     Hylak_id: waterbody_id
-custom_reservoir_capacity:
+custom_reservoir_capacity_krishna:
   data_type: DataFrame
   driver: excel
   path: reservoir_capacity.xlsx

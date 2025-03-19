@@ -449,16 +449,16 @@ class fairSTREAMModel(GEBModel):
         farm_size_n_cells = farm_size_n_cells[farm_ids != -1]
         farm_ids = farm_ids[farm_ids != -1]
 
-        mean_cell_size = self.subgrid["areamaps/sub_cell_area"].mean()
-        farm_size_m2 = farm_size_n_cells * mean_cell_size.item()
+        mean_cell_size = self.subgrid["cell_area"].mean().compute().item()
+        farm_size_m2 = farm_size_n_cells * mean_cell_size
         return farm_size_m2
 
-    def setup_farmer_cropping(
+    def setup_farmer_crop_calendar(
         self,
         seasons,
         crop_variables,
     ):
-        n_farmers = self.binary["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
         # Set all farmers within command areas to canal irrigation
@@ -479,7 +479,7 @@ class fairSTREAMModel(GEBModel):
             dtype=np.int32,
         )
 
-        command_areas = self.subgrid["routing/lakesreservoirs/subcommand_areas"]
+        command_areas = self.subgrid["waterbodies/subcommand_areas"]
         canal_irrigated_farms = np.unique(farms.where(command_areas != -1, -1))
         canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
         adaptations[canal_irrigated_farms, SURFACE_IRRIGATION_EQUIPMENT] = 1
@@ -507,7 +507,7 @@ class fairSTREAMModel(GEBModel):
         canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
         adaptations[canal_irrigated_farms, SURFACE_IRRIGATION_EQUIPMENT] = 1
 
-        groundwater_depth = self.grid["landsurface/topo/elevation"] - self.grid[
+        groundwater_depth = self.grid["landsurface/elevation"] - self.grid[
             "groundwater/heads"
         ].sel(layer="upper")
         groundwater_depth_subgrid = repeat_grid(
@@ -554,7 +554,7 @@ class fairSTREAMModel(GEBModel):
         #     (irrigation_source != irrigation_sources["no"]) * farm_sizes
         # ).sum()
 
-        regions = self.geoms["areamaps/regions"]
+        regions = self.geoms["regions"]
 
         irrigation_status_per_tehsil = pd.read_excel(
             self.preprocessing_dir / "census" / "irrigation_sources.xlsx"
@@ -635,7 +635,7 @@ class fairSTREAMModel(GEBModel):
         farm_size_class[farm_sizes > 100000] = 8
         farm_size_class[farm_sizes > 200000] = 9
 
-        region_id = self.binary["agents/farmers/region_id"]
+        region_id = self.array["agents/farmers/region_id"]
 
         region_ids = np.unique(region_id)
         size_classes = np.unique(farm_size_class)
@@ -831,9 +831,9 @@ class fairSTREAMModel(GEBModel):
                     year_index,
                 ]
 
-        self.set_binary(adaptations, name="agents/farmers/adaptations")
-        self.set_binary(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
-        self.set_binary(
+        self.set_array(adaptations, name="agents/farmers/adaptations")
+        self.set_array(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
+        self.set_array(
             crop_calendar_rotation_years,
             name="agents/farmers/crop_calendar_rotation_years",
         )
@@ -893,15 +893,15 @@ class fairSTREAMModel(GEBModel):
             invert=True,
         )
 
-        n_farmers = self.binary["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/id"].size
 
         farms = self.subgrid["agents/farmers/farms"]
         farm_ids, farm_size_n_cells = np.unique(farms, return_counts=True)
         farm_size_n_cells = farm_size_n_cells[farm_ids != -1]
         farm_ids = farm_ids[farm_ids != -1]
 
-        mean_cell_size = self.subgrid["areamaps/sub_cell_area"].mean()
-        farm_size_m2 = farm_size_n_cells * mean_cell_size.item()
+        mean_cell_size = self.subgrid["cell_area"].mean()
+        farm_size_m2 = farm_size_n_cells * mean_cell_size.compute().item()
         farm_size_bins = farmer_survey.bin(
             farm_size_m2 / 10_000,
             "How large is the area you grow crops on in hectares?",
@@ -947,20 +947,20 @@ class fairSTREAMModel(GEBModel):
         risk_aversion = farmer_survey.apply_mapper("risk_aversion", risk_aversion_raw)
         discount_rate = farmer_survey.apply_mapper("discount_rate", discount_rate_raw)
 
-        self.set_binary(
+        self.set_array(
             perceived_effectivity, name="agents/farmers/perceived_effectivity"
         )
-        self.set_binary(risk_aversion, name="agents/farmers/risk_aversion")
-        self.set_binary(discount_rate, name="agents/farmers/discount_rate")
+        self.set_array(risk_aversion, name="agents/farmers/risk_aversion")
+        self.set_array(discount_rate, name="agents/farmers/discount_rate")
 
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
-        self.set_binary(interest_rate, name="agents/farmers/interest_rate")
+        self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
         def normalize(array):
             return (array - np.min(array)) / (np.max(array) - np.min(array))
 
-        education_levels = self.binary["agents/farmers/education_level"]
-        household_head_age = self.binary["agents/farmers/age_household_head"]
+        education_levels = self.array["agents/farmers/education_level"]
+        household_head_age = self.array["agents/farmers/age_household_head"]
 
         # Calculate intention factor based on age and education
         # Intention factor scales negatively with age and positively with education level
@@ -970,4 +970,4 @@ class fairSTREAMModel(GEBModel):
         # The total intention of age, education and neighbor effects can scale to 1
         intention_factor = intention_factor * 0.333 + 0.333
 
-        self.set_binary(discount_rate, name="agents/farmers/intention_factor")
+        self.set_array(discount_rate, name="agents/farmers/intention_factor")

@@ -17,11 +17,11 @@ import requests
 import time
 import zipfile
 import json
+from collections import defaultdict
 from urllib.parse import urlparse
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import pyproj
 from affine import Affine
 from rasterio.env import defenv
 import xarray as xr
@@ -32,12 +32,7 @@ import pyflwdir
 import rasterio
 
 from hydromt.exceptions import NoDataException
-from hydromt.models.model_grid import GridModel
 from hydromt.data_catalog import DataCatalog
-from hydromt.data_adapter import (
-    RasterDatasetAdapter,
-    DatasetAdapter,
-)
 
 from honeybees.library.raster import sample_from_map, pixels_to_coords
 from isimip_client.client import ISIMIPClient
@@ -51,7 +46,7 @@ from .workflows.general import (
     bounds_are_within,
 )
 from .workflows.farmers import get_farm_locations, create_farms, get_farm_distribution
-from .workflows.population import generate_locations, load_GLOPOP_S
+from .workflows.population import load_GLOPOP_S
 from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from .workflows.soilgrids import load_soilgrids
 from .workflows.conversions import (
@@ -82,7 +77,7 @@ from geb.agents.crop_farmers import (
     IRRIGATION_EFFICIENCY_ADAPTATION,
     FIELD_EXPANSION_ADAPTATION,
 )
-from geb.hydrology.lakes_reservoirs import RESERVOIR
+from geb.hydrology.lakes_reservoirs import RESERVOIR, LAKE
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
@@ -92,7 +87,7 @@ GDAL_HTTP_ENV_OPTS = {
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
 
-XY_CHUNKSIZE = 350  # chunksize for xy coordinates
+XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
@@ -160,83 +155,41 @@ class PathEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-class GEBModel(GridModel, Forcing):
-    _CLI_ARGS = {"region": "setup_grid"}
-
+class GEBModel(Forcing):
     def __init__(
         self,
         root: str = None,
-        mode: str = "w",
-        config_fn: str = None,
-        data_libs: List[str] = None,
+        data_catalogs: List[str] = None,
         logger=logger,
         epsg=4326,
         data_provider: str = None,
     ):
-        GridModel.__init__(
-            self,
-            root=root,
-            mode=mode,
-            config_fn=config_fn,
-            data_libs=data_libs,
-            logger=logger,
-        )
+        self.logger = logger
+        self.data_catalog = DataCatalog(data_libs=data_catalogs, logger=self.logger)
+
         Forcing.__init__(self)
 
         self.root = root
         self.epsg = epsg
         self.data_provider = data_provider
 
-        self._grid = None
-        self._subgrid = None
-        self._region_subgrid = None
+        # the grid, subgrid, and region subgrids are all datasets, which should
+        # have exactly matching coordinates
+        self.grid = xr.Dataset()
+        self.subgrid = xr.Dataset()
+        self.region_subgrid = xr.Dataset()
 
+        # all other data types are dictionaries because these entries don't
+        # necessarily match the grid coordinates, shapes etc.
+        self.geoms = {}
         self.table = {}
         self.array = {}
         self.dict = {}
         self.other = {}
 
-        self.files = {
-            "other": {},
-            "geoms": {},
-            "grid": {},
-            "dict": {},
-            "table": {},
-            "array": {},
-            "subgrid": {},
-            "region_subgrid": {},
-        }
+        self.files = defaultdict(dict)
 
-    @property
-    def subgrid(self):
-        """Model static gridded data as xarray.Dataset."""
-        if self._subgrid is None:
-            self._subgrid = xr.Dataset()
-        return self._subgrid
-
-    @property
-    def grid(self):
-        """Model static gridded data as xarray.Dataset."""
-        if self._grid is None:
-            self._grid = xr.Dataset()
-        return self._grid
-
-    @subgrid.setter
-    def subgrid(self, value):
-        self._subgrid = value
-
-    @property
-    def region_subgrid(self):
-        """Model static gridded data as xarray.Dataset."""
-        if self._region_subgrid is None:
-            self._region_subgrid = xr.Dataset()
-        return self._region_subgrid
-
-    @region_subgrid.setter
-    def region_subgrid(self, value):
-        self._region_subgrid = value
-
-    def setup_grid(
+    def setup_region(
         self,
         region: dict,
         subgrid_factor: int,
@@ -397,6 +350,12 @@ class GEBModel(GridModel, Forcing):
 
         flow_mask = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
 
+        mask = self.full_like(elevation, fill_value=False, nodata=None, dtype=bool)
+        # we use the inverted mask, that is True outside the study area
+        mask.data = flow_mask
+        self.set_grid(mask, name="mask")
+        self.set_grid(elevation, name="landsurface/elevation")
+
         mask_geom = list(
             rasterio.features.shapes(
                 flow_mask.astype(np.uint8),
@@ -405,18 +364,12 @@ class GEBModel(GridModel, Forcing):
                 transform=elevation.rio.transform(recalc=True),
             ),
         )
-        assert len(mask_geom) == 1, "Basin mask is not contiguous"
         mask_geom = gpd.GeoDataFrame.from_features(
-            [{"geometry": mask_geom[0][0], "properties": {}}], crs=hydrography.rio.crs
+            [{"geometry": geom[0], "properties": {}} for geom in mask_geom],
+            crs=hydrography.rio.crs,
         )
 
         self.set_geoms(mask_geom, name="mask")
-
-        mask = self.full_like(elevation, fill_value=False, nodata=None, dtype=bool)
-        # we use the inverted mask, that is True outside the study area
-        mask.data = flow_mask
-        self.set_grid(mask, name="mask")
-        self.set_grid(elevation, name="landsurface/elevation")
 
         self.set_grid(
             elevation_coarsened.std(),
@@ -567,19 +520,51 @@ class GEBModel(GridModel, Forcing):
         submask = self.set_subgrid(submask, name="mask")
         return None
 
-    def setup_elevation(self):
-        DEM = self.data_catalog.get_rasterdataset(
+    def setup_elevation(
+        self, DEMs=[{"name": "fabdem", "zmin": 0.001}, {"name": "gebco"}]
+    ):
+        """For configuration of DEMs parameters, see
+        https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html
+        """
+        if not DEMs:
+            DEMs = []
+
+        assert isinstance(DEMs, list)
+        # here we use the bounds of all subbasins, which may include downstream
+        # subbasins that are not part of the study area
+        bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
+
+        fabdem = self.data_catalog.get_rasterdataset(
             "fabdem",
-            bbox=self.bounds,
+            bbox=bounds,
             buffer=100,
         ).raster.mask_nodata()
+
         target = self.subgrid["mask"]
         target.raster.set_crs(4326)
-        DEM = DEM.raster.reproject_like(target, method="average")
+        fabdem = fabdem.raster.reproject_like(target, method="average")
         self.set_subgrid(
-            DEM,
+            fabdem,
             name="landsurface/elevation",
         )
+
+        self.set_dict(DEMs, name="hydrodynamics/DEM_config")
+        for DEM in DEMs:
+            if DEM["name"] == "fabdem":
+                DEM_raster = fabdem
+            else:
+                DEM_raster = self.data_catalog.get_rasterdataset(
+                    DEM["name"],
+                    bbox=bounds,
+                    buffer=100,
+                ).raster.mask_nodata()
+
+            DEM_raster = DEM_raster.astype(np.float32)
+            self.set_other(
+                DEM_raster,
+                name=f"DEM/{DEM['name']}",
+                byteshuffle=True,
+            )
 
     def setup_cell_area(self) -> None:
         """
@@ -1467,7 +1452,10 @@ class GEBModel(GridModel, Forcing):
 
         self.set_grid(self.interpolate(crop_group, "linear"), name="soil/crop_group")
 
-    def setup_land_use_parameters(self) -> None:
+    def setup_land_use_parameters(
+        self,
+        land_cover="esa_worldcover_2021_v200",
+    ) -> None:
         """
         Sets up the land use parameters for the model.
 
@@ -1502,6 +1490,17 @@ class GEBModel(GridModel, Forcing):
         where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
         """
         self.logger.info("Setting up land use parameters")
+
+        # landcover
+        landcover_classification = self.data_catalog.get_rasterdataset(
+            land_cover,
+            bbox=self.bounds,
+            buffer=200,  # 2 km buffer
+        )
+        self.set_other(
+            landcover_classification,
+            name="landcover/classification",
+        )
 
         target = self.grid["mask"]
         target.raster.set_crs(4326)
@@ -1539,8 +1538,8 @@ class GEBModel(GridModel, Forcing):
 
     def setup_waterbodies(
         self,
-        command_areas="reservoir_command_areas",
-        custom_reservoir_capacity="custom_reservoir_capacity",
+        command_areas=None,
+        custom_reservoir_capacity=None,
     ):
         """
         Sets up the waterbodies for GEB.
@@ -1584,10 +1583,13 @@ class GEBModel(GridModel, Forcing):
                 ],
             )
             waterbodies = waterbodies.astype(dtypes)
-            print(
-                "check how lakes resverois IDs work, map to RESERVOIR and LAKE, exiting"
+            hydrolakes_to_geb = {
+                1: LAKE,
+                2: RESERVOIR,
+            }
+            waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
+                hydrolakes_to_geb
             )
-            exit()
         except NoDataException:
             self.logger.info(
                 "No water bodies found in domain, skipping water bodies setup"
@@ -1601,7 +1603,7 @@ class GEBModel(GridModel, Forcing):
                     "average_area",
                     "geometry",
                 ],
-                crs=self.crs,
+                crs=4326,
             )
             waterbodies = waterbodies.astype(dtypes)
             water_body_id = xr.zeros_like(self.grid["mask"], dtype=np.int32)
@@ -1685,7 +1687,7 @@ class GEBModel(GridModel, Forcing):
 
         if custom_reservoir_capacity:
             custom_reservoir_capacity = self.data_catalog.get_dataframe(
-                "custom_reservoir_capacity"
+                custom_reservoir_capacity
             )
             custom_reservoir_capacity = custom_reservoir_capacity[
                 custom_reservoir_capacity.index != -1
@@ -2085,7 +2087,6 @@ class GEBModel(GridModel, Forcing):
         region_database="GADM_level1",
         unique_region_id="GID_1",
         ISO3_column="GID_0",
-        river_threshold=100,
         land_cover="esa_worldcover_2021_v200",
     ):
         """
@@ -2100,8 +2101,6 @@ class GEBModel(GridModel, Forcing):
         unique_region_id : str, optional
             The name of the column in the region database that contains the unique region ID. Default is 'UID',
             which is the unique identifier for the GADM database.
-        river_threshold : int, optional
-            The threshold value to use when identifying rivers in the MERIT dataset. Default is 100.
 
         Notes
         -----
@@ -2201,26 +2200,6 @@ class GEBModel(GridModel, Forcing):
             name="cell_area",
         )
 
-        MERIT = self.data_catalog.get_rasterdataset(
-            "merit_hydro",
-            variables=["upg"],
-            bbox=region_mask.rio.bounds(),
-            buffer=300,  # 3 km buffer
-        )
-        # There is a half degree offset in MERIT data
-        MERIT = MERIT.assign_coords(
-            x=MERIT.coords["x"] + MERIT.rio.resolution()[0] / 2,
-            y=MERIT.coords["y"] - MERIT.rio.resolution()[1] / 2,
-        )
-
-        # Assume all cells with at least x upstream cells are rivers.
-        rivers = MERIT > river_threshold
-        rivers = rivers.astype(np.int32)
-        rivers.attrs["_FillValue"] = 0
-        rivers = rivers.raster.reproject_like(reprojected_land_use, method="nearest")
-        rivers = rivers.astype(bool)
-        rivers = self.set_region_subgrid(rivers, name="landcover/rivers")
-
         full_region_land_use_classes = reprojected_land_use.raster.reclassify(
             pd.DataFrame.from_dict(
                 {
@@ -2241,9 +2220,6 @@ class GEBModel(GridModel, Forcing):
                 columns=["GEB_land_use_class"],
             ),
         )["GEB_land_use_class"].astype(np.int32)
-        full_region_land_use_classes = xr.where(
-            rivers != 1, full_region_land_use_classes, 5, keep_attrs=True
-        )  # set rivers to 5 (permanent water bodies)
 
         full_region_land_use_classes = self.set_region_subgrid(
             full_region_land_use_classes,
@@ -2255,7 +2231,7 @@ class GEBModel(GridModel, Forcing):
             True,
             False,
         )
-        cultivated_land_full_region.attrs["_FillValue"] = False
+        cultivated_land_full_region.attrs["_FillValue"] = None
         cultivated_land_full_region = self.set_region_subgrid(
             cultivated_land_full_region, name="landsurface/full_region_cultivated_land"
         )
@@ -2837,15 +2813,15 @@ class GEBModel(GridModel, Forcing):
         with names of the form 'agents/farmers/{column}'.
         """
         regions = self.geoms["regions"]
-        regions_raster = self.region_subgrid["subgrid"]
+        region_ids = self.region_subgrid["region_ids"]
         full_region_cultivated_land = self.region_subgrid[
             "landsurface/full_region_cultivated_land"
         ]
 
-        farms = self.full_like(regions_raster, fill_value=-1, nodata=-1)
+        farms = self.full_like(region_ids, fill_value=-1, nodata=-1)
         for region_id in regions["region_id"]:
             self.logger.info(f"Creating farms for region {region_id}")
-            region = regions_raster == region_id
+            region = region_ids == region_id
             region_clip, bounds = clip_with_grid(region, region)
 
             cultivated_land_region = full_region_cultivated_land.isel(bounds)
@@ -3069,7 +3045,7 @@ class GEBModel(GridModel, Forcing):
         output_filename = save_dir / "crop_irrigated_fraction_all_years.nc"
         all_years_irrigated_fraction_da.to_netcdf(output_filename)
 
-    def setup_create_farms_simple(
+    def setup_create_farms(
         self,
         region_id_column="region_id",
         country_iso3_column="ISO3",
@@ -3124,7 +3100,7 @@ class GEBModel(GridModel, Forcing):
 
         cultivated_land = self.region_subgrid["landsurface/full_region_cultivated_land"]
         assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
-        regions_grid = self.region_subgrid["subgrid"]
+        region_ids = self.region_subgrid["region_ids"]
         cell_area = self.region_subgrid["cell_area"]
 
         regions_shapes = self.geoms["regions"]
@@ -3184,12 +3160,10 @@ class GEBModel(GridModel, Forcing):
             self.logger.info(f"Processing region {UID}")
 
             cultivated_land_region_total_cells = (
-                ((regions_grid == UID) & (cultivated_land)).sum().compute()
+                ((region_ids == UID) & (cultivated_land)).sum().compute()
             )
             total_cultivated_land_area_lu = (
-                (((regions_grid == UID) & (cultivated_land)) * cell_area)
-                .sum()
-                .compute()
+                (((region_ids == UID) & (cultivated_land)) * cell_area).sum().compute()
             )
             if (
                 total_cultivated_land_area_lu == 0
@@ -3197,7 +3171,7 @@ class GEBModel(GridModel, Forcing):
                 continue
 
             average_cell_area_region = (
-                cell_area.where(((regions_grid == UID) & (cultivated_land)))
+                cell_area.where(((region_ids == UID) & (cultivated_land)))
                 .mean()
                 .compute()
             )
@@ -3806,7 +3780,7 @@ class GEBModel(GridModel, Forcing):
 
         return preferences_country_level
 
-    def setup_farmer_characteristics_simple(
+    def setup_farmer_characteristics(
         self,
         interest_rate=0.05,
     ):
@@ -4669,40 +4643,6 @@ class GEBModel(GridModel, Forcing):
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
-    def setup_population(self):
-        populaton_map = self.data_catalog.get_rasterdataset(
-            "ghs_pop_2020_54009_v2023a", bbox=self.bounds
-        )
-        populaton_map_values = np.round(populaton_map.values).astype(np.int32)
-        populaton_map_values[populaton_map_values < 0] = 0  # -200 is nodata value
-
-        locations, sizes = generate_locations(
-            population=populaton_map_values,
-            geotransform=populaton_map.rio.transform(recalc=True).to_gdal(),
-            mean_household_size=5,
-        )
-
-        transformer = pyproj.Transformer.from_crs(
-            populaton_map.raster.crs, self.epsg, always_xy=True
-        )
-        locations[:, 0], locations[:, 1] = transformer.transform(
-            locations[:, 0], locations[:, 1]
-        )
-
-        # sample_locatons = locations[::10]
-        # import matplotlib.pyplot as plt
-        # from scipy.stats import gaussian_kde
-
-        # xy = np.vstack([sample_locatons[:, 0], sample_locatons[:, 1]])
-        # z = gaussian_kde(xy)(xy)
-        # plt.scatter(sample_locatons[:, 0], sample_locatons[:, 1], c=z, s=100)
-        # plt.savefig('population.png')
-
-        self.set_array(sizes, name="agents/households/sizes")
-        self.set_array(locations, name="agents/households/locations")
-
-        return None
-
     def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
         """
         Get assets from OpenStreetMap (OSM) data.
@@ -5128,160 +5068,38 @@ class GEBModel(GridModel, Forcing):
             ds = ds.assign_coords(time=ds.time - np.timedelta64(12, "h"))
         return ds
 
-    def setup_hydrodynamics(
+    def setup_coastal_water_levels(
         self,
-        land_cover="esa_worldcover_2021_v200",
-        include_coastal=True,
-        DEMs=[{"elevtn": "fabdem", "zmin": 0.001}, {"elevtn": "gebco"}],
     ):
-        assert isinstance(DEMs, list)
-
-        hydrodynamics_data_catalog = DataCatalog()
-
-        bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
-
-        self.set_dict(DEMs, name="hydrodynamics/DEM_config")
-        for DEM in DEMs:
-            DEM_raster = self.data_catalog.get_rasterdataset(
-                DEM["elevtn"],
-                bbox=bounds,
-                buffer=100,
-            ).raster.mask_nodata()
-            self.set_other(
-                DEM_raster,
-                name=f"hydrodynamics/DEM/{DEM['elevtn']}",
-                byteshuffle=True,
-            )
-
-            hydrodynamics_data_catalog.add_source(
-                DEM["elevtn"],
-                RasterDatasetAdapter(
-                    path=Path(self.root)
-                    / "hydrodynamics"
-                    / "DEM"
-                    / f"{DEM['elevtn']}.zarr",
-                    crs=self.data_catalog.get_source(
-                        DEM["elevtn"]
-                    ).crs,  # perhaps set crs in dataset itself
-                    meta=self.data_catalog.get_source(DEM["elevtn"]).meta,
-                    driver="zarr",
-                ),  # hydromt likes absolute paths
-            )
-
-        # landcover
-        esa_worldcover = self.data_catalog.get_rasterdataset(
-            land_cover,
-            bbox=bounds,
-            buffer=200,  # 2 km buffer
+        water_levels = self.data_catalog.get_dataset("GTSM")
+        assert (
+            water_levels.time.diff("time").astype(np.int64)
+            == (water_levels.time[1] - water_levels.time[0]).astype(np.int64)
+        ).all()
+        # convert to geodataframe
+        stations = gpd.GeoDataFrame(
+            water_levels.stations,
+            geometry=gpd.points_from_xy(
+                water_levels.station_x_coordinate, water_levels.station_y_coordinate
+            ),
         )
+        # filter all stations within the bounds, considering a buffer
+        station_ids = stations.cx[
+            self.bounds[0] - 0.1 : self.bounds[2] + 0.1,
+            self.bounds[1] - 0.1 : self.bounds[3] + 0.1,
+        ].index.values
+
+        water_levels = water_levels.sel(stations=station_ids)
+
+        assert len(water_levels.stations) > 0, (
+            "No stations found in the region. If no stations should be set, set include_coastal=False"
+        )
+
         self.set_other(
-            esa_worldcover,
-            name="hydrodynamics/esa_worldcover",
-            byteshuffle=False,
-        )
-
-        hydrodynamics_data_catalog.add_source(
-            "esa_worldcover",
-            RasterDatasetAdapter(
-                path=Path(self.root) / "hydrodynamics" / "esa_worldcover.zarr",
-                meta=self.data_catalog.get_source(land_cover).meta,
-                driver="zarr",
-            ),  # hydromt likes absolute paths
-        )
-
-        if include_coastal:
-            water_levels = self.data_catalog.get_dataset("GTSM")
-            assert (
-                water_levels.time.diff("time").astype(np.int64)
-                == (water_levels.time[1] - water_levels.time[0]).astype(np.int64)
-            ).all()
-            # convert to geodataframe
-            stations = gpd.GeoDataFrame(
-                water_levels.stations,
-                geometry=gpd.points_from_xy(
-                    water_levels.station_x_coordinate, water_levels.station_y_coordinate
-                ),
-            )
-            # filter all stations within the bounds, considering a buffer
-            station_ids = stations.cx[
-                self.bounds[0] - 0.1 : self.bounds[2] + 0.1,
-                self.bounds[1] - 0.1 : self.bounds[3] + 0.1,
-            ].index.values
-
-            water_levels = water_levels.sel(stations=station_ids)
-
-            assert len(water_levels.stations) > 0, (
-                "No stations found in the region. If no stations should be set, set include_coastal=False"
-            )
-
-            path = self.set_other(
-                water_levels,
-                name="hydrodynamics/waterlevel",
-                time_chunksize=24 * 6,  # 10 minute data
-                byteshuffle=True,
-            )
-            hydrodynamics_data_catalog.add_source(
-                "waterlevel",
-                DatasetAdapter(
-                    path=Path(self.root) / path,
-                    meta=self.data_catalog.get_source("GTSM").meta,
-                    driver="zarr",
-                ),  # hydromt likes absolute paths
-            )
-
-        # TEMPORARY HACK UNTIL HYDROMT IS FIXED
-        # SEE: https://github.com/Deltares/hydromt/issues/832
-        def to_yml(
-            self,
-            path: Union[str, Path],
-            root: str = "auto",
-            source_names: Optional[List] = None,
-            used_only: bool = False,
-            meta: Optional[Dict] = None,
-        ) -> None:
-            """Write data catalog to yaml format.
-
-            Parameters
-            ----------
-            path: str, Path
-                yaml output path.
-            root: str, Path, optional
-                Global root for all relative paths in yaml file.
-                If "auto" (default) the data source paths are relative to the yaml
-                output ``path``.
-            source_names: list, optional
-                List of source names to export, by default None in which case all sources
-                are exported. This argument is ignored if `used_only=True`.
-            used_only: bool, optional
-                If True, export only data entries kept in used_data list, by default False.
-            meta: dict, optional
-                key-value pairs to add to the data catalog meta section, such as 'version',
-                by default empty.
-            """
-            import yaml
-
-            meta = meta or []
-            yml_dir = os.path.dirname(os.path.abspath(path))
-            if root == "auto":
-                root = yml_dir
-            data_dict = self.to_dict(
-                root=root, source_names=source_names, meta=meta, used_only=used_only
-            )
-            if str(root) == yml_dir:
-                data_dict["meta"].pop(
-                    "root", None
-                )  # remove root if it equals the yml_dir
-            if data_dict:
-                with open(path, "w") as f:
-                    yaml.dump(data_dict, f, default_flow_style=False, sort_keys=False)
-            else:
-                self.logger.info("The data catalog is empty, no yml file is written.")
-
-        hydrodynamics_data_catalog.to_yml = to_yml
-
-        hydrodynamics_data_catalog.to_yml(
-            hydrodynamics_data_catalog,
-            Path(self.root) / "other" / "hydrodynamics" / "data_catalog.yml",
+            water_levels,
+            name="waterlevels",
+            time_chunksize=24 * 6,  # 10 minute data
+            byteshuffle=True,
         )
 
     def setup_damage_parameters(self, parameters):
@@ -5312,7 +5130,7 @@ class GEBModel(GridModel, Forcing):
         risk_scaling_factors = pd.DataFrame(
             risk_scaling_factors, columns=["exceedance_probability", "scaling_factor"]
         )
-        self.set_table(risk_scaling_factors, name="hydrodynamics/risk_scaling_factors")
+        self.set_table(risk_scaling_factors, name="precipitation_scaling_factors")
 
     def setup_discharge_observations(self, files):
         transform = self.grid.rio.transform(recalc=True)
@@ -5424,37 +5242,46 @@ class GEBModel(GridModel, Forcing):
 
         return self.geoms[name]
 
-    def write(self):
+    def write_file_library(self):
+        file_library = self.read_file_library()
+
+        # merge file library from disk with new files, prioritizing new files
+        for type_name, type_files in self.files.items():
+            if type_name not in file_library:
+                file_library[type_name] = type_files
+            else:
+                file_library[type_name].update(type_files)
+
         with open(Path(self.root, "files.json"), "w") as f:
             json.dump(self.files, f, indent=4, cls=PathEncoder)
+
         self.logger.info("Done")
 
-    def read_files(self):
-        files_is_empty = all(len(v) == 0 for v in self.files.values())
-        if files_is_empty:
+    def read_file_library(self):
+        fp = Path(self.root, "files.json")
+        if not fp.exists():
+            return {}
+        else:
             with open(Path(self.root, "files.json"), "r") as f:
-                self.files = json.load(f)
+                files = json.load(f)
+        return defaultdict(dict, files)  # convert dict to defaultdict
 
     def read_geoms(self):
-        self.read_files()
         for name, fn in self.files["geoms"].items():
             geom = gpd.read_parquet(Path(self.root, fn))
             self.set_geoms(geom, name=name, write=False)
 
     def read_array(self):
-        self.read_files()
         for name, fn in self.files["array"].items():
             array = np.load(Path(self.root, fn))["data"]
             self.set_array(array, name=name, write=False)
 
     def read_table(self):
-        self.read_files()
         for name, fn in self.files["table"].items():
             table = pd.read_parquet(Path(self.root, fn))
             self.set_table(table, name=name, write=False)
 
     def read_dict(self):
-        self.read_files()
         for name, fn in self.files["dict"].items():
             with open(Path(self.root, fn), "r") as f:
                 d = json.load(f)
@@ -5480,7 +5307,6 @@ class GEBModel(GridModel, Forcing):
             self.set_region_subgrid(data, name=name, write=False)
 
     def read_other(self) -> None:
-        self.read_files()
         for name, fn in self.files["other"].items():
             da = open_zarr(Path(self.root) / fn)
             self.set_other(da, name=name, write=False)
@@ -5488,7 +5314,7 @@ class GEBModel(GridModel, Forcing):
 
     def read(self):
         with suppress_logging_warning(self.logger):
-            self.read_files()
+            self.files = self.read_file_library()
 
             self.read_geoms()
             self.read_array()
@@ -5550,8 +5376,7 @@ class GEBModel(GridModel, Forcing):
         assert isinstance(data, xr.DataArray)
 
         if name in grid:
-            if self._read:
-                self.logger.warning(f"Replacing grid map: {name}")
+            self.logger.warning(f"Replacing grid map: {name}")
             grid = grid.drop_vars(name)
 
         if len(grid) == 0:
@@ -5565,7 +5390,10 @@ class GEBModel(GridModel, Forcing):
             if name != "mask":
                 # if the mask exists, mask the data, saving some valuable space on disk
                 data_ = xr.where(
-                    ~grid["mask"], data, data.attrs["_FillValue"], keep_attrs=True
+                    ~grid["mask"],
+                    data,
+                    data.attrs["_FillValue"] if data.dtype != bool else False,
+                    keep_attrs=True,
                 )
                 # depending on the order of the dimensions, xr.where may change the dimension order
                 # so we change it back
@@ -5630,6 +5458,10 @@ class GEBModel(GridModel, Forcing):
         return self.geoms["mask"]
 
     @property
+    def bounds(self):
+        return self.grid.rio.bounds(recalc=True)
+
+    @property
     def root(self):
         return self._root
 
@@ -5648,17 +5480,15 @@ class GEBModel(GridModel, Forcing):
         }
         return ds
 
-    def _check_get_opt(self, opt):
+    def check_methods(self, opt):
         """Check all opt keys and raise sensible error messages if unknown."""
         for method in opt.keys():
-            m = method.strip("0123456789")
-            if not callable(getattr(self, m, None)):
+            if not callable(getattr(self, method, None)):
                 raise ValueError(f'Model {self._NAME} has no method "{method}"')
         return opt
 
-    def _run_log_method(self, method, *args, **kwargs):
+    def run_method(self, method, *args, **kwargs):
         """Log method parameters before running a method."""
-        method = method.strip("0123456789")
         func = getattr(self, method)
         signature = inspect.signature(func)
         # combine user and default options
@@ -5680,149 +5510,28 @@ class GEBModel(GridModel, Forcing):
                 self.logger.info(f"{method}.{k}: {v}")
         return func(*args, **kwargs)
 
-    def build(
-        self,
-        region: Optional[dict] = None,
-        write: Optional[bool] = True,
-        opt: Optional[dict] = None,
-    ):
-        r"""Single method to build a model from scratch based on settings in `opt`.
-
-        Methods will be run one by one based on the order of appearance in `opt`
-        (.ini configuration file). All model methods are supported including
-        setup\_\*, read\_\* and write\_\* methods.
-
-        If a write\_\* option is listed in `opt` (ini file) the full writing of the
-        model at the end of the update process is skipped.
-
-        Parameters
-        ----------
-        region: dict
-            Description of model region. See :py:meth:`~hydromt.workflows.parse_region`
-            for all options.
-        write: bool, optional
-            Write complete model after executing all methods in opt, by default True.
-        opt: dict, optional
-            Model build configuration. The configuration can be parsed from a
-            .ini file using :py:meth:`~hydromt.config.configread`.
-            This is a nested dictionary where the first-level keys are the names
-            of model specific methods and the second-level contain
-            argument-value pairs of the method.
-
-            .. code-block:: text
-
-                {
-                    <name of method1>: {
-                        <argument1>: <value1>, <argument2>: <value2>
-                    },
-                    <name of method2>: {
-                        ...
-                    }
-                }
-
-        """
-        opt = opt or {}
-        opt = self._check_get_opt(opt)
-
-        # merge cli region and res arguments with opt
-        if region is not None:
-            if self._CLI_ARGS["region"] not in opt:
-                opt = {self._CLI_ARGS["region"]: {}, **opt}
-            opt[self._CLI_ARGS["region"]].update(region=region)
-
+    def run_methods(self, methods):
         # then loop over other methods
-        for method in opt:
-            # if any write_* functions are present in opt, skip the final self.write()
-            if method.startswith("write_"):
-                write = False
-            kwargs = {} if opt[method] is None else opt[method]
-            self._run_log_method(method, **kwargs)
+        for method in methods:
+            kwargs = {} if methods[method] is None else methods[method]
+            self.run_method(method, **kwargs)
+            self.write_file_library()
 
-        # write
-        if write:
-            self.write()
+    def build(self, region: dict, methods: dict):
+        methods = methods or {}
+        methods = self.check_methods(methods)
+        methods["setup_region"].update(region=region)
+
+        self.run_methods(methods)
 
     def update(
         self,
-        model_out,
-        write: Optional[bool] = True,
-        opt: Optional[Dict] = None,
-        forceful_overwrite: bool = False,
+        methods: dict,
     ):
-        r"""Single method to update a model based the settings in `opt`.
+        methods = methods or {}
+        methods = self.check_methods(methods)
 
-        Methods will be run one by one based on the order of appearance in `opt`
-        (ini configuration file).
+        if "setup_region" in methods:
+            raise ValueError('"setup_region" can only be called when building a model.')
 
-        All model methods are supported including setup\_\*, read\_\* and write\_\* methods.
-        If a write\_\* option is listed in `opt` (ini file) the full writing of the model
-        at the end of the update process is skipped.
-
-        Parameters
-        ----------
-        model_out: str, path, optional
-            Destination folder to write the model schematization after updating
-            the model. If None the updated model components are overwritten in the
-            current model schematization if these exist. By default None.
-        write: bool, optional
-            Write the updated model schematization to disk. By default True.
-        opt: dict, optional
-            Model build configuration. The configuration can be parsed from a
-            .ini file using :py:meth:`~hydromt.config.configread`.
-            This is a nested dictionary where the first-level keys
-            are the names of model specific methods and
-            the second-level contain argument-value pairs of the method.
-
-            .. code-block:: text
-
-                {
-                    <name of method1>: {
-                        <argument1>: <value1>, <argument2>: <value2>
-                    },
-                    <name of method2>: {
-                        ...
-                    }
-                }
-          forceful_overwrite:
-            Force open files to close when attempting to write them. In the case you
-            try to write to a file that's already opened. The output will be written
-            to a temporary file in case the original file cannot be written to.
-        """
-        opt = opt or {}
-        opt = self._check_get_opt(opt)
-
-        # read current model
-        if not self._write:
-            if model_out is None:
-                raise ValueError(
-                    '"model_out" directory required when updating in "read-only" mode'
-                )
-            self.read()
-            if forceful_overwrite:
-                self.set_root(model_out, mode="w+")
-            else:
-                self.set_root(model_out, mode="w")
-
-        # check if model has a region
-        if self.region is None:
-            raise ValueError("Model region not found, setup model using `build` first.")
-
-        # remove setup_basemaps from options and throw warning
-        method = self._CLI_ARGS["region"]
-        if method in opt:
-            opt.pop(method)  # remove from opt
-            self.logger.warning(f'"{method}" can only be called when building a model.')
-
-        # loop over other methods from ini file
-        for method in opt:
-            # if any write_* functions are present in opt, skip the final self.write()
-            if method.startswith("write_"):
-                write = False
-            kwargs = {} if opt[method] is None else opt[method]
-            self._run_log_method(method, **kwargs)
-
-        # write
-        if write:
-            self.write()
-
-        self._cleanup(forceful_overwrite=forceful_overwrite)
+        self.run_methods(methods)

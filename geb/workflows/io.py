@@ -48,6 +48,35 @@ def to_wkt(crs_obj):
         raise TypeError("Unsupported CRS type")
 
 
+def check_attrs(da1, da2):
+    assert len(da1.attrs) == len(da2.attrs), "number of attributes is not equal"
+
+    for key, value in da1.attrs.items():
+        # perform a special check for nan values, which are not equal to each other
+        if (
+            key == "_FillValue"
+            and isinstance(value, (float, np.float32, np.float64))
+            and np.isnan(value)
+        ):
+            assert np.isnan(da2.attrs["_FillValue"]), f"attribute {key} is not equal"
+        else:
+            assert da1.attrs[key] == da2.attrs[key], f"attribute {key} is not equal"
+
+    return True
+
+
+def check_buffer_size(da, chunks_or_shards, max_buffer_size=2147483647):
+    assert (
+        chunks_or_shards["y"]
+        * chunks_or_shards["x"]
+        * chunks_or_shards["time"]
+        * da.dtype.itemsize
+        <= max_buffer_size
+    ), (
+        f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
+    )
+
+
 def to_zarr(
     da,
     path,
@@ -70,21 +99,18 @@ def to_zarr(
 
     assert da.dtype != np.float64, "should be float32"
 
+    assert "_FillValue" in da.attrs, "Fill value must be set"
     if da.dtype == bool:
-        assert "_FillValue" not in da.attrs or da.attrs["_FillValue"] in (
-            True,
-            False,
-            None,
-        ), f"Fill value must be bool or None, not {da.attrs['_FillValue']}"
+        assert da.attrs["_FillValue"] is None, (
+            f"Fill value must be None, not {da.attrs['_FillValue']}"
+        )
     # for integer types, fill value must not be nan
     elif np.issubdtype(da.dtype, np.integer):
-        assert "_FillValue" in da.attrs, "Fill value must be set"
         assert ~np.isnan(da.attrs["_FillValue"]), (
             f"Fill value must not be nan, not {da.attrs['_FillValue']}"
         )
     # for float types, fill value must be nan
     else:
-        assert "_FillValue" in da.attrs, "Fill value must be set"
         assert np.isnan(da.attrs["_FillValue"]), (
             f"Fill value must be nan, not {da.attrs['_FillValue']}"
         )
@@ -102,8 +128,8 @@ def to_zarr(
         if "y" in da.dims and "x" in da.dims:
             chunks.update(
                 {
-                    "y": y_chunksize,
-                    "x": x_chunksize,
+                    "y": min(y_chunksize, da.sizes["y"]),
+                    "x": min(x_chunksize, da.sizes["x"]),
                 }
             )
 
@@ -124,10 +150,14 @@ def to_zarr(
                 clevel=9,
                 shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
             )
+
+            check_buffer_size(da, chunks_or_shards=shards)
         else:
             assert not filters, "Filters are only supported for zarr version 3"
             zarr_version = 2
             compressor = numcodecs.Blosc(cname="zstd", clevel=9, shuffle=byteshuffle)
+
+            check_buffer_size(da, chunks_or_shards=chunks)
 
         da = da.chunk(shards if shards is not None else chunks)
 
@@ -176,7 +206,15 @@ def to_zarr(
             shutil.rmtree(path)
         shutil.move(tmp_zarr, folder)
 
-    return open_zarr(path)
+    da_disk = open_zarr(path)
+
+    # perform some asserts to check if the data was written and read correctly
+    assert da.dtype == da_disk.dtype, "dtype mismatch"
+    assert check_attrs(da, da_disk), "attributes mismatch"
+    assert da.dims == da_disk.dims, "dimensions mismatch"
+    assert da.shape == da_disk.shape, "shape mismatch"
+
+    return da_disk
 
 
 class AsyncForcingReader:

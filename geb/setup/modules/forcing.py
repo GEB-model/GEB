@@ -114,6 +114,7 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
 
         logger.info(f"Downloading ERA5 {variable} to {output_fn}")
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
+        da = da.raster.mask_nodata()
         da = to_zarr(
             da,
             output_fn,

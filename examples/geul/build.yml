@@ -9,8 +9,6 @@ setup_regions_and_land_use:
   region_database: GADM_level1
   ISO3_column: GID_0
   
-  river_threshold: 100
-
 setup_economic_data:
 
 setup_mannings:
@@ -44,7 +42,7 @@ setup_irrigation_sources:
     canal: 0
     well: 1
 
-setup_create_farms_simple:
+setup_create_farms:
 
 setup_household_characteristics:
 
@@ -60,7 +58,7 @@ setup_farmer_crop_calendar:
   reduce_crops: true
   replace_base: false
 
-setup_farmer_characteristics_simple:
+setup_farmer_characteristics:
   interest_rate: 0.05
 
 setup_crop_prices:
@@ -164,7 +162,6 @@ setup_crop_prices:
     sunflower: 
       - sunflower seed
 
-setup_population:
 
 setup_assets:
   feature_types:
