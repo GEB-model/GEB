@@ -15,6 +15,32 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+
+def load_numba_threading_layer():
+    """Load TBB shared library, a very efficient threading layer
+    for parallelizing CPU-bound tasks in Numba-compiled functions.
+
+    However, there is some trouble finding the shared libraries.
+    Therefore, we load the shared library manually and check
+    if the import works.
+
+    """
+    if platform.system() != "Windows":
+        # Modify LD_LIBRARY_PATH on Unix-like systems (Linux, macOS)
+        tbb_path = Path(sys.prefix) / "lib" / "libtbb.so.12"
+    else:
+        tbb_path = Path(sys.prefix) / "Library" / "bin" / "tbb12.dll"
+
+    assert tbb_path.exists(), f"tbb shared library not found at {tbb_path}"
+    binding.load_library_permanently(str(tbb_path))
+
+    # test import
+    from numba.np.ufunc import tbbpool  # noqa: F401
+
+    # set threading layer
+    config.THREADING_LAYER = "tbb"
+
+
 if __debug__:
     import numba
 
@@ -27,21 +53,7 @@ if __debug__:
 os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
 # os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
 
-
-if platform.system() != "Windows":
-    # Modify LD_LIBRARY_PATH on Unix-like systems (Linux, macOS)
-    tbb_path = Path(sys.prefix) / "lib" / "libtbb.so.12"
-    assert tbb_path.exists(), f"tbb shared library not found at {tbb_path}"
-
-    binding.load_library_permanently(str(tbb_path))
-
-    from numba.np.ufunc import tbbpool  # noqa: F401
-else:
-    # test if import works
-    from numba.np.ufunc import tbbpool  # noqa: F401
-
-# set threading layer to tbb, this is much faster than other threading layers
-config.THREADING_LAYER = "tbb"
+load_numba_threading_layer()
 
 # xarray uses bottleneck for some operations to speed up computations
 # however, some implementations are numerically unstable, so we disable it
