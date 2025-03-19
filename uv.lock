@@ -717,6 +717,7 @@ dependencies = [
     { name = "findlibs", marker = "sys_platform != 'linux'" },
     { name = "numpy", marker = "sys_platform != 'linux'" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/52/61/835be2fea693b79dcfa1662b86913063501d74f62649e0bc484b56b9c8f6/eccodes-2.40.1.tar.gz", hash = "sha256:9e0dee65a464bdd131077375dc482841385d9eaef7b5194bf2e5697279ef5d7c", size = 2267659 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/8b/acc2877a7ee3aa124313df491a9317f320f5b6e72dec3a488d69e2490d76/eccodes-2.40.1-cp312-cp312-macosx_13_0_arm64.whl", hash = "sha256:f8c21db46fb643810f873ecd4b9d16b1ec45c18533de0612a933173bdcf4d560", size = 6538685 },
     { url = "https://files.pythonhosted.org/packages/c1/35/be0ae90fffd3f64216ce1ebee090c3f795442800ffec9f7cd0216b85a66f/eccodes-2.40.1-cp312-cp312-macosx_13_0_x86_64.whl", hash = "sha256:48da8ce8232c4d252f23807f6c68df4b8cd80c484edfc8bec17d30df7115bf0e", size = 6638929 },
@@ -724,6 +725,7 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/80/a6/a830c1d78f5672536a521a9156ecb289cb30de04d78a55f35f45c8baec11/eccodes-2.40.1-cp313-cp313-macosx_13_0_arm64.whl", hash = "sha256:494b9a5e7f27b4f79518227a4cc0d85dfd95f152a0aa31bd1186341232b58f1b", size = 6538691 },
     { url = "https://files.pythonhosted.org/packages/e4/7f/e16f0409afb9d9946239743ae6dafd1d474b9a3eb7a6348d88742a6df3c4/eccodes-2.40.1-cp313-cp313-macosx_13_0_x86_64.whl", hash = "sha256:733010f1c499dbcea541a12abe26d602815743611ca1fefccbe3b55fb3243508", size = 6638934 },
     { url = "https://files.pythonhosted.org/packages/e7/a5/36d4e865fcd484e44df63d9591a655533c54aefa981861bba3359f98f98d/eccodes-2.40.1-cp313-cp313-win_amd64.whl", hash = "sha256:0f4eaed3ea766ce6b1c3e0594fdd364e8bce21c29022725903de67e21dbf4777", size = 6224298 },
+    { url = "https://files.pythonhosted.org/packages/26/74/c3683ec85d70dd063a79ff4612c5ea4f0c37c39a5aa7a7340c17e767fdbd/eccodes-2.40.1-py3-none-any.whl", hash = "sha256:5a0ae2653e88fee740e53a13c91066682eca1b885bf33bf1547ac8e25e82845e", size = 43563 },
 ]
 
 [[package]]
@@ -912,6 +914,7 @@ dependencies = [
     { name = "pyresample" },
     { name = "pytest" },
     { name = "pytest-dependency" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "rasterio" },
     { name = "rioxarray" },
@@ -920,7 +923,7 @@ dependencies = [
     { name = "salib" },
     { name = "scipy" },
     { name = "setuptools" },
-    { name = "tbb4py" },
+    { name = "tbb" },
     { name = "tqdm" },
     { name = "xarray" },
     { name = "xclim" },
@@ -973,6 +976,7 @@ requires-dist = [
     { name = "pyresample", specifier = ">=1.32.0" },
     { name = "pytest" },
     { name = "pytest-dependency" },
+    { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "rasterio", specifier = ">=1.3.10" },
     { name = "rioxarray", specifier = ">=0.17.0" },
@@ -987,7 +991,7 @@ requires-dist = [
     { name = "sphinxcontrib-autoprogram", marker = "extra == 'docs'" },
     { name = "sphinxcontrib-autoyaml", marker = "extra == 'docs'" },
     { name = "sphinxcontrib-bibtex", marker = "extra == 'docs'" },
-    { name = "tbb4py", specifier = ">=2021.13.1" },
+    { name = "tbb", specifier = ">=2022.0.0" },
     { name = "tqdm", specifier = ">=4.66.1" },
     { name = "xarray", specifier = ">=2024.3.0" },
     { name = "xclim", specifier = ">=0.52.0" },
@@ -2474,6 +2478,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-dotenv"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bc/57/e84d88dfe0aec03b7a2d4327012c1627ab5f03652216c63d49846d7a6c58/python-dotenv-1.0.1.tar.gz", hash = "sha256:e324ee90a023d808f1959c46bcbc04446a10ced277783dc6ee09987c37ec10ca", size = 39115 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/3e/b68c118422ec867fa7ab88444e1274aa40681c606d59ac27de5a5588f082/python_dotenv-1.0.1-py3-none-any.whl", hash = "sha256:f7b63ef50f1b690dddf550d03497b66d609393b40b564ed0d674909a68ebf16a", size = 19863 },
+]
+
+[[package]]
 name = "pytz"
 version = "2025.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2995,24 +3008,6 @@ dependencies = [
 wheels = [
     { url = "https://files.pythonhosted.org/packages/93/4b/2e29f4266be5a66f21fc2dadcde48f9acea86119d6fb1bb2d2a451222ff7/tbb-2022.0.0-py2.py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:15a15a4e3ea4c3f3198bdb3c55fac75c589e15ed2ad0bbb080900d355c5b017e", size = 5833508 },
     { url = "https://files.pythonhosted.org/packages/30/02/7b9c333141784aca2370cd3c826efa98eaf9848674f2752961ac6d5f1abf/tbb-2022.0.0-py3-none-win_amd64.whl", hash = "sha256:6a0bae732599ec5c082f46e4aaf14bdbef1621e8cd0c6fcf64d50d347c2ebda4", size = 298708 },
-]
-
-[[package]]
-name = "tbb4py"
-version = "2022.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "tbb" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/70/ca17729289c48a05f44b284c1c84005530edf73440119452d50a3c5c59ec/tbb4py-2022.0.0-py310-none-manylinux_2_28_x86_64.whl", hash = "sha256:cb9067518c6f49169baa988ecd6ab48664f5fa4cb5375efa61bd5f918452123a", size = 347673 },
-    { url = "https://files.pythonhosted.org/packages/23/ca/1eaf6186ff17ad0d4215fa074b209380a6531575056e7dc4083ee50a7c79/tbb4py-2022.0.0-py310-none-win_amd64.whl", hash = "sha256:3d095d823c88821229151907279e1f9f838ea0f560cf3a5e7485cda53270be64", size = 53877 },
-    { url = "https://files.pythonhosted.org/packages/b1/f9/17d7f1b951465fc9dd0d0dec1c96e53458d9913015993853439182b6a869/tbb4py-2022.0.0-py311-none-manylinux_2_28_x86_64.whl", hash = "sha256:f34d30d5f88ed86703fb03836a6017ea07186b5519a1d37cbb0aab4c3a30d72d", size = 347688 },
-    { url = "https://files.pythonhosted.org/packages/e5/85/18483bbf4e3129badd49be41ec869d12b5ac68b3d198064d48b8d278f8a7/tbb4py-2022.0.0-py311-none-win_amd64.whl", hash = "sha256:e7089cb7f2a27a2a3ca621b6fd6a1fca69b25638e26cb0facaaee0ef3634316e", size = 53919 },
-    { url = "https://files.pythonhosted.org/packages/81/ca/3143cd7a9be1d0667c7f5ec0b338781772a4c99bdf4fc7948d2072304776/tbb4py-2022.0.0-py312-none-manylinux_2_28_x86_64.whl", hash = "sha256:82d7ab8dccce09a06e0b37ca30422a6385c7f2ee379404ad78bf0a4e04279d3d", size = 348263 },
-    { url = "https://files.pythonhosted.org/packages/79/1f/8e91caf7fdf43fcfbb5e674bab2829ce40a767df8d983aa53cfc84432ee5/tbb4py-2022.0.0-py312-none-win_amd64.whl", hash = "sha256:1e127305c1113682f1e71debb9c04e899a4621ec9f00efa75457f4bdc0b2d5cd", size = 47099 },
-    { url = "https://files.pythonhosted.org/packages/78/6e/527d51f29f2affe1264041e809bf77b4c11f743c0f94c30afe0c7f5b8e97/tbb4py-2022.0.0-py39-none-manylinux_2_28_x86_64.whl", hash = "sha256:59dc0d6cbd781eb65bd7acbd542e2a2520dc6ce6eabb5181b43f7f9075541944", size = 347642 },
-    { url = "https://files.pythonhosted.org/packages/74/9b/62f8c2b50c3b51ef89d271711e386e46d6263e54f2420c09203bbf508999/tbb4py-2022.0.0-py39-none-win_amd64.whl", hash = "sha256:a87e202de1d53af81e58d62745c8dd98431ed26d393385d131c0de316968e184", size = 53846 },
 ]
 
 [[package]]
