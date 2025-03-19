@@ -548,7 +548,6 @@ class GEBModel(Forcing):
             name="landsurface/elevation",
         )
 
-        self.set_dict(DEMs, name="hydrodynamics/DEM_config")
         for DEM in DEMs:
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
@@ -565,6 +564,9 @@ class GEBModel(Forcing):
                 name=f"DEM/{DEM['name']}",
                 byteshuffle=True,
             )
+            DEM["path"] = f"DEM/{DEM['name']}"
+
+        self.set_dict(DEMs, name="hydrodynamics/DEM_config")
 
     def setup_cell_area(self) -> None:
         """

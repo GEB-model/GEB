@@ -71,17 +71,6 @@ class SFINCS:
         else:
             return "all"
 
-    @property
-    def data_catalogs(self):
-        return [
-            str(
-                Path(self.model.config["general"]["input_folder"])
-                / "other"
-                / "hydrodynamics"
-                / "data_catalog.yml"
-            )
-        ]
-
     def get_utm_zone(self, region_file):
         region = load_geom(region_file)
         # Calculate the central longitude of the dataset
@@ -214,7 +203,6 @@ class SFINCS:
             forcing_method="precipitation",
             discharge_grid=discharge_grid,
             precipitation_grid=self.precipitation,
-            data_catalogs=self.data_catalogs,
             uparea_discharge_grid=None,
         )
 
@@ -414,11 +402,15 @@ class SFINCS:
     def get_build_parameters(self, model_root):
         with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
             DEM_config = json.load(f)
+        for entry in DEM_config:
+            entry["elevtn"] = open_zarr(
+                self.model.files["other"][entry["path"]]
+            ).to_dataset(name="elevtn")
+
         return {
             "model_root": model_root,
-            "data_catalogs": self.data_catalogs,
             "region": load_geom(self.model.files["geoms"]["routing/subbasins"]),
-            "DEM_config": DEM_config,
+            "DEMs": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
             "land_cover": self.land_cover,
