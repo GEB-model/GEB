@@ -71,6 +71,9 @@ required-environments = [
     "sys_platform == 'win32'",
 ]
 
+[tool.uv.sources]
+geb-hydrodynamics = { path = "../GEB-hydrodynamics", editable = true }
+
 [tool.flit.module]
 name = "geb"
 
@@ -85,8 +88,14 @@ docs = [
     "sphinxcontrib-autoyaml",
     "pypandoc",
 ]
-full = []
-fairstream = ["pgmpy>=0.1.24", "daft-pgm>=0.1.4", "opt-einsum>=3.3.0"]
+fairstream = [
+    "pgmpy>=0.1.24",
+    "daft-pgm>=0.1.4",
+    "opt-einsum>=3.3.0",
+]
+floods = [
+    "geb-hydrodynamics",
+]
 
 [project.scripts]
 geb = "geb.cli:cli"
