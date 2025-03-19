@@ -12,6 +12,8 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import cftime
 import zarr
+import rasterio.crs
+from pyproj import CRS
 
 all_async_readers = []
 
@@ -29,7 +31,21 @@ def open_zarr(zarr_folder):
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
 
+    if "_CRS" in da.attrs:
+        da.rio.write_crs(pyproj.CRS(da.attrs["_CRS"]["wkt"]), inplace=True)
+
     return da
+
+
+def to_wkt(crs_obj):
+    if isinstance(crs_obj, int):  # EPSG code
+        return CRS.from_epsg(crs_obj).to_wkt()
+    elif isinstance(crs_obj, CRS):  # Pyproj CRS
+        return crs_obj.to_wkt()
+    elif isinstance(crs_obj, rasterio.crs.CRS):  # Rasterio CRS
+        return CRS(crs_obj.to_wkt()).to_wkt()
+    else:
+        raise TypeError("Unsupported CRS type")
 
 
 def to_zarr(
@@ -115,7 +131,7 @@ def to_zarr(
 
         da = da.chunk(shards if shards is not None else chunks)
 
-        da.attrs["_CRS"] = {"wkt": pyproj.CRS.from_epsg(crs).to_wkt()}
+        da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
         chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)
