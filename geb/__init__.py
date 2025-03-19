@@ -6,10 +6,14 @@ import os
 import platform
 import sys
 from pathlib import Path
+from llvmlite import binding
 from numba import config
 import faulthandler
 import xarray as xr
+from dotenv import load_dotenv
 
+# Load environment variables from .env file
+load_dotenv()
 
 if __debug__:
     import numba
@@ -20,21 +24,21 @@ if __debug__:
     # Setting BOUNDSCHECK to 1 will enable bounds checking for all array accesses
     numba.config.BOUNDSCHECK = 1
 
-
 os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
 # os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
 
 
 if platform.system() != "Windows":
     # Modify LD_LIBRARY_PATH on Unix-like systems (Linux, macOS)
-    import tbb  # noqa: F401
-
-    tbb_path = Path(sys.prefix) / "lib" / "libtbb.so"
+    tbb_path = Path(sys.prefix) / "lib" / "libtbb.so.12"
     assert tbb_path.exists(), f"tbb shared library not found at {tbb_path}"
-    os.environ["LD_LIBRARY_PATH"] = str(tbb_path)
+
+    binding.load_library_permanently(str(tbb_path))
+
+    from numba.np.ufunc import tbbpool  # noqa: F401
 else:
     # test if import works
-    import tbb  # noqa: F401
+    from numba.np.ufunc import tbbpool  # noqa: F401
 
 # set threading layer to tbb, this is much faster than other threading layers
 config.THREADING_LAYER = "tbb"
