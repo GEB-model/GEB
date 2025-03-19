@@ -8,6 +8,7 @@ from dask.diagnostics import ProgressBar
 import pyproj
 import numcodecs
 import asyncio
+import os
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import cftime
@@ -66,13 +67,10 @@ def check_attrs(da1, da2):
 
 
 def check_buffer_size(da, chunks_or_shards, max_buffer_size=2147483647):
-    assert (
-        chunks_or_shards["y"]
-        * chunks_or_shards["x"]
-        * chunks_or_shards["time"]
-        * da.dtype.itemsize
-        <= max_buffer_size
-    ), (
+    buffer_size = (
+        np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
+    )
+    assert buffer_size <= max_buffer_size, (
         f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
     )
 
@@ -193,7 +191,9 @@ def to_zarr(
 
         if progress:
             # start writing after 10 seconds, and update every 0.1 seconds
-            with ProgressBar(minimum=10, dt=0.1):
+            with ProgressBar(
+                minimum=10, dt=float(os.environ.get("GEB_OVERRIDE_PROGRESSBAR_DT", 0.1))
+            ):
                 store = da.to_zarr(**arguments)
         else:
             store = da.to_zarr(**arguments)
@@ -218,12 +218,8 @@ def to_zarr(
 
 
 class AsyncForcingReader:
-    shared_loop = (
-        asyncio.new_event_loop()
-    )  # Shared event loop, note running in a separate thread is slower
-    asyncio.set_event_loop(shared_loop)
-
     def __init__(self, filepath, variable_name):
+        self.variable_name = variable_name
         self.filepath = filepath
 
         store = zarr.storage.LocalStore(self.filepath, read_only=True)
@@ -243,11 +239,13 @@ class AsyncForcingReader:
         all_async_readers.append(self)
         self.preloaded_data_future = None
         self.current_index = -1  # Initialize to -1 to indicate no data loaded yet
+
+        self.loop = asyncio.new_event_loop()
         self.executor = ThreadPoolExecutor(max_workers=1)
-        self.loop = AsyncForcingReader.shared_loop
 
     def load(self, index):
-        return self.var[index]
+        data = self.var[index, :]
+        return data
 
     async def load_await(self, index):
         return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
@@ -292,15 +290,15 @@ class AsyncForcingReader:
             assert np.count_nonzero(indices) == 1, "Date not found in the dataset."
             return indices.argmax()
 
-    def read_timestep(self, date):
-        index = self.get_index(date)
-        fn = self.read_timestep_async(index)
-        data = self.loop.run_until_complete(fn)
-        return data
-
-    def read_timestep_not_async(self, date):
-        index = self.get_index(date)
-        return self.load(index)
+    def read_timestep(self, date, asynchronous=False):
+        if asynchronous:
+            index = self.get_index(date)
+            fn = self.read_timestep_async(index)
+            data = self.loop.run_until_complete(fn)
+            return data
+        else:
+            index = self.get_index(date)
+            return self.load(index)
 
     def close(self):
         # cancel the preloading of the next timestep
@@ -309,6 +307,4 @@ class AsyncForcingReader:
         # close the executor
         self.executor.shutdown(wait=False)
 
-        AsyncForcingReader.shared_loop.call_soon_threadsafe(
-            AsyncForcingReader.shared_loop.stop
-        )
+        self.loop.call_soon_threadsafe(self.loop.stop)
