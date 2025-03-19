@@ -113,10 +113,12 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
         da = da.isel(time=slice(1, None))
 
         logger.info(f"Downloading ERA5 {variable} to {output_fn}")
+        da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
         da = to_zarr(
             da,
             output_fn,
             time_chunksize=24,
+            crs=4326,
         )
     return da
 
