@@ -11,7 +11,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from ...HRUs import load_geom
-from ...workflows.io import to_zarr
+from ...workflows.io import to_zarr, open_zarr
 
 try:
     from geb_hydrodynamics.build_model import build_sfincs
@@ -43,15 +43,9 @@ class SFINCS:
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
-        store = zarr.storage.LocalStore(
-            self.model.files["other"]["climate/pr_hourly"],
-            read_only=True,
+        self.precipitation_dataarray = open_zarr(
+            self.model.files["other"]["climate/pr_hourly"]
         )
-
-        # set default precipitation file
-        self.precipitation_dataarray = xr.open_dataset(store, engine="zarr")[
-            "pr_hourly"
-        ]
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
@@ -352,11 +346,8 @@ class SFINCS:
 
     @property
     def discharge_spinup_ds(self):
-        ds = xr.open_dataset(
-            Path("report") / "spinup" / "discharge_daily.zarr", engine="zarr"
-        )
+        da = open_zarr(Path("report") / "spinup" / "discharge_daily.zarr")
 
-        da = ds["discharge_daily"]
         # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
         # ds = ds.sel(time=slice(start_time, ds.time[-1]))
 
@@ -390,6 +381,30 @@ class SFINCS:
         self._precipitation_dataarray = dataarray
 
     @property
+    def land_cover(self):
+        return open_zarr(self.model.files["other"]["landcover/classification"])
+
+    @property
+    def land_cover_mannings_rougness_classification(self):
+        return pd.DataFrame(
+            data=[
+                [10, "Tree cover", 10, 0.12],
+                [20, "Shrubland", 20, 0.05],
+                [30, "Grasland", 30, 0.034],
+                [40, "Cropland", 40, 0.037],
+                [50, "Built-up", 50, 0.1],
+                [60, "Bare / sparse vegetation", 60, 0.023],
+                [70, "Snow and Ice", 70, 0.01],
+                [80, "Permanent water bodies", 80, 0.02],
+                [90, "Herbaceous wetland", 90, 0.035],
+                [95, "Mangroves", 95, 0.07],
+                [100, "Moss and lichen", 100, 0.025],
+                [0, "No data", 0, 0.1],
+            ],
+            columns=["esa_worldcover", "description", "landuse", "N"],
+        )
+
+    @property
     def crs(self):
         crs = self.config["crs"]
         if crs == "auto":
@@ -406,6 +421,8 @@ class SFINCS:
             "DEM_config": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
+            "land_cover": self.land_cover,
+            "land_cover_mannings_rougness_classification": self.land_cover_mannings_rougness_classification,
             "resolution": self.config["resolution"],
             "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
             "crs": self.crs,
