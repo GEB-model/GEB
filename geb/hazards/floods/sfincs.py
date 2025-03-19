@@ -9,9 +9,9 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from pyproj import CRS
 
 from ...HRUs import load_geom
+from ...workflows.io import to_zarr
 
 try:
     from geb_hydrodynamics.build_model import build_sfincs
@@ -82,6 +82,7 @@ class SFINCS:
         return [
             str(
                 Path(self.model.config["general"]["input_folder"])
+                / "other"
                 / "hydrodynamics"
                 / "data_catalog.yml"
             )
@@ -201,16 +202,11 @@ class SFINCS:
 
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
 
-        # Convert the WKT string to a pyproj CRS object
-        crs_obj = CRS.from_wkt(self.hydrology.grid.crs)
-
-        # Now you can safely call to_proj4() on the CRS object
-        discharge_grid.raster.set_crs(crs_obj.to_proj4())
-        tstart = start_time
-        tend = discharge_grid.time[-1] + pd.Timedelta(
+        discharge_grid.raster.set_crs(self.model.crs)
+        end_time = discharge_grid.time[-1] + pd.Timedelta(
             self.model.timestep_length / substeps
         )
-        discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
+        discharge_grid = discharge_grid.sel(time=slice(start_time, end_time))
 
         event_name = self.get_event_name(event)
 
@@ -218,8 +214,8 @@ class SFINCS:
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
             current_event={
-                "tstart": self.to_sfincs_datetime(tstart),
-                "tend": self.to_sfincs_datetime(tend.dt).item(),
+                "tstart": self.to_sfincs_datetime(start_time),
+                "tend": self.to_sfincs_datetime(end_time.dt).item(),
             },
             forcing_method="precipitation",
             discharge_grid=discharge_grid,
@@ -245,6 +241,11 @@ class SFINCS:
             model_root=model_root,
             simulation_root=simulation_root,
         )  # xc, yc is for x and y in rotated grid`DD`
+        flood_map = to_zarr(
+            flood_map,
+            self.model.report_folder / "flood_maps" / f"{start_time.isoformat()}.zarr",
+            crs=flood_map.rio.crs,
+        )
         damages = self.flood(flood_map=flood_map)
         return damages
 
@@ -352,8 +353,10 @@ class SFINCS:
     @property
     def discharge_spinup_ds(self):
         ds = xr.open_dataset(
-            Path("report") / "spinup" / "discharge_daily.zarr.zip", engine="zarr"
-        )["discharge_daily"]
+            Path("report") / "spinup" / "discharge_daily.zarr", engine="zarr"
+        )
+
+        da = ds["discharge_daily"]
         # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
         # ds = ds.sel(time=slice(start_time, ds.time[-1]))
 
@@ -364,7 +367,7 @@ class SFINCS:
         #         Please run the model for at least 30 years (10 years of data is discarded)."""
         #     )
 
-        return ds
+        return da
 
     @property
     def rivers(self):
@@ -390,7 +393,7 @@ class SFINCS:
     def crs(self):
         crs = self.config["crs"]
         if crs == "auto":
-            crs = self.get_utm_zone(self.model.files["geoms"]["region"])
+            crs = self.get_utm_zone(self.model.files["geoms"]["routing/subbasins"])
         return crs
 
     def get_build_parameters(self, model_root):
