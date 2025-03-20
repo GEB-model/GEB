@@ -1546,7 +1546,7 @@ class Soil(object):
 
         return (
             interflow,
-            direct_runoff,
+            runoff,
             groundwater_recharge,
             open_water_evaporation,
             actual_total_transpiration,

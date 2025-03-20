@@ -85,15 +85,19 @@ class Government(AgentBaseClass):
             ] = irrigation_limit["min"]
 
     def reforestation(self) -> None:
-        if not self.config.get("reforestation", False):
+        if self.model.spinup:
             return None
-        if self.model.current_timestep == 1:
+        elif not self.config.get("reforestation", False):
+            return None
+        elif self.model.current_timestep == 1:
             print("running the reforestation scenario")
             # load reforestation map
             # forest_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_new4.nc"
 
             # Open dataset and explicitly select `esa_worldcover`
-            to_forest = xr.open_dataset(self.model.files["forcing"]["hydrodynamics/esa_worldcover_reforestation_scenario"])["esa_worldcover"]
+            # to_forest = xr.open_dataset(self.model.files["forcing"]["hydrodynamics/esa_worldcover_reforestation_scenario"])["esa_worldcover"]
+            to_forest = xr.open_dataset("/scistor/ivm/vbl220/PhD/models/geulnew/input/hydrodynamics/esa_worldcover_reforestation.nc", engine="netcdf4")["esa_worldcover"]
+            print(to_forest)
 
             # Convert to a spatially-aware raster dataset
             to_forest = to_forest.rio.write_crs("EPSG:28992").squeeze()
@@ -134,6 +138,13 @@ class Government(AgentBaseClass):
             output_vector_path = "/scistor/ivm/vbl220/PhD/forestation_vectorized.gpkg"
             forest.to_file(output_vector_path)
 
+            print("Forest DataFrame Info:")
+            print(forest.info())  # Check if geometries exist
+            print("\nFirst few geometries:")
+            print(forest.geometry.head())  # Print a few geometries
+            print("\nNumber of geometries:", len(forest))
+
+
             # then we rasterize this file to match the HRUs
             forest = rasterize(
                 [(shape(geom), 1) for geom in forest.geometry],
@@ -142,6 +153,13 @@ class Government(AgentBaseClass):
                 fill=False,
                 dtype="uint8",  # bool is not supported, so we use uint8 and convert to bool
             ).astype(bool)
+
+            print("\nRasterized Forest Stats:")
+            print("Min value:", forest.min())
+            print("Max value:", forest.max())
+            print("Number of forest pixels (value=1):", np.sum(forest))
+            print("Total pixels:", forest.size)
+            
             # do not create forests outside the study area
             forest[self.model.data.HRU.mask] = False
             # only create forests in grassland or agricultural areas
@@ -154,6 +172,8 @@ class Government(AgentBaseClass):
                 )
             ] = False
 
+           
+
             import matplotlib.pyplot as plt
 
             plt.imshow(forest)
@@ -162,6 +182,8 @@ class Government(AgentBaseClass):
             new_forest_HRUs = np.unique(
                 self.model.data.HRU.var.unmerged_HRU_indices[forest]
             )
+
+            print(f"new forest hrus: {new_forest_HRUs}")
             # set the land use type to forest
             self.model.data.HRU.var.land_use_type[new_forest_HRUs] = FOREST
 

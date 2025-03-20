@@ -132,6 +132,8 @@ class Households(AgentBaseClass):
         ) as f:
             self.var.max_dam_forest = float(json.load(f)["maximum_damage"])
 
+        print(f"maximum damage forest is: {self.var.max_dam_forest}")
+
         with open(
             self.model.files["dict"][
                 "damage_parameters/flood/land_use/agriculture/maximum_damage"
@@ -264,11 +266,11 @@ class Households(AgentBaseClass):
                 self.var.max_dam_buildings_content
             )
 
-        if self.config.get("measure") == "dry_proofing":
+        if self.config.get("measure") == "dry_proofing_05m":
             print("turning on dryproofing")
             self.var.buildings_structure_curve = pd.read_parquet(
                 self.model.files["table"][
-                    "damage_parameters/flood/buildings/dry_proofing/structure/curve"
+                    "damage_parameters/flood/buildings/dry_proofing/structure/curve_05m"
                 ]
             )
             self.var.buildings_structure_curve.set_index("severity", inplace=True)
@@ -280,7 +282,55 @@ class Households(AgentBaseClass):
 
             self.var.buildings_content_curve = pd.read_parquet(
                 self.model.files["table"][
-                    "damage_parameters/flood/buildings/dry_proofing/content/curve"
+                    "damage_parameters/flood/buildings/dry_proofing/content/curve_05m"
+                ]
+            )
+            self.var.buildings_content_curve.set_index("severity", inplace=True)
+            self.var.buildings_content_curve = self.var.buildings_content_curve.rename(
+                columns={"damage_ratio": "building_content"}
+            )
+            with open(
+                self.model.files["dict"][
+                    "damage_parameters/flood/buildings/dry_proofing/structure/maximum_damage"
+                ],
+                "r",
+            ) as f:
+                self.var.max_dam_buildings_structure = json.load(f)
+            self.var.max_dam_buildings_structure = float(
+                self.var.max_dam_buildings_structure["maximum_damage"]
+            )
+            self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
+            with open(
+                self.model.files["dict"][
+                    "damage_parameters/flood/buildings/dry_proofing/content/maximum_damage"
+                ],
+                "r",
+            ) as f:
+                self.var.max_dam_buildings_content = json.load(f)
+            self.var.max_dam_buildings_content = float(
+                self.var.max_dam_buildings_content["maximum_damage"]
+            )
+            self.var.buildings_centroid["maximum_damage"] = (
+                self.var.max_dam_buildings_content
+            )
+
+        if self.config.get("measure") == "dry_proofing_1m":
+            print("turning on dryproofing")
+            self.var.buildings_structure_curve = pd.read_parquet(
+                self.model.files["table"][
+                    "damage_parameters/flood/buildings/dry_proofing/structure/curve_1m"
+                ]
+            )
+            self.var.buildings_structure_curve.set_index("severity", inplace=True)
+            self.var.buildings_structure_curve = (
+                self.var.buildings_structure_curve.rename(
+                    columns={"damage_ratio": "building_structure"}
+                )
+            )
+
+            self.var.buildings_content_curve = pd.read_parquet(
+                self.model.files["table"][
+                    "damage_parameters/flood/buildings/dry_proofing/content/curve_1m"
                 ]
             )
             self.var.buildings_content_curve.set_index("severity", inplace=True)
@@ -523,6 +573,8 @@ class Households(AgentBaseClass):
             total_damage_structure + total_damages_content + total_damages_roads + total_damages_rail + total_damages_forest + total_damages_agriculture
         )
         print(f"The total flood damages are: {total_flood_damages}")
+
+        return total_flood_damages
 
     def update_water_demand(self):
         """
