@@ -3413,19 +3413,28 @@ class GEBModel(Forcing):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
-    def setup_household_characteristics(self, maximum_age=85):
+    def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+            "GDL_regions_v4", geom=self.region, variables=["GDLcode", "iso_code"]
         )
         # create list of attibutes to include
         attributes_to_include = ["HHSIZE_CAT", "AGE", "EDUC", "WEALTH"]
         region_results = {}
         # iterate over regions and sample agents from GLOPOP-S
-        for GDL_region in GDL_regions["GDLcode"]:
-            region_results[GDL_region] = {}
+        for _, GDL_region in GDL_regions.iterrows():
+            GDL_code = GDL_region["GDLcode"]
+            if GDL_region["iso_code"] in skip_countries_ISO3:
+                self.logger.info(
+                    f"Skipping setting up household characteristics for {GDL_region['iso_code']}"
+                )
+                continue
+            self.logger.info(
+                f"Setting up household characteristics for {GDL_region['iso_code']}"
+            )
+            region_results[GDL_code] = {}
             GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
-                self.data_catalog, GDL_region
+                self.data_catalog, GDL_code
             )
 
             # clip grid to model bounds
@@ -3499,15 +3508,15 @@ class GEBModel(Forcing):
                     household_characteristics[household_attribute][:households_found]
                 )
 
-            region_results[GDL_region] = household_characteristics
+            region_results[GDL_code] = household_characteristics
 
         # concatenate all data
         data_concatenated = {}
         for household_attribute in household_characteristics:
             data_concatenated[household_attribute] = np.concatenate(
                 [
-                    region_results[GDL_region][household_attribute]
-                    for GDL_region in region_results
+                    region_results[GDL_code][household_attribute]
+                    for GDL_code in region_results
                 ]
             )
         for household_attribute in household_characteristics:
