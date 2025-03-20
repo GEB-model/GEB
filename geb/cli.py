@@ -1,29 +1,28 @@
-import click
+import cProfile
+import functools
+import importlib
+import logging
 import os
 import platform
 import subprocess
-import tempfile
 import sys
-import cProfile
-from pstats import Stats
+import tempfile
 from operator import attrgetter
-import yaml
-import logging
-import functools
 from pathlib import Path
-import importlib
+from pstats import Stats
 
+import click
+import yaml
+from honeybees.visualization.canvas import Canvas
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
-from honeybees.visualization.canvas import Canvas
-
 from hydromt.config import configread
-from geb import __version__
-from geb import setup
-from geb.model import GEBModel
+
+from geb import __version__, setup
 from geb.calibrate import calibrate as geb_calibrate
-from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
+from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
+from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 
 
 def multi_level_merge(dict1, dict2):

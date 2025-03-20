@@ -19,17 +19,19 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-import numpy as np
 from pathlib import Path
-from geb.workflows import TimingModule, balance_check
-from numba import njit, prange, float32
+
+import numpy as np
+from numba import float32, njit, prange
 
 from geb.HRUs import load_grid
+from geb.workflows import TimingModule, balance_check
+
 from .landcover import (
     FOREST,
     GRASSLAND_LIKE,
-    PADDY_IRRIGATED,
     NON_PADDY_IRRIGATED,
+    PADDY_IRRIGATED,
     SEALED,
 )
 

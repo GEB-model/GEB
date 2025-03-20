@@ -20,23 +20,24 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-from geb.workflows import TimingModule, balance_check
-from geb.HRUs import Data
 
-from .potential_evapotranspiration import PotentialEvapotranspiration
-from .snow_frost import SnowFrost
-from .soil import Soil
-from .landcover import LandCover
-from .sealed_water import SealedWater
+from geb.HRUs import Data
+from geb.workflows import TimingModule, balance_check
+
+from .erosion.hillslope import HillSlopeErosion
 from .evaporation import Evaporation
 from .groundwater import GroundWater
-from .water_demand import WaterDemand
 from .interception import Interception
-from .runoff_concentration import RunoffConcentration
 from .lakes_res_small import SmallLakesReservoirs
-from .routing import Routing
 from .lakes_reservoirs import LakesReservoirs
-from .erosion.hillslope import HillSlopeErosion
+from .landcover import LandCover
+from .potential_evapotranspiration import PotentialEvapotranspiration
+from .routing import Routing
+from .runoff_concentration import RunoffConcentration
+from .sealed_water import SealedWater
+from .snow_frost import SnowFrost
+from .soil import Soil
+from .water_demand import WaterDemand
 
 
 class Hydrology(Data):

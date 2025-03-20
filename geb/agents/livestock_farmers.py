@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 import calendar
+
 import numpy as np
-from .general import downscale_volume, AgentBaseClass
+
 from ..hydrology.landcover import GRASSLAND_LIKE
+from .general import AgentBaseClass, downscale_volume
 
 
 class LiveStockFarmers(AgentBaseClass):

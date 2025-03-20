@@ -1,24 +1,24 @@
-import numpy as np
 import math
-import pytest
 from time import time
 
 import matplotlib.pyplot as plt
-
-from ..testconfig import output_folder
+import numpy as np
+import pytest
 
 import geb.hydrology.soil
 from geb.hydrology.soil import (
+    get_aeration_stress_factor,
+    get_aeration_stress_threshold,
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
-    get_transpiration_factor_single,
-    get_total_transpiration_factor,
-    get_aeration_stress_threshold,
-    get_aeration_stress_factor,
-    get_soil_water_flow_parameters,
     get_soil_moisture_at_pressure,
+    get_soil_water_flow_parameters,
+    get_total_transpiration_factor,
+    get_transpiration_factor_single,
     vertical_water_transport,
 )
+
+from ..testconfig import output_folder
 
 output_folder_soil = output_folder / "soil"
 output_folder_soil.mkdir(exist_ok=True)

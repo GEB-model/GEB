@@ -1,17 +1,18 @@
-from pathlib import Path
+import json
+import os
+import platform
 from collections import deque
 from datetime import datetime
-import xarray as xr
-import zarr
-import json
-import platform
-import os
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import xarray as xr
+import zarr
 
 from ...HRUs import load_geom
-from ...workflows.io import to_zarr, open_zarr
+from ...workflows.io import open_zarr, to_zarr
 
 try:
     from geb_hydrodynamics.build_model import build_sfincs
@@ -19,15 +20,15 @@ except ModuleNotFoundError:
     raise ModuleNotFoundError(
         "The 'GEB-hydrodynamics' package is not installed. Please install it by running 'pip install geb-hydrodynamics'."
     )
-from geb_hydrodynamics.sfincs_utils import run_sfincs_simulation
-from geb_hydrodynamics.update_model_forcing import update_sfincs_model_forcing
-from geb_hydrodynamics.run_sfincs_for_return_periods import (
-    run_sfincs_for_return_periods,
-)
-from geb_hydrodynamics.postprocess_model import read_flood_map
 from geb_hydrodynamics.estimate_discharge_for_return_periods import (
     estimate_discharge_for_return_periods,
 )
+from geb_hydrodynamics.postprocess_model import read_flood_map
+from geb_hydrodynamics.run_sfincs_for_return_periods import (
+    run_sfincs_for_return_periods,
+)
+from geb_hydrodynamics.sfincs_utils import run_sfincs_simulation
+from geb_hydrodynamics.update_model_forcing import update_sfincs_model_forcing
 
 
 class SFINCS:

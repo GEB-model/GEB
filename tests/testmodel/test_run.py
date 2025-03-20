@@ -1,9 +1,11 @@
-import pytest
 from pathlib import Path
 from shutil import rmtree
+
+import pytest
+
 from geb.cli import build_fn, run_model_with_method
 
-from ..testconfig import tmp_folder, IN_GITHUB_ACTIONS
+from ..testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
 working_directory = Path("examples/geul")
 DEFAULT_VARIABLES = {

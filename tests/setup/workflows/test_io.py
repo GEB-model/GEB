@@ -1,9 +1,10 @@
-import xarray as xr
 import numpy as np
+import xarray as xr
 
 # from numcodecs import PackBits
 # from zarr.codecs import PackBits
 from geb.setup.workflows.io import to_zarr
+
 from ...testconfig import tmp_folder
 
 

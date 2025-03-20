@@ -1,21 +1,22 @@
+import copy
 import datetime
 import shutil
 from pathlib import Path
 from time import time
-import copy
-import numpy as np
-from dateutil.relativedelta import relativedelta
-import xarray as xr
 
+import numpy as np
+import xarray as xr
+from dateutil.relativedelta import relativedelta
 from honeybees.model import Model as ABM_Model
 
-from geb.store import Store
-from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
-from .hydrology import Hydrology
 from geb.hazards.driver import HazardDriver
+from geb.reporter import Reporter
+from geb.store import Store
+
 from .HRUs import load_geom
+from .hydrology import Hydrology
 
 
 class GEBModel(HazardDriver, ABM_Model):

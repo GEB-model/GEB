@@ -20,9 +20,11 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-from .model import ModFlowSimulation
+
 from geb.workflows import balance_check
+
 from ..routing import get_channel_ratio
+from .model import ModFlowSimulation
 
 
 class GroundWater:

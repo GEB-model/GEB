@@ -22,18 +22,18 @@
 
 import math
 
-import pandas as pd
 import numpy as np
-from geb.workflows import balance_check
+import pandas as pd
+
 from geb.HRUs import load_grid
+from geb.workflows import balance_check
 
 from .routing.subroutines import (
-    subcatchment1,
+    PIT,
     define_river_network,
+    subcatchment1,
     upstream1,
 )
-
-from .routing.subroutines import PIT
 
 OFF = 0
 LAKE = 1

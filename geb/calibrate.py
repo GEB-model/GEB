@@ -13,37 +13,33 @@ Thanks Hylke for making it available for use and modification
 Modified by Peter Burek and Jens de Bruijn
 """
 
-import os
-from pathlib import Path
-import xarray as xr
-import time
 import array
-import random
-import numpy as np
-from copy import deepcopy
-import signal
-import pandas as pd
-import yaml
-import geopandas as gpd
-from io import StringIO
 import collections
-
-from deap import creator, base, tools, algorithms
-from functools import wraps, partial
-
-from sklearn.ensemble import RandomForestRegressor
-import joblib
-from sklearn.model_selection import KFold
-
-import json
-import sys
 import datetime
-import traceback
-
+import json
 import multiprocessing
+import os
+import pickle
+import random
+import signal
+import sys
+import time
+import traceback
+from copy import deepcopy
+from functools import partial, wraps
+from io import StringIO
+from pathlib import Path
 from subprocess import Popen
 
-import pickle
+import geopandas as gpd
+import joblib
+import numpy as np
+import pandas as pd
+import xarray as xr
+import yaml
+from deap import algorithms, base, creator, tools
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import KFold
 
 
 def KGE_calculation(s, o):

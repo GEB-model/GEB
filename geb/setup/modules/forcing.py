@@ -1,19 +1,21 @@
-import numpy as np
-import xarray as xr
-import pandas as pd
-from datetime import date, timedelta, datetime
 import tempfile
-import xclim.indices as xci
 from calendar import monthrange
-from typing import List
-from tqdm import tqdm
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import List
 
-from ...workflows.io import to_zarr, open_zarr
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import xarray as xr
+import xclim.indices as xci
+from tqdm import tqdm
+
+from ...workflows.io import open_zarr, to_zarr
 
 
 def reproject_and_apply_lapse_rate_temperature(T, DEM, grid_mask, lapse_rate=-0.0065):
-    DEM.raster.mask_nodata().fillna(
+    DEM = DEM.raster.mask_nodata().fillna(
         0
     )  # assuming 0 for missing DEM values above the ocean
     DEM_grid = DEM.raster.reproject_like(grid_mask, method="average")
@@ -64,7 +66,7 @@ def reproject_and_apply_lapse_rate_pressure(
     press_fact : xarray.DataArray
         pressure correction factor
     """
-    DEM.raster.mask_nodata().fillna(
+    DEM = DEM.raster.mask_nodata().fillna(
         0
     )  # assuming 0 for missing DEM values above the ocean
     DEM_grid = DEM.raster.reproject_like(grid_mask, method="average")
@@ -175,46 +177,94 @@ def process_ERA5(variable, folder, starttime, endtime, bounds, logger):
     return da
 
 
+def plot_timeline(da, data, name, ax):
+    ax.plot(data.time, data)
+    ax.set_xlabel("Time")
+    if "units" in da.attrs:
+        ax.set_ylabel(da.attrs["units"])
+    ax.set_xlim(data.time[0], data.time[-1])
+    ax.set_ylim(data.min(), data.max() * 1.1)
+    ax.set_title(name)
+
+
 class Forcing:
     def __init__(self):
         pass
 
-    def set_pr_hourly(self, pr_hourly, *args, **kwargs):
-        self.set_other(
-            pr_hourly, name="climate/pr_hourly", *args, **kwargs, time_chunksize=7 * 24
-        )
+    def plot_forcing(self, da, name):
+        fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
-    def set_pr(self, pr, *args, **kwargs):
-        self.set_other(pr, name="climate/pr", *args, **kwargs)
+        data = da.mean(dim=("y", "x"))
 
-    def set_rsds(self, rsds, *args, **kwargs):
-        self.set_other(rsds, name="climate/rsds", *args, **kwargs)
+        # plot entire timeline on the first axis
+        plot_timeline(da, data, name, axes[0])
 
-    def set_rlds(self, rlds, *args, **kwargs):
-        self.set_other(rlds, name="climate/rlds", *args, **kwargs)
+        # plot the first three years on separate axes
+        for i in range(0, 3):
+            year = data.time[0].dt.year + i
+            plot_timeline(
+                da,
+                data.sel(time=da.time.dt.year == year),
+                f"{name} - {year.item()}",
+                axes[i + 1],
+            )
 
-    def set_tas(self, tas, *args, **kwargs):
-        self.set_other(tas, name="climate/tas", *args, **kwargs, byteshuffle=True)
+        plt.savefig(self.root / "other" / (name + ".png"))
 
-    def set_tasmax(self, tasmax, *args, **kwargs):
-        self.set_other(tasmax, name="climate/tasmax", *args, **kwargs, byteshuffle=True)
+    def set_pr_hourly(self, da, *args, **kwargs):
+        name = "climate/pr_hourly"
+        da = self.set_other(da, name=name, *args, **kwargs, time_chunksize=7 * 24)
+        self.plot_forcing(da, name)
 
-    def set_tasmin(self, tasmin, *args, **kwargs):
-        self.set_other(tasmin, name="climate/tasmin", *args, **kwargs, byteshuffle=True)
+    def set_pr(self, da, *args, **kwargs):
+        name = "climate/pr"
+        da = self.set_other(da, name=name, *args, **kwargs)
+        self.plot_forcing(da, name)
 
-    def set_hurs(self, hurs, *args, **kwargs):
-        self.set_other(hurs, name="climate/hurs", *args, **kwargs, byteshuffle=True)
+    def set_rsds(self, da, *args, **kwargs):
+        name = "climate/rsds"
+        da = self.set_other(da, name=name, *args, **kwargs)
+        self.plot_forcing(da, name)
 
-    def set_ps(self, ps, *args, **kwargs):
-        self.set_other(ps, name="climate/ps", *args, **kwargs, byteshuffle=True)
+    def set_rlds(self, da, *args, **kwargs):
+        name = "climate/rlds"
+        da = self.set_other(da, name=name, *args, **kwargs)
+        self.plot_forcing(da, name)
 
-    def set_sfcwind(self, sfcwind, *args, **kwargs):
-        self.set_other(
-            sfcwind, name="climate/sfcwind", *args, **kwargs, byteshuffle=True
-        )
+    def set_tas(self, da, *args, **kwargs):
+        name = "climate/tas"
+        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        self.plot_forcing(da, name)
 
-    def set_SPEI(self, SPEI, *args, **kwargs):
-        self.set_other(SPEI, name="climate/SPEI", *args, **kwargs, byteshuffle=True)
+    def set_tasmax(self, da, *args, **kwargs):
+        name = "climate/tasmax"
+        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        self.plot_forcing(da, name)
+
+    def set_tasmin(self, da, *args, **kwargs):
+        name = "climate/tasmin"
+        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        self.plot_forcing(da, name)
+
+    def set_hurs(self, da, *args, **kwargs):
+        name = "climate/hurs"
+        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        self.plot_forcing(da, name)
+
+    def set_ps(self, da, *args, **kwargs):
+        name = "climate/ps"
+        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        self.plot_forcing(da, name)
+
+    def set_sfcwind(self, da, *args, **kwargs):
+        name = "climate/sfcwind"
+        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        self.plot_forcing(da, name)
+
+    def set_SPEI(self, da, *args, **kwargs):
+        name = "climate/SPEI"
+        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        self.plot_forcing(da, name)
 
     def setup_forcing_era5(self, starttime, endtime):
         target = self.grid["mask"]
@@ -285,7 +335,7 @@ class Forcing:
             bbox=hourly_tas.raster.bounds,
             buffer=100,
             variables=["fabdem"],
-        )
+        ).compute()
 
         hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
             hourly_tas, DEM, target

@@ -1,14 +1,17 @@
-import numpy as np
-import zarr
-import pandas as pd
+import shutil
 from datetime import date
+from time import sleep, time
+
+import numpy as np
+import pandas as pd
 import xarray as xr
-from time import time, sleep
+import zarr
+
 from geb.workflows.io import (
     AsyncForcingReader,
 )
+
 from .testconfig import tmp_folder
-import shutil
 
 
 def zarr_file(varname):

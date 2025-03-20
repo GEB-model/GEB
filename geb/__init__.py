@@ -2,15 +2,16 @@
 
 __version__ = "1.0.0b4"
 
+import faulthandler
 import os
 import platform
 import sys
 from pathlib import Path
-from llvmlite import binding
-from numba import config
-import faulthandler
+
 import xarray as xr
 from dotenv import load_dotenv
+from llvmlite import binding
+from numba import config
 
 # Load environment variables from .env file
 load_dotenv()

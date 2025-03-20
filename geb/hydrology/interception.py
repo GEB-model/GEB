@@ -19,18 +19,19 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-import zarr
 import numpy as np
+import zarr
+
 from geb.workflows import balance_check
 
 from .landcover import (
+    ALL_LAND_COVER_TYPES,
     FOREST,
     GRASSLAND_LIKE,
-    PADDY_IRRIGATED,
     NON_PADDY_IRRIGATED,
-    SEALED,
     OPEN_WATER,
-    ALL_LAND_COVER_TYPES,
+    PADDY_IRRIGATED,
+    SEALED,
 )
 
 

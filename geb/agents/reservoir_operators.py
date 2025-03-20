@@ -1,10 +1,10 @@
 import calendar
 
 import numpy as np
-from .general import AgentBaseClass
-from ..store import DynamicArray
 
 from ..hydrology.lakes_reservoirs import RESERVOIR
+from ..store import DynamicArray
+from .general import AgentBaseClass
 
 IRRIGATION_RESERVOIR = 1
 FLOOD_RESERVOIR = 2

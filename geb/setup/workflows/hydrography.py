@@ -1,7 +1,7 @@
+import geopandas as gpd
 import networkx as nx
 import numpy as np
 import xarray as xr
-import geopandas as gpd
 from rasterio.features import rasterize
 from shapely.geometry import LineString
 

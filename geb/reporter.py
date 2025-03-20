@@ -2,15 +2,15 @@
 """This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `model.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`)."""
 
 import os
-import zarr
-import pandas as pd
-from collections.abc import Iterable
-import numpy as np
 import re
-from honeybees.library.raster import coord_to_pixel
-from pathlib import Path
+from collections.abc import Iterable
 from operator import attrgetter
+from pathlib import Path
 
+import numpy as np
+import pandas as pd
+import zarr
+from honeybees.library.raster import coord_to_pixel
 from honeybees.reporter import Reporter as ABMReporter
 
 

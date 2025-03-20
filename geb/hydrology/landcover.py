@@ -22,6 +22,7 @@
 import numpy as np
 import zarr
 from numba import njit
+
 from geb.workflows import TimingModule, balance_check
 
 # All natural areas MUST be before the sealed and water areas

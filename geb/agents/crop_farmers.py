@@ -1,44 +1,40 @@
 # -*- coding: utf-8 -*-
-import math
-from datetime import datetime
-import copy
-import os
 import calendar
+import copy
+import math
+import os
+from datetime import datetime
 from typing import Tuple, Union
 
+import numpy as np
 import pandas as pd
-from scipy.stats import genextreme
+from honeybees.library.neighbors import find_neighbors
+from honeybees.library.raster import pixels_to_coords, sample_from_map
+from numba import njit
 from scipy.optimize import curve_fit
+from scipy.stats import genextreme
 
 from geb.workflows import TimingModule
 
-import numpy as np
-from numba import njit
-
-from ..workflows import balance_check
-
-from honeybees.library.raster import pixels_to_coords, sample_from_map
-from honeybees.library.neighbors import find_neighbors
-
 from ..data import (
-    load_regional_crop_data_from_dict,
     load_crop_data,
     load_economic_data,
+    load_regional_crop_data_from_dict,
 )
+from ..HRUs import load_grid
+from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from ..store import DynamicArray
+from ..workflows import balance_check
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
-from ..store import DynamicArray
-from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
-from ..HRUs import load_grid
 from .workflows.crop_farmers import (
-    get_farmer_HRUs,
-    farmer_command_area,
-    get_farmer_groundwater_depth,
     abstract_water,
     crop_profit_difference_njit,
+    farmer_command_area,
+    get_farmer_groundwater_depth,
+    get_farmer_HRUs,
     plant,
 )
-
 
 NO_IRRIGATION = -1
 CHANNEL_IRRIGATION = 0
@@ -2110,8 +2106,8 @@ class CropFarmers(AgentBaseClass):
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from scipy.optimize import curve_fit
         import numpy as np
+        from scipy.optimize import curve_fit
 
         # Create unique groups based on agent properties
         crop_elevation_group = self.create_unique_groups(10)

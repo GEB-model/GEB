@@ -1,18 +1,18 @@
+import numpy as np
+
 from geb.agents.crop_farmers import (
+    advance_crop_rotation_year,
     cumulative_mean,
     shift_and_update,
-    advance_crop_rotation_year,
 )
 from geb.agents.workflows.crop_farmers import (
+    adjust_irrigation_to_limit,
     get_deficit_between_dates,
     get_future_deficit,
-    adjust_irrigation_to_limit,
-    withdraw_groundwater,
     withdraw_channel,
+    withdraw_groundwater,
     withdraw_reservoir,
 )
-
-import numpy as np
 
 
 def test_cumulative_mean():

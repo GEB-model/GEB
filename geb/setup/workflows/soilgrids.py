@@ -1,12 +1,12 @@
-import xarray as xr
 import numpy as np
+import xarray as xr
 from pyresample import geometry
-from pyresample.resampler import resample_blocks
 from pyresample.gradient import (
-    gradient_resampler_indices_block,
     block_bilinear_interpolator,
     block_nn_interpolator,
+    gradient_resampler_indices_block,
 )
+from pyresample.resampler import resample_blocks
 
 
 def get_area_definition(da):

@@ -4,80 +4,78 @@ Notes:
 - All prices are in nominal USD (face value) for their respective years. That means that the prices are not adjusted for inflation.
 """
 
-from tqdm import tqdm
-from pathlib import Path
-import hydromt.workflows
-from datetime import datetime
-from typing import Union, Dict, List, Optional
-import logging
-import os
 import inspect
+import json
+import logging
 import math
-import requests
+import os
 import time
 import zipfile
-import json
 from collections import defaultdict
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 from urllib.parse import urlparse
+
+import geopandas as gpd
+import hydromt.workflows
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-from affine import Affine
-from rasterio.env import defenv
-import xarray as xr
-from dateutil.relativedelta import relativedelta
-from contextlib import contextmanager
-from scipy.ndimage import value_indices
 import pyflwdir
 import rasterio
-
-from hydromt.exceptions import NoDataException
+import requests
+import xarray as xr
+from affine import Affine
+from dateutil.relativedelta import relativedelta
+from honeybees.library.raster import pixels_to_coords, sample_from_map
 from hydromt.data_catalog import DataCatalog
-
-from honeybees.library.raster import sample_from_map, pixels_to_coords
+from hydromt.exceptions import NoDataException
 from isimip_client.client import ISIMIPClient
-
-from .workflows.general import (
-    repeat_grid,
-    clip_with_grid,
-    pad_xy,
-    calculate_cell_area,
-    fetch_and_save,
-    bounds_are_within,
-)
-from .workflows.farmers import get_farm_locations, create_farms, get_farm_distribution
-from .workflows.population import load_GLOPOP_S
-from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
-from .workflows.soilgrids import load_soilgrids
-from .workflows.conversions import (
-    M49_to_ISO3,
-    SUPERWELL_NAME_TO_ISO3,
-    GLOBIOM_NAME_TO_ISO3,
-    COUNTRY_NAME_TO_ISO3,
-)
-from .modules.forcing import Forcing
-
-from .workflows.hydrography import (
-    get_upstream_subbasin_ids,
-    get_subbasin_id_from_coordinate,
-    get_sink_subbasin_id_for_geom,
-    get_subbasins_geometry,
-    get_river_graph,
-    get_downstream_subbasins,
-    get_rivers,
-    create_river_raster_from_river_lines,
-    get_SWORD_translation_IDs_and_lenghts,
-    get_SWORD_river_widths,
-)
-from ..workflows.io import to_zarr, open_zarr
+from rasterio.env import defenv
+from scipy.ndimage import value_indices
+from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
+    FIELD_EXPANSION_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
-    IRRIGATION_EFFICIENCY_ADAPTATION,
-    FIELD_EXPANSION_ADAPTATION,
 )
-from geb.hydrology.lakes_reservoirs import RESERVOIR, LAKE
+from geb.hydrology.lakes_reservoirs import LAKE, RESERVOIR
+
+from ..workflows.io import open_zarr, to_zarr
+from .modules.forcing import Forcing
+from .workflows.conversions import (
+    COUNTRY_NAME_TO_ISO3,
+    GLOBIOM_NAME_TO_ISO3,
+    SUPERWELL_NAME_TO_ISO3,
+    M49_to_ISO3,
+)
+from .workflows.crop_calendars import parse_MIRCA2000_crop_calendar
+from .workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
+from .workflows.general import (
+    bounds_are_within,
+    calculate_cell_area,
+    clip_with_grid,
+    fetch_and_save,
+    pad_xy,
+    repeat_grid,
+)
+from .workflows.hydrography import (
+    create_river_raster_from_river_lines,
+    get_downstream_subbasins,
+    get_river_graph,
+    get_rivers,
+    get_sink_subbasin_id_for_geom,
+    get_subbasin_id_from_coordinate,
+    get_subbasins_geometry,
+    get_SWORD_river_widths,
+    get_SWORD_translation_IDs_and_lenghts,
+    get_upstream_subbasin_ids,
+)
+from .workflows.population import load_GLOPOP_S
+from .workflows.soilgrids import load_soilgrids
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
@@ -5169,31 +5167,6 @@ class GEBModel(Forcing):
             time_chunksize=1e99,  # no chunking
         )
 
-    def write_other_to_zarr(
-        self,
-        var,
-        da,
-        y_chunksize=XY_CHUNKSIZE,
-        x_chunksize=XY_CHUNKSIZE,
-        time_chunksize=1,
-        byteshuffle=False,
-    ) -> None:
-        self.logger.info(f"Write {var}")
-
-        destination = Path("other") / (var + ".zarr")
-        self.files["other"][var] = destination
-
-        dst_file = Path(self.root, destination)
-        return to_zarr(
-            da,
-            dst_file,
-            x_chunksize=x_chunksize,
-            y_chunksize=y_chunksize,
-            time_chunksize=time_chunksize,
-            byteshuffle=byteshuffle,
-            crs=4326,
-        )
-
     def set_table(self, table, name, write=True):
         self.table[name] = table
         if write:
@@ -5331,7 +5304,7 @@ class GEBModel(Forcing):
 
     def set_other(
         self,
-        data,
+        da,
         name: str,
         write=True,
         x_chunksize=XY_CHUNKSIZE,
@@ -5339,18 +5312,26 @@ class GEBModel(Forcing):
         time_chunksize=1,
         byteshuffle=False,
     ):
-        assert isinstance(data, xr.DataArray)
+        assert isinstance(da, xr.DataArray)
+
         if write:
-            data = self.write_other_to_zarr(
-                name,
-                data,
+            self.logger.info(f"Write {name}")
+
+            fp = Path("other") / (name + ".zarr")
+            self.files["other"][name] = fp
+
+            dst_file = Path(self.root, fp)
+            da = to_zarr(
+                da,
+                dst_file,
                 x_chunksize=x_chunksize,
                 y_chunksize=y_chunksize,
                 time_chunksize=time_chunksize,
                 byteshuffle=byteshuffle,
+                crs=4326,
             )
-        self.other[name] = data
-        return self.files["other"][name]
+        self.other[name] = da
+        return self.other[name]
 
     def _set_grid(
         self,

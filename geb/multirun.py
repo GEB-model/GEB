@@ -5,18 +5,18 @@
 Sensitivity analysis for the GEB model
 """
 
-import os
-import shutil
-import random
-import string
-import numpy as np
-from copy import deepcopy
-import signal
-import yaml
-from functools import wraps
-
 import multiprocessing
-from subprocess import Popen, PIPE
+import os
+import random
+import shutil
+import signal
+import string
+from copy import deepcopy
+from functools import wraps
+from subprocess import PIPE, Popen
+
+import numpy as np
+import yaml
 
 
 def handle_ctrl_c(func):

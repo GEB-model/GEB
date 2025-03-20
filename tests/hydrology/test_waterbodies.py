@@ -1,18 +1,18 @@
 import math
 
-import numpy as np
 import matplotlib.pyplot as plt
-
-from ..testconfig import output_folder
+import numpy as np
 
 from geb.hydrology.lakes_reservoirs import (
+    estimate_lake_outflow,
     estimate_outflow_height,
     get_lake_factor,
-    get_river_width,
     get_lake_height_above_outflow,
-    estimate_lake_outflow,
     get_lake_outflow_and_storage,
+    get_river_width,
 )
+
+from ..testconfig import output_folder
 
 
 def test_estimate_initial_lake_storage_and_outflow_height():

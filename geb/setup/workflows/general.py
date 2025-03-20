@@ -1,15 +1,16 @@
 import os
 import shutil
 import tempfile
-import requests
-from tqdm import tqdm
 import time
-import pandas as pd
+from collections.abc import Mapping
 from datetime import date
 from typing import Any, Union
-import xarray
+
 import numpy as np
-from collections.abc import Mapping
+import pandas as pd
+import requests
+import xarray
+from tqdm import tqdm
 
 
 def repeat_grid(data, factor):

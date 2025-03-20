@@ -19,14 +19,16 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-from .subroutines import (
-    define_river_network,
-    upstreamArea,
-    kinematic,
-)
 import numpy as np
+
 from geb.workflows import balance_check
-from .subroutines import PIT
+
+from .subroutines import (
+    PIT,
+    define_river_network,
+    kinematic,
+    upstreamArea,
+)
 
 
 def get_channel_ratio(river_width, river_length, cell_area):

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-from typing import Union
-from honeybees.artists import Artists as honeybeesArtists
-import numpy as np
 import re
 from operator import attrgetter
+from typing import Union
+
+import numpy as np
+from honeybees.artists import Artists as honeybeesArtists
 
 from geb.store import DynamicArray
 

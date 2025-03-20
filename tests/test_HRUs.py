@@ -1,5 +1,5 @@
-import pytest
 import numpy as np
+import pytest
 
 from geb.HRUs import to_grid, to_HRU
 

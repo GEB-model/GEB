@@ -1,24 +1,25 @@
-import numpy as np
-import geopandas as gpd
 import calendar
-from .general import downscale_volume, AgentBaseClass
-from ..store import DynamicArray
-from ..hydrology.landcover import (
-    SEALED,
-    FOREST,
-)
-import pandas as pd
-from os.path import join
-from damagescanner.core import object_scanner
 import json
-import rioxarray
-from rasterio.features import shapes
-from shapely.geometry import shape
-from .decision_module_flood import DecisionModule
-from shapely.geometry import Point
+from os.path import join
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
 import pyproj
+import rioxarray
+from damagescanner.core import object_scanner
 from honeybees.library.raster import sample_from_map
+from rasterio.features import shapes
 from scipy import interpolate
+from shapely.geometry import Point, shape
+
+from ..hydrology.landcover import (
+    FOREST,
+    SEALED,
+)
+from ..store import DynamicArray
+from .decision_module_flood import DecisionModule
+from .general import AgentBaseClass, downscale_volume
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
@@ -536,10 +537,10 @@ class Households(AgentBaseClass):
 
     def spinup(self):
         self.var = self.model.store.create_bucket("agents.households.var")
-        self.load_objects()
-        self.load_max_damage_values()
-        self.load_damage_curves()
         if self.config["adapt"]:
+            self.load_objects()
+            self.load_max_damage_values()
+            self.load_damage_curves()
             self.assign_household_attributes()
 
         super().__init__()

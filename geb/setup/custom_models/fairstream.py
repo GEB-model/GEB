@@ -1,30 +1,24 @@
-from ..geb import GEBModel
-
-import numpy as np
 import zipfile
 from pathlib import Path
-import pandas as pd
+
 import matplotlib.pyplot as plt
-
-from scipy.stats import norm
-from pgmpy.estimators import K2Score
-from pgmpy.models import BayesianNetwork
-from pgmpy.estimators import BayesianEstimator
-from pgmpy.sampling import BayesianModelSampling
+import numpy as np
+import pandas as pd
+from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
 from pgmpy.factors.discrete import State
-
-from pgmpy.estimators import HillClimbSearch
-
-from scipy.stats import chi2_contingency
-
-from ..workflows.general import repeat_grid
+from pgmpy.models import BayesianNetwork
+from pgmpy.sampling import BayesianModelSampling
+from scipy.stats import chi2_contingency, norm
 
 from geb.agents.crop_farmers import (
+    FIELD_EXPANSION_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
-    IRRIGATION_EFFICIENCY_ADAPTATION,
-    FIELD_EXPANSION_ADAPTATION,
 )
+
+from ..geb import GEBModel
+from ..workflows.general import repeat_grid
 
 
 class Survey:

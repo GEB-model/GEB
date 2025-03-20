@@ -20,19 +20,20 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-from .soil import (
-    get_root_ratios,
-    get_maximum_water_content,
-    get_critical_water_level,
-    get_available_water,
-    get_fraction_easily_available_soil_water,
-    get_crop_group_number,
-)
-from .landcover import PADDY_IRRIGATED, NON_PADDY_IRRIGATED
-from .lakes_reservoirs import RESERVOIR
-from geb.HRUs import load_grid
 
+from geb.HRUs import load_grid
 from geb.workflows import TimingModule, balance_check
+
+from .lakes_reservoirs import RESERVOIR
+from .landcover import NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from .soil import (
+    get_available_water,
+    get_critical_water_level,
+    get_crop_group_number,
+    get_fraction_easily_available_soil_water,
+    get_maximum_water_content,
+    get_root_ratios,
+)
 
 
 class WaterDemand:

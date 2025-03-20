@@ -14,6 +14,7 @@
 import os
 import sys
 from pathlib import Path
+
 import pypandoc
 
 sys.path.insert(0, os.path.abspath(".."))

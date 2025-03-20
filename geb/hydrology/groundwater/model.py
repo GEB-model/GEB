@@ -19,18 +19,19 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-from time import time
-from contextlib import contextmanager
+import hashlib
+import json
 import os
+import platform
+from contextlib import contextmanager
 from pathlib import Path
+from time import time
+
+import flopy
 import numpy as np
 from numba import njit
-from xmipy import XmiWrapper
-import flopy
-import json
-import hashlib
-import platform
 from pyproj import CRS, Transformer
+from xmipy import XmiWrapper
 
 MODFLOW_VERSION = "6.5.0"
 

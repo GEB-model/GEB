@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
-from typing import Union
-from numba import njit
-import rasterio
-import geopandas as gpd
-import warnings
 import math
-from affine import Affine
+import warnings
+from typing import Union
+
+import geopandas as gpd
+import numpy as np
+import rasterio
 import xarray as xr
 import zarr
-import numpy as np
-from geb.workflows.io import AsyncForcingReader
+from affine import Affine
+from numba import njit
 from scipy.spatial import cKDTree
+
+from geb.workflows.io import AsyncForcingReader
 
 
 def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
