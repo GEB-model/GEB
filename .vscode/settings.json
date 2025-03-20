@@ -14,7 +14,6 @@
         "source.fixAll": "always"
     },
     "files.autoSave": "onFocusChange",
-    "python.defaultInterpreterPath": ".venv/bin/python",
     "files.exclude": {
         ".ruff_cache": true,
         ".pytest_cache": true,

@@ -12,13 +12,16 @@ or with [uv](https://docs.astral.sh/uv/):
 uv pip install geb --prerelease=allow
 ```
 
+### Development
+
 To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use [uv](https://docs.astral.sh/uv/) to install the dependencies. Execute in the GEB folder (where `pyproject.toml` is located):
 
 ```bash
-uv sync
+git clone git@github.com:GEB-model/GEB.git
+cd GEB
 ```
 
-This will create a viritual environment (`.venv`) in the GEB folder. Alternatively, you can install GEB in editable mode. Execute in the GEB folder (where `pyproject.toml` is located):
+This will create a virtual environment (`.venv`) in the GEB folder. Alternatively, you can install GEB in editable mode. Execute in the GEB folder (where `pyproject.toml` is located):
 
 ```bash
 pip install -e .
