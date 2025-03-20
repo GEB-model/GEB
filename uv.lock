@@ -962,7 +962,7 @@ requires-dist = [
     { name = "setuptools", specifier = ">=75.8.0" },
     { name = "tbb", specifier = ">=2022.0.0" },
     { name = "tqdm", specifier = ">=4.66.1" },
-    { name = "xarray", specifier = ">=2024.3.0" },
+    { name = "xarray", specifier = ">=2025.3.0" },
     { name = "xclim", specifier = ">=0.52.0" },
     { name = "xmipy", specifier = ">=1.5.0" },
     { name = "zarr", specifier = ">=3.0.5" },
