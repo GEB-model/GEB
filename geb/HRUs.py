@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-from typing import Union
-from numba import njit
-import rasterio
-import geopandas as gpd
-import warnings
 import math
-from affine import Affine
+import warnings
+from typing import Union
+
+import geopandas as gpd
+import numpy as np
+import rasterio
 import xarray as xr
 import zarr
-import numpy as np
-import zarr.convenience
-from geb.workflows import AsyncForcingReader
+from affine import Affine
+from numba import njit
 from scipy.spatial import cKDTree
+
+from geb.workflows.io import AsyncForcingReader
 
 
 def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
@@ -46,24 +47,25 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
                 return data, src.transform, src.crs
             else:
                 return data
-    elif filepath.suffixes == [".zarr", ".zip"]:
-        ds = zarr.convenience.open_group(filepath)
-        data = ds["data"][:]
+    elif filepath.suffix == ".zarr":
+        store = zarr.storage.LocalStore(filepath, read_only=True)
+        group = zarr.open_group(store, mode="r")
+        data = group[filepath.stem][:]
         data = data.astype(np.float32) if data.dtype == np.float64 else data
         if return_transform_and_crs:
-            x = ds.x[:]
-            y = ds.y[:]
+            x = group["x"][:]
+            y = group["y"][:]
             x_diff = np.diff(x[:]).mean()
             y_diff = np.diff(y[:]).mean()
             transform = Affine(
                 a=x_diff,
                 b=0,
-                c=x[:][0] - x_diff / 2,
+                c=x[0] - x_diff / 2,
                 d=0,
                 e=y_diff,
-                f=ds.y[:][0] - y_diff / 2,
+                f=y[0] - y_diff / 2,
             )
-            wkt = ds.spatial_ref.attrs["spatial_ref"]
+            wkt = group[filepath.stem].attrs["_CRS"]
             return data, transform, wkt
         else:
             return data
@@ -73,6 +75,16 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
 
 def load_geom(filepath):
     return gpd.read_parquet(filepath)
+
+
+def load_forcing_xr(filepath):
+    return xr.open_dataset(
+        zarr.storage.LocalStore(
+            filepath,
+            read_only=True,
+        ),
+        engine="zarr",
+    )
 
 
 @njit(cache=True)
@@ -226,7 +238,7 @@ class Grid(BaseVariables):
 
         self.scaling = 1
         mask, self.transform, self.crs = load_grid(
-            self.model.files["grid"]["areamaps/grid_mask"],
+            self.model.files["grid"]["mask"],
             return_transform_and_crs=True,
         )
         self.mask = mask.astype(bool)
@@ -251,9 +263,7 @@ class Grid(BaseVariables):
         assert math.isclose(self.transform.a, -self.transform.e)
         self.cell_size = self.transform.a
 
-        self.cell_area_uncompressed = load_grid(
-            self.model.files["grid"]["areamaps/cell_area"]
-        )
+        self.cell_area_uncompressed = load_grid(self.model.files["grid"]["cell_area"])
 
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
@@ -355,7 +365,7 @@ class Grid(BaseVariables):
 
     def load_forcing_ds(self, name):
         reader = AsyncForcingReader(
-            self.model.files["forcing"][f"climate/{name}"],
+            self.model.files["other"][f"climate/{name}"],
             name,
         )
         assert reader.ds["y"][0] > reader.ds["y"][-1]
@@ -447,7 +457,7 @@ class Grid(BaseVariables):
     @property
     def spei_uncompressed(self):
         if not hasattr(self, "spei_ds"):
-            self.spei_ds = self.load_forcing_ds("spei")
+            self.spei_ds = self.load_forcing_ds("SPEI")
 
         current_time = self.model.current_time
 
@@ -504,7 +514,7 @@ class HRUs(BaseVariables):
         self.data = data
         self.model = model
 
-        subgrid_mask = load_grid(self.model.files["subgrid"]["areamaps/sub_grid_mask"])
+        subgrid_mask = load_grid(self.model.files["subgrid"]["mask"])
         submask_height, submask_width = subgrid_mask.shape
 
         self.scaling = submask_height // self.data.grid.shape[0]
@@ -933,25 +943,20 @@ class Data:
         )
 
     def load_water_demand(self):
-        self.model.domestic_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/domestic_water_consumption"],
-            engine="zarr",
+        self.model.domestic_water_consumption_ds = load_forcing_xr(
+            self.model.files["other"]["water_demand/domestic_water_consumption"]
         )
-        self.model.domestic_water_demand_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/domestic_water_demand"],
-            engine="zarr",
+        self.model.domestic_water_demand_ds = load_forcing_xr(
+            self.model.files["other"]["water_demand/domestic_water_demand"]
         )
-        self.model.industry_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/industry_water_consumption"],
-            engine="zarr",
+        self.model.industry_water_consumption_ds = load_forcing_xr(
+            self.model.files["other"]["water_demand/industry_water_consumption"]
         )
-        self.model.industry_water_demand_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/industry_water_demand"],
-            engine="zarr",
+        self.model.industry_water_demand_ds = load_forcing_xr(
+            self.model.files["other"]["water_demand/industry_water_demand"]
         )
-        self.model.livestock_water_consumption_ds = xr.open_dataset(
-            self.model.files["forcing"]["water_demand/livestock_water_consumption"],
-            engine="zarr",
+        self.model.livestock_water_consumption_ds = load_forcing_xr(
+            self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
 
     def to_HRU(self, *, data=None, fn=None):

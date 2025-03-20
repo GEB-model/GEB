@@ -1,23 +1,23 @@
 import math
 
-import numpy as np
 import matplotlib.pyplot as plt
-
-from ..testconfig import output_folder
+import numpy as np
 
 from geb.hydrology.lakes_reservoirs import (
+    estimate_lake_outflow,
     estimate_outflow_height,
     get_lake_factor,
-    get_river_width,
     get_lake_height_above_outflow,
-    estimate_lake_outflow,
     get_lake_outflow_and_storage,
+    get_river_width,
 )
+
+from ..testconfig import output_folder
 
 
 def test_estimate_initial_lake_storage_and_outflow_height():
     lake_area = np.array([3_480_000.0])
-    lake_volume = np.array([7_630_000.0])
+    lake_storage = np.array([7_630_000.0])
     avg_outflow = np.array([2.494])
     river_width = get_river_width(avg_outflow)
     lake_factor = get_lake_factor(
@@ -25,19 +25,19 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     )
 
     outflow_height = estimate_outflow_height(
-        lake_volume=lake_volume,
+        lake_storage=lake_storage,
         lake_factor=lake_factor,
         lake_area=lake_area,
         avg_outflow=avg_outflow,
     )
 
-    storage = lake_volume.copy()
+    storage = lake_storage.copy()
     height_above_outflow = get_lake_height_above_outflow(
         storage=storage, lake_area=lake_area, outflow_height=outflow_height
     )
 
     assert math.isclose(
-        ((height_above_outflow + outflow_height) * lake_area)[0], lake_volume[0]
+        ((height_above_outflow + outflow_height) * lake_area)[0], lake_storage[0]
     )
     outflow = estimate_lake_outflow(
         lake_factor=lake_factor, height_above_outflow=height_above_outflow
@@ -46,7 +46,7 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     # test if outflow_to_height_above_outflow is indeed the inverse of estimate_lake_outflow
     assert math.isclose(outflow[0], avg_outflow[0])
 
-    storage = np.linspace(0, lake_volume * 1.2, 100)
+    storage = np.linspace(0, lake_storage * 1.2, 100)
     height_above_outflow = get_lake_height_above_outflow(
         storage=storage, lake_area=lake_area, outflow_height=outflow_height
     )
@@ -63,7 +63,7 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     ax_right.plot(storage, outflow, color="blue", label="outflow")
 
     # plot vertical line of initial storage
-    ax_left.axvline(x=lake_volume[0], color="green", linestyle="--")
+    ax_left.axvline(x=lake_storage[0], color="green", linestyle="--")
 
     # plot horizontal line of average outflow
     ax_right.axhline(y=avg_outflow[0], color="black", linestyle="--")
@@ -80,7 +80,7 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     plt.savefig(output_folder / "estimate_outflow_height.png")
     plt.close()
 
-    storage = lake_volume.copy()
+    storage = lake_storage.copy()
 
     dt = 3600
 
@@ -115,7 +115,7 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(15, 5))
 
     ax0.plot(new_storages, color="red", label="storage (red)")
-    ax0.axhline(y=lake_volume[0], color="red", linestyle="--")
+    ax0.axhline(y=lake_storage[0], color="red", linestyle="--")
     ax0.axhline(y=outflow_height[0] * lake_area[0], color="black", linestyle="--")
 
     ax1.plot(new_outflows, color="blue", label="outflow (blue)")

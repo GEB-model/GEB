@@ -19,17 +19,19 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-import numpy as np
 from pathlib import Path
-from geb.workflows import TimingModule, balance_check
-from numba import njit, prange, float32
+
+import numpy as np
+from numba import float32, njit, prange
 
 from geb.HRUs import load_grid
+from geb.workflows import TimingModule, balance_check
+
 from .landcover import (
     FOREST,
     GRASSLAND_LIKE,
-    PADDY_IRRIGATED,
     NON_PADDY_IRRIGATED,
+    PADDY_IRRIGATED,
     SEALED,
 )
 
@@ -1021,13 +1023,6 @@ class Soil(object):
             ),
             method="mean",
         )
-        self.HRU.var.sand = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["soil/sand"],
-                layer=None,
-            ),
-            method="mean",
-        )
         self.HRU.var.silt = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/silt"],
@@ -1043,6 +1038,10 @@ class Soil(object):
             method="mean",
         )
 
+        # calculate sand content based on silt and clay content (together they should sum to 100%)
+        self.HRU.var.sand = 100 - self.HRU.var.silt - self.HRU.var.clay
+
+        # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
         is_top_soil = np.zeros_like(self.HRU.var.clay, dtype=bool)
         is_top_soil[0:3] = True
 
@@ -1102,7 +1101,7 @@ class Soil(object):
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
         natural_crop_groups = self.hydrology.grid.load(
-            self.model.files["grid"]["soil/cropgrp"]
+            self.model.files["grid"]["soil/crop_group"]
         )
         self.HRU.var.natural_crop_groups = self.hydrology.to_HRU(
             data=natural_crop_groups
@@ -1120,7 +1119,7 @@ class Soil(object):
         # b = max( (oh - o0)/(oh + omax), 0.01)
         # oh: the standard deviation of orography, o0: minimum std dev, omax: max std dev
         elevation_std = self.grid.load(
-            self.model.files["grid"]["landsurface/topo/elevation_STD"]
+            self.model.files["grid"]["landsurface/elevation_standard_deviation"]
         )
         elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
         arnoBetaOro = (elevation_std - 10.0) / (elevation_std + 1500.0)

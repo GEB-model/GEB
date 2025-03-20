@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-from .households import Households
 from .crop_farmers import CropFarmers
-from .livestock_farmers import LiveStockFarmers
+from .government import Government
+from .households import Households
 from .industry import Industry
+from .livestock_farmers import LiveStockFarmers
+from .market import Market
 from .reservoir_operators import ReservoirOperators
 from .town_managers import TownManagers
-from .government import Government
-from .market import Market
 
 
 class Agents:

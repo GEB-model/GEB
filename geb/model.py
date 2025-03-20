@@ -1,20 +1,22 @@
+import copy
 import datetime
 import shutil
 from pathlib import Path
 from time import time
-import copy
-from dateutil.relativedelta import relativedelta
-import xarray as xr
 
+import numpy as np
+import xarray as xr
+from dateutil.relativedelta import relativedelta
 from honeybees.model import Model as ABM_Model
 
-from geb.store import Store
-from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
-from .hydrology import Hydrology
 from geb.hazards.driver import HazardDriver
+from geb.reporter import Reporter
+from geb.store import Store
+
 from .HRUs import load_geom
+from .hydrology import Hydrology
 
 
 class GEBModel(HazardDriver, ABM_Model):
@@ -282,7 +284,7 @@ class GEBModel(HazardDriver, ABM_Model):
         }
 
         self.var = self.store.create_bucket("var")
-        self.var.regions = load_geom(self.files["geoms"]["areamaps/regions"])
+        self.var.regions = load_geom(self.files["geoms"]["regions"])
 
         self._initialize(
             report=True,
@@ -328,6 +330,15 @@ class GEBModel(HazardDriver, ABM_Model):
             day: current day of the year.
         """
         return self.current_time.timetuple().tm_yday
+
+    @property
+    def current_time_unix_s(self) -> int:
+        """Gets the current time in unix seconds.
+
+        Returns:
+            time: current time in unix seconds.
+        """
+        return np.datetime64(self.current_time, "s").astype(np.int64).item()
 
     @property
     def simulation_root(self) -> Path:
@@ -397,7 +408,7 @@ class GEBModel(HazardDriver, ABM_Model):
         ):
             Hydrology.finalize(self)
 
-            from geb.workflows import all_async_readers
+            from geb.workflows.io import all_async_readers
 
             for reader in all_async_readers:
                 reader.close()

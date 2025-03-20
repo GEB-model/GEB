@@ -6,7 +6,6 @@ general:
   # start of the spinup time (YYYY-MM-DD).
   spinup_time: 2000-01-01
   input_folder: input/
-  original_data: ../../../original_data/
   preprocessing_folder: preprocessing/
   report_folder: report/
   name: default

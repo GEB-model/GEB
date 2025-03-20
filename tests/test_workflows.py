@@ -1,24 +1,23 @@
+import shutil
+from datetime import date
+from time import sleep, time
+
 import numpy as np
 import pandas as pd
-from datetime import date
 import xarray as xr
-from time import time, sleep
-from geb.workflows import (
+import zarr
+
+from geb.workflows.io import (
     AsyncForcingReader,
 )
-from numcodecs import Blosc
 
 from .testconfig import tmp_folder
-
-compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
 
 def zarr_file(varname):
     size = 1000
     # Create a temporary zarr file for testing
-    zarr = tmp_folder / f"{varname}.zarr.zip"
-    if zarr.exists():
-        zarr.unlink()
+    file_path = tmp_folder / f"{varname}.zarr"
 
     periods = 100
 
@@ -33,18 +32,18 @@ def zarr_file(varname):
         coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)},
     )
 
+    store = zarr.storage.LocalStore(file_path, read_only=False)
     ds.to_zarr(
-        zarr,
+        store,
         mode="w",
         encoding={
             varname: {
-                # "compressor": compressor,
                 "chunks": (1, size, size),
             }
         },
-        # zarr_version=3,
+        consolidated=False,
     )
-    return zarr
+    return file_path
 
 
 def test_read_timestep():
@@ -114,6 +113,6 @@ def test_read_timestep():
     reader2.close()
     reader3.close()
 
-    temperature_file.unlink()
-    precipitation_file.unlink()
-    pressure_file.unlink()
+    shutil.rmtree(temperature_file)
+    shutil.rmtree(precipitation_file)
+    shutil.rmtree(pressure_file)

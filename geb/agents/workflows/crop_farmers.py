@@ -1,6 +1,7 @@
-from numba import njit
-import numpy as np
 from typing import Union
+
+import numpy as np
+from numba import njit
 
 
 @njit(cache=True, inline="always")

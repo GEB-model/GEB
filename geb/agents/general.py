@@ -1,10 +1,11 @@
-from numba import njit
-from typing import Tuple
 import math
-import numpy as np
-from geb.store import DynamicArray
+from typing import Tuple
 
+import numpy as np
 from honeybees.agents import AgentBaseClass as HoneybeesAgentBaseClass
+from numba import njit
+
+from geb.store import DynamicArray
 
 
 @njit(cache=True)

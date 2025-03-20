@@ -1,0 +1,21 @@
+{
+    "python.testing.pytestArgs": [
+        ".",
+        "-s"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnPaste": true,
+    "editor.formatOnSave": true,
+    "editor.formatOnSaveMode": "file",
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "always",
+        "source.fixAll": "always"
+    },
+    "files.autoSave": "onFocusChange",
+    "files.exclude": {
+        ".ruff_cache": true,
+        ".pytest_cache": true,
+    }
+}

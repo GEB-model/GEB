@@ -1,17 +1,18 @@
-from pathlib import Path
+import json
+import os
+import platform
 from collections import deque
 from datetime import datetime
-import xarray as xr
-import zarr
-import json
-import platform
-import os
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from pyproj import CRS
+import xarray as xr
+import zarr
 
 from ...HRUs import load_geom
+from ...workflows.io import open_zarr, to_zarr
 
 try:
     from geb_hydrodynamics.build_model import build_sfincs
@@ -19,15 +20,15 @@ except ModuleNotFoundError:
     raise ModuleNotFoundError(
         "The 'GEB-hydrodynamics' package is not installed. Please install it by running 'pip install geb-hydrodynamics'."
     )
-from geb_hydrodynamics.sfincs_utils import run_sfincs_simulation
-from geb_hydrodynamics.update_model_forcing import update_sfincs_model_forcing
-from geb_hydrodynamics.run_sfincs_for_return_periods import (
-    run_sfincs_for_return_periods,
-)
-from geb_hydrodynamics.postprocess_model import read_flood_map
 from geb_hydrodynamics.estimate_discharge_for_return_periods import (
     estimate_discharge_for_return_periods,
 )
+from geb_hydrodynamics.postprocess_model import read_flood_map
+from geb_hydrodynamics.run_sfincs_for_return_periods import (
+    run_sfincs_for_return_periods,
+)
+from geb_hydrodynamics.sfincs_utils import run_sfincs_simulation
+from geb_hydrodynamics.update_model_forcing import update_sfincs_model_forcing
 
 
 class SFINCS:
@@ -43,10 +44,9 @@ class SFINCS:
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
-        # set default precipitation file
-        self.precipitation_dataarray = xr.open_dataset(
-            self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
-        )["pr_hourly"]
+        self.precipitation_dataarray = open_zarr(
+            self.model.files["other"]["climate/pr_hourly"]
+        )
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
@@ -71,16 +71,6 @@ class SFINCS:
             return "region"
         else:
             return "all"
-
-    @property
-    def data_catalogs(self):
-        return [
-            str(
-                Path(self.model.config["general"]["input_folder"])
-                / "hydrodynamics"
-                / "data_catalog.yml"
-            )
-        ]
 
     def get_utm_zone(self, region_file):
         region = load_geom(region_file)
@@ -196,16 +186,11 @@ class SFINCS:
 
         discharge_grid = xr.Dataset({"discharge": discharge_grid})
 
-        # Convert the WKT string to a pyproj CRS object
-        crs_obj = CRS.from_wkt(self.hydrology.grid.crs)
-
-        # Now you can safely call to_proj4() on the CRS object
-        discharge_grid.raster.set_crs(crs_obj.to_proj4())
-        tstart = start_time
-        tend = discharge_grid.time[-1] + pd.Timedelta(
+        discharge_grid.raster.set_crs(self.model.crs)
+        end_time = discharge_grid.time[-1] + pd.Timedelta(
             self.model.timestep_length / substeps
         )
-        discharge_grid = discharge_grid.sel(time=slice(tstart, tend))
+        discharge_grid = discharge_grid.sel(time=slice(start_time, end_time))
 
         event_name = self.get_event_name(event)
 
@@ -213,17 +198,13 @@ class SFINCS:
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
             current_event={
-                "tstart": self.to_sfincs_datetime(tstart),
-                "tend": self.to_sfincs_datetime(tend.dt).item(),
+                "tstart": self.to_sfincs_datetime(start_time),
+                "tend": self.to_sfincs_datetime(end_time.dt).item(),
             },
             forcing_method="precipitation",
             discharge_grid=discharge_grid,
             precipitation_grid=self.precipitation,
-            data_catalogs=self.data_catalogs,
-            uparea_discharge_grid=xr.open_dataset(
-                self.model.files["grid"]["routing/upstream_area"],
-                engine="zarr",
-            ),  # .isel(band=0),
+            uparea_discharge_grid=None,
         )
 
     def run_single_event(self, event, start_time):
@@ -243,6 +224,11 @@ class SFINCS:
             model_root=model_root,
             simulation_root=simulation_root,
         )  # xc, yc is for x and y in rotated grid`DD`
+        flood_map = to_zarr(
+            flood_map,
+            self.model.report_folder / "flood_maps" / f"{start_time.isoformat()}.zarr",
+            crs=flood_map.rio.crs,
+        )
         damages = self.flood(flood_map=flood_map)
         return damages
 
@@ -349,9 +335,8 @@ class SFINCS:
 
     @property
     def discharge_spinup_ds(self):
-        ds = xr.open_dataset(
-            Path("report") / "spinup" / "discharge_daily.zarr.zip", engine="zarr"
-        )["discharge_daily"]
+        da = open_zarr(Path("report") / "spinup" / "discharge_daily.zarr")
+
         # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
         # ds = ds.sel(time=slice(start_time, ds.time[-1]))
 
@@ -362,7 +347,7 @@ class SFINCS:
         #         Please run the model for at least 30 years (10 years of data is discarded)."""
         #     )
 
-        return ds
+        return da
 
     @property
     def rivers(self):
@@ -385,22 +370,52 @@ class SFINCS:
         self._precipitation_dataarray = dataarray
 
     @property
+    def land_cover(self):
+        return open_zarr(self.model.files["other"]["landcover/classification"])
+
+    @property
+    def land_cover_mannings_rougness_classification(self):
+        return pd.DataFrame(
+            data=[
+                [10, "Tree cover", 10, 0.12],
+                [20, "Shrubland", 20, 0.05],
+                [30, "Grasland", 30, 0.034],
+                [40, "Cropland", 40, 0.037],
+                [50, "Built-up", 50, 0.1],
+                [60, "Bare / sparse vegetation", 60, 0.023],
+                [70, "Snow and Ice", 70, 0.01],
+                [80, "Permanent water bodies", 80, 0.02],
+                [90, "Herbaceous wetland", 90, 0.035],
+                [95, "Mangroves", 95, 0.07],
+                [100, "Moss and lichen", 100, 0.025],
+                [0, "No data", 0, 0.1],
+            ],
+            columns=["esa_worldcover", "description", "landuse", "N"],
+        )
+
+    @property
     def crs(self):
         crs = self.config["crs"]
         if crs == "auto":
-            crs = self.get_utm_zone(self.model.files["geoms"]["region"])
+            crs = self.get_utm_zone(self.model.files["geoms"]["routing/subbasins"])
         return crs
 
     def get_build_parameters(self, model_root):
         with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
             DEM_config = json.load(f)
+        for entry in DEM_config:
+            entry["elevtn"] = open_zarr(
+                self.model.files["other"][entry["path"]]
+            ).to_dataset(name="elevtn")
+
         return {
             "model_root": model_root,
-            "data_catalogs": self.data_catalogs,
             "region": load_geom(self.model.files["geoms"]["routing/subbasins"]),
-            "DEM_config": DEM_config,
+            "DEMs": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
+            "land_cover": self.land_cover,
+            "land_cover_mannings_rougness_classification": self.land_cover_mannings_rougness_classification,
             "resolution": self.config["resolution"],
             "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
             "crs": self.crs,

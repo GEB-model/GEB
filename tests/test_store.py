@@ -1,8 +1,10 @@
-import pytest
 import os
+
 import numpy as np
+import pytest
 
 from geb.store import DynamicArray
+
 from .testconfig import tmp_folder
 
 

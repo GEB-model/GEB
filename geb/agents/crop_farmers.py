@@ -1,44 +1,40 @@
 # -*- coding: utf-8 -*-
-import math
-from datetime import datetime
-import copy
-import os
 import calendar
+import copy
+import math
+import os
+from datetime import datetime
 from typing import Tuple, Union
 
+import numpy as np
 import pandas as pd
-from scipy.stats import genextreme
+from honeybees.library.neighbors import find_neighbors
+from honeybees.library.raster import pixels_to_coords, sample_from_map
+from numba import njit
 from scipy.optimize import curve_fit
+from scipy.stats import genextreme
 
 from geb.workflows import TimingModule
 
-import numpy as np
-from numba import njit
-
-from ..workflows import balance_check
-
-from honeybees.library.raster import pixels_to_coords, sample_from_map
-from honeybees.library.neighbors import find_neighbors
-
 from ..data import (
-    load_regional_crop_data_from_dict,
     load_crop_data,
     load_economic_data,
+    load_regional_crop_data_from_dict,
 )
+from ..HRUs import load_grid
+from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from ..store import DynamicArray
+from ..workflows import balance_check
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
-from ..store import DynamicArray
-from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
-from ..HRUs import load_grid
 from .workflows.crop_farmers import (
-    get_farmer_HRUs,
-    farmer_command_area,
-    get_farmer_groundwater_depth,
     abstract_water,
     crop_profit_difference_njit,
+    farmer_command_area,
+    get_farmer_groundwater_depth,
+    get_farmer_HRUs,
     plant,
 )
-
 
 NO_IRRIGATION = -1
 CHANNEL_IRRIGATION = 0
@@ -202,22 +198,23 @@ class CropFarmers(AgentBaseClass):
         super().__init__()
 
         self.inflation_rate = load_economic_data(
-            self.model.files["dict"]["economics/inflation_rates"]
+            self.model.files["dict"]["socioeconomics/inflation_rates"]
         )
         # self.lending_rate = load_economic_data(
-        #     self.model.files["dict"]["economics/lending_rates"]
+        #     self.model.files["dict"]["socioeconomics/lending_rates"]
         # )
         self.electricity_cost = load_economic_data(
-            self.model.files["dict"]["economics/electricity_cost"]
+            self.model.files["dict"]["socioeconomics/electricity_cost"]
         )
 
-        self.why_10 = load_economic_data(self.model.files["dict"]["economics/why_10"])
-        self.why_20 = load_economic_data(self.model.files["dict"]["economics/why_20"])
-        self.why_30 = load_economic_data(self.model.files["dict"]["economics/why_30"])
-
-        self.elevation_subgrid = load_grid(
-            self.model.files["MERIT_grid"]["landsurface/topo/subgrid_elevation"],
-            return_transform_and_crs=True,
+        self.why_10 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_10"]
+        )
+        self.why_20 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_20"]
+        )
+        self.why_30 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_30"]
         )
 
         self.crop_prices = load_regional_crop_data_from_dict(
@@ -290,11 +287,9 @@ class CropFarmers(AgentBaseClass):
 
         # load map of all subdistricts
         self.var.subdistrict_map = load_grid(
-            self.model.files["region_subgrid"]["areamaps/region_subgrid"]
+            self.model.files["region_subgrid"]["region_ids"]
         )
-        region_mask = load_grid(
-            self.model.files["region_subgrid"]["areamaps/region_mask"]
-        )
+        region_mask = load_grid(self.model.files["region_subgrid"]["mask"])
         self.HRU_regions_map = np.zeros_like(self.HRU.mask, dtype=np.int8)
         self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
             region_mask == 0
@@ -375,14 +370,14 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
         self.var.risk_aversion[:] = np.load(
-            self.model.files["binary"]["agents/farmers/risk_aversion"]
+            self.model.files["array"]["agents/farmers/risk_aversion"]
         )["data"]
 
         self.var.discount_rate = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
         self.var.discount_rate[:] = np.load(
-            self.model.files["binary"]["agents/farmers/discount_rate"]
+            self.model.files["array"]["agents/farmers/discount_rate"]
         )["data"]
 
         self.var.intention_factor = DynamicArray(
@@ -390,26 +385,18 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.intention_factor[:] = np.load(
-            self.model.files["binary"]["agents/farmers/intention_factor"]
+            self.model.files["array"]["agents/farmers/intention_factor"]
         )["data"]
 
         # Load the region_code of each farmer.
         self.var.region_id = DynamicArray(
-            input_array=np.load(self.model.files["binary"]["agents/farmers/region_id"])[
+            input_array=np.load(self.model.files["array"]["agents/farmers/region_id"])[
                 "data"
             ],
             max_n=self.max_n,
         )
 
-        # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
-        self.var.elevation = DynamicArray(
-            input_array=sample_from_map(
-                self.elevation_subgrid[0],
-                self.var.locations.data,
-                self.elevation_subgrid[1].to_gdal(),
-            ),
-            max_n=self.max_n,
-        )
+        self.var.elevation = self.get_farmer_elevation()
 
         self.var.crop_calendar = DynamicArray(
             n=self.n,
@@ -420,7 +407,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=-1,
         )  # first dimension is the farmers, second is the rotation, third is the crop, planting and growing length
         self.var.crop_calendar[:] = np.load(
-            self.model.files["binary"]["agents/farmers/crop_calendar"]
+            self.model.files["array"]["agents/farmers/crop_calendar"]
         )["data"]
         # assert self.var.crop_calendar[:, :, 0].max() < len(self.var.crop_ids)
 
@@ -431,7 +418,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
         self.var.crop_calendar_rotation_years[:] = np.load(
-            self.model.files["binary"]["agents/farmers/crop_calendar_rotation_years"]
+            self.model.files["array"]["agents/farmers/crop_calendar_rotation_years"]
         )["data"]
 
         self.var.current_crop_calendar_rotation_year_index = DynamicArray(
@@ -447,7 +434,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.adaptations = DynamicArray(
-            np.load(self.model.files["binary"]["agents/farmers/adaptations"])["data"],
+            np.load(self.model.files["array"]["agents/farmers/adaptations"])["data"],
             max_n=self.max_n,
             extra_dims_names=("adaptation_type",),
         )
@@ -623,7 +610,7 @@ class CropFarmers(AgentBaseClass):
             n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1
         )
         self.var.household_size[:] = np.load(
-            self.model.files["binary"]["agents/farmers/household_size"]
+            self.model.files["array"]["agents/farmers/household_size"]
         )["data"]
 
         self.var.yield_ratios_drought_event = DynamicArray(
@@ -2119,8 +2106,8 @@ class CropFarmers(AgentBaseClass):
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from scipy.optimize import curve_fit
         import numpy as np
+        from scipy.optimize import curve_fit
 
         # Create unique groups based on agent properties
         crop_elevation_group = self.create_unique_groups(10)
@@ -4253,3 +4240,15 @@ class CropFarmers(AgentBaseClass):
     @n.setter
     def n(self, value):
         self.var._n = value
+
+    def get_farmer_elevation(self):
+        # get elevation per farmer
+        elevation_subgrid = load_grid(
+            self.model.files["subgrid"]["landsurface/elevation"],
+        )
+        decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)
+        mask = decompressed_land_owners != -1
+        return np.bincount(
+            decompressed_land_owners[mask],
+            weights=elevation_subgrid[mask],
+        ) / np.bincount(decompressed_land_owners[mask])

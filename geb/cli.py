@@ -1,30 +1,28 @@
-import click
+import cProfile
+import functools
+import importlib
+import logging
 import os
 import platform
 import subprocess
-import tempfile
 import sys
-import cProfile
-from pstats import Stats
+import tempfile
 from operator import attrgetter
-import yaml
-import logging
-import functools
 from pathlib import Path
-import warnings
-import importlib
+from pstats import Stats
 
+import click
+import yaml
+from honeybees.visualization.canvas import Canvas
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
-from honeybees.visualization.canvas import Canvas
-
 from hydromt.config import configread
-from geb import __version__
-from geb import setup
-from geb.model import GEBModel
+
+from geb import __version__, setup
 from geb.calibrate import calibrate as geb_calibrate
-from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
+from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
+from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 
 
 def multi_level_merge(dict1, dict2):
@@ -407,8 +405,7 @@ def build_fn(
 
     arguments = {
         "root": input_folder,
-        "mode": "w+",
-        "data_libs": customize_data_catalog(data_catalog),
+        "data_catalogs": customize_data_catalog(data_catalog),
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -416,7 +413,7 @@ def build_fn(
     geb_model = get_model(custom_model)(**arguments)
 
     geb_model.build(
-        opt=configread(build_config),
+        methods=configread(build_config),
         region=config["general"]["region"],
     )
 
@@ -449,8 +446,7 @@ def alter(
 
     arguments = {
         "root": reference_model_folder,
-        "mode": "r+",
-        "data_libs": customize_data_catalog(data_catalog),
+        "data_catalogs": customize_data_catalog(data_catalog),
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -481,15 +477,14 @@ def update(
 
     arguments = {
         "root": input_folder,
-        "mode": "r+",
-        "data_libs": customize_data_catalog(data_catalog),
+        "data_catalogs": customize_data_catalog(data_catalog),
         "logger": create_logger("build_update.log"),
         "data_provider": data_provider,
     }
 
     geb_model = get_model(custom_model)(**arguments)
     geb_model.read()
-    geb_model.update(opt=configread(build_config))
+    geb_model.update(methods=configread(build_config))
 
 
 @cli.command()

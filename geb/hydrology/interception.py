@@ -20,17 +20,18 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-import xarray as xr
+import zarr
+
 from geb.workflows import balance_check
 
 from .landcover import (
+    ALL_LAND_COVER_TYPES,
     FOREST,
     GRASSLAND_LIKE,
-    PADDY_IRRIGATED,
     NON_PADDY_IRRIGATED,
-    SEALED,
     OPEN_WATER,
-    ALL_LAND_COVER_TYPES,
+    PADDY_IRRIGATED,
+    SEALED,
 )
 
 
@@ -96,15 +97,15 @@ class Interception(object):
             (len(ALL_LAND_COVER_TYPES), 37, 1),
         )
         for cover_name, cover in (("forest", FOREST), ("grassland", GRASSLAND_LIKE)):
-            ds = xr.open_dataset(
-                self.model.files["forcing"][
-                    f"landcover/{cover_name}/interceptCap{cover_name.title()}_10days"
+            store = zarr.storage.LocalStore(
+                self.model.files["grid"][
+                    f"landcover/{cover_name}/interception_capacity"
                 ],
-                engine="zarr",
+                read_only=True,
             )
 
             self.grid.var.interception[cover] = self.grid.compress(
-                ds[f"interceptCap{cover_name.title()}_10days"].values
+                zarr.open_group(store, mode="r")["interception_capacity"][:]
             )
 
     def step(self, potential_transpiration):

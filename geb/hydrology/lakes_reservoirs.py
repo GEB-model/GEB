@@ -22,18 +22,18 @@
 
 import math
 
-import pandas as pd
 import numpy as np
-from geb.workflows import balance_check
+import pandas as pd
+
 from geb.HRUs import load_grid
+from geb.workflows import balance_check
 
 from .routing.subroutines import (
-    subcatchment1,
+    PIT,
     define_river_network,
+    subcatchment1,
     upstream1,
 )
-
-from .routing.subroutines import PIT
 
 OFF = 0
 LAKE = 1
@@ -95,9 +95,9 @@ def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
     )
 
 
-def estimate_outflow_height(lake_volume, lake_factor, lake_area, avg_outflow):
+def estimate_outflow_height(lake_storage, lake_factor, lake_area, avg_outflow):
     height_above_outflow = outflow_to_height_above_outflow(lake_factor, avg_outflow)
-    outflow_height = (lake_volume / lake_area) - height_above_outflow
+    outflow_height = (lake_storage / lake_area) - height_above_outflow
     outflow_height[outflow_height < 0] = 0
     return outflow_height
 
@@ -118,7 +118,7 @@ def get_lake_outflow_and_storage(
     dt : float
         Time step in seconds
     storage : float
-        Current storage volume in m3
+        Current storage in m3
     inflow : float
         Inflow to the lake in m3/s
     inflow_prev : float
@@ -137,7 +137,7 @@ def get_lake_outflow_and_storage(
     outflow : float
         New outflow from the lake in m3/s
     storage : float
-        New storage volume in m3
+        New storage in m3
 
     """
     storage += inflow_m3
@@ -175,7 +175,7 @@ class LakesReservoirs(object):
 
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped = self.grid.load(
-            self.model.files["grid"]["routing/lakesreservoirs/lakesResID"]
+            self.model.files["grid"]["waterbodies/water_body_id"]
         )
         waterBodyID_unmapped[waterBodyID_unmapped == OFF] = -1
 
@@ -241,23 +241,23 @@ class LakesReservoirs(object):
             self.hydrology.grid,
         )
 
-        self.var.waterBodyTypC = self.var.water_body_data["waterbody_type"].values
+        self.var.water_body_type = self.var.water_body_data["waterbody_type"].values
         self.var.waterBodyOrigID = self.var.water_body_data[
             "original_waterbody_id"
         ].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
-        self.var.waterBodyTypC[self.var.waterBodyTypC == LAKE_CONTROL] = LAKE
+        self.var.water_body_type[self.var.water_body_type == LAKE_CONTROL] = LAKE
 
-        assert (np.isin(self.var.waterBodyTypC, [OFF, LAKE, RESERVOIR])).all()
+        assert (np.isin(self.var.water_body_type, [OFF, LAKE, RESERVOIR])).all()
 
         self.var.lake_area = self.var.water_body_data["average_area"].values
         # a factor which increases evaporation from lake because of wind TODO: use wind to set this factor
         self.var.lakeEvaFactor = self.model.config["parameters"]["lakeEvaFactor"]
 
-        self.var.volume = self.var.water_body_data["volume_total"].values
+        self.var.capacity = self.var.water_body_data["volume_total"].values
 
         self.var.total_inflow_from_other_water_bodies = np.zeros_like(
-            self.var.volume, dtype=np.float32
+            self.var.capacity, dtype=np.float32
         )
 
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
@@ -276,9 +276,10 @@ class LakesReservoirs(object):
             self.model.config["parameters"]["lakeAFactor"],
         )
 
-        self.var.storage = self.var.volume.copy()
+        # initialize storage with (full) capacity
+        self.var.storage = self.var.capacity.copy()
         self.var.outflow_height = estimate_outflow_height(
-            self.var.volume,
+            self.var.storage,
             self.var.lake_factor,
             self.var.lake_area,
             average_discharge,
@@ -302,7 +303,7 @@ class LakesReservoirs(object):
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
         water_body_data = pd.read_parquet(
-            self.model.files["table"]["routing/lakesreservoirs/basin_lakes_data"],
+            self.model.files["table"]["waterbodies/waterbody_data"],
         )
         # drop all data that is not in the original ids
         waterbody_original_ids_compressed = np.unique(waterbody_original_ids)
@@ -402,21 +403,6 @@ class LakesReservoirs(object):
 
         return waterbody_outflow_points
 
-    def step(self):
-        """
-        Dynamic part set lakes and reservoirs for each year
-        """
-        # if first timestep, or beginning of new year
-        if self.model.current_timestep == 1 or (
-            self.model.current_time.month == 1 and self.model.current_time.day == 1
-        ):
-            # - 3 = reservoirs and lakes (used as reservoirs but before the year of construction as lakes
-            # - 2 = reservoirs (regulated discharge)
-            # - 1 = lakes (weirFormula)
-            # - 0 = non lakes or reservoirs (e.g. wetland)
-            if self.hydrology.dynamic_water_bodies:
-                raise NotImplementedError("dynamic_water_bodies not implemented yet")
-
     def routing_lakes(self, inflow_m3, routing_step_length_seconds):
         """
         Lake routine to calculate lake outflow
@@ -427,7 +413,7 @@ class LakesReservoirs(object):
         if __debug__:
             prestorage = self.var.storage.copy()
 
-        lakes = self.var.waterBodyTypC == LAKE
+        lakes = self.var.water_body_type == LAKE
 
         lake_outflow_m3 = np.zeros_like(inflow_m3)
 
@@ -460,53 +446,57 @@ class LakesReservoirs(object):
 
         return lake_outflow_m3
 
-    def routing_reservoirs(self, inflowC, routing_step_length_seconds):
+    def routing_reservoirs(self, inflow_m3, n_routing_steps):
         """
         Reservoir outflow
         :param inflowC: inflow to reservoirs
         :return: qResOutM3DtC - reservoir outflow in [m3] per subtime step
         """
         if __debug__:
-            prestorage = self.var.storage.copy()
+            prestorage = self.reservoir_storage.copy()
 
-        reservoirs = self.var.waterBodyTypC == RESERVOIR
+        reservoirs = self.var.water_body_type == RESERVOIR
 
         # Reservoir inflow in [m3] per timestep
-        self.var.storage[reservoirs] += inflowC[reservoirs]
         # New reservoir storage [m3] = plus inflow for this sub step
 
-        outflow_m3_s = np.zeros(self.var.waterBodyIDC.size, dtype=np.float64)
-        outflow_m3_s[reservoirs] = (
-            self.model.agents.reservoir_operators.regulate_reservoir_outflow(
-                self.var.storage[reservoirs],
-                inflowC[reservoirs]
-                / routing_step_length_seconds,  # convert per timestep to per second
-                self.var.waterBodyIDC[reservoirs],
+        outflow_m3 = np.zeros(self.var.waterBodyIDC.size, dtype=np.float64)
+
+        is_command_area = self.HRU.var.reservoir_command_areas != -1
+
+        # print("WARNING: Assuming irrigation demand equal to ETRef")
+        irrigation_demand_m3 = (
+            np.bincount(
+                self.HRU.var.reservoir_command_areas[is_command_area],
+                weights=self.HRU.var.ETRef[is_command_area]
+                * self.HRU.var.cell_area[is_command_area],
+            )
+            / n_routing_steps
+        )
+
+        outflow_m3 = (
+            self.model.agents.reservoir_operators.regulate_reservoir_outflow_hanasaki(
+                inflow_m3=inflow_m3[reservoirs],
+                irrigation_demand_m3=irrigation_demand_m3,
+                n_routing_steps=n_routing_steps,
             )
         )
 
-        outflow_m3 = outflow_m3_s * routing_step_length_seconds
-        assert (outflow_m3 <= self.var.storage).all()
-
-        self.var.storage -= outflow_m3
-
-        inflow_reservoirs = np.zeros_like(inflowC)
-        inflow_reservoirs[reservoirs] = inflowC[reservoirs]
         if __debug__:
             balance_check(
-                influxes=[inflow_reservoirs],  # In [m3/s]
+                influxes=[inflow_m3[reservoirs]],  # In [m3/s]
                 outfluxes=[outflow_m3],
                 prestorages=[prestorage],
-                poststorages=[self.var.storage],
+                poststorages=[self.reservoir_storage],
                 name="reservoirs",
                 tollerance=1e-5,
             )
 
         return outflow_m3
 
-    def routing(
+    def substep(
         self,
-        step,
+        substep,
         n_routing_steps,
         routing_step_length_seconds,
         discharge,
@@ -525,7 +515,7 @@ class LakesReservoirs(object):
         if __debug__:
             prestorage = self.var.storage.copy()
 
-        if step == 0:
+        if substep == 0:
             # average evaporation overeach lake
             average_evaporation_per_water_body = np.bincount(
                 self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
@@ -564,18 +554,14 @@ class LakesReservoirs(object):
             self.evaporation_from_water_bodies_per_routing_step_m3, self.var.storage
         )  # evaporation is already in m3 per routing substep
         actual_evaporation_from_water_bodies_per_routing_step_m3[
-            self.var.waterBodyTypC == OFF
+            self.var.water_body_type == OFF
         ] = 0
         self.var.storage -= actual_evaporation_from_water_bodies_per_routing_step_m3
 
-        outflow_lakes = self.routing_lakes(inflow_m3, routing_step_length_seconds)
-        outflow_reservoirs = self.routing_reservoirs(
-            inflow_m3, routing_step_length_seconds
+        outflow = self.routing_lakes(inflow_m3, routing_step_length_seconds)
+        outflow[self.var.water_body_type == RESERVOIR] = self.routing_reservoirs(
+            inflow_m3, n_routing_steps
         )
-
-        assert (outflow_reservoirs[outflow_lakes > 0] == 0).all()
-
-        outflow = outflow_lakes + outflow_reservoirs
 
         if outflow.size > 0:
             outflow_grid = np.take(outflow, self.grid.var.waterbody_outflow_points)
@@ -637,11 +623,52 @@ class LakesReservoirs(object):
 
     @property
     def reservoir_storage(self):
-        return self.var.storage[self.var.waterBodyTypC == RESERVOIR]
+        return self.var.storage[self.var.water_body_type == RESERVOIR]
+
+    @reservoir_storage.setter
+    def reservoir_storage(self, value):
+        self.var.storage[self.var.water_body_type == RESERVOIR] = value
+
+    @property
+    def reservoir_capacity(self):
+        return self.var.capacity[self.var.water_body_type == RESERVOIR]
+
+    @reservoir_capacity.setter
+    def reservoir_capacity(self, value):
+        self.var.capacity[self.var.water_body_type == RESERVOIR] = value
 
     @property
     def lake_storage(self):
-        return self.var.storage[self.var.waterBodyTypC == LAKE]
+        return self.var.storage[self.var.water_body_type == LAKE]
+
+    @lake_storage.setter
+    def lake_storage(self, value):
+        self.var.storage[self.var.water_body_type == LAKE] = value
+
+    @property
+    def lake_capacity(self):
+        return self.var.capacity[self.var.water_body_type == LAKE]
+
+    @lake_capacity.setter
+    def lake_capacity(self, value):
+        self.var.capacity[self.var.water_body_type == LAKE] = value
+
+    @property
+    def reservoir_fill_percentage(self):
+        return self.reservoir_storage / self.reservoir_capacity * 100
 
     def decompress(self, array):
         return array
+
+    def step(self):
+        """
+        Dynamic part set lakes and reservoirs for each year
+        """
+        # if first timestep, or beginning of new year
+        if self.model.current_timestep == 1 or (
+            self.model.current_time.month == 1 and self.model.current_time.day == 1
+        ):
+            if self.hydrology.dynamic_water_bodies:
+                raise NotImplementedError("dynamic_water_bodies not implemented yet")
+
+        # print(self.reservoir_fill_percentage.astype(int))

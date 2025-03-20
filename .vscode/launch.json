@@ -1,0 +1,70 @@
+{
+    // Use IntelliSense to learn about defaultssible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Spinup",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "geb/cli.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "args": [
+                "spinup",
+                "-wd",
+                "../model",
+            ],
+        },
+        {
+            "name": "Run",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "geb/cli.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "args": [
+                "run",
+                "-wd",
+                "../model"
+            ]
+        },
+        {
+            "name": "Build",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "geb/cli.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "args": [
+                "build",
+                "-wd", "model",
+            ]
+        },
+        {
+            "name": "Update",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "geb/cli.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "args": [
+                "update",
+                "-wd", "model",
+            ]
+        },
+    ]
+}

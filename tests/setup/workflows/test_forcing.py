@@ -1,8 +1,10 @@
-import numpy as np
-import matplotlib.pyplot as plt
 from math import isclose
 
+import matplotlib.pyplot as plt
+import numpy as np
+
 from geb.setup.workflows.forcing import get_pressure_correction_factor
+
 from ...testconfig import output_folder
 
 

@@ -1,23 +1,24 @@
-import numpy as np
-import geopandas as gpd
 import calendar
-from .general import downscale_volume, AgentBaseClass
-from ..store import DynamicArray
-from ..hydrology.landcover import (
-    SEALED,
-    FOREST,
-)
-import pandas as pd
-from damagescanner.core import object_scanner
 import json
-import xarray as xr
-from rasterio.features import shapes
-from shapely.geometry import shape
-from .decision_module_flood import DecisionModule
-from shapely.geometry import Point
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
 import pyproj
+import xarray as xr
+from damagescanner.core import object_scanner
 from honeybees.library.raster import sample_from_map
+from rasterio.features import shapes
 from scipy import interpolate
+from shapely.geometry import Point, shape
+
+from ..hydrology.landcover import (
+    FOREST,
+    SEALED,
+)
+from ..store import DynamicArray
+from .decision_module_flood import DecisionModule
+from .general import AgentBaseClass, downscale_volume
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
@@ -146,14 +147,14 @@ class Households(AgentBaseClass):
         Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
 
         # load household locations
-        locations = np.load(self.model.files["binary"]["agents/households/locations"])[
+        locations = np.load(self.model.files["array"]["agents/households/locations"])[
             "data"
         ]
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
         self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
         # load household sizes
-        sizes = np.load(self.model.files["binary"]["agents/households/sizes"])["data"]
+        sizes = np.load(self.model.files["array"]["agents/households/sizes"])["data"]
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
         # load age household head
@@ -588,11 +589,11 @@ class Households(AgentBaseClass):
 
     def spinup(self):
         self.var = self.model.store.create_bucket("agents.households.var")
-        self.load_objects()
-        self.load_max_damage_values()
-        self.load_damage_curves()
-        self.construct_income_distribution()
         if self.config["adapt"]:
+            self.load_objects()
+            self.load_max_damage_values()
+            self.load_damage_curves()
+            self.construct_income_distribution()
             self.assign_household_attributes()
 
         super().__init__()

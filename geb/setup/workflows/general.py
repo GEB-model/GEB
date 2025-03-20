@@ -1,15 +1,16 @@
 import os
 import shutil
 import tempfile
-import requests
-from tqdm import tqdm
 import time
-import pandas as pd
+from collections.abc import Mapping
 from datetime import date
 from typing import Any, Union
-import xarray
+
 import numpy as np
-from collections.abc import Mapping
+import pandas as pd
+import requests
+import xarray
+from tqdm import tqdm
 
 
 def repeat_grid(data, factor):
@@ -28,7 +29,7 @@ def calculate_cell_area(affine_transform, shape):
         distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
     )
     height_m = distance_1_degree_latitude * abs(affine_transform.e)
-    return width_m * height_m
+    return (width_m * height_m).astype(np.float32)
 
 
 def clip_with_grid(ds, mask):

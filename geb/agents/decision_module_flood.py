@@ -1,5 +1,5 @@
-from numba.core.decorators import njit
 import numpy as np
+from numba.core.decorators import njit
 from scipy import interpolate
 
 
