@@ -71,9 +71,6 @@ required-environments = [
     "sys_platform == 'win32'",
 ]
 
-[tool.uv.sources]
-geb-hydrodynamics = { path = "../GEB-hydrodynamics", editable = true }
-
 [dependency-groups]
 dev = [
     "pypandoc>=1.15",
@@ -94,9 +91,7 @@ fairstream = [
     "daft-pgm>=0.1.4",
     "opt-einsum>=3.3.0",
 ]
-floods = [
-    "geb-hydrodynamics",
-]
+floods = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
