@@ -38,7 +38,13 @@ code .
 
 Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do.
 
-We have also prepared a configuration for the debugger in `.vscode/launch.json`. You can run the debugger by pressing F5. The debugger assumes that you have the data files for the model located in `../models/geul/base`. You may need to adjust the paths in  `.vscode/launch.json` to match your setup.
+We have also prepared a configuration for the debugger in `.vscode/launch.json`. You can run the debugger by pressing F5. The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`).
+
+You may need to adjust the paths in  `.vscode/launch.json` to match your setup. In case you do this, please make sure to not commit these changes to the repository. To tell git to ignore any local changes here, you can run.
+
+```bash
+git update-index --skip-worktree .vscode/*
+```
 
 Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome. You can find a list of active and past contributors at the bottom of this file.
 

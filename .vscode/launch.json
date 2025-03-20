@@ -1,5 +1,5 @@
 {
-    // Use IntelliSense to learn about geulssible attributes.
+    // Use IntelliSense to learn about defaultssible attributes.
     // Hover to view descriptions of existing attributes.
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
@@ -23,7 +23,7 @@
             "args": [
                 "spinup",
                 "-wd",
-                "../models/geul/base",
+                "../model",
             ],
         },
         {
@@ -37,7 +37,7 @@
             "args": [
                 "run",
                 "-wd",
-                "../models/geul/base"
+                "../model"
             ]
         },
         {
@@ -50,7 +50,7 @@
             "justMyCode": false,
             "args": [
                 "build",
-                "-wd", "../models/geul/base",
+                "-wd", "model",
             ]
         },
         {
@@ -63,7 +63,7 @@
             "justMyCode": false,
             "args": [
                 "update",
-                "-wd", "../models/geul/base",
+                "-wd", "model",
             ]
         },
     ]
