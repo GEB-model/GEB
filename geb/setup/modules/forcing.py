@@ -107,10 +107,11 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
 
         da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
 
+        # use a slightly larger slice. The resolution is 0.1 degrees, so 0.11 degrees is a bit more than that (to be sure)
         da = da.sel(
             time=slice(starttime, endtime),
-            y=slice(bounds[3], bounds[1]),
-            x=slice(bounds[0], bounds[2]),
+            y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+            x=slice(bounds[0] - 0.11, bounds[2] + 0.11),
         )
         da = da.isel(time=slice(1, None))
 
@@ -215,56 +216,67 @@ class Forcing:
         name = "climate/pr_hourly"
         da = self.set_other(da, name=name, *args, **kwargs, time_chunksize=7 * 24)
         self.plot_forcing(da, name)
+        return da
 
     def set_pr(self, da, *args, **kwargs):
         name = "climate/pr"
         da = self.set_other(da, name=name, *args, **kwargs)
         self.plot_forcing(da, name)
+        return da
 
     def set_rsds(self, da, *args, **kwargs):
         name = "climate/rsds"
         da = self.set_other(da, name=name, *args, **kwargs)
         self.plot_forcing(da, name)
+        return da
 
     def set_rlds(self, da, *args, **kwargs):
         name = "climate/rlds"
         da = self.set_other(da, name=name, *args, **kwargs)
         self.plot_forcing(da, name)
+        return da
 
     def set_tas(self, da, *args, **kwargs):
         name = "climate/tas"
         da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
         self.plot_forcing(da, name)
+        return da
 
     def set_tasmax(self, da, *args, **kwargs):
         name = "climate/tasmax"
         da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
         self.plot_forcing(da, name)
+        return da
 
     def set_tasmin(self, da, *args, **kwargs):
         name = "climate/tasmin"
         da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
         self.plot_forcing(da, name)
+        return da
 
     def set_hurs(self, da, *args, **kwargs):
         name = "climate/hurs"
         da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
         self.plot_forcing(da, name)
+        return da
 
     def set_ps(self, da, *args, **kwargs):
         name = "climate/ps"
         da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
         self.plot_forcing(da, name)
+        return da
 
     def set_sfcwind(self, da, *args, **kwargs):
         name = "climate/sfcwind"
         da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
         self.plot_forcing(da, name)
+        return da
 
     def set_SPEI(self, da, *args, **kwargs):
         name = "climate/SPEI"
         da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
         self.plot_forcing(da, name)
+        return da
 
     def setup_forcing_era5(self, starttime, endtime):
         target = self.grid["mask"]
@@ -291,7 +303,7 @@ class Forcing:
         }
         # ensure no negative values for precipitation, which may arise due to float precision
         pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        self.set_pr_hourly(pr_hourly)  # weekly chunk size
+        pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
         pr = pr.raster.reproject_like(target, method="average")
@@ -333,9 +345,10 @@ class Forcing:
         DEM = self.data_catalog.get_rasterdataset(
             "fabdem",
             bbox=hourly_tas.raster.bounds,
-            buffer=100,
+            buffer=500,
             variables=["fabdem"],
-        ).compute()
+        ).raster.mask_nodata()
+        DEM = to_zarr(DEM, self.preprocessing_dir / "climate" / "DEM.zarr", crs=4326)
 
         hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
             hourly_tas, DEM, target
