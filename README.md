@@ -19,28 +19,28 @@ To contribute to GEB, we recommend first cloning the repository from this repo u
 ```bash
 git clone git@github.com:GEB-model/GEB.git
 cd GEB
+git switch main  # use main by default, but may be changed to another branch
+git update-index --skip-worktree .vscode/*  # we don't want to commit local changes to the vscode settings
 uv sync --dev
 ```
 
-This will create a virtual environment (`.venv`) in the GEB folder with the right Python installation and all packages you need. When you open the project in Visual Studio Code, it will automatically use this virtual environment.
+You will now have a virtual environment (`.venv`) in the GEB folder with the right Python installation and all packages you need.
 
-You should now be able run geb's help command to show the available commands, and check if the installation was successful:
-
-```bash
-geb --help
-```
-
-Now open Visual Studio Code in the GEB folder (or use the "File -> Open Folder" dialog in Visual Studio Code):
+Now open Visual Studio Code in the GEB folder (or use the "File -> Open Folder" dialog in Visual Studio Code).
 
 ```bash
 code .
 ```
 
-Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do.
+Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do. After installing the Python extension VS Code should also automatically use the environment you created earlier. To test this, open a terminal in VS Code (`Terminal -> New Terminal`) and run:
+
+```bash
+geb --help
+```
 
 We have also prepared a configuration for the debugger in `.vscode/launch.json`. You can run the debugger by pressing F5. The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`).
 
-You may need to adjust the paths in  `.vscode/launch.json` to match your setup. In case you do this, please make sure to not commit these changes to the repository. To tell git to ignore any local changes here, you can run.
+You may need to adjust the paths in  `.vscode/launch.json` to match your setup. In case you do this, please make sure to not commit these changes to the repository. To tell git to ignore any local changes here, you can run:
 
 ```bash
 git update-index --skip-worktree .vscode/*
