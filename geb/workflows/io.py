@@ -133,7 +133,7 @@ def to_zarr(
             )
 
         if "time" in da.dims:
-            chunks.update({"time": time_chunksize})
+            chunks.update({"time": min(time_chunksize, da.sizes["time"])})
             if time_chunks_per_shard is not None:
                 shards = chunks.copy()
                 shards["time"] = time_chunks_per_shard * time_chunksize
@@ -193,7 +193,8 @@ def to_zarr(
         if progress:
             # start writing after 10 seconds, and update every 0.1 seconds
             with ProgressBar(
-                minimum=10, dt=float(os.environ.get("GEB_OVERRIDE_PROGRESSBAR_DT", 0.1))
+                minimum=0.1,
+                dt=float(os.environ.get("GEB_OVERRIDE_PROGRESSBAR_DT", 0.1)),
             ):
                 store = da.to_zarr(**arguments)
         else:
