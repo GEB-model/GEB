@@ -7,6 +7,7 @@ import platform
 import subprocess
 import sys
 import tempfile
+import zipfile
 from operator import attrgetter
 from pathlib import Path
 from pstats import Stats
@@ -503,19 +504,25 @@ def evaluate():
     "--name",
     "-n",
     default="model",
-    help="Working directory for model.",
+    help="Name used for the zip file.",
+)
+@click.option(
+    "--include-preprocessing",
+    is_flag=True,
+    default=False,
+    help="Include preprocessing files in the zip file.",
 )
 @cli.command()
-def share(working_directory, name):
+def share(working_directory, name, include_preprocessing):
     """Share model."""
 
     os.chdir(working_directory)
 
     # create a zip file called model.zip with the folders input, and model files
     # in the working directory
-    import zipfile
-
     folders = ["input"]
+    if include_preprocessing:
+        folders.append("preprocessing")
     files = ["model.yml", "build.yml"]
     optional_files = ["update.yml", "data_catalog.yml"]
     zip_filename = f"{name}.zip"
