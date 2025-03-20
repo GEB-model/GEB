@@ -3492,7 +3492,7 @@ class GEBModel(Forcing):
             # initiate indice tracker
             households_found = 0
 
-            for HID in GLOPOP_households_region:
+            for i, HID in enumerate(GLOPOP_households_region):
                 if not households_found % 1000:
                     print(f"searching household {households_found} of {n_households}")
                 household = GLOPOP_S_region[GLOPOP_S_region["HID"] == HID]
