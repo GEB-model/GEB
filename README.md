@@ -1,4 +1,4 @@
-## Installation
+## Installation (not for development)
 
 GEB can be installed with pip, including all dependencies on Windows, Linux and Mac OS X.
 
@@ -12,9 +12,9 @@ or with [uv](https://docs.astral.sh/uv/):
 uv pip install geb --prerelease=allow
 ```
 
-### Development
+## Development installation and setup
 
-To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use [uv](https://docs.astral.sh/uv/) to install the dependencies. Execute in the GEB folder (where `pyproject.toml` is located):
+To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use [uv](https://docs.astral.sh/uv/) to install the dependencies. To do so execute the following within the folder where you would like to work on the development of GEB:
 
 ```bash
 git clone git@github.com:GEB-model/GEB.git
@@ -22,11 +22,25 @@ cd GEB
 uv sync --dev
 ```
 
-This will create a virtual environment (`.venv`) in the GEB folder. Alternatively, you can install GEB in editable mode. Execute in the GEB folder (where `pyproject.toml` is located):
+This will create a virtual environment (`.venv`) in the GEB folder with the right Python installation and all packages you need. When you open the project in Visual Studio Code, it will automatically use this virtual environment.
+
+You should now be able run geb's help command to show the available commands, and check if the installation was successful:
 
 ```bash
-pip install -e .
+geb --help
 ```
+
+Now open Visual Studio Code in the GEB folder (or use the "File -> Open Folder" dialog in Visual Studio Code):
+
+```bash
+code .
+```
+
+Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do.
+
+We have also prepared a configuration for the debugger in .vscode/launch.json. You can run the debugger by pressing F5. The debugger assumes that you have the data files for the model located in `../models/geul/base`. You may need to adjust the paths in the launch.json file to match your setup.
+
+Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome. You can find a list of active and past contributors at the bottom of this file.
 
 ## Overview
 GEB (Geographical Environmental and Behavioural model) simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale. The model does so through a "deep" coupling of an agent-based model a hydrological model, a vegetation model and a hydrodynamic model. You can find full documentation [here](https://geb-model.github.io/GEB/).
@@ -61,9 +75,11 @@ GEB builds on, couples and extends several models, depicted in the figure below.
 ## Developers (ordered by full-time equivalent working time on model)
 - [Jens de Bruijn](https://research.vu.nl/en/persons/jens-de-bruijn)
 - [Maurice Kalthof](https://research.vu.nl/en/persons/maurice-kalthof)
-- [Tarun Sadana](https://research.vu.nl/en/persons/tarun-sadana)
 - [Veerle Bril](https://research.vu.nl/en/persons/veerle-bril)
+- [Lars Tierolf](https://research.vu.nl/en/persons/lars-tierolf)
+- [Tarun Sadana](https://research.vu.nl/en/persons/tarun-sadana)
 - [Tim Busker](https://research.vu.nl/en/persons/tim-busker)
+- [Rafaella Oliveira](https://research.vu.nl/en/persons/rafaella-gouveia-loureiro-oliveira)
 
 ## Current or past contributors (in order of first to last contribution)
 - [Mikhail Smilovic](https://iiasa.ac.at/staff/mikhail-smilovic)
