@@ -74,20 +74,21 @@ required-environments = [
 [tool.uv.sources]
 geb-hydrodynamics = { path = "../GEB-hydrodynamics", editable = true }
 
-[tool.flit.module]
-name = "geb"
+[dependency-groups]
+dev = [
+    "pypandoc>=1.15",
+    "sphinx<8",
+    "sphinx-autodoc-typehints>=2.3.0",
+    "sphinx-rtd-theme>=3.0.2",
+    "sphinxcontrib-autoprogram>=0.1.9",
+    "sphinxcontrib-autoyaml>=1.1.3",
+    "sphinxcontrib-bibtex>=2.6.3",
+]
+
+[project.scripts]
+geb = "geb.cli:cli"
 
 [project.optional-dependencies]
-dev = []
-docs = [
-    "sphinx<8",
-    "sphinx-autodoc-typehints",
-    "sphinxcontrib-autoprogram",
-    "sphinxcontrib-bibtex",
-    "sphinx_rtd_theme",
-    "sphinxcontrib-autoyaml",
-    "pypandoc",
-]
 fairstream = [
     "pgmpy>=0.1.24",
     "daft-pgm>=0.1.4",
@@ -97,5 +98,15 @@ floods = [
     "geb-hydrodynamics",
 ]
 
-[project.scripts]
-geb = "geb.cli:cli"
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py313"
+lint.extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["geb"]
+known-third-party = ["geb-hydrodynamics"]
+combine-as-imports = true
