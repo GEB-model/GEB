@@ -1,5 +1,4 @@
 # Custom
-.vscode
 .ruff_cache
 .benchmarks
 .nfs*
