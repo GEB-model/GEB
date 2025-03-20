@@ -1,12 +1,11 @@
 import calendar
 import json
-from os.path import join
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pyproj
-import rioxarray
+import xarray as xr
 from damagescanner.core import object_scanner
 from honeybees.library.raster import sample_from_map
 from rasterio.features import shapes
@@ -77,25 +76,70 @@ class Households(AgentBaseClass):
 
         flood_maps = {}
         for return_period in self.return_periods:
-            flood_path = join(
-                "report", "estimate_risk", "flood_maps", f"{return_period}.tif"
+            file_path = (
+                self.model.report_folder_root
+                / "estimate_risk"
+                / "flood_maps"
+                / f"{return_period}.zarr.zip"
             )
-            print(f"using this flood map: {flood_path}")
-            flood_maps[return_period] = rioxarray.open_rasterio(flood_path)
+            flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
         flood_maps["crs"] = flood_maps[return_period].rio.crs
-
-        # now also get gdal transform
-        affine_transform = flood_maps[return_period].rio.transform()
-        gdal_geotransform = (
-            affine_transform.c,  # Top-left x
-            affine_transform.a,  # Pixel width
-            affine_transform.b,  # Rotation (0 if north-up)
-            affine_transform.f,  # Top-left y
-            affine_transform.d,  # Rotation (0 if north-up)
-            affine_transform.e,  # Pixel height (negative for north-up)
+        flood_maps["gdal_geotransform"] = (
+            flood_maps[return_period].rio.transform().to_gdal()
         )
-        flood_maps["gdal_geotransform"] = gdal_geotransform
         self.flood_maps = flood_maps
+
+    def construct_income_distribution(self):
+        # These settings are dummy data now. Should come from subnational datasets.
+        average_household_income = 38_500
+        mean_to_median_inc_ratio = 1.3
+        median_income = average_household_income / mean_to_median_inc_ratio
+
+        # construct lognormal income distribution
+        mu = np.log(median_income)
+        sd = np.sqrt(2 * np.log(average_household_income / median_income))
+        income_distribution_region = np.sort(
+            np.random.lognormal(mu, sd, 15_000).astype(np.int32)
+        )
+        # set var
+        self.var.income_distribution = income_distribution_region
+
+    def assign_household_wealth_and_income(self):
+        # initiate array with wealth indices
+        wealth_index = np.load(
+            self.model.files["binary"]["agents/households/wealth_index"]
+        )["data"]
+        self.var.wealth_index = DynamicArray(wealth_index, max_n=self.max_n)
+
+        # convert wealth index to income percentile
+        income_percentiles = np.full(self.n, -1, np.int32)
+        wealth_index_to_income_percentile = {
+            1: (1, 19),
+            2: (20, 39),
+            3: (40, 59),
+            4: (60, 79),
+            5: (80, 100),
+        }
+
+        for index in wealth_index_to_income_percentile:
+            min_perc, max_perc = wealth_index_to_income_percentile[index]
+            # get indices of agents with wealth index
+            idx = np.where(self.var.wealth_index.data == index)[0]
+            # get random income percentile for agents with wealth index
+            income_percentile = np.random.randint(min_perc, max_perc + 1, len(idx))
+            # assign income percentile to agents with wealth index
+            income_percentiles[idx] = income_percentile
+        assert (income_percentiles == -1).sum() == 0, (
+            "Not all agents have an income percentile"
+        )
+        self.var.income_percentile = DynamicArray(income_percentiles, max_n=self.max_n)
+
+        # assign household disposable income based on income percentile households
+        income = np.percentile(self.var.income_distribution, income_percentiles)
+        self.var.income = DynamicArray(income, max_n=self.max_n)
+
+        # assign wealth based on income (dummy data, there are ratios available in literature)
+        self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
     def assign_household_attributes(self):
         """Household locations are already sampled from population map in GEBModel.setup_population()
@@ -113,27 +157,20 @@ class Households(AgentBaseClass):
         sizes = np.load(self.model.files["array"]["agents/households/sizes"])["data"]
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
+        # load age household head
+        age_household_head = np.load(
+            self.model.files["binary"]["agents/households/age_household_head"]
+        )["data"]
+        self.var.age_household_head = DynamicArray(age_household_head, max_n=self.max_n)
+
+        # load education level household head
+        education_level = np.load(
+            self.model.files["binary"]["agents/households/education_level"]
+        )["data"]
+        self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
+
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
-
-        # initiate array with household incomes [dummy data for now]
-        self.var.income = DynamicArray(
-            np.random.randint(16_000, 30_000, self.n), max_n=self.max_n
-        )
-
-        # initiate array with houshold wealth [dummy data for now]
-        self.var.wealth = DynamicArray(
-            np.int64(self.var.income.data * 2.8), max_n=self.max_n
-        )
-
-        # initiate array with property values (used as max damage) [dummy data for now]
-        self.var.property_value = DynamicArray(
-            np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
-        )
-        # initiate array with RANDOM adaptation costs [dummy data for now]
-        self.var.adaptation_costs = DynamicArray(
-            np.int64(self.var.property_value.data * 0.1), max_n=self.max_n
-        )
 
         # initiate array with risk perception [dummy data for now]
         self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
@@ -152,12 +189,6 @@ class Households(AgentBaseClass):
         # initiate array with risk aversion [fixed for now]
         self.var.risk_aversion = DynamicArray(np.full(self.n, 1), max_n=self.max_n)
 
-        # initiate array with amenity value [dummy data for now]
-        amenity_premiums = np.random.uniform(0, 0.2, self.n)
-        self.var.amenity_value = DynamicArray(
-            amenity_premiums * self.var.wealth, max_n=self.max_n
-        )
-
         # initiate array with time adapted
         self.var.time_adapted = DynamicArray(
             np.zeros(self.n, np.int32), max_n=self.max_n
@@ -166,6 +197,24 @@ class Households(AgentBaseClass):
         # initiate array with time since last flood
         self.var.years_since_last_flood = DynamicArray(
             np.full(self.n, 25, np.int32), max_n=self.max_n
+        )
+
+        # assign income and wealth attributes
+        self.assign_household_wealth_and_income()
+
+        # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
+        self.var.property_value = DynamicArray(
+            np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
+        )
+        # initiate array with RANDOM annual adaptation costs [dummy data for now, values are availbale in literature]
+        self.var.adaptation_costs = DynamicArray(
+            np.int64(self.var.property_value.data * 0.05), max_n=self.max_n
+        )
+
+        # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
+        amenity_premiums = np.random.uniform(0, 0.2, self.n)
+        self.var.amenity_value = DynamicArray(
+            amenity_premiums * self.var.wealth, max_n=self.max_n
         )
 
         # reproject households to flood maps and store in var bucket
@@ -186,7 +235,9 @@ class Households(AgentBaseClass):
             self.var.locations[:, 0], self.var.locations[:, 1]
         )
         self.var.locations_reprojected_to_flood_map = locations
-        print(f"Household attributes assigned for {self.n} households.")
+        print(
+            f"Household attributes assigned for {self.n} households with {self.population} people."
+        )
 
     def get_flood_risk_information_honeybees(self):
         # preallocate array for damages
@@ -202,11 +253,12 @@ class Households(AgentBaseClass):
             # get flood map
             flood_map = self.flood_maps[return_period]
 
+            # sample waterlevels for individual households
             water_levels = sample_from_map(
-                flood_map.values[0],
+                flood_map.values,
                 self.var.locations_reprojected_to_flood_map.data,
                 self.flood_maps["gdal_geotransform"],
-            )
+            )[:, 0]
 
             # cap water levels at damage curve max inundation
             water_levels = np.minimum(
@@ -541,6 +593,7 @@ class Households(AgentBaseClass):
             self.load_objects()
             self.load_max_damage_values()
             self.load_damage_curves()
+            self.construct_income_distribution()
             self.assign_household_attributes()
 
         super().__init__()
@@ -741,3 +794,7 @@ class Households(AgentBaseClass):
     @property
     def n(self):
         return self.var.locations.shape[0]
+
+    @property
+    def population(self):
+        return self.var.sizes.data.sum()
