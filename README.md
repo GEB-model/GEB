@@ -20,7 +20,7 @@ To contribute to GEB, we recommend first cloning the repository from this repo u
 git clone git@github.com:GEB-model/GEB.git
 cd GEB
 git switch main  # use main by default, but may be changed to another branch
-git update-index --skip-worktree .vscode/*  # we don't want to commit local changes to the vscode settings
+git update-index --skip-worktree .vscode/extensions.json  .vscode/launch.json  .vscode/settings.json  # we don't want to commit local changes to the vscode settings
 uv sync --dev
 ```
 
@@ -43,7 +43,7 @@ We have also prepared a configuration for the debugger in `.vscode/launch.json`.
 You may need to adjust the paths in  `.vscode/launch.json` to match your setup. In case you do this, please make sure to not commit these changes to the repository. To tell git to ignore any local changes here, you can run:
 
 ```bash
-git update-index --skip-worktree .vscode/*
+git update-index --skip-worktree .vscode/extensions.json  .vscode/launch.json  .vscode/settings.json  # we don't want to commit local changes to the vscode settings
 ```
 
 Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome. You can find a list of active and past contributors at the bottom of this file.
