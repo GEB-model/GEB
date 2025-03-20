@@ -1,5 +1,5 @@
 {
-    // Use IntelliSense to learn about sanctuaryssible attributes.
+    // Use IntelliSense to learn about geulssible attributes.
     // Hover to view descriptions of existing attributes.
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
@@ -23,31 +23,11 @@
             "args": [
                 "spinup",
                 "-wd",
-                "../models/models/sanctuary/base",
-                // "--optimize"
-                // "-c", "configs/irrigation_limit_per_area.yml"
-
+                "../models/geul/base",
             ],
         },
         {
-            "name": "Spinup GUI",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "geb/cli.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "args": [
-                "spinup",
-                "--gui",
-                "--no-browser",
-                "--port", "8888",
-                "-wd",
-                "../models/models/sanctuary/base"
-            ],
-        },
-        {
-            "name": "Base",
+            "name": "Run",
             "type": "debugpy",
             "request": "launch",
             "program": "geb/cli.py",
@@ -57,38 +37,7 @@
             "args": [
                 "run",
                 "-wd",
-                "../models/models/sanctuary/base"
-            ]
-        },
-        {
-            "name": "Base GUI",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "geb/cli.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "args": [
-                "run",
-                "--gui",
-                "--no-browser",
-                "-wd",
-                "../models/models/sanctuary/base"
-            ]
-        },
-        {
-            "name": "Estimate risk",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "geb/cli.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "args": [
-                "exec",
-                "estimate_risk",
-                "-wd",
-                "../models/models/sanctuary/base"
+                "../models/geul/base"
             ]
         },
         {
@@ -101,21 +50,7 @@
             "justMyCode": false,
             "args": [
                 "build",
-                "-wd", "../models/models/sanctuary/base",
-            ]
-        },
-        {
-            "name": "Build - fairSTREAM",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "geb/cli.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "args": [
-                "build",
-                "-wd", "../models/models/sanctuary/base",
-                "--custom-model", "fairstream.fairSTREAMModel"
+                "-wd", "../models/geul/base",
             ]
         },
         {
@@ -128,67 +63,8 @@
             "justMyCode": false,
             "args": [
                 "update",
-                "-wd", "../models/models/sanctuary/base",
+                "-wd", "../models/geul/base",
             ]
         },
-        {
-            "name": "Update with build parameters",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "geb/cli.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "args": [
-                "update",
-                "-b", "build.yml",
-                "-wd", "../models/models/sanctuary/base",
-            ]
-        },
-        {
-            "name": "Update - fairSTREAM",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "geb/cli.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "args": [
-                "update",
-                "-wd", "../models/models/sanctuary/base",
-                "--custom-model", "fairstream.fairSTREAMModel"
-            ]
-        },
-        {
-            "name": "Update with build parameters - fairSTREAM",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "geb/cli.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "args": [
-                "update",
-                "-b", "build.yml",
-                "-wd", "../models/models/sanctuary/base",
-                "--custom-model", "fairstream.fairSTREAMModel"
-            ]
-        },
-        {
-            "name": "Spinup (timeit)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "geb/cli.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "args": [
-                "spinup",
-                "-wd",
-                "../models/models/sanctuary/base",
-                "--profiling",
-                "--timing"
-            ],
-        }
     ]
 }
