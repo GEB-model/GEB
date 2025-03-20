@@ -19,6 +19,7 @@ To contribute to GEB, we recommend first cloning the repository from this repo u
 ```bash
 git clone git@github.com:GEB-model/GEB.git
 cd GEB
+uv sync --dev
 ```
 
 This will create a virtual environment (`.venv`) in the GEB folder. Alternatively, you can install GEB in editable mode. Execute in the GEB folder (where `pyproject.toml` is located):
