@@ -5239,7 +5239,13 @@ class GEBModel(Forcing):
 
             fp = Path(self.root, fn)
             fp.parent.mkdir(parents=True, exist_ok=True)
-            table.to_parquet(fp, engine="pyarrow")
+            # brotli is a bit slower but gives better compression,
+            # gzip is faster to read. Higher compression levels
+            # generally don't make it slower to read, therefore
+            # we use the highest compression level for gzip
+            table.to_parquet(
+                fp, engine="pyarrow", compression="gzip", compression_level=9
+            )
 
     def set_array(self, data, name, write=True):
         self.array[name] = data
