@@ -194,7 +194,7 @@ class Forcing:
                 axes[i + 1],
             )
 
-        fp = self.report_dir / "climate" / (name + ".png")
+        fp = self.report_dir / (name + ".png")
         fp.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(fp)
 
@@ -548,6 +548,8 @@ class Forcing:
             "tp",  # total_precipitation
             **download_args,
         )
+        elevation_forcing = self.get_elevation_forcing(pr_hourly, forcing_type="ERA5")
+
         pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
 
         # ensure no negative values for precipitation, which may arise due to float precision
@@ -559,7 +561,6 @@ class Forcing:
         self.set_pr(pr)
 
         elevation_target = self.grid["landsurface/elevation"]
-        elevation_forcing = self.get_elevation_forcing(pr, forcing_type="ERA5")
 
         hourly_rsds = process_ERA5(
             "ssrd",  # surface_solar_radiation_downwards
@@ -1452,9 +1453,12 @@ class Forcing:
                 .raster.mask_nodata()
                 .fillna(0)
             )
+            elevation_forcing = elevation_forcing.raster.reproject_like(
+                da, method="average"
+            )
             elevation_forcing = to_zarr(
                 elevation_forcing,
-                self.preprocessing_dir / "climate" / "DEM.zarr",
+                DEM_fp,
                 crs=4326,
             )
         return elevation_forcing
