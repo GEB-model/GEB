@@ -149,6 +149,7 @@ def suppress_logging_warning(logger):
 class PathEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, Path):
+            obj = obj.as_posix()
             return str(obj)
         return super().default(obj)
 
@@ -5372,6 +5373,7 @@ class GEBModel(Forcing):
         y_chunksize=XY_CHUNKSIZE,
         time_chunksize=1,
         byteshuffle=False,
+        filters=None,
     ):
         assert isinstance(da, xr.DataArray)
 
@@ -5390,6 +5392,7 @@ class GEBModel(Forcing):
                 time_chunksize=time_chunksize,
                 byteshuffle=byteshuffle,
                 crs=4326,
+                filters=filters,
             )
         self.other[name] = da
         return self.other[name]
