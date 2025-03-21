@@ -197,10 +197,14 @@ def to_zarr(
             )
             array_encoding["shards"] = shards
 
+        encoding = {da.name: array_encoding}
+        for coord in da.coords:
+            encoding[coord] = {"compressors": (compressor,)}
+
         arguments = {
             "store": tmp_zarr,
             "mode": "w",
-            "encoding": {da.name: array_encoding},
+            "encoding": encoding,
             "zarr_version": zarr_version,
             "consolidated": False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
         }
