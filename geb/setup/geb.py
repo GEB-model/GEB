@@ -5281,7 +5281,13 @@ class GEBModel(Forcing):
             self.files["geoms"][name] = fn
             fp = self.root / fn
             fp.parent.mkdir(parents=True, exist_ok=True)
-            geoms.to_parquet(fp)
+            # brotli is a bit slower but gives better compression,
+            # gzip is faster to read. Higher compression levels
+            # generally don't make it slower to read, therefore
+            # we use the highest compression level for gzip
+            geoms.to_parquet(
+                fp, engine="pyarrow", compression="gzip", compression_level=9
+            )
 
         return self.geoms[name]
 
