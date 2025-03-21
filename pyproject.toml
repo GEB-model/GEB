@@ -48,10 +48,10 @@ dependencies = [
     "setuptools>=75.8.0",
     "tbb>=2022.0.0",
     "tqdm>=4.66.1",
-    "xarray==2025.01.2",  # Pinned until https://github.com/Ouranosinc/xclim/issues/2113 is resolved
+    "xarray==2025.01.2", # Pinned until https://github.com/Ouranosinc/xclim/issues/2113 is resolved
     "xclim>=0.52.0",
     "xmipy>=1.5.0",
-    "zarr>=3.0.5",
+    "zarr>=3.0.6",
 ]
 requires-python = ">=3.12, <3.14"
 readme = "README.md"
