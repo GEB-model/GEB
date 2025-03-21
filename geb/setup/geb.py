@@ -5520,6 +5520,10 @@ class GEBModel(Forcing):
     def preprocessing_dir(self):
         return Path(self.root).parent / "preprocessing"
 
+    @property
+    def report_dir(self):
+        return Path(self.root).parent / "report"
+
     def full_like(self, data, fill_value, nodata, *args, **kwargs):
         ds = xr.full_like(data, fill_value, *args, **kwargs)
         ds.attrs = {

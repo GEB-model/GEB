@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cftime
-import numcodecs
 import numpy as np
 import pandas as pd
 import pyproj
@@ -15,9 +14,25 @@ import xarray as xr
 import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
-from zarr.codecs import BloscCodec, BloscShuffle
 
 all_async_readers = []
+
+
+def calculate_scaling(min_value, max_value, precision, offset=0, out_dtype=np.int32):
+    """Note that for very high precision in relation to the min and max values,
+    there may be some issues due to rounding and the given factors may
+    become slighly imprecise."""
+    scaling_factor = 1 / precision / 2
+
+    # get the maximum value that can be represented by the dtype
+    max_dtype = np.iinfo(out_dtype).max
+
+    if (max_value - offset) * scaling_factor > max_dtype:
+        raise ValueError("scaling factor too large for dtype")
+    if (min_value + offset) * scaling_factor < -max_dtype:
+        raise ValueError("scaling factor too small for dtype")
+
+    return scaling_factor
 
 
 def open_zarr(zarr_folder):
@@ -144,17 +159,21 @@ def to_zarr(
         # For anything with a shard, we opt for zarr version 3, for anything without, we use version 2.
         if shards:
             zarr_version = 3
-            compressor = BloscCodec(
+            from numcodecs.zarr3 import Blosc
+
+            compressor = Blosc(
                 cname="zstd",
                 clevel=9,
-                shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
+                shuffle=1 if byteshuffle else 0,
             )
 
             check_buffer_size(da, chunks_or_shards=shards)
         else:
             assert not filters, "Filters are only supported for zarr version 3"
             zarr_version = 2
-            compressor = numcodecs.Blosc(cname="zstd", clevel=9, shuffle=byteshuffle)
+            from numcodecs import Blosc
+
+            compressor = Blosc(cname="zstd", clevel=9, shuffle=1 if byteshuffle else 0)
 
             check_buffer_size(da, chunks_or_shards=chunks)
 
@@ -178,14 +197,10 @@ def to_zarr(
             )
             array_encoding["shards"] = shards
 
-        encoding = {da.name: array_encoding}
-        for coord in da.coords:
-            encoding[coord] = {"compressors": None}
-
         arguments = {
             "store": tmp_zarr,
             "mode": "w",
-            "encoding": encoding,
+            "encoding": {da.name: array_encoding},
             "zarr_version": zarr_version,
             "consolidated": False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
         }

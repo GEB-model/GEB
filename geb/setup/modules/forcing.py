@@ -9,27 +9,20 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import xclim.indices as xci
+from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
 
-from ...workflows.io import open_zarr, to_zarr
+from ...workflows.io import calculate_scaling, open_zarr, to_zarr
 
 
-def reproject_and_apply_lapse_rate_temperature(T, DEM, grid_mask, lapse_rate=-0.0065):
-    DEM = DEM.raster.mask_nodata().fillna(
-        0
-    )  # assuming 0 for missing DEM values above the ocean
-    DEM_grid = DEM.raster.reproject_like(grid_mask, method="average")
-    if "dparams" in DEM_grid.coords:
-        DEM_grid = DEM_grid.drop_vars(["dparams"])
-    if "inplace" in DEM_grid.coords:
-        DEM_grid = DEM_grid.drop_vars(["inplace"])
-    DEM_forcing = DEM.raster.reproject_like(T, method="average")
-
-    t_at_sea_level = T - DEM_forcing * lapse_rate
+def reproject_and_apply_lapse_rate_temperature(
+    T, elevation_forcing, elevation_target, lapse_rate=-0.0065
+):
+    t_at_sea_level = T - elevation_forcing * lapse_rate
     t_at_sea_level_reprojected = t_at_sea_level.raster.reproject_like(
-        DEM_grid, method="average"
+        elevation_target, method="average"
     )
-    T_grid = t_at_sea_level_reprojected + lapse_rate * DEM_grid
+    T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
     T_grid.name = T.name
     T_grid.attrs = T.attrs
     return T_grid
@@ -41,8 +34,8 @@ def get_pressure_correction_factor(DEM, g, Mo, lapse_rate):
 
 def reproject_and_apply_lapse_rate_pressure(
     pressure,
-    DEM,
-    grid_mask,
+    elevation_forcing,
+    elevation_target,
     g=9.80665,
     Mo=0.0289644,
     lapse_rate=-0.0065,
@@ -66,25 +59,16 @@ def reproject_and_apply_lapse_rate_pressure(
     press_fact : xarray.DataArray
         pressure correction factor
     """
-    DEM = DEM.raster.mask_nodata().fillna(
-        0
-    )  # assuming 0 for missing DEM values above the ocean
-    DEM_grid = DEM.raster.reproject_like(grid_mask, method="average")
-    if "dparams" in DEM_grid.coords:
-        DEM_grid = DEM_grid.drop_vars(["dparams"])
-    if "inplace" in DEM_grid.coords:
-        DEM_grid = DEM_grid.drop_vars(["inplace"])
-    DEM_forcing = DEM.raster.reproject_like(pressure, method="average")
 
     pressure_at_sea_level = pressure / get_pressure_correction_factor(
-        DEM_forcing, g, Mo, lapse_rate
+        elevation_forcing, g, Mo, lapse_rate
     )  # divide by pressure factor to get pressure at sea level
     pressure_at_sea_level_reprojected = pressure_at_sea_level.raster.reproject_like(
-        DEM_grid, method="average"
+        elevation_target, method="average"
     )
     pressure_grid = (
         pressure_at_sea_level_reprojected
-        * get_pressure_correction_factor(DEM_grid, g, Mo, lapse_rate)
+        * get_pressure_correction_factor(elevation_target, g, Mo, lapse_rate)
     )  # multiply by pressure factor to get pressure at DEM grid, corrected for elevation
     pressure_grid.name = pressure.name
     pressure_grid.attrs = pressure.attrs
@@ -195,7 +179,7 @@ class Forcing:
     def plot_forcing(self, da, name):
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
-        data = da.mean(dim=("y", "x"))
+        data = da.mean(dim=("y", "x")).compute()
 
         # plot entire timeline on the first axis
         plot_timeline(da, data, name, axes[0])
@@ -210,71 +194,341 @@ class Forcing:
                 axes[i + 1],
             )
 
-        plt.savefig(self.root / "other" / (name + ".png"))
+        fp = self.report_dir / "climate" / (name + ".png")
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(fp)
+
+    def set_xy_attrs(self, da):
+        da.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
+        da.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
     def set_pr_hourly(self, da, *args, **kwargs):
         name = "climate/pr_hourly"
-        da = self.set_other(da, name=name, *args, **kwargs, time_chunksize=7 * 24)
+        da.attrs = {
+            "standard_name": "precipitation_flux",
+            "long_name": "Precipitation",
+            "units": "kg m-2 s-1",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = 0
+
+        # maximum rainfall in one hour was 304.8 mm in 1956 in Holt, Missouri, USA
+        # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
+        # we take a wide margin of 500 mm/h
+        max_value = 500 / 3600  # convert to kg/m2/s
+        precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
+
+        scaling_factor = calculate_scaling(
+            0, max_value, offset=offset, precision=precision, out_dtype=np.int32
+        )
+
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(
+            da, name=name, *args, **kwargs, time_chunksize=7 * 24, filters=filters
+        )
         self.plot_forcing(da, name)
         return da
 
     def set_pr(self, da, *args, **kwargs):
         name = "climate/pr"
-        da = self.set_other(da, name=name, *args, **kwargs)
+        da.attrs = {
+            "standard_name": "precipitation_flux",
+            "long_name": "Precipitation",
+            "units": "kg m-2 s-1",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        # maximum rainfall in one hour was 304.8 mm in 1956 in Holt, Missouri, USA
+        # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
+        # we take a wide margin of 500 mm/h
+        # this function is currently daily, so the hourly value should be save
+        max_value = 500 / 3600  # convert to kg/m2/s
+        precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
+
+        offset = 0
+        scaling_factor = calculate_scaling(
+            0, max_value, offset=offset, precision=precision, out_dtype=np.int32
+        )
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
         self.plot_forcing(da, name)
         return da
 
     def set_rsds(self, da, *args, **kwargs):
         name = "climate/rsds"
-        da = self.set_other(da, name=name, *args, **kwargs)
+        da.attrs = {
+            "standard_name": "surface_downwelling_shortwave_flux_in_air",
+            "long_name": "Surface Downwelling Shortwave Radiation",
+            "units": "W m-2",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = -250
+        scaling_factor = calculate_scaling(
+            0, 500, offset=offset, precision=0.1, out_dtype=np.int32
+        )
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
         self.plot_forcing(da, name)
         return da
 
     def set_rlds(self, da, *args, **kwargs):
         name = "climate/rlds"
-        da = self.set_other(da, name=name, *args, **kwargs)
+        da.attrs = {
+            "standard_name": "surface_downwelling_longwave_flux_in_air",
+            "long_name": "Surface Downwelling Longwave Radiation",
+            "units": "W m-2",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = -250
+        scaling_factor = calculate_scaling(
+            0, 500, offset=offset, precision=0.1, out_dtype=np.int32
+        )
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
         self.plot_forcing(da, name)
         return da
 
     def set_tas(self, da, *args, **kwargs):
         name = "climate/tas"
-        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        da.attrs = {
+            "standard_name": "air_temperature",
+            "long_name": "Near-Surface Air Temperature",
+            "units": "K",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = -15  # average temperature on earth
+        scaling_factor = calculate_scaling(
+            -100, 60, offset=offset, precision=0.1, out_dtype=np.int32
+        )
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+        da = self.set_other(
+            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+        )
+
         self.plot_forcing(da, name)
         return da
 
     def set_tasmax(self, da, *args, **kwargs):
         name = "climate/tasmax"
-        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        da.attrs = {
+            "standard_name": "air_temperature",
+            "long_name": "Daily Maximum Near-Surface Air Temperature",
+            "units": "K",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = -15  # average temperature on earth
+        scaling_factor = calculate_scaling(
+            -100, 60, offset=offset, precision=0.1, out_dtype=np.int32
+        )
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(
+            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+        )
         self.plot_forcing(da, name)
         return da
 
     def set_tasmin(self, da, *args, **kwargs):
         name = "climate/tasmin"
-        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        da.attrs = {
+            "standard_name": "air_temperature",
+            "long_name": "Daily Minimum Near-Surface Air Temperature",
+            "units": "K",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = -15  # average temperature on earth
+        scaling_factor = calculate_scaling(
+            -100, 60, offset=offset, precision=0.1, out_dtype=np.int32
+        )
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(
+            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+        )
         self.plot_forcing(da, name)
         return da
 
     def set_hurs(self, da, *args, **kwargs):
         name = "climate/hurs"
-        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        da.attrs = {
+            "standard_name": "relative_humidity",
+            "long_name": "Near-Surface Relative Humidity",
+            "units": "%",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = -50
+        scaling_factor = calculate_scaling(
+            0, 100, offset=offset, precision=0.1, out_dtype=np.int32
+        )
+
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(
+            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+        )
         self.plot_forcing(da, name)
         return da
 
     def set_ps(self, da, *args, **kwargs):
         name = "climate/ps"
-        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        da.attrs = {
+            "standard_name": "surface_air_pressure",
+            "long_name": "Surface Air Pressure",
+            "units": "Pa",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = -100_000
+        scaling_factor = calculate_scaling(
+            30_000, 120_000, offset=offset, precision=10, out_dtype=np.int32
+        )
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(
+            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+        )
         self.plot_forcing(da, name)
         return da
 
     def set_sfcwind(self, da, *args, **kwargs):
         name = "climate/sfcwind"
-        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        da.attrs = {
+            "standard_name": "wind_speed",
+            "long_name": "Near-Surface Wind Speed",
+            "units": "m s-1",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = 0
+        scaling_factor = calculate_scaling(
+            0, 120, offset=offset, precision=0.1, out_dtype=np.int32
+        )
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(
+            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+        )
         self.plot_forcing(da, name)
         return da
 
     def set_SPEI(self, da, *args, **kwargs):
         name = "climate/SPEI"
-        da = self.set_other(da, name=name, *args, **kwargs, byteshuffle=True)
+        da.attrs = {
+            "units": "-",
+            "long_name": "Standard Precipitation Evapotranspiration Index",
+            "name": "spei",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = 0
+        scaling_factor = calculate_scaling(
+            5, 5, offset=offset, precision=0.001, out_dtype=np.int32
+        )
+
+        filters = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=np.dtype(np.int32).str,
+            )
+        ]
+
+        da = self.set_other(
+            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+        )
         self.plot_forcing(da, name)
         return da
 
@@ -295,12 +549,7 @@ class Forcing:
             **download_args,
         )
         pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
-        pr_hourly.attrs = {
-            "standard_name": "precipitation_flux",
-            "long_name": "Precipitation",
-            "units": "kg m-2 s-1",
-            "_FillValue": np.nan,
-        }
+
         # ensure no negative values for precipitation, which may arise due to float precision
         pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
         pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
@@ -309,6 +558,9 @@ class Forcing:
         pr = pr.raster.reproject_like(target, method="average")
         self.set_pr(pr)
 
+        elevation_target = self.grid["landsurface/elevation"]
+        elevation_forcing = self.get_elevation_forcing(pr, forcing_type="ERA5")
+
         hourly_rsds = process_ERA5(
             "ssrd",  # surface_solar_radiation_downwards
             **download_args,
@@ -316,12 +568,6 @@ class Forcing:
         rsds = hourly_rsds.resample(time="D").sum() / (
             24 * 3600
         )  # get daily sum and convert from J/m2 to W/m2
-        rsds.attrs = {
-            "standard_name": "surface_downwelling_shortwave_flux_in_air",
-            "long_name": "Surface Downwelling Shortwave Radiation",
-            "units": "W m-2",
-            "_FillValue": np.nan,
-        }
 
         rsds = rsds.raster.reproject_like(target, method="average")
         self.set_rsds(rsds)
@@ -331,54 +577,22 @@ class Forcing:
             **download_args,
         )
         rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        rlds.attrs = {
-            "standard_name": "surface_downwelling_longwave_flux_in_air",
-            "long_name": "Surface Downwelling Longwave Radiation",
-            "units": "W m-2",
-            "_FillValue": np.nan,
-        }
         rlds = rlds.raster.reproject_like(target, method="average")
         self.set_rlds(rlds)
 
         hourly_tas = process_ERA5("t2m", **download_args)
 
-        DEM = self.data_catalog.get_rasterdataset(
-            "fabdem",
-            bbox=hourly_tas.raster.bounds,
-            buffer=500,
-            variables=["fabdem"],
-        ).raster.mask_nodata()
-        DEM = to_zarr(DEM, self.preprocessing_dir / "climate" / "DEM.zarr", crs=4326)
-
         hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-            hourly_tas, DEM, target
+            hourly_tas, elevation_forcing, elevation_target
         )
 
         tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
-        tas_reprojected.attrs = {
-            "standard_name": "air_temperature",
-            "long_name": "Near-Surface Air Temperature",
-            "units": "K",
-            "_FillValue": np.nan,
-        }
         self.set_tas(tas_reprojected)
 
         tasmax = hourly_tas_reprojected.resample(time="D").max()
-        tasmax.attrs = {
-            "standard_name": "air_temperature",
-            "long_name": "Daily Maximum Near-Surface Air Temperature",
-            "units": "K",
-            "_FillValue": np.nan,
-        }
         self.set_tasmax(tasmax)
 
         tasmin = hourly_tas_reprojected.resample(time="D").min()
-        tasmin.attrs = {
-            "standard_name": "air_temperature",
-            "long_name": "Daily Minimum Near-Surface Air Temperature",
-            "units": "K",
-            "_FillValue": np.nan,
-        }
         self.set_tasmin(tasmin)
 
         dew_point_tas = process_ERA5(
@@ -386,7 +600,7 @@ class Forcing:
             **download_args,
         )
         dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-            dew_point_tas, DEM, target
+            dew_point_tas, elevation_forcing, elevation_target
         )
 
         water_vapour_pressure = 0.6108 * np.exp(
@@ -402,12 +616,6 @@ class Forcing:
 
         assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
         relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
-        relative_humidity.attrs = {
-            "standard_name": "relative_humidity",
-            "long_name": "Near-Surface Relative Humidity",
-            "units": "%",
-            "_FillValue": np.nan,
-        }
         relative_humidity = relative_humidity.resample(time="D").mean()
         relative_humidity = relative_humidity.raster.reproject_like(
             target, method="average"
@@ -415,13 +623,9 @@ class Forcing:
         self.set_hurs(relative_humidity)
 
         pressure = process_ERA5("sp", **download_args)
-        pressure = reproject_and_apply_lapse_rate_pressure(pressure, DEM, target)
-        pressure.attrs = {
-            "standard_name": "surface_air_pressure",
-            "long_name": "Surface Air Pressure",
-            "units": "Pa",
-            "_FillValue": np.nan,
-        }
+        pressure = reproject_and_apply_lapse_rate_pressure(
+            pressure, elevation_forcing, elevation_target
+        )
         pressure = pressure.resample(time="D").mean()
         self.set_ps(pressure)
 
@@ -437,12 +641,6 @@ class Forcing:
         )
         v_wind = v_wind.resample(time="D").mean()
         wind_speed = np.sqrt(u_wind**2 + v_wind**2)
-        wind_speed.attrs = {
-            "standard_name": "wind_speed",
-            "long_name": "Near-Surface Wind Speed",
-            "units": "m s-1",
-            "_FillValue": np.nan,
-        }
         wind_speed = wind_speed.raster.reproject_like(target, method="average")
         self.set_sfcwind(wind_speed)
 
@@ -630,20 +828,21 @@ class Forcing:
                 == (ds.time[1] - ds.time[0]).astype(np.int64)
             ).all(), "time is not monotonically increasing with a constant step size"
 
-            mask = self.grid["mask"]
-            mask.raster.set_crs(4326)
+            elevation_target = self.grid["landsurface/elevation"]
             var = var.rename({"lon": "x", "lat": "y"})
             if variable_name in ("tas", "tasmin", "tasmax", "ps"):
-                DEM = self.data_catalog.get_rasterdataset(
-                    "fabdem",
-                    bbox=var.raster.bounds,
-                    buffer=100,
-                    variables=["fabdem"],
+                elevation_forcing = self.get_elevation_forcing(
+                    var, forcing_type="ISIMIP"
                 )
+
                 if variable_name in ("tas", "tasmin", "tasmax"):
-                    var = reproject_and_apply_lapse_rate_temperature(var, DEM, mask)
+                    var = reproject_and_apply_lapse_rate_temperature(
+                        var, elevation_forcing, elevation_target
+                    )
                 elif variable_name == "ps":
-                    var = reproject_and_apply_lapse_rate_pressure(var, DEM, mask)
+                    var = reproject_and_apply_lapse_rate_pressure(
+                        var, elevation_forcing, elevation_target
+                    )
                 else:
                     raise ValueError
             else:
@@ -777,11 +976,6 @@ class Forcing:
         hurs_output = self.full_like(
             self.other["climate/tas"], fill_value=np.nan, nodata=np.nan
         )
-        hurs_output.attrs = {
-            "units": "%",
-            "long_name": "Relative humidity",
-            "_FillValue": np.nan,
-        }
         hurs_ds_30sec.raster.set_crs(4326)
 
         for year in tqdm(range(start_year, end_year + 1)):
@@ -949,11 +1143,6 @@ class Forcing:
         )  # downscaled lwr! assume cloud e is the same
 
         lw_fine = self.snap_to_grid(lw_fine, self.grid, relative_tollerance=0.07)
-        lw_fine.attrs = {
-            "units": "W m-2",
-            "long_name": "Surface Downwelling Longwave Radiation",
-            "_FillValue": np.nan,
-        }
         self.set_rlds(lw_fine)
 
     def setup_pressure_isimip_30arcsec(self, starttime: date, endtime: date):
@@ -1014,11 +1203,6 @@ class Forcing:
         pressure_30_min_regridded_corr = pressure_30_min_regridded * np.exp(
             -(g * orography * M) / (T0 * r0)
         )
-        pressure_30_min_regridded_corr.attrs = {
-            "units": "Pa",
-            "long_name": "surface pressure",
-            "_FillValue": np.nan,
-        }
 
         self.set_ps(pressure_30_min_regridded_corr)
 
@@ -1112,11 +1296,6 @@ class Forcing:
         )
 
         wind_output_clipped = self.snap_to_grid(wind_output_clipped, self.grid)
-        wind_output_clipped.attrs = {
-            "units": "m/s",
-            "long_name": "Surface Wind Speed",
-            "_FillValue": np.nan,
-        }
         self.set_sfcwind(wind_output_clipped)
 
     def setup_SPEI(
@@ -1172,11 +1351,6 @@ class Forcing:
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )
 
-        self.other["climate/tasmin"]["y"].attrs["standard_name"] = "latitude"
-        self.other["climate/tasmin"]["x"].attrs["standard_name"] = "longitude"
-        self.other["climate/tasmin"]["y"].attrs["units"] = "degrees_north"
-        self.other["climate/tasmin"]["x"].attrs["units"] = "degrees_east"
-
         pet = xci.potential_evapotranspiration(
             tasmin=self.other["climate/tasmin"],
             tasmax=self.other["climate/tasmax"],
@@ -1220,16 +1394,13 @@ class Forcing:
             ).astype(np.float32)
 
             # remove all nan values as a result of the sliding window
-            SPEI.attrs = {
-                "units": "-",
-                "long_name": "Standard Precipitation Evapotranspiration Index",
-                "name": "spei",
-                "_FillValue": np.nan,
-            }
 
             with tempfile.TemporaryDirectory() as tmp_spei_folder:
                 tmp_spei_file = Path(tmp_spei_folder) / "tmp_spei_file.zarr"
                 self.logger.info("Calculating SPEI and exporting to temporary file...")
+                SPEI.attrs = {
+                    "_FillValue": np.nan,
+                }
                 SPEI = to_zarr(
                     SPEI,
                     tmp_spei_file,
@@ -1265,3 +1436,25 @@ class Forcing:
                     GEV.sel(dparams="scale").astype(np.float32),
                     name="climate/gev_scale",
                 )
+
+    def get_elevation_forcing(self, da, forcing_type):
+        DEM_fp = self.preprocessing_dir / "climate" / forcing_type / "DEM.zarr"
+        if DEM_fp.exists():
+            elevation_forcing = open_zarr(DEM_fp)
+        else:
+            elevation_forcing = (
+                self.data_catalog.get_rasterdataset(
+                    "fabdem",
+                    bbox=da.rio.bounds(),
+                    buffer=500,
+                    variables=["fabdem"],
+                )
+                .raster.mask_nodata()
+                .fillna(0)
+            )
+            elevation_forcing = to_zarr(
+                elevation_forcing,
+                self.preprocessing_dir / "climate" / "DEM.zarr",
+                crs=4326,
+            )
+        return elevation_forcing
