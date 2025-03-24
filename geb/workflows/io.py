@@ -101,6 +101,7 @@ def to_zarr(
     time_chunks_per_shard=30,
     byteshuffle=True,
     filters=[],
+    compressor=None,
     progress=True,
 ):
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
@@ -173,7 +174,10 @@ def to_zarr(
             zarr_version = 2
             from numcodecs import Blosc
 
-            compressor = Blosc(cname="zstd", clevel=9, shuffle=1 if byteshuffle else 0)
+            if compressor is None:
+                compressor = Blosc(
+                    cname="zstd", clevel=9, shuffle=1 if byteshuffle else 0
+                )
 
             check_buffer_size(da, chunks_or_shards=chunks)
 
@@ -308,7 +312,9 @@ class AsyncForcingReader:
             return self.current_index + 1
         else:
             indices = self.datetime_index == numpy_date
-            assert np.count_nonzero(indices) == 1, "Date not found in the dataset."
+            assert np.count_nonzero(indices) == 1, (
+                f"Date not found in the dataset. The first date available in {self.variable_name} ({self.filepath}) is {self.datetime_index[0]} and the last date is {self.datetime_index[-1]}, while requested date is {date}"
+            )
             return indices.argmax()
 
     def read_timestep(self, date, asynchronous=False):

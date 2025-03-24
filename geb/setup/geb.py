@@ -5384,8 +5384,8 @@ class GEBModel(Forcing):
         x_chunksize=XY_CHUNKSIZE,
         y_chunksize=XY_CHUNKSIZE,
         time_chunksize=1,
-        byteshuffle=False,
-        filters=None,
+        *args,
+        **kwargs,
     ):
         assert isinstance(da, xr.DataArray)
 
@@ -5402,9 +5402,9 @@ class GEBModel(Forcing):
                 x_chunksize=x_chunksize,
                 y_chunksize=y_chunksize,
                 time_chunksize=time_chunksize,
-                byteshuffle=byteshuffle,
                 crs=4326,
-                filters=filters,
+                *args,
+                **kwargs,
             )
         self.other[name] = da
         return self.other[name]
