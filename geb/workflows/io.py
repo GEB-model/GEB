@@ -176,7 +176,7 @@ def to_zarr(
 
             if compressor is None:
                 compressor = Blosc(
-                    cname="zstd", clevel=9, shuffle=1 if byteshuffle else 0
+                    cname="zstd", clevel=22, shuffle=1 if byteshuffle else 0
                 )
 
             check_buffer_size(da, chunks_or_shards=chunks)

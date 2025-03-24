@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import xclim.indices as xci
-from numcodecs.zarr3 import FixedScaleOffset
+from numcodecs.zarr3 import Delta, FixedScaleOffset
 from tqdm import tqdm
 
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
@@ -18,6 +18,8 @@ from ...workflows.io import calculate_scaling, open_zarr, to_zarr
 def reproject_and_apply_lapse_rate_temperature(
     T, elevation_forcing, elevation_target, lapse_rate=-0.0065
 ):
+    assert (T.x.values == elevation_forcing.x.values).all()
+    assert (T.y.values == elevation_forcing.y.values).all
     t_at_sea_level = T - elevation_forcing * lapse_rate
     t_at_sea_level_reprojected = t_at_sea_level.raster.reproject_like(
         elevation_target, method="average"
@@ -60,6 +62,8 @@ def reproject_and_apply_lapse_rate_pressure(
         pressure correction factor
     """
 
+    assert (pressure.x.values == elevation_forcing.x.values).all()
+    assert (pressure.y.values == elevation_forcing.y.values).all
     pressure_at_sea_level = pressure / get_pressure_correction_factor(
         elevation_forcing, g, Mo, lapse_rate
     )  # divide by pressure factor to get pressure at sea level
@@ -179,7 +183,8 @@ class Forcing:
     def plot_forcing(self, da, name):
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
-        data = da.mean(dim=("y", "x")).compute()
+        mask = self.grid["mask"]
+        data = da.where(~mask).mean(dim=("y", "x"), skipna=True).compute()
 
         # plot entire timeline on the first axis
         plot_timeline(da, data, name, axes[0])
@@ -230,13 +235,12 @@ class Forcing:
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
         ]
 
         da = self.set_other(
             da, name=name, *args, **kwargs, time_chunksize=7 * 24, filters=filters
         )
-        self.plot_forcing(da, name)
         return da
 
     def set_pr(self, da, *args, **kwargs):
@@ -266,9 +270,10 @@ class Forcing:
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
         self.plot_forcing(da, name)
         return da
@@ -293,9 +298,10 @@ class Forcing:
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
         self.plot_forcing(da, name)
         return da
@@ -320,9 +326,10 @@ class Forcing:
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
         self.plot_forcing(da, name)
         return da
@@ -337,18 +344,23 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
-        offset = -15  # average temperature on earth
+        K_to_C = 273.15
+        offset = -15 - K_to_C  # average temperature on earth
         scaling_factor = calculate_scaling(
-            -100, 60, offset=offset, precision=0.1, out_dtype=np.int32
+            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1, out_dtype=np.int32
         )
+
         filters = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
+            Delta(dtype=np.dtype(np.int32).str),
         ]
+
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
             da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
         )
@@ -366,19 +378,23 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
-        offset = -15  # average temperature on earth
+        K_to_C = 273.15
+        offset = -15 - K_to_C  # average temperature on earth
         scaling_factor = calculate_scaling(
-            -100, 60, offset=offset, precision=0.1, out_dtype=np.int32
+            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1, out_dtype=np.int32
         )
+
         filters = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
+            Delta(dtype=np.dtype(np.int32).str),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
             da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
         )
@@ -395,19 +411,23 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
-        offset = -15  # average temperature on earth
+        K_to_C = 273.15
+        offset = -15 - K_to_C  # average temperature on earth
         scaling_factor = calculate_scaling(
-            -100, 60, offset=offset, precision=0.1, out_dtype=np.int32
+            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1, out_dtype=np.int32
         )
+
         filters = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
+            Delta(dtype=np.dtype(np.int32).str),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
             da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
         )
@@ -435,13 +455,20 @@ class Forcing:
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
+            Delta(dtype=np.dtype(np.int32).str),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
             da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
         )
         self.plot_forcing(da, name)
+        return da
+
+    def _mask_forcing(self, da, value):
+        da_ = xr.where(~self.grid["mask"], da, value, keep_attrs=True)
+        da = da_.transpose(*da.dims)
         return da
 
     def set_ps(self, da, *args, **kwargs):
@@ -464,11 +491,18 @@ class Forcing:
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
+            Delta(dtype=np.dtype(np.int32).str),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
-            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            byteshuffle=True,
+            filters=filters,
         )
         self.plot_forcing(da, name)
         return da
@@ -493,9 +527,11 @@ class Forcing:
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
+            Delta(dtype=np.dtype(np.int32).str),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
             da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
         )
@@ -523,9 +559,11 @@ class Forcing:
                 scale=scaling_factor,
                 dtype=da.dtype,
                 astype=np.dtype(np.int32).str,
-            )
+            ),
+            Delta(dtype=np.dtype(np.int32).str),
         ]
 
+        da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
             da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
         )
@@ -548,19 +586,19 @@ class Forcing:
             "tp",  # total_precipitation
             **download_args,
         )
-        elevation_forcing = self.get_elevation_forcing(pr_hourly, forcing_type="ERA5")
+        elevation_forcing, elevation_target = self.get_elevation_forcing_and_grid(
+            self.grid["mask"], pr_hourly, forcing_type="ERA5"
+        )
 
         pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
 
         # ensure no negative values for precipitation, which may arise due to float precision
         pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
+        # pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
         pr = pr.raster.reproject_like(target, method="average")
-        self.set_pr(pr)
-
-        elevation_target = self.grid["landsurface/elevation"]
+        # self.set_pr(pr)
 
         hourly_rsds = process_ERA5(
             "ssrd",  # surface_solar_radiation_downwards
@@ -652,12 +690,12 @@ class Forcing:
             )
             # download source data from ISIMIP
             self.logger.info("setting up forcing data")
-            # high_res_variables = ["pr", "rsds", "tas", "tasmax", "tasmin"]
-            # self.setup_30arcsec_variables_isimip(high_res_variables, starttime, endtime)
+            high_res_variables = ["pr", "rsds", "tas", "tasmax", "tasmin"]
+            self.setup_30arcsec_variables_isimip(high_res_variables, starttime, endtime)
             self.logger.info("setting up relative humidity...")
-            # self.setup_hurs_isimip_30arcsec(starttime, endtime)
+            self.setup_hurs_isimip_30arcsec(starttime, endtime)
             self.logger.info("setting up longwave radiation...")
-            # self.setup_longwave_isimip_30arcsec(starttime=starttime, endtime=endtime)
+            self.setup_longwave_isimip_30arcsec(starttime=starttime, endtime=endtime)
             self.logger.info("setting up pressure...")
             self.setup_pressure_isimip_30arcsec(starttime, endtime)
             self.logger.info("setting up wind...")
@@ -686,9 +724,9 @@ class Forcing:
         self,
         starttime: date,
         endtime: date,
-        data_source: str = "isimip",
-        resolution_arcsec: int = 30,
-        forcing: str = "chelsa-w5e5",
+        data_source: str,
+        resolution_arcsec,
+        forcing,
         ssp=None,
     ):
         """
@@ -829,20 +867,19 @@ class Forcing:
                 == (ds.time[1] - ds.time[0]).astype(np.int64)
             ).all(), "time is not monotonically increasing with a constant step size"
 
-            elevation_target = self.grid["landsurface/elevation"]
             var = var.rename({"lon": "x", "lat": "y"})
             if variable_name in ("tas", "tasmin", "tasmax", "ps"):
-                elevation_forcing = self.get_elevation_forcing(
-                    var, forcing_type="ISIMIP"
+                elevation_forcing, elevation_grid = self.get_elevation_forcing_and_grid(
+                    self.grid["mask"], var, forcing_type="ISIMIP"
                 )
 
                 if variable_name in ("tas", "tasmin", "tasmax"):
                     var = reproject_and_apply_lapse_rate_temperature(
-                        var, elevation_forcing, elevation_target
+                        var, elevation_forcing, elevation_grid
                     )
                 elif variable_name == "ps":
                     var = reproject_and_apply_lapse_rate_pressure(
-                        var, elevation_forcing, elevation_target
+                        var, elevation_forcing, elevation_grid
                     )
                 else:
                     raise ValueError
@@ -1438,27 +1475,35 @@ class Forcing:
                     name="climate/gev_scale",
                 )
 
-    def get_elevation_forcing(self, da, forcing_type):
-        DEM_fp = self.preprocessing_dir / "climate" / forcing_type / "DEM.zarr"
-        if DEM_fp.exists():
-            elevation_forcing = open_zarr(DEM_fp)
+    def get_elevation_forcing_and_grid(self, grid, forcing_grid, forcing_type):
+        # we also need to process the elevation data for the grid, because the
+        # elevation data that is available in the model is masked to the grid
+        elevation_forcing_fp = (
+            self.preprocessing_dir / "climate" / forcing_type / "DEM_forcing.zarr"
+        )
+        elevation_grid_fp = self.preprocessing_dir / "climate" / "DEM.zarr"
+        if elevation_forcing_fp.exists() and elevation_grid_fp.exists():
+            elevation_forcing = open_zarr(elevation_forcing_fp)
+            elevation_grid = open_zarr(elevation_grid_fp)
         else:
-            elevation_forcing = (
+            elevation = (
                 self.data_catalog.get_rasterdataset(
                     "fabdem",
-                    bbox=da.rio.bounds(),
+                    bbox=forcing_grid.rio.bounds(),  # forcing bounds are larger
                     buffer=500,
                     variables=["fabdem"],
                 )
                 .raster.mask_nodata()
                 .fillna(0)
             )
-            elevation_forcing = elevation_forcing.raster.reproject_like(
-                da, method="average"
+            elevation_forcing = elevation.raster.reproject_like(
+                forcing_grid, method="average"
             )
             elevation_forcing = to_zarr(
                 elevation_forcing,
-                DEM_fp,
+                elevation_forcing_fp,
                 crs=4326,
             )
-        return elevation_forcing
+            elevation_grid = elevation.raster.reproject_like(grid, method="average")
+            elevation_grid = to_zarr(elevation_grid, elevation_grid_fp, crs=4326)
+        return elevation_forcing, elevation_grid
