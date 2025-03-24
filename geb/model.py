@@ -55,6 +55,8 @@ class GEBModel(HazardDriver, ABM_Model):
             for key, value in data.items():
                 data[key] = self.input_folder / value
 
+        self.mask = load_geom(self.files["geoms"]["mask"])
+
         self.store = Store(self)
         self.artists = Artists(self)
 
@@ -398,6 +400,26 @@ class GEBModel(HazardDriver, ABM_Model):
     @property
     def crs(self):
         return 4326
+
+    @property
+    def bounds(self):
+        return self.mask.total_bounds
+
+    @property
+    def xmin(self):
+        return self.bounds[0]
+
+    @property
+    def xmax(self):
+        return self.bounds[2]
+
+    @property
+    def ymin(self):
+        return self.bounds[1]
+
+    @property
+    def ymax(self):
+        return self.bounds[3]
 
     def close(self) -> None:
         """Finalizes the model."""

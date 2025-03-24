@@ -246,7 +246,7 @@ def run_model_with_method(
                 ChartModule(series) for series in config["draw"]["plot"]
             ]
 
-        DISPLAY_TIMESTEPS = ["day", "week", "month", "year"]
+        DISPLAY_TIMESTEPS = [1, 10, 100, 1000]
 
         server = ModularServer(
             "GEB",

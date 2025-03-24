@@ -21,7 +21,7 @@ class Artists(honeybeesArtists):
         self.color = "#1386FF"
         self.min_colorbar_alpha = 0.4
         self.background_variable = (
-            "data.HRU.var.land_use_type"  # set initial background iamge.
+            "hydrology.HRU.var.land_use_type"  # set initial background iamge.
         )
         self.custom_plot = self.get_custom_plot()
 
@@ -146,15 +146,15 @@ class Artists(honeybeesArtists):
                         continue
 
         add_vars(
-            "data.grid.var",
-            compressed_size=self.hydrology.grid.compressed_size,
+            "hydrology.grid.var",
+            compressed_size=self.model.hydrology.grid.compressed_size,
             dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
         )
         add_vars(
-            "data.HRU.var",
-            compressed_size=self.hydrology.HRU.compressed_size,
+            "hydrology.HRU.var",
+            compressed_size=self.model.hydrology.HRU.compressed_size,
             dtypes=np.ndarray,
             variant_dim=0,
             invariant_dim=1,
