@@ -1,3 +1,11 @@
+## Overview
+GEB (Geographical Environmental and Behavioural model) simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale. The model does so through a "deep" coupling of an agent-based model a hydrological model, a vegetation model and a hydrodynamic model. You can find full documentation [here](https://geb-model.github.io/GEB/).
+
+The figure below shows a schematic overview of the model agent-based and hydrological model.
+
+![Schematic model overview of GEB.](https://raw.githubusercontent.com/GEB-model/GEB/refs/heads/main/docs/images/schematic_overview.svg "Schematic model overview")
+
+
 ## Installation (not for development)
 
 GEB can be installed with pip, including all dependencies on Windows, Linux and Mac OS X.
@@ -38,7 +46,7 @@ Visual Studio code should now prompts you to install the recommended extensions,
 geb --help
 ```
 
-We have also prepared a configuration for the debugger in `.vscode/launch.json`. You can run the debugger by pressing F5. The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`).
+We have also prepared a configuration for the debugger in `.vscode/launch.json`. The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`).
 
 You may need to adjust the paths in  `.vscode/launch.json` to match your setup. In case you do this, please make sure to not commit these changes to the repository. To tell git to ignore any local changes here, you can run:
 
@@ -47,13 +55,6 @@ git update-index --skip-worktree .vscode/extensions.json  .vscode/launch.json  .
 ```
 
 Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome. You can find a list of active and past contributors at the bottom of this file.
-
-## Overview
-GEB (Geographical Environmental and Behavioural model) simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale. The model does so through a "deep" coupling of an agent-based model a hydrological model, a vegetation model and a hydrodynamic model. You can find full documentation [here](https://geb-model.github.io/GEB/).
-
-The figure below shows a schematic overview of the model agent-based and hydrological model.
-
-![Schematic model overview of GEB.](https://raw.githubusercontent.com/GEB-model/GEB/refs/heads/main/docs/images/schematic_overview.svg "Schematic model overview")
 
 ## Cite as
 
