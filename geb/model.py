@@ -83,13 +83,12 @@ class GEBModel(HazardDriver, ABM_Model):
 
         for member in forecasts.member:
             self.multiverse_name = member.item()
-            # self.sfincs.precipitation_dataarray = (
-            #     forecasts.sel(member=member).rename({"accum_precipitation": "precip"})
-            #     / 3600
-            # )
             self.sfincs.precipitation_dataarray = (
-                precipitation_dataarray / 100 * member.item()
+                 forecasts.sel(member=member)/3600
             )
+            #self.sfincs.precipitation_dataarray = (
+            #    precipitation_dataarray / 100 * member.item()
+            #)
             print(f"Running forecast member {member.item()}...")
             for _ in range(n_timesteps):
                 self.step()

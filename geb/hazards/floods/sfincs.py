@@ -134,8 +134,6 @@ class SFINCS:
     def to_sfincs_datetime(self, dt: datetime):
         return dt.strftime("%Y%m%d %H%M%S")
 
-    def forecasts(self): # this was a test
-
     def set_forcing(self, event, start_time):
         if self.model.simulate_hydrology:
             n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
@@ -407,5 +405,6 @@ class SFINCS:
             "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
             "crs": self.crs,
             "depth_calculation": "power_law",
+            #"river_method": 'detailed',
             "mask_flood_plains": False,  # setting this to True sometimes leads to errors
         }
