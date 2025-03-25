@@ -812,9 +812,9 @@ def plant(
     Returns:
         plant: Subarray map of what crops are planted this day.
     """
-    assert farmers_going_out_of_business is False, (
-        "Farmers going out of business not implemented."
-    )
+    assert (
+        farmers_going_out_of_business is False
+    ), "Farmers going out of business not implemented."
 
     plant = np.full_like(crop_map, -1, dtype=np.int32)
     sell_land = np.zeros(n, dtype=np.bool_)
@@ -1274,6 +1274,16 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_sprinkler"]["return_fraction_drip"]
 
+        self.irr_eff_surface = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["irr_eff_surface"]
+        self.irr_eff_sprinkler = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["irr_eff_sprinkler"]
+        self.irr_eff_drip = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["irr_eff_drip"]
+
         # Calibration factors
         self.intention_factor_neighbor = self.model.config["agent_settings"]["farmers"][
             "social_network"
@@ -1625,9 +1635,9 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
         for attribute in agent_relation_attributes:
-            assert getattr(self, attribute).shape[0] == self.n, (
-                "attribute does not exist or is of wrong size"
-            )
+            assert (
+                getattr(self, attribute).shape[0] == self.n
+            ), "attribute does not exist or is of wrong size"
 
         self.household_size = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1
@@ -1648,7 +1658,10 @@ class CropFarmers(AgentBaseClass):
         # Set irrigation efficiency data
         irrigation_mask = self.irrigation_source != -1
         self.irrigation_efficiency = AgentArray(
-            n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=0.50
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.float32,
+            fill_value=self.irr_eff_surface,
         )
 
         self.return_fraction = AgentArray(
@@ -1676,22 +1689,22 @@ class CropFarmers(AgentBaseClass):
 
         rng = np.random.default_rng(42)
         self.irrigation_efficiency[eff_vict_mask] = rng.choice(
-            [0.50, 0.70, 0.90],
+            [self.irr_eff_surface, self.irr_eff_sprinkler, self.irr_eff_drip],
             size=eff_vict_mask.sum(),
             p=[eff_vict[0], eff_vict[1], eff_vict[2]],
         )  # vict
         self.irrigation_efficiency[eff_nsw_mask] = rng.choice(
-            [0.50, 0.70, 0.90],
+            [self.irr_eff_surface, self.irr_eff_sprinkler, self.irr_eff_drip],
             size=eff_nsw_mask.sum(),
             p=[eff_nsw[0], eff_nsw[1], eff_nsw[2]],
         )  # nsw
-        self.adapted[:, 2][self.irrigation_efficiency == 0.70] = 1
-        self.adapted[:, 3][self.irrigation_efficiency == 0.90] = 1
+        self.adapted[:, 2][self.irrigation_efficiency == self.irr_eff_sprinkler] = 1
+        self.adapted[:, 3][self.irrigation_efficiency == self.irr_eff_drip] = 1
 
-        self.return_fraction[self.irrigation_efficiency == 0.70] = (
+        self.return_fraction[self.irrigation_efficiency == self.irr_eff_sprinkler] = (
             self.return_fraction_sprinkler
         )
-        self.return_fraction[self.irrigation_efficiency == 0.90] = (
+        self.return_fraction[self.irrigation_efficiency == self.irr_eff_drip] = (
             self.return_fraction_drip
         )
 
@@ -1767,8 +1780,12 @@ class CropFarmers(AgentBaseClass):
         self.farmer_class_irrigation = AgentArray(
             n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=0
         )
-        self.farmer_class_irrigation[self.irrigation_efficiency == 0.70] = 1
-        self.farmer_class_irrigation[self.irrigation_efficiency == 0.90] = 2
+        self.farmer_class_irrigation[
+            self.irrigation_efficiency == self.irr_eff_sprinkler
+        ] = 1
+        self.farmer_class_irrigation[
+            self.irrigation_efficiency == self.irr_eff_drip
+        ] = 2
 
         self.water_use = AgentArray(
             n=self.n,
@@ -4500,9 +4517,9 @@ class CropFarmers(AgentBaseClass):
         mask_groundwater = self.farmer_class_water == 2
 
         # Create mutually exclusive boolean masks for irrigation methods
-        mask_surface_irrigation = self.irrigation_efficiency == 0.50
-        mask_sprinkler_irrigation = self.irrigation_efficiency == 0.70
-        mask_drip_irrigation = self.irrigation_efficiency == 0.90
+        mask_surface_irrigation = self.irrigation_efficiency == self.irr_eff_surface
+        mask_sprinkler_irrigation = self.irrigation_efficiency == self.irr_eff_sprinkler
+        mask_drip_irrigation = self.irrigation_efficiency == self.irr_eff_drip
 
         # # Compute power required for groundwater extraction per agent (kW)
         # power = (
@@ -5136,9 +5153,9 @@ class CropFarmers(AgentBaseClass):
             # Loop through each month from start_date to end_date to get the sum of crop costs over the past year
             current_date = start_date
             while current_date <= end_date:
-                assert self.crop_prices[0] is not None, (
-                    "behavior needs crop prices to work"
-                )
+                assert (
+                    self.crop_prices[0] is not None
+                ), "behavior needs crop prices to work"
                 monthly_price = self.crop_prices[1][
                     self.crop_prices[0].get(current_date)
                 ]
@@ -5369,8 +5386,12 @@ class CropFarmers(AgentBaseClass):
                 self.yearly_abstraction_m3_by_farmer[:, 3, 0] == 0
             ] = 3
 
-            self.farmer_class_irrigation[self.irrigation_efficiency == 0.70] = 0
-            self.farmer_class_irrigation[self.irrigation_efficiency == 0.90] = 1
+            self.farmer_class_irrigation[
+                self.irrigation_efficiency == self.irr_eff_sprinkler
+            ] = 0
+            self.farmer_class_irrigation[
+                self.irrigation_efficiency == self.irr_eff_drip
+            ] = 1
 
             timer = TimingModule("crop_farmers")
 
@@ -5506,9 +5527,9 @@ class CropFarmers(AgentBaseClass):
 
     def remove_agent(self, farmer_idx: int, land_use_type: int) -> np.ndarray:
         assert farmer_idx >= 0, "Farmer index must be positive."
-        assert farmer_idx < self.n, (
-            "Farmer index must be less than the number of agents."
-        )
+        assert (
+            farmer_idx < self.n
+        ), "Farmer index must be less than the number of agents."
         last_farmer_HRUs = get_farmer_HRUs(
             self.field_indices, self.field_indices_by_farmer.data, -1
         )
