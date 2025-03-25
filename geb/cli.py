@@ -489,9 +489,9 @@ def update(
 
 
 @cli.command()
-def evaluate():
-    """Evaluate model."""
-    raise NotImplementedError
+@click_run_options()
+def evaluate(*args, **kwargs):
+    run_model_with_method(method="evaluate", *args, **kwargs)
 
 
 @click.option(

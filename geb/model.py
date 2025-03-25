@@ -324,6 +324,9 @@ class GEBModel(HazardDriver, ABM_Model):
         HazardDriver.initialize(self, longest_flood_event=30)
         self.sfincs.get_return_period_maps()
 
+    def evaluate(self):
+        print("Evaluating model...")
+
     @property
     def current_day_of_year(self) -> int:
         """Gets the current day of the year.
