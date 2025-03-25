@@ -3192,7 +3192,7 @@ class CropFarmers(AgentBaseClass):
         def power_model(X, a, b):
             return a * X**b
 
-        # Initialize dictionaries for coefficients and R² values
+        # Initialize dictionaries for coefficients and RÂ² values
         model_names = ["linear", "exponential", "logarithmic", "quadratic", "power"]
         r_squared_dict = {model: np.zeros(n_agents) for model in model_names}
         coefficients_dict = {model: [] for model in model_names}
@@ -3307,7 +3307,7 @@ class CropFarmers(AgentBaseClass):
             x_max = np.max(X_valid)
             x_plot = np.linspace(x_min, x_max, 100)
 
-            # Plot each fitted model with R² in the label
+            # Plot each fitted model with RÂ² in the label
             for model in model_names:
                 coeffs = coefficients_dict[model][agent_idx]
                 r_squared = r_squared_dict[model][agent_idx]
@@ -3326,7 +3326,7 @@ class CropFarmers(AgentBaseClass):
                             plt.plot(
                                 x_plot[x_plot > 0],
                                 y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
+                                label=f"{model} (RÂ²={r_squared:.3f})",
                                 linewidth=2,
                             )
                     elif model == "exponential":
@@ -3334,7 +3334,7 @@ class CropFarmers(AgentBaseClass):
                         plt.plot(
                             x_plot,
                             y_plot,
-                            label=f"{model} (R²={r_squared:.3f})",
+                            label=f"{model} (RÂ²={r_squared:.3f})",
                             linewidth=2,
                         )
                     elif model == "logarithmic":
@@ -3344,7 +3344,7 @@ class CropFarmers(AgentBaseClass):
                             plt.plot(
                                 x_plot_positive,
                                 y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
+                                label=f"{model} (RÂ²={r_squared:.3f})",
                                 linewidth=2,
                             )
                     elif model == "quadratic":
@@ -3352,7 +3352,7 @@ class CropFarmers(AgentBaseClass):
                         plt.plot(
                             x_plot,
                             y_plot,
-                            label=f"{model} (R²={r_squared:.3f})",
+                            label=f"{model} (RÂ²={r_squared:.3f})",
                             linewidth=2,
                         )
                     elif model == "power":
@@ -3362,11 +3362,11 @@ class CropFarmers(AgentBaseClass):
                             plt.plot(
                                 x_plot_positive,
                                 y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
+                                label=f"{model} (RÂ²={r_squared:.3f})",
                                 linewidth=2,
                             )
                 else:
-                    continue  # Skip models with invalid coefficients or R²
+                    continue  # Skip models with invalid coefficients or RÂ²
 
             # Add labels and legend
             plt.xlabel("SPEI Probability")
@@ -3382,11 +3382,11 @@ class CropFarmers(AgentBaseClass):
             plt.savefig(filename)
             plt.close()
 
-        # Compute median R² for each model
+        # Compute median RÂ² for each model
         for model in model_names:
             valid_r2 = r_squared_dict[model][~np.isnan(r_squared_dict[model])]
             median_r2 = np.median(valid_r2) if len(valid_r2) > 0 else np.nan
-            print(f"Median R² for {model}: {median_r2}")
+            print(f"Median RÂ² for {model}: {median_r2}")
 
     def calculate_yield_spei_relation_test_group(self):
         import matplotlib
@@ -3431,7 +3431,7 @@ class CropFarmers(AgentBaseClass):
         def power_model(X, a, b):
             return a * X**b
 
-        # Initialize dictionaries for coefficients and R² values
+        # Initialize dictionaries for coefficients and RÂ² values
         model_names = ["linear", "exponential", "logarithmic", "quadratic", "power"]
         r_squared_dict = {model: np.full(n_groups, np.nan) for model in model_names}
         coefficients_dict = {model: [None] * n_groups for model in model_names}
@@ -3487,7 +3487,7 @@ class CropFarmers(AgentBaseClass):
                     r_squared_dict["linear"][group_idx] = r_squared
                     coefficients_dict["linear"][group_idx] = (a, b)
                 except (RuntimeError, ValueError):
-                    pass  # Keep NaN in R² and None in coefficients
+                    pass  # Keep NaN in RÂ² and None in coefficients
 
                 # Model 2: Exponential
                 try:
@@ -3572,7 +3572,7 @@ class CropFarmers(AgentBaseClass):
                                 plt.plot(
                                     x_plot_positive,
                                     y_plot,
-                                    label=f"{model} (R²={r_squared:.3f})",
+                                    label=f"{model} (RÂ²={r_squared:.3f})",
                                     linewidth=2,
                                 )
                         elif model == "exponential":
@@ -3580,7 +3580,7 @@ class CropFarmers(AgentBaseClass):
                             plt.plot(
                                 x_plot,
                                 y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
+                                label=f"{model} (RÂ²={r_squared:.3f})",
                                 linewidth=2,
                             )
                         elif model == "logarithmic":
@@ -3590,7 +3590,7 @@ class CropFarmers(AgentBaseClass):
                                 plt.plot(
                                     x_plot_positive,
                                     y_plot,
-                                    label=f"{model} (R²={r_squared:.3f})",
+                                    label=f"{model} (RÂ²={r_squared:.3f})",
                                     linewidth=2,
                                 )
                         elif model == "quadratic":
@@ -3598,7 +3598,7 @@ class CropFarmers(AgentBaseClass):
                             plt.plot(
                                 x_plot,
                                 y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
+                                label=f"{model} (RÂ²={r_squared:.3f})",
                                 linewidth=2,
                             )
                         elif model == "power":
@@ -3608,7 +3608,7 @@ class CropFarmers(AgentBaseClass):
                                 plt.plot(
                                     x_plot_positive,
                                     y_plot,
-                                    label=f"{model} (R²={r_squared:.3f})",
+                                    label=f"{model} (RÂ²={r_squared:.3f})",
                                     linewidth=2,
                                 )
                 # Add labels and legend
@@ -3626,14 +3626,14 @@ class CropFarmers(AgentBaseClass):
                 # Not enough data points for this group
                 continue
 
-        # Compute median R² for each model across all groups
+        # Compute median RÂ² for each model across all groups
         for model in model_names:
             valid_r2 = r_squared_dict[model][~np.isnan(r_squared_dict[model])]
             median_r2 = np.median(valid_r2) if len(valid_r2) > 0 else np.nan
-            print(f"Median R² for {model}: {median_r2}")
+            print(f"Median RÂ² for {model}: {median_r2}")
 
         # Assign relations to agents based on their group
-        # Here, we'll choose the model with the highest median R²
+        # Here, we'll choose the model with the highest median RÂ²
         # Alternatively, you can select the best model per group
         # For simplicity, we'll assign the linear model coefficients to agents
 
@@ -3651,7 +3651,7 @@ class CropFarmers(AgentBaseClass):
         # Assign to agents
         self.farmer_yield_probability_relation = np.column_stack((a_array, b_array))
 
-        # Print overall best-fitting model based on median R²
+        # Print overall best-fitting model based on median RÂ²
         median_r2_values = {
             model: np.nanmedian(r_squared_dict[model]) for model in model_names
         }
@@ -3662,7 +3662,7 @@ class CropFarmers(AgentBaseClass):
         # Number of agents
         n_agents = self.yearly_yield_ratio.shape[0]
 
-        # Initialize arrays for coefficients and R²
+        # Initialize arrays for coefficients and RÂ²
         a_array = np.zeros(n_agents)
         b_array = np.zeros(n_agents)
         r_squared_array = np.zeros(n_agents)
@@ -3694,7 +3694,7 @@ class CropFarmers(AgentBaseClass):
                 coefficients = np.linalg.lstsq(X_matrix, y_valid, rcond=None)[0]
                 a, b = coefficients
 
-                # Calculate R²
+                # Calculate RÂ²
                 y_pred = a * X_valid + b
                 ss_res = np.sum((y_valid - y_pred) ** 2)
                 ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
@@ -3710,9 +3710,9 @@ class CropFarmers(AgentBaseClass):
         # Assign relations to agents
         self.farmer_yield_probability_relation = np.column_stack((a_array, b_array))
 
-        # Print median R²
+        # Print median RÂ²
         valid_r2 = r_squared_array[~np.isnan(r_squared_array)]
-        print("Median R²:", np.median(valid_r2) if len(valid_r2) > 0 else "N/A")
+        print("Median RÂ²:", np.median(valid_r2) if len(valid_r2) > 0 else "N/A")
 
     def calculate_yield_spei_relation_group(self):
         # Create unique groups
@@ -3741,7 +3741,7 @@ class CropFarmers(AgentBaseClass):
         # Number of groups
         n_groups = unique_crop_combinations.shape[0]
 
-        # Initialize arrays for coefficients and R²
+        # Initialize arrays for coefficients and RÂ²
         a_array = np.zeros(n_groups)
         b_array = np.zeros(n_groups)
         r_squared_array = np.zeros(n_groups)
@@ -3782,7 +3782,7 @@ class CropFarmers(AgentBaseClass):
                 # Calculate predicted y values
                 y_pred = a * np.exp(b * X_group_valid)
 
-                # Calculate R²
+                # Calculate RÂ²
                 ss_res = np.sum((y_group_valid - y_pred) ** 2)
                 ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
                 r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
@@ -3800,10 +3800,10 @@ class CropFarmers(AgentBaseClass):
         )
         self.farmer_yield_probability_relation = farmer_yield_probability_relation
 
-        # Print median R²
+        # Print median RÂ²
         valid_r2 = r_squared_array[~np.isnan(r_squared_array)][group_indices]
         print(
-            "Median R² for exponential model:",
+            "Median RÂ² for exponential model:",
             np.median(valid_r2) if len(valid_r2) > 0 else "N/A",
         )
 
@@ -4142,8 +4142,8 @@ class CropFarmers(AgentBaseClass):
         ) | ~has_irrigation_access
         self.adapted[expired_adaptations, adaptation_type] = 0
         self.time_adapted[expired_adaptations, adaptation_type] = -1
-        self.irrigation_efficiency[expired_adaptations] = 0.5
-        self.return_fraction[expired_adaptations] = self.return_fraction_surface
+        # self.irrigation_efficiency[expired_adaptations] = 0.5
+        # self.return_fraction[expired_adaptations] = self.return_fraction_surface
 
         adapted = self.adapted[:, adaptation_type].copy()
 
@@ -4406,7 +4406,7 @@ class CropFarmers(AgentBaseClass):
             Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing:
                 - energy_costs (np.ndarray): Energy costs per agent (USD/year).
                 - water_costs (np.ndarray): Water costs per agent (USD/year).
-                - average_extraction_speed (np.ndarray): Average water extraction speed per agent (m³/s).
+                - average_extraction_speed (np.ndarray): Average water extraction speed per agent (mÂ³/s).
         """
         # Get electricity costs per agent based on their region and current time
         electricity_costs = np.full(
@@ -4467,7 +4467,7 @@ class CropFarmers(AgentBaseClass):
         # Initialize array to store average extraction per unique group
         average_extraction_array = np.full(len(unique_crop_groups), 0, dtype=np.float32)
 
-        # Compute yearly water abstraction per m² per agent
+        # Compute yearly water abstraction per mÂ² per agent
         yearly_abstraction_m3_per_m2 = (
             self.yearly_abstraction_m3_by_farmer
             / self.field_size_per_farmer[..., None, None]
@@ -4486,7 +4486,9 @@ class CropFarmers(AgentBaseClass):
 
             # Compute average extraction for the group if there are non-zero values
             if non_zero_extractions.size > 0:
-                average_extraction = np.mean(non_zero_extractions)  # m³ per m² per year
+                average_extraction = np.mean(
+                    non_zero_extractions
+                )  # mÂ³ per mÂ² per year
             else:
                 average_extraction = 0.0
 
@@ -4503,13 +4505,13 @@ class CropFarmers(AgentBaseClass):
         )
         average_extraction_m2 = average_extraction_array[positions_agent]
 
-        # Compute average extraction per agent (m³/year)
+        # Compute average extraction per agent (mÂ³/year)
         average_extraction = average_extraction_m2 * self.field_size_per_farmer
 
-        # Compute average extraction speed per agent (m³/s)
+        # Compute average extraction speed per agent (mÂ³/s)
         average_extraction_speed = (
             average_extraction / 365 / self.pump_hours / 3600
-        )  # Convert from m³/year to m³/s
+        )  # Convert from mÂ³/year to mÂ³/s
 
         # Create boolean masks for different types of water sources
         mask_channel = self.farmer_class_water == 0  # Surface water irrigating farmers
@@ -4610,7 +4612,7 @@ class CropFarmers(AgentBaseClass):
 
         Parameters:
             groundwater_depth (np.ndarray): Array of groundwater depths per agent (in meters).
-            average_extraction_speed (np.ndarray): Array of average water extraction speeds per agent (m³/s).
+            average_extraction_speed (np.ndarray): Array of average water extraction speeds per agent (mÂ³/s).
 
         Returns:
             Tuple[np.ndarray, np.ndarray]:
@@ -4656,7 +4658,7 @@ class CropFarmers(AgentBaseClass):
         total_pump_duration = np.mean(self.total_crop_age, axis=1)  # days
 
         # Calculate the power required per agent for pumping groundwater (in kilowatts)
-        # specific_weight_water (N/m³), groundwater_depth (m), average_extraction_speed (m³/s), pump_efficiency (%)
+        # specific_weight_water (N/mÂ³), groundwater_depth (m), average_extraction_speed (mÂ³/s), pump_efficiency (%)
         power = (
             self.specific_weight_water
             * groundwater_depth
