@@ -510,9 +510,9 @@ class GEBModel(Forcing, Crops):
 
         target = self.subgrid["mask"]
         target.raster.set_crs(4326)
-        fabdem = fabdem.raster.reproject_like(target, method="average")
+
         self.set_subgrid(
-            fabdem,
+            fabdem.raster.reproject_like(target, method="average"),
             name="landsurface/elevation",
         )
 
