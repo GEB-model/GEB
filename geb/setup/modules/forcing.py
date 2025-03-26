@@ -619,41 +619,60 @@ class Forcing:
             hourly_tas, elevation_forcing, elevation_target
         )
 
-        tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
-        self.set_tas(tas_reprojected)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            self.logger.info("Writing temporary tas to zarr")
+            hourly_tas_reprojected = to_zarr(
+                hourly_tas_reprojected,
+                tmpdir / "reprojected_tas.zarr",
+                crs=4326,
+                time_chunksize=24,
+            )
 
-        tasmax = hourly_tas_reprojected.resample(time="D").max()
-        self.set_tasmax(tasmax)
+            tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
+            self.set_tas(tas_reprojected)
 
-        tasmin = hourly_tas_reprojected.resample(time="D").min()
-        self.set_tasmin(tasmin)
+            tasmax = hourly_tas_reprojected.resample(time="D").max()
+            self.set_tasmax(tasmax)
 
-        dew_point_tas = process_ERA5(
-            "d2m",
-            **download_args,
-        )
-        dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-            dew_point_tas, elevation_forcing, elevation_target
-        )
+            tasmin = hourly_tas_reprojected.resample(time="D").min()
+            self.set_tasmin(tasmin)
 
-        water_vapour_pressure = 0.6108 * np.exp(
-            17.27
-            * (dew_point_tas_reprojected - 273.15)
-            / (237.3 + (dew_point_tas_reprojected - 273.15))
-        )  # calculate water vapour pressure (kPa)
-        saturation_vapour_pressure = 0.6108 * np.exp(
-            17.27
-            * (hourly_tas_reprojected - 273.15)
-            / (237.3 + (hourly_tas_reprojected - 273.15))
-        )
+            dew_point_tas = process_ERA5(
+                "d2m",
+                **download_args,
+            )
+            dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
+                dew_point_tas, elevation_forcing, elevation_target
+            )
+            self.logger.info("Writing temporary dew_point_tas to zarr")
+            dew_point_tas_reprojected = to_zarr(
+                dew_point_tas_reprojected,
+                tmpdir / "reprojected_dew_point_tas.zarr",
+                crs=4326,
+                time_chunksize=24,
+            )
 
-        assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
-        relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
-        relative_humidity = relative_humidity.resample(time="D").mean()
-        relative_humidity = relative_humidity.raster.reproject_like(
-            target, method="average"
-        )
-        self.set_hurs(relative_humidity)
+            water_vapour_pressure = 0.6108 * np.exp(
+                17.27
+                * (dew_point_tas_reprojected - 273.15)
+                / (237.3 + (dew_point_tas_reprojected - 273.15))
+            )  # calculate water vapour pressure (kPa)
+            saturation_vapour_pressure = 0.6108 * np.exp(
+                17.27
+                * (hourly_tas_reprojected - 273.15)
+                / (237.3 + (hourly_tas_reprojected - 273.15))
+            )
+
+            assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
+            relative_humidity = (
+                water_vapour_pressure / saturation_vapour_pressure
+            ) * 100
+            relative_humidity = relative_humidity.resample(time="D").mean()
+            relative_humidity = relative_humidity.raster.reproject_like(
+                target, method="average"
+            )
+            self.set_hurs(relative_humidity)
 
         pressure = process_ERA5("sp", **download_args)
         pressure = reproject_and_apply_lapse_rate_pressure(
