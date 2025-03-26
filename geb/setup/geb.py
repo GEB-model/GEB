@@ -2702,23 +2702,18 @@ class GEBModel(Forcing, Crops):
         # concatenate all data
         data_concatenated = {}
         for household_attribute in household_characteristics:
-            data_concatenated[household_attribute] = np.concatenate(
-                [
-                    region_results[GDL_code][household_attribute]
-                    for GDL_code in region_results
-                ]
-            )
-
-            # and store to binary
             if household_attribute in attributes_to_include:
+                data_concatenated[household_attribute] = np.concatenate(
+                    [
+                        region_results[GDL_code][household_attribute]
+                        for GDL_code in region_results
+                    ]
+                )
+
+                # and store to array
                 self.set_array(
                     data_concatenated[household_attribute],
                     name=f"agents/households/{attributes_to_include[household_attribute]}",
-                )
-            else:
-                self.set_array(
-                    data_concatenated[household_attribute],
-                    name=f"agents/households/{household_attribute}",
                 )
 
     def setup_farmer_household_characteristics(self, maximum_age=85):

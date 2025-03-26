@@ -20,6 +20,7 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
+from honeybees.library.raster import write_to_array
 
 from geb.HRUs import load_grid
 from geb.workflows import TimingModule, balance_check
@@ -213,9 +214,11 @@ class WaterDemand:
     def step(self, potential_evapotranspiration):
         timer = TimingModule("Water demand")
 
-        domestic_water_demand, domestic_water_efficiency = (
-            self.model.agents.households.water_demand()
-        )
+        (
+            domestic_water_demand_per_household,
+            domestic_water_efficiency_per_household,
+            household_locations,
+        ) = self.model.agents.households.water_demand()
         timer.new_split("Domestic")
         industry_water_demand, industry_water_efficiency = (
             self.model.agents.industry.water_demand()
@@ -245,7 +248,7 @@ class WaterDemand:
             )
         )
 
-        assert (domestic_water_demand >= 0).all()
+        assert (domestic_water_demand_per_household >= 0).all()
         assert (industry_water_demand >= 0).all()
         assert (livestock_water_demand >= 0).all()
 
@@ -259,14 +262,23 @@ class WaterDemand:
         available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         available_groundwater_m3_pre = available_groundwater_m3.copy()
 
+        domestic_water_demand_m3 = np.zeros(self.model.hydrology.grid.shape, np.float32)
+
+        domestic_water_demand_m3 = write_to_array(
+            domestic_water_demand_m3,
+            domestic_water_demand_per_household,
+            household_locations,
+            self.model.hydrology.grid.gt,
+        )
+        domestic_water_demand_m3 = self.model.hydrology.grid.compress(
+            domestic_water_demand_m3
+        )
+
+        assert (domestic_water_efficiency_per_household == 1).all()
+        domestic_water_efficiency = 1
+
         # water withdrawal
         # 1. domestic (surface + ground)
-        domestic_water_demand = self.hydrology.to_grid(
-            HRU_data=domestic_water_demand, fn="weightedmean"
-        )
-        domestic_water_demand_m3 = self.hydrology.grid.MtoM3(domestic_water_demand)
-        del domestic_water_demand
-
         self.hydrology.grid.domestic_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, domestic_water_demand_m3
         )  # withdraw from surface water
