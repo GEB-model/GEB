@@ -200,12 +200,12 @@ def adjust_irrigation_to_limit(
     crop_calendar: np.ndarray,
     crop_rotation_year_index: np.ndarray,
     irrigation_efficiency_farmer: float,
-    potential_irrigation_consumption_m,
+    potential_irrigation_consumption_m_farmer,
     potential_irrigation_consumption_farmer_m3,
 ):
     if remaining_irrigation_limit_m3[farmer] < np.float32(0):
-        potential_irrigation_consumption_m[:] = np.float32(0)
-        return potential_irrigation_consumption_m
+        potential_irrigation_consumption_m_farmer[:] = np.float32(0)
+        return potential_irrigation_consumption_m_farmer
     # calculate future water deficit, but also include today's irrigation consumption
     # Check whether a full year has passed
     if np.all(~np.isnan(cumulative_water_deficit_m3[farmer])):
@@ -246,10 +246,10 @@ def adjust_irrigation_to_limit(
     )
     assert not np.isnan(reduction_factor)
 
-    potential_irrigation_consumption_m = (
-        potential_irrigation_consumption_m * np.float32(reduction_factor)
+    potential_irrigation_consumption_m_farmer = (
+        potential_irrigation_consumption_m_farmer * np.float32(reduction_factor)
     )
-    return potential_irrigation_consumption_m
+    return potential_irrigation_consumption_m_farmer
 
 
 @njit(cache=True)
@@ -359,8 +359,53 @@ def withdraw_groundwater(
     return irrigation_water_demand_field
 
 
-@njit(cache=True)
-def abstract_water(
+@njit(cache=True, inline="always")
+def get_potential_irrigation_consumption_m(
+    fields,
+    is_paddy_irrigated,
+    paddy_level,
+    readily_available_water,
+    critical_water_level,
+    max_water_content,
+    potential_infiltration_capacity,
+    fraction_irrigated_field,
+    max_paddy_water_level,
+) -> np.ndarray:
+    """TODO: make this work for farmers with both paddy and non-paddy fields"""
+    # Calculate the potential irrigation consumption for the farmer
+    if is_paddy_irrigated[fields][0]:
+        # make sure all fields are paddy irrigateds
+        # always irrigate to 0.05 m for paddy fields
+        potential_irrigation_consumption_m = max_paddy_water_level - paddy_level[fields]
+        # make sure the potential irrigation consumption is not negative
+        potential_irrigation_consumption_m[potential_irrigation_consumption_m < 0] = (
+            np.float32(0)
+        )
+    else:
+        # assert none of the fiels are paddy irrigated
+        # if soil moisture content falls below critical level, irrigate to field capacity
+        potential_irrigation_consumption_m = np.where(
+            readily_available_water[fields]
+            < critical_water_level[fields],  # if there is not enough water
+            max_water_content[fields]
+            - readily_available_water[
+                fields
+            ],  # irrigate to field capacity (if possible)
+            np.float32(0),
+        )
+        # limit the irrigation consumption to the potential infiltration capacity
+        potential_irrigation_consumption_m = (
+            np.minimum(
+                potential_irrigation_consumption_m,
+                potential_infiltration_capacity[fields],
+            )
+            * fraction_irrigated_field
+        )
+    return potential_irrigation_consumption_m
+
+
+# @njit(cache=True)
+def get_gross_irrigation_demand_m3(
     day_index: int,
     n: int,
     activation_order: np.ndarray,
@@ -368,11 +413,7 @@ def abstract_water(
     field_indices: np.ndarray,
     irrigation_efficiency: np.ndarray,
     fraction_irrigated_field: np.ndarray,
-    surface_irrigated: np.ndarray,
-    well_irrigated: np.ndarray,
     cell_area: np.ndarray,
-    HRU_to_grid: np.ndarray,
-    nearest_river_grid_cell: np.ndarray,
     crop_map: np.ndarray,
     field_is_paddy_irrigated: np.ndarray,
     paddy_level: np.ndarray,
@@ -380,18 +421,11 @@ def abstract_water(
     critical_water_level: np.ndarray,
     max_water_content: np.ndarray,
     potential_infiltration_capacity: np.ndarray,
-    available_channel_storage_m3: np.ndarray,
-    available_groundwater_m3: np.ndarray,
-    groundwater_depth: np.ndarray,
-    available_reservoir_storage_m3: np.ndarray,
-    farmer_command_area: np.ndarray,
-    return_fraction: float,
-    well_depth: float,
     remaining_irrigation_limit_m3: np.ndarray,
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
     current_crop_calendar_rotation_year_index: np.ndarray,
-    max_paddy_water_level: float,
+    max_paddy_water_level: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -425,6 +459,88 @@ def abstract_water(
     assert n == activation_order.size
 
     n_hydrological_response_units = cell_area.size
+    gross_potential_irrigation_m3 = np.zeros(
+        n_hydrological_response_units, dtype=np.float32
+    )
+
+    for activated_farmer_index in range(activation_order.size):
+        farmer = activation_order[activated_farmer_index]
+        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
+
+        # if no crops are grown on the fields, skip the farmer
+        farmer_crops = crop_map[farmer_fields]
+        if farmer_crops[0] == -1:
+            assert (
+                farmer_crops == -1
+            ).all()  # currently only support situation where all fields are growing crops, or all fields are fallow
+            continue
+
+        potential_irrigation_consumption_m_farmer = (
+            get_potential_irrigation_consumption_m(
+                fields=farmer_fields,
+                is_paddy_irrigated=field_is_paddy_irrigated,
+                paddy_level=paddy_level,
+                readily_available_water=readily_available_water,
+                critical_water_level=critical_water_level,
+                max_water_content=max_water_content,
+                potential_infiltration_capacity=potential_infiltration_capacity,
+                fraction_irrigated_field=fraction_irrigated_field[farmer],
+                max_paddy_water_level=max_paddy_water_level[farmer],
+            )
+        )
+
+        # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
+        # if there is no irrigation limit, no need to adjust the irrigation
+        if potential_irrigation_consumption_m_farmer.sum() > 0.0 and not np.isnan(
+            remaining_irrigation_limit_m3[farmer]
+        ):
+            irrigation_efficiency_farmer = irrigation_efficiency[farmer]
+            potential_irrigation_consumption_m_farmer = adjust_irrigation_to_limit(
+                farmer=farmer,
+                day_index=day_index,
+                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+                crop_calendar=crop_calendar,
+                crop_rotation_year_index=current_crop_calendar_rotation_year_index,
+                irrigation_efficiency_farmer=np.float32(irrigation_efficiency_farmer),
+                potential_irrigation_consumption_m_farmer=potential_irrigation_consumption_m_farmer,
+                potential_irrigation_consumption_farmer_m3=(
+                    potential_irrigation_consumption_m_farmer * cell_area[farmer_fields]
+                ).sum(),
+            )
+            gross_potential_irrigation_m3[farmer_fields] = (
+                potential_irrigation_consumption_m_farmer * cell_area[farmer_fields]
+            ).sum() / irrigation_efficiency_farmer
+
+    return gross_potential_irrigation_m3
+
+
+@njit(cache=True)
+def abstract_water(
+    activation_order: np.ndarray,
+    field_indices_by_farmer: np.ndarray,
+    field_indices: np.ndarray,
+    irrigation_efficiency: np.ndarray,
+    surface_irrigated: np.ndarray,
+    well_irrigated: np.ndarray,
+    cell_area: np.ndarray,
+    HRU_to_grid: np.ndarray,
+    nearest_river_grid_cell: np.ndarray,
+    crop_map: np.ndarray,
+    available_channel_storage_m3: np.ndarray,
+    available_groundwater_m3: np.ndarray,
+    groundwater_depth: np.ndarray,
+    available_reservoir_storage_m3: np.ndarray,
+    farmer_command_area: np.ndarray,
+    return_fraction: float,
+    well_depth: float,
+    remaining_irrigation_limit_m3: np.ndarray,
+    gross_potential_irrigation_m3: np.ndarray,
+):
+    for activated_farmer_index in range(activation_order.size):
+        farmer = activation_order[activated_farmer_index]
+        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
+    n_hydrological_response_units = cell_area.size
     water_withdrawal_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
     water_consumption_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
 
@@ -442,189 +558,85 @@ def abstract_water(
     for activated_farmer_index in range(activation_order.size):
         farmer = activation_order[activated_farmer_index]
         farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
-
-        # if no crops are grown on the fields, skip the farmer
-        farmer_crops = crop_map[farmer_fields]
-        if farmer_crops[0] == -1:
-            assert (
-                farmer_crops == -1
-            ).all()  # currently only support situation where all fields are growing crops, or all fields are fallow
+        potential_irrigation_consumption_m3_farmer = gross_potential_irrigation_m3[
+            farmer_fields
+        ]
+        if potential_irrigation_consumption_m3_farmer.sum() <= 0:
             continue
 
-        farmer_has_access_to_irrigation_water = False
-
-        # Determine whether farmer would have access to irrigation water this timestep. Regardless of whether the water is actually used. This is used for making investment decisions.
-        for field in farmer_fields:
+        # loop through all farmers fields and apply irrigation
+        for field_idx, field in enumerate(farmer_fields):
             grid_cell = HRU_to_grid[field]
             grid_cell_nearest = nearest_river_grid_cell[field]
+            if crop_map[field] != -1:
+                irrigation_water_demand_field = gross_potential_irrigation_m3[field_idx]
+                assert irrigation_water_demand_field >= 0
 
-            if well_irrigated[farmer]:
-                if groundwater_depth[grid_cell] < well_depth[farmer]:
-                    farmer_has_access_to_irrigation_water = True
-                    break
-            elif surface_irrigated[farmer]:
-                if available_channel_storage_m3[grid_cell_nearest] > 0:
-                    farmer_has_access_to_irrigation_water = True
-                    break
-                command_area = farmer_command_area[farmer]
-                # -1 means no command area
-                if (
-                    command_area != -1
-                    and available_reservoir_storage_m3[command_area] > 0
-                ):
-                    farmer_has_access_to_irrigation_water = True
-                    break
-
-        # Actual irrigation from surface, reservoir and groundwater
-        # If farmer doesn't have access to irrigation water, skip the irrigation abstraction
-        if farmer_has_access_to_irrigation_water:
-            irrigation_efficiency_farmer = irrigation_efficiency[farmer]
-            fraction_irrigated_field_farmer = fraction_irrigated_field[farmer]
-
-            # Calculate the potential irrigation consumption for the farmer
-            if field_is_paddy_irrigated[farmer_fields][0]:
-                # make sure all fields are paddy irrigateds
-                assert (field_is_paddy_irrigated[farmer_fields]).all()
-                # always irrigate to 0.05 m for paddy fields
-                potential_irrigation_consumption_m = (
-                    max_paddy_water_level - paddy_level[farmer_fields]
-                )
-                # make sure the potential irrigation consumption is not negative
-                potential_irrigation_consumption_m[
-                    potential_irrigation_consumption_m < 0
-                ] = 0
-            else:
-                # assert none of the fiels are paddy irrigated
-                assert (~field_is_paddy_irrigated[farmer_fields]).all()
-                # if soil moisture content falls below critical level, irrigate to field capacity
-                potential_irrigation_consumption_m = np.where(
-                    readily_available_water[farmer_fields]
-                    < critical_water_level[
-                        farmer_fields
-                    ],  # if there is not enough water
-                    max_water_content[farmer_fields]
-                    - readily_available_water[
-                        farmer_fields
-                    ],  # irrigate to field capacity (if possible)
-                    0.0,
-                )
-                # limit the irrigation consumption to the potential infiltration capacity
-                potential_irrigation_consumption_m = (
-                    np.minimum(
-                        potential_irrigation_consumption_m,
-                        potential_infiltration_capacity[farmer_fields],
-                    )
-                    * fraction_irrigated_field_farmer
-                )
-
-            assert (potential_irrigation_consumption_m >= 0).all()
-            potential_irrigation_consumption_farmer_m3 = (
-                potential_irrigation_consumption_m * cell_area[farmer_fields]
-            ).sum()
-
-            # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
-            if potential_irrigation_consumption_farmer_m3 > 0.0:
-                # if irrigation limit is active, reduce the irrigation demand
-                if not np.isnan(remaining_irrigation_limit_m3[farmer]):
-                    potential_irrigation_consumption_m = adjust_irrigation_to_limit(
+                if surface_irrigated[farmer]:
+                    irrigation_water_demand_field = withdraw_channel(
+                        available_channel_storage_m3=available_channel_storage_m3,
+                        grid_cell=grid_cell_nearest,
+                        cell_area=cell_area,
+                        field=field,
                         farmer=farmer,
-                        day_index=day_index,
+                        water_withdrawal_m=water_withdrawal_m,
+                        irrigation_water_demand_field=irrigation_water_demand_field,
                         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
-                        crop_calendar=crop_calendar,
-                        crop_rotation_year_index=current_crop_calendar_rotation_year_index,
-                        irrigation_efficiency_farmer=np.float32(
-                            irrigation_efficiency_farmer
-                        ),
-                        potential_irrigation_consumption_m=potential_irrigation_consumption_m,
-                        potential_irrigation_consumption_farmer_m3=np.float32(
-                            potential_irrigation_consumption_farmer_m3
-                        ),
+                        channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                        minimum_channel_storage_m3=100.0,
                     )
-                    potential_irrigation_consumption_farmer_m3 = (
-                        potential_irrigation_consumption_m * cell_area[farmer_fields]
-                    ).sum()
+                    assert water_withdrawal_m[field] >= 0
+                    assert irrigation_water_demand_field >= 0
 
-                # loop through all farmers fields and apply irrigation
-                for field_idx, field in enumerate(farmer_fields):
-                    grid_cell = HRU_to_grid[field]
-                    if crop_map[field] != -1:
-                        irrigation_water_demand_field = (
-                            potential_irrigation_consumption_m[field_idx]
-                            / irrigation_efficiency_farmer
+                    # command areas
+                    command_area = farmer_command_area[farmer]
+                    if command_area != -1:  # -1 means no command area
+                        irrigation_water_demand_field = withdraw_reservoir(
+                            command_area=command_area,
+                            field=field,
+                            farmer=farmer,
+                            available_reservoir_storage_m3=available_reservoir_storage_m3,
+                            irrigation_water_demand_field=irrigation_water_demand_field,
+                            water_withdrawal_m=water_withdrawal_m,
+                            remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                            reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+                            cell_area=cell_area,
                         )
+                        assert water_withdrawal_m[field] >= 0
                         assert irrigation_water_demand_field >= 0
 
-                        if surface_irrigated[farmer]:
-                            irrigation_water_demand_field = withdraw_channel(
-                                available_channel_storage_m3=available_channel_storage_m3,
-                                grid_cell=grid_cell_nearest,
-                                cell_area=cell_area,
-                                field=field,
-                                farmer=farmer,
-                                water_withdrawal_m=water_withdrawal_m,
-                                irrigation_water_demand_field=irrigation_water_demand_field,
-                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                                channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
-                                minimum_channel_storage_m3=100.0,
-                            )
-                            assert water_withdrawal_m[field] >= 0
-                            assert irrigation_water_demand_field >= 0
-
-                            # command areas
-                            command_area = farmer_command_area[farmer]
-                            if command_area != -1:  # -1 means no command area
-                                irrigation_water_demand_field = withdraw_reservoir(
-                                    command_area=command_area,
-                                    field=field,
-                                    farmer=farmer,
-                                    available_reservoir_storage_m3=available_reservoir_storage_m3,
-                                    irrigation_water_demand_field=irrigation_water_demand_field,
-                                    water_withdrawal_m=water_withdrawal_m,
-                                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                                    reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
-                                    cell_area=cell_area,
-                                )
-                                assert water_withdrawal_m[field] >= 0
-                                assert irrigation_water_demand_field >= 0
-
-                        if well_irrigated[farmer]:
-                            irrigation_water_demand_field = withdraw_groundwater(
-                                farmer=farmer,
-                                field=field,
-                                grid_cell=grid_cell,
-                                available_groundwater_m3=available_groundwater_m3,
-                                cell_area=cell_area,
-                                groundwater_depth=groundwater_depth,
-                                well_depth=well_depth,
-                                irrigation_water_demand_field=irrigation_water_demand_field,
-                                water_withdrawal_m=water_withdrawal_m,
-                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                                groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
-                            )
-                            assert irrigation_water_demand_field >= 0
-                            assert water_withdrawal_m[field] >= 0
-
-                        assert (
-                            irrigation_water_demand_field >= -1e15
-                        )  # Make sure irrigation water demand is zero, or positive. Allow very small error.
-
-                    assert water_consumption_m[field] >= 0
+                if well_irrigated[farmer]:
+                    irrigation_water_demand_field = withdraw_groundwater(
+                        farmer=farmer,
+                        field=field,
+                        grid_cell=grid_cell,
+                        available_groundwater_m3=available_groundwater_m3,
+                        cell_area=cell_area,
+                        groundwater_depth=groundwater_depth,
+                        well_depth=well_depth,
+                        irrigation_water_demand_field=irrigation_water_demand_field,
+                        water_withdrawal_m=water_withdrawal_m,
+                        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                        groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+                    )
+                    assert irrigation_water_demand_field >= 0
                     assert water_withdrawal_m[field] >= 0
-                    assert 1 >= irrigation_efficiency_farmer >= 0
-                    assert 1 >= return_fraction >= 0
 
-                    water_consumption_m[field] = (
-                        water_withdrawal_m[field] * irrigation_efficiency_farmer
-                    )
-                    irrigation_loss_m = (
-                        water_withdrawal_m[field] - water_consumption_m[field]
-                    )
-                    assert irrigation_loss_m >= 0
-                    returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
-                    addtoevapotrans_m[field] = (
-                        irrigation_loss_m - returnFlowIrr_m[field]
-                    )
+                assert (
+                    irrigation_water_demand_field >= -1e15
+                )  # Make sure irrigation water demand is zero, or positive. Allow very small error.
+
+            assert water_consumption_m[field] >= 0
+            assert water_withdrawal_m[field] >= 0
+            assert 1 >= return_fraction >= 0
+
+            water_consumption_m[field] = (
+                water_withdrawal_m[field] * irrigation_efficiency[farmer]
+            )
+            irrigation_loss_m = water_withdrawal_m[field] - water_consumption_m[field]
+            assert irrigation_loss_m >= 0
+            returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
+            addtoevapotrans_m[field] = irrigation_loss_m - returnFlowIrr_m[field]
 
     return (
         channel_abstraction_m3_by_farmer,

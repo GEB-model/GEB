@@ -33,6 +33,7 @@ from .workflows.crop_farmers import (
     farmer_command_area,
     get_farmer_groundwater_depth,
     get_farmer_HRUs,
+    get_gross_irrigation_demand_m3,
     plant,
 )
 
@@ -77,83 +78,12 @@ def shift_and_update(array, update):
     array[:, 0] = update
 
 
-def shift_and_update_1d(array, update):
-    """Shifts the array and updates the first element with the update value.
-
-    Args:
-        array: The array that needs to be shifted.
-        update: The value that needs to be added to the first element of the array.
-    """
-    array[1:] = array[:-1]
-    array[0] = update
-
-
 def shift_and_reset_matrix(matrix: np.ndarray) -> None:
     """
     Shifts columns to the right in the matrix and sets the first column to zero.
     """
     matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
     matrix[:, 0] = 0  # Reset the first column to 0
-
-
-def rolling_mean_2d(array, window):
-    return np.apply_along_axis(
-        lambda x: np.concatenate(
-            (
-                np.convolve(x, np.ones(window) / window, mode="valid"),
-                np.full(window - 1, np.nan),
-            )
-        ),
-        axis=-1,
-        arr=array,
-    )
-
-
-def ema_2d(array, span=60):
-    """
-    Compute the exponential moving average (EMA) along the last axis (axis=-1) for a 2D array.
-    This replicates the behavior of Pandas' .ewm(span=span, adjust=False).mean() for each 1D slice.
-
-    Parameters
-    ----------
-    array : np.ndarray
-        2D NumPy array of shape (M, N), where we want to compute an EMA along each row.
-    span : int
-        The EMA span, analogous to `span` in Pandas' ewm. The effective smoothing factor alpha
-        is given by alpha = 2 / (span + 1).
-
-    Returns
-    -------
-    ema_array : np.ndarray
-        2D NumPy array of the same shape as `array`, where each row has been replaced
-        by its exponential moving average along the last axis.
-    """
-
-    # Calculate alpha using Pandas' ewm(span=...).mean() convention:
-    # alpha = 2 / (span + 1)
-    alpha = 2.0 / (span + 1)
-
-    def ema_1d(x):
-        """
-        Compute EMA for a 1D array x using iterative approach:
-        ema[i] = alpha * x[i] + (1 - alpha) * ema[i-1].
-        """
-        out = np.zeros_like(x, dtype=float)
-        if len(x) == 0:
-            return out
-
-        # Initialize first value directly
-        out[0] = x[0]
-
-        # Iteratively compute EMA
-        for i in range(1, len(x)):
-            out[i] = alpha * x[i] + (1 - alpha) * out[i - 1]
-
-        return out
-
-    # Apply ema_1d along the last axis of the 2D array
-    ema_array = np.apply_along_axis(ema_1d, axis=-1, arr=array)
-    return ema_array
 
 
 def advance_crop_rotation_year(
@@ -250,8 +180,6 @@ class CropFarmers(AgentBaseClass):
         self.var.expenditure_cap = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["decisions"]["expenditure_cap"]
-
-        self.var.max_paddy_water_level = 0.05
 
         # New global well variables
         self.var.pump_hours = self.model.config["agent_settings"]["farmers"][
@@ -500,6 +428,13 @@ class CropFarmers(AgentBaseClass):
             extra_dims_names=("abstraction_type",),
             dtype=np.float32,
             fill_value=0,
+        )
+
+        self.var.max_paddy_water_level = DynamicArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.float32,
+            fill_value=0.05,
         )
 
         self.var.cumulative_SPEI_during_growing_season = DynamicArray(
@@ -1005,19 +940,44 @@ class CropFarmers(AgentBaseClass):
                     self.var.cumulative_water_deficit_m3[:, 364]
                 )
 
+    def get_gross_irrigation_demand_m3(
+        self,
+        paddy_level,
+        readily_available_water,
+        critical_water_level,
+        max_water_content,
+        potential_infiltration_capacity,
+    ):
+        return get_gross_irrigation_demand_m3(
+            day_index=self.model.current_day_of_year - 1,
+            n=self.n,
+            activation_order=self.activation_order_by_elevation,
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+            field_indices=self.var.field_indices,
+            irrigation_efficiency=self.var.irrigation_efficiency.data,
+            fraction_irrigated_field=self.var.fraction_irrigated_field.data,
+            cell_area=self.model.hydrology.HRU.var.cell_area,
+            crop_map=self.HRU.var.crop_map,
+            field_is_paddy_irrigated=self.field_is_paddy_irrigated,
+            paddy_level=paddy_level,
+            readily_available_water=readily_available_water,
+            critical_water_level=critical_water_level,
+            max_water_content=max_water_content,
+            potential_infiltration_capacity=potential_infiltration_capacity,
+            remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
+            cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
+            crop_calendar=self.var.crop_calendar.data,
+            current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
+            max_paddy_water_level=self.var.max_paddy_water_level.data,
+        )
+
     def abstract_water(
         self,
-        cell_area: np.ndarray,
-        paddy_level: np.ndarray,
-        readily_available_water: np.ndarray,
-        critical_water_level: np.ndarray,
-        max_water_content: np.ndarray,
-        potential_infiltration_capacity: np.ndarray,
+        gross_potential_irrigation_m3: np.ndarray,
         available_channel_storage_m3: np.ndarray,
         available_groundwater_m3: np.ndarray,
         groundwater_depth: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
-        command_areas: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function allows the abstraction of water by farmers for irrigation purposes. It's main purpose is to call the relevant numba function to do the actual abstraction. In addition, the function saves the abstraction from the various sources by farmer.
@@ -1056,25 +1016,16 @@ class CropFarmers(AgentBaseClass):
             returnFlowIrr_m,
             addtoevapotrans_m,
         ) = abstract_water(
-            self.model.current_day_of_year - 1,
-            self.n,
-            self.activation_order_by_elevation,
-            self.var.field_indices_by_farmer.data,
-            self.var.field_indices,
-            self.var.irrigation_efficiency.data,
-            self.var.fraction_irrigated_field.data,
+            activation_order=self.activation_order_by_elevation,
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+            field_indices=self.var.field_indices,
+            irrigation_efficiency=self.var.irrigation_efficiency.data,
             surface_irrigated=self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0,
             well_irrigated=self.var.adaptations[:, WELL_ADAPTATION] > 0,
-            cell_area=cell_area,
+            cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
             nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
             crop_map=self.HRU.var.crop_map,
-            field_is_paddy_irrigated=self.field_is_paddy_irrigated,
-            paddy_level=paddy_level,
-            readily_available_water=readily_available_water,
-            critical_water_level=critical_water_level,
-            max_water_content=max_water_content,
-            potential_infiltration_capacity=potential_infiltration_capacity,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
@@ -1085,10 +1036,7 @@ class CropFarmers(AgentBaseClass):
             ],
             well_depth=self.var.well_depth.data,
             remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
-            cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
-            crop_calendar=self.var.crop_calendar.data,
-            current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
-            max_paddy_water_level=self.var.max_paddy_water_level,
+            gross_potential_irrigation_m3=gross_potential_irrigation_m3,
         )
 
         if __debug__:
@@ -1101,7 +1049,9 @@ class CropFarmers(AgentBaseClass):
                     self.var.reservoir_abstraction_m3_by_farmer,
                     self.var.groundwater_abstraction_m3_by_farmer,
                 ),
-                outfluxes=[(water_withdrawal_m * cell_area)],
+                outfluxes=[
+                    (water_withdrawal_m * self.model.hydrology.HRU.var.cell_area)
+                ],
                 tollerance=50,
             )
 

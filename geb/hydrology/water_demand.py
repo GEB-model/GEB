@@ -58,7 +58,9 @@ class WaterDemand:
             water_body_mapping, reservoir_command_areas, mode="clip"
         )
 
-    def get_potential_irrigation_consumption(self, potential_evapotranspiration):
+    def get_soil_parameters_for_irrigation_consumption(
+        self, potential_evapotranspiration
+    ):
         """Calculate the potential irrigation consumption. Not that consumption
         is not the same as withdrawal. Consumption is the amount of water that
         is actually used by the farmers, while withdrawal is the amount of water
@@ -179,7 +181,7 @@ class WaterDemand:
             potential_infiltration_capacity,
         )
 
-    def get_available_water(self):
+    def get_available_water(self, gross_irrigation_demand_m3):
         assert (
             self.hydrology.lakes_reservoirs.var.waterBodyIDC.size
             == self.hydrology.lakes_reservoirs.var.storage.size
@@ -193,7 +195,9 @@ class WaterDemand:
         )
         available_reservoir_storage_m3[
             self.hydrology.lakes_reservoirs.var.water_body_type == RESERVOIR
-        ] = self.model.agents.reservoir_operators.get_available_water_reservoir_command_areas()
+        ] = self.model.agents.reservoir_operators.get_available_water_reservoir_command_areas(
+            gross_irrigation_demand_m3
+        )
         return (
             self.grid.var.river_storage_m3.copy(),
             available_reservoir_storage_m3,
@@ -227,7 +231,19 @@ class WaterDemand:
             critical_water_level,
             max_water_content,
             potential_infiltration_capacity,
-        ) = self.get_potential_irrigation_consumption(potential_evapotranspiration)
+        ) = self.get_soil_parameters_for_irrigation_consumption(
+            potential_evapotranspiration
+        )
+
+        gross_irrigation_demand_m3 = (
+            self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
+                paddy_level=paddy_level,
+                readily_available_water=readily_available_water,
+                critical_water_level=critical_water_level,
+                max_water_content=max_water_content,
+                potential_infiltration_capacity=potential_infiltration_capacity,
+            )
+        )
 
         assert (domestic_water_demand >= 0).all()
         assert (industry_water_demand >= 0).all()
@@ -237,7 +253,7 @@ class WaterDemand:
             available_channel_storage_m3,
             available_reservoir_storage_m3,
             available_groundwater_m3,
-        ) = self.get_available_water()
+        ) = self.get_available_water(gross_irrigation_demand_m3)
 
         available_channel_storage_m3_pre = available_channel_storage_m3.copy()
         available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
@@ -301,17 +317,11 @@ class WaterDemand:
             return_flow_irrigation_m,
             irrigation_loss_to_evaporation_m,
         ) = self.model.agents.crop_farmers.abstract_water(
-            cell_area=self.HRU.var.cell_area,
-            paddy_level=paddy_level,
-            readily_available_water=readily_available_water,
-            critical_water_level=critical_water_level,
-            max_water_content=max_water_content,
-            potential_infiltration_capacity=potential_infiltration_capacity,
+            gross_potential_irrigation_m3=gross_irrigation_demand_m3,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             groundwater_depth=self.hydrology.groundwater.modflow.groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
-            command_areas=self.HRU.var.reservoir_command_areas,
         )
         timer.new_split("Irrigation")
 

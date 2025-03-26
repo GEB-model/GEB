@@ -460,8 +460,6 @@ class LakesReservoirs(object):
         # Reservoir inflow in [m3] per timestep
         # New reservoir storage [m3] = plus inflow for this sub step
 
-        outflow_m3 = np.zeros(self.var.waterBodyIDC.size, dtype=np.float64)
-
         is_command_area = self.HRU.var.reservoir_command_areas != -1
 
         # print("WARNING: Assuming irrigation demand equal to ETRef")
@@ -474,25 +472,31 @@ class LakesReservoirs(object):
             / n_routing_steps
         )
 
-        outflow_m3 = (
+        reservoir_infow_m3 = inflow_m3[reservoirs]
+        reservoir_release_m3 = (
             self.model.agents.reservoir_operators.regulate_reservoir_outflow_hanasaki(
-                inflow_m3=inflow_m3[reservoirs],
+                inflow_m3=reservoir_infow_m3,
                 irrigation_demand_m3=irrigation_demand_m3,
                 n_routing_steps=n_routing_steps,
             )
         )
 
+        self.reservoir_storage = (
+            self.reservoir_storage - reservoir_release_m3 + reservoir_infow_m3
+        )
+        assert (self.reservoir_storage >= 0).all()
+
         if __debug__:
             balance_check(
-                influxes=[inflow_m3[reservoirs]],  # In [m3/s]
-                outfluxes=[outflow_m3],
+                influxes=[reservoir_infow_m3],  # In [m3/s]
+                outfluxes=[reservoir_release_m3],
                 prestorages=[prestorage],
                 poststorages=[self.reservoir_storage],
                 name="reservoirs",
                 tollerance=1e-5,
             )
 
-        return outflow_m3
+        return reservoir_release_m3
 
     def substep(
         self,
@@ -671,4 +675,4 @@ class LakesReservoirs(object):
             if self.hydrology.dynamic_water_bodies:
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
-        # print(self.reservoir_fill_percentage.astype(int))
+        print(self.reservoir_fill_percentage.astype(int))
