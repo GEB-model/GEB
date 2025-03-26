@@ -22,7 +22,7 @@ dependencies = [
     "deap>=1.4.1",
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
-    "honeybees>=1.1.1",
+    "honeybees>=1.2.0",
     "hydromt==0.10.1",
     "isimip-client>=1.0.1",
     "nest_asyncio>=1.6.0", # for GUI in
