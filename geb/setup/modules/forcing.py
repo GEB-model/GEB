@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import xclim.indices as xci
-from numcodecs.zarr3 import Delta, FixedScaleOffset
+from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
 
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
@@ -357,7 +357,6 @@ class Forcing:
                 dtype=da.dtype,
                 astype=out_dtype,
             ),
-            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -391,7 +390,6 @@ class Forcing:
                 dtype=da.dtype,
                 astype=out_dtype,
             ),
-            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -424,7 +422,6 @@ class Forcing:
                 dtype=da.dtype,
                 astype=out_dtype,
             ),
-            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -456,7 +453,6 @@ class Forcing:
                 dtype=da.dtype,
                 astype=out_dtype,
             ),
-            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -493,7 +489,6 @@ class Forcing:
                 dtype=da.dtype,
                 astype=out_dtype,
             ),
-            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -529,7 +524,6 @@ class Forcing:
                 dtype=da.dtype,
                 astype=out_dtype,
             ),
-            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -561,7 +555,6 @@ class Forcing:
                 dtype=da.dtype,
                 astype=out_dtype,
             ),
-            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
