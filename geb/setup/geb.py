@@ -482,7 +482,14 @@ class GEBModel(Forcing, Crops):
         return None
 
     def setup_elevation(
-        self, DEMs=[{"name": "fabdem", "zmin": 0.001}, {"name": "gebco"}]
+        self,
+        DEMs=[
+            {
+                "name": "fabdem",
+                "zmin": 0.001,
+            },
+            {"name": "gebco"},
+        ],
     ):
         """For configuration of DEMs parameters, see
         https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html
@@ -3965,7 +3972,7 @@ class GEBModel(Forcing, Crops):
                 x_chunksize=x_chunksize,
                 y_chunksize=y_chunksize,
                 time_chunksize=time_chunksize,
-                crs=4326,
+                crs=da.rio.crs,
                 *args,
                 **kwargs,
             )
