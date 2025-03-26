@@ -18,21 +18,73 @@ from pyproj import CRS
 all_async_readers = []
 
 
-def calculate_scaling(min_value, max_value, precision, offset=0, out_dtype=np.int32):
-    """Note that for very high precision in relation to the min and max values,
+def calculate_scaling(min_value, max_value, precision, offset=0):
+    """
+    This function calculates the scaling factor and output dtype for
+    a fixed scale and offset codec. The expected minimum and maximum
+    values along with the precision are used to determine the number
+    of bits required to represent the data. The scaling factor is then
+    calculated to scale the original data to the required integer
+    range. The output dtype is determined based on the number of bits
+    required.
+
+    Note that for very high precision in relation to the min and max values,
     there may be some issues due to rounding and the given factors may
-    become slighly imprecise."""
-    scaling_factor = 1 / precision / 2
+    become slighly imprecise.
 
-    # get the maximum value that can be represented by the dtype
-    max_dtype = np.iinfo(out_dtype).max
+    Parameters
+    ----------
+    min_value : float
+        The minimum expected value of the original data. Outside this range
+        the data may start to behave unexpectedly.
+    max_value : float
+        The maximum expected value of the original data. Outside this range
+        the data may start to behave unexpectedly.
+    precision : float
+        The precision of the data, i.e. the maximum difference between the
+        original and decoded data.
+    offset : float, optional
+        The offset to apply to the original data before scaling.
 
-    if (max_value - offset) * scaling_factor > max_dtype:
-        raise ValueError("scaling factor too large for dtype")
-    if (min_value + offset) * scaling_factor < -max_dtype:
-        raise ValueError("scaling factor too small for dtype")
+    Returns
+    -------
+    scaling_factor : float
+        The scaling factor to apply to the original data.
+    out_dtype : str
+        The output dtype to use for the fixed scale and offset codec.
+    """
 
-    return scaling_factor
+    min_with_offset = min_value + offset
+    max_with_offset = max_value + offset
+
+    max_abs_value = max(abs(min_with_offset), abs(max_with_offset))
+
+    steps_required = int(max_abs_value / precision / 2) + 1
+
+    bits_required = steps_required.bit_length()
+
+    steps_available = 2**bits_required
+
+    if min_with_offset < 0:
+        bits_required += 1  # need to account for the sign bit
+        out_dtype_prefix = ""
+    else:
+        out_dtype_prefix = "u"
+
+    scaling_factor = steps_available / max_abs_value
+
+    if bits_required <= 8:
+        out_dtype = out_dtype_prefix + "int8"
+    elif bits_required <= 16:
+        out_dtype = out_dtype_prefix + "int16"
+    elif bits_required <= 32:
+        out_dtype = out_dtype_prefix + "int32"
+    elif bits_required <= 64:
+        out_dtype = out_dtype_prefix + "int64"
+    else:
+        raise ValueError("Too many bits required for precision and range")
+
+    return scaling_factor, out_dtype
 
 
 def open_zarr(zarr_folder):
@@ -165,7 +217,7 @@ def to_zarr(
             compressor = Blosc(
                 cname="zstd",
                 clevel=9,
-                shuffle=1 if byteshuffle else 0,
+                shuffle=0,
             )
 
             check_buffer_size(da, chunks_or_shards=shards)
@@ -176,7 +228,7 @@ def to_zarr(
 
             if compressor is None:
                 compressor = Blosc(
-                    cname="zstd", clevel=22, shuffle=1 if byteshuffle else 0
+                    cname="zstd", clevel=9, shuffle=1 if byteshuffle else 0
                 )
 
             check_buffer_size(da, chunks_or_shards=chunks)
