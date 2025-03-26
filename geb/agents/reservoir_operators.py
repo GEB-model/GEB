@@ -184,9 +184,6 @@ class ReservoirOperators(AgentBaseClass):
         )
         assert (reservoir_release_m3 >= 0).all()
 
-        self.storage = self.storage - reservoir_release_m3 + inflow_m3
-        assert (self.storage >= 0).all()
-
         return reservoir_release_m3
 
     def release_corrections(
@@ -355,7 +352,14 @@ class ReservoirOperators(AgentBaseClass):
         Rflood_final[cond2] = temp3 + temp4
         return Rflood_final
 
-    def get_available_water_reservoir_command_areas(self):
+    def get_available_water_reservoir_command_areas(self, gross_irrigation_demand_m3):
+        # TODO: only farmers that use surface irrigation
+        command_areas = self.model.hydrology.HRU.var.reservoir_command_areas
+        irrigation_demand_per_command_area = np.bincount(
+            command_areas[command_areas != -1],
+            weights=gross_irrigation_demand_m3[command_areas != -1],
+        )
+        assert irrigation_demand_per_command_area.size == self.storage.size
         return 0
 
     def step(self) -> None:

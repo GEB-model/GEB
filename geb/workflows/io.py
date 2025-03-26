@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cftime
-import numcodecs
 import numpy as np
 import pandas as pd
 import pyproj
@@ -15,9 +14,77 @@ import xarray as xr
 import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
-from zarr.codecs import BloscCodec, BloscShuffle
 
 all_async_readers = []
+
+
+def calculate_scaling(min_value, max_value, precision, offset=0):
+    """
+    This function calculates the scaling factor and output dtype for
+    a fixed scale and offset codec. The expected minimum and maximum
+    values along with the precision are used to determine the number
+    of bits required to represent the data. The scaling factor is then
+    calculated to scale the original data to the required integer
+    range. The output dtype is determined based on the number of bits
+    required.
+
+    Note that for very high precision in relation to the min and max values,
+    there may be some issues due to rounding and the given factors may
+    become slighly imprecise.
+
+    Parameters
+    ----------
+    min_value : float
+        The minimum expected value of the original data. Outside this range
+        the data may start to behave unexpectedly.
+    max_value : float
+        The maximum expected value of the original data. Outside this range
+        the data may start to behave unexpectedly.
+    precision : float
+        The precision of the data, i.e. the maximum difference between the
+        original and decoded data.
+    offset : float, optional
+        The offset to apply to the original data before scaling.
+
+    Returns
+    -------
+    scaling_factor : float
+        The scaling factor to apply to the original data.
+    out_dtype : str
+        The output dtype to use for the fixed scale and offset codec.
+    """
+
+    min_with_offset = min_value + offset
+    max_with_offset = max_value + offset
+
+    max_abs_value = max(abs(min_with_offset), abs(max_with_offset))
+
+    steps_required = int(max_abs_value / precision / 2) + 1
+
+    bits_required = steps_required.bit_length()
+
+    steps_available = 2**bits_required
+
+    if min_with_offset < 0:
+        bits_required += 1  # need to account for the sign bit
+        out_dtype_prefix = ""
+    else:
+        out_dtype_prefix = "u"
+
+    scaling_factor = steps_available / max_abs_value
+
+    if bits_required <= 8:
+        out_dtype = out_dtype_prefix + "int8"
+    elif bits_required <= 16:
+        out_dtype = out_dtype_prefix + "int16"
+    elif bits_required <= 32:
+        out_dtype = out_dtype_prefix + "int32"
+    elif bits_required <= 64:
+        out_dtype = out_dtype_prefix + "int64"
+    else:
+        raise ValueError("Too many bits required for precision and range")
+
+    return scaling_factor, out_dtype
 
 
 def open_zarr(zarr_folder):
@@ -86,6 +153,7 @@ def to_zarr(
     time_chunks_per_shard=30,
     byteshuffle=True,
     filters=[],
+    compressor=None,
     progress=True,
 ):
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
@@ -144,17 +212,24 @@ def to_zarr(
         # For anything with a shard, we opt for zarr version 3, for anything without, we use version 2.
         if shards:
             zarr_version = 3
-            compressor = BloscCodec(
+            from numcodecs.zarr3 import Blosc
+
+            compressor = Blosc(
                 cname="zstd",
                 clevel=9,
-                shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
+                shuffle=0,
             )
 
             check_buffer_size(da, chunks_or_shards=shards)
         else:
             assert not filters, "Filters are only supported for zarr version 3"
             zarr_version = 2
-            compressor = numcodecs.Blosc(cname="zstd", clevel=9, shuffle=byteshuffle)
+            from numcodecs import Blosc
+
+            if compressor is None:
+                compressor = Blosc(
+                    cname="zstd", clevel=9, shuffle=1 if byteshuffle else 0
+                )
 
             check_buffer_size(da, chunks_or_shards=chunks)
 
@@ -180,7 +255,7 @@ def to_zarr(
 
         encoding = {da.name: array_encoding}
         for coord in da.coords:
-            encoding[coord] = {"compressors": None}
+            encoding[coord] = {"compressors": (compressor,)}
 
         arguments = {
             "store": tmp_zarr,
@@ -289,7 +364,9 @@ class AsyncForcingReader:
             return self.current_index + 1
         else:
             indices = self.datetime_index == numpy_date
-            assert np.count_nonzero(indices) == 1, "Date not found in the dataset."
+            assert np.count_nonzero(indices) == 1, (
+                f"Date not found in the dataset. The first date available in {self.variable_name} ({self.filepath}) is {self.datetime_index[0]} and the last date is {self.datetime_index[-1]}, while requested date is {date}"
+            )
             return indices.argmax()
 
     def read_timestep(self, date, asynchronous=False):

@@ -589,10 +589,10 @@ class Households(AgentBaseClass):
 
     def spinup(self):
         self.var = self.model.store.create_bucket("agents.households.var")
+        self.load_objects()
+        self.load_max_damage_values()
+        self.load_damage_curves()
         if self.config["adapt"]:
-            self.load_objects()
-            self.load_max_damage_values()
-            self.load_damage_curves()
             self.construct_income_distribution()
             self.assign_household_attributes()
 
