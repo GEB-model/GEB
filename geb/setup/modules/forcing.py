@@ -225,8 +225,8 @@ class Forcing:
         max_value = 500 / 3600  # convert to kg/m2/s
         precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
-        scaling_factor = calculate_scaling(
-            0, max_value, offset=offset, precision=precision, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            0, max_value, offset=offset, precision=precision
         )
 
         filters = [
@@ -234,7 +234,7 @@ class Forcing:
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
         ]
 
@@ -261,15 +261,15 @@ class Forcing:
         precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
         offset = 0
-        scaling_factor = calculate_scaling(
-            0, max_value, offset=offset, precision=precision, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            0, max_value, offset=offset, precision=precision
         )
         filters = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
         ]
 
@@ -289,15 +289,15 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = -250
-        scaling_factor = calculate_scaling(
-            0, 500, offset=offset, precision=0.1, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            0, 1361, offset=offset, precision=0.1
         )
         filters = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
         ]
 
@@ -317,15 +317,15 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = -250
-        scaling_factor = calculate_scaling(
-            0, 500, offset=offset, precision=0.1, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            0, 1361, offset=offset, precision=0.1
         )
         filters = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
         ]
 
@@ -346,8 +346,8 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters = [
@@ -355,9 +355,9 @@ class Forcing:
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
-            Delta(dtype=np.dtype(np.int32).str),
+            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -380,8 +380,8 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters = [
@@ -389,9 +389,9 @@ class Forcing:
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
-            Delta(dtype=np.dtype(np.int32).str),
+            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -413,8 +413,8 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters = [
@@ -422,9 +422,9 @@ class Forcing:
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
-            Delta(dtype=np.dtype(np.int32).str),
+            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -445,8 +445,8 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = -50
-        scaling_factor = calculate_scaling(
-            0, 100, offset=offset, precision=0.1, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            0, 100, offset=offset, precision=0.1
         )
 
         filters = [
@@ -454,9 +454,9 @@ class Forcing:
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
-            Delta(dtype=np.dtype(np.int32).str),
+            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -482,17 +482,18 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = -100_000
-        scaling_factor = calculate_scaling(
-            30_000, 120_000, offset=offset, precision=10, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            30_000, 120_000, offset=offset, precision=10
         )
+
         filters = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
-            Delta(dtype=np.dtype(np.int32).str),
+            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -518,17 +519,17 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
-        scaling_factor = calculate_scaling(
-            0, 120, offset=offset, precision=0.1, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            0, 120, offset=offset, precision=0.1
         )
         filters = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
-            Delta(dtype=np.dtype(np.int32).str),
+            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -549,8 +550,8 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
-        scaling_factor = calculate_scaling(
-            5, 5, offset=offset, precision=0.001, out_dtype=np.int32
+        scaling_factor, out_dtype = calculate_scaling(
+            5, 5, offset=offset, precision=0.001
         )
 
         filters = [
@@ -558,9 +559,9 @@ class Forcing:
                 offset=offset,
                 scale=scaling_factor,
                 dtype=da.dtype,
-                astype=np.dtype(np.int32).str,
+                astype=out_dtype,
             ),
-            Delta(dtype=np.dtype(np.int32).str),
+            Delta(dtype=out_dtype),
         ]
 
         da = self._mask_forcing(da, value=-offset)
@@ -594,11 +595,11 @@ class Forcing:
 
         # ensure no negative values for precipitation, which may arise due to float precision
         pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        # pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
+        pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
         pr = pr.raster.reproject_like(target, method="average")
-        # self.set_pr(pr)
+        self.set_pr(pr)
 
         hourly_rsds = process_ERA5(
             "ssrd",  # surface_solar_radiation_downwards
