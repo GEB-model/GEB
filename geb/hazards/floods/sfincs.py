@@ -13,6 +13,7 @@ import zarr
 
 from ...HRUs import load_geom
 from ...workflows.io import open_zarr, to_zarr
+from ...workflows.raster import reclassify
 
 try:
     from geb_hydrodynamics.build_model import build_sfincs
@@ -370,6 +371,16 @@ class SFINCS:
         self._precipitation_dataarray = dataarray
 
     @property
+    def mannings(self):
+        mannings = reclassify(
+            self.land_cover,
+            self.land_cover_mannings_rougness_classification.set_index(
+                "esa_worldcover"
+            )["N"].to_dict(),
+        )
+        return mannings
+
+    @property
     def land_cover(self):
         return open_zarr(self.model.files["other"]["landcover/classification"])
 
@@ -414,8 +425,7 @@ class SFINCS:
             "DEMs": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
-            "land_cover": self.land_cover,
-            "land_cover_mannings_rougness_classification": self.land_cover_mannings_rougness_classification,
+            "mannings": self.mannings,
             "resolution": self.config["resolution"],
             "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
             "crs": self.crs,
