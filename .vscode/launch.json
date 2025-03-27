@@ -18,12 +18,10 @@
             "request": "launch",
             "program": "geb/cli.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "args": [
                 "spinup",
-                "-wd",
-                "../model",
+                "-wd", "../model",
             ],
         },
         {
@@ -32,12 +30,10 @@
             "request": "launch",
             "program": "geb/cli.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "args": [
                 "run",
-                "-wd",
-                "../model"
+                "-wd", "../model"
             ]
         },
         {
@@ -46,7 +42,6 @@
             "request": "launch",
             "program": "geb/cli.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "args": [
                 "build",
@@ -59,7 +54,6 @@
             "request": "launch",
             "program": "geb/cli.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "args": [
                 "update",
