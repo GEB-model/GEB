@@ -1,6 +1,7 @@
+from .agents import Agents
 from .crops import Crops
 from .forcing import Forcing
-from .groundwater import Groundwater
+from .groundwater import GroundWater
 from .hydrography import Hydrography
 from .landsurface import LandSurface
 from .observations import Observations
@@ -11,5 +12,6 @@ __all__ = [
     "Forcing",
     "LandSurface",
     "Observations",
-    "Groundwater",
+    "GroundWater",
+    "Agents",
 ]

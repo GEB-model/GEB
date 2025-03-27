@@ -2,7 +2,7 @@ import numpy as np
 import xarray as xr
 
 
-class Groundwater:
+class GroundWater:
     def __init__(self):
         pass
 
