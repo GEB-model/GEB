@@ -118,7 +118,7 @@ class Routing(object):
         )
 
         # number of substep per day
-        self.var.n_routing_steps = 24
+        self.var.n_routing_substeps = 24
         # kinematic wave parameter: 0.6 is for broad sheet flow
 
         self.var.river_beta = 0.6  # TODO: Make this a parameter
@@ -145,7 +145,7 @@ class Routing(object):
 
         # Corresponding sub-timestep (seconds)
         self.var.routing_step_length_seconds = (
-            self.model.timestep_length.total_seconds() / self.var.n_routing_steps
+            self.model.timestep_length.total_seconds() / self.var.n_routing_substeps
         )
 
         # for a river, the wetted perimeter can be approximated by the channel width
@@ -174,7 +174,7 @@ class Routing(object):
             self.grid.var.river_width, dtype=np.float32
         )
         self.grid.var.discharge_substep = np.full(
-            (self.var.n_routing_steps, self.grid.var.discharge.size),
+            (self.var.n_routing_substeps, self.grid.var.discharge.size),
             0,
             dtype=self.grid.var.discharge.dtype,
         )
@@ -218,18 +218,20 @@ class Routing(object):
 
         # self.grid.var.riverbedExchange = np.where(self.grid.var.waterBodyID > 0, 0., self.grid.var.riverbedExchange)
 
-        # riverbedExchangeDt = self.grid.var.riverbedExchangeM3 / self.var.n_routing_steps
+        # riverbedExchangeDt = self.grid.var.riverbedExchangeM3 / self.var.n_routing_substeps
 
         net_channel_abstraction_m3_Dt = (
             (channel_abstraction_m - return_flow)
             * self.grid.var.cell_area
-            / self.var.n_routing_steps
+            / self.var.n_routing_substeps
         )
 
-        runoff_m3_Dt = total_runoff * self.grid.var.cell_area / self.var.n_routing_steps
+        runoff_m3_Dt = (
+            total_runoff * self.grid.var.cell_area / self.var.n_routing_substeps
+        )
 
         self.grid.var.discharge_substep = np.full(
-            (self.var.n_routing_steps, self.grid.var.discharge.size),
+            (self.var.n_routing_substeps, self.grid.var.discharge.size),
             np.nan,
             dtype=self.grid.var.discharge.dtype,
         )
@@ -241,7 +243,7 @@ class Routing(object):
             waterbody_evaporation_m3 = 0
             discharge_at_outlets = 0
 
-        for subrouting_step in range(self.var.n_routing_steps):
+        for subrouting_step in range(self.var.n_routing_substeps):
             # the ratio of each grid cell that is currently covered by a river
             channel_ratio = get_channel_ratio(
                 river_length=self.grid.var.river_length,
@@ -252,7 +254,7 @@ class Routing(object):
             # calculate evaporation from rivers per timestep usting the current channel ratio
             evaporation_in_rivers_m3_Dt = (
                 self.grid.var.EWRef * channel_ratio * self.grid.var.cell_area
-            ) / self.var.n_routing_steps
+            ) / self.var.n_routing_substeps
 
             # limit evaporation to available water in river
             evaporation_in_rivers_m3_Dt = np.minimum(
@@ -275,8 +277,8 @@ class Routing(object):
             # because it is outflow from the waterbodies to the river network
             inflow_to_river_network, waterbody_evaporation_m3_Dt = (
                 self.hydrology.lakes_reservoirs.substep(
-                    substep=subrouting_step,
-                    n_routing_steps=self.var.n_routing_steps,
+                    current_substep=subrouting_step,
+                    n_routing_substeps=self.var.n_routing_substeps,
                     routing_step_length_seconds=self.var.routing_step_length_seconds,
                     discharge=self.grid.var.discharge,
                     total_runoff=total_runoff,
@@ -348,7 +350,7 @@ class Routing(object):
             balance_check(
                 how="sum",
                 influxes=[
-                    total_runoff / self.var.n_routing_steps,
+                    total_runoff / self.var.n_routing_substeps,
                     inflow_to_river_network / self.grid.var.cell_area,
                 ],
                 outfluxes=[

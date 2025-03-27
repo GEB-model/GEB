@@ -595,7 +595,7 @@ class Households(AgentBaseClass):
         self.load_max_damage_values()
         self.load_damage_curves()
         self.construct_income_distribution()
-        self.assign_household_attributes()
+        # self.assign_household_attributes()
 
         super().__init__()
 

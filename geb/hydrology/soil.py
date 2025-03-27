@@ -1334,6 +1334,8 @@ class Soil(object):
         potential_transpiration,
         potential_bare_soil_evaporation,
         potential_evapotranspiration,
+        natural_available_water_infiltration,
+        actual_irrigation_consumption,
     ):
         """
         Dynamic part of the soil module
@@ -1354,8 +1356,8 @@ class Soil(object):
 
         available_water_infiltration, open_water_evaporation = (
             get_available_water_infiltration(
-                natural_available_water_infiltration=self.HRU.var.natural_available_water_infiltration,
-                actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
+                natural_available_water_infiltration=natural_available_water_infiltration,
+                actual_irrigation_consumption=actual_irrigation_consumption,
                 land_use_type=self.HRU.var.land_use_type,
                 crop_kc=self.HRU.var.cropKC,
                 EWRef=self.HRU.var.EWRef,
@@ -1461,13 +1463,13 @@ class Soil(object):
             assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
             assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
-            balance_check(
+            assert balance_check(
                 name="soil_1",
                 how="cellwise",
                 influxes=[
-                    self.HRU.var.natural_available_water_infiltration[bioarea],
+                    natural_available_water_infiltration[bioarea],
                     capillary_rise_from_groundwater[bioarea],
-                    self.HRU.var.actual_irrigation_consumption[bioarea],
+                    actual_irrigation_consumption[bioarea],
                 ],
                 outfluxes=[
                     runoff[bioarea],
@@ -1488,13 +1490,13 @@ class Soil(object):
                 tollerance=1e-6,
             )
 
-            balance_check(
+            assert balance_check(
                 name="soil_2",
                 how="cellwise",
                 influxes=[
-                    self.HRU.var.natural_available_water_infiltration[bioarea],
+                    natural_available_water_infiltration[bioarea],
                     capillary_rise_from_groundwater[bioarea],
-                    self.HRU.var.actual_irrigation_consumption[bioarea],
+                    actual_irrigation_consumption[bioarea],
                 ],
                 outfluxes=[
                     runoff[bioarea],

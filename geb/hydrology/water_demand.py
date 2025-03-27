@@ -20,7 +20,6 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-from honeybees.library.raster import write_to_array
 
 from geb.HRUs import load_grid
 from geb.workflows import TimingModule, balance_check
@@ -182,7 +181,7 @@ class WaterDemand:
             potential_infiltration_capacity,
         )
 
-    def get_available_water(self, gross_irrigation_demand_m3):
+    def get_available_water(self, gross_irrigation_demand_m3_per_command_area):
         assert (
             self.hydrology.lakes_reservoirs.var.waterBodyIDC.size
             == self.hydrology.lakes_reservoirs.var.storage.size
@@ -194,10 +193,11 @@ class WaterDemand:
         available_reservoir_storage_m3 = np.zeros_like(
             self.hydrology.lakes_reservoirs.var.storage
         )
+
         available_reservoir_storage_m3[
             self.hydrology.lakes_reservoirs.var.water_body_type == RESERVOIR
-        ] = self.model.agents.reservoir_operators.get_available_water_reservoir_command_areas(
-            gross_irrigation_demand_m3
+        ] = self.model.agents.reservoir_operators.get_command_area_release(
+            gross_irrigation_demand_m3_per_command_area
         )
         return (
             self.grid.var.river_storage_m3.copy(),
@@ -214,12 +214,12 @@ class WaterDemand:
     def step(self, potential_evapotranspiration):
         timer = TimingModule("Water demand")
 
-        (
-            domestic_water_demand_per_household,
-            domestic_water_efficiency_per_household,
-            household_locations,
-        ) = self.model.agents.households.water_demand()
-        timer.new_split("Domestic")
+        # (
+        #     domestic_water_demand_per_household,
+        #     domestic_water_efficiency_per_household,
+        #     household_locations,
+        # ) = self.model.agents.households.water_demand()
+        # timer.new_split("Domestic")
         industry_water_demand, industry_water_efficiency = (
             self.model.agents.industry.water_demand()
         )
@@ -238,7 +238,7 @@ class WaterDemand:
             potential_evapotranspiration
         )
 
-        gross_irrigation_demand_m3 = (
+        gross_irrigation_demand_m3_per_field = (
             self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
                 paddy_level=paddy_level,
                 readily_available_water=readily_available_water,
@@ -248,7 +248,19 @@ class WaterDemand:
             )
         )
 
-        assert (domestic_water_demand_per_household >= 0).all()
+        gross_irrigation_demand_m3_per_farmer = (
+            self.model.agents.crop_farmers.field_to_farmer(
+                gross_irrigation_demand_m3_per_field
+            )
+        )
+
+        farmer_command_area = self.model.agents.crop_farmers.farmer_command_area
+        gross_irrigation_demand_m3_per_command_area = np.bincount(
+            farmer_command_area[farmer_command_area != -1],
+            gross_irrigation_demand_m3_per_farmer[farmer_command_area != -1],
+        )
+
+        # assert (domestic_water_demand_per_household >= 0).all()
         assert (industry_water_demand >= 0).all()
         assert (livestock_water_demand >= 0).all()
 
@@ -256,38 +268,38 @@ class WaterDemand:
             available_channel_storage_m3,
             available_reservoir_storage_m3,
             available_groundwater_m3,
-        ) = self.get_available_water(gross_irrigation_demand_m3)
+        ) = self.get_available_water(gross_irrigation_demand_m3_per_command_area)
 
         available_channel_storage_m3_pre = available_channel_storage_m3.copy()
         available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         available_groundwater_m3_pre = available_groundwater_m3.copy()
 
-        domestic_water_demand_m3 = np.zeros(self.model.hydrology.grid.shape, np.float32)
+        # domestic_water_demand_m3 = np.zeros(self.model.hydrology.grid.shape, np.float32)
 
-        domestic_water_demand_m3 = write_to_array(
-            domestic_water_demand_m3,
-            domestic_water_demand_per_household,
-            household_locations,
-            self.model.hydrology.grid.gt,
-        )
-        domestic_water_demand_m3 = self.model.hydrology.grid.compress(
-            domestic_water_demand_m3
-        )
+        # domestic_water_demand_m3 = write_to_array(
+        #     domestic_water_demand_m3,
+        #     domestic_water_demand_per_household,
+        #     household_locations,
+        #     self.model.hydrology.grid.gt,
+        # )
+        # domestic_water_demand_m3 = self.model.hydrology.grid.compress(
+        #     domestic_water_demand_m3
+        # )
 
-        assert (domestic_water_efficiency_per_household == 1).all()
-        domestic_water_efficiency = 1
+        # assert (domestic_water_efficiency_per_household == 1).all()
+        # domestic_water_efficiency = 1
 
         # water withdrawal
         # 1. domestic (surface + ground)
-        self.hydrology.grid.domestic_withdrawal_m3 = self.withdraw(
-            available_channel_storage_m3, domestic_water_demand_m3
-        )  # withdraw from surface water
-        self.hydrology.grid.domestic_withdrawal_m3 += self.withdraw(
-            available_groundwater_m3, domestic_water_demand_m3
-        )  # withdraw from groundwater
-        domestic_return_flow_m = self.hydrology.grid.M3toM(
-            self.hydrology.grid.domestic_withdrawal_m3 * (1 - domestic_water_efficiency)
-        )
+        # self.hydrology.grid.domestic_withdrawal_m3 = self.withdraw(
+        #     available_channel_storage_m3, domestic_water_demand_m3
+        # )  # withdraw from surface water
+        # self.hydrology.grid.domestic_withdrawal_m3 += self.withdraw(
+        #     available_groundwater_m3, domestic_water_demand_m3
+        # )  # withdraw from groundwater
+        # domestic_return_flow_m = self.hydrology.grid.M3toM(
+        #     self.hydrology.grid.domestic_withdrawal_m3 * (1 - domestic_water_efficiency)
+        # )
 
         # 2. industry (surface + ground)
         industry_water_demand = self.hydrology.to_grid(
@@ -329,16 +341,21 @@ class WaterDemand:
             return_flow_irrigation_m,
             irrigation_loss_to_evaporation_m,
         ) = self.model.agents.crop_farmers.abstract_water(
-            gross_potential_irrigation_m3=gross_irrigation_demand_m3,
+            gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             groundwater_depth=self.hydrology.groundwater.modflow.groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
         )
+
+        assert (available_reservoir_storage_m3 < 1).all(), (
+            "Reservoir storage should be empty after abstraction"
+        )
+
         timer.new_split("Irrigation")
 
         if __debug__:
-            balance_check(
+            assert balance_check(
                 name="water_demand_1",
                 how="cellwise",
                 influxes=[irrigation_water_withdrawal_m],
@@ -373,28 +390,15 @@ class WaterDemand:
             available_channel_storage_m3_pre - available_channel_storage_m3
         )
 
-        reservoir_abstraction_m3 = (
-            available_reservoir_storage_m3_pre - available_reservoir_storage_m3
-        )
-        assert (
-            self.hydrology.lakes_reservoirs.var.water_body_type[
-                np.where(reservoir_abstraction_m3 > 0)
-            ]
-            == RESERVOIR
-        ).all(), "Reservoir abstraction should only be from reservoirs"
-
-        # Abstract water from reservoir
-        self.hydrology.lakes_reservoirs.var.storage -= reservoir_abstraction_m3
-
         return_flow = (
             self.hydrology.to_grid(HRU_data=return_flow_irrigation_m, fn="weightedmean")
-            + domestic_return_flow_m
+            # + domestic_return_flow_m
             + industry_return_flow_m
             + livestock_return_flow_m
         )
 
         if __debug__:
-            balance_check(
+            assert balance_check(
                 name="water_demand_1",
                 how="cellwise",
                 influxes=[irrigation_water_withdrawal_m],
@@ -405,12 +409,12 @@ class WaterDemand:
                 ],
                 tollerance=1e-6,
             )
-            balance_check(
+            assert balance_check(
                 name="water_demand_2",
                 how="sum",
                 influxes=[],
                 outfluxes=[
-                    self.hydrology.grid.domestic_withdrawal_m3,
+                    # self.hydrology.grid.domestic_withdrawal_m3,
                     self.hydrology.grid.industry_withdrawal_m3,
                     self.hydrology.grid.livestock_withdrawal_m3,
                     self.HRU.var.cell_area,

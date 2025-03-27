@@ -948,7 +948,7 @@ class CropFarmers(AgentBaseClass):
         max_water_content,
         potential_infiltration_capacity,
     ):
-        return get_gross_irrigation_demand_m3(
+        gross_irrigation_demand_m3 = get_gross_irrigation_demand_m3(
             day_index=self.model.current_day_of_year - 1,
             n=self.n,
             activation_order=self.activation_order_by_elevation,
@@ -971,9 +971,14 @@ class CropFarmers(AgentBaseClass):
             max_paddy_water_level=self.var.max_paddy_water_level.data,
         )
 
+        assert (
+            gross_irrigation_demand_m3 < self.model.hydrology.HRU.var.cell_area
+        ).all()
+        return gross_irrigation_demand_m3
+
     def abstract_water(
         self,
-        gross_potential_irrigation_m3: np.ndarray,
+        gross_irrigation_demand_m3_per_field: np.ndarray,
         available_channel_storage_m3: np.ndarray,
         available_groundwater_m3: np.ndarray,
         groundwater_depth: np.ndarray,
@@ -1036,8 +1041,13 @@ class CropFarmers(AgentBaseClass):
             ],
             well_depth=self.var.well_depth.data,
             remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
-            gross_potential_irrigation_m3=gross_potential_irrigation_m3,
+            gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
         )
+
+        assert (water_withdrawal_m < 1).all()
+        assert (water_consumption_m < 1).all()
+        assert (returnFlowIrr_m < 1).all()
+        assert (addtoevapotrans_m < 1).all()
 
         if __debug__:
             # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
@@ -1252,6 +1262,12 @@ class CropFarmers(AgentBaseClass):
         assert not np.isnan(yield_ratio).any()
 
         return yield_ratio
+
+    def field_to_farmer(self, array, method="sum"):
+        assert method == "sum", "Only sum is implemented"
+        farmer_fields = self.HRU.var.land_owners[self.HRU.var.land_owners != -1]
+        masked_array = array[self.HRU.var.land_owners != -1]
+        return np.bincount(farmer_fields, masked_array, minlength=self.n)
 
     def decompress(self, array):
         if np.issubdtype(array.dtype, np.floating):
