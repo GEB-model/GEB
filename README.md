@@ -22,7 +22,9 @@ uv pip install geb --prerelease=allow
 
 ## Development installation and setup
 
-To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use [uv](https://docs.astral.sh/uv/) to install the dependencies. To do so execute the following within the folder where you would like to work on the development of GEB:
+To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [uv](https://docs.astral.sh/uv/) and [git](https://git-scm.com/).
+
+After installation, open a **new** shell and execute the following within a folder where you want to store the GEB repository and models:
 
 ```bash
 git clone git@github.com:GEB-model/GEB.git
@@ -40,7 +42,7 @@ Now open Visual Studio Code in the GEB folder (or use the "File -> Open Folder" 
 code .
 ```
 
-Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do. After installing the Python extension VS Code should also automatically use the environment you created earlier. To test this, open a terminal in VS Code (`Terminal -> New Terminal`) and run:
+Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do. After installing the Python extension VS Code should also automatically use the environment you created earlier. To test this, open a terminal in Visusal Studio Code (`Terminal -> New Terminal`) and run:
 
 ```bash
 geb --help
