@@ -934,7 +934,7 @@ requires-dist = [
     { name = "deap", specifier = ">=1.4.1" },
     { name = "flopy", specifier = ">=3.8.0" },
     { name = "geopandas", specifier = ">=1.0.1" },
-    { name = "honeybees", specifier = ">=1.1.1" },
+    { name = "honeybees", specifier = ">=1.2.0" },
     { name = "hydromt", specifier = "==0.10.1" },
     { name = "isimip-client", specifier = ">=1.0.1" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
@@ -1151,7 +1151,7 @@ wheels = [
 
 [[package]]
 name = "honeybees"
-version = "1.1.1"
+version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "geopandas" },
@@ -1169,9 +1169,9 @@ dependencies = [
     { name = "xarray" },
     { name = "zarr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/f9/0ad5335c4708446577c9aaef5d0767afabdb8c0073d2b7a911727d5c78a5/honeybees-1.1.1.tar.gz", hash = "sha256:f13204f9d85b2304c996b1d6127903b364d0dbcdcac0d6ebc0384d8e6a32b163", size = 448723 }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/26/55663ef1df9b7697a7d51530b46f4b652d4b17014a1806ca153751cf181e/honeybees-1.2.0.tar.gz", hash = "sha256:f99e4c71662a21396c149cc7ac8578d0624e3b1b6d4050c784fb892e82e11f0a", size = 448930 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/19/a72910ab81bf07840e110c4f216c1f540de66a9019cea1306912a2286e94/honeybees-1.1.1-py3-none-any.whl", hash = "sha256:d46ed461ce1e67558bef0947b0362a827a937b011e02b42aac989032416cbdd0", size = 459566 },
+    { url = "https://files.pythonhosted.org/packages/c2/6f/f438192218bcdd7c816d389994d601a7fa28aea2657aa2ebb68aa6ca7162/honeybees-1.2.0-py3-none-any.whl", hash = "sha256:72f8f0927fcb62da42bfe9a3bb7a0c34e09c397365bee7ba89f0c5ee1af7e444", size = 459834 },
 ]
 
 [[package]]
