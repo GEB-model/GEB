@@ -22,16 +22,46 @@ uv pip install geb --prerelease=allow
 
 ## Development installation and setup
 
-To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [uv](https://docs.astral.sh/uv/) and [git](https://git-scm.com/).
+To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [uv](https://docs.astral.sh/uv/#installation) and [git](https://git-scm.com/).
 
-After installation, open a **new** shell and execute the following within a folder where you want to store the GEB repository and models:
+Also create a folder where you would like to store the code and model, we call this the *working directory*. In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
+
+```
+working directory
+|   model
+|   |   model.yml
+|   |   build.yml│       
+|   |   input
+|   |   (potential other files and folders)
+```
+
+Then, in the *working directory*, open a **new** terminal and run the following command to *clone* (download) all the code from the repository:
 
 ```bash
 git clone git@github.com:GEB-model/GEB.git
-cd GEB
-git switch main  # use main by default, but may be changed to another branch
+```
+
+Now the directory structure should look like this:
+
+```
+working directory
+|   model
+|   |   model.yml
+|   |   build.yml     
+|   |   input
+|   |   (potential other files and folders)
+|   GEB
+|   |   README.md
+|   |   (all files and folders from the repository)
+```
+
+Then proceed with the following commands:
+
+```bash
+cd GEB  # switch the terminal to GEB code folder
+git switch main  # switch to the main development branch by default, but may be changed to another branch
 git update-index --skip-worktree .vscode/extensions.json  .vscode/launch.json  .vscode/settings.json  # we don't want to commit local changes to the vscode settings
-uv sync --dev
+uv sync --dev  # install all dependencies using uv
 ```
 
 You will now have a virtual environment (`.venv`) in the GEB folder with the right Python installation and all packages you need.
