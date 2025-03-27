@@ -50,7 +50,7 @@
             "justMyCode": false,
             "args": [
                 "build",
-                "-wd", "model",
+                "-wd", "../model",
             ]
         },
         {
@@ -63,7 +63,7 @@
             "justMyCode": false,
             "args": [
                 "update",
-                "-wd", "model",
+                "-wd", "../model",
             ]
         },
     ]
