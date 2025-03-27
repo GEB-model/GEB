@@ -124,6 +124,15 @@ class ReservoirOperators(AgentBaseClass):
         )
         self.remaining_command_area_release = self.command_area_release_m3.copy()
         self.gross_irrigation_demand_m3 = gross_irrigation_demand_m3
+
+        print(
+            "fullfillment",
+            np.round(
+                (self.command_area_release_m3 / self.gross_irrigation_demand_m3) * 100,
+                decimals=1,
+            ),
+        )
+
         return self.command_area_release_m3
 
     def release(self, inflow_m3, daily_substeps, current_substep):
@@ -132,17 +141,17 @@ class ReservoirOperators(AgentBaseClass):
             inflow_m3
         )
 
+        command_area_release_substep = self.command_area_release_m3 / daily_substeps
+
+        # subtract the evaporation in this timestep from the remaining evaporation
+        self.remaining_command_area_release -= command_area_release_substep
+        self.remaining_evaporation_m3 -= self.evaporation_m3 / daily_substeps
+
         usable_release_m3, environmental_release_m3 = self._get_release(
             inflow_m3=inflow_m3,
             irrigation_demand_m3=self.gross_irrigation_demand_m3,
             daily_substeps=daily_substeps,
         )
-
-        command_area_release_substep = self.command_area_release_m3 / daily_substeps
-        self.remaining_command_area_release -= command_area_release_substep
-
-        command_area_evaporation_substep = self.evaporation_m3 / daily_substeps
-        self.remaining_evaporation_m3 -= command_area_evaporation_substep
 
         # main channel release is the usable release, the environmental release
         # minus the command area release. The command area release
@@ -170,9 +179,6 @@ class ReservoirOperators(AgentBaseClass):
         return main_channel_release, command_area_release_substep
 
     def _get_release(self, inflow_m3, irrigation_demand_m3, daily_substeps):
-        if inflow_m3.size == 0:
-            return np.zeros_like(inflow_m3)
-
         days_in_month = calendar.monthrange(
             self.model.current_time.year, self.model.current_time.month
         )[1]
@@ -253,6 +259,9 @@ class ReservoirOperators(AgentBaseClass):
         )
         assert (usable_release_m3 >= 0).all()
         assert (environmental_release_m3 >= 0).all()
+        assert (
+            usable_release_m3 >= self.command_area_release_m3 / daily_substeps
+        ).all()
 
         return usable_release_m3, environmental_release_m3
 
@@ -274,7 +283,12 @@ class ReservoirOperators(AgentBaseClass):
         assert (reservoir_release_m3 >= 0).all()
 
         # get provisional storage given inflow and release
-        provisional_storage_m3 = storage_m3 + inflow_m3 - reservoir_release_m3
+        provisional_storage_m3 = (
+            storage_m3
+            + inflow_m3
+            - reservoir_release_m3
+            - self.evaporation_m3 / daily_substeps
+        )
 
         # release any over capacity
         normal_capacity = alpha * capacity_m3
@@ -288,34 +302,28 @@ class ReservoirOperators(AgentBaseClass):
         assert (reservoir_release_m3 >= 0).all()
 
         # storage can never drop below 10% of the capacity
-        # also make sure the remaining storage is enough to provide the command area release.
-        # Since this is the storage at the end of the current substep, we consider
-        # subtract the command area release that is still available in the current substep.
+        # also make sure the remaining storage is enough to provide the command area release
+        # and remaining evaporative demand
         minimum_storage_m3 = (
             0.1 * capacity_m3
             + self.remaining_command_area_release
-            - self.command_area_release_m3 / daily_substeps
             + self.remaining_evaporation_m3
         )
-        reservoir_release_m3 = np.where(
+        reservoir_release_m3_ = np.where(
             provisional_storage_m3 < minimum_storage_m3,
             np.maximum(storage_m3 + inflow_m3 - minimum_storage_m3, 0),
             reservoir_release_m3,
         )
 
-        assert (reservoir_release_m3 >= 0).all()
+        assert (reservoir_release_m3_ >= 0).all()
         assert (
-            storage_m3
-            + inflow_m3
-            - self.remaining_command_area_release
-            - reservoir_release_m3
-            >= 0
+            reservoir_release_m3_ >= self.command_area_release_m3 / daily_substeps
         ).all()
 
         environmental_flow_release_m3 = np.minimum(
-            reservoir_release_m3, environmental_flow_requirement_m3
+            reservoir_release_m3_, environmental_flow_requirement_m3
         )
-        usable_release_m3 = reservoir_release_m3 - environmental_flow_release_m3
+        usable_release_m3 = reservoir_release_m3_ - environmental_flow_release_m3
         return usable_release_m3, environmental_flow_release_m3
 
     def get_irrigation_reservoir_release(
