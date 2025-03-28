@@ -363,6 +363,7 @@ def get_potential_irrigation_consumption_m(
     max_paddy_water_level_farmer,
     crop_group,
     is_paddy,
+    depletion_factor=np.float32(0.5),
 ) -> np.ndarray:
     assert np.float32(0) <= fraction_irrigated_field <= np.float32(1)
 
@@ -401,13 +402,10 @@ def get_potential_irrigation_consumption_m(
 
         soil_depletion = field_capacity_root_zone - available_water_root_zone
 
-        # if soil moisture content falls below critical level, irrigate to field capacity
-        potential_irrigation_consumption_m = np.where(
-            soil_depletion
-            > readily_available_water_root_zone,  # if there is not enough water
-            soil_depletion,  # irrigate to field capacity (if possible)
-            np.float32(0),
-        )
+        if soil_depletion > readily_available_water_root_zone * depletion_factor:
+            potential_irrigation_consumption_m = soil_depletion
+        else:
+            potential_irrigation_consumption_m = np.float32(0)
 
         infiltration_capacity = get_infiltration_capacity(w, ws, arno_beta)
         potential_irrigation_consumption_m = np.minimum(
