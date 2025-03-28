@@ -18,10 +18,12 @@
             "request": "launch",
             "program": "geb/cli.py",
             "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "args": [
                 "spinup",
-                "-wd", "../model",
+                "-wd",
+                "../model",
             ],
         },
         {
@@ -30,10 +32,26 @@
             "request": "launch",
             "program": "geb/cli.py",
             "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "args": [
                 "run",
-                "-wd", "../model"
+                "-wd",
+                "../model"
+            ]
+        },
+        {
+            "name": "Evaluate",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "geb/cli.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "args": [
+                "evaluate",
+                "-wd",
+                "../model"
             ]
         },
         {
@@ -42,10 +60,11 @@
             "request": "launch",
             "program": "geb/cli.py",
             "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "args": [
                 "build",
-                "-wd", "../model",
+                "-wd", "model",
             ]
         },
         {
@@ -54,10 +73,11 @@
             "request": "launch",
             "program": "geb/cli.py",
             "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "args": [
                 "update",
-                "-wd", "../model",
+                "-wd", "model",
             ]
         },
     ]
