@@ -962,8 +962,8 @@ requires-dist = [
     { name = "setuptools", specifier = ">=75.8.0" },
     { name = "tbb", specifier = ">=2022.0.0" },
     { name = "tqdm", specifier = ">=4.66.1" },
-    { name = "xarray", specifier = "==2025.1.2" },
-    { name = "xclim", specifier = ">=0.52.0" },
+    { name = "xarray", specifier = ">=2025.3.0" },
+    { name = "xclim", specifier = ">=0.56.0" },
     { name = "xmipy", specifier = ">=1.5.0" },
     { name = "zarr", specifier = ">=3.0.6" },
 ]
@@ -3239,21 +3239,21 @@ wheels = [
 
 [[package]]
 name = "xarray"
-version = "2025.1.2"
+version = "2025.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "packaging" },
     { name = "pandas" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/c0/edb2f6cfafa5369106f927409f6211141c3296c14877cc634d8ee4c970a4/xarray-2025.1.2.tar.gz", hash = "sha256:e7675c79ac69d274dd3b3c5450ce57176928d2792947576251ed1c7df1783224", size = 3271214 }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/8c/e56820a2c682834d8fb4a940956cd41b9f2532fee9692bfaf43b14f33c6e/xarray-2025.3.0.tar.gz", hash = "sha256:531cf6d64e6ab54c19239930a840654f1a79d2140e9f0d11d1e8d69dcc581d0f", size = 3292399 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/05/79/4e19100342fe13d69fd6e77b343e2269924fec681258e2ea21b55576aad2/xarray-2025.1.2-py3-none-any.whl", hash = "sha256:a7ad6a36c6e0becd67f8aff6a7808d20e4bdcd344debb5205f0a34b1a4a7f8d6", size = 1247773 },
+    { url = "https://files.pythonhosted.org/packages/91/19/5dbac77ca82f009f8267d0e7cca4fd3be2a435d83ed98f6f8b9c5cb1747e/xarray-2025.3.0-py3-none-any.whl", hash = "sha256:022b7eac5ebc26d70d34211de732ec1a15127a40455f9492acdde7fbe5bbf091", size = 1270849 },
 ]
 
 [[package]]
 name = "xclim"
-version = "0.55.1"
+version = "0.56.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boltons" },
@@ -3277,9 +3277,9 @@ dependencies = [
     { name = "xarray" },
     { name = "yamale" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/c8/d3634cd6f2d9258cbe9b743114a323f95e80d88a5471c6407ce00c897677/xclim-0.55.1.tar.gz", hash = "sha256:35fe67432eeecfc0ab945a0afe5c342be37a74dd8a6581d2400dd6e89e911c83", size = 968856 }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/39/985fc6c23918358f0016e57f57024a73f931fe088851937f417d693072d3/xclim-0.56.0.tar.gz", hash = "sha256:36257713271d31ce55cdbc03e285112de60e2bbf313c204605d0ef24c493a740", size = 974201 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/8d/cc3013a92a02b48d273f041128b3e83019dc76c3bb31efc7420ec1e08e4e/xclim-0.55.1-py3-none-any.whl", hash = "sha256:821d5b71b00b996578a22ece1e89525c5a70c091146fd0c80da8d1011c0f30c1", size = 451826 },
+    { url = "https://files.pythonhosted.org/packages/cd/72/ae37c583317539e011c979ad3ecd522bdfc3c056a3779df42d16d0f027c2/xclim-0.56.0-py3-none-any.whl", hash = "sha256:bead5b5e3f03e0def348a7697cbae3c8c57a357bc6ddbfc589f719a4f7e59f4a", size = 454670 },
 ]
 
 [[package]]
