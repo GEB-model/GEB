@@ -90,10 +90,12 @@ class GEBModel(
         data_catalogs: List[str] = None,
         logger=logger,
         epsg=4326,
-        data_provider: str = None,
+        data_provider: str = "default",
     ):
         self.logger = logger
-        self.data_catalog = DataCatalog(data_libs=data_catalogs, logger=self.logger)
+        self.data_catalog = DataCatalog(
+            data_libs=data_catalogs, logger=self.logger, fallback_lib=None
+        )
 
         Hydrography.__init__(self)
         Forcing.__init__(self)
