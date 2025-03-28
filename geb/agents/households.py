@@ -2,6 +2,8 @@ import calendar
 import json
 
 import geopandas as gpd
+import os
+from os.path import join
 import numpy as np
 import pandas as pd
 import pyproj
@@ -602,12 +604,26 @@ class Households(AgentBaseClass):
         self.var.current_water_demand = water_demand
         self.var.current_efficiency = efficiency
 
-    def flood(self, flood_map):
+    def flood(self, flood_map,model_root, simulation_root):
+        # Ensure the "damage" folder exists
+        damage_folder = join(model_root, "damage")
+        os.makedirs(damage_folder, exist_ok=True)
+
+        #--------------------------------------------------------------------------------------------
+        # Damage to agriculture
+        category_name = 'Agriculture'
+        # Ensure that damages are saved in the output
+        filename = f"damages_{category_name}.gpkg"
+        file_path = join(damage_folder, filename)
+        print(file_path)
+
+        # Load landuse and make turn into polygons
         agriculture = from_landuse_raster_to_polygon(
             self.HRU.decompress(self.HRU.var.land_owners != -1),
             self.HRU.transform,
             self.model.crs,
         )
+        
         agriculture["object_type"] = "agriculture"
         agriculture["maximum_damage"] = self.var.max_dam_agriculture
 
@@ -618,8 +634,22 @@ class Households(AgentBaseClass):
             hazard=flood_map,
             curves=self.var.agriculture_curve,
         )
+        agriculture["damage"] = damages_agriculture
+        # Save to GeoPackage
+        agriculture.to_file(file_path, driver="GPKG")
+        print(f"Saved assets to {file_path}")
+
         total_damages_agriculture = damages_agriculture.sum()
         print(f"damages to agriculture are: {total_damages_agriculture}")
+
+        #--------------------------------------------------------------------------------------------
+        # Damage to Forests
+        category_name = 'Forests'
+
+        # Ensure that damages are saved in the output
+        filename = f"damages_{category_name}.gpkg"
+        file_path = join(damage_folder, filename)
+        print(file_path)
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
@@ -635,8 +665,23 @@ class Households(AgentBaseClass):
         damages_forest = object_scanner(
             objects=forest, hazard=flood_map, curves=self.var.forest_curve
         )
+
+        forest["damage"] = damages_forest
+        # Save to GeoPackage
+        forest.to_file(file_path, driver="GPKG")
+        print(f"Saved assets to {file_path}")
+
         total_damages_forest = damages_forest.sum()
         print(f"damages to forest are: {total_damages_forest}")
+
+        #--------------------------------------------------------------------------------------------
+        # Damage to Buildings Structures
+        category_name = 'Buildings_structures'
+
+        # Ensure that damages are saved in the output
+        filename = f"damages_{category_name}.gpkg"
+        file_path = join(damage_folder, filename)
+        print(file_path)
 
         buildings = self.var.buildings.to_crs(flood_map.rio.crs)
         damages_buildings_structure = object_scanner(
@@ -644,8 +689,22 @@ class Households(AgentBaseClass):
             hazard=flood_map,
             curves=self.var.buildings_structure_curve,
         )
+        buildings["damage"] = damages_buildings_structure
+        # Save to GeoPackage
+        buildings.to_file(file_path, driver="GPKG")
+        print(f"Saved assets to {file_path}")
+
         total_damage_structure = damages_buildings_structure.sum()
         print(f"damages to building structure are: {total_damage_structure}")
+
+        #--------------------------------------------------------------------------------------------
+        # Damage to Buildings content
+        category_name = 'Buildings_content'
+
+        # Ensure that damages are saved in the output
+        filename = f"damages_{category_name}.gpkg"
+        file_path = join(damage_folder, filename)
+        print(file_path)
 
         buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
         damages_buildings_content = object_scanner(
@@ -653,8 +712,23 @@ class Households(AgentBaseClass):
             hazard=flood_map,
             curves=self.var.buildings_content_curve,
         )
+
+        buildings_centroid["damage"] = damages_buildings_content
+        # Save to GeoPackage
+        buildings_centroid.to_file(file_path, driver="GPKG")
+        print(f"Saved assets to {file_path}")
+
         total_damages_content = damages_buildings_content.sum()
         print(f"damages to building content are: {total_damages_content}")
+
+        #--------------------------------------------------------------------------------------------
+        # Damage to roads
+        category_name = 'Roads'
+
+        # Ensure that damages are saved in the output
+        filename = f"damages_{category_name}.gpkg"
+        file_path = join(damage_folder, filename)
+        print(file_path)
 
         roads = self.var.roads.to_crs(flood_map.rio.crs)
         damages_roads = object_scanner(
@@ -662,8 +736,23 @@ class Households(AgentBaseClass):
             hazard=flood_map,
             curves=self.var.road_curves,
         )
+
+        roads["damage"] = damages_roads
+        # Save to GeoPackage
+        roads.to_file(file_path, driver="GPKG")
+        print(f"Saved assets to {file_path}")
+
         total_damages_roads = damages_roads.sum()
         print(f"damages to roads are: {total_damages_roads} ")
+
+        #--------------------------------------------------------------------------------------------
+        # Damage to rails
+        category_name = 'Rails'
+
+        # Ensure that damages are saved in the output
+        filename = f"damages_{category_name}.gpkg"
+        file_path = join(damage_folder, filename)
+        print(file_path)
 
         rail = self.var.rail.to_crs(flood_map.rio.crs)
         damages_rail = object_scanner(
@@ -671,8 +760,17 @@ class Households(AgentBaseClass):
             hazard=flood_map,
             curves=self.var.rail_curve,
         )
+
+        rail["damage"] = damages_rail
+        # Save to GeoPackage
+        rail.to_file(file_path, driver="GPKG")
+        print(f"Saved assets to {file_path}")
+
         total_damages_rail = damages_rail.sum()
         print(f"damages to rail are: {total_damages_rail}")
+
+        #--------------------------------------------------------------------------------------------
+        # Total Damages
 
         total_flood_damages = (
             total_damage_structure
