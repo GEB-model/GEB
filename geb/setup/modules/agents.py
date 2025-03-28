@@ -19,6 +19,7 @@ from geb.agents.crop_farmers import (
 )
 
 from ..workflows.conversions import (
+    AQUASTAT_NAME_TO_ISO3,
     COUNTRY_NAME_TO_ISO3,
     GLOBIOM_NAME_TO_ISO3,
     SUPERWELL_NAME_TO_ISO3,
@@ -53,7 +54,61 @@ class Agents:
 
         The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
         """
-        self.logger.info("Setting up water demand")
+
+        self.logger.info("Setting up municipal water demands")
+
+        municipal_water_demand = self.data_catalog.get_dataframe(
+            "AQUASTAT_municipal_withdrawal"
+        )
+        municipal_water_demand["ISO3"] = municipal_water_demand["Area"].map(
+            AQUASTAT_NAME_TO_ISO3
+        )
+        municipal_water_demand = municipal_water_demand.set_index("ISO3")
+
+        ISO3s = np.unique(self.geoms["regions"]["ISO3"])
+        assert len(ISO3s) == 1, "Only one region is supported"
+
+        for ISO3 in ISO3s:
+            # select domestic water demand for the region
+            municipal_water_demand_region = municipal_water_demand.loc[ISO3]
+            population = municipal_water_demand_region[
+                municipal_water_demand_region["Variable"] == "Total population"
+            ]
+            population = population.set_index("Year")
+            population = population["Value"] * 1000
+
+            municipal_water_withdrawal = municipal_water_demand_region[
+                municipal_water_demand_region["Variable"]
+                == "Municipal water withdrawal"
+            ]
+            municipal_water_withdrawal = municipal_water_withdrawal.set_index("Year")
+            municipal_water_withdrawal = municipal_water_withdrawal["Value"] * 10e9
+
+            municipal_water_withdrawal_m3_per_capita_per_day = (
+                municipal_water_withdrawal / population / 365.2425
+            )
+            municipal_water_withdrawal_m3_per_capita_per_day = (
+                municipal_water_withdrawal_m3_per_capita_per_day
+            ).dropna()
+
+            assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
+                f"Too large water withdrawal data for {ISO3}"
+            )
+
+            municipal_water_withdrawal_m3_per_capita_per_day = (
+                municipal_water_withdrawal_m3_per_capita_per_day.to_frame(
+                    name="municipal_water_demand_m3_per_day"
+                )
+            )
+
+            self.set_table(
+                municipal_water_withdrawal_m3_per_capita_per_day,
+                name="municipal_water_demand_m3_per_day",
+            )
+
+        return
+
+        self.logger.info("Setting up other water demands")
 
         def set(file, accessor, name, ssp, starttime, endtime):
             ds_historic = self.data_catalog.get_rasterdataset(
@@ -87,22 +142,6 @@ class Agents:
             ds.attrs["_FillValue"] = np.nan
             self.set_other(ds, name=f"water_demand/{name}")
 
-        set(
-            "domestic_water_demand",
-            "domWW",
-            "domestic_water_demand",
-            ssp,
-            starttime,
-            endtime,
-        )
-        set(
-            "domestic_water_demand",
-            "domCon",
-            "domestic_water_consumption",
-            ssp,
-            starttime,
-            endtime,
-        )
         set(
             "industry_water_demand",
             "indWW",
@@ -1166,7 +1205,9 @@ class Agents:
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4", geom=self.region, variables=["GDLcode", "iso_code"]
+            "GDL_regions_v4",
+            geom=self.region,
+            variables=["GDLcode", "iso_code"],
         )
         # create list of attibutes to include (and include name to store to)
         attributes_to_include = {

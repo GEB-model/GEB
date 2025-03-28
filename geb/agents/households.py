@@ -684,7 +684,10 @@ class Households(AgentBaseClass):
         return total_flood_damages
 
     def water_demand(self):
-        water_demand_per_household = np.full(self.n, 0.130, np.float32) * self.var.sizes
+        water_demand_per_household = (
+            np.full(self.n, self.config["water_demand_per_capita_m3"], np.float32)
+            * self.var.sizes
+        )
         water_efficiency_per_household = np.full_like(
             water_demand_per_household, 1.0, np.float32
         )
