@@ -273,6 +273,12 @@ def spinup(*args, **kwargs):
 
 
 @cli.command()
+@click_run_options()
+def evaluate(*args, **kwargs):
+    run_model_with_method(method="evaluate", *args, **kwargs)
+
+
+@cli.command()
 @click.argument("method", required=True)
 @click_run_options()
 def exec(method, *args, **kwargs):
