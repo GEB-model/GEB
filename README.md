@@ -60,7 +60,6 @@ Then proceed with the following commands:
 ```bash
 cd GEB  # switch the terminal to GEB code folder
 git switch main  # switch to the main development branch by default, but may be changed to another branch
-git update-index --skip-worktree .vscode/extensions.json  .vscode/launch.json  .vscode/settings.json  # we don't want to commit local changes to the vscode settings
 uv sync --dev  # install all dependencies using uv
 ```
 
@@ -78,13 +77,9 @@ Visual Studio code should now prompts you to install the recommended extensions,
 geb --help
 ```
 
-We have also prepared a configuration for the debugger in `.vscode/launch.json`. The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`).
+We have also prepared a configuration for the debugger in `.vscode/launch.json.sample` and a settings file in `.vscode/settings.json.sample` with some useful default settings. To activate these files, copy (i.e., not remove or rename) the files to `.vscode/launch.json` and `.vscode/settings.json` respectively. 
 
-You may need to adjust the paths in  `.vscode/launch.json` to match your setup. In case you do this, please make sure to not commit these changes to the repository. To tell git to ignore any local changes here, you can run:
-
-```bash
-git update-index --skip-worktree .vscode/extensions.json  .vscode/launch.json  .vscode/settings.json  # we don't want to commit local changes to the vscode settings
-```
+The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`). You may need to adjust the paths in  `.vscode/launch.json` to match your setup.
 
 Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome. You can find a list of active and past contributors at the bottom of this file.
 
