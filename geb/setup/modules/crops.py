@@ -17,6 +17,88 @@ from ..workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from ..workflows.farmers import get_farm_locations
 
 
+def project_crop_prices_past_and_future_region(
+    costs,
+    inflation,
+    region_id,
+    start_year,
+    end_year,
+):
+    assert end_year != start_year, (
+        "extra processed years must not be the same as data years"
+    )
+
+    if end_year < start_year:
+        operator = "div"
+        step = -1
+    else:
+        operator = "mul"
+        step = 1
+
+    inflation_rate_region = inflation["data"][str(region_id)]
+
+    for year in range(start_year, end_year, step):
+        year_str = str(year)
+        year_index = inflation["time"].index(year_str)
+        inflation_rate = inflation_rate_region[year_index]
+
+        # Check and add an empty row if needed
+        if (region_id, year) not in costs.index:
+            empty_row = pd.DataFrame(
+                {col: [None] for col in costs.columns},
+                index=pd.MultiIndex.from_tuples(
+                    [(region_id, year)], names=["region_id", "year"]
+                ),
+            )
+            costs = pd.concat(
+                [costs, empty_row]
+            ).sort_index()  # Ensure the index is sorted after adding new rows
+
+        # Update costs based on inflation rate and operation
+        if operator == "div":
+            costs.loc[(region_id, year)] = (
+                costs.loc[(region_id, year + 1)] / inflation_rate
+            )
+        elif operator == "mul":
+            costs.loc[(region_id, year)] = (
+                costs.loc[(region_id, year - 1)] * inflation_rate
+            )
+
+    return costs
+
+
+def project_crop_prices_past_and_future(
+    costs,
+    inflation,
+    total_years,
+    unique_regions,
+    lower_bound=None,
+    upper_bound=None,
+):
+    for _, region in unique_regions.iterrows():
+        region_id = region["region_id"]
+
+        if lower_bound:
+            costs = project_crop_prices_past_and_future_region(
+                costs=costs,
+                inflation=inflation,
+                region_id=region_id,
+                start_year=total_years[0],
+                end_year=lower_bound,
+            )
+
+        if upper_bound:
+            costs = project_crop_prices_past_and_future_region(
+                costs=costs,
+                inflation=inflation,
+                region_id=region_id,
+                start_year=total_years[-1],
+                end_year=upper_bound,
+            )
+
+    return costs
+
+
 class Crops:
     def __init__(self):
         pass
@@ -307,8 +389,9 @@ class Crops:
                 )
 
             if project_past_until_year or project_future_until_year:
-                data = self.process_additional_years(
+                data = project_crop_prices_past_and_future(
                     costs=data,
+                    inflation=self.dict["socioeconomics/inflation_rates"],
                     total_years=total_years,
                     unique_regions=unique_regions,
                     lower_bound=project_past_until_year,
@@ -1299,7 +1382,7 @@ class Crops:
 
         crops_in_dataarray = area_fraction_2000.coords["crop"].values
 
-        grid_id_da = self.create_grid_cell_id_array(all_years_fraction_da)
+        grid_id_da = self.get_linear_indices(all_years_fraction_da)
 
         ny, nx = area_fraction_2000.sizes["y"], area_fraction_2000.sizes["x"]
 
@@ -1342,7 +1425,9 @@ class Crops:
                 max_radius = max(nx, ny)  # Maximum possible radius
                 radius = 1
                 while not found_valid_neighbor and radius <= max_radius:
-                    neighbor_ids = self.get_neighbor_cell_ids(i, nx, ny, radius)
+                    neighbor_ids = self.get_neighbor_cell_ids_for_linear_indices(
+                        i, nx, ny, radius
+                    )
                     for neighbor_id in neighbor_ids:
                         if neighbor_id not in farmer_cells:
                             continue

@@ -401,6 +401,8 @@ class LandCover(object):
             potential_transpiration_minus_interception_evaporation,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
+            natural_available_water_infiltration=self.HRU.var.natural_available_water_infiltration,
+            actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
         )
         assert not (runoff < 0).any()
         timer.new_split("Soil")

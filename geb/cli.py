@@ -19,7 +19,7 @@ from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
 from hydromt.config import configread
 
-from geb import __version__, setup
+from geb import __version__
 from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
@@ -365,7 +365,9 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
-def get_model(custom_model):
+def get_model_setup(custom_model):
+    from geb import setup
+
     if custom_model is None:
         return setup.GEBModel
     else:
@@ -417,7 +419,7 @@ def build_fn(
         "data_provider": data_provider,
     }
 
-    geb_model = get_model(custom_model)(**arguments)
+    geb_model = get_model_setup(custom_model)(**arguments)
 
     geb_model.build(
         methods=configread(build_config),
@@ -458,7 +460,7 @@ def alter(
         "data_provider": data_provider,
     }
 
-    geb_model = get_model(custom_model)(**arguments)
+    geb_model = get_model_setup(custom_model)(**arguments)
     geb_model.read()
     geb_model.set_alternate_root(
         Path(".") / Path(config["general"]["input_folder"]), mode="w+"
@@ -489,7 +491,7 @@ def update(
         "data_provider": data_provider,
     }
 
-    geb_model = get_model(custom_model)(**arguments)
+    geb_model = get_model_setup(custom_model)(**arguments)
     geb_model.read()
     geb_model.update(methods=configread(build_config))
 

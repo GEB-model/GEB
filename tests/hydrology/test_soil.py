@@ -7,14 +7,11 @@ import pytest
 
 import geb.hydrology.soil
 from geb.hydrology.soil import (
-    get_aeration_stress_factor,
-    get_aeration_stress_threshold,
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
     get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
-    get_total_transpiration_factor,
-    get_transpiration_factor_single,
+    get_transpiration_factor,
     vertical_water_transport,
 )
 
@@ -22,6 +19,23 @@ from ..testconfig import output_folder
 
 output_folder_soil = output_folder / "soil"
 output_folder_soil.mkdir(exist_ok=True)
+
+
+def test_get_transpiration_factor():
+    critical_soil_moisture_content = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
+    wwp = np.array([0.15, 0.15, 0.15, 0.15, 0.15, 0.15])  # wilting point
+    w = np.array([0.3, 0.2, 0.175, 0.15, 0.1, 0.0])
+
+    transpiration_factor = np.zeros_like(w)
+    for i in range(len(w)):
+        transpiration_factor[i] = get_transpiration_factor(
+            w[i], wwp[i], critical_soil_moisture_content[i]
+        )
+
+    np.testing.assert_almost_equal(
+        transpiration_factor,
+        np.array([1.0, 1.0, 0.5, 0.0, 0.0, 0.0]),
+    )
 
 
 def test_get_soil_moisture_at_pressure():
@@ -122,18 +136,10 @@ def test_soil_moisture_potential_inverse(pf_value):
 
 
 def test_get_fraction_easily_available_soil_water():
-    potential_evapotranspiration = (
+    potential_evapotranspiratios = (
         np.array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]) / 100
     )  # cm/day to m/day
-    crop_group_number = np.full_like(potential_evapotranspiration, 5)
-
-    p = get_fraction_easily_available_soil_water(
-        crop_group_number=crop_group_number,
-        potential_evapotranspiration=potential_evapotranspiration,
-    )
-
-    np.testing.assert_almost_equal(
-        p,
+    p5s_test = np.array(
         [
             0.94339623,
             0.82644628,
@@ -144,18 +150,9 @@ def test_get_fraction_easily_available_soil_water():
             0.51020408,
             0.47393365,
             0.44247788,
-        ],
+        ]
     )
-
-    crop_group_number = np.full_like(potential_evapotranspiration, 1)
-
-    p = get_fraction_easily_available_soil_water(
-        crop_group_number=crop_group_number,
-        potential_evapotranspiration=potential_evapotranspiration,
-    )
-
-    np.testing.assert_almost_equal(
-        p,
+    p1s_test = np.array(
         [
             0.44339623,
             0.35144628,
@@ -166,8 +163,24 @@ def test_get_fraction_easily_available_soil_water():
             0.16020408,
             0.14893365,
             0.14247788,
-        ],
+        ]
     )
+    for potential_evapotranspiration, p5_test, p1_test in zip(
+        potential_evapotranspiratios, p5s_test, p1s_test, strict=True
+    ):
+        p5 = get_fraction_easily_available_soil_water(
+            crop_group_number=5,
+            potential_evapotranspiration=potential_evapotranspiration,
+        )
+
+        assert math.isclose(p5, p5_test, rel_tol=1e-6)
+
+        p1 = get_fraction_easily_available_soil_water(
+            crop_group_number=1,
+            potential_evapotranspiration=potential_evapotranspiration,
+        )
+
+        assert math.isclose(p1, p1_test, rel_tol=1e-6)
 
 
 def test_get_critical_soil_moisture_content():
@@ -179,151 +192,6 @@ def test_get_critical_soil_moisture_content():
         p=p, wfc=wfc, wwp=wwp
     )
     assert np.array_equal(critical_soil_moisture_content, [0.29, 0.21, 0.15, 0.35])
-
-
-def test_get_transpiration_factor():
-    critical_soil_moisture_content = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
-    wwp = np.array([0.15, 0.15, 0.15, 0.15, 0.15, 0.15])  # wilting point
-    w = np.array([0.3, 0.2, 0.175, 0.15, 0.1, 0.0])
-
-    transpiration_factor = np.zeros_like(w)
-    for i in range(len(w)):
-        transpiration_factor[i] = get_transpiration_factor_single(
-            w[i], wwp[i], critical_soil_moisture_content[i]
-        )
-
-    np.testing.assert_almost_equal(
-        transpiration_factor,
-        np.array([1.0, 1.0, 0.5, 0.0, 0.0, 0.0]),
-    )
-
-
-def test_get_total_transpiration_factor():
-    transpiration_factor_per_layer = np.array(
-        [
-            [0.1, 0.2, 0.3, 0.4, 0.5],
-            [0.1, 0.2, 0.3, 0.4, 0.5],
-            [0.1, 0.2, 0.3, 0.4, 0.5],
-        ]
-    )
-
-    root_ratios = np.array(
-        [
-            [1, 1, 1, 1, 0.5],
-            [1, 1, 0.5, 0.0, 0.0],
-            [1, 0.5, 0, 0, 0],
-        ]
-    )
-
-    soil_layer_height = np.array(
-        [
-            [0.05, 0.05, 0.05, 0.05, 0.05],
-            [1.0, 1.0, 1.0, 1.0, 1.0],
-            [2.0, 2.0, 2.0, 2.0, 2.0],
-        ]
-    )
-
-    # when transpiration_factor is equal among all layers, output should be equal to transpiration_factor
-    total_transpiration_factor = get_total_transpiration_factor(
-        transpiration_factor_per_layer, root_ratios, soil_layer_height
-    )
-
-    transpiration_factor_per_layer = np.array(
-        [
-            [0.1, 0.1, 0.1, 0.1, 0.1],
-            [0.2, 0.2, 0.2, 0.2, 0.2],
-            [0.3, 0.3, 0.3, 0.3, 0.3],
-        ]
-    )
-    total_transpiration_factor = get_total_transpiration_factor(
-        transpiration_factor_per_layer, root_ratios, soil_layer_height
-    )
-    # the first one is fully in all layers, so should be equal to the transpiration_factor
-    # of all layers, consdering soil layer height
-    # (0.05 * 0.1 * 1 + 1.0 * 0.2 * 1 + 2.0 * 0.3 * 1) / (0.05 + 1.0 + 2.0) = 0.2639344262295082
-    # the second one is only half in the bottom layer
-    # (0.05 * 0.1 * 1 + 1.0 * 0.2 * 1 + 2.0 * 0.3 * 0.5) / (0.05 * 1 + 1.0 * 1 + 2.0 * 0.5) = 0.24634146
-    # the third one is only in the top layer, and half in the second layer
-    # (0.05 * 0.1 * 1 + 1.0 * 0.2 * 0.5) / (0.05 * 1 + 1.0 * 0.5) = 0.19090909
-    # last two are fully in the top layer, so should be equal to the transpiration_factor of the top layer
-    np.testing.assert_almost_equal(
-        total_transpiration_factor,
-        np.array([0.2639344262295082, 0.24634146, 0.19090909, 0.1, 0.1]),
-    )
-
-
-def test_get_aeration_stress_threshold():
-    soil_layer_height = 0.10
-    ws = 0.05
-    aeration_stress_threshold = get_aeration_stress_threshold(
-        ws=ws,
-        soil_layer_height=soil_layer_height,
-        crop_aeration_stress_threshold=0,
-    )
-    # if crop_aeration_stress_threshold is 0, then it should be equal to ws
-    assert aeration_stress_threshold == ws
-
-    aeration_stress_threshold = get_aeration_stress_threshold(
-        ws=0.1,
-        soil_layer_height=soil_layer_height,
-        crop_aeration_stress_threshold=100,
-    )
-
-    # if crop_aeration_stress_threshold is 100, the crop is always in aeration stress
-    assert math.isclose(aeration_stress_threshold, 0, abs_tol=1e-9)
-
-    aeration_stress_threshold = get_aeration_stress_threshold(
-        ws=0.1,
-        soil_layer_height=soil_layer_height,
-        crop_aeration_stress_threshold=50,
-    )
-
-    # if crop_aeration_stress_threshold is 50, the crop is in aeration stress at half of the ws
-    assert aeration_stress_threshold == soil_layer_height / 2
-
-
-def test_get_aeration_stress_factor():
-    # default settings
-    aeration_days_counter = 0
-    crop_lag_aeration_days = 3
-    ws = 0.1
-    w = 0.09
-    aeration_stress_threshold = 0.08
-
-    aeration_stress_factor = get_aeration_stress_factor(
-        aeration_days_counter=aeration_days_counter,
-        crop_lag_aeration_days=crop_lag_aeration_days,
-        ws=ws,
-        w=w,
-        aeration_stress_threshold=aeration_stress_threshold,
-    )
-
-    # at zero aeration_days_counter, the reduction factor should be 1 (no reduction)
-    assert aeration_stress_factor == 1
-
-    aeration_stress_factor = get_aeration_stress_factor(
-        aeration_days_counter=1,
-        crop_lag_aeration_days=crop_lag_aeration_days,
-        ws=ws,
-        w=w,
-        aeration_stress_threshold=aeration_stress_threshold,
-    )
-
-    aeration_stress_factor = get_aeration_stress_factor(
-        aeration_days_counter=4,
-        crop_lag_aeration_days=crop_lag_aeration_days,
-        ws=ws,
-        w=w,
-        aeration_stress_threshold=aeration_stress_threshold,
-    )
-
-    aeration_stress_factor = get_aeration_stress_factor(
-        aeration_days_counter=aeration_days_counter,
-        crop_lag_aeration_days=crop_lag_aeration_days,
-        ws=ws,
-        w=w,
-        aeration_stress_threshold=aeration_stress_threshold,
-    )
 
 
 def test_get_unsaturated_hydraulic_conductivity():

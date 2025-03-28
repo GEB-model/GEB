@@ -1,10 +1,14 @@
 {
     "python.testing.pytestArgs": [
-        ".",
         "-s"
     ],
+    "python.testing.cwd": "tests",
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.shellIntegration.enabled": false,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "python.envFile": ".env",
     "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.formatOnPaste": true,
     "editor.formatOnSave": true,
@@ -13,9 +17,8 @@
         "source.organizeImports": "always",
         "source.fixAll": "always"
     },
-    "files.autoSave": "onFocusChange",
     "files.exclude": {
         ".ruff_cache": true,
         ".pytest_cache": true,
-    }
+    },
 }
