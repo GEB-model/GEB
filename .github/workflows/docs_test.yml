@@ -39,7 +39,7 @@ jobs:
       # Install project dependencies (including Sphinx and docs dependencies)
       - name: Install the project
         run: |
-          uv sync --extra docs
+          uv sync --dev
 
       # Debugging information
       - name: Debugging information
