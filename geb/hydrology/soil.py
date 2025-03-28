@@ -72,29 +72,6 @@ def get_soil_moisture_at_pressure(
 
 
 @njit(cache=True, inline="always")
-def get_aeration_stress_threshold(
-    ws, soil_layer_height, crop_aeration_stress_threshold
-):
-    max_saturation_fraction = ws / soil_layer_height
-    # Water storage in root zone at aeration stress threshold (m)
-    return (
-        max_saturation_fraction - (crop_aeration_stress_threshold / np.float32(100))
-    ) * soil_layer_height
-
-
-@njit(cache=True, inline="always")
-def get_aeration_stress_factor(
-    aeration_days_counter, crop_lag_aeration_days, ws, w, aeration_stress_threshold
-):
-    if aeration_days_counter < crop_lag_aeration_days:
-        stress = np.float32(1) - ((ws - w) / (ws - aeration_stress_threshold))
-        aeration_stress_factor = np.float32(1) - ((aeration_days_counter / 3) * stress)
-    else:
-        aeration_stress_factor = (ws - w) / (ws - aeration_stress_threshold)
-    return aeration_stress_factor
-
-
-@njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(p, wfc, wwp):
     """
     "The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -110,46 +87,8 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
     return (np.float32(1) - p) * (wfc - wwp) + wwp
 
 
-def get_available_water(w, wwp):
-    return np.maximum(0.0, w - wwp)
-
-
-def get_maximum_water_content(wfc, wwp):
-    return wfc - wwp
-
-
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
-    crop_group_number, potential_evapotranspiration
-):
-    """
-    Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
-    following Van Diepen et al., 1988: WOFOST 6.0, p.87
-
-    Parameters
-    ----------
-    crop_group_number : np.ndarray
-        The crop group number is a indicator of adaptation to dry climate,
-        Van Diepen et al., 1988: WOFOST 6.0, p.87
-    potential_evapotranspiration : np.ndarray
-        Potential evapotranspiration in m
-
-    Returns
-    -------
-    np.ndarray
-        The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
-    """
-
-    p = np.zeros_like(crop_group_number)
-    for i in range(crop_group_number.size):
-        p[i] = get_fraction_easily_available_soil_water_single(
-            crop_group_number[i], potential_evapotranspiration[i]
-        )
-    return p
-
-
-@njit(cache=True, inline="always")
-def get_fraction_easily_available_soil_water_single(
     crop_group_number, potential_evapotranspiration
 ):
     """
@@ -188,29 +127,8 @@ def get_fraction_easily_available_soil_water_single(
     return p
 
 
-def get_critical_water_level(p, wfc, wwp):
-    return np.maximum(
-        get_critical_soil_moisture_content(p, wfc, wwp) - wwp, np.float32(0)
-    )
-
-
-def get_total_transpiration_factor(
-    transpiration_factor_per_layer, root_ratios, soil_layer_height
-):
-    transpiration_factor_relative_contribution_per_layer = (
-        soil_layer_height * root_ratios
-    )
-    transpiration_factor_total = np.sum(
-        transpiration_factor_relative_contribution_per_layer
-        / transpiration_factor_relative_contribution_per_layer.sum(axis=0)
-        * transpiration_factor_per_layer,
-        axis=0,
-    )
-    return transpiration_factor_total
-
-
 @njit(cache=True, inline="always")
-def get_transpiration_factor_single(w, wwp, wcrit):
+def get_transpiration_factor(w, wwp, wcrit):
     nominator = w - wwp
     denominator = wcrit - wwp
     if denominator == np.float32(0):
@@ -227,21 +145,9 @@ def get_transpiration_factor_single(w, wwp, wcrit):
 
 
 @njit(cache=True, inline="always")
-def get_root_ratios(
-    root_depth,
-    soil_layer_height,
-):
-    root_ratios = np.zeros_like(soil_layer_height)
-    for i in range(root_depth.size):
-        set_root_ratios_single(
-            root_depth[i], soil_layer_height[:, i], root_ratios[:, i]
-        )
-    return root_ratios
-
-
-@njit(cache=True, inline="always")
-def set_root_ratios_single(root_depth, soil_layer_height, root_ratios):
+def get_root_ratios(root_depth, soil_layer_height):
     remaining_root_depth = root_depth
+    root_ratios = np.zeros_like(soil_layer_height)
     for layer in range(N_SOIL_LAYERS):
         root_ratios[layer] = min(
             remaining_root_depth / soil_layer_height[layer], np.float32(1)
@@ -348,13 +254,11 @@ def evapotranspirate(
     wfc,
     ws,
     wres,
-    aeration_days_counter,
     soil_layer_height,
     land_use_type,
     root_depth,
     crop_map,
     natural_crop_groups,
-    crop_lag_aeration_days,
     potential_transpiration,
     potential_bare_soil_evaporation,
     potential_evapotranspiration,
@@ -365,11 +269,7 @@ def evapotranspirate(
     open_water_evaporation,
     available_water_infiltration,
 ):
-    root_ratios_matrix = np.zeros_like(soil_layer_height)
     root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
-    root_distribution_per_layer_aeration_stress_corrected_matrix = np.zeros_like(
-        soil_layer_height
-    )
 
     is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
@@ -394,22 +294,19 @@ def evapotranspirate(
         else:  #
             crop_group_number = crop_group_number_per_group[crop_map[i]]
 
-        p = get_fraction_easily_available_soil_water_single(
+        p = get_fraction_easily_available_soil_water(
             crop_group_number, potential_evapotranspiration[i]
         )
 
-        root_ratios = set_root_ratios_single(
+        root_ratios = get_root_ratios(
             root_depth[i],
             soil_layer_height[:, i],
-            root_ratios_matrix[:, i],
         )
 
         total_transpiration_factor_water_stress = np.float32(0.0)
-        total_aeration_stress = np.float32(0.0)
         total_root_length_rws_corrected = np.float32(
             0.0
         )  # check if same as total_transpiration_factor * root_depth
-        total_root_length_aeration_stress_corrected = np.float32(0.0)
         for layer in range(N_SOIL_LAYERS):
             root_length_within_layer = soil_layer_height[layer, i] * root_ratios[layer]
 
@@ -417,7 +314,7 @@ def evapotranspirate(
             critical_soil_moisture_content = get_critical_soil_moisture_content(
                 p, wfc[layer, i], wwp[layer, i]
             )
-            transpiration_factor = get_transpiration_factor_single(
+            transpiration_factor = get_transpiration_factor(
                 w[layer, i], wwp[layer, i], critical_soil_moisture_content
             )
 
@@ -433,74 +330,28 @@ def evapotranspirate(
                 root_length_within_layer_rws_corrected
             )
 
-            # Aeration stress
-            aeration_stress_threshold = get_aeration_stress_threshold(
-                ws[layer, i], soil_layer_height[layer, i], np.float32(5)
-            )  # 15 is placeholder for crop_aeration_threshold
-            if w[layer, i] > aeration_stress_threshold:
-                aeration_days_counter[layer, i] += 1
-                aeration_stress_factor = get_aeration_stress_factor(
-                    aeration_days_counter[layer, i],
-                    crop_lag_aeration_days[i],
-                    ws[layer, i],
-                    w[layer, i],
-                    aeration_stress_threshold,
-                )
-            else:
-                # Reset aeration days counter where w <= waer
-                aeration_days_counter[layer, i] = 0
-                aeration_stress_factor = np.float32(1)  # no stress
-
-            total_aeration_stress += aeration_stress_factor * root_length_within_layer
-
-            root_length_within_layer_aeration_stress_corrected = (
-                root_length_within_layer * aeration_stress_factor
-            )
-
-            total_root_length_aeration_stress_corrected += (
-                root_length_within_layer_aeration_stress_corrected
-            )
-
-            root_distribution_per_layer_aeration_stress_corrected_matrix[layer, i] = (
-                root_length_within_layer_aeration_stress_corrected
-            )
-
         total_transpiration_factor_water_stress /= root_depth[i]
-        total_aeration_stress /= root_depth[i]
 
         # correct the transpiration reduction factor for water stress
         # if the soil is frozen, no transpiration occurs, so we can skip the loop
         # and thus transpiration is 0 this also avoids division by zero, and thus NaNs
-        # likewise, if the total_transpiration_factor (full water stress) is 0
-        # or full aeration stress, we can skip the loop
-        if (
-            not soil_is_frozen[i]
-            and total_transpiration_factor_water_stress > np.float32(0)
-            and total_aeration_stress > np.float32(0)
-        ):
-            maximum_transpiration = remaining_potential_transpiration * min(
-                total_transpiration_factor_water_stress, total_aeration_stress
+        # likewise, if the total_transpiration_factor (full water stress) is 0,
+        # we can skip the loop
+        if not soil_is_frozen[
+            i
+        ] and total_transpiration_factor_water_stress > np.float32(0):
+            maximum_transpiration = (
+                remaining_potential_transpiration
+                * total_transpiration_factor_water_stress
             )
             # distribute the transpiration over the layers, considering the root ratios
             # and the transpiration reduction factor per layer
             for layer in range(N_SOIL_LAYERS):
-                transpiration_water_stress_corrected = (
+                transpiration = (
                     maximum_transpiration
                     * root_distribution_per_layer_rws_corrected_matrix[layer, i]
                     / total_root_length_rws_corrected
                 )
-                transpiration_aeration_stress_corrected = (
-                    maximum_transpiration
-                    * root_distribution_per_layer_aeration_stress_corrected_matrix[
-                        layer, i
-                    ]
-                    / total_root_length_aeration_stress_corrected
-                )
-                transpiration = min(
-                    transpiration_water_stress_corrected,
-                    transpiration_aeration_stress_corrected,
-                )
-                transpiration = transpiration_water_stress_corrected
                 w[layer, i] -= transpiration
                 w[layer, i] = max(
                     w[layer, i], wres[layer, i]
@@ -604,6 +455,31 @@ def get_soil_water_flow_parameters(
     return psi, K_unsat
 
 
+@njit(cache=True, inline="always")
+def get_infiltration_capacity(w, ws, arno_beta):
+    # Estimate the infiltration capacity
+    # Use first 2 soil layers to estimate distribution between runoff and infiltration
+    soil_water_storage = w[0] + w[1]
+    soil_water_storage_max = ws[0] + ws[1]
+
+    relative_saturation = min(
+        soil_water_storage / soil_water_storage_max, np.float32(1)
+    )
+
+    # Fraction of pixel that is at saturation
+    saturated_area_fraction = (
+        np.float32(1) - (np.float32(1) - relative_saturation) ** arno_beta
+    )
+    saturated_area_fraction = max(saturated_area_fraction, np.float32(0))
+    saturated_area_fraction = min(saturated_area_fraction, np.float32(1))
+
+    store = soil_water_storage_max / (arno_beta + np.float32(1))
+    pot_beta = (arno_beta + np.float32(1)) / arno_beta
+    return store - store * (
+        np.float32(1) - (np.float32(1) - saturated_area_fraction) ** pot_beta
+    )
+
+
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
 @njit(cache=True, parallel=True, fastmath=False)
 def vertical_water_transport(
@@ -651,28 +527,9 @@ def vertical_water_transport(
     delta_z = (soil_layer_height[:-1, :] + soil_layer_height[1:, :]) / 2
 
     potential_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
-    relative_saturation = np.zeros_like(land_use_type, dtype=np.float32)
     for i in prange(land_use_type.size):
-        # Infiltration and preferential flow
-        # Estimate the infiltration capacity
-        # Use first 2 soil layers to estimate distribution between runoff and infiltration
-        soil_water_storage = w[0, i] + w[1, i]
-        soil_water_storage_max = ws[0, i] + ws[1, i]
-        relative_saturation[i] = min(
-            soil_water_storage / soil_water_storage_max, np.float32(1)
-        )
-
-        # Fraction of pixel that is at saturation
-        saturated_area_fraction = (
-            np.float32(1) - (np.float32(1) - relative_saturation[i]) ** arno_beta[i]
-        )
-        saturated_area_fraction = max(saturated_area_fraction, np.float32(0))
-        saturated_area_fraction = min(saturated_area_fraction, np.float32(1))
-
-        store = soil_water_storage_max / (arno_beta[i] + np.float32(1))
-        pot_beta = (arno_beta[i] + np.float32(1)) / arno_beta[i]
-        potential_infiltration[i] = store - store * (
-            np.float32(1) - (np.float32(1) - saturated_area_fraction) ** pot_beta
+        potential_infiltration[i] = get_infiltration_capacity(
+            w[:, i], ws[:, i], arno_beta[i]
         )
 
     for i in prange(land_use_type.size):
@@ -686,9 +543,15 @@ def vertical_water_transport(
                 0
             )  # preferential flow only occurs when there is no capillary rise from groundwater
         ):
+            soil_water_storage = w[0, i] + w[1, i]
+            soil_water_storage_max = ws[0, i] + ws[1, i]
+
+            relative_saturation = min(
+                soil_water_storage / soil_water_storage_max, np.float32(1)
+            )
             preferential_flow[i] = (
                 available_water_infiltration[i]
-                * relative_saturation[i] ** preferential_flow_constant
+                * relative_saturation**preferential_flow_constant
             )
 
     for i in prange(land_use_type.size):
@@ -1088,7 +951,7 @@ class Soil(object):
         # set soil moisture to nan where land use is not bioarea
         self.HRU.var.w = np.where(
             self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
-            (self.HRU.var.wfc + self.HRU.var.wwp) / 2,
+            (self.HRU.var.wfc - self.HRU.var.wwp) * 0.2 + self.HRU.var.wwp,
             np.nan,
         )
         # for paddy irrigation flooded paddy fields
@@ -1145,13 +1008,6 @@ class Soil(object):
             self.HRU.var.arnoBeta[land_use_indices] = np.minimum(
                 1.2, np.maximum(0.01, self.HRU.var.arnoBeta[land_use_indices])
             )
-
-        self.HRU.var.aeration_days_counter = np.full_like(
-            self.HRU.var.ws, 0, dtype=np.int32
-        )
-        self.HRU.var.crop_lag_aeration_days = np.full_like(
-            self.HRU.var.land_use_type, 3, dtype=np.int32
-        )
 
         def create_ini(yaml, idx, plantFATE_cluster, biodiversity_scenario):
             out_dir = self.model.simulation_root / "plantFATE" / f"cell_{idx}"
@@ -1391,13 +1247,11 @@ class Soil(object):
             wfc=self.HRU.var.wfc,
             ws=self.HRU.var.ws,
             wres=self.HRU.var.wres,
-            aeration_days_counter=self.HRU.var.aeration_days_counter,
             soil_layer_height=self.HRU.var.soil_layer_height,
             land_use_type=self.HRU.var.land_use_type,
             root_depth=self.HRU.var.root_depth,
             crop_map=self.HRU.var.crop_map,
             natural_crop_groups=self.HRU.var.natural_crop_groups,
-            crop_lag_aeration_days=self.HRU.var.crop_lag_aeration_days,
             potential_transpiration=potential_transpiration,
             potential_bare_soil_evaporation=potential_bare_soil_evaporation,
             potential_evapotranspiration=potential_evapotranspiration,

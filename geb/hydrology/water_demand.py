@@ -25,15 +25,6 @@ from geb.HRUs import load_grid
 from geb.workflows import TimingModule, balance_check
 
 from .lakes_reservoirs import RESERVOIR
-from .landcover import NON_PADDY_IRRIGATED, PADDY_IRRIGATED
-from .soil import (
-    get_available_water,
-    get_critical_water_level,
-    get_crop_group_number,
-    get_fraction_easily_available_soil_water,
-    get_maximum_water_content,
-    get_root_ratios,
-)
 
 
 class WaterDemand:
@@ -56,129 +47,6 @@ class WaterDemand:
         water_body_mapping = self.hydrology.lakes_reservoirs.var.waterbody_mapping
         self.HRU.var.reservoir_command_areas = np.take(
             water_body_mapping, reservoir_command_areas, mode="clip"
-        )
-
-    def get_soil_parameters_for_irrigation_consumption(
-        self, potential_evapotranspiration
-    ):
-        """Calculate the potential irrigation consumption. Not that consumption
-        is not the same as withdrawal. Consumption is the amount of water that
-        is actually used by the farmers, while withdrawal is the amount of water
-        that is taken from the source. The difference is the return flow."""
-        # a function of cropKC (evaporation and transpiration) and available water see Wada et al. 2014 p. 19
-        paddy_irrigated_land = np.where(self.HRU.var.land_use_type == PADDY_IRRIGATED)
-
-        paddy_level = self.HRU.full_compressed(np.nan, dtype=np.float32)
-        paddy_level[paddy_irrigated_land] = (
-            self.HRU.var.topwater[paddy_irrigated_land]
-            + self.HRU.var.natural_available_water_infiltration[paddy_irrigated_land]
-        )
-
-        nonpaddy_irrigated_land = np.where(
-            self.HRU.var.land_use_type == NON_PADDY_IRRIGATED
-        )[0]
-
-        # load crop group number
-        crop_group_number = get_crop_group_number(
-            self.HRU.var.crop_map,
-            self.model.agents.crop_farmers.var.crop_data["crop_group_number"].values,
-            self.HRU.var.land_use_type,
-            self.HRU.var.natural_crop_groups,
-        )
-
-        # p is between 0 and 1 => if p =1 wcrit = wwp, if p= 0 wcrit = wfc
-        p = get_fraction_easily_available_soil_water(
-            crop_group_number[nonpaddy_irrigated_land],
-            potential_evapotranspiration[nonpaddy_irrigated_land],
-        )
-
-        root_ratios = get_root_ratios(
-            self.HRU.var.root_depth[nonpaddy_irrigated_land],
-            self.HRU.var.soil_layer_height[:, nonpaddy_irrigated_land],
-        )
-
-        max_water_content = self.HRU.full_compressed(np.nan, dtype=np.float32)
-        max_water_content[nonpaddy_irrigated_land] = (
-            get_maximum_water_content(
-                self.HRU.var.wfc[:, nonpaddy_irrigated_land],
-                self.HRU.var.wwp[:, nonpaddy_irrigated_land],
-            )
-            * root_ratios
-        ).sum(axis=0)
-
-        critical_water_level = self.HRU.full_compressed(np.nan, dtype=np.float32)
-        critical_water_level[nonpaddy_irrigated_land] = (
-            get_critical_water_level(
-                p,
-                self.HRU.var.wfc[:, nonpaddy_irrigated_land],
-                self.HRU.var.wwp[:, nonpaddy_irrigated_land],
-            )
-            * root_ratios
-        ).sum(axis=0)
-
-        readily_available_water = self.HRU.full_compressed(np.nan, dtype=np.float32)
-        readily_available_water[nonpaddy_irrigated_land] = (
-            get_available_water(
-                self.HRU.var.w[:, nonpaddy_irrigated_land],
-                self.HRU.var.wwp[:, nonpaddy_irrigated_land],
-            )
-            * root_ratios
-        ).sum(axis=0)
-
-        # first 2 soil layers to estimate distribution between runoff and infiltration
-        topsoil_w_nonpaddy_irrigated_land = self.HRU.var.w[:2, nonpaddy_irrigated_land]
-        topsoil_ws_nonpaddy_irrigated_land = self.HRU.var.ws[
-            :2, nonpaddy_irrigated_land
-        ]
-
-        assert (
-            topsoil_w_nonpaddy_irrigated_land <= topsoil_ws_nonpaddy_irrigated_land
-        ).all()
-
-        soil_water_storage = topsoil_w_nonpaddy_irrigated_land.sum(axis=0)
-        soil_water_storage_cap = topsoil_ws_nonpaddy_irrigated_land.sum(axis=0)
-
-        relative_saturation = soil_water_storage / soil_water_storage_cap
-        assert (relative_saturation <= 1 + 1e-7).all(), (
-            "Relative saturation should always be <= 1"
-        )
-        relative_saturation[relative_saturation > 1] = 1
-
-        relative_saturation[relative_saturation > 1] = 1
-
-        satAreaFrac = (
-            1
-            - (1 - relative_saturation)
-            ** self.HRU.var.arnoBeta[nonpaddy_irrigated_land]
-        )
-        satAreaFrac = np.maximum(np.minimum(satAreaFrac, 1.0), 0.0)
-
-        store = soil_water_storage_cap / (
-            self.HRU.var.arnoBeta[nonpaddy_irrigated_land] + 1
-        )
-        potBeta = (
-            self.HRU.var.arnoBeta[nonpaddy_irrigated_land] + 1
-        ) / self.HRU.var.arnoBeta[nonpaddy_irrigated_land]
-        potential_infiltration_capacity = self.HRU.full_compressed(
-            np.nan, dtype=np.float32
-        )
-        potential_infiltration_capacity[nonpaddy_irrigated_land] = store - store * (
-            1 - (1 - satAreaFrac) ** potBeta
-        )
-
-        assert not (
-            np.any(np.isnan(potential_infiltration_capacity[nonpaddy_irrigated_land]))
-            and not np.all(
-                np.isnan(potential_infiltration_capacity[nonpaddy_irrigated_land])
-            )
-        ), "Error: Some values in readily_available_water are NaN, but not all."
-
-        return (
-            paddy_level,
-            readily_available_water,
-            critical_water_level,
-            max_water_content,
-            potential_infiltration_capacity,
         )
 
     def get_available_water(self, gross_irrigation_demand_m3_per_command_area):
@@ -228,24 +96,10 @@ class WaterDemand:
             self.model.agents.livestock_farmers.water_demand()
         )
         timer.new_split("Livestock")
-        (
-            paddy_level,
-            readily_available_water,
-            critical_water_level,
-            max_water_content,
-            potential_infiltration_capacity,
-        ) = self.get_soil_parameters_for_irrigation_consumption(
-            potential_evapotranspiration
-        )
 
-        gross_irrigation_demand_m3_per_field = (
-            self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
-                paddy_level=paddy_level,
-                readily_available_water=readily_available_water,
-                critical_water_level=critical_water_level,
-                max_water_content=max_water_content,
-                potential_infiltration_capacity=potential_infiltration_capacity,
-            )
+        gross_irrigation_demand_m3_per_field = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
+            potential_evapotranspiration=potential_evapotranspiration,
+            available_infiltration=self.HRU.var.natural_available_water_infiltration,
         )
 
         gross_irrigation_demand_m3_per_farmer = (

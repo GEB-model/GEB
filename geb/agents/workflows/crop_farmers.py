@@ -3,6 +3,12 @@ from typing import Union
 import numpy as np
 from numba import njit
 
+from geb.hydrology.soil import (
+    get_fraction_easily_available_soil_water,
+    get_infiltration_capacity,
+    get_root_ratios,
+)
+
 
 @njit(cache=True, inline="always")
 def get_farmer_HRUs(
@@ -199,16 +205,17 @@ def adjust_irrigation_to_limit(
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
     crop_rotation_year_index: np.ndarray,
+    farmer_gross_irrigation_m3: float,
     irrigation_efficiency_farmer: float,
-    potential_irrigation_consumption_m_farmer,
-    potential_irrigation_consumption_farmer_m3,
 ):
     if remaining_irrigation_limit_m3[farmer] < np.float32(0):
-        potential_irrigation_consumption_m_farmer[:] = np.float32(0)
-        return potential_irrigation_consumption_m_farmer
+        return np.float32(0)
     # calculate future water deficit, but also include today's irrigation consumption
     # Check whether a full year has passed
     if np.all(~np.isnan(cumulative_water_deficit_m3[farmer])):
+        potential_irrigation_consumption_farmer_m3 = (
+            farmer_gross_irrigation_m3 * irrigation_efficiency_farmer
+        )
         future_water_deficit = get_future_deficit(
             farmer=farmer,
             day_index=day_index,
@@ -217,39 +224,20 @@ def adjust_irrigation_to_limit(
             crop_rotation_year_index=crop_rotation_year_index,
             potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
         )
-        limit_to_deficit_ratio = (
-            remaining_irrigation_limit_m3[farmer] / future_water_deficit
+        effective_remaining_irrigation_limit_m3 = (
+            remaining_irrigation_limit_m3[farmer] * irrigation_efficiency_farmer
         )
+
+        limit_to_deficit_ratio = (
+            effective_remaining_irrigation_limit_m3 / future_water_deficit
+        )
+        # limit the ratio to 1 if the deficit is smaller than the limit
+        limit_to_deficit_ratio = min(limit_to_deficit_ratio, 1)
     else:
         limit_to_deficit_ratio = np.float32(1)
 
     assert future_water_deficit > np.float32(0)
-
-    # first find the total irrigation demand for the farmer in m3
-    irrigation_water_withdrawal_farmer_m3 = (
-        potential_irrigation_consumption_farmer_m3 * limit_to_deficit_ratio
-    )
-    assert not np.isnan(irrigation_water_withdrawal_farmer_m3)
-
-    irrigation_water_consumption_farmer_m3 = (
-        irrigation_water_withdrawal_farmer_m3 * irrigation_efficiency_farmer
-    )
-    irrigation_water_consumption_farmer_m3 = min(
-        irrigation_water_consumption_farmer_m3,
-        potential_irrigation_consumption_farmer_m3,
-    )
-
-    # if the irrigation demand is higher than the limit, reduce the irrigation demand by the calculated reduction factor
-    reduction_factor = (
-        irrigation_water_consumption_farmer_m3
-        / potential_irrigation_consumption_farmer_m3
-    )
-    assert not np.isnan(reduction_factor)
-
-    potential_irrigation_consumption_m_farmer = (
-        potential_irrigation_consumption_m_farmer * np.float32(reduction_factor)
-    )
-    return potential_irrigation_consumption_m_farmer
+    return limit_to_deficit_ratio
 
 
 @njit(cache=True)
@@ -361,69 +349,100 @@ def withdraw_groundwater(
 
 @njit(cache=True, inline="always")
 def get_potential_irrigation_consumption_m(
-    fields,
-    is_paddy_irrigated,
-    paddy_level,
-    readily_available_water,
-    critical_water_level,
-    max_water_content,
-    potential_infiltration_capacity,
+    topwater,
+    available_infiltration,
+    potential_evapotranspiration,
+    root_depth,
+    soil_layer_height,
+    field_capacity,
+    wilting_point,
+    w,
+    ws,
+    arno_beta,
     fraction_irrigated_field,
-    max_paddy_water_level,
+    max_paddy_water_level_farmer,
+    crop_group,
+    is_paddy,
 ) -> np.ndarray:
-    """TODO: make this work for farmers with both paddy and non-paddy fields"""
+    assert np.float32(0) <= fraction_irrigated_field <= np.float32(1)
+
     # Calculate the potential irrigation consumption for the farmer
-    if is_paddy_irrigated[fields][0]:
+    if is_paddy:
         # make sure all fields are paddy irrigateds
         # always irrigate to 0.05 m for paddy fields
-        potential_irrigation_consumption_m = max_paddy_water_level - paddy_level[fields]
-        # make sure the potential irrigation consumption is not negative
-        potential_irrigation_consumption_m[potential_irrigation_consumption_m < 0] = (
-            np.float32(0)
-        )
-    else:
-        # assert none of the fiels are paddy irrigated
-        # if soil moisture content falls below critical level, irrigate to field capacity
-        potential_irrigation_consumption_m = np.where(
-            readily_available_water[fields]
-            < critical_water_level[fields],  # if there is not enough water
-            max_water_content[fields]
-            - readily_available_water[
-                fields
-            ],  # irrigate to field capacity (if possible)
+        potential_irrigation_consumption_m = max(
+            max_paddy_water_level_farmer - topwater + available_infiltration,
             np.float32(0),
         )
-        # limit the irrigation consumption to the potential infiltration capacity
-        potential_irrigation_consumption_m = (
-            np.minimum(
-                potential_irrigation_consumption_m,
-                potential_infiltration_capacity[fields],
-            )
-            * fraction_irrigated_field
+    else:
+        # use a minimum root depth of 25 cm, following AQUACROP recommendation
+        # see: Reference manual for AquaCrop v7.1 – Chapter 3
+        effective_root_depth = np.maximum(np.float32(0.25), root_depth)
+        root_ratios = get_root_ratios(
+            effective_root_depth,
+            soil_layer_height,
         )
-    return potential_irrigation_consumption_m
+
+        field_capacity_root_zone = (field_capacity * root_ratios).sum(axis=0)
+        wilting_point_root_zone = (wilting_point * root_ratios).sum(axis=0)
+        available_water_root_zone = (w * root_ratios).sum(axis=0)
+
+        # calculate the total available soil water for the root zone
+        # often refered to as TAW (see AquaCrop v7.1, Chapter 3)
+        maximum_available_water = field_capacity_root_zone - wilting_point_root_zone
+
+        # calculate the depletion coefficient (P_{sto}), which is the fraction of
+        # total available water (TAW) at which stomata start to close
+        p = get_fraction_easily_available_soil_water(
+            crop_group, potential_evapotranspiration
+        )
+
+        readily_available_water_root_zone = maximum_available_water * p
+
+        soil_depletion = field_capacity_root_zone - available_water_root_zone
+
+        # if soil moisture content falls below critical level, irrigate to field capacity
+        potential_irrigation_consumption_m = np.where(
+            soil_depletion
+            > readily_available_water_root_zone,  # if there is not enough water
+            soil_depletion,  # irrigate to field capacity (if possible)
+            np.float32(0),
+        )
+
+        infiltration_capacity = get_infiltration_capacity(w, ws, arno_beta)
+        potential_irrigation_consumption_m = np.minimum(
+            potential_irrigation_consumption_m, infiltration_capacity
+        )
+
+    return potential_irrigation_consumption_m * fraction_irrigated_field
 
 
 @njit(cache=True)
 def get_gross_irrigation_demand_m3(
     day_index: int,
     n: int,
-    activation_order: np.ndarray,
+    currently_irrigated_fields: np.ndarray,
     field_indices_by_farmer: np.ndarray,
     field_indices: np.ndarray,
     irrigation_efficiency: np.ndarray,
     fraction_irrigated_field: np.ndarray,
     cell_area: np.ndarray,
     crop_map: np.ndarray,
-    field_is_paddy_irrigated: np.ndarray,
-    paddy_level: np.ndarray,
-    readily_available_water: np.ndarray,
-    critical_water_level: np.ndarray,
-    max_water_content: np.ndarray,
-    potential_infiltration_capacity: np.ndarray,
+    topwater: np.ndarray,
+    available_infiltration: np.ndarray,
+    potential_evapotranspiration: np.ndarray,
+    root_depth: np.ndarray,
+    soil_layer_height: np.ndarray,
+    field_capacity: np.ndarray,
+    wilting_point: np.ndarray,
+    w: np.ndarray,
+    ws: np.ndarray,
+    arno_beta: np.ndarray,
     remaining_irrigation_limit_m3: np.ndarray,
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
+    crop_group_numbers: np.ndarray,
+    paddy_irrigated_crops: np.ndarray,
     current_crop_calendar_rotation_year_index: np.ndarray,
     max_paddy_water_level: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -453,67 +472,71 @@ def get_gross_irrigation_demand_m3(
         groundwater_abstraction_m3_by_farmer: Groundwater abstraction by farmer in m3.
         water_withdrawal_m: Water withdrawal in meters.
         water_consumption_m: Water consumption in meters.
-        returnFlowIrr_m: Return flow in meters.
-        addtoevapotrans_m: Evaporated irrigation water in meters.
+        irrigation_return_flow_m: Return flow in meters.
+        irrigation_evaporation_m: Evaporated irrigation water in meters.
     """
-    assert n == activation_order.size
 
     n_hydrological_response_units = cell_area.size
     gross_potential_irrigation_m3 = np.zeros(
         n_hydrological_response_units, dtype=np.float32
     )
 
-    for activated_farmer_index in range(activation_order.size):
-        farmer = activation_order[activated_farmer_index]
+    # TODO: First part of this function can be parallelized
+    for farmer in range(n):
         farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
+        irrigation_efficiency_farmer = irrigation_efficiency[farmer]
+        for field in farmer_fields:
+            if not currently_irrigated_fields[field]:
+                continue
 
-        # if no crops are grown on the fields, skip the farmer
-        farmer_crops = crop_map[farmer_fields]
-        if farmer_crops[0] == -1:
-            assert (
-                farmer_crops == -1
-            ).all()  # currently only support situation where all fields are growing crops, or all fields are fallow
-            continue
+            crop = crop_map[field]
+            assert crop != -1
 
-        potential_irrigation_consumption_m_farmer = (
-            get_potential_irrigation_consumption_m(
-                fields=farmer_fields,
-                is_paddy_irrigated=field_is_paddy_irrigated,
-                paddy_level=paddy_level,
-                readily_available_water=readily_available_water,
-                critical_water_level=critical_water_level,
-                max_water_content=max_water_content,
-                potential_infiltration_capacity=potential_infiltration_capacity,
+            consumption_m = get_potential_irrigation_consumption_m(
+                topwater=topwater[field],
+                available_infiltration=available_infiltration[field],
+                potential_evapotranspiration=potential_evapotranspiration[field],
+                root_depth=root_depth[field],
+                soil_layer_height=soil_layer_height[:, field],
+                field_capacity=field_capacity[:, field],
+                wilting_point=wilting_point[:, field],
+                w=w[:, field],
+                ws=ws[:, field],
+                arno_beta=arno_beta[field],
                 fraction_irrigated_field=fraction_irrigated_field[farmer],
-                max_paddy_water_level=max_paddy_water_level[farmer],
+                max_paddy_water_level_farmer=max_paddy_water_level[farmer],
+                crop_group=crop_group_numbers[crop],
+                is_paddy=paddy_irrigated_crops[crop],
             )
-        )
 
-        assert potential_irrigation_consumption_m_farmer.max() < 1
+            assert consumption_m < 1
+
+            gross_potential_irrigation_m3[field] = (
+                consumption_m * cell_area[field]
+            ) / irrigation_efficiency_farmer
 
         # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
         # if there is no irrigation limit, no need to adjust the irrigation
-        irrigation_efficiency_farmer = irrigation_efficiency[farmer]
-        if potential_irrigation_consumption_m_farmer.sum() > 0.0 and not np.isnan(
-            remaining_irrigation_limit_m3[farmer]
-        ):
-            potential_irrigation_consumption_m_farmer = adjust_irrigation_to_limit(
-                farmer=farmer,
-                day_index=day_index,
-                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                cumulative_water_deficit_m3=cumulative_water_deficit_m3,
-                crop_calendar=crop_calendar,
-                crop_rotation_year_index=current_crop_calendar_rotation_year_index,
-                irrigation_efficiency_farmer=irrigation_efficiency_farmer,
-                potential_irrigation_consumption_m_farmer=potential_irrigation_consumption_m_farmer,
-                potential_irrigation_consumption_farmer_m3=(
-                    potential_irrigation_consumption_m_farmer * cell_area[farmer_fields]
-                ).sum(),
-            )
+        if not np.isnan(remaining_irrigation_limit_m3[farmer]):
+            farmer_gross_irrigation_m3 = gross_potential_irrigation_m3[
+                farmer_fields
+            ].sum()
+            if farmer_gross_irrigation_m3 > 0.0:
+                reduction_factor = adjust_irrigation_to_limit(
+                    farmer=farmer,
+                    day_index=day_index,
+                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                    cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+                    crop_calendar=crop_calendar,
+                    crop_rotation_year_index=current_crop_calendar_rotation_year_index,
+                    farmer_gross_irrigation_m3=farmer_gross_irrigation_m3,
+                    irrigation_efficiency_farmer=irrigation_efficiency_farmer,
+                )
+                assert 0 <= reduction_factor <= 1
 
-        gross_potential_irrigation_m3[farmer_fields] = (
-            potential_irrigation_consumption_m_farmer * cell_area[farmer_fields]
-        ) / irrigation_efficiency_farmer
+                gross_potential_irrigation_m3[farmer_fields] = (
+                    gross_potential_irrigation_m3[farmer_fields] * reduction_factor
+                )
 
         assert (
             gross_potential_irrigation_m3[farmer_fields] / cell_area[farmer_fields]
@@ -551,8 +574,8 @@ def abstract_water(
     water_withdrawal_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
     water_consumption_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
 
-    returnFlowIrr_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
-    addtoevapotrans_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
+    irrigation_return_flow_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
+    irrigation_evaporation_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
 
     channel_abstraction_m3_by_farmer = np.zeros(activation_order.size, dtype=np.float32)
     reservoir_abstraction_m3_by_farmer = np.zeros(
@@ -646,8 +669,10 @@ def abstract_water(
                     water_withdrawal_m[field] - water_consumption_m[field]
                 )
                 assert irrigation_loss_m >= 0
-                returnFlowIrr_m[field] = irrigation_loss_m * return_fraction
-                addtoevapotrans_m[field] = irrigation_loss_m - returnFlowIrr_m[field]
+                irrigation_return_flow_m[field] = irrigation_loss_m * return_fraction
+                irrigation_evaporation_m[field] = (
+                    irrigation_loss_m - irrigation_return_flow_m[field]
+                )
 
     return (
         channel_abstraction_m3_by_farmer,
@@ -655,8 +680,8 @@ def abstract_water(
         groundwater_abstraction_m3_by_farmer,
         water_withdrawal_m,
         water_consumption_m,
-        returnFlowIrr_m,
-        addtoevapotrans_m,
+        irrigation_return_flow_m,
+        irrigation_evaporation_m,
     )
 
 

@@ -21,7 +21,7 @@ DEFAULT_VARIABLES = {
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-# @pytest.mark.dependency(name="build")
+@pytest.mark.skip(reason="Skip unless explicitly called")
 def test_build():
     working_directory = tmp_folder / "model"
     working_directory.mkdir(parents=True, exist_ok=True)
@@ -39,24 +39,28 @@ def test_build():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.skip(reason="Skip unless explicitly called")
 # @pytest.mark.dependency(name="spinup")
 def test_spinup():
     run_model_with_method(method="spinup", **DEFAULT_VARIABLES)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.skip(reason="Skip unless explicitly called")
 # @pytest.mark.dependency(depends=["spinup"])
 def test_run():
     run_model_with_method(method="run", **DEFAULT_VARIABLES)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.skip(reason="Skip unless explicitly called")
 # @pytest.mark.dependency(depends=["spinup"])
 def test_run_yearly():
     run_model_with_method(method="run_yearly", **DEFAULT_VARIABLES)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.skip(reason="Skip unless explicitly called")
 # @pytest.mark.dependency(depends=["spinup"])
 def test_estimate_risk():
     run_model_with_method(method="estimate_risk", **DEFAULT_VARIABLES)

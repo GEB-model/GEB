@@ -941,32 +941,35 @@ class CropFarmers(AgentBaseClass):
                 )
 
     def get_gross_irrigation_demand_m3(
-        self,
-        paddy_level,
-        readily_available_water,
-        critical_water_level,
-        max_water_content,
-        potential_infiltration_capacity,
-    ):
+        self, potential_evapotranspiration, available_infiltration
+    ) -> np.ndarray:
         gross_irrigation_demand_m3 = get_gross_irrigation_demand_m3(
             day_index=self.model.current_day_of_year - 1,
             n=self.n,
-            activation_order=self.activation_order_by_elevation,
+            currently_irrigated_fields=self.currently_irrigated_fields,
             field_indices_by_farmer=self.var.field_indices_by_farmer.data,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
             fraction_irrigated_field=self.var.fraction_irrigated_field.data,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             crop_map=self.HRU.var.crop_map,
-            field_is_paddy_irrigated=self.field_is_paddy_irrigated,
-            paddy_level=paddy_level,
-            readily_available_water=readily_available_water,
-            critical_water_level=critical_water_level,
-            max_water_content=max_water_content,
-            potential_infiltration_capacity=potential_infiltration_capacity,
+            topwater=self.HRU.var.topwater,
+            available_infiltration=available_infiltration,
+            potential_evapotranspiration=potential_evapotranspiration,
+            root_depth=self.HRU.var.root_depth,
+            soil_layer_height=self.HRU.var.soil_layer_height,
+            field_capacity=self.HRU.var.wfc,
+            wilting_point=self.HRU.var.wwp,
+            w=self.HRU.var.w,
+            ws=self.HRU.var.ws,
+            arno_beta=self.HRU.var.arnoBeta,
             remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
             cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
             crop_calendar=self.var.crop_calendar.data,
+            crop_group_numbers=self.var.crop_data["crop_group_number"].values.astype(
+                np.float32
+            ),
+            paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
             current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
             max_paddy_water_level=self.var.max_paddy_water_level.data,
         )
@@ -975,6 +978,24 @@ class CropFarmers(AgentBaseClass):
             gross_irrigation_demand_m3 < self.model.hydrology.HRU.var.cell_area
         ).all()
         return gross_irrigation_demand_m3
+
+    @property
+    def surface_irrigated(self):
+        return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0
+
+    @property
+    def well_irrigated(self):
+        return self.var.adaptations[:, WELL_ADAPTATION] > 0
+
+    @property
+    def irrigated(self):
+        return self.surface_irrigated | self.well_irrigated  # | is the OR operator
+
+    @property
+    def currently_irrigated_fields(self):
+        return self.farmer_to_field(self.is_irrigated, False) & (
+            self.HRU.var.crop_map != -1
+        )
 
     def abstract_water(
         self,
@@ -1025,8 +1046,8 @@ class CropFarmers(AgentBaseClass):
             field_indices_by_farmer=self.var.field_indices_by_farmer.data,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
-            surface_irrigated=self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0,
-            well_irrigated=self.var.adaptations[:, WELL_ADAPTATION] > 0,
+            surface_irrigated=self.surface_irrigated,
+            well_irrigated=self.well_irrigated,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
             nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
@@ -1269,13 +1290,17 @@ class CropFarmers(AgentBaseClass):
         masked_array = array[self.HRU.var.land_owners != -1]
         return np.bincount(farmer_fields, masked_array, minlength=self.n)
 
+    def farmer_to_field(self, array, nodata):
+        by_field = np.take(array, self.HRU.var.land_owners)
+        by_field[self.HRU.var.land_owners == -1] = nodata
+        return by_field
+
     def decompress(self, array):
         if np.issubdtype(array.dtype, np.floating):
             nofieldvalue = np.nan
         else:
             nofieldvalue = -1
-        by_field = np.take(array, self.HRU.var.land_owners)
-        by_field[self.HRU.var.land_owners == -1] = nofieldvalue
+        by_field = self.farmer_to_field(array, nodata=nofieldvalue)
         return self.HRU.decompress(by_field)
 
     @property
@@ -1717,18 +1742,16 @@ class CropFarmers(AgentBaseClass):
 
         assert (self.HRU.var.crop_age_days_map[self.HRU.var.crop_map > 0] >= 0).all()
 
-        self.HRU.var.land_use_type[
-            (self.HRU.var.crop_map >= 0) & (self.field_is_paddy_irrigated)
-        ] = PADDY_IRRIGATED
-        self.HRU.var.land_use_type[
-            (self.HRU.var.crop_map >= 0) & (~self.field_is_paddy_irrigated)
-        ] = NON_PADDY_IRRIGATED
-
-    @property
-    def field_is_paddy_irrigated(self):
-        return np.isin(
+        is_paddy_crop = np.isin(
             self.HRU.var.crop_map,
             self.var.crop_data[self.var.crop_data["is_paddy"]].index,
+        )
+
+        self.HRU.var.land_use_type[(self.HRU.var.crop_map >= 0) & is_paddy_crop] = (
+            PADDY_IRRIGATED
+        )
+        self.HRU.var.land_use_type[(self.HRU.var.crop_map >= 0) & (~is_paddy_crop)] = (
+            NON_PADDY_IRRIGATED
         )
 
     def water_abstraction_sum(self) -> None:
