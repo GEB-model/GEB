@@ -25,6 +25,7 @@ from ..HRUs import load_grid
 from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check
+from ..workflows.io import load_array
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
@@ -297,30 +298,30 @@ class CropFarmers(AgentBaseClass):
         self.var.risk_aversion = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
-        self.var.risk_aversion[:] = np.load(
+        self.var.risk_aversion[:] = load_array(
             self.model.files["array"]["agents/farmers/risk_aversion"]
-        )["data"]
+        )
 
         self.var.discount_rate = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
-        self.var.discount_rate[:] = np.load(
+        self.var.discount_rate[:] = load_array(
             self.model.files["array"]["agents/farmers/discount_rate"]
-        )["data"]
+        )
 
         self.var.intention_factor = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
 
-        self.var.intention_factor[:] = np.load(
+        self.var.intention_factor[:] = load_array(
             self.model.files["array"]["agents/farmers/intention_factor"]
-        )["data"]
+        )
 
         # Load the region_code of each farmer.
         self.var.region_id = DynamicArray(
-            input_array=np.load(self.model.files["array"]["agents/farmers/region_id"])[
-                "data"
-            ],
+            input_array=load_array(
+                self.model.files["array"]["agents/farmers/region_id"]
+            ),
             max_n=self.max_n,
         )
 
@@ -334,9 +335,9 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=-1,
         )  # first dimension is the farmers, second is the rotation, third is the crop, planting and growing length
-        self.var.crop_calendar[:] = np.load(
+        self.var.crop_calendar[:] = load_array(
             self.model.files["array"]["agents/farmers/crop_calendar"]
-        )["data"]
+        )
         # assert self.var.crop_calendar[:, :, 0].max() < len(self.var.crop_ids)
 
         self.var.crop_calendar_rotation_years = DynamicArray(
@@ -345,9 +346,9 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=0,
         )
-        self.var.crop_calendar_rotation_years[:] = np.load(
+        self.var.crop_calendar_rotation_years[:] = load_array(
             self.model.files["array"]["agents/farmers/crop_calendar_rotation_years"]
-        )["data"]
+        )
 
         self.var.current_crop_calendar_rotation_year_index = DynamicArray(
             n=self.n,
@@ -362,7 +363,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.adaptations = DynamicArray(
-            np.load(self.model.files["array"]["agents/farmers/adaptations"])["data"],
+            load_array(self.model.files["array"]["agents/farmers/adaptations"]),
             max_n=self.max_n,
             extra_dims_names=("adaptation_type",),
         )
@@ -544,9 +545,9 @@ class CropFarmers(AgentBaseClass):
         self.var.household_size = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1
         )
-        self.var.household_size[:] = np.load(
+        self.var.household_size[:] = load_array(
             self.model.files["array"]["agents/farmers/household_size"]
-        )["data"]
+        )
 
         self.var.yield_ratios_drought_event = DynamicArray(
             n=self.n,

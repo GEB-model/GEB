@@ -15,6 +15,7 @@ from ..hydrology.landcover import (
     FOREST,
 )
 from ..store import DynamicArray
+from ..workflows.io import load_array, load_table
 from .decision_module_flood import DecisionModule
 from .general import AgentBaseClass
 
@@ -101,9 +102,9 @@ class Households(AgentBaseClass):
 
     def assign_household_wealth_and_income(self):
         # initiate array with wealth indices
-        wealth_index = np.load(
+        wealth_index = load_array(
             self.model.files["array"]["agents/households/wealth_index"]
-        )["data"]
+        )
         self.var.wealth_index = DynamicArray(wealth_index, max_n=self.max_n)
 
         # convert wealth index to income percentile
@@ -142,31 +143,48 @@ class Households(AgentBaseClass):
         Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
 
         # load household locations
-        locations = np.load(self.model.files["array"]["agents/households/locations"])[
-            "data"
-        ]
+        locations = load_array(self.model.files["array"]["agents/households/locations"])
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
         self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
         # load household sizes
-        sizes = np.load(self.model.files["array"]["agents/households/sizes"])["data"]
+        sizes = load_array(
+            self.model.files["array"]["agents/households/household_size"]
+        )
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
+
+        self.var.municipal_water_demand_m3_baseline = load_array(
+            self.model.files["array"][
+                "agents/households/municipal_water_demand_m3_baseline"
+            ]
+        )
+        self.var.water_efficiency_per_household = np.full_like(
+            self.var.municipal_water_demand_m3_baseline, 1.0, np.float32
+        )
+
+        self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier = (
+            load_table(
+                self.model.files["table"][
+                    "municipal_water_withdrawal_m3_per_capita_per_day_multiplier"
+                ]
+            )
+        )
 
         if self.config["adapt"]:
             self.load_flood_maps()
 
             # load age household head
-            age_household_head = np.load(
+            age_household_head = load_array(
                 self.model.files["array"]["agents/households/AGE"]
-            )["data"]
+            )
             self.var.age_household_head = DynamicArray(
                 age_household_head, max_n=self.max_n
             )
 
             # load education level household head
-            education_level = np.load(
+            education_level = load_array(
                 self.model.files["array"]["agents/households/education_level"]
-            )["data"]
+            )
             self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
 
             # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
@@ -595,7 +613,7 @@ class Households(AgentBaseClass):
         self.load_max_damage_values()
         self.load_damage_curves()
         self.construct_income_distribution()
-        # self.assign_household_attributes()
+        self.assign_household_attributes()
 
         super().__init__()
 
@@ -684,17 +702,16 @@ class Households(AgentBaseClass):
         return total_flood_damages
 
     def water_demand(self):
-        water_demand_per_household = (
-            np.full(self.n, self.config["water_demand_per_capita_m3"], np.float32)
-            * self.var.sizes
-        )
-        water_efficiency_per_household = np.full_like(
-            water_demand_per_household, 1.0, np.float32
+        water_demand_per_household_m3 = (
+            self.var.municipal_water_demand_m3_baseline
+            * self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
+                self.model.current_time.year
+            ].item()
         )
 
         return (
-            water_demand_per_household,
-            water_efficiency_per_household,
+            water_demand_per_household_m3,
+            self.var.water_efficiency_per_household,
             self.var.locations.data,
         )
 

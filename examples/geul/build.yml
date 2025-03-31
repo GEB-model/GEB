@@ -21,11 +21,6 @@ setup_waterbodies:
   command_areas: null
   custom_reservoir_capacity: null
 
-setup_water_demand:
-  starttime: 1961-01-01
-  endtime: 2060-12-31
-  ssp: ssp2
-
 setup_groundwater:
 
 setup_well_prices_by_reference_year_global:
@@ -45,6 +40,11 @@ setup_irrigation_sources:
 setup_create_farms:
 
 setup_household_characteristics:
+
+setup_water_demand:
+  starttime: 1961-01-01
+  endtime: 2060-12-31
+  ssp: ssp2
 
 setup_farmer_household_characteristics:
 

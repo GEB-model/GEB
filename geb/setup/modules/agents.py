@@ -1243,6 +1243,7 @@ class Agents:
             "WEALTH_INDEX": "wealth_index",
             "RURAL": "rural",
             "sizes": "household_size",
+            "locations": "locations",
         }
         region_results = {}
 
@@ -1303,9 +1304,14 @@ class Agents:
                 (n_households, 2), -1, dtype=np.float32
             )
             for column in attributes_to_include:
-                household_characteristics[column] = np.full(
-                    n_households, -1, dtype=np.int32
-                )
+                if column == "locations":
+                    household_characteristics[column] = np.full(
+                        (n_households, 2), -1, dtype=np.float32
+                    )
+                else:
+                    household_characteristics[column] = np.full(
+                        n_households, -1, dtype=np.int32
+                    )
 
             # initiate indice tracker
             households_found = 0
@@ -1323,7 +1329,7 @@ class Agents:
                 GRID_CELL = int(household["GRID_CELL"])
                 if GRID_CELL in GLOPOP_GRID_region.values:
                     for column in attributes_to_include:
-                        if column == "sizes":
+                        if column in ("sizes", "locations"):
                             continue
                         household_characteristics[column][households_found] = household[
                             column
@@ -1359,7 +1365,7 @@ class Agents:
                             age_range[0], age_range[1]
                         )
                         household_characteristics[column][i] = age_household_head
-                    elif column == "sizes":
+                    elif column in ("sizes", "locations"):
                         continue
                     else:
                         household_characteristics[column][i] = household[column]
