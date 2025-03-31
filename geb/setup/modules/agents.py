@@ -101,12 +101,38 @@ class Agents:
                 )
             )
 
-            self.set_table(
-                municipal_water_withdrawal_m3_per_capita_per_day,
-                name="municipal_water_demand_m3_per_day",
+            municipal_water_demand_2000_m3_per_capita_per_day = (
+                municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
             )
 
-        return
+            municipal_water_demand = (
+                np.full_like(
+                    self.array["agents/households/household_size"],
+                    municipal_water_demand_2000_m3_per_capita_per_day,
+                    dtype=np.float32,
+                )
+                * self.array["agents/households/household_size"]
+            )
+
+            # we don't want to calculate the water demand for every year,
+            # so instead we use a baseline (2000 for easy reasoning), and scale
+            # the other years relatively to the baseline
+            self.set_array(
+                municipal_water_demand,
+                name="agents/households/municipal_water_demand_m3_baseline",
+            )
+
+            # scale municipal water demand table to use baseline as 1.00 and scale other values
+            # relatively
+            municipal_water_withdrawal_m3_per_capita_per_day_multiplier = (
+                municipal_water_withdrawal_m3_per_capita_per_day
+                / municipal_water_demand_2000_m3_per_capita_per_day
+            )
+
+            self.set_table(
+                municipal_water_withdrawal_m3_per_capita_per_day_multiplier,
+                name="municipal_water_withdrawal_m3_per_capita_per_day_multiplier",
+            )
 
         self.logger.info("Setting up other water demands")
 
@@ -1216,6 +1242,7 @@ class Agents:
             "EDUC": "education_level",
             "WEALTH_INDEX": "wealth_index",
             "RURAL": "rural",
+            "sizes": "household_size",
         }
         region_results = {}
 
@@ -1296,12 +1323,15 @@ class Agents:
                 GRID_CELL = int(household["GRID_CELL"])
                 if GRID_CELL in GLOPOP_GRID_region.values:
                     for column in attributes_to_include:
+                        if column == "sizes":
+                            continue
                         household_characteristics[column][households_found] = household[
                             column
                         ]
-                        household_characteristics["sizes"][households_found] = (
-                            household_size
-                        )
+
+                    household_characteristics["sizes"][households_found] = (
+                        household_size
+                    )
 
                     # now find location of household
                     idx_household = np.where(GLOPOP_GRID_region.values[0] == GRID_CELL)
@@ -1329,6 +1359,8 @@ class Agents:
                             age_range[0], age_range[1]
                         )
                         household_characteristics[column][i] = age_household_head
+                    elif column == "sizes":
+                        continue
                     else:
                         household_characteristics[column][i] = household[column]
                         household_characteristics["sizes"][i] = household_size
