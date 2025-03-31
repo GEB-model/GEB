@@ -345,6 +345,11 @@ class LandSurface:
             crop_coefficient = crop_coefficient.raster.reproject_like(
                 target, method="nearest"
             )
+            crop_coefficient.attrs = {
+                key: attr
+                for key, attr in crop_coefficient.attrs.items()
+                if not key.startswith("NETCDF_") and key != "units"
+            }
             self.set_grid(
                 crop_coefficient,
                 name=f"landcover/{simple_name}/crop_coefficient",
@@ -355,6 +360,11 @@ class LandSurface:
                 interception_capacity = interception_capacity.raster.reproject_like(
                     target, method="nearest"
                 )
+                interception_capacity.attrs = {
+                    key: attr
+                    for key, attr in interception_capacity.attrs.items()
+                    if not key.startswith("NETCDF_") and key != "units"
+                }
                 self.set_grid(
                     interception_capacity,
                     name=f"landcover/{simple_name}/interception_capacity",
