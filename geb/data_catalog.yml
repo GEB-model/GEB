@@ -13,7 +13,7 @@ fabdem:
 SWORD:
   data_type: GeoDataFrame
   driver: vector
-  path: /scistor/ivm/data_catalogue/hydrology/rivers/SWORD_v16/sword_reaches_v16.gpkg
+  path: rivers/SWORD_v16/sword_reaches_v16.gpkg
   meta:
     category: hydrology
     source_license: Creative Commons Attribution 4.0 International
@@ -47,7 +47,7 @@ SWORD:
       conn.close()
       ```
 MERIT_Basins_to_SWORD:
-  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins_v07/mb_to_sword_pfaf_{SWORD_Region}_translate.nc
+  path: basins/MERIT-Basins_v07/mb_to_sword_pfaf_{SWORD_Region}_translate.nc
   data_type: Dataset
   driver: netcdf
   meta:
@@ -60,7 +60,7 @@ MERIT_Basins_{kind}:
   driver: vector
   placeholders: 
     kind: [riv, cat]
-  path: /scistor/ivm/data_catalogue/hydrology/MERIT-Basins_v07/{kind}_pfaf_MERIT_Hydro_v07_Basins_v01.gpkg
+  path: basins/MERIT-Basins_v07/{kind}_pfaf_MERIT_Hydro_v07_Basins_v01.gpkg
   meta:
     category: hydrology
     source_license: CC BY-NC-SA 4.0
@@ -157,7 +157,7 @@ MIRCA2000_crop_data_variants:
 MIRCA2000_unit_grid:
   data_type: RasterDataset
   driver: raster
-  path: /scistor/ivm/data_catalogue/agriculture/MIRCA2000/unit_code_grid/unit_code.asc
+  path: agriculture/MIRCA2000/unit_code_grid/unit_code.asc
   crs: 4326
   meta:
     paper_doi: 10.1029/2008GB003435
@@ -167,7 +167,7 @@ MIRCA2000_unit_grid:
     source_version: 1.1
 MIRCA2000_cropping_calendar_{irrigated_or_rainfed}:
   data_type: Dataset
-  path: /scistor/ivm/data_catalogue/agriculture/MIRCA2000/condensed_cropping_calendars/cropping_calendar_{irrigated_or_rainfed}.txt
+  path: agriculture/MIRCA2000/condensed_cropping_calendars/cropping_calendar_{irrigated_or_rainfed}.txt
   meta:
     paper_doi: 10.1029/2008GB003435
     paper_ref: Portmann et al. (2010)
@@ -178,7 +178,7 @@ MIRCA2000_cropping_calendar_{irrigated_or_rainfed}:
     irrigated_or_rainfed: [irrigated, rainfed]
 MIRCA2000_cropping_calendar_{irrigated_or_rainfed}_{year}:
   data_type: Dataset
-  path: /scistor/ivm/data_catalogue/agriculture/MIRCA2000/condensed_cropping_calendars_2024/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
+  path: agriculture/MIRCA2000/condensed_cropping_calendars_2024/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
   meta:
     paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
     paper_ref: Kebede et al. (2024) (preprint)
@@ -190,7 +190,7 @@ MIRCA2000_cropping_calendar_{irrigated_or_rainfed}_{year}:
 MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
   data_type: RasterDataset
   driver: raster
-  path: /scistor/ivm/data_catalogue/agriculture/MIRCA2000_Annual_Harvested_Area_Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{ir_or_rf}.tif
+  path: agriculture/MIRCA2000_Annual_Harvested_Area_Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{ir_or_rf}.tif
   meta:
     paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
     paper_ref: Kebede et al. (2024) (preprint)
@@ -204,7 +204,7 @@ MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
 global_irrigation_area_{irrigation_type}:
   data_type: RasterDataset
   driver: raster
-  path: /scistor/ivm/GEB/data_catalog/irrigation/gmia_v5_{irrigation_type}_pct_aei.asc
+  path: irrigation/gmia_v5_{irrigation_type}_pct_aei.asc
   crs: 4326
   meta:
     paper_doi: 10.5194/hess-14-1863-2010
@@ -216,7 +216,7 @@ global_irrigation_area_{irrigation_type}:
     irrigation_type: [aei, aai, aeisw, aeigw]
 GTSM:
   data_type: Dataset
-  path: /scistor/ivm/data_catalogue/water_level/GTSM/reanalysis_waterlevel_10min_*_v1.nc
+  path: GTSM/reanalysis_waterlevel_10min_*_v1.nc
   meta:
     category: water level
     paper_doi: doi:10.1038/ncomms11969
@@ -235,10 +235,10 @@ gebco:
     paper_doi: 10.5285/a29c5465-b138-234d-e053-6c86abc040b9
     paper_ref: Weatherall et al (2020)
     source_license: https://www.gebco.net/data_and_products/gridded_bathymetry_data/#a1
-    source_url: https://www.bodc.ac.uk/data/open_download/gebco/gebco_2020/geotiff/
+    source_url: https://www.bodc.ac.uk/data/open_download/gebco/gebco_2024/geotiff/
     source_version: 2020
     unit: m+MSL
-  path: /scistor/ivm/data_catalogue/hydrology/topography/gebco/gebco.vrt
+  path: topography/gebco.vrt
 merit_hydro:
   crs: 4326
   data_type: RasterDataset
@@ -252,28 +252,7 @@ merit_hydro:
     source_license: CC-BY-NC 4.0 or ODbL 1.0
     source_url: http://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro
     source_version: 1.0
-  path: /scistor/ivm/data_catalogue/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
-hydrobasins_8:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  meta:
-    category: hydrography
-    source_license: https://data.hydrosheds.org/file/technical-documentation/HydroSHEDS_TechDoc_v1_4.pdf
-    source_url: https://www.hydrosheds.org
-    source_version: 1.0
-  path: /scistor/ivm/data_catalogue/hydrology/hydrobasins/level8.gpkg
-rivers_lin2019_v1:
-  data_type: GeoDataFrame
-  driver: vector
-  meta:
-    category: hydrography
-    paper_doi: 10.5281/zenodo.3552776
-    paper_ref: Lin et al. (2019)
-    source_license: CC-BY-NC 4.0
-    source_url: https://zenodo.org/record/3552776#.YVbOrppByUk
-    source_version: 1
-  path: rivers_lin2019_v1.gpkg
+  path: hydrography/merit_hydro_v1.0/{variable}.vrt
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
@@ -404,7 +383,7 @@ GADM_level0:
     source_license: https://gadm.org/license.html
     source_url: https://gadm.org/download_world.html
     source_version: 4.1
-  path: /scistor/ivm/data_catalogue/admin/gadm_410-levels.gpkg
+  path: admin/gadm_410-levels.gpkg
 GADM_level1:
   crs: 4326
   data_type: GeoDataFrame
@@ -418,63 +397,7 @@ GADM_level1:
     source_license: https://gadm.org/license.html
     source_url: https://gadm.org/download_world.html
     source_version: 4.1
-  path: /scistor/ivm/data_catalogue/admin/gadm_410-levels.gpkg
-GADM_level2:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  driver_kwargs:
-    layer: ADM_2
-  meta:
-    category: geography
-    notes: last downloaded 2023-05-18; license required for commercial use
-    source_author: gadm
-    source_license: https://gadm.org/license.html
-    source_url: https://gadm.org/download_world.html
-    source_version: 4.1
-  path: /scistor/ivm/data_catalogue/admin/gadm_410-levels.gpkg
-GADM_level3:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  driver_kwargs:
-    layer: ADM_3
-  meta:
-    category: geography
-    notes: last downloaded 2023-05-18; license required for commercial use
-    source_author: gadm
-    source_license: https://gadm.org/license.html
-    source_url: https://gadm.org/download_world.html
-    source_version: 4.1
-  path: /scistor/ivm/data_catalogue/admin/gadm_410-levels.gpkg
-GADM_level4:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  driver_kwargs:
-    layer: ADM_4
-  meta:
-    category: geography
-    notes: last downloaded 2023-05-18; license required for commercial use
-    source_author: gadm
-    source_license: https://gadm.org/license.html
-    source_url: https://gadm.org/download_world.html
-    source_version: 4.1
-  path: /scistor/ivm/data_catalogue/admin/gadm_410-levels.gpkg
-GADM_level5:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  driver_kwargs:
-    layer: ADM_5
-  meta:
-    category: geography
-    notes: last downloaded 2023-05-18; license required for commercial use
-    source_author: gadm
-    source_license: https://gadm.org/license.html
-    source_url: https://gadm.org/download_world.html
-    source_version: 4.1
-  path: /scistor/ivm/data_catalogue/admin/gadm_410-levels.gpkg
+  path: admin/gadm_410-levels.gpkg
 india_cencus:
   crs: 4326
   data_type: GeoDataFrame
@@ -483,11 +406,7 @@ india_cencus:
 GDL_regions_v4:
   data_type: GeoDataFrame
   driver: vector
-  variants:
-  - provider: default
-    path: "/scistor/ivm/data_catalogue/admin/GDL_regions_v4.gpkg"
-  - provider: S-drive
-    path: "S:\\BETA-IVM-BAZIS/data_catalogue/admin/GDL_regions_v4.gpkg"
+  path: "admin/GDL_regions_v4.gpkg"
   meta:
     category: geography
     source_author: Global Data Lab
@@ -496,27 +415,15 @@ GDL_regions_v4:
     source_license: https://globaldatalab.org/termsofuse/
 GLOPOP-S:
   data_type: Dataset
-  variants:
-  - provider: default
-    path: /scistor/ivm/data_catalogue/population/synthpop_{region}_grid.dat.gz
-  - provider: S-drive
-    path: S:\\BETA-IVM-BAZIS/data_catalogue/population/synthpop_{region}_grid.dat.gz
+  path: population/synthpop_{region}_grid.dat.gz
 GLOPOP-S_grid:
   data_type: RasterDataset
   driver: raster
-  variants:
-  - provider: default
-    path: /scistor/ivm/data_catalogue/population/{region}_grid_nr.tif
-  - provider: S-drive
-    path: S:\\BETA-IVM-BAZIS/data_catalogue/population/{region}_grid_nr.tif
+  path: population/{region}_grid_nr.tif
 AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
-  variants:
-  - provider: default
-    path: /scistor/ivm/GEB/data_catalog/water_demand/AQUASTAT_municipal_withdrawal.xlsx
-  - provider: S-drive
-    path: S:\\BETA-IVM-BAZIS/GEB/data_catalog/water_demand/AQUASTAT_municipal_withdrawal.xlsx
+  path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
 esa_worldcover_2020_v100:
   crs: 4326
   data_type: RasterDataset
@@ -541,7 +448,7 @@ esa_worldcover_2021_v200:
     source_license: CC BY 4.0
     source_url: https://doi.org/10.5281/zenodo.5571936
     source_version: v200
-  path: /scistor/ivm/data_catalogue/land_systems/ESA WorldCover/ESA_WorldCover_10m_2021_v200_Map_AWS.vrt
+  path: landsurface/ESA_WorldCover_10m_2021_v200_Map_AWS.vrt
   rename:
     ESA_WorldCover_10m_2021_v200_Map_AWS: landuse
 CHELSA-BIOCLIM+_monthly_{variable}_{month}_{year}:
@@ -657,21 +564,6 @@ cwatm_industry_water_demand_{scenario}_year:
     source_url: https://doi.org/10.5194/gmd-9-175-2016
   placeholders:
     scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
-ghs_pop_2020_54009_v2023a:
-  crs: ESRI:54009
-  data_type: RasterDataset
-  driver: raster
-  driver_kwargs:
-    chunks:
-      x: 1000
-      y: 1000
-  meta:
-    category: socio-economic
-    paper_doi: 10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE
-    paper_ref: Schiavina et al (2023)
-    source_license: CC BY 4.0
-    source_url: https://ghsl.jrc.ec.europa.eu/download.php?ds=pop
-  path: /scistor/ivm/data_catalogue/population/GHSL/GHS_POP/GHS_POP_E2020_GLOBE_R2023A_54009_100_V1_0.tif
 FAO_crop_price:
   path: crops/FAOSTAT_data_en_9-27-2024.csv
   driver: csv

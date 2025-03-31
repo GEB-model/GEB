@@ -22,25 +22,20 @@ from .hydrology import Hydrology
 class GEBModel(HazardDriver, ABM_Model):
     """GEB parent class.
 
-    Args:
-        config: Filepath of the YAML-configuration file (e.g. model.yml).
-        name: Name of model.
-        xmin: Minimum x coordinate.
-        xmax: Maximum x coordinate.
-        ymin: Minimum y coordinate.
-        ymax: Maximum y coordinate.
-        args: Run arguments.
-        coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
+    Parameters
+    ----------
+    config: Filepath of the YAML-configuration file (e.g. model.yml).
+    files: Dictionary with the paths of the input files.
+    mode: Mode of the model. Either `w` (write) or `r` (read).
+    timing: Boolean indicating if the model steps should be timed.
     """
-
-    description = """GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.\nGEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail. The model does so by coupling an agent-based model which simulates millions individual people or households and a hydrological model. While the model can be expanded to other agents and environmental interactions, we focus on farmers, high-level agents, irrigation behaviour and land management for now."""
 
     def __init__(
         self,
         config: dict,
         files: dict,
-        mode="w",
-        timing=False,
+        mode: str = "w",
+        timing: bool = False,
     ):
         self.timing = timing
         self.mode = mode
@@ -60,7 +55,7 @@ class GEBModel(HazardDriver, ABM_Model):
         self.store = Store(self)
         self.artists = Artists(self)
 
-    def restore(self, store_location, timestep):
+    def restore(self, store_location: str, timestep: int) -> None:
         self.store.load(store_location)
         self.hydrology.groundwater.modflow.restore(self.hydrology.grid.var.heads)
         self.current_timestep = timestep

@@ -17,6 +17,7 @@ import geopandas as gpd
 import hydromt.workflows
 import numpy as np
 import pandas as pd
+import rasterio
 import xarray as xr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
@@ -184,59 +185,63 @@ class GEBModel(
         ]
 
         xmin, ymin, xmax, ymax = subbasins_without_outflow_basin.total_bounds
-        hydrography = self.data_catalog.get_rasterdataset(
-            "merit_hydro",
-            bbox=[
-                xmin,
-                ymin,
-                xmax,
-                ymax,
-            ],
-            buffer=10,
-        )
 
-        self.logger.info("Preparing 2D grid.")
-        if "outflow" in region:
-            # get basin geometry
-            geom, _ = hydromt.workflows.get_basin_geometry(
-                ds=hydrography,
-                flwdir_name="dir",
-                kind="subbasin",
-                logger=self.logger,
-                xy=(lon, lat),
+        with rasterio.Env(
+            GDAL_HTTP_USERPWD=f"{os.environ['MERIT_USERNAME']}:{os.environ['MERIT_PASSWORD']}"
+        ):
+            hydrography = self.data_catalog.get_rasterdataset(
+                "merit_hydro",
+                bbox=[
+                    xmin,
+                    ymin,
+                    xmax,
+                    ymax,
+                ],
+                buffer=10,
             )
-        elif "subbasin" in region or "admin" in region:
-            geom = gpd.GeoDataFrame(
-                geometry=[subbasins_without_outflow_basin.union_all()],
-                crs=subbasins_without_outflow_basin.crs,
+
+            self.logger.info("Preparing 2D grid.")
+            if "outflow" in region:
+                # get basin geometry
+                geom, _ = hydromt.workflows.get_basin_geometry(
+                    ds=hydrography,
+                    flwdir_name="dir",
+                    kind="subbasin",
+                    logger=self.logger,
+                    xy=(lon, lat),
+                )
+            elif "subbasin" in region or "admin" in region:
+                geom = gpd.GeoDataFrame(
+                    geometry=[subbasins_without_outflow_basin.union_all()],
+                    crs=subbasins_without_outflow_basin.crs,
+                )
+            elif "geom" in region:
+                geom = region["geom"]
+                if geom.crs is None:
+                    raise ValueError('Model region "geom" has no CRS')
+                # merge regions when more than one geom is given
+                if isinstance(geom, gpd.GeoDataFrame):
+                    geom = gpd.GeoDataFrame(geometry=[geom.union_all()], crs=geom.crs)
+            else:
+                raise ValueError(f"Region {region} not understood.")
+
+            # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
+            # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+            # usable between 86°S and 86°N.
+            self.logger.info(
+                f"Approximate basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
             )
-        elif "geom" in region:
-            geom = region["geom"]
-            if geom.crs is None:
-                raise ValueError('Model region "geom" has no CRS')
-            # merge regions when more than one geom is given
-            if isinstance(geom, gpd.GeoDataFrame):
-                geom = gpd.GeoDataFrame(geometry=[geom.union_all()], crs=geom.crs)
-        else:
-            raise ValueError(f"Region {region} not understood.")
 
-        # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
-        # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
-        # usable between 86°S and 86°N.
-        self.logger.info(
-            f"Approximate basin size in km2: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)}"
-        )
+            hydrography = hydrography.raster.clip_geom(
+                geom,
+                align=resolution_arcsec
+                / 60
+                / 60,  # align grid to resolution of model grid. Conversion is to convert from arcsec to degrees
+                mask=True,
+            )
 
-        hydrography = hydrography.raster.clip_geom(
-            geom,
-            align=resolution_arcsec
-            / 60
-            / 60,  # align grid to resolution of model grid. Conversion is to convert from arcsec to degrees
-            mask=True,
-        )
-
-        self.get_base_hydrography(hydrography, resolution_arcsec)
-        self.create_subgrid(subgrid_factor)
+            self.get_base_hydrography(hydrography, resolution_arcsec)
+            self.create_subgrid(subgrid_factor)
 
     def create_subgrid(self, subgrid_factor):
         mask = self.grid["mask"]

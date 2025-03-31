@@ -36,6 +36,7 @@ def get_river_graph(data_catalog):  # , reverse=False):
         data_catalog.get_source("MERIT_Basins_riv").path,
         columns=["COMID", "NextDownID"],
         ignore_geometry=True,
+        # bbox=(-7.22, 36.11, 1.05, 41.48),  # bbox for Quipar (potentail speedup for when developing)
         # bbox=(
         #     3.68,
         #     49.82,
@@ -130,7 +131,7 @@ def get_rivers(data_catalog, subbasin_ids):
 def create_river_raster_from_river_lines(rivers, flwdir_idxs_out, hydrography):
     river_raster = rasterize(
         zip(rivers.geometry, rivers.index),
-        out_shape=hydrography["flwdir"].shape,
+        out_shape=hydrography["dir"].shape,
         fill=-1,
         dtype=np.int32,
         transform=hydrography.rio.transform(),
