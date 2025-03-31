@@ -332,7 +332,7 @@ wb_inflation_rate:
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/FP.CPI.TOTL.ZG
     sorce_version: 5551656
-  path: economics/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_77.csv
+  path: socioeconomic/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_77.csv
   driver: csv
   data_type: DataFrame
   driver_kwargs:
@@ -344,7 +344,7 @@ wb_lending_rate:
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/FR.INR.LEND
     sorce_version: 5553913
-  path: economics/WB lending interest rates/API_FR.INR.LEND_DS2_en_csv_v2_3789.csv
+  path: socioeconomic/WB lending interest rates/API_FR.INR.LEND_DS2_en_csv_v2_3789.csv
   driver: csv
   data_type: DataFrame
   driver_kwargs:
@@ -355,7 +355,7 @@ world_bank_price_ratio:
     source_author: World Bank
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
-  path: economics/price_ratio/API_PA.NUS.PPPC.RF_DS2_en_csv_v2_4549.csv
+  path: socioeconomic/price_ratio/API_PA.NUS.PPPC.RF_DS2_en_csv_v2_4549.csv
   driver: csv
   data_type: DataFrame
   driver_kwargs:
@@ -363,7 +363,7 @@ world_bank_price_ratio:
 gcam_electricity_rates:
   meta:
     category: economics
-  path: economics/electricity_rates/GCAM_Electricity_Rates.csv
+  path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
   meta:
@@ -415,11 +415,11 @@ GDL_regions_v4:
     source_license: https://globaldatalab.org/termsofuse/
 GLOPOP-S:
   data_type: Dataset
-  path: population/synthpop_{region}_grid.dat.gz
+  path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz
 GLOPOP-S_grid:
   data_type: RasterDataset
   driver: raster
-  path: population/{region}_grid_nr.tif
+  path: population/GLOPOP-S/{region}_grid_nr.tif
 AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
