@@ -102,12 +102,36 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
 
         da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
 
+        # Check if region crosses the meridian (longitude=0)
         # use a slightly larger slice. The resolution is 0.1 degrees, so 0.11 degrees is a bit more than that (to be sure)
-        da = da.sel(
-            time=slice(starttime, endtime),
-            y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
-            x=slice(bounds[0] - 0.11, bounds[2] + 0.11),
-        )
+        if bounds[0] < 0 and bounds[2] > 0:
+            # Need to handle the split across the meridian
+            # Get western hemisphere part (longitude < 0)
+            west_da = da.sel(
+                time=slice(starttime, endtime),
+                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+                x=slice(((bounds[0] - 0.11) + 360) % 360, 360),
+            )
+            # Get eastern hemisphere part (longitude > 0)
+            east_da = da.sel(
+                time=slice(starttime, endtime),
+                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+                x=slice(0, ((bounds[2] + 0.11) + 360) % 360),
+            )
+            # Combine the two parts
+            da = xr.concat([west_da, east_da], dim="x")
+        else:
+            # Regular case - doesn't cross meridian
+            da = da.sel(
+                time=slice(starttime, endtime),
+                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+                x=slice(
+                    ((bounds[0] - 0.11) + 360) % 360, ((bounds[2] + 0.11) + 360) % 360
+                ),
+            )
+
+        # Reorder x to be between -180 and 180 degrees
+        da = da.assign_coords(x=((da.x + 180) % 360 - 180))
         da = da.isel(time=slice(1, None))
 
         logger.info(f"Downloading ERA5 {variable} to {output_fn}")
