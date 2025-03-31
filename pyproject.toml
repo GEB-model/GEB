@@ -1,9 +1,14 @@
 [build-system]
-requires = ["flit_core >=3.4.0,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
 
 [project]
 name = "geb"
+version = "1.0.0b5"
+description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
     {name = "Maurice Kalthof", email = "w.m.l.kalthof@vu.nl"},
@@ -63,7 +68,6 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dynamic = ["version", "description"]
 
 [tool.uv]
 required-environments = [
