@@ -18,6 +18,14 @@ from pyproj import CRS
 all_async_readers = []
 
 
+def load_table(fp):
+    return pd.read_parquet(fp, engine="pyarrow")
+
+
+def load_array(fp):
+    return np.load(fp)["data"]
+
+
 def calculate_scaling(min_value, max_value, precision, offset=0):
     """
     This function calculates the scaling factor and output dtype for
