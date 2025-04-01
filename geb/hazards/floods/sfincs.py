@@ -14,22 +14,16 @@ import zarr
 from ...HRUs import load_geom
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
-
-try:
-    from geb_hydrodynamics.build_model import build_sfincs
-except ModuleNotFoundError:
-    raise ModuleNotFoundError(
-        "The 'GEB-hydrodynamics' package is not installed. Please install it by running 'pip install geb-hydrodynamics'."
-    )
-from geb_hydrodynamics.estimate_discharge_for_return_periods import (
+from .build_model import build_sfincs
+from .estimate_discharge_for_return_periods import (
     estimate_discharge_for_return_periods,
 )
-from geb_hydrodynamics.postprocess_model import read_flood_map
-from geb_hydrodynamics.run_sfincs_for_return_periods import (
+from .postprocess_model import read_flood_map
+from .run_sfincs_for_return_periods import (
     run_sfincs_for_return_periods,
 )
-from geb_hydrodynamics.sfincs_utils import run_sfincs_simulation
-from geb_hydrodynamics.update_model_forcing import update_sfincs_model_forcing
+from .sfincs_utils import run_sfincs_simulation
+from .update_model_forcing import update_sfincs_model_forcing
 
 
 class SFINCS:
