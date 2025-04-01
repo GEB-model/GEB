@@ -136,6 +136,8 @@ class ReservoirOperators(AgentBaseClass):
         return self.command_area_release_m3
 
     def release(self, inflow_m3, daily_substeps, current_substep):
+        if inflow_m3.size == 0:
+            return np.zeros_like(inflow_m3), np.zeros_like(inflow_m3)
         # add the inflow to the multi_year_monthly_total_inflow, use the current month
         self.var.multi_year_monthly_total_inflow[:, self.current_month_index, 0] += (
             inflow_m3
@@ -179,6 +181,10 @@ class ReservoirOperators(AgentBaseClass):
         return main_channel_release, command_area_release_substep
 
     def _get_release(self, inflow_m3, irrigation_demand_m3, daily_substeps):
+        if inflow_m3.size == 0:
+            return np.zeros_like(irrigation_demand_m3), np.zeros_like(
+                irrigation_demand_m3
+            )
         days_in_month = calendar.monthrange(
             self.model.current_time.year, self.model.current_time.month
         )[1]
@@ -188,9 +194,9 @@ class ReservoirOperators(AgentBaseClass):
         month_weights = np.array(
             [31, 28.2425, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], dtype=np.float32
         )
-        month_weights = np.broadcast_to(month_weights, (5, 12))[..., np.newaxis].repeat(
-            self.var.history_fill_index - 1, axis=2
-        )
+        month_weights = np.broadcast_to(month_weights, (inflow_m3.shape[0], 12))[
+            ..., np.newaxis
+        ].repeat(self.var.history_fill_index - 1, axis=2)
 
         # get the long term inflow across all time. Do not consider the current month as
         # it is not yet complete.
