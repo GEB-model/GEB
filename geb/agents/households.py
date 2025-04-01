@@ -491,7 +491,9 @@ class Households(AgentBaseClass):
 
         def compute_damages_by_country(assets, curve, category_name):
             assets = assets.to_crs(flood_map_clipped.rio.crs)
-
+            damage_folder = join(model_root, "damage")
+            os.makedirs(damage_folder, exist_ok=True) 
+            
             # Check for multiple geometry types
             geometry_types = assets.geometry.geom_type.unique()
             print(f"Geometry types in {category_name}: {geometry_types}")
