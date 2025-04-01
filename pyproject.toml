@@ -5,6 +5,9 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 
+[tool.uv.sources]
+hydromt-sfincs = { git = "https://github.com/GEB-model/hydromt_sfincs.git" }
+
 [project]
 name = "geb"
 version = "1.0.0b5"
@@ -29,6 +32,7 @@ dependencies = [
     "geopandas>=1.0.1",
     "honeybees>=1.2.0",
     "hydromt==0.10.1",
+    "hydromt-sfincs",
     "isimip-client>=1.0.1",
     "nest_asyncio>=1.6.0", # for GUI in
     "networkx",
@@ -37,6 +41,7 @@ dependencies = [
     "openpyxl>=3.1.2",
     "pyarrow>=17.0.0",
     "pybind11>=2.13.4",
+    "pyextremes>=2.3.3",
     "pyflwdir>=0.5.9",
     "pyogrio>=0.9.0",
     "pyresample>=1.32.0",
