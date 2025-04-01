@@ -943,12 +943,6 @@ class Data:
         )
 
     def load_water_demand(self):
-        self.model.domestic_water_consumption_ds = load_forcing_xr(
-            self.model.files["other"]["water_demand/domestic_water_consumption"]
-        )
-        self.model.domestic_water_demand_ds = load_forcing_xr(
-            self.model.files["other"]["water_demand/domestic_water_demand"]
-        )
         self.model.industry_water_consumption_ds = load_forcing_xr(
             self.model.files["other"]["water_demand/industry_water_consumption"]
         )
