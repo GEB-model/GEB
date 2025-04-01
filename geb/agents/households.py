@@ -474,15 +474,24 @@ class Households(AgentBaseClass):
         )
         forest["object_type"] = "forest"
         forest["maximum_damage"] = self.var.max_dam_forest
-        forest = forest.to_crs(flood_map_final.rio.crs)
 
-        def compute_damages_by_country(assets, curve, category_name, model_root, return_period=None):
-            assets = assets.to_crs(flood_map_final.rio.crs)
-            
-            # Ensure the "damage" folder exists
-            damage_folder = join(model_root, "damage")
-            os.makedirs(damage_folder, exist_ok=True)
-            
+        forest = forest.to_crs(flood_map.rio.crs)
+
+        flood_map = flood_map.where(~rivers_mask)
+        flood_map = flood_map.fillna(0)
+        flood_map = flood_map.where(flood_map != 0, np.nan)
+
+        # Clip the flood map to the region for which we want to know the damages
+        region_path = r"C:/Users/merli/Documenten_lokaal/Master/Thesis/data thesis/models/geulnew/damages_region.gpkg"
+        region = gpd.read_file(region_path)
+        region_projected = region.to_crs(flood_map.rio.crs)
+        flood_map_clipped = flood_map.rio.clip(
+            region_projected.geometry, region_projected.crs
+        )
+
+        def compute_damages_by_country(assets, curve, category_name):
+            assets = assets.to_crs(flood_map_clipped.rio.crs)
+
             # Check for multiple geometry types
             geometry_types = assets.geometry.geom_type.unique()
             print(f"Geometry types in {category_name}: {geometry_types}")
@@ -554,7 +563,7 @@ class Households(AgentBaseClass):
             return total_damages
 
         # Filter countries
-        all_countries = gpd.read_file(self.model.files["geoms"]["europe"])
+        all_countries = gpd.read_file(r"C:/Users/merli/Documenten_lokaal/Master/Thesis/data thesis/models/geulnew/Europe_merged.shp")
         selection_countries = ["Netherlands", "Belgium", "Germany"]
         gdf_filtered_countries = all_countries[all_countries["COUNTRY"].isin(selection_countries)]
         if self.var.buildings.crs != flood_map_final.rio.crs:

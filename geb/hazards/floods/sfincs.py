@@ -232,6 +232,13 @@ class SFINCS:
             )
             build_parameters["waterbuffer_locations"] = waterbuffer_locations
 
+        # Inlezen van de wetland_loc_RANDOM
+        wetland_loc_random = gpd.read_file(
+            r"C:\Users\merli\Documenten_lokaal\Master\Thesis\data thesis\models\geulnew\input\hydrodynamics\Wetlands_RANDOM.shp"
+    )
+    # Voeg wetland_loc_random toe aan de build_parameters
+        build_parameters["wetland_loc_random"] = wetland_loc_random
+
         detailed_region = self.get_detailed_catchment_outline(
             region_file=self.model.files["geoms"]["region"]
         )
