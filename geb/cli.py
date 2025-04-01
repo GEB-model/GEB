@@ -368,16 +368,16 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
-def get_model_setup(custom_model):
-    from geb import setup
+def get_model_builder(custom_model):
+    from geb import build
 
     if custom_model is None:
-        return setup.GEBModel
+        return build.GEBModel
     else:
         importlib.import_module(
             "." + custom_model.split(".")[0], package="geb.setup.custom_models"
         )
-        return attrgetter(custom_model)(setup.custom_models)
+        return attrgetter(custom_model)(build.custom_models)
 
 
 def customize_data_catalog(data_catalogs, data_root=None):
@@ -393,7 +393,7 @@ def customize_data_catalog(data_catalogs, data_root=None):
 
                 if "meta" not in data_catalog_yml:
                     data_catalog_yml["meta"] = {}
-                data_catalog_yml["meta"]["root"] = data_root
+                data_catalog_yml["meta"]["root"] = str(data_root)
 
             with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
                 yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
@@ -427,7 +427,7 @@ def build_fn(
         "data_provider": data_provider,
     }
 
-    geb_model = get_model_setup(custom_model)(**arguments)
+    geb_model = get_model_builder(custom_model)(**arguments)
 
     geb_model.build(
         methods=configread(build_config),
@@ -469,7 +469,7 @@ def alter(
         "data_provider": data_provider,
     }
 
-    geb_model = get_model_setup(custom_model)(**arguments)
+    geb_model = get_model_builder(custom_model)(**arguments)
     geb_model.read()
     geb_model.set_alternate_root(
         Path(".") / Path(config["general"]["input_folder"]), mode="w+"
@@ -506,7 +506,7 @@ def update(
         "data_provider": data_provider,
     }
 
-    geb_model = get_model_setup(custom_model)(**arguments)
+    geb_model = get_model_builder(custom_model)(**arguments)
     geb_model.read()
     geb_model.update(methods=configread(build_config))
 
