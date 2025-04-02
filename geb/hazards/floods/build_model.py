@@ -3,13 +3,14 @@ import logging
 import numpy as np
 import pyflwdir
 import xarray as xr
-from geb_hydrodynamics.IO import export_rivers
-from geb_hydrodynamics.sfincs_utils import (
+from hydromt_sfincs import SfincsModel
+
+from .io import export_rivers
+from .sfincs_utils import (
     assign_return_periods,
     get_discharge_by_point,
     get_logger,
 )
-from hydromt_sfincs import SfincsModel
 
 logger = logging.getLogger(__name__)
 

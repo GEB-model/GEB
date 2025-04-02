@@ -7,8 +7,8 @@ import xarray as xr
 from hydromt_sfincs import SfincsModel
 from shapely.geometry import Point
 
-from geb_hydrodynamics.IO import import_rivers
-from geb_hydrodynamics.sfincs_utils import configure_sfincs_model, get_logger
+from .io import import_rivers
+from .sfincs_utils import configure_sfincs_model, get_logger
 
 
 def update_sfincs_model_forcing(
