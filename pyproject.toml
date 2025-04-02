@@ -112,5 +112,4 @@ lint.extend-select = ["I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
-known-third-party = ["geb-hydrodynamics"]
 combine-as-imports = true
