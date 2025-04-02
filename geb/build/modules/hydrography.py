@@ -63,9 +63,7 @@ class Hydrography:
         downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
         subbasin_ids.update(downstream_subbasins)
 
-        subbasins = get_subbasins_geometry(self.data_catalog, subbasin_ids).set_index(
-            "COMID"
-        )
+        subbasins = get_subbasins_geometry(self.data_catalog, subbasin_ids)
         subbasins["is_downstream_outflow_subbasin"] = pd.Series(
             True, index=downstream_subbasins
         ).reindex(subbasins.index, fill_value=False)
@@ -91,6 +89,7 @@ class Hydrography:
 
         scale_factor = resolution_arcsec // 3
 
+        self.logger.info("Coarsening hydrography")
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
         flow_raster_upscaled, idxs_out = flow_raster.upscale(
             scale_factor=scale_factor,
@@ -199,8 +198,11 @@ class Hydrography:
 
         # river width
         subbasin_ids = self.geoms["routing/subbasins"].index
-        rivers = get_rivers(self.data_catalog, subbasin_ids).set_index("COMID")
 
+        self.logger.info("Retrieving river data")
+        rivers = get_rivers(self.data_catalog, subbasin_ids)
+
+        self.logger.info("Processing river data")
         # remove all rivers that are both shorter than 1 km and have no upstream river
         rivers = rivers[~((rivers["lengthkm"] < 1) & (rivers["maxup"] == 0))]
 

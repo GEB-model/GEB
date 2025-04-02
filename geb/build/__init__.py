@@ -155,15 +155,17 @@ class GEBModel(
         )
         assert subgrid_factor >= 2
 
+        self.logger.info("Loading river network.")
         river_graph = get_river_graph(self.data_catalog)
 
+        self.logger.info("Finding sinks in river network of requested region.")
         if "subbasin" in region:
-            sink_subbasin_ids = region["subbasin"]
+            sink_subbasin_ids = [region["subbasin"]]
         elif "outflow" in region:
             lon, lat = region["outflow"][0], region["outflow"][1]
-            sink_subbasin_ids = get_subbasin_id_from_coordinate(
-                self.data_catalog, lon, lat
-            )
+            sink_subbasin_ids = [
+                get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
+            ]
         elif "admin" in region:
             admin_regions = self.data_catalog.get_geodataframe(
                 region["admin"]["source"]
@@ -177,6 +179,9 @@ class GEBModel(
         else:
             raise ValueError(f"Region {region} not understood.")
 
+        self.logger.info(
+            f"Found {len(sink_subbasin_ids)} sink subbasins in region {region}."
+        )
         self.set_routing_subbasins(river_graph, sink_subbasin_ids)
 
         subbasins = self.geoms["routing/subbasins"]

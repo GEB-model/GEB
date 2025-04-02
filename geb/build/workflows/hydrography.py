@@ -1,9 +1,10 @@
 import geopandas as gpd
 import networkx as nx
 import numpy as np
+import pandas as pd
 import xarray as xr
 from rasterio.features import rasterize
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
 
 
 def get_upstream_subbasin_ids(river_graph, subbasin_ids):
@@ -31,18 +32,13 @@ def get_downstream_subbasins(river_graph, sink_subbasin_ids):
     return downstream_subbasins
 
 
-def get_river_graph(data_catalog):  # , reverse=False):
-    river_network = gpd.read_file(
+def get_river_graph(data_catalog):
+    river_network = pd.read_parquet(
         data_catalog.get_source("MERIT_Basins_riv").path,
         columns=["COMID", "NextDownID"],
-        ignore_geometry=True,
-        # bbox=(-7.22, 36.11, 1.05, 41.48),  # bbox for Quipar (potentail speedup for when developing)
-        # bbox=(
-        #     3.68,
-        #     49.82,
-        #     8.22,
-        #     51.66,
-        # ),  # bbox for the Geul (potentail speedup for when developing)
+    ).set_index("COMID")
+    assert river_network.index.name == "COMID", (
+        "The index of the river network is not the COMID column"
     )
 
     # create a directed graph for the river network
@@ -53,14 +49,14 @@ def get_river_graph(data_catalog):  # , reverse=False):
         river_network["NextDownID"] != 0
     ]
     river_network_with_downstream_connection = (
-        river_network_with_downstream_connection.itertuples(index=False, name=None)
+        river_network_with_downstream_connection.itertuples(index=True, name=None)
     )
     river_graph.add_edges_from(river_network_with_downstream_connection)
 
     river_network_without_downstream_connection = river_network[
         river_network["NextDownID"] == 0
     ]
-    river_graph.add_nodes_from(river_network_without_downstream_connection["COMID"])
+    river_graph.add_nodes_from(river_network_without_downstream_connection.index)
 
     return river_graph
 
@@ -69,25 +65,39 @@ def get_subbasin_id_from_coordinate(data_catalog, lon, lat):
     # we select the basin that contains the point. To do so
     # we use a bounding box with the point coordinates, thus
     # xmin == xmax and ymin == ymax
-    COMID = gpd.read_file(
+    # geoparquet uses < and >, not <= and >=, so we need to add
+    # a small value to the coordinates to avoid missing the point
+    COMID = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_cat").path,
-        bbox=(lon, lat, lon, lat),
-    )
+        bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
+    ).set_index("COMID")
+
+    # get only the points where the point is inside the basin
+    COMID = COMID[COMID.geometry.contains(Point(lon, lat))]
+
     if len(COMID) == 0:
         raise ValueError(
             f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.get_source('MERIT_Basins_cat').path}), ensure that the point is in a basin."
         )
     assert len(COMID) == 1, "The point is not in a single basin"
     # get the COMID value from the GeoDataFrame
-    return COMID["COMID"].values[0]
+    return COMID.index.values[0]
 
 
 def get_sink_subbasin_id_for_geom(data_catalog, geom, river_graph):
-    basins = data_catalog.get_geodataframe("MERIT_Basins_cat", geom=geom)
-    COMID = basins["COMID"].tolist()
+    subbasins = gpd.read_parquet(
+        data_catalog.get_source("MERIT_Basins_cat").path,
+        bbox=tuple([float(c) for c in geom.total_bounds]),
+    ).set_index("COMID")
+
+    subbasins = subbasins.iloc[
+        subbasins.sindex.query(geom.union_all(), predicate="intersects")
+    ]
+
+    assert len(subbasins) > 0, "The geometry does not intersect with any subbasin."
 
     # create a subgraph containing only the selected subbasins
-    region_river_graph = river_graph.subgraph(COMID)
+    region_river_graph = river_graph.subgraph(subbasins.index.tolist())
 
     # get all subbasins with no downstream subbasin (out degree is 0)
     # in the subgraph. These are the sink subbasins
@@ -103,29 +113,30 @@ def get_sink_subbasin_id_for_geom(data_catalog, geom, river_graph):
 
 
 def get_subbasins_geometry(data_catalog, subbasin_ids):
-    subbasins = gpd.read_file(
+    subbasins = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_cat").path,
-        sql=f"""SELECT * FROM cat_pfaf_MERIT_Hydro_v07_Basins_v01 WHERE COMID IN ({
-            ",".join([str(ID) for ID in subbasin_ids])
-        })""",
+        filters=[
+            ("COMID", "in", subbasin_ids),
+        ],
     )
     assert len(subbasins) == len(subbasin_ids), "Some subbasins were not found"
-    return subbasins
+    return subbasins.set_index("COMID")
 
 
 def get_rivers(data_catalog, subbasin_ids):
-    rivers = gpd.read_file(
+    rivers = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_riv").path,
-        sql=f"""SELECT * FROM riv_pfaf_MERIT_Hydro_v07_Basins_v01 WHERE COMID IN ({
-            ",".join([str(ID) for ID in subbasin_ids])
-        })""",
+        columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+        filters=[
+            ("COMID", "in", subbasin_ids),
+        ],
     )
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
     # reverse the river lines to have the downstream direction
     rivers["geometry"] = rivers["geometry"].apply(
         lambda x: LineString(list(x.coords)[::-1])
     )
-    return rivers
+    return rivers.set_index("COMID")
 
 
 def create_river_raster_from_river_lines(rivers, flwdir_idxs_out, hydrography):
