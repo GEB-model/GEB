@@ -19,8 +19,6 @@ def update_sfincs_model_forcing(
     uparea_discharge_grid,
     forcing_method,
     precipitation_grid=None,
-    # if True, then if the discharge peak is detected, the model will be updated with the peak discharge
-    method="nearest",  # Method to use for the unsnapped points , either "nearest" or "outflow"
 ):
     assert os.path.isfile(os.path.join(model_root, "sfincs.inp")), (
         f"model root does not exist {model_root}"
