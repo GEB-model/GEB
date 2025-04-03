@@ -139,19 +139,21 @@ def get_rivers(data_catalog, subbasin_ids):
     return rivers.set_index("COMID")
 
 
-def create_river_raster_from_river_lines(rivers, flwdir_idxs_out, hydrography):
+def create_river_raster_from_river_lines(
+    rivers, flwdir_idxs_out, original_d8_elevation
+):
     river_raster = rasterize(
         zip(rivers.geometry, rivers.index),
-        out_shape=hydrography["dir"].shape,
+        out_shape=original_d8_elevation.shape,
         fill=-1,
         dtype=np.int32,
-        transform=hydrography.rio.transform(),
+        transform=original_d8_elevation.rio.transform(),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
     )
 
-    river_raster_coarsened = river_raster.ravel()[flwdir_idxs_out.ravel()].reshape(
-        flwdir_idxs_out.shape
-    )
+    river_raster_coarsened = river_raster.ravel()[
+        flwdir_idxs_out.values.ravel()
+    ].reshape(flwdir_idxs_out.shape)
     return river_raster_coarsened
 
 

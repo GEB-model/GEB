@@ -2,9 +2,9 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pyflwdir
-import rasterio
 import xarray as xr
 from hydromt.exceptions import NoDataException
+from pyflwdir import FlwdirRaster
 from scipy.ndimage import value_indices
 
 from geb.hydrology.lakes_reservoirs import LAKE, RESERVOIR
@@ -74,70 +74,31 @@ class Hydrography:
 
         self.set_geoms(subbasins, name="routing/subbasins")
 
-    def get_base_hydrography(self, hydrography, resolution_arcsec):
-        flwdir = hydrography["dir"].values
-        assert flwdir.dtype == np.uint8
-
-        flow_raster = pyflwdir.from_array(
-            flwdir,
-            ftype="d8",
-            transform=hydrography.rio.transform(),
-            latlon=True,  # hydrography is specified in latlon
-            mask=hydrography.mask,  # this mask is True within study area
-        )
-        hydrography = hydrography.drop_vars(["mask"])
-
-        scale_factor = resolution_arcsec // 3
-
-        self.logger.info("Coarsening hydrography")
-        # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
-        flow_raster_upscaled, idxs_out = flow_raster.upscale(
-            scale_factor=scale_factor,
-            method="ihu",
-        )
-        flow_raster_upscaled.repair_loops()
-
-        elevation_coarsened = (
-            hydrography["elv"]
-            .raster.mask_nodata()
-            .coarsen(
-                x=scale_factor, y=scale_factor, boundary="exact", coord_func="mean"
-            )
+    def setup_hydrography(self):
+        original_d8_elevation = self.other["original_d8_elevation"]
+        elevation_coarsened = original_d8_elevation.coarsen(
+            x=self.ldd_scale_factor,
+            y=self.ldd_scale_factor,
+            boundary="exact",
+            coord_func="mean",
         )
 
         # elevation (we only set this later, because it has to be done after setting the mask)
         elevation = elevation_coarsened.mean()
+        elevation = self.snap_to_grid(elevation, self.grid["mask"])
 
-        flow_mask = ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape)
-
-        mask = self.full_like(elevation, fill_value=False, nodata=None, dtype=bool)
-        # we use the inverted mask, that is True outside the study area
-        mask.data = flow_mask
-        self.set_grid(mask, name="mask")
         self.set_grid(elevation, name="landsurface/elevation")
 
-        mask_geom = list(
-            rasterio.features.shapes(
-                flow_mask.astype(np.uint8),
-                mask=~flow_mask,
-                connectivity=8,
-                transform=elevation.rio.transform(recalc=True),
-            ),
-        )
-        mask_geom = gpd.GeoDataFrame.from_features(
-            [{"geometry": geom[0], "properties": {}} for geom in mask_geom],
-            crs=hydrography.rio.crs,
-        )
-
-        self.set_geoms(mask_geom, name="mask")
-
+        elevation_std = elevation_coarsened.std()
+        elevation_std = self.snap_to_grid(elevation_std, self.grid["mask"])
         self.set_grid(
-            elevation_coarsened.std(),
+            elevation_std,
             name="landsurface/elevation_standard_deviation",
         )
 
         # outflow elevation
         outflow_elevation = elevation_coarsened.min()
+        outflow_elevation = self.snap_to_grid(outflow_elevation, self.grid["mask"])
         self.set_grid(outflow_elevation, name="routing/outflow_elevation")
 
         slope = self.full_like(
@@ -151,24 +112,31 @@ class Hydrography:
             transform=elevation.rio.transform(recalc=True),
         )
         # set slope to zero on the mask boundary
-        slope_data[np.isnan(slope_data) & (~mask.data)] = 0
+        slope_data[np.isnan(slope_data) & (~self.grid["mask"].data)] = 0
         slope.data = slope_data
         self.set_grid(slope, name="landsurface/slope")
+
+        flow_raster_idxs_ds = self.grid["flow_raster_idxs_ds"]
+        flow_raster = FlwdirRaster(
+            flow_raster_idxs_ds.values.ravel(),
+            shape=flow_raster_idxs_ds.shape,
+            transform=flow_raster_idxs_ds.rio.transform(recalc=True),
+            ftype="d8",
+            latlon=True,
+        )
 
         # flow direction
         ldd = self.full_like(
             outflow_elevation, fill_value=255, nodata=255, dtype=np.uint8
         )
-        ldd.data = flow_raster_upscaled.to_array(ftype="ldd")
+        ldd.data = flow_raster.to_array(ftype="ldd")
         self.set_grid(ldd, name="routing/ldd")
 
         # upstream area
         upstream_area = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        upstream_area_data = flow_raster_upscaled.upstream_area(unit="m2").astype(
-            np.float32
-        )
+        upstream_area_data = flow_raster.upstream_area(unit="m2").astype(np.float32)
         upstream_area_data[upstream_area_data == -9999.0] = np.nan
         upstream_area.data = upstream_area_data
         self.set_grid(upstream_area, name="routing/upstream_area")
@@ -178,7 +146,7 @@ class Hydrography:
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
         river_length_data = flow_raster.subgrid_rivlen(
-            idxs_out, unit="m", direction="down"
+            self.grid["idxs_outflow"].values, unit="m", direction="down"
         )
         river_length_data[river_length_data == -9999.0] = np.nan
         river_length.data = river_length_data
@@ -188,7 +156,9 @@ class Hydrography:
         river_slope = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        river_slope_data = flow_raster.subgrid_rivslp(idxs_out, hydrography["elv"])
+        river_slope_data = flow_raster.subgrid_rivslp(
+            self.grid["idxs_outflow"].values, elevation
+        )
         river_slope_data[river_slope_data == -9999.0] = np.nan
         river_slope.data = river_slope_data
         self.set_grid(
@@ -214,7 +184,7 @@ class Hydrography:
         )
 
         COMID_IDs_raster_data = create_river_raster_from_river_lines(
-            rivers, idxs_out, hydrography
+            rivers, self.grid["idxs_outflow"], original_d8_elevation
         )
 
         assert set(

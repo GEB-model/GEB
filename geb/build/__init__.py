@@ -17,6 +17,7 @@ import geopandas as gpd
 import hydromt.workflows
 import numpy as np
 import pandas as pd
+import pyflwdir
 import rasterio
 import xarray as xr
 from affine import Affine
@@ -245,8 +246,98 @@ class GEBModel(
                 mask=True,
             )
 
-            self.get_base_hydrography(hydrography, resolution_arcsec)
-            self.create_subgrid(subgrid_factor)
+            d8_original = hydrography["dir"]
+            d8_original.attrs["_FillValue"] = 247
+            d8_original = xr.where(
+                hydrography.mask,
+                d8_original,
+                d8_original.attrs["_FillValue"],
+                keep_attrs=True,
+            )
+            d8_original = self.set_other(
+                d8_original, name="original_d8_flow_directions"
+            )
+
+            d8_elv_original = hydrography["elv"]
+            d8_elv_original.attrs["_FillValue"] = -9999.0
+            d8_elv_original = xr.where(
+                hydrography.mask,
+                d8_elv_original,
+                d8_elv_original.attrs["_FillValue"],
+                keep_attrs=True,
+            )
+            d8_elv_original = d8_elv_original.raster.mask_nodata()
+
+            self.set_other(d8_elv_original, name="original_d8_elevation")
+
+            self.derive_mask(
+                d8_original, hydrography.rio.transform(), resolution_arcsec
+            )
+
+        self.create_subgrid(subgrid_factor)
+
+    def derive_mask(self, d8_original, transform, resolution_arcsec):
+        assert d8_original.dtype == np.uint8
+
+        d8_original_data = d8_original.values
+        flow_raster = pyflwdir.from_array(
+            d8_original_data,
+            ftype="d8",
+            transform=transform,
+            latlon=True,  # hydrography is specified in latlon
+            mask=d8_original_data
+            != d8_original.attrs["_FillValue"],  # this mask is True within study area
+        )
+
+        scale_factor = resolution_arcsec // 3
+
+        self.logger.info("Coarsening hydrography")
+        # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
+        flow_raster_upscaled, idxs_out = flow_raster.upscale(
+            scale_factor=scale_factor,
+            method="ihu",
+        )
+        flow_raster_upscaled.repair_loops()
+
+        mask = xr.DataArray(
+            ~flow_raster_upscaled.mask.reshape(flow_raster_upscaled.shape),
+            coords={
+                "y": flow_raster_upscaled.transform.f
+                + flow_raster_upscaled.transform.e
+                * (np.arange(flow_raster_upscaled.shape[0]) + 0.5),
+                "x": flow_raster_upscaled.transform.c
+                + flow_raster_upscaled.transform.a
+                * (np.arange(flow_raster_upscaled.shape[1]) + 0.5),
+            },
+            dims=("y", "x"),
+            name="mask",
+            attrs={
+                "_FillValue": None,
+            },
+        )
+        self.set_grid(mask, name="mask")
+
+        flow_raster_idxs_ds = self.full_like(
+            self.grid["mask"],
+            fill_value=-1,
+            nodata=-1,
+            dtype=np.int32,
+        )
+        flow_raster_idxs_ds.name = "flow_raster_idxs_ds"
+        flow_raster_idxs_ds.data = flow_raster_upscaled.idxs_ds.reshape(
+            flow_raster_upscaled.shape
+        )
+        self.set_grid(flow_raster_idxs_ds, name="flow_raster_idxs_ds")
+
+        idxs_out = self.full_like(
+            self.grid["mask"],
+            fill_value=-1,
+            nodata=-1,
+            dtype=np.int32,
+        )
+        idxs_out.name = "idxs_outflow"
+        idxs_out.data = idxs_out
+        self.set_grid(idxs_out, name="idxs_outflow")
 
     def create_subgrid(self, subgrid_factor):
         mask = self.grid["mask"]
@@ -642,6 +733,18 @@ class GEBModel(
         subgrid_factor = self.subgrid.dims["x"] // self.grid.dims["x"]
         assert subgrid_factor == self.subgrid.dims["y"] // self.grid.dims["y"]
         return subgrid_factor
+
+    @property
+    def ldd_scale_factor(self):
+        scale_factor = (
+            self.other["original_d8_flow_directions"].shape[0]
+            // self.grid["mask"].shape[0]
+        )
+        assert scale_factor == (
+            self.other["original_d8_flow_directions"].shape[1]
+            // self.grid["mask"].shape[1]
+        )
+        return scale_factor
 
     @property
     def region(self):
