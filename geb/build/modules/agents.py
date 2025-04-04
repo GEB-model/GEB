@@ -873,16 +873,14 @@ class Agents:
 
         Parameters
         ----------
-        irrigation_sources : dict
-            A dictionary of irrigation sources and their corresponding water availability in m^3/day.
         region_id_column : str, optional
             The name of the column in the region database that contains the region IDs. Default is 'UID'.
         country_iso3_column : str, optional
             The name of the column in the region database that contains the country ISO3 codes. Default is 'ISO3'.
-        risk_aversion_mean : float, optional
-            The mean of the normal distribution from which the risk aversion values are sampled. Default is 1.5.
-        risk_aversion_standard_deviation : float, optional
-            The standard deviation of the normal distribution from which the risk aversion values are sampled. Default is 0.5.
+        farm_size_donor_countries : dict, optional
+            Dictionary with key, value pairs of ISO3 codes. The value-country is used as donor for the key-country.
+            Default is None.
+
 
         Notes
         -----

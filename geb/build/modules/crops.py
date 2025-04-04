@@ -924,11 +924,10 @@ class Crops:
         save_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        output_filename = save_dir / "crop_area_fraction_all_years.nc"
-        all_years_fraction_da.to_netcdf(output_filename)
-
-        output_filename = save_dir / "crop_irrigated_fraction_all_years.nc"
-        all_years_irrigated_fraction_da.to_netcdf(output_filename)
+        all_years_fraction_da.to_netcdf(save_dir / "crop_area_fraction_all_years.nc")
+        all_years_irrigated_fraction_da.to_netcdf(
+            save_dir / "crop_irrigated_fraction_all_years.nc"
+        )
 
     def setup_farmer_crop_calendar_multirun(
         self,
@@ -955,7 +954,7 @@ class Crops:
 
         MIRCA_unit_grid = self.data_catalog.get_rasterdataset(
             "MIRCA2000_unit_grid", bbox=self.bounds, buffer=2
-        )
+        ).compute()
 
         crop_calendar = parse_MIRCA2000_crop_calendar(
             self.data_catalog,
@@ -972,8 +971,16 @@ class Crops:
             MIRCA_unit_grid.rio.transform(recalc=True).to_gdal(),
         )
 
-        farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(year)
+        farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(
+            crop_calendar,
+            farmer_locations,
+            farmer_mirca_units,
+            year,
+            MIRCA_unit_grid,
+        )
         self.setup_farmer_irrigation_source(is_irrigated, year)
+
+        all_farmers_assigned = []
 
         crop_calendar_per_farmer = np.zeros((n_farmers, 3, 4), dtype=np.int32)
         for mirca_unit in np.unique(farmer_mirca_units):
@@ -1010,10 +1017,9 @@ class Crops:
                         rotations_with_crop_idx.append(idx)
 
                 if not rotations_with_crop_idx:
-                    print(
+                    raise ValueError(
                         f"No rotations found for crop ID {crop_id} in mirca unit {mirca_unit}"
                     )
-                    continue
 
                 # Get the area fractions and rotations for these indices
                 areas_with_crop = area_per_crop_rotation[rotations_with_crop_idx]
@@ -1048,6 +1054,7 @@ class Crops:
                     crop_calendar_per_farmer[farmer_idx] = assigned_rotation[
                         :, [0, 2, 3, 4]
                     ]
+                    all_farmers_assigned.append(farmer_idx)
 
         # Define constants for crop IDs
         WHEAT = 0
@@ -1334,18 +1341,17 @@ class Crops:
             name="agents/farmers/crop_calendar_rotation_years",
         )
 
-    def assign_crops_irrigation_farmers(self, year=2000):
+    def assign_crops_irrigation_farmers(
+        self, crop_calendar, farmer_locations, farmer_mirca_units, year, MIRCA_unit_grid
+    ):
         # Define the directory and file paths
         data_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
-        crop_area_file = data_dir / "crop_area_fraction_all_years.nc"
-        crop_irr_fraction_file = data_dir / "crop_irrigated_fraction_all_years.nc"
-
         # Load the DataArrays
-        all_years_fraction_da = xr.open_dataarray(crop_area_file)
-        all_years_irrigated_fraction_da = xr.open_dataarray(crop_irr_fraction_file)
-
-        farmer_locations = get_farm_locations(
-            self.subgrid["agents/farmers/farms"], method="centroid"
+        all_years_fraction_da = xr.open_dataarray(
+            data_dir / "crop_area_fraction_all_years.nc"
+        )
+        all_years_irrigated_fraction_da = xr.open_dataarray(
+            data_dir / "crop_irrigated_fraction_all_years.nc"
         )
 
         crop_dict = {
@@ -1380,7 +1386,17 @@ class Crops:
         area_fraction_2000 = area_fraction_2000.fillna(0)
         irrigated_fraction_2000 = irrigated_fraction_2000.fillna(0)
 
-        crops_in_dataarray = area_fraction_2000.coords["crop"].values
+        crop_ids_in_dataarray = np.array(
+            [
+                crop_dict[crop_name]
+                for crop_name in area_fraction_2000.coords["crop"].values
+            ]
+        )
+
+        mirca_crops_19_to_26 = np.full(26, -1, dtype=np.int32)
+        mirca_crops_19_to_26[crop_ids_in_dataarray] = np.arange(
+            len(crop_ids_in_dataarray)
+        )
 
         grid_id_da = self.get_linear_indices(all_years_fraction_da)
 
@@ -1405,19 +1421,26 @@ class Crops:
             irrigated_fraction_2000.rio.transform(recalc=True).to_gdal(),
         )
 
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = farmer_mirca_units.size
 
         # Prepare empty crop arrays
         farmer_crops = np.full(n_farmers, -1, dtype=np.int32)
         farmer_irrigated = np.full(n_farmers, 0, dtype=np.bool_)
 
-        for i in range(n_cells):
-            farmers_cell_mask = farmer_cells == i
+        for cell_idx in range(n_cells):
+            farmers_cell_mask = farmer_cells == cell_idx
             nr_farmers_cell = np.count_nonzero(farmers_cell_mask)
             if nr_farmers_cell == 0:
                 continue
-            crop_area_fraction = crop_area_fractions[farmer_cells == i][0]
-            crop_irrigated_fraction = crop_irrigated_fractions[farmer_cells == i][0]
+            crop_area_fraction = crop_area_fractions[farmer_cells == cell_idx][0]
+
+            MIRCA_unit_cell = MIRCA_unit_grid.values.ravel()[cell_idx]
+            available_crops = np.unique(
+                np.concat([crop for _, crop in crop_calendar[MIRCA_unit_cell]])[
+                    :, 0, ...
+                ]
+            )
+            available_crops = available_crops[available_crops != -1]
 
             if crop_area_fraction.sum() == 0:
                 # Expand the search radius until valid data is found
@@ -1426,7 +1449,7 @@ class Crops:
                 radius = 1
                 while not found_valid_neighbor and radius <= max_radius:
                     neighbor_ids = self.get_neighbor_cell_ids_for_linear_indices(
-                        i, nx, ny, radius
+                        cell_idx, nx, ny, radius
                     )
                     for neighbor_id in neighbor_ids:
                         if neighbor_id not in farmer_cells:
@@ -1438,51 +1461,60 @@ class Crops:
                         if neighbor_crop_area_fraction.sum() != 0:
                             # Found valid neighbor
                             crop_area_fraction = neighbor_crop_area_fraction
-                            crop_irrigated_fraction = crop_irrigated_fractions[
-                                farmer_cells == neighbor_id
-                            ][0]
                             found_valid_neighbor = True
                             break
                     if not found_valid_neighbor:
                         radius += 1  # Increase the search radius
                 if not found_valid_neighbor:
                     # No valid data found even after expanding radius
-                    print(
-                        f"No valid data found for cell {i} after searching up to radius {radius - 1}."
+                    raise ValueError(
+                        f"No valid data found for cell {cell_idx} after searching up to radius {radius - 1}."
                     )
-                    continue  # Skip this cell
-
-            farmer_indices_in_cell = np.where(farmers_cell_mask)[0]
 
             # ensure fractions sum to 1
-            area_per_crop_rotation = crop_area_fraction / crop_area_fraction.sum()
+            area_per_crop_rotation_26 = crop_area_fraction[mirca_crops_19_to_26]
+            area_per_crop_rotation_26[mirca_crops_19_to_26 == -1] = 0
 
-            farmer_crop_rotations_idx = np.random.choice(
-                np.arange(len(area_per_crop_rotation)),
-                size=len(farmer_indices_in_cell),
-                replace=True,
-                p=area_per_crop_rotation,
+            available_crops_mask = np.zeros_like(area_per_crop_rotation_26, dtype=bool)
+            available_crops_mask[available_crops] = True
+            area_per_crop_rotation_26[~available_crops_mask] = 0
+
+            assert area_per_crop_rotation_26.sum() > 0, (
+                "Error: No crops available for this cell"
             )
 
-            # Map sampled indices to crop names using crops_in_dataarray
-            farmer_crop_names = crops_in_dataarray[farmer_crop_rotations_idx]
-            # Map crop names to integer codes using crop_dict
-            farmer_crop_codes = [
-                crop_dict[crop_name] for crop_name in farmer_crop_names
-            ]
+            # normalize the area fractions
+            area_per_crop_rotation_26 = (
+                area_per_crop_rotation_26 / area_per_crop_rotation_26.sum()
+            )
+
+            farmer_indices_in_cell = np.where(farmers_cell_mask)[0]
+            farmer_crop_rotations = np.random.choice(
+                area_per_crop_rotation_26.size,
+                size=len(farmer_indices_in_cell),
+                replace=True,
+                p=area_per_crop_rotation_26,
+            )
+
             # assign to farmers
-            farmer_crops[farmer_indices_in_cell] = farmer_crop_codes
+            farmer_crops[farmer_indices_in_cell] = farmer_crop_rotations
 
             # Determine irrigating farmers
-            chosen_crops = np.unique(farmer_crop_rotations_idx)
+            chosen_crops = np.unique(farmer_crop_rotations)
+
+            crop_irrigated_fraction_19 = crop_irrigated_fractions[
+                farmer_cells == cell_idx
+            ][0]
+            crop_irrigated_fraction_26 = crop_irrigated_fraction_19[
+                mirca_crops_19_to_26
+            ]
+            crop_irrigated_fraction_26[mirca_crops_19_to_26 == -1] = np.nan
 
             for c in chosen_crops:
                 # Indices of farmers in the cell assigned to crop c
-                farmers_with_crop_c_in_cell = np.where(farmer_crop_rotations_idx == c)[
-                    0
-                ]
+                farmers_with_crop_c_in_cell = np.where(farmer_crop_rotations == c)[0]
                 N_c = len(farmers_with_crop_c_in_cell)
-                f_c = crop_irrigated_fraction[c]
+                f_c = crop_irrigated_fraction_26[c]
                 if np.isnan(f_c) or f_c <= 0:
                     continue  # No irrigation for this crop
                 N_irrigated = int(round(N_c * f_c))
