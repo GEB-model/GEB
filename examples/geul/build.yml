@@ -164,7 +164,6 @@ setup_crop_prices:
     sunflower: 
       - sunflower seed
 
-
 setup_assets:
   feature_types:
   - buildings
@@ -345,8 +344,7 @@ setup_well_prices_by_reference_year_global:
   start_year: 1960
   end_year: 2020
 
-setup_forcing:
-  data_source: era5
+setup_forcing_era5:
   starttime: 2000-01-01
   endtime: 2023-12-31
 
