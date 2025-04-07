@@ -19,6 +19,7 @@ class HazardDriver:
                 self.sfincs.save_discharge()
                 self.sfincs.save_soil_moisture()
                 self.sfincs.save_max_soil_moisture()
+                self.sfincs.save_soil_storage_capacity()
                 self.sfincs.save_ksat()
 
             for event in self.config["hazards"]["floods"]["events"]:

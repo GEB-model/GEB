@@ -48,6 +48,7 @@ class SFINCS:
         self.saturated_hydraulic_conductivity_per_timestep = deque(
             maxlen=self.max_number_of_timesteps
         )
+        self.soil_storage_capacity_per_timestep = deque(maxlen=self.max_number_of_timesteps)
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
@@ -363,7 +364,7 @@ class SFINCS:
                 name="discharge",
             )
 
-            initial_soil_moisture_grid = xr.Dataset(
+            self.initial_soil_moisture_grid = xr.Dataset(
                 {
                     "initial_soil_moisture": (
                         ["y", "x"],
@@ -378,12 +379,27 @@ class SFINCS:
                 },
             )
 
-            max_water_storage_grid = xr.Dataset(
+            self.max_water_storage_grid = xr.Dataset(
                 {
                     "max_water_storage": (
                         ["y", "x"],
                         self.model.data.HRU.decompress(
                             self.max_water_storage_per_timestep[first_timestep_of_event]
+                        ),  # take first time step of soil moisture
+                    )
+                },  # deque
+                coords={
+                    "y": self.model.data.HRU.lat,
+                    "x": self.model.data.HRU.lon,
+                },
+            )
+
+            soil_storage_capacity_grid = xr.Dataset(
+                {
+                    "soil_storage_capacity": (
+                        ["y", "x"],
+                        self.model.data.HRU.decompress(
+                            self.soil_storage_capacity_per_timestep[first_timestep_of_event]
                         ),  # take first time step of soil moisture
                     )
                 },  # deque
@@ -442,15 +458,18 @@ class SFINCS:
 
         # Now you can safely call to_proj4() on the CRS object
         discharge_grid.raster.set_crs(crs_obj.to_proj4())  # for discharge
-        initial_soil_moisture_grid.raster.set_crs(
+        self.initial_soil_moisture_grid.raster.set_crs(
             crs_obj.to_proj4()
         )  # for soil moisture
         saturated_hydraulic_conductivity_grid.raster.set_crs(
             crs_obj.to_proj4()
         )  # for saturated hydraulic conductivity
-        max_water_storage_grid.raster.set_crs(
+        self.max_water_storage_grid.raster.set_crs(
             crs_obj.to_proj4()
         )  # for max water storage
+        soil_storage_capacity_grid.raster.set_crs(
+            crs_obj.to_proj4()
+        )  # for the soil water storage capacity
 
         tstart = start_time
         tend = discharge_grid.time[-1] + pd.Timedelta(
@@ -483,8 +502,8 @@ class SFINCS:
             },
             forcing_method="precipitation",
             # discharge_grid=discharge_grid,
-            initial_soil_moisture_grid=initial_soil_moisture_grid,
-            max_water_storage_grid=max_water_storage_grid,
+            soil_water_capacity_grid=soil_storage_capacity_grid,
+            max_water_storage_grid=self.max_water_storage_grid,
             saturated_hydraulic_conductivity_grid=saturated_hydraulic_conductivity_grid,
             precipitation_grid=sfincs_precipitation,
             data_catalogs=self.data_catalogs,
@@ -658,9 +677,9 @@ class SFINCS:
         self.model.data.HRU.var.w[
             :, self.model.data.HRU.var.land_use_type == OPEN_WATER
         ] = 0
-        initial_soil_moisture_grid = self.model.data.HRU.var.w[:2].sum(axis=0)
+        self.initial_soil_moisture_grid = self.model.data.HRU.var.w[:2].sum(axis=0)
 
-        self.soil_moisture_per_timestep.append(initial_soil_moisture_grid)
+        self.soil_moisture_per_timestep.append(self.initial_soil_moisture_grid)
 
     def save_max_soil_moisture(self):
         # smax
@@ -670,8 +689,12 @@ class SFINCS:
         self.model.data.HRU.var.ws[
             :, self.model.data.HRU.var.land_use_type == OPEN_WATER
         ] = 0
-        max_water_storage_grid = self.model.data.HRU.var.ws[:2].sum(axis=0)
-        self.max_water_storage_per_timestep.append(max_water_storage_grid)
+        self.max_water_storage_grid = self.model.data.HRU.var.ws[:2].sum(axis=0)
+        self.max_water_storage_per_timestep.append(self.max_water_storage_grid)
+    
+    def save_soil_storage_capacity(self):
+        self.soil_storage_capacity_grid = self.max_water_storage_grid - self.initial_soil_moisture_grid
+        self.soil_storage_capacity_per_timestep.append(self.soil_storage_capacity_grid)
 
     def save_ksat(self):
         # ksat
@@ -684,6 +707,8 @@ class SFINCS:
         saturated_hydraulic_conductivity_grid = self.model.data.HRU.var.ksat[:2].sum(
             axis=0
         )
+
+        saturated_hydraulic_conductivity_grid = (saturated_hydraulic_conductivity_grid * 1000) / 24
         self.saturated_hydraulic_conductivity_per_timestep.append(
             saturated_hydraulic_conductivity_grid
         )
