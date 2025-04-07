@@ -20,6 +20,7 @@ from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
 
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
+from ..workflows.general import interpolate_na_along_time_dim, resample_like
 
 
 def reproject_and_apply_lapse_rate_temperature(
@@ -28,8 +29,8 @@ def reproject_and_apply_lapse_rate_temperature(
     assert (T.x.values == elevation_forcing.x.values).all()
     assert (T.y.values == elevation_forcing.y.values).all
     t_at_sea_level = T - elevation_forcing * lapse_rate
-    t_at_sea_level_reprojected = t_at_sea_level.raster.reproject_like(
-        elevation_target, method="average"
+    t_at_sea_level_reprojected = resample_like(
+        t_at_sea_level, elevation_target, method="average"
     )
     T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
     T_grid.name = T.name
@@ -74,8 +75,8 @@ def reproject_and_apply_lapse_rate_pressure(
     pressure_at_sea_level = pressure / get_pressure_correction_factor(
         elevation_forcing, g, Mo, lapse_rate
     )  # divide by pressure factor to get pressure at sea level
-    pressure_at_sea_level_reprojected = pressure_at_sea_level.raster.reproject_like(
-        elevation_target, method="average"
+    pressure_at_sea_level_reprojected = resample_like(
+        pressure_at_sea_level, elevation_target, method="average"
     )
     pressure_grid = (
         pressure_at_sea_level_reprojected
@@ -193,6 +194,7 @@ def process_ERA5(variable, folder, starttime, endtime, bounds, logger):
 
     da = da.rio.set_crs(4326)
     da.raster.set_crs(4326)
+    da = interpolate_na_along_time_dim(da)
 
     return da
 
@@ -503,12 +505,14 @@ class Forcing:
         # plot the first three years on separate axes
         for i in range(0, 3):
             year = data.time[0].dt.year + i
-            plot_timeline(
-                da,
-                data.sel(time=da.time.dt.year == year),
-                f"{name} - {year.item()}",
-                axes[i + 1],
-            )
+            year_data = data.sel(time=data.time.dt.year == year)
+            if year_data.size > 0:
+                plot_timeline(
+                    da,
+                    data.sel(time=da.time.dt.year == year),
+                    f"{name} - {year.item()}",
+                    axes[i + 1],
+                )
 
         fp = self.report_dir / (name + ".png")
         fp.parent.mkdir(parents=True, exist_ok=True)
@@ -775,6 +779,7 @@ class Forcing:
 
     def _mask_forcing(self, da, value):
         da_ = xr.where(~self.grid["mask"], da, value, keep_attrs=True)
+        da_ = da_.rio.write_crs(da.rio.crs)
         da = da_.transpose(*da.dims)
         return da
 
@@ -854,9 +859,15 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
+        # this range corresponds to probabilities of lower than 0.001 and higher than 0.999
+        # which should be considered non-significant
+        min_SPEI = -3.09
+        max_SPEI = 3.09
+        da = da.clip(min=min_SPEI, max=max_SPEI)
+
         offset = 0
         scaling_factor, out_dtype = calculate_scaling(
-            5, 5, offset=offset, precision=0.001
+            min_SPEI, max_SPEI, offset=offset, precision=0.001
         )
 
         filters = [
@@ -902,7 +913,7 @@ class Forcing:
         pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        pr = pr.raster.reproject_like(target, method="average")
+        pr = resample_like(pr, target, method="average")
         self.set_pr(pr)
 
         hourly_rsds = process_ERA5(
@@ -913,7 +924,7 @@ class Forcing:
             24 * 3600
         )  # get daily sum and convert from J/m2 to W/m2
 
-        rsds = rsds.raster.reproject_like(target, method="average")
+        rsds = resample_like(rsds, target, method="average")
         self.set_rsds(rsds)
 
         hourly_rlds = process_ERA5(
@@ -921,7 +932,7 @@ class Forcing:
             **download_args,
         )
         rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        rlds = rlds.raster.reproject_like(target, method="average")
+        rlds = resample_like(rlds, target, method="average")
         self.set_rlds(rlds)
 
         hourly_tas = process_ERA5("t2m", **download_args)
@@ -933,6 +944,7 @@ class Forcing:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             self.logger.info("Writing temporary tas to zarr")
+
             hourly_tas_reprojected = to_zarr(
                 hourly_tas_reprojected,
                 tmpdir / "reprojected_tas.zarr",
@@ -980,8 +992,8 @@ class Forcing:
                 water_vapour_pressure / saturation_vapour_pressure
             ) * 100
             relative_humidity = relative_humidity.resample(time="D").mean()
-            relative_humidity = relative_humidity.raster.reproject_like(
-                target, method="average"
+            relative_humidity = resample_like(
+                relative_humidity, target, method="bilinear"
             )
             self.set_hurs(relative_humidity)
 
@@ -1004,7 +1016,7 @@ class Forcing:
         )
         v_wind = v_wind.resample(time="D").mean()
         wind_speed = np.sqrt(u_wind**2 + v_wind**2)
-        wind_speed = wind_speed.raster.reproject_like(target, method="average")
+        wind_speed = resample_like(wind_speed, target, method="bilinear")
         self.set_sfcwind(wind_speed)
 
     def setup_forcing_ISIMIP(self, starttime, endtime, resolution_arcsec, forcing, ssp):
@@ -1347,9 +1359,7 @@ class Forcing:
 
                 w5e5_30min_sel = hurs_30_min.sel(time=slice(start_month, end_month))
                 w5e5_regridded = (
-                    w5e5_30min_sel.raster.reproject_like(
-                        hurs_ds_30sec, method="bilinear"
-                    )
+                    resample_like(w5e5_30min_sel, hurs_ds_30sec, method="bilinear")
                     * 0.01
                 )
                 w5e5_regridded = w5e5_regridded * 0.01  # convert to fraction
@@ -1458,16 +1468,10 @@ class Forcing:
         target = self.other["climate/hurs"]
         target.raster.set_crs(4326)
 
-        hurs_coarse_regridded = hurs_coarse.raster.reproject_like(
-            target, method="bilinear"
-        )
+        hurs_coarse_regridded = resample_like(hurs_coarse, target, method="bilinear")
 
-        tas_coarse_regridded = tas_coarse.raster.reproject_like(
-            target, method="bilinear"
-        )
-        rlds_coarse_regridded = rlds_coarse.raster.reproject_like(
-            target, method="bilinear"
-        )
+        tas_coarse_regridded = resample_like(tas_coarse, target, method="bilinear")
+        rlds_coarse_regridded = resample_like(rlds_coarse, target, method="bilinear")
 
         hurs_fine = self.other["climate/hurs"]
         tas_fine = self.other["climate/tas"]
@@ -1554,12 +1558,12 @@ class Forcing:
             product="InputData", variable="orog", forcing="chelsa-w5e5", buffer=1
         ).orog  # some buffer to avoid edge effects / errors in ISIMIP API
         # TODO: This can perhaps be a clipped version of the orography data
-        orography = orography.raster.reproject_like(target, method="average")
+        orography = resample_like(orography, target, method="average")
 
         # pressure at sea level, so we can do bilinear interpolation before
         # applying the correction for orography
-        pressure_30_min_regridded = pressure_30_min.raster.reproject_like(
-            target, method="bilinear"
+        pressure_30_min_regridded = resample_like(
+            pressure_30_min, target, method="bilinear"
         )
 
         pressure_30_min_regridded_corr = pressure_30_min_regridded * np.exp(
@@ -1607,8 +1611,8 @@ class Forcing:
         target = self.grid["mask"]
         target.raster.set_crs(4326)
 
-        global_wind_atlas_regridded = global_wind_atlas.raster.reproject_like(
-            target, method="average"
+        global_wind_atlas_regridded = resample_like(
+            global_wind_atlas, target, method="average"
         )
 
         wind_30_min_avg = self.download_isimip(
@@ -1622,8 +1626,8 @@ class Forcing:
             dim="time"
         )  # some buffer to avoid edge effects / errors in ISIMIP API
 
-        wind_30_min_avg_regridded = wind_30_min_avg.raster.reproject_like(
-            target, method="bilinear"
+        wind_30_min_avg_regridded = resample_like(
+            wind_30_min_avg, target, method="bilinear"
         )
 
         # create diff layer:
@@ -1645,9 +1649,7 @@ class Forcing:
             buffer=1,
         ).sfcWind  # some buffer to avoid edge effects / errors in ISIMIP API
 
-        wind_30min_regridded = wind_30_min.raster.reproject_like(
-            target, method="bilinear"
-        )
+        wind_30min_regridded = resample_like(wind_30_min, target, method="bilinear")
         wind_30min_regridded_log = np.log(wind_30min_regridded)
 
         wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
@@ -1685,6 +1687,8 @@ class Forcing:
             The start time of the reSPEI data in ISO 8601 format (YYYY-MM-DD).
         calibration_period_end : date
             The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
+        window : int
+            The window size in months for the SPEI calculation. Default is 12 months.
         """
         self.logger.info("setting up SPEI...")
 
@@ -1716,6 +1720,22 @@ class Forcing:
         pet = xci.potential_evapotranspiration(
             tasmin=self.other["climate/tasmin"],
             tasmax=self.other["climate/tasmax"],
+            # hurs=self.other["climate/hurs"],
+            # rsds=self.other["climate/rsds"],
+            # rlds=self.other["climate/rlds"],
+            # rsus=self.full_like(
+            #     self.other["climate/rsds"],
+            #     fill_value=0,
+            #     nodata=np.nan,
+            #     attrs=self.other["climate/rsds"].attrs,
+            # ),
+            # rlus=self.full_like(
+            #     self.other["climate/rsds"],
+            #     fill_value=0,
+            #     nodata=np.nan,
+            #     attrs=self.other["climate/rsds"].attrs,
+            # ),
+            # sfcWind=self.other["climate/sfcwind"],
             method="BR65",
         ).astype(np.float32)
 
@@ -1723,10 +1743,10 @@ class Forcing:
         water_budget = xci.water_budget(pr=self.other["climate/pr"], evspsblpot=pet)
 
         water_budget = water_budget.resample(time="MS").mean(keep_attrs=True)
+        water_budget.attrs["_FillValue"] = np.nan
 
         temp_xy_chunk_size = 50
 
-        water_budget.attrs = {"units": "kg m-2 s-1", "_FillValue": np.nan}
         with tempfile.TemporaryDirectory() as tmp_water_budget_folder:
             tmp_water_budget_file = (
                 Path(tmp_water_budget_folder) / "tmp_water_budget_file.zarr"
@@ -1745,17 +1765,28 @@ class Forcing:
             # We set freq to None, so that the input frequency is used (no recalculating)
             # this means that we can calculate SPEI much more efficiently, as it is not
             # rechunked in the xclim package
+
+            # The log-logistic distribution used in SPEI has three parameters: scale, shape, and location.
+            # In practice, fixing the location (floc) to 0 simplifies the fitting process and often
+            # provides satisfactory results.The fitting is then effectively done with two parameters,
+            # also reducing the risk of overfitting, especially with limited data.
+            # When empirical data suggest that the climatic water balance values are significantly shifted,
+            # a non-zero floc may better fit the distribution. However, this is not typical in routine applications.
             SPEI = xci.standardized_precipitation_evapotranspiration_index(
                 wb=water_budget,
                 cal_start=calibration_period_start,
                 cal_end=calibration_period_end,
                 freq=None,
                 window=window,
-                dist="gamma",
-                method="ML",
+                dist="fisk",  # log-logistic distribution
+                method="APP",  # approximative method
+                fitkwargs={
+                    "floc": water_budget.min().compute().item()
+                },  # location parameter, assures that the distribution is always positive
             ).astype(np.float32)
 
             # remove all nan values as a result of the sliding window
+            SPEI = SPEI.isel(time=slice(window - 1, -1))
 
             with tempfile.TemporaryDirectory() as tmp_spei_folder:
                 tmp_spei_file = Path(tmp_spei_folder) / "tmp_spei_file.zarr"
@@ -1820,14 +1851,12 @@ class Forcing:
                 .raster.mask_nodata()
                 .fillna(0)
             )
-            elevation_forcing = elevation.raster.reproject_like(
-                forcing_grid, method="average"
-            )
+            elevation_forcing = resample_like(elevation, forcing_grid, method="average")
             elevation_forcing = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
                 crs=4326,
             )
-            elevation_grid = elevation.raster.reproject_like(grid, method="average")
+            elevation_grid = resample_like(elevation, grid, method="average")
             elevation_grid = to_zarr(elevation_grid, elevation_grid_fp, crs=4326)
         return elevation_forcing, elevation_grid

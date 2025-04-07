@@ -58,7 +58,7 @@ load_numba_threading_layer()
 
 # xarray uses bottleneck for some operations to speed up computations
 # however, some implementations are numerically unstable, so we disable it
-xr.set_options(use_bottleneck=False)
+xr.set_options(use_bottleneck=False, keep_attrs=True)
 
 # set environment variable for GEB package directory
 os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
