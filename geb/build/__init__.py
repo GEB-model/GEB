@@ -161,7 +161,10 @@ class GEBModel(
 
         self.logger.info("Finding sinks in river network of requested region.")
         if "subbasin" in region:
-            sink_subbasin_ids = [region["subbasin"]]
+            if isinstance(region["subbasin"], list):
+                sink_subbasin_ids = region["subbasin"]
+            else:
+                sink_subbasin_ids = [region["subbasin"]]
         elif "outflow" in region:
             lon, lat = region["outflow"][0], region["outflow"][1]
             sink_subbasin_ids = [
@@ -317,6 +320,21 @@ class GEBModel(
         )
         self.set_grid(mask, name="mask")
 
+        mask_geom = list(
+            rasterio.features.shapes(
+                mask.astype(np.uint8),
+                mask=~mask,
+                connectivity=8,
+                transform=mask.rio.transform(recalc=True),
+            ),
+        )
+        mask_geom = gpd.GeoDataFrame.from_features(
+            [{"geometry": geom[0], "properties": {}} for geom in mask_geom],
+            crs=4326,
+        )
+
+        self.set_geoms(mask_geom, name="mask")
+
         flow_raster_idxs_ds = self.full_like(
             self.grid["mask"],
             fill_value=-1,
@@ -329,15 +347,15 @@ class GEBModel(
         )
         self.set_grid(flow_raster_idxs_ds, name="flow_raster_idxs_ds")
 
-        idxs_out = self.full_like(
+        idxs_out_da = self.full_like(
             self.grid["mask"],
             fill_value=-1,
             nodata=-1,
             dtype=np.int32,
         )
-        idxs_out.name = "idxs_outflow"
-        idxs_out.data = idxs_out
-        self.set_grid(idxs_out, name="idxs_outflow")
+        idxs_out_da.name = "idxs_outflow"
+        idxs_out_da.data = idxs_out
+        self.set_grid(idxs_out_da, name="idxs_outflow")
 
     def create_subgrid(self, subgrid_factor):
         mask = self.grid["mask"]
@@ -525,8 +543,6 @@ class GEBModel(
 
         with open(Path(self.root, "files.json"), "w") as f:
             json.dump(self.files, f, indent=4, cls=PathEncoder)
-
-        self.logger.info("Done")
 
     def read_file_library(self):
         fp = Path(self.root, "files.json")
@@ -770,11 +786,10 @@ class GEBModel(
     def report_dir(self):
         return Path(self.root).parent / "report"
 
-    def full_like(self, data, fill_value, nodata, *args, **kwargs):
+    def full_like(self, data, fill_value, nodata, attrs=None, *args, **kwargs):
         ds = xr.full_like(data, fill_value, *args, **kwargs)
-        ds.attrs = {
-            "_FillValue": nodata,
-        }
+        ds.attrs = attrs or {}
+        ds.attrs["_FillValue"] = nodata
         return ds
 
     def check_methods(self, opt):
@@ -813,6 +828,8 @@ class GEBModel(
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
             self.write_file_library()
+
+        self.logger.info("Finished!")
 
     def build(self, region: dict, methods: dict):
         methods = methods or {}

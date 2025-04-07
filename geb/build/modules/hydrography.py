@@ -116,7 +116,7 @@ class Hydrography:
         slope.data = slope_data
         self.set_grid(slope, name="landsurface/slope")
 
-        flow_raster_idxs_ds = self.grid["flow_raster_idxs_ds"]
+        flow_raster_idxs_ds = self.grid["flow_raster_idxs_ds"].compute()
         flow_raster = FlwdirRaster(
             flow_raster_idxs_ds.values.ravel(),
             shape=flow_raster_idxs_ds.shape,
@@ -142,10 +142,23 @@ class Hydrography:
         self.set_grid(upstream_area, name="routing/upstream_area")
 
         # river length
+        original_d8_ldd = self.other["original_d8_flow_directions"]
+        original_d8_ldd_data = original_d8_ldd.values
+        flow_raster_original = pyflwdir.from_array(
+            original_d8_ldd_data,
+            ftype="d8",
+            transform=original_d8_ldd.rio.transform(recalc=True),
+            latlon=True,  # hydrography is specified in latlon
+            mask=original_d8_ldd_data
+            != original_d8_ldd.attrs[
+                "_FillValue"
+            ],  # this mask is True within study area
+        )
+
         river_length = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        river_length_data = flow_raster.subgrid_rivlen(
+        river_length_data = flow_raster_original.subgrid_rivlen(
             self.grid["idxs_outflow"].values, unit="m", direction="down"
         )
         river_length_data[river_length_data == -9999.0] = np.nan
@@ -156,8 +169,8 @@ class Hydrography:
         river_slope = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        river_slope_data = flow_raster.subgrid_rivslp(
-            self.grid["idxs_outflow"].values, elevation
+        river_slope_data = flow_raster_original.subgrid_rivslp(
+            self.grid["idxs_outflow"].values, original_d8_elevation
         )
         river_slope_data[river_slope_data == -9999.0] = np.nan
         river_slope.data = river_slope_data
