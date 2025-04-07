@@ -62,6 +62,9 @@ def calculate_scaling(min_value, max_value, precision, offset=0):
         The output dtype to use for the fixed scale and offset codec.
     """
 
+    assert min_value < max_value, "min_value must be less than max_value"
+    assert precision > 0, "precision must be greater than 0"
+
     min_with_offset = min_value + offset
     max_with_offset = max_value + offset
 
