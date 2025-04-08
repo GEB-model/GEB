@@ -76,6 +76,30 @@ class Hydrography:
 
     def setup_hydrography(self):
         original_d8_elevation = self.other["original_d8_elevation"]
+        original_d8_ldd = self.other["original_d8_flow_directions"]
+        original_d8_ldd_data = original_d8_ldd.values
+
+        flow_raster_original = pyflwdir.from_array(
+            original_d8_ldd_data,
+            ftype="d8",
+            transform=original_d8_ldd.rio.transform(recalc=True),
+            latlon=True,  # hydrography is specified in latlon
+            mask=original_d8_ldd_data
+            != original_d8_ldd.attrs[
+                "_FillValue"
+            ],  # this mask is True within study area
+        )
+
+        original_upstream_area = self.full_like(
+            original_d8_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+        )
+        original_upstream_area_data = flow_raster_original.upstream_area(
+            unit="m2"
+        ).astype(np.float32)
+        original_upstream_area_data[original_upstream_area_data == -9999.0] = np.nan
+        original_upstream_area.data = original_upstream_area_data
+        self.set_other(original_upstream_area, name="original_d8_upstream_area")
+
         elevation_coarsened = original_d8_elevation.coarsen(
             x=self.ldd_scale_factor,
             y=self.ldd_scale_factor,
@@ -142,19 +166,6 @@ class Hydrography:
         self.set_grid(upstream_area, name="routing/upstream_area")
 
         # river length
-        original_d8_ldd = self.other["original_d8_flow_directions"]
-        original_d8_ldd_data = original_d8_ldd.values
-        flow_raster_original = pyflwdir.from_array(
-            original_d8_ldd_data,
-            ftype="d8",
-            transform=original_d8_ldd.rio.transform(recalc=True),
-            latlon=True,  # hydrography is specified in latlon
-            mask=original_d8_ldd_data
-            != original_d8_ldd.attrs[
-                "_FillValue"
-            ],  # this mask is True within study area
-        )
-
         river_length = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
@@ -207,13 +218,18 @@ class Hydrography:
         # Derive the xy coordinates of the river network. Here the coordinates
         # are the PIXEL coordinates for the coarse drainage network.
         rivers["hydrography_xy"] = [[]] * len(rivers)
+        rivers["hydrography_upstream_area_m2"] = [[]] * len(rivers)
         xy_per_river_segment = value_indices(COMID_IDs_raster_data, ignore_value=-1)
         for COMID, (ys, xs) in xy_per_river_segment.items():
             upstream_area = upstream_area_data[ys, xs]
             up_to_downstream_ids = np.argsort(upstream_area)
+            upstream_area_sorted = upstream_area[up_to_downstream_ids]
             ys = ys[up_to_downstream_ids]
             xs = xs[up_to_downstream_ids]
             rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys))
+            rivers.at[COMID, "hydrography_upstream_area_m2"] = (
+                upstream_area_sorted.tolist()
+            )
 
         COMID_IDs_raster = self.full_like(
             outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
