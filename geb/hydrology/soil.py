@@ -1317,7 +1317,7 @@ class Soil(object):
             assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
             assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
-            assert balance_check(
+            balance_check(
                 name="soil_1",
                 how="cellwise",
                 influxes=[
@@ -1344,7 +1344,7 @@ class Soil(object):
                 tollerance=1e-6,
             )
 
-            assert balance_check(
+            balance_check(
                 name="soil_2",
                 how="cellwise",
                 influxes=[

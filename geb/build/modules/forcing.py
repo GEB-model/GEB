@@ -906,15 +906,15 @@ class Forcing:
             self.grid["mask"], pr_hourly, forcing_type="ERA5"
         )
 
-        # pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
+        pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
 
-        # # ensure no negative values for precipitation, which may arise due to float precision
-        # pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        # pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
+        # ensure no negative values for precipitation, which may arise due to float precision
+        pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
+        pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
-        # pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        # pr = resample_like(pr, target, method="average")
-        # self.set_pr(pr)
+        pr = pr_hourly.resample(time="D").mean()  # get daily mean
+        pr = resample_like(pr, target, method="average")
+        self.set_pr(pr)
 
         hourly_rsds = process_ERA5(
             "ssrd",  # surface_solar_radiation_downwards
@@ -934,8 +934,6 @@ class Forcing:
         rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
         rlds = resample_like(rlds, target, method="average")
         self.set_rlds(rlds)
-
-        return
 
         hourly_tas = process_ERA5("t2m", **download_args)
 
