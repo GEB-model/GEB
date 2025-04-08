@@ -302,10 +302,10 @@ class GEBModel(HazardDriver, ABM_Model):
 
         self.store.save()
 
-    def estimate_risk(self) -> None:
+    def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""
         current_time = self.create_datetime(self.config["general"]["start_time"])
-        self.config["general"]["name"] = "estimate_risk"
+        self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(
             report=False,

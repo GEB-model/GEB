@@ -74,7 +74,7 @@ class Households(AgentBaseClass):
         for return_period in self.return_periods:
             file_path = (
                 self.model.report_folder_root
-                / "estimate_risk"
+                / "estimate_return_periods"
                 / "flood_maps"
                 / f"{return_period}.zarr"
             )

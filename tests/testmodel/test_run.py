@@ -59,4 +59,4 @@ def test_run_yearly():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 # @pytest.mark.dependency(depends=["spinup"])
 def test_estimate_risk():
-    run_model_with_method(method="estimate_risk", **DEFAULT_VARIABLES)
+    run_model_with_method(method="estimate_return_periods", **DEFAULT_VARIABLES)
