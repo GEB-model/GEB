@@ -160,7 +160,7 @@ def process_ERA5(variable, folder, starttime, endtime, bounds, logger):
             # Identify the axis number for the given dimension
             assert da.time.dt.hour[0] == 1, "First time step must be at 1 UTC"
             # All chunksizes must be divisible by 24, except the last one
-            assert all(chunksize % 24 == 0 for chunksize in da.chunksizes["time"][:-1])
+            assert all(chunksize == 24 for chunksize in da.chunksizes["time"][:-1])
 
             def diff_with_prepend(data, dim):
                 # Assert dimension is a multiple of 24
@@ -906,15 +906,15 @@ class Forcing:
             self.grid["mask"], pr_hourly, forcing_type="ERA5"
         )
 
-        pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
+        # pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
 
-        # ensure no negative values for precipitation, which may arise due to float precision
-        pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
+        # # ensure no negative values for precipitation, which may arise due to float precision
+        # pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
+        # pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
-        pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        pr = resample_like(pr, target, method="average")
-        self.set_pr(pr)
+        # pr = pr_hourly.resample(time="D").mean()  # get daily mean
+        # pr = resample_like(pr, target, method="average")
+        # self.set_pr(pr)
 
         hourly_rsds = process_ERA5(
             "ssrd",  # surface_solar_radiation_downwards
@@ -934,6 +934,8 @@ class Forcing:
         rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
         rlds = resample_like(rlds, target, method="average")
         self.set_rlds(rlds)
+
+        return
 
         hourly_tas = process_ERA5("t2m", **download_args)
 
