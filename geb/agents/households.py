@@ -79,7 +79,7 @@ class Households(AgentBaseClass):
                 / f"{return_period}.zarr"
             )
             flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
-        flood_maps["crs"] = flood_maps[return_period].rio.crs
+        flood_maps["crs"] = pyproj.CRS.from_user_input(flood_maps[return_period]._CRS['wkt'])
         flood_maps["gdal_geotransform"] = (
             flood_maps[return_period].rio.transform().to_gdal()
         )
@@ -249,7 +249,7 @@ class Households(AgentBaseClass):
             self.var.household_points = household_points.to_crs(self.flood_maps["crs"])
 
             transformer = pyproj.Transformer.from_crs(
-                self.grid.crs, self.flood_maps["crs"], always_xy=True
+                self.grid.crs['wkt'], self.flood_maps["crs"], always_xy=True
             )
             locations[:, 0], locations[:, 1] = transformer.transform(
                 self.var.locations[:, 0], self.var.locations[:, 1]
@@ -278,7 +278,7 @@ class Households(AgentBaseClass):
                 flood_map.values,
                 self.var.locations_reprojected_to_flood_map.data,
                 self.flood_maps["gdal_geotransform"],
-            )[:, 0]
+            )
 
             # cap water levels at damage curve max inundation
             water_levels = np.minimum(
