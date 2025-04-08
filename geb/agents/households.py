@@ -60,6 +60,9 @@ class Households(AgentBaseClass):
         )
         self.decision_module = DecisionModule(self, model=None)
 
+        if self.config["adapt"]:
+            self.load_flood_maps()
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -171,7 +174,6 @@ class Households(AgentBaseClass):
         )
 
         if self.config["adapt"]:
-            self.load_flood_maps()
 
             # load age household head
             age_household_head = load_array(
