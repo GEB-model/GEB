@@ -68,7 +68,9 @@ class Households(AgentBaseClass):
 
     def reproject_locations_to_floodmap_crs(self):
         locations = self.var.locations.copy()
-        self.var.household_points = self.var.household_points.to_crs(self.flood_maps["crs"])
+        self.var.household_points = self.var.household_points.to_crs(
+            self.flood_maps["crs"]
+        )
 
         transformer = pyproj.Transformer.from_crs(
             self.grid.crs["wkt"], self.flood_maps["crs"], always_xy=True
@@ -269,8 +271,8 @@ class Households(AgentBaseClass):
         # load damage interpolators (cannot be store in bucket, therefor outside spinup)
         if not hasattr(self, "buildings_content_curve_interpolator"):
             self.create_damage_interpolators()
-        
-        if not hasattr(self.var, 'locations_reprojected_to_flood_map'):
+
+        if not hasattr(self.var, "locations_reprojected_to_flood_map"):
             self.reproject_locations_to_floodmap_crs()
 
         # loop over return periods
