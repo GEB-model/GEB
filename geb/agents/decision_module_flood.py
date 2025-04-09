@@ -233,7 +233,7 @@ class DecisionModule:
         # Use composite trapezoidal rule integrate EU over event probability
         y = EU_store
         x = p_all_events
-        EU_adapt_array = np.trapz(y=y, x=x, axis=0)
+        EU_adapt_array = np.trapezoid(y=y, x=x, axis=0)
 
         # set EU of adapt to -np.inf for thuse unable to afford it [maybe move this earlier to reduce array sizes]
         constrained = np.where(income * expendature_cap <= adaptation_costs)
@@ -361,7 +361,7 @@ class DecisionModule:
         # Use composite trapezoidal rule integrate EU over event probability
         y = EU_store
         x = p_all_events
-        EU_insure_array = np.trapz(y=y, x=x, axis=0)
+        EU_insure_array = np.trapezoid(y=y, x=x, axis=0)
 
         # set EU of adapt to -np.inf for thuse unable to afford it [maybe move this earlier to reduce array sizes]
         constrained = np.where(income * expendature_cap <= premium)
@@ -469,7 +469,7 @@ class DecisionModule:
         # Use composite trapezoidal rule integrate EU over event probability
         y = EU_store
         x = p_all_events
-        EU_do_nothing_array = np.trapz(y=y, x=x, axis=0)
+        EU_do_nothing_array = np.trapezoid(y=y, x=x, axis=0)
 
         # People who already adapted cannot not adapt
         EU_do_nothing_array[np.where(adapted == 1)] = -np.inf

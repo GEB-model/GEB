@@ -60,8 +60,25 @@ class Households(AgentBaseClass):
         )
         self.decision_module = DecisionModule(self, model=None)
 
+        if self.config["adapt"]:
+            self.load_flood_maps()
+
         if self.model.in_spinup:
             self.spinup()
+
+    def reproject_locations_to_floodmap_crs(self):
+        locations = self.var.locations.copy()
+        self.var.household_points = self.var.household_points.to_crs(
+            self.flood_maps["crs"]
+        )
+
+        transformer = pyproj.Transformer.from_crs(
+            self.grid.crs["wkt"], self.flood_maps["crs"], always_xy=True
+        )
+        locations[:, 0], locations[:, 1] = transformer.transform(
+            self.var.locations[:, 0], self.var.locations[:, 1]
+        )
+        self.var.locations_reprojected_to_flood_map = locations
 
     def load_flood_maps(self):
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
@@ -79,7 +96,9 @@ class Households(AgentBaseClass):
                 / f"{return_period}.zarr"
             )
             flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
-        flood_maps["crs"] = pyproj.CRS.from_user_input(flood_maps[return_period]._CRS['wkt'])
+        flood_maps["crs"] = pyproj.CRS.from_user_input(
+            flood_maps[return_period]._CRS["wkt"]
+        )
         flood_maps["gdal_geotransform"] = (
             flood_maps[return_period].rio.transform().to_gdal()
         )
@@ -170,94 +189,79 @@ class Households(AgentBaseClass):
             )
         )
 
-        if self.config["adapt"]:
-            self.load_flood_maps()
+        # load age household head
+        age_household_head = load_array(
+            self.model.files["array"]["agents/households/AGE"]
+        )
+        self.var.age_household_head = DynamicArray(age_household_head, max_n=self.max_n)
 
-            # load age household head
-            age_household_head = load_array(
-                self.model.files["array"]["agents/households/AGE"]
-            )
-            self.var.age_household_head = DynamicArray(
-                age_household_head, max_n=self.max_n
-            )
+        # load education level household head
+        education_level = load_array(
+            self.model.files["array"]["agents/households/education_level"]
+        )
+        self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
 
-            # load education level household head
-            education_level = load_array(
-                self.model.files["array"]["agents/households/education_level"]
-            )
-            self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
+        # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
+        self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
-            # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
-            self.var.adapted = DynamicArray(
-                np.zeros(self.n, np.int32), max_n=self.max_n
-            )
+        # initiate array with risk perception [dummy data for now]
+        self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["min"]
+        self.var.risk_perc_max = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["max"]
+        self.var.risk_decr = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["risk_perception"]["coef"]
 
-            # initiate array with risk perception [dummy data for now]
-            self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
-                "expected_utility"
-            ]["flood_risk_calculations"]["risk_perception"]["min"]
-            self.var.risk_perc_max = self.model.config["agent_settings"]["households"][
-                "expected_utility"
-            ]["flood_risk_calculations"]["risk_perception"]["max"]
-            self.var.risk_decr = self.model.config["agent_settings"]["households"][
-                "expected_utility"
-            ]["flood_risk_calculations"]["risk_perception"]["coef"]
+        risk_perception = np.full(self.n, self.var.risk_perc_min)
+        self.var.risk_perception = DynamicArray(risk_perception, max_n=self.max_n)
 
-            risk_perception = np.full(self.n, self.var.risk_perc_min)
-            self.var.risk_perception = DynamicArray(risk_perception, max_n=self.max_n)
+        # initiate array with risk aversion [fixed for now]
+        self.var.risk_aversion = DynamicArray(np.full(self.n, 1), max_n=self.max_n)
 
-            # initiate array with risk aversion [fixed for now]
-            self.var.risk_aversion = DynamicArray(np.full(self.n, 1), max_n=self.max_n)
+        # initiate array with time adapted
+        self.var.time_adapted = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )
 
-            # initiate array with time adapted
-            self.var.time_adapted = DynamicArray(
-                np.zeros(self.n, np.int32), max_n=self.max_n
-            )
+        # initiate array with time since last flood
+        self.var.years_since_last_flood = DynamicArray(
+            np.full(self.n, 25, np.int32), max_n=self.max_n
+        )
 
-            # initiate array with time since last flood
-            self.var.years_since_last_flood = DynamicArray(
-                np.full(self.n, 25, np.int32), max_n=self.max_n
-            )
+        # assign income and wealth attributes
+        self.assign_household_wealth_and_income()
 
-            # assign income and wealth attributes
-            self.assign_household_wealth_and_income()
+        # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
+        self.var.property_value = DynamicArray(
+            np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
+        )
+        # initiate array with RANDOM annual adaptation costs [dummy data for now, values are availbale in literature]
+        self.var.adaptation_costs = DynamicArray(
+            np.int64(self.var.property_value.data * 0.05), max_n=self.max_n
+        )
 
-            # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
-            self.var.property_value = DynamicArray(
-                np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
-            )
-            # initiate array with RANDOM annual adaptation costs [dummy data for now, values are availbale in literature]
-            self.var.adaptation_costs = DynamicArray(
-                np.int64(self.var.property_value.data * 0.05), max_n=self.max_n
-            )
+        # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
+        amenity_premiums = np.random.uniform(0, 0.2, self.n)
+        self.var.amenity_value = DynamicArray(
+            amenity_premiums * self.var.wealth, max_n=self.max_n
+        )
 
-            # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
-            amenity_premiums = np.random.uniform(0, 0.2, self.n)
-            self.var.amenity_value = DynamicArray(
-                amenity_premiums * self.var.wealth, max_n=self.max_n
-            )
-
-            # reproject households to flood maps and store in var bucket
-            household_points = gpd.GeoDataFrame(
-                geometry=[Point(lon, lat) for lon, lat in self.var.locations.data],
-                crs="EPSG:4326",
-            )
-            household_points["maximum_damage"] = self.var.property_value.data
-            household_points["object_type"] = (
-                "building_content"  # this must match damage curves  # this must match damage curves
-            )
-            self.var.household_points = household_points.to_crs(self.flood_maps["crs"])
-
-            transformer = pyproj.Transformer.from_crs(
-                self.grid.crs['wkt'], self.flood_maps["crs"], always_xy=True
-            )
-            locations[:, 0], locations[:, 1] = transformer.transform(
-                self.var.locations[:, 0], self.var.locations[:, 1]
-            )
-            self.var.locations_reprojected_to_flood_map = locations
-            print(
-                f"Household attributes assigned for {self.n} households with {self.population} people."
-            )
+        # load household points (only in use for damagescanner, could be removed)
+        household_points = gpd.GeoDataFrame(
+            geometry=[Point(lon, lat) for lon, lat in self.var.locations.data],
+            crs="EPSG:4326",
+        )
+        household_points["maximum_damage"] = self.var.property_value.data
+        household_points["object_type"] = (
+            "building_content"  # this must match damage curves  # this must match damage curves
+        )
+        self.var.household_points = household_points
+        print(
+            f"Household attributes assigned for {self.n} households with {self.population} people."
+        )
 
     def get_flood_risk_information_honeybees(self):
         # preallocate array for damages
@@ -267,6 +271,9 @@ class Households(AgentBaseClass):
         # load damage interpolators (cannot be store in bucket, therefor outside spinup)
         if not hasattr(self, "buildings_content_curve_interpolator"):
             self.create_damage_interpolators()
+
+        if not hasattr(self.var, "locations_reprojected_to_flood_map"):
+            self.reproject_locations_to_floodmap_crs()
 
         # loop over return periods
         for i, return_period in enumerate(self.return_periods):
