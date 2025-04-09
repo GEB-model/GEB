@@ -1236,7 +1236,7 @@ class Agents:
         # create list of attibutes to include (and include name to store to)
         attributes_to_include = {
             "HHSIZE_CAT": "household_type",
-            "AGE": "age_household_head",
+            "AGE_HH_HEAD": "age_household_head",
             "EDUC": "education_level",
             "WEALTH_INDEX": "wealth_index",
             "RURAL": "rural",
@@ -1273,13 +1273,25 @@ class Agents:
                 self.data_catalog, GDL_code
             )
 
+            # get size of household
+            HH_SIZE = GLOPOP_S_region["HID"].value_counts()
+
+            # only select household heads
+            GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RELATE_HEAD"] == 1]
+
+            # add household sizes to household df
+            GLOPOP_S_region = GLOPOP_S_region.merge(HH_SIZE, on="HID", how="left")
+            GLOPOP_S_region = GLOPOP_S_region.rename(
+                columns={"count": "HHSIZE"}
+            ).reset_index(drop=True)
+
             # clip grid to model bounds
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
             # get unique cells in grid
             unique_grid_cells = np.unique(GLOPOP_GRID_region.values)
 
-            # subset GLOPOP_households_region to unique cells for quicker search
+            # subset GLOPOP_households_region
             GLOPOP_S_region = GLOPOP_S_region[
                 GLOPOP_S_region["GRID_CELL"].isin(unique_grid_cells)
             ]
@@ -1288,6 +1300,19 @@ class Agents:
             GLOPOP_S_region["WEALTH_INDEX"] = (
                 GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
             )
+
+            # calculate age:
+            GLOPOP_S_region["AGE_HH_HEAD"] = np.nan
+            for age_class in age_class_to_age:
+                age_range = age_class_to_age[age_class]
+
+                GLOPOP_S_region.loc[
+                    GLOPOP_S_region["AGE"] == age_class, "AGE_HH_HEAD"
+                ] = np.random.randint(
+                    age_range[0],
+                    age_range[1],
+                    size=len(GLOPOP_S_region.loc[GLOPOP_S_region["AGE"] == age_class]),
+                )
 
             # create all households
             GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
@@ -1311,74 +1336,23 @@ class Agents:
                         n_households, -1, dtype=np.int32
                     )
 
-            # initiate indice tracker
-            households_found = 0
+            # iterate columns and fill in the values
+            for column in attributes_to_include:
+                if column in ("sizes", "locations"):
+                    continue
+                household_characteristics[column] = np.array(GLOPOP_S_region[column])
 
-            for i, HID in enumerate(GLOPOP_households_region):
-                if not households_found % 1000:
-                    print(f"searching household {households_found} of {n_households}")
-                household = GLOPOP_S_region[GLOPOP_S_region["HID"] == HID]
-                household_size = len(household)
-                if len(household) > 1:
-                    # if there are multiple people in the household
-                    # take head household
-                    household = household[household["RELATE_HEAD"] == 1]
-
-                GRID_CELL = int(household["GRID_CELL"])
-                if GRID_CELL in GLOPOP_GRID_region.values:
-                    for column in attributes_to_include:
-                        if column in ("sizes", "locations"):
-                            continue
-                        household_characteristics[column][households_found] = household[
-                            column
-                        ]
-
-                    household_characteristics["sizes"][households_found] = (
-                        household_size
-                    )
-
-                    # now find location of household
-                    idx_household = np.where(GLOPOP_GRID_region.values[0] == GRID_CELL)
-                    # get x and y from xarray
-                    x_y = np.concatenate(
-                        [
-                            GLOPOP_GRID_region.x.values[idx_household[1]],
-                            GLOPOP_GRID_region.y.values[idx_household[0]],
-                        ]
-                    )
-                    household_characteristics["locations"][households_found, :] = x_y
-                    households_found += 1
-
-            print(f"searching household {households_found} of {n_households}")
-
-            # clip away unused data:
-            for household_attribute in household_characteristics:
-                household_characteristics[household_attribute] = (
-                    household_characteristics[household_attribute][:households_found]
-                )
-                for column in attributes_to_include:
-                    if column == "AGE":
-                        age_range = age_class_to_age[household[column].values[0]]
-                        age_household_head = np.random.randint(
-                            age_range[0], age_range[1]
-                        )
-                        household_characteristics[column][i] = age_household_head
-                    elif column in ("sizes", "locations"):
-                        continue
-                    else:
-                        household_characteristics[column][i] = household[column]
-                        household_characteristics["sizes"][i] = household_size
-
-                # now find location of household
-                idx_household = np.where(GLOPOP_GRID_region.values[0] == GRID_CELL)
-                # get x and y from xarray
-                x_y = np.concatenate(
-                    [
-                        GLOPOP_GRID_region.x.values[idx_household[1]],
-                        GLOPOP_GRID_region.y.values[idx_household[0]],
-                    ]
-                )
-                household_characteristics["locations"][i, :] = x_y
+            household_characteristics["sizes"] = np.array(GLOPOP_S_region["HHSIZE"])
+            # now find location of household
+            # get x and y from df
+            x_y = np.stack(
+                [
+                    GLOPOP_S_region["coord_X"],
+                    GLOPOP_S_region["coord_Y"],
+                ],
+                axis=1,
+            )
+            household_characteristics["locations"] = x_y
 
             region_results[GDL_code] = household_characteristics
 
