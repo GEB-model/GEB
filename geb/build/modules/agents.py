@@ -65,10 +65,17 @@ class Agents:
         )
         municipal_water_demand = municipal_water_demand.set_index("ISO3")
 
-        ISO3s = np.unique(self.geoms["regions"]["ISO3"])
-        assert len(ISO3s) == 1, "Only one region is supported"
+        municipal_water_demand_per_capita = np.full_like(
+            self.array["agents/households/region_ids"],
+            np.nan,
+            dtype=np.float32,
+        )
 
-        for ISO3 in ISO3s:
+        municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
+        for _, region in self.geoms["regions"].iterrows():
+            ISO3 = region["ISO3"]
+            region_id = region["region_id"]
+
             # select domestic water demand for the region
             municipal_water_demand_region = municipal_water_demand.loc[ISO3]
             population = municipal_water_demand_region[
@@ -95,44 +102,36 @@ class Agents:
                 f"Too large water withdrawal data for {ISO3}"
             )
 
-            municipal_water_withdrawal_m3_per_capita_per_day = (
-                municipal_water_withdrawal_m3_per_capita_per_day.to_frame(
-                    name="municipal_water_demand_m3_per_day"
-                )
-            )
-
             municipal_water_demand_2000_m3_per_capita_per_day = (
                 municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
             )
 
-            municipal_water_demand = (
-                np.full_like(
-                    self.array["agents/households/household_size"],
-                    municipal_water_demand_2000_m3_per_capita_per_day,
-                    dtype=np.float32,
-                )
-                * self.array["agents/households/household_size"]
-            )
-
-            # we don't want to calculate the water demand for every year,
-            # so instead we use a baseline (2000 for easy reasoning), and scale
-            # the other years relatively to the baseline
-            self.set_array(
-                municipal_water_demand,
-                name="agents/households/municipal_water_demand_m3_baseline",
-            )
+            municipal_water_demand_per_capita[
+                self.array["agents/households/region_ids"] == region_id
+            ] = municipal_water_demand_2000_m3_per_capita_per_day
 
             # scale municipal water demand table to use baseline as 1.00 and scale other values
             # relatively
-            municipal_water_withdrawal_m3_per_capita_per_day_multiplier = (
+            municipal_water_withdrawal_m3_per_capita_per_day_multiplier[region_id] = (
                 municipal_water_withdrawal_m3_per_capita_per_day
                 / municipal_water_demand_2000_m3_per_capita_per_day
             )
 
-            self.set_table(
-                municipal_water_withdrawal_m3_per_capita_per_day_multiplier,
-                name="municipal_water_withdrawal_m3_per_capita_per_day_multiplier",
-            )
+        # we don't want to calculate the water demand for every year,
+        # so instead we use a baseline (2000 for easy reasoning), and scale
+        # the other years relatively to the baseline
+        self.set_table(
+            municipal_water_withdrawal_m3_per_capita_per_day_multiplier,
+            name="municipal_water_withdrawal_m3_per_capita_per_day_multiplier",
+        )
+
+        assert not np.isnan(municipal_water_demand_per_capita).any(), (
+            "Missing municipal water demand per capita data"
+        )
+        self.set_array(
+            municipal_water_demand_per_capita,
+            name="agents/households/municipal_water_demand_per_capita_m3_baseline",
+        )
 
         self.logger.info("Setting up other water demands")
 
