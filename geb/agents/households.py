@@ -66,6 +66,18 @@ class Households(AgentBaseClass):
         if self.model.in_spinup:
             self.spinup()
 
+    def reproject_locations_to_floodmap_crs(self):
+        locations = self.var.locations.copy()
+        self.var.household_points = self.var.household_points.to_crs(self.flood_maps["crs"])
+
+        transformer = pyproj.Transformer.from_crs(
+            self.grid.crs["wkt"], self.flood_maps["crs"], always_xy=True
+        )
+        locations[:, 0], locations[:, 1] = transformer.transform(
+            self.var.locations[:, 0], self.var.locations[:, 1]
+        )
+        self.var.locations_reprojected_to_flood_map = locations
+
     def load_flood_maps(self):
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
 
@@ -235,28 +247,19 @@ class Households(AgentBaseClass):
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
 
-        if self.config["adapt"]:
-            # reproject households to flood maps and store in var bucket
-            household_points = gpd.GeoDataFrame(
-                geometry=[Point(lon, lat) for lon, lat in self.var.locations.data],
-                crs="EPSG:4326",
-            )
-            household_points["maximum_damage"] = self.var.property_value.data
-            household_points["object_type"] = (
-                "building_content"  # this must match damage curves  # this must match damage curves
-            )
-            self.var.household_points = household_points.to_crs(self.flood_maps["crs"])
-
-            transformer = pyproj.Transformer.from_crs(
-                self.grid.crs["wkt"], self.flood_maps["crs"], always_xy=True
-            )
-            locations[:, 0], locations[:, 1] = transformer.transform(
-                self.var.locations[:, 0], self.var.locations[:, 1]
-            )
-            self.var.locations_reprojected_to_flood_map = locations
-            print(
-                f"Household attributes assigned for {self.n} households with {self.population} people."
-            )
+        # load household points (only in use for damagescanner, could be removed)
+        household_points = gpd.GeoDataFrame(
+            geometry=[Point(lon, lat) for lon, lat in self.var.locations.data],
+            crs="EPSG:4326",
+        )
+        household_points["maximum_damage"] = self.var.property_value.data
+        household_points["object_type"] = (
+            "building_content"  # this must match damage curves  # this must match damage curves
+        )
+        self.var.household_points = household_points
+        print(
+            f"Household attributes assigned for {self.n} households with {self.population} people."
+        )
 
     def get_flood_risk_information_honeybees(self):
         # preallocate array for damages
@@ -266,6 +269,9 @@ class Households(AgentBaseClass):
         # load damage interpolators (cannot be store in bucket, therefor outside spinup)
         if not hasattr(self, "buildings_content_curve_interpolator"):
             self.create_damage_interpolators()
+        
+        if not hasattr(self.var, 'locations_reprojected_to_flood_map'):
+            self.reproject_locations_to_floodmap_crs()
 
         # loop over return periods
         for i, return_period in enumerate(self.return_periods):
