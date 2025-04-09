@@ -1234,14 +1234,12 @@ class Agents:
             variables=["GDLcode", "iso_code"],
         )
         # create list of attibutes to include (and include name to store to)
-        attributes_to_include = {
+        rename = {
             "HHSIZE_CAT": "household_type",
             "AGE_HH_HEAD": "age_household_head",
             "EDUC": "education_level",
             "WEALTH_INDEX": "wealth_index",
             "RURAL": "rural",
-            "sizes": "household_size",
-            "locations": "locations",
         }
         region_results = {}
 
@@ -1265,13 +1263,15 @@ class Agents:
                     f"Skipping setting up household characteristics for {GDL_region['iso_code']}"
                 )
                 continue
+
             self.logger.info(
                 f"Setting up household characteristics for {GDL_region['iso_code']}"
             )
-            region_results[GDL_code] = {}
             GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
                 self.data_catalog, GDL_code
             )
+
+            GLOPOP_S_region = GLOPOP_S_region.rename(columns=rename)
 
             # get size of household
             HH_SIZE = GLOPOP_S_region["HID"].value_counts()
@@ -1297,17 +1297,17 @@ class Agents:
             ]
 
             # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefor we combine these.)
-            GLOPOP_S_region["WEALTH_INDEX"] = (
+            GLOPOP_S_region["wealth_index"] = (
                 GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
             )
 
             # calculate age:
-            GLOPOP_S_region["AGE_HH_HEAD"] = np.nan
+            GLOPOP_S_region["age_household_head"] = np.nan
             for age_class in age_class_to_age:
                 age_range = age_class_to_age[age_class]
 
                 GLOPOP_S_region.loc[
-                    GLOPOP_S_region["AGE"] == age_class, "AGE_HH_HEAD"
+                    GLOPOP_S_region["AGE"] == age_class, "age_household_head"
                 ] = np.random.randint(
                     age_range[0],
                     age_range[1],
@@ -1326,52 +1326,70 @@ class Agents:
             household_characteristics["locations"] = np.full(
                 (n_households, 2), -1, dtype=np.float32
             )
-            for column in attributes_to_include:
-                if column == "locations":
-                    household_characteristics[column] = np.full(
-                        (n_households, 2), -1, dtype=np.float32
-                    )
-                else:
-                    household_characteristics[column] = np.full(
-                        n_households, -1, dtype=np.int32
-                    )
 
-            # iterate columns and fill in the values
-            for column in attributes_to_include:
-                if column in ("sizes", "locations"):
-                    continue
+            household_characteristics["locations"] = np.full(
+                (n_households, 2), -1, dtype=np.float32
+            )
+
+            for column in (
+                "household_type",
+                "age_household_head",
+                "education_level",
+                "wealth_index",
+                "rural",
+            ):
                 household_characteristics[column] = np.array(GLOPOP_S_region[column])
 
             household_characteristics["sizes"] = np.array(GLOPOP_S_region["HHSIZE"])
             # now find location of household
             # get x and y from df
+
+            res_x, res_y = GLOPOP_GRID_region.rio.resolution()
+            n = len(GLOPOP_S_region)
             x_y = np.stack(
                 [
-                    GLOPOP_S_region["coord_X"],
-                    GLOPOP_S_region["coord_Y"],
+                    GLOPOP_S_region["coord_X"]
+                    + (np.random.random(n) * abs(res_x))
+                    - 0.5 * res_x,
+                    GLOPOP_S_region["coord_Y"]
+                    + (np.random.random(n) * abs(res_y))
+                    - 0.5 * res_y,
                 ],
                 axis=1,
             )
             household_characteristics["locations"] = x_y
 
+            household_characteristics["region_ids"] = sample_from_map(
+                self.region_subgrid["region_ids"].values,
+                household_characteristics["locations"],
+                self.region_subgrid["region_ids"].rio.transform(recalc=True).to_gdal(),
+            )
+
+            households_with_region = household_characteristics["region_ids"] != -1
+
+            for column, data in household_characteristics.items():
+                # only keep households with region
+                household_characteristics[column] = data[households_with_region]
+
+            # ensure that all households have a region assigned
+            assert not (household_characteristics["region_ids"] == -1).any()
+
             region_results[GDL_code] = household_characteristics
 
         # concatenate all data
-        data_concatenated = {}
         for household_attribute in household_characteristics:
-            if household_attribute in attributes_to_include:
-                data_concatenated[household_attribute] = np.concatenate(
-                    [
-                        region_results[GDL_code][household_attribute]
-                        for GDL_code in region_results
-                    ]
-                )
+            data_concatenated = np.concatenate(
+                [
+                    region_results[GDL_code][household_attribute]
+                    for GDL_code in region_results
+                ]
+            )
 
-                # and store to array
-                self.set_array(
-                    data_concatenated[household_attribute],
-                    name=f"agents/households/{attributes_to_include[household_attribute]}",
-                )
+            # and store to array
+            self.set_array(
+                data_concatenated,
+                name=f"agents/households/{household_attribute}",
+            )
 
     def setup_farmer_household_characteristics(self, maximum_age=85):
         n_farmers = self.array["agents/farmers/id"].size
