@@ -46,14 +46,25 @@ def load_GLOPOP_S(data_catalog, GDL_region):
         GLOPOP_S_GRID.path.format(region=GDL_region)
     )
 
-    # create lookup table for grid cells
-    populated_cells = GLOPOP_S_region["GRID_CELL"].unique()
-    GLOPOP_S_region['GRID_X'] = np.nan
-    GLOPOP_S_region['GRID_Y'] = np.nan
+    # # create lookup table for grid cells
+    # populated_cells = GLOPOP_S_region["GRID_CELL"].unique()
+    # GLOPOP_S_region['GRID_X'] = np.nan
+    # GLOPOP_S_region['GRID_Y'] = np.nan
 
-    for GRID_CELL in populated_cells:
-        x_y_lookup = np.concat(np.where(GLOPOP_GRID_region.values[0] == GRID_CELL))
-        GLOPOP_S_region.loc[GLOPOP_S_region["GRID_CELL"] == GRID_CELL, 'GRID_X'] = GLOPOP_GRID_region.x.values[x_y_lookup[1]]
-        GLOPOP_S_region.loc[GLOPOP_S_region["GRID_CELL"] == GRID_CELL, 'GRID_Y'] = GLOPOP_GRID_region.y.values[x_y_lookup[0]]
+    # for GRID_CELL in populated_cells:
+    #     x_y_lookup = np.concat(np.where(GLOPOP_GRID_region.values[0] == GRID_CELL))
+    #     GLOPOP_S_region.loc[GLOPOP_S_region["GRID_CELL"] == GRID_CELL, 'GRID_X'] = GLOPOP_GRID_region.x.values[x_y_lookup[1]]
+    #     GLOPOP_S_region.loc[GLOPOP_S_region["GRID_CELL"] == GRID_CELL, 'GRID_Y'] = GLOPOP_GRID_region.y.values[x_y_lookup[0]]
+
+    # Get coordinates of each GRID_CELL in GLOPOP_GRID_region
+    grid_coords = pd.DataFrame(np.stack(np.where(GLOPOP_GRID_region.values[0] > -1), axis=1), columns=['GRID_Y', 'GRID_X'])
+    grid_coords['GRID_CELL'] = GLOPOP_GRID_region.values[0][GLOPOP_GRID_region.values[0] > -1]
+
+    # also get the coordinates of the grid cells
+    grid_coords['coord_Y'] = GLOPOP_GRID_region.y.values[grid_coords['GRID_Y']]
+    grid_coords['coord_X'] = GLOPOP_GRID_region.x.values[grid_coords['GRID_X']]
+
+    # Merge the coordinates onto GLOPOP_S_region
+    GLOPOP_S_region = GLOPOP_S_region.merge(grid_coords, on='GRID_CELL', how='left')
 
     return GLOPOP_S_region, GLOPOP_GRID_region
