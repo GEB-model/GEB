@@ -66,7 +66,7 @@ class Agents:
         municipal_water_demand = municipal_water_demand.set_index("ISO3")
 
         municipal_water_demand_per_capita = np.full_like(
-            self.array["agents/households/region_ids"],
+            self.array["agents/households/region_id"],
             np.nan,
             dtype=np.float32,
         )
@@ -107,7 +107,7 @@ class Agents:
             )
 
             municipal_water_demand_per_capita[
-                self.array["agents/households/region_ids"] == region_id
+                self.array["agents/households/region_id"] == region_id
             ] = municipal_water_demand_2000_m3_per_capita_per_day
 
             # scale municipal water demand table to use baseline as 1.00 and scale other values
@@ -1319,14 +1319,11 @@ class Agents:
 
             # iterate over unique housholds and extract the variables we want
             household_characteristics = {}
-            household_characteristics["sizes"] = np.full(
+            household_characteristics["size"] = np.full(
                 n_households, -1, dtype=np.int32
             )
-            household_characteristics["locations"] = np.full(
-                (n_households, 2), -1, dtype=np.float32
-            )
 
-            household_characteristics["locations"] = np.full(
+            household_characteristics["location"] = np.full(
                 (n_households, 2), -1, dtype=np.float32
             )
 
@@ -1339,7 +1336,7 @@ class Agents:
             ):
                 household_characteristics[column] = np.array(GLOPOP_S_region[column])
 
-            household_characteristics["sizes"] = np.array(GLOPOP_S_region["HHSIZE"])
+            household_characteristics["size"] = np.array(GLOPOP_S_region["HHSIZE"])
             # now find location of household
             # get x and y from df
 
@@ -1356,22 +1353,22 @@ class Agents:
                 ],
                 axis=1,
             )
-            household_characteristics["locations"] = x_y
+            household_characteristics["location"] = x_y
 
-            household_characteristics["region_ids"] = sample_from_map(
+            household_characteristics["region_id"] = sample_from_map(
                 self.region_subgrid["region_ids"].values,
-                household_characteristics["locations"],
+                household_characteristics["location"],
                 self.region_subgrid["region_ids"].rio.transform(recalc=True).to_gdal(),
             )
 
-            households_with_region = household_characteristics["region_ids"] != -1
+            households_with_region = household_characteristics["region_id"] != -1
 
             for column, data in household_characteristics.items():
                 # only keep households with region
                 household_characteristics[column] = data[households_with_region]
 
             # ensure that all households have a region assigned
-            assert not (household_characteristics["region_ids"] == -1).any()
+            assert not (household_characteristics["region_id"] == -1).any()
 
             region_results[GDL_code] = household_characteristics
 
