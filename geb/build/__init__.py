@@ -48,6 +48,7 @@ GDAL_HTTP_ENV_OPTS = {
     "GDAL_HTTP_MAX_RETRY": "10",  # Number of retry attempts
     "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
     "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
+    "GDAL_CACHEMAX": 1 * 1024**3,  # 1 GB cache size
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
 
