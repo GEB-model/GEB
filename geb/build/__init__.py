@@ -688,6 +688,7 @@ class GEBModel(
         submask = self.set_subgrid(submask, name="mask")
 
     def set_time_range(self, start_date, end_date):
+        assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
             {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
             name="model_time_range",
