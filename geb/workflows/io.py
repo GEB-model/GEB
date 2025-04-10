@@ -18,6 +18,14 @@ from pyproj import CRS
 all_async_readers = []
 
 
+def load_table(fp):
+    return pd.read_parquet(fp, engine="pyarrow")
+
+
+def load_array(fp):
+    return np.load(fp)["data"]
+
+
 def calculate_scaling(min_value, max_value, precision, offset=0):
     """
     This function calculates the scaling factor and output dtype for
@@ -53,6 +61,9 @@ def calculate_scaling(min_value, max_value, precision, offset=0):
     out_dtype : str
         The output dtype to use for the fixed scale and offset codec.
     """
+
+    assert min_value < max_value, "min_value must be less than max_value"
+    assert precision > 0, "precision must be greater than 0"
 
     min_with_offset = min_value + offset
     max_with_offset = max_value + offset

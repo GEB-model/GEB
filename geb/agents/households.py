@@ -1,4 +1,3 @@
-import calendar
 import json
 
 import geopandas as gpd
@@ -14,11 +13,11 @@ from shapely.geometry import Point, shape
 
 from ..hydrology.landcover import (
     FOREST,
-    SEALED,
 )
 from ..store import DynamicArray
+from ..workflows.io import load_array, load_table
 from .decision_module_flood import DecisionModule
-from .general import AgentBaseClass, downscale_volume
+from .general import AgentBaseClass
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
@@ -67,6 +66,20 @@ class Households(AgentBaseClass):
         if self.model.in_spinup:
             self.spinup()
 
+    def reproject_locations_to_floodmap_crs(self):
+        locations = self.var.locations.copy()
+        self.var.household_points = self.var.household_points.to_crs(
+            self.flood_maps["crs"]
+        )
+
+        transformer = pyproj.Transformer.from_crs(
+            self.grid.crs["wkt"], self.flood_maps["crs"], always_xy=True
+        )
+        locations[:, 0], locations[:, 1] = transformer.transform(
+            self.var.locations[:, 0], self.var.locations[:, 1]
+        )
+        self.var.locations_reprojected_to_flood_map = locations
+
     def load_flood_maps(self):
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
 
@@ -78,12 +91,14 @@ class Households(AgentBaseClass):
         for return_period in self.return_periods:
             file_path = (
                 self.model.report_folder_root
-                / "estimate_risk"
+                / "estimate_return_periods"
                 / "flood_maps"
-                / f"{return_period}.zarr.zip"
+                / f"{return_period}.zarr"
             )
             flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
-        flood_maps["crs"] = flood_maps[return_period].rio.crs
+        flood_maps["crs"] = pyproj.CRS.from_user_input(
+            flood_maps[return_period]._CRS["wkt"]
+        )
         flood_maps["gdal_geotransform"] = (
             flood_maps[return_period].rio.transform().to_gdal()
         )
@@ -106,9 +121,9 @@ class Households(AgentBaseClass):
 
     def assign_household_wealth_and_income(self):
         # initiate array with wealth indices
-        wealth_index = np.load(
-            self.model.files["binary"]["agents/households/wealth_index"]
-        )["data"]
+        wealth_index = load_array(
+            self.model.files["array"]["agents/households/wealth_index"]
+        )
         self.var.wealth_index = DynamicArray(wealth_index, max_n=self.max_n)
 
         # convert wealth index to income percentile
@@ -147,26 +162,47 @@ class Households(AgentBaseClass):
         Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
 
         # load household locations
-        locations = np.load(self.model.files["array"]["agents/households/locations"])[
-            "data"
-        ]
+        locations = load_array(self.model.files["array"]["agents/households/location"])
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
         self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
+        self.var.region_id = load_array(
+            self.model.files["array"]["agents/households/region_id"]
+        )
+
         # load household sizes
-        sizes = np.load(self.model.files["array"]["agents/households/sizes"])["data"]
+        sizes = load_array(self.model.files["array"]["agents/households/size"])
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
+        self.var.municipal_water_demand_per_capita_m3_baseline = load_array(
+            self.model.files["array"][
+                "agents/households/municipal_water_demand_per_capita_m3_baseline"
+            ]
+        )
+
+        # set municipal water demand efficiency to 1.0 for all households
+        self.var.water_efficiency_per_household = np.full_like(
+            self.var.municipal_water_demand_per_capita_m3_baseline, 1.0, np.float32
+        )
+
+        self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier = (
+            load_table(
+                self.model.files["table"][
+                    "municipal_water_withdrawal_m3_per_capita_per_day_multiplier"
+                ]
+            )
+        )
+
         # load age household head
-        age_household_head = np.load(
-            self.model.files["binary"]["agents/households/age_household_head"]
-        )["data"]
+        age_household_head = load_array(
+            self.model.files["array"]["agents/households/age_household_head"]
+        )
         self.var.age_household_head = DynamicArray(age_household_head, max_n=self.max_n)
 
         # load education level household head
-        education_level = np.load(
-            self.model.files["binary"]["agents/households/education_level"]
-        )["data"]
+        education_level = load_array(
+            self.model.files["array"]["agents/households/education_level"]
+        )
         self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
 
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
@@ -217,7 +253,7 @@ class Households(AgentBaseClass):
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
 
-        # reproject households to flood maps and store in var bucket
+        # load household points (only in use for damagescanner, could be removed)
         household_points = gpd.GeoDataFrame(
             geometry=[Point(lon, lat) for lon, lat in self.var.locations.data],
             crs="EPSG:4326",
@@ -226,15 +262,7 @@ class Households(AgentBaseClass):
         household_points["object_type"] = (
             "building_content"  # this must match damage curves  # this must match damage curves
         )
-        self.var.household_points = household_points.to_crs(self.flood_maps["crs"])
-
-        transformer = pyproj.Transformer.from_crs(
-            self.grid.crs, self.flood_maps["crs"], always_xy=True
-        )
-        locations[:, 0], locations[:, 1] = transformer.transform(
-            self.var.locations[:, 0], self.var.locations[:, 1]
-        )
-        self.var.locations_reprojected_to_flood_map = locations
+        self.var.household_points = household_points
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
@@ -248,6 +276,9 @@ class Households(AgentBaseClass):
         if not hasattr(self, "buildings_content_curve_interpolator"):
             self.create_damage_interpolators()
 
+        if not hasattr(self.var, "locations_reprojected_to_flood_map"):
+            self.reproject_locations_to_floodmap_crs()
+
         # loop over return periods
         for i, return_period in enumerate(self.return_periods):
             # get flood map
@@ -258,7 +289,7 @@ class Households(AgentBaseClass):
                 flood_map.values,
                 self.var.locations_reprojected_to_flood_map.data,
                 self.flood_maps["gdal_geotransform"],
-            )[:, 0]
+            )
 
             # cap water levels at damage curve max inundation
             water_levels = np.minimum(
@@ -592,15 +623,10 @@ class Households(AgentBaseClass):
         self.load_objects()
         self.load_max_damage_values()
         self.load_damage_curves()
-        if self.config["adapt"]:
-            self.construct_income_distribution()
-            self.assign_household_attributes()
+        self.construct_income_distribution()
+        self.assign_household_attributes()
 
         super().__init__()
-
-        water_demand, efficiency = self.update_water_demand()
-        self.var.current_water_demand = water_demand
-        self.var.current_efficiency = efficiency
 
     def flood(self, flood_map):
         agriculture = from_landuse_raster_to_polygon(
@@ -686,101 +712,41 @@ class Households(AgentBaseClass):
 
         return total_flood_damages
 
-    def update_water_demand(self):
-        """
-        Dynamic part of the water demand module - domestic
-        read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
-
-        """
-        downscale_mask = self.model.hydrology.HRU.var.land_use_type != SEALED
-        days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
-        water_demand = (
-            self.model.domestic_water_demand_ds.sel(
-                time=self.model.current_time, method="ffill", tolerance="366D"
-            ).domestic_water_demand
-            * 1_000_000
-            / days_in_year
-        )
-        water_demand = (
-            water_demand.rio.set_crs(4326).rio.reproject(
-                4326,
-                shape=self.model.hydrology.grid.shape,
-                transform=self.model.hydrology.grid.transform,
-            )
-            / (water_demand.rio.transform().a / self.model.hydrology.grid.transform.a)
-            ** 2
-        )
-        water_demand = downscale_volume(
-            water_demand.rio.transform().to_gdal(),
-            self.model.hydrology.grid.gt,
-            water_demand.values,
-            self.model.hydrology.grid.mask,
-            self.model.hydrology.grid_to_HRU_uncompressed,
-            downscale_mask,
-            self.model.hydrology.HRU.var.land_use_ratio,
-        )
-        water_demand = self.model.hydrology.HRU.M3toM(water_demand)
-
-        water_consumption = (
-            self.model.domestic_water_consumption_ds.sel(
-                time=self.model.current_time, method="ffill"
-            ).domestic_water_consumption
-            * 1_000_000
-            / days_in_year
-        )
-        water_consumption = (
-            water_consumption.rio.set_crs(4326).rio.reproject(
-                4326,
-                shape=self.model.hydrology.grid.shape,
-                transform=self.model.hydrology.grid.transform,
-            )
-            / (
-                water_consumption.rio.transform().a
-                / self.model.hydrology.grid.transform.a
-            )
-            ** 2
-        )
-        water_consumption = downscale_volume(
-            water_consumption.rio.transform().to_gdal(),
-            self.model.hydrology.grid.gt,
-            water_consumption.values,
-            self.model.hydrology.grid.mask,
-            self.model.hydrology.grid_to_HRU_uncompressed,
-            downscale_mask,
-            self.model.hydrology.HRU.var.land_use_ratio,
-        )
-        water_consumption = self.model.hydrology.HRU.M3toM(water_consumption)
-
-        efficiency = np.divide(
-            water_consumption,
-            water_demand,
-            out=np.zeros_like(water_consumption, dtype=float),
-            where=water_demand != 0,
-        )
-
-        efficiency = self.model.hydrology.to_grid(HRU_data=efficiency, fn="max")
-
-        assert (efficiency <= 1).all()
-        assert (efficiency >= 0).all()
-        self.var.last_water_demand_update = self.model.current_time
-        return water_demand, efficiency
-
     def water_demand(self):
-        if (
-            np.datetime64(self.model.current_time, "ns")
-            in self.model.domestic_water_consumption_ds.time
-        ):
-            water_demand, efficiency = self.update_water_demand()
-            self.var.current_water_demand = water_demand
-            self.var.current_efficiency = efficiency
+        """Calculate the water demand per household in m3 per day.
 
-        assert (
-            self.model.current_time - self.var.last_water_demand_update
-        ).days < 366, (
-            "Water demand has not been updated for over a year. "
-            "Please check the household water demand datasets."
+        This function uses a multiplier to calculate the water demand for
+        for each region with respect to the base year.
+        """
+
+        # the water demand multiplier is a function of the year and region
+        water_demand_multiplier_per_region = (
+            self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
+                self.model.current_time.year
+            ]
         )
-        return self.var.current_water_demand, self.var.current_efficiency
+        assert (
+            water_demand_multiplier_per_region.index
+            == np.arange(len(water_demand_multiplier_per_region))
+        ).all()
+        water_demand_multiplier_per_household = (
+            water_demand_multiplier_per_region.values[self.var.region_id]
+        )
+
+        # water demand is the per capita water demand in the household,
+        # multiplied by the size of the household and the water demand multiplier
+        # per region and year, relative to the baseline.
+        water_demand_per_household_m3 = (
+            self.var.municipal_water_demand_per_capita_m3_baseline
+            * self.var.sizes
+            * water_demand_multiplier_per_household
+        )
+
+        return (
+            water_demand_per_household_m3,
+            self.var.water_efficiency_per_household,
+            self.var.locations.data,
+        )
 
     def step(self) -> None:
         if (

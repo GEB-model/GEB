@@ -41,6 +41,20 @@
             ]
         },
         {
+            "name": "Evaluate",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "geb/cli.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "args": [
+                "evaluate",
+                "-wd",
+                "../model"
+            ]
+        },
+        {
             "name": "Build",
             "type": "debugpy",
             "request": "launch",
@@ -50,7 +64,7 @@
             "justMyCode": false,
             "args": [
                 "build",
-                "-wd", "model",
+                "-wd", "../model",
             ]
         },
         {
@@ -63,7 +77,7 @@
             "justMyCode": false,
             "args": [
                 "update",
-                "-wd", "model",
+                "-wd", "../model",
             ]
         },
     ]

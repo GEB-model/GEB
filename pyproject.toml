@@ -1,9 +1,17 @@
 [build-system]
-requires = ["flit_core >=3.4.0,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+hydromt-sfincs = { git = "https://github.com/GEB-model/hydromt_sfincs.git" }
 
 [project]
 name = "geb"
+version = "1.0.0b5"
+description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
     {name = "Maurice Kalthof", email = "w.m.l.kalthof@vu.nl"},
@@ -24,6 +32,7 @@ dependencies = [
     "geopandas>=1.0.1",
     "honeybees>=1.2.0",
     "hydromt==0.10.1",
+    "hydromt-sfincs",
     "isimip-client>=1.0.1",
     "nest_asyncio>=1.6.0", # for GUI in
     "networkx",
@@ -32,6 +41,7 @@ dependencies = [
     "openpyxl>=3.1.2",
     "pyarrow>=17.0.0",
     "pybind11>=2.13.4",
+    "pyextremes>=2.3.3",
     "pyflwdir>=0.5.9",
     "pyogrio>=0.9.0",
     "pyresample>=1.32.0",
@@ -48,8 +58,8 @@ dependencies = [
     "setuptools>=75.8.0",
     "tbb>=2022.0.0",
     "tqdm>=4.66.1",
-    "xarray==2025.01.2", # Pinned until https://github.com/Ouranosinc/xclim/issues/2113 is resolved
-    "xclim>=0.52.0",
+    "xarray>=2025.3.0",
+    "xclim>=0.56.0",
     "xmipy>=1.5.0",
     "zarr>=3.0.6",
 ]
@@ -63,7 +73,6 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dynamic = ["version", "description"]
 
 [tool.uv]
 required-environments = [
@@ -103,5 +112,4 @@ lint.extend-select = ["I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
-known-third-party = ["geb-hydrodynamics"]
 combine-as-imports = true

@@ -21,7 +21,6 @@ DEFAULT_VARIABLES = {
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-# @pytest.mark.dependency(name="build")
 def test_build():
     working_directory = tmp_folder / "model"
     working_directory.mkdir(parents=True, exist_ok=True)
@@ -33,6 +32,7 @@ def test_build():
         working_directory=working_directory,
         custom_model=None,
         data_provider=None,
+        data_root=Path("../../../../data_catalog"),
     )
 
     rmtree(working_directory, ignore_errors=True)
@@ -59,4 +59,4 @@ def test_run_yearly():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 # @pytest.mark.dependency(depends=["spinup"])
 def test_estimate_risk():
-    run_model_with_method(method="estimate_risk", **DEFAULT_VARIABLES)
+    run_model_with_method(method="estimate_return_periods", **DEFAULT_VARIABLES)

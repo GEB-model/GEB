@@ -19,7 +19,7 @@ from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
 from hydromt.config import configread
 
-from geb import __version__, setup
+from geb import __version__
 from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
@@ -319,14 +319,6 @@ def click_build_options(build_config="build.yml"):
     def decorator(func):
         @click_config
         @click.option(
-            "--data-catalog",
-            "-d",
-            type=str,
-            multiple=True,
-            default=[Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
-            help="""A list of paths to the data library YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
-        )
-        @click.option(
             "--build-config",
             "-b",
             default=build_config,
@@ -345,10 +337,27 @@ def click_build_options(build_config="build.yml"):
             help="Working directory for model.",
         )
         @click.option(
+            "--data-catalog",
+            "-d",
+            type=str,
+            multiple=True,
+            default=[Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
+            help="""A list of paths to the data library YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
+        )
+        @click.option(
             "--data-provider",
             "-p",
-            default=os.environ.get("GEB_DATA_PROVIDER", None),
+            default=os.environ.get("GEB_DATA_PROVIDER", "default"),
             help="Data variant to use from data catalog (see hydroMT documentation).",
+        )
+        @click.option(
+            "--data-root",
+            "-r",
+            default=os.environ.get(
+                "GEB_DATA_ROOT",
+                Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
+            ),
+            help="Root folder where the data is located.",
         )
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -359,23 +368,24 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
-def get_model(custom_model):
+def get_model_builder(custom_model):
+    from geb import build
+
     if custom_model is None:
-        return setup.GEBModel
+        return build.GEBModel
     else:
         importlib.import_module(
             "." + custom_model.split(".")[0], package="geb.setup.custom_models"
         )
-        return attrgetter(custom_model)(setup.custom_models)
+        return attrgetter(custom_model)(build.custom_models)
 
 
-def customize_data_catalog(data_catalogs):
+def customize_data_catalog(data_catalogs, data_root=None):
     """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
     This enables reading the data catalog from a different location than the location of the yml-file
     without the need to specify root in the meta of the data catalog."""
-    geb_data_root = os.environ.get("GEB_DATA_ROOT", None)
 
-    if geb_data_root:
+    if data_root:
         customized_data_catalogs = []
         for data_catalog in data_catalogs:
             with open(data_catalog, "r") as stream:
@@ -383,7 +393,7 @@ def customize_data_catalog(data_catalogs):
 
                 if "meta" not in data_catalog_yml:
                     data_catalog_yml["meta"] = {}
-                data_catalog_yml["meta"]["root"] = geb_data_root
+                data_catalog_yml["meta"]["root"] = str(data_root)
 
             with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
                 yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
@@ -394,7 +404,13 @@ def customize_data_catalog(data_catalogs):
 
 
 def build_fn(
-    data_catalog, config, build_config, custom_model, working_directory, data_provider
+    data_catalog,
+    config,
+    build_config,
+    custom_model,
+    working_directory,
+    data_provider,
+    data_root,
 ):
     """Build model."""
 
@@ -406,12 +422,12 @@ def build_fn(
 
     arguments = {
         "root": input_folder,
-        "data_catalogs": customize_data_catalog(data_catalog),
+        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
 
-    geb_model = get_model(custom_model)(**arguments)
+    geb_model = get_model_builder(custom_model)(**arguments)
 
     geb_model.build(
         methods=configread(build_config),
@@ -436,6 +452,7 @@ def alter(
     working_directory,
     model,
     data_provider,
+    data_root,
 ):
     """Build model."""
 
@@ -447,12 +464,12 @@ def alter(
 
     arguments = {
         "root": reference_model_folder,
-        "data_catalogs": customize_data_catalog(data_catalog),
+        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
 
-    geb_model = get_model(custom_model)(**arguments)
+    geb_model = get_model_builder(custom_model)(**arguments)
     geb_model.read()
     geb_model.set_alternate_root(
         Path(".") / Path(config["general"]["input_folder"]), mode="w+"
@@ -466,7 +483,13 @@ def alter(
 @cli.command()
 @click_build_options(build_config="update.yml")
 def update(
-    data_catalog, config, build_config, custom_model, working_directory, data_provider
+    data_catalog,
+    config,
+    build_config,
+    custom_model,
+    working_directory,
+    data_provider,
+    data_root,
 ):
     """Update model."""
 
@@ -478,12 +501,12 @@ def update(
 
     arguments = {
         "root": input_folder,
-        "data_catalogs": customize_data_catalog(data_catalog),
+        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
         "logger": create_logger("build_update.log"),
         "data_provider": data_provider,
     }
 
-    geb_model = get_model(custom_model)(**arguments)
+    geb_model = get_model_builder(custom_model)(**arguments)
     geb_model.read()
     geb_model.update(methods=configread(build_config))
 

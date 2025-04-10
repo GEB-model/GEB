@@ -71,7 +71,7 @@ def balance_check(
         if balance.size == 0:
             return True
         elif np.abs(balance).max() > tollerance:
-            text = f"{balance[np.abs(balance).argmax()]} is larger than tollerance {tollerance}"
+            text = f"{balance[np.abs(balance).argmax()]} > tollerance {tollerance}, max imbalance at index {np.abs(balance).argmax()}"
             if name:
                 print(name, text)
             else:

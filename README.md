@@ -22,14 +22,45 @@ uv pip install geb --prerelease=allow
 
 ## Development installation and setup
 
-To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use [uv](https://docs.astral.sh/uv/) to install the dependencies. To do so execute the following within the folder where you would like to work on the development of GEB:
+To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [uv](https://docs.astral.sh/uv/#installation) and [git](https://git-scm.com/).
+
+Also create a folder where you would like to store the code and model, we call this the *working directory*. In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
+
+```
+working directory
+|   model
+|   |   model.yml
+|   |   build.yml│       
+|   |   input
+|   |   (potential other files and folders)
+```
+
+Then, in the *working directory*, open a **new** terminal and run the following command to *clone* (download) all the code from the repository:
 
 ```bash
 git clone git@github.com:GEB-model/GEB.git
-cd GEB
-git switch main  # use main by default, but may be changed to another branch
-git update-index --skip-worktree .vscode/extensions.json  .vscode/launch.json  .vscode/settings.json  # we don't want to commit local changes to the vscode settings
-uv sync --dev
+```
+
+Now the directory structure should look like this:
+
+```
+working directory
+|   model
+|   |   model.yml
+|   |   build.yml     
+|   |   input
+|   |   (potential other files and folders)
+|   GEB
+|   |   README.md
+|   |   (all files and folders from the repository)
+```
+
+Then proceed with the following commands:
+
+```bash
+cd GEB  # switch the terminal to GEB code folder
+git switch main  # switch to the main development branch by default, but may be changed to another branch
+uv sync --dev  # install all dependencies using uv
 ```
 
 You will now have a virtual environment (`.venv`) in the GEB folder with the right Python installation and all packages you need.
@@ -40,19 +71,15 @@ Now open Visual Studio Code in the GEB folder (or use the "File -> Open Folder" 
 code .
 ```
 
-Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do. After installing the Python extension VS Code should also automatically use the environment you created earlier. To test this, open a terminal in VS Code (`Terminal -> New Terminal`) and run:
+Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do. After installing the Python extension VS Code should also automatically use the environment you created earlier. To test this, open a terminal in Visusal Studio Code (`Terminal -> New Terminal`) and run:
 
 ```bash
 geb --help
 ```
 
-We have also prepared a configuration for the debugger in `.vscode/launch.json`. The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`).
+We have also prepared a configuration for the debugger in `.vscode/launch.json.sample` and a settings file in `.vscode/settings.json.sample` with some useful default settings. To activate these files, copy (i.e., not remove or rename) the files to `.vscode/launch.json` and `.vscode/settings.json` respectively. 
 
-You may need to adjust the paths in  `.vscode/launch.json` to match your setup. In case you do this, please make sure to not commit these changes to the repository. To tell git to ignore any local changes here, you can run:
-
-```bash
-git update-index --skip-worktree .vscode/extensions.json  .vscode/launch.json  .vscode/settings.json  # we don't want to commit local changes to the vscode settings
-```
+The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`). You may need to adjust the paths in  `.vscode/launch.json` to match your setup.
 
 Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome. You can find a list of active and past contributors at the bottom of this file.
 
@@ -64,7 +91,7 @@ Happy gebbing! Let us know when you run into issues, and any contributions to GE
 
 ### Applications
 
-> Kalthof, M. W. M. L., de Bruijn, J., de Moel, H., Kreibich, H., and Aerts, J. C. J. H.: Adaptive Behavior of Over a Million Individual Farmers Under Consecutive Droughts: A Large-Scale Agent-Based Modeling Analysis in the Bhima Basin, India, EGUsphere preprint, [https://doi.org/10.5194/egusphere-2024-1588](https://doi.org/10.5194/egusphere-2024-1588), 2024.
+> Kalthof, M. W. M. L., de Bruijn, J., de Moel, H., Kreibich, H., and Aerts, J. C. J. H.: Adaptive behavior of farmers under consecutive droughts results in more vulnerable farmers: a large-scale agent-based modeling analysis in the Bhima basin, India, NHESS, [https://doi.org/10.5194/nhess-25-1013-2025](https://doi.org/10.5194/nhess-25-1013-2025), 2025.
 
 ## Building on the shoulders of giants
 

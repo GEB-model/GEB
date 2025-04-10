@@ -797,11 +797,18 @@ class HRUs(BaseVariables):
         array = array.ravel()
         unmerged_HRU_indices = unmerged_HRU_indices.ravel()
         if method == "last":
-            for i in range(array.size):
-                value = array[i]
-                if value != nodatavalue:
-                    HRU = unmerged_HRU_indices[i]
-                    outarray[HRU] = value
+            if np.isnan(nodatavalue):
+                for i in range(array.size):
+                    value = array[i]
+                    if not np.isnan(value):
+                        HRU = unmerged_HRU_indices[i]
+                        outarray[HRU] = value
+            else:
+                for i in range(array.size):
+                    value = array[i]
+                    if value != nodatavalue:
+                        HRU = unmerged_HRU_indices[i]
+                        outarray[HRU] = value
         elif method == "mean":
             array = array[unmerged_HRU_indices != -1]
             unmerged_HRU_indices = unmerged_HRU_indices[unmerged_HRU_indices != -1]
@@ -820,8 +827,10 @@ class HRUs(BaseVariables):
         else:
             fill_value = np.nan
 
-        output_data = np.empty(
-            (*array.shape[:-2], self.var.land_use_ratio.size), dtype=array.dtype
+        output_data = np.full(
+            (*array.shape[:-2], self.var.land_use_ratio.size),
+            fill_value,
+            dtype=array.dtype,
         )
 
         if array.ndim == 2:
@@ -943,12 +952,6 @@ class Data:
         )
 
     def load_water_demand(self):
-        self.model.domestic_water_consumption_ds = load_forcing_xr(
-            self.model.files["other"]["water_demand/domestic_water_consumption"]
-        )
-        self.model.domestic_water_demand_ds = load_forcing_xr(
-            self.model.files["other"]["water_demand/domestic_water_demand"]
-        )
         self.model.industry_water_consumption_ds = load_forcing_xr(
             self.model.files["other"]["water_demand/industry_water_consumption"]
         )

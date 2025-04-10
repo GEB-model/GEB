@@ -1,18 +1,26 @@
+import os
 import tempfile
+import time
+import zipfile
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import requests
 import xarray as xr
 import xclim.indices as xci
+from dateutil.relativedelta import relativedelta
+from isimip_client.client import ISIMIPClient
 from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
 
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
+from ..workflows.general import interpolate_na_along_time_dim, resample_like
 
 
 def reproject_and_apply_lapse_rate_temperature(
@@ -21,8 +29,8 @@ def reproject_and_apply_lapse_rate_temperature(
     assert (T.x.values == elevation_forcing.x.values).all()
     assert (T.y.values == elevation_forcing.y.values).all
     t_at_sea_level = T - elevation_forcing * lapse_rate
-    t_at_sea_level_reprojected = t_at_sea_level.raster.reproject_like(
-        elevation_target, method="average"
+    t_at_sea_level_reprojected = resample_like(
+        t_at_sea_level, elevation_target, method="average"
     )
     T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
     T_grid.name = T.name
@@ -67,8 +75,8 @@ def reproject_and_apply_lapse_rate_pressure(
     pressure_at_sea_level = pressure / get_pressure_correction_factor(
         elevation_forcing, g, Mo, lapse_rate
     )  # divide by pressure factor to get pressure at sea level
-    pressure_at_sea_level_reprojected = pressure_at_sea_level.raster.reproject_like(
-        elevation_target, method="average"
+    pressure_at_sea_level_reprojected = resample_like(
+        pressure_at_sea_level, elevation_target, method="average"
     )
     pressure_grid = (
         pressure_at_sea_level_reprojected
@@ -80,7 +88,7 @@ def reproject_and_apply_lapse_rate_pressure(
     return pressure_grid
 
 
-def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
+def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
     output_fn = folder / f"{variable}.zarr"
     if output_fn.exists():
         da = open_zarr(output_fn)
@@ -95,12 +103,36 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
 
         da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
 
+        # Check if region crosses the meridian (longitude=0)
         # use a slightly larger slice. The resolution is 0.1 degrees, so 0.11 degrees is a bit more than that (to be sure)
-        da = da.sel(
-            time=slice(starttime, endtime),
-            y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
-            x=slice(bounds[0] - 0.11, bounds[2] + 0.11),
-        )
+        if bounds[0] < 0 and bounds[2] > 0:
+            # Need to handle the split across the meridian
+            # Get western hemisphere part (longitude < 0)
+            west_da = da.sel(
+                time=slice(start_date, end_date),
+                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+                x=slice(((bounds[0] - 0.11) + 360) % 360, 360),
+            )
+            # Get eastern hemisphere part (longitude > 0)
+            east_da = da.sel(
+                time=slice(start_date, end_date),
+                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+                x=slice(0, ((bounds[2] + 0.11) + 360) % 360),
+            )
+            # Combine the two parts
+            da = xr.concat([west_da, east_da], dim="x")
+        else:
+            # Regular case - doesn't cross meridian
+            da = da.sel(
+                time=slice(start_date, end_date),
+                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+                x=slice(
+                    ((bounds[0] - 0.11) + 360) % 360, ((bounds[2] + 0.11) + 360) % 360
+                ),
+            )
+
+        # Reorder x to be between -180 and 180 degrees
+        da = da.assign_coords(x=((da.x + 180) % 360 - 180))
         da = da.isel(time=slice(1, None))
 
         logger.info(f"Downloading ERA5 {variable} to {output_fn}")
@@ -115,8 +147,8 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
     return da
 
 
-def process_ERA5(variable, folder, starttime, endtime, bounds, logger):
-    da = download_ERA5(folder, variable, starttime, endtime, bounds, logger)
+def process_ERA5(variable, folder, start_date, end_date, bounds, logger):
+    da = download_ERA5(folder, variable, start_date, end_date, bounds, logger)
     # assert that time is monotonically increasing with a constant step size
     assert (
         da.time.diff("time").astype(np.int64)
@@ -128,7 +160,7 @@ def process_ERA5(variable, folder, starttime, endtime, bounds, logger):
             # Identify the axis number for the given dimension
             assert da.time.dt.hour[0] == 1, "First time step must be at 1 UTC"
             # All chunksizes must be divisible by 24, except the last one
-            assert all(chunksize % 24 == 0 for chunksize in da.chunksizes["time"][:-1])
+            assert all(chunksize == 24 for chunksize in da.chunksizes["time"][:-1])
 
             def diff_with_prepend(data, dim):
                 # Assert dimension is a multiple of 24
@@ -162,6 +194,7 @@ def process_ERA5(variable, folder, starttime, endtime, bounds, logger):
 
     da = da.rio.set_crs(4326)
     da.raster.set_crs(4326)
+    da = interpolate_na_along_time_dim(da)
 
     return da
 
@@ -180,6 +213,286 @@ class Forcing:
     def __init__(self):
         pass
 
+    def download_isimip(
+        self,
+        product,
+        variable,
+        forcing,
+        start_date=None,
+        end_date=None,
+        simulation_round="ISIMIP3a",
+        climate_scenario="obsclim",
+        resolution=None,
+        buffer=0,
+    ):
+        """
+        Downloads ISIMIP climate data for GEB.
+
+        Parameters
+        ----------
+        product : str
+            The name of the ISIMIP product to download.
+        variable : str
+            The name of the climate variable to download.
+        forcing : str
+            The name of the climate forcing to download.
+        start_date : date, optional
+            The start date of the data. Default is None.
+        end_date : date, optional
+            The end date of the data. Default is None.
+        resolution : str, optional
+            The resolution of the data to download. Default is None.
+        buffer : int, optional
+            The buffer size in degrees to add to the bounding box of the data to download. Default is 0.
+
+        Returns
+        -------
+        xr.Dataset
+            The downloaded climate data as an xarray dataset.
+
+        Notes
+        -----
+        This method downloads ISIMIP climate data for GEB. It first retrieves the dataset
+        metadata from the ISIMIP repository using the specified `product`, `variable`, `forcing`, and `resolution`
+        parameters. It then downloads the data files that match the specified `start_date` and `end_date` parameters, and
+        extracts them to the specified `download_path` directory.
+
+        The resulting climate data is returned as an xarray dataset. The dataset is assigned the coordinate reference system
+        EPSG:4326, and the spatial dimensions are set to 'lon' and 'lat'.
+        """
+        # if start_date is specified, end_date must be specified as well
+        assert (start_date is None) == (end_date is None)
+
+        client = ISIMIPClient()
+        download_path = self.preprocessing_dir / "climate" / forcing / variable
+        download_path.mkdir(parents=True, exist_ok=True)
+
+        # Code to get data from disk rather than server.
+        parse_files = []
+        for file in os.listdir(download_path):
+            if file.endswith(".nc"):
+                fp = download_path / file
+                parse_files.append(fp)
+
+        # get the dataset metadata from the ISIMIP repository
+        response = client.datasets(
+            simulation_round=simulation_round,
+            product=product,
+            climate_forcing=forcing,
+            climate_scenario=climate_scenario,
+            climate_variable=variable,
+            resolution=resolution,
+        )
+        assert len(response["results"]) == 1
+        dataset = response["results"][0]
+        files = dataset["files"]
+
+        xmin, ymin, xmax, ymax = self.bounds
+        xmin -= buffer
+        ymin -= buffer
+        xmax += buffer
+        ymax += buffer
+
+        if variable == "orog":
+            assert len(files) == 1
+            filename = files[
+                0
+            ][
+                "name"
+            ]  # global should be included due to error in ISIMIP API .replace('_global', '')
+            parse_files = [filename]
+            if not (download_path / filename).exists():
+                download_files = [files[0]["path"]]
+            else:
+                download_files = []
+
+        else:
+            assert start_date is not None and end_date is not None
+            download_files = []
+            parse_files = []
+            for file in files:
+                name = file["name"]
+                assert name.endswith(".nc")
+                splitted_filename = name.split("_")
+                date = splitted_filename[-1].split(".")[0]
+                if "-" in date:
+                    start_date, end_date = date.split("-")
+                    start_date = datetime.strptime(start_date, "%Y%m%d").date()
+                    end_date = datetime.strptime(end_date, "%Y%m%d").date()
+                elif len(date) == 6:
+                    start_date = datetime.strptime(date, "%Y%m").date()
+                    end_date = (
+                        start_date + relativedelta(months=1) - relativedelta(days=1)
+                    )
+                elif len(date) == 4:  # is year
+                    assert splitted_filename[-2].isdigit()
+                    start_date = datetime.strptime(splitted_filename[-2], "%Y").date()
+                    end_date = datetime.strptime(date, "%Y").date()
+                else:
+                    raise ValueError(f"could not parse date {date} from file {name}")
+
+                if not (end_date < start_date or start_date > end_date):
+                    parse_files.append(file["name"].replace("_global", ""))
+                    if not (
+                        download_path / file["name"].replace("_global", "")
+                    ).exists():
+                        download_files.append(file["path"])
+
+        if download_files:
+            self.logger.info(f"Requesting download of {len(download_files)} files")
+            while True:
+                try:
+                    response = client.cutout(download_files, [ymin, ymax, xmin, xmax])
+                except requests.exceptions.HTTPError:
+                    self.logger.warning(
+                        "HTTPError, could not download files, retrying in 60 seconds"
+                    )
+                else:
+                    if response["status"] == "finished":
+                        break
+                    elif response["status"] == "started":
+                        self.logger.info(
+                            f"{response['meta']['created_files']}/{response['meta']['total_files']} files prepared on ISIMIP server for {variable}, waiting 60 seconds before retrying"
+                        )
+                    elif response["status"] == "queued":
+                        self.logger.info(
+                            f"Data preparation queued for {variable} on ISIMIP server, waiting 60 seconds before retrying"
+                        )
+                    elif response["status"] == "failed":
+                        self.logger.info(
+                            "ISIMIP internal server error, waiting 60 seconds before retrying"
+                        )
+                    else:
+                        raise ValueError(
+                            f"Could not download files: {response['status']}"
+                        )
+                time.sleep(60)
+            self.logger.info(f"Starting download of files for {variable}")
+            # download the file when it is ready
+            client.download(
+                response["file_url"], path=download_path, validate=False, extract=False
+            )
+            self.logger.info(f"Download finished for {variable}")
+            # remove zip file
+            zip_file = download_path / Path(
+                urlparse(response["file_url"]).path.split("/")[-1]
+            )
+            # make sure the file exists
+            assert zip_file.exists()
+            # Open the zip file
+            with zipfile.ZipFile(zip_file, "r") as zip_ref:
+                # Get a list of all the files in the zip file
+                file_list = [f for f in zip_ref.namelist() if f.endswith(".nc")]
+                # Extract each file one by one
+                for i, file_name in enumerate(file_list):
+                    # Rename the file
+                    bounds_str = ""
+                    if isinstance(ymin, float):
+                        bounds_str += f"_lat{ymin}"
+                    else:
+                        bounds_str += f"_lat{ymin:.1f}"
+                    if isinstance(ymax, float):
+                        bounds_str += f"to{ymax}"
+                    else:
+                        bounds_str += f"to{ymax:.1f}"
+                    if isinstance(xmin, float):
+                        bounds_str += f"lon{xmin}"
+                    else:
+                        bounds_str += f"lon{xmin:.1f}"
+                    if isinstance(xmax, float):
+                        bounds_str += f"to{xmax}"
+                    else:
+                        bounds_str += f"to{xmax:.1f}"
+                    assert bounds_str in file_name
+                    new_file_name = file_name.replace(bounds_str, "")
+                    zip_ref.getinfo(file_name).filename = new_file_name
+                    # Extract the file
+                    if os.name == "nt":
+                        max_file_path_length = 260
+                    else:
+                        max_file_path_length = os.pathconf("/", "PC_PATH_MAX")
+                    assert (
+                        len(str(download_path / new_file_name)) <= max_file_path_length
+                    ), (
+                        f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
+                    )
+                    zip_ref.extract(file_name, path=download_path)
+            # remove zip file
+            (
+                download_path / Path(urlparse(response["file_url"]).path.split("/")[-1])
+            ).unlink()
+
+        datasets = [
+            xr.open_dataset(download_path / file, chunks={}) for file in parse_files
+        ]
+        for dataset in datasets:
+            assert "lat" in dataset.coords and "lon" in dataset.coords
+
+        # make sure y is decreasing rather than increasing
+        datasets = [
+            (
+                dataset.reindex(lat=dataset.lat[::-1])
+                if dataset.lat[0] < dataset.lat[-1]
+                else dataset
+            )
+            for dataset in datasets
+        ]
+
+        reference = datasets[0]
+        for dataset in datasets:
+            # make sure all datasets have more or less the same coordinates
+            assert np.isclose(
+                dataset.coords["lat"].values,
+                reference["lat"].values,
+                atol=abs(datasets[0].rio.resolution()[1] / 50),
+                rtol=0,
+            ).all()
+            assert np.isclose(
+                dataset.coords["lon"].values,
+                reference["lon"].values,
+                atol=abs(datasets[0].rio.resolution()[0] / 50),
+                rtol=0,
+            ).all()
+
+        datasets = [
+            ds.assign_coords(lon=reference["lon"].values, lat=reference["lat"].values)
+            for ds in datasets
+        ]
+        if len(datasets) > 1:
+            ds = xr.concat(datasets, dim="time")
+        else:
+            ds = datasets[0]
+
+        if start_date is not None:
+            ds = ds.sel(time=slice(start_date, end_date))
+            # assert that time is monotonically increasing with a constant step size
+            assert (
+                ds.time.diff("time").astype(np.int64)
+                == (ds.time[1] - ds.time[0]).astype(np.int64)
+            ).all()
+
+        ds.raster.set_spatial_dims(x_dim="lon", y_dim="lat")
+        assert not ds.lat.attrs, "lat already has attributes"
+        assert not ds.lon.attrs, "lon already has attributes"
+        ds.lat.attrs = {
+            "long_name": "latitude of grid cell center",
+            "units": "degrees_north",
+        }
+        ds.lon.attrs = {
+            "long_name": "longitude of grid cell center",
+            "units": "degrees_east",
+        }
+        ds.raster.set_crs(4326)
+
+        # check whether data is for noon or midnight. If noon, subtract 12 hours from time coordinate to align with other datasets
+        if hasattr(ds, "time") and pd.to_datetime(ds.time[0].values).hour == 12:
+            # subtract 12 hours from time coordinate
+            self.logger.warning(
+                "Subtracting 12 hours from time coordinate to align climate datasets"
+            )
+            ds = ds.assign_coords(time=ds.time - np.timedelta64(12, "h"))
+        return ds
+
     def plot_forcing(self, da, name):
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
@@ -192,12 +505,14 @@ class Forcing:
         # plot the first three years on separate axes
         for i in range(0, 3):
             year = data.time[0].dt.year + i
-            plot_timeline(
-                da,
-                data.sel(time=da.time.dt.year == year),
-                f"{name} - {year.item()}",
-                axes[i + 1],
-            )
+            year_data = data.sel(time=data.time.dt.year == year)
+            if year_data.size > 0:
+                plot_timeline(
+                    da,
+                    data.sel(time=da.time.dt.year == year),
+                    f"{name} - {year.item()}",
+                    axes[i + 1],
+                )
 
         fp = self.report_dir / (name + ".png")
         fp.parent.mkdir(parents=True, exist_ok=True)
@@ -464,6 +779,7 @@ class Forcing:
 
     def _mask_forcing(self, da, value):
         da_ = xr.where(~self.grid["mask"], da, value, keep_attrs=True)
+        da_ = da_.rio.write_crs(da.rio.crs)
         da = da_.transpose(*da.dims)
         return da
 
@@ -543,9 +859,15 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
+        # this range corresponds to probabilities of lower than 0.001 and higher than 0.999
+        # which should be considered non-significant
+        min_SPEI = -3.09
+        max_SPEI = 3.09
+        da = da.clip(min=min_SPEI, max=max_SPEI)
+
         offset = 0
         scaling_factor, out_dtype = calculate_scaling(
-            5, 5, offset=offset, precision=0.001
+            min_SPEI, max_SPEI, offset=offset, precision=0.001
         )
 
         filters = [
@@ -564,14 +886,14 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def setup_forcing_era5(self, starttime, endtime):
+    def setup_forcing_era5(self):
         target = self.grid["mask"]
         target.raster.set_crs(4326)
 
         download_args = {
             "folder": self.preprocessing_dir / "climate" / "ERA5",
-            "starttime": starttime,
-            "endtime": endtime,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
             "bounds": target.raster.bounds,
             "logger": self.logger,
         }
@@ -591,7 +913,7 @@ class Forcing:
         pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        pr = pr.raster.reproject_like(target, method="average")
+        pr = resample_like(pr, target, method="average")
         self.set_pr(pr)
 
         hourly_rsds = process_ERA5(
@@ -602,7 +924,7 @@ class Forcing:
             24 * 3600
         )  # get daily sum and convert from J/m2 to W/m2
 
-        rsds = rsds.raster.reproject_like(target, method="average")
+        rsds = resample_like(rsds, target, method="average")
         self.set_rsds(rsds)
 
         hourly_rlds = process_ERA5(
@@ -610,7 +932,7 @@ class Forcing:
             **download_args,
         )
         rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        rlds = rlds.raster.reproject_like(target, method="average")
+        rlds = resample_like(rlds, target, method="average")
         self.set_rlds(rlds)
 
         hourly_tas = process_ERA5("t2m", **download_args)
@@ -619,41 +941,61 @@ class Forcing:
             hourly_tas, elevation_forcing, elevation_target
         )
 
-        tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
-        self.set_tas(tas_reprojected)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            self.logger.info("Writing temporary tas to zarr")
 
-        tasmax = hourly_tas_reprojected.resample(time="D").max()
-        self.set_tasmax(tasmax)
+            hourly_tas_reprojected = to_zarr(
+                hourly_tas_reprojected,
+                tmpdir / "reprojected_tas.zarr",
+                crs=4326,
+                time_chunksize=24,
+            )
 
-        tasmin = hourly_tas_reprojected.resample(time="D").min()
-        self.set_tasmin(tasmin)
+            tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
+            self.set_tas(tas_reprojected)
 
-        dew_point_tas = process_ERA5(
-            "d2m",
-            **download_args,
-        )
-        dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-            dew_point_tas, elevation_forcing, elevation_target
-        )
+            tasmax = hourly_tas_reprojected.resample(time="D").max()
+            self.set_tasmax(tasmax)
 
-        water_vapour_pressure = 0.6108 * np.exp(
-            17.27
-            * (dew_point_tas_reprojected - 273.15)
-            / (237.3 + (dew_point_tas_reprojected - 273.15))
-        )  # calculate water vapour pressure (kPa)
-        saturation_vapour_pressure = 0.6108 * np.exp(
-            17.27
-            * (hourly_tas_reprojected - 273.15)
-            / (237.3 + (hourly_tas_reprojected - 273.15))
-        )
+            tasmin = hourly_tas_reprojected.resample(time="D").min()
+            self.set_tasmin(tasmin)
 
-        assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
-        relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
-        relative_humidity = relative_humidity.resample(time="D").mean()
-        relative_humidity = relative_humidity.raster.reproject_like(
-            target, method="average"
-        )
-        self.set_hurs(relative_humidity)
+            dew_point_tas = process_ERA5(
+                "d2m",
+                **download_args,
+            )
+            dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
+                dew_point_tas, elevation_forcing, elevation_target
+            )
+            self.logger.info("Writing temporary dew_point_tas to zarr")
+            dew_point_tas_reprojected = to_zarr(
+                dew_point_tas_reprojected,
+                tmpdir / "reprojected_dew_point_tas.zarr",
+                crs=4326,
+                time_chunksize=24,
+            )
+
+            water_vapour_pressure = 0.6108 * np.exp(
+                17.27
+                * (dew_point_tas_reprojected - 273.15)
+                / (237.3 + (dew_point_tas_reprojected - 273.15))
+            )  # calculate water vapour pressure (kPa)
+            saturation_vapour_pressure = 0.6108 * np.exp(
+                17.27
+                * (hourly_tas_reprojected - 273.15)
+                / (237.3 + (hourly_tas_reprojected - 273.15))
+            )
+
+            assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
+            relative_humidity = (
+                water_vapour_pressure / saturation_vapour_pressure
+            ) * 100
+            relative_humidity = relative_humidity.resample(time="D").mean()
+            relative_humidity = resample_like(
+                relative_humidity, target, method="bilinear"
+            )
+            self.set_hurs(relative_humidity)
 
         pressure = process_ERA5("sp", **download_args)
         pressure = reproject_and_apply_lapse_rate_pressure(
@@ -674,10 +1016,10 @@ class Forcing:
         )
         v_wind = v_wind.resample(time="D").mean()
         wind_speed = np.sqrt(u_wind**2 + v_wind**2)
-        wind_speed = wind_speed.raster.reproject_like(target, method="average")
+        wind_speed = resample_like(wind_speed, target, method="bilinear")
         self.set_sfcwind(wind_speed)
 
-    def setup_forcing_ISIMIP(self, starttime, endtime, resolution_arcsec, forcing, ssp):
+    def setup_forcing_ISIMIP(self, resolution_arcsec, forcing, ssp):
         if resolution_arcsec == 30:
             assert forcing == "chelsa-w5e5", (
                 "Only chelsa-w5e5 is supported for 30 arcsec resolution"
@@ -685,15 +1027,15 @@ class Forcing:
             # download source data from ISIMIP
             self.logger.info("setting up forcing data")
             high_res_variables = ["pr", "rsds", "tas", "tasmax", "tasmin"]
-            self.setup_30arcsec_variables_isimip(high_res_variables, starttime, endtime)
+            self.setup_30arcsec_variables_isimip(high_res_variables)
             self.logger.info("setting up relative humidity...")
-            self.setup_hurs_isimip_30arcsec(starttime, endtime)
+            self.setup_hurs_isimip_30arcsec()
             self.logger.info("setting up longwave radiation...")
-            self.setup_longwave_isimip_30arcsec(starttime=starttime, endtime=endtime)
+            self.setup_longwave_isimip_30arcsec()
             self.logger.info("setting up pressure...")
-            self.setup_pressure_isimip_30arcsec(starttime, endtime)
+            self.setup_pressure_isimip_30arcsec()
             self.logger.info("setting up wind...")
-            self.setup_wind_isimip_30arcsec(starttime, endtime)
+            self.setup_wind_isimip_30arcsec()
         elif resolution_arcsec == 1800:
             variables = [
                 "pr",
@@ -706,9 +1048,7 @@ class Forcing:
                 "ps",
                 "sfcwind",
             ]
-            self.setup_1800arcsec_variables_isimip(
-                forcing, variables, starttime, endtime, ssp=ssp
-            )
+            self.setup_1800arcsec_variables_isimip(forcing, variables, ssp=ssp)
         else:
             raise ValueError(
                 "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
@@ -716,8 +1056,6 @@ class Forcing:
 
     def setup_forcing(
         self,
-        starttime: date,
-        endtime: date,
         data_source: str,
         resolution_arcsec,
         forcing,
@@ -728,10 +1066,6 @@ class Forcing:
 
         Parameters
         ----------
-        starttime : date
-            The start time of the forcing data.
-        endtime : date
-            The end time of the forcing data.
         data_source : str, optional
             The data source to use for the forcing data. Default is 'isimip'.
 
@@ -750,13 +1084,10 @@ class Forcing:
 
         The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
-        assert starttime < endtime, "Start time must be before end time"
         if data_source == "isimip":
-            self.setup_forcing_ISIMIP(
-                starttime, endtime, resolution_arcsec, forcing, ssp
-            )
+            self.setup_forcing_ISIMIP(resolution_arcsec, forcing, ssp)
         elif data_source == "era5":
-            self.setup_forcing_era5(starttime, endtime)
+            self.setup_forcing_era5()
         elif data_source == "cmip":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
@@ -766,8 +1097,6 @@ class Forcing:
         self,
         forcing: str,
         variables: List[str],
-        starttime: date,
-        endtime: date,
         ssp: str,
     ):
         """
@@ -777,10 +1106,6 @@ class Forcing:
         ----------
         variables : list of str
             The list of climate variables to set up.
-        starttime : date
-            The start time of the forcing data.
-        endtime : date
-            The end time of the forcing data.
         folder: str
             The folder to save the forcing data in.
 
@@ -796,7 +1121,7 @@ class Forcing:
         The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable_name, forcing, ssp, starttime, endtime):
+        def download_variable(variable_name, forcing, ssp):
             self.logger.info(f"Setting up {variable_name}...")
             first_year_future_climate = 2015
             var = []
@@ -806,17 +1131,16 @@ class Forcing:
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
                     variable=variable_name,
-                    starttime=starttime,
-                    endtime=endtime,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
                 var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
+
             if (
                 (
-                    endtime.year < first_year_future_climate
-                    or starttime.year < first_year_future_climate
+                    self.end_date.year < first_year_future_climate
+                    or self.start_date.year < first_year_future_climate
                 )
                 and ssp != "picontrol"
             ):  # isimip cutoff date between historic and future climate
@@ -825,16 +1149,16 @@ class Forcing:
                     simulation_round="ISIMIP3b",
                     climate_scenario="historical",
                     variable=variable_name,
-                    starttime=starttime,
-                    endtime=endtime,
+                    start_date=self.start_date,
+                    end_date=self.end_date,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
                 var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
             if (
-                starttime.year >= first_year_future_climate
-                or endtime.year >= first_year_future_climate
+                self.start_date.year >= first_year_future_climate
+                or self.end_date.year >= first_year_future_climate
             ) and ssp != "picontrol":
                 assert ssp is not None, "ssp must be specified for future climate"
                 assert ssp != "historical", "historical scenarios run until 2014"
@@ -843,8 +1167,8 @@ class Forcing:
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
                     variable=variable_name,
-                    starttime=starttime,
-                    endtime=endtime,
+                    start_date=self.start_date,
+                    end_date=self.end_date,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
@@ -885,11 +1209,9 @@ class Forcing:
             getattr(self, f"set_{variable_name}")(var)
 
         for variable in variables:
-            download_variable(variable, forcing, ssp, starttime, endtime)
+            download_variable(variable, forcing, ssp)
 
-    def setup_30arcsec_variables_isimip(
-        self, variables: List[str], starttime: date, endtime: date
-    ):
+    def setup_30arcsec_variables_isimip(self, variables: List[str]):
         """
         Sets up the high-resolution climate variables for GEB.
 
@@ -897,10 +1219,6 @@ class Forcing:
         ----------
         variables : list of str
             The list of climate variables to set up.
-        starttime : date
-            The start time of the forcing data.
-        endtime : date
-            The end time of the forcing data.
         folder: str
             The folder to save the forcing data in.
 
@@ -916,13 +1234,13 @@ class Forcing:
         The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable, starttime, endtime):
+        def download_variable(variable):
             self.logger.info(f"Setting up {variable}...")
             ds = self.download_isimip(
                 product="InputData",
                 variable=variable,
-                starttime=starttime,
-                endtime=endtime,
+                start_date=self.start_date,
+                end_date=self.end_date,
                 forcing="chelsa-w5e5",
                 resolution="30arcsec",
             )
@@ -937,18 +1255,14 @@ class Forcing:
             getattr(self, f"set_{variable}")(var)
 
         for variable in variables:
-            download_variable(variable, starttime, endtime)
+            download_variable(variable)
 
-    def setup_hurs_isimip_30arcsec(self, starttime: date, endtime: date):
+    def setup_hurs_isimip_30arcsec(self):
         """
         Sets up the relative humidity data for GEB.
 
         Parameters
         ----------
-        starttime : date
-            The start time of the relative humidity data in ISO 8601 format (YYYY-MM-DD).
-        endtime : date
-            The end time of the relative humidity data in ISO 8601 format (YYYY-MM-DD).
         folder: str
             The folder to save the forcing data in.
 
@@ -970,15 +1284,15 @@ class Forcing:
         hurs_30_min = self.download_isimip(
             product="SecondaryInputData",
             variable="hurs",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         )  # some buffer to avoid edge effects / errors in ISIMIP API
 
         # just taking the years to simplify things
-        start_year = starttime.year
-        end_year = endtime.year
+        start_year = self.start_date.year
+        end_year = self.end_date.year
 
         chelsa_folder = self.preprocessing_dir / "climate" / "chelsa-bioclim+" / "hurs"
         chelsa_folder.mkdir(parents=True, exist_ok=True)
@@ -1017,9 +1331,7 @@ class Forcing:
 
                 w5e5_30min_sel = hurs_30_min.sel(time=slice(start_month, end_month))
                 w5e5_regridded = (
-                    w5e5_30min_sel.raster.reproject_like(
-                        hurs_ds_30sec, method="bilinear"
-                    )
+                    resample_like(w5e5_30min_sel, hurs_ds_30sec, method="bilinear")
                     * 0.01
                 )
                 w5e5_regridded = w5e5_regridded * 0.01  # convert to fraction
@@ -1064,16 +1376,12 @@ class Forcing:
 
         self.set_hurs(hurs_output)
 
-    def setup_longwave_isimip_30arcsec(self, starttime: date, endtime: date):
+    def setup_longwave_isimip_30arcsec(self):
         """
         Sets up the longwave radiation data for GEB.
 
         Parameters
         ----------
-        starttime : date
-            The start time of the longwave radiation data in ISO 8601 format (YYYY-MM-DD).
-        endtime : date
-            The end time of the longwave radiation data in ISO 8601 format (YYYY-MM-DD).
         folder: str
             The folder to save the forcing data in.
 
@@ -1103,24 +1411,24 @@ class Forcing:
         hurs_coarse = self.download_isimip(
             product="SecondaryInputData",
             variable="hurs",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).hurs  # some buffer to avoid edge effects / errors in ISIMIP API
         tas_coarse = self.download_isimip(
             product="SecondaryInputData",
             variable="tas",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).tas  # some buffer to avoid edge effects / errors in ISIMIP API
         rlds_coarse = self.download_isimip(
             product="SecondaryInputData",
             variable="rlds",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).rlds  # some buffer to avoid edge effects / errors in ISIMIP API
@@ -1128,16 +1436,10 @@ class Forcing:
         target = self.other["climate/hurs"]
         target.raster.set_crs(4326)
 
-        hurs_coarse_regridded = hurs_coarse.raster.reproject_like(
-            target, method="bilinear"
-        )
+        hurs_coarse_regridded = resample_like(hurs_coarse, target, method="bilinear")
 
-        tas_coarse_regridded = tas_coarse.raster.reproject_like(
-            target, method="bilinear"
-        )
-        rlds_coarse_regridded = rlds_coarse.raster.reproject_like(
-            target, method="bilinear"
-        )
+        tas_coarse_regridded = resample_like(tas_coarse, target, method="bilinear")
+        rlds_coarse_regridded = resample_like(rlds_coarse, target, method="bilinear")
 
         hurs_fine = self.other["climate/hurs"]
         tas_fine = self.other["climate/tas"]
@@ -1177,16 +1479,12 @@ class Forcing:
         lw_fine = self.snap_to_grid(lw_fine, self.grid, relative_tollerance=0.07)
         self.set_rlds(lw_fine)
 
-    def setup_pressure_isimip_30arcsec(self, starttime: date, endtime: date):
+    def setup_pressure_isimip_30arcsec(self):
         """
         Sets up the surface pressure data for GEB.
 
         Parameters
         ----------
-        starttime : date
-            The start time of the surface pressure data in ISO 8601 format (YYYY-MM-DD).
-        endtime : date
-            The end time of the surface pressure data in ISO 8601 format (YYYY-MM-DD).
         folder: str
             The folder to save the forcing data in.
 
@@ -1211,8 +1509,8 @@ class Forcing:
         pressure_30_min = self.download_isimip(
             product="SecondaryInputData",
             variable="psl",  # pressure at sea level
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).psl  # some buffer to avoid edge effects / errors in ISIMIP API
@@ -1224,12 +1522,12 @@ class Forcing:
             product="InputData", variable="orog", forcing="chelsa-w5e5", buffer=1
         ).orog  # some buffer to avoid edge effects / errors in ISIMIP API
         # TODO: This can perhaps be a clipped version of the orography data
-        orography = orography.raster.reproject_like(target, method="average")
+        orography = resample_like(orography, target, method="average")
 
         # pressure at sea level, so we can do bilinear interpolation before
         # applying the correction for orography
-        pressure_30_min_regridded = pressure_30_min.raster.reproject_like(
-            target, method="bilinear"
+        pressure_30_min_regridded = resample_like(
+            pressure_30_min, target, method="bilinear"
         )
 
         pressure_30_min_regridded_corr = pressure_30_min_regridded * np.exp(
@@ -1238,16 +1536,12 @@ class Forcing:
 
         self.set_ps(pressure_30_min_regridded_corr)
 
-    def setup_wind_isimip_30arcsec(self, starttime: date, endtime: date):
+    def setup_wind_isimip_30arcsec(self):
         """
         Sets up the wind data for GEB.
 
         Parameters
         ----------
-        starttime : date
-            The start time of the wind data in ISO 8601 format (YYYY-MM-DD).
-        endtime : date
-            The end time of the wind data in ISO 8601 format (YYYY-MM-DD).
         folder: str
             The folder to save the forcing data in.
 
@@ -1277,23 +1571,23 @@ class Forcing:
         target = self.grid["mask"]
         target.raster.set_crs(4326)
 
-        global_wind_atlas_regridded = global_wind_atlas.raster.reproject_like(
-            target, method="average"
+        global_wind_atlas_regridded = resample_like(
+            global_wind_atlas, target, method="average"
         )
 
         wind_30_min_avg = self.download_isimip(
             product="SecondaryInputData",
             variable="sfcwind",
-            starttime=date(2008, 1, 1),
-            endtime=date(2017, 12, 31),
+            start_date=date(2008, 1, 1),
+            end_date=date(2017, 12, 31),
             forcing="w5e5v2.0",
             buffer=1,
         ).sfcWind.mean(
             dim="time"
         )  # some buffer to avoid edge effects / errors in ISIMIP API
 
-        wind_30_min_avg_regridded = wind_30_min_avg.raster.reproject_like(
-            target, method="bilinear"
+        wind_30_min_avg_regridded = resample_like(
+            wind_30_min_avg, target, method="bilinear"
         )
 
         # create diff layer:
@@ -1309,15 +1603,13 @@ class Forcing:
         wind_30_min = self.download_isimip(
             product="SecondaryInputData",
             variable="sfcwind",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).sfcWind  # some buffer to avoid edge effects / errors in ISIMIP API
 
-        wind_30min_regridded = wind_30_min.raster.reproject_like(
-            target, method="bilinear"
-        )
+        wind_30min_regridded = resample_like(wind_30_min, target, method="bilinear")
         wind_30min_regridded_log = np.log(wind_30min_regridded)
 
         wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
@@ -1355,6 +1647,8 @@ class Forcing:
             The start time of the reSPEI data in ISO 8601 format (YYYY-MM-DD).
         calibration_period_end : date
             The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
+        window : int
+            The window size in months for the SPEI calculation. Default is 12 months.
         """
         self.logger.info("setting up SPEI...")
 
@@ -1386,6 +1680,22 @@ class Forcing:
         pet = xci.potential_evapotranspiration(
             tasmin=self.other["climate/tasmin"],
             tasmax=self.other["climate/tasmax"],
+            # hurs=self.other["climate/hurs"],
+            # rsds=self.other["climate/rsds"],
+            # rlds=self.other["climate/rlds"],
+            # rsus=self.full_like(
+            #     self.other["climate/rsds"],
+            #     fill_value=0,
+            #     nodata=np.nan,
+            #     attrs=self.other["climate/rsds"].attrs,
+            # ),
+            # rlus=self.full_like(
+            #     self.other["climate/rsds"],
+            #     fill_value=0,
+            #     nodata=np.nan,
+            #     attrs=self.other["climate/rsds"].attrs,
+            # ),
+            # sfcWind=self.other["climate/sfcwind"],
             method="BR65",
         ).astype(np.float32)
 
@@ -1393,10 +1703,10 @@ class Forcing:
         water_budget = xci.water_budget(pr=self.other["climate/pr"], evspsblpot=pet)
 
         water_budget = water_budget.resample(time="MS").mean(keep_attrs=True)
+        water_budget.attrs["_FillValue"] = np.nan
 
         temp_xy_chunk_size = 50
 
-        water_budget.attrs = {"units": "kg m-2 s-1", "_FillValue": np.nan}
         with tempfile.TemporaryDirectory() as tmp_water_budget_folder:
             tmp_water_budget_file = (
                 Path(tmp_water_budget_folder) / "tmp_water_budget_file.zarr"
@@ -1415,17 +1725,28 @@ class Forcing:
             # We set freq to None, so that the input frequency is used (no recalculating)
             # this means that we can calculate SPEI much more efficiently, as it is not
             # rechunked in the xclim package
+
+            # The log-logistic distribution used in SPEI has three parameters: scale, shape, and location.
+            # In practice, fixing the location (floc) to 0 simplifies the fitting process and often
+            # provides satisfactory results.The fitting is then effectively done with two parameters,
+            # also reducing the risk of overfitting, especially with limited data.
+            # When empirical data suggest that the climatic water balance values are significantly shifted,
+            # a non-zero floc may better fit the distribution. However, this is not typical in routine applications.
             SPEI = xci.standardized_precipitation_evapotranspiration_index(
                 wb=water_budget,
                 cal_start=calibration_period_start,
                 cal_end=calibration_period_end,
                 freq=None,
                 window=window,
-                dist="gamma",
-                method="ML",
+                dist="fisk",  # log-logistic distribution
+                method="APP",  # approximative method
+                fitkwargs={
+                    "floc": water_budget.min().compute().item()
+                },  # location parameter, assures that the distribution is always positive
             ).astype(np.float32)
 
             # remove all nan values as a result of the sliding window
+            SPEI = SPEI.isel(time=slice(window - 1, -1))
 
             with tempfile.TemporaryDirectory() as tmp_spei_folder:
                 tmp_spei_file = Path(tmp_spei_folder) / "tmp_spei_file.zarr"
@@ -1490,14 +1811,12 @@ class Forcing:
                 .raster.mask_nodata()
                 .fillna(0)
             )
-            elevation_forcing = elevation.raster.reproject_like(
-                forcing_grid, method="average"
-            )
+            elevation_forcing = resample_like(elevation, forcing_grid, method="average")
             elevation_forcing = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
                 crs=4326,
             )
-            elevation_grid = elevation.raster.reproject_like(grid, method="average")
+            elevation_grid = resample_like(elevation, grid, method="average")
             elevation_grid = to_zarr(elevation_grid, elevation_grid_fp, crs=4326)
         return elevation_forcing, elevation_grid

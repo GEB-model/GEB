@@ -1,6 +1,6 @@
 """GEB simulates the environment, the individual behaviour of people, households and organizations - including their interactions - at small and large scale."""
 
-__version__ = "1.0.0b4"
+__version__ = "1.0.0b5"
 
 import faulthandler
 import os
@@ -58,7 +58,7 @@ load_numba_threading_layer()
 
 # xarray uses bottleneck for some operations to speed up computations
 # however, some implementations are numerically unstable, so we disable it
-xr.set_options(use_bottleneck=False)
+xr.set_options(use_bottleneck=False, keep_attrs=True)
 
 # set environment variable for GEB package directory
 os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)

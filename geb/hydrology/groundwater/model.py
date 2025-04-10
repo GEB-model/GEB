@@ -501,7 +501,7 @@ class ModFlowSimulation:
             prev_hash = None
         else:
             with open(self.hash_file, "rb") as f:
-                prev_hash = f.read().strip()
+                prev_hash = f.read()
         if prev_hash == self.hash and not self.never_load_from_disk:
             return True
         else:
