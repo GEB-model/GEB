@@ -363,6 +363,7 @@ def get_potential_irrigation_consumption_m(
     max_paddy_water_level_farmer,
     crop_group,
     is_paddy,
+    minimum_effective_root_depth: float,
     depletion_factor=np.float32(0.5),
 ) -> np.ndarray:
     assert np.float32(0) <= fraction_irrigated_field <= np.float32(1)
@@ -378,7 +379,9 @@ def get_potential_irrigation_consumption_m(
     else:
         # use a minimum root depth of 25 cm, following AQUACROP recommendation
         # see: Reference manual for AquaCrop v7.1 – Chapter 3
-        effective_root_depth = np.maximum(np.float32(0.25), root_depth)
+        effective_root_depth = np.maximum(
+            np.float32(minimum_effective_root_depth), root_depth
+        )
         root_ratios = get_root_ratios(
             effective_root_depth,
             soil_layer_height,
@@ -443,6 +446,7 @@ def get_gross_irrigation_demand_m3(
     paddy_irrigated_crops: np.ndarray,
     current_crop_calendar_rotation_year_index: np.ndarray,
     max_paddy_water_level: np.ndarray,
+    minimum_effective_root_depth: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
@@ -505,6 +509,7 @@ def get_gross_irrigation_demand_m3(
                 max_paddy_water_level_farmer=max_paddy_water_level[farmer],
                 crop_group=crop_group_numbers[crop],
                 is_paddy=paddy_irrigated_crops[crop],
+                minimum_effective_root_depth=minimum_effective_root_depth,
             )
 
             assert consumption_m < 1

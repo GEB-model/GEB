@@ -252,7 +252,6 @@ def rise_from_groundwater(
 def evapotranspirate(
     wwp,
     wfc,
-    ws,
     wres,
     soil_layer_height,
     land_use_type,
@@ -268,6 +267,7 @@ def evapotranspirate(
     topwater,
     open_water_evaporation,
     available_water_infiltration,
+    minimum_effective_root_depth: float,
 ):
     root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
 
@@ -298,8 +298,11 @@ def evapotranspirate(
             crop_group_number, potential_evapotranspiration[i]
         )
 
+        effective_root_depth = np.maximum(
+            np.float32(minimum_effective_root_depth), root_depth[i]
+        )
         root_ratios = get_root_ratios(
-            root_depth[i],
+            effective_root_depth,
             soil_layer_height[:, i],
         )
 
@@ -330,7 +333,7 @@ def evapotranspirate(
                 root_length_within_layer_rws_corrected
             )
 
-        total_transpiration_factor_water_stress /= root_depth[i]
+        total_transpiration_factor_water_stress /= effective_root_depth
 
         # correct the transpiration reduction factor for water stress
         # if the soil is frozen, no transpiration occurs, so we can skip the loop
@@ -361,7 +364,7 @@ def evapotranspirate(
 
         if is_bioarea[i]:
             # limit the bare soil evaporation to the available water in the soil
-            if not soil_is_frozen[i] and topwater[i] == np.float32(0):
+            if not soil_is_frozen[i] and land_use_type[i] != PADDY_IRRIGATED:
                 # TODO: Minor bug, this should only occur when topwater is above 0
                 # fix this after completing soil module speedup
                 actual_bare_soil_evaporation[i] = min(
@@ -863,6 +866,10 @@ class Soil(object):
     def spinup(self):
         self.var = self.model.store.create_bucket("hydrology.soil.var")
 
+        # use a minimum root depth of 25 cm, following AQUACROP recommendation
+        # see: Reference manual for AquaCrop v7.1 – Chapter 3
+        self.var.minimum_effective_root_depth = 0.25  # m
+
         # Soil properties
         self.HRU.var.soil_layer_height = self.HRU.compress(
             load_grid(
@@ -1221,6 +1228,26 @@ class Soil(object):
             )
         )
 
+        # assert balance_check(
+        #     name="soil_1",
+        #     how="cellwise",
+        #     influxes=[
+        #         actual_irrigation_consumption[bioarea],
+        #         natural_available_water_infiltration[bioarea],
+        #     ],
+        #     outfluxes=[
+        #         open_water_evaporation[bioarea],
+        #         available_water_infiltration[bioarea],
+        #     ],
+        #     prestorages=[
+        #         topwater_pre[bioarea],
+        #     ],
+        #     poststorages=[
+        #         self.HRU.var.topwater[bioarea],
+        #     ],
+        #     tollerance=1e-6,
+        # )
+
         timer.new_split("Available infiltration")
 
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
@@ -1234,6 +1261,27 @@ class Soil(object):
             ),
         )
 
+        # assert balance_check(
+        #     name="soil_2",
+        #     how="cellwise",
+        #     influxes=[
+        #         capillary_rise_from_groundwater[bioarea],
+        #         actual_irrigation_consumption[bioarea],
+        #         natural_available_water_infiltration[bioarea],
+        #     ],
+        #     outfluxes=[
+        #         open_water_evaporation[bioarea],
+        #         available_water_infiltration[bioarea],
+        #         runoff_from_groundwater[bioarea],
+        #     ],
+        #     prestorages=[topwater_pre[bioarea], w_pre[:, bioarea].sum(axis=0)],
+        #     poststorages=[
+        #         self.HRU.var.topwater[bioarea],
+        #         self.HRU.var.w[:, bioarea].sum(axis=0),
+        #     ],
+        #     tollerance=1e-6,
+        # )
+
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
@@ -1245,7 +1293,6 @@ class Soil(object):
         ) = evapotranspirate(
             wwp=self.HRU.var.wwp,
             wfc=self.HRU.var.wfc,
-            ws=self.HRU.var.ws,
             wres=self.HRU.var.wres,
             soil_layer_height=self.HRU.var.soil_layer_height,
             land_use_type=self.HRU.var.land_use_type,
@@ -1263,10 +1310,34 @@ class Soil(object):
             topwater=self.HRU.var.topwater,
             open_water_evaporation=open_water_evaporation,
             available_water_infiltration=available_water_infiltration,
+            minimum_effective_root_depth=self.var.minimum_effective_root_depth,
         )
         assert actual_total_transpiration.dtype == np.float32
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
+
+        # assert balance_check(
+        #     name="soil_3",
+        #     how="cellwise",
+        #     influxes=[
+        #         capillary_rise_from_groundwater[bioarea],
+        #         actual_irrigation_consumption[bioarea],
+        #         natural_available_water_infiltration[bioarea],
+        #     ],
+        #     outfluxes=[
+        #         open_water_evaporation[bioarea],
+        #         available_water_infiltration[bioarea],
+        #         runoff_from_groundwater[bioarea],
+        #         actual_total_transpiration[bioarea],
+        #         actual_bare_soil_evaporation[bioarea],
+        #     ],
+        #     prestorages=[topwater_pre[bioarea], w_pre[:, bioarea].sum(axis=0)],
+        #     poststorages=[
+        #         self.HRU.var.topwater[bioarea],
+        #         self.HRU.var.w[:, bioarea].sum(axis=0),
+        #     ],
+        #     tollerance=1e-6,
+        # )
 
         timer.new_split("Evapotranspiration")
 
@@ -1318,7 +1389,7 @@ class Soil(object):
             assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
-                name="soil_1",
+                name="soil_4",
                 how="cellwise",
                 influxes=[
                     natural_available_water_infiltration[bioarea],
@@ -1345,7 +1416,7 @@ class Soil(object):
             )
 
             balance_check(
-                name="soil_2",
+                name="soil_5",
                 how="cellwise",
                 influxes=[
                     natural_available_water_infiltration[bioarea],
