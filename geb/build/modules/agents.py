@@ -36,7 +36,7 @@ class Agents:
     def __init__(self):
         pass
 
-    def setup_water_demand(self, starttime, endtime, ssp):
+    def setup_water_demand(self, ssp):
         """
         Sets up the water demand data for GEB.
 
@@ -135,7 +135,7 @@ class Agents:
 
         self.logger.info("Setting up other water demands")
 
-        def set(file, accessor, name, ssp, starttime, endtime):
+        def set(file, accessor, name, ssp):
             ds_historic = self.data_catalog.get_rasterdataset(
                 f"cwatm_{file}_historical_year", bbox=self.bounds, buffer=2
             )
@@ -162,7 +162,7 @@ class Agents:
             )
 
             assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
-            ds = ds.sel(time=slice(starttime, endtime))
+            ds = ds.sel(time=slice(self.start_date, self.end_date))
             ds = ds.rename({"lat": "y", "lon": "x"})
             ds.attrs["_FillValue"] = np.nan
             self.set_other(ds, name=f"water_demand/{name}")
@@ -172,29 +172,21 @@ class Agents:
             "indWW",
             "industry_water_demand",
             ssp,
-            starttime,
-            endtime,
         )
         set(
             "industry_water_demand",
             "indCon",
             "industry_water_consumption",
             ssp,
-            starttime,
-            endtime,
         )
         set(
             "livestock_water_demand",
             None,
             "livestock_water_consumption",
             ssp,
-            starttime,
-            endtime,
         )
 
-    def setup_economic_data(
-        self, project_future_until_year=False, reference_start_year=2000
-    ):
+    def setup_economic_data(self):
         """
         Sets up the economic data for GEB.
 
@@ -212,12 +204,6 @@ class Agents:
         'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
         """
         self.logger.info("Setting up economic data")
-        assert (
-            not project_future_until_year
-            or project_future_until_year > reference_start_year
-        ), (
-            f"project_future_until_year ({project_future_until_year}) must be larger than reference_start_year ({reference_start_year})"
-        )
 
         # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
@@ -313,39 +299,39 @@ class Agents:
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
-        if project_future_until_year:
-            # convert to pandas dataframe
-            inflation_rates = pd.DataFrame(
-                inflation_rates_dict["data"], index=inflation_rates_dict["time"]
-            ).dropna()
-            # lending_rates = pd.DataFrame(
-            #     lending_rates_dict["data"], index=lending_rates_dict["time"]
-            # ).dropna()
+        # if project_future_until_year:
+        #     # convert to pandas dataframe
+        #     inflation_rates = pd.DataFrame(
+        #         inflation_rates_dict["data"], index=inflation_rates_dict["time"]
+        #     ).dropna()
+        #     # lending_rates = pd.DataFrame(
+        #     #     lending_rates_dict["data"], index=lending_rates_dict["time"]
+        #     # ).dropna()
 
-            inflation_rates.index = inflation_rates.index.astype(int)
-            # extend inflation rates to future
-            mean_inflation_rate_since_reference_year = inflation_rates.loc[
-                reference_start_year:
-            ].mean(axis=0)
-            inflation_rates = inflation_rates.reindex(
-                range(inflation_rates.index.min(), project_future_until_year + 1)
-            ).fillna(mean_inflation_rate_since_reference_year)
+        #     inflation_rates.index = inflation_rates.index.astype(int)
+        #     # extend inflation rates to future
+        #     mean_inflation_rate_since_reference_year = inflation_rates.loc[
+        #         reference_start_year:
+        #     ].mean(axis=0)
+        #     inflation_rates = inflation_rates.reindex(
+        #         range(inflation_rates.index.min(), project_future_until_year + 1)
+        #     ).fillna(mean_inflation_rate_since_reference_year)
 
-            inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
-            inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
+        #     inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
+        #     inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
 
-            # lending_rates.index = lending_rates.index.astype(int)
-            # extend lending rates to future
-            # mean_lending_rate_since_reference_year = lending_rates.loc[
-            #     reference_start_year:
-            # ].mean(axis=0)
-            # lending_rates = lending_rates.reindex(
-            #     range(lending_rates.index.min(), project_future_until_year + 1)
-            # ).fillna(mean_lending_rate_since_reference_year)
+        #     # lending_rates.index = lending_rates.index.astype(int)
+        #     # extend lending rates to future
+        #     # mean_lending_rate_since_reference_year = lending_rates.loc[
+        #     #     reference_start_year:
+        #     # ].mean(axis=0)
+        #     # lending_rates = lending_rates.reindex(
+        #     #     range(lending_rates.index.min(), project_future_until_year + 1)
+        #     # ).fillna(mean_lending_rate_since_reference_year)
 
-            # # convert back to dictionary
-            # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
-            # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
+        #     # # convert back to dictionary
+        #     # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
+        #     # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
 
         self.set_dict(inflation_rates_dict, name="socioeconomics/inflation_rates")
         # self.set_dict(lending_rates_dict, name="socioeconomics/lending_rates")
@@ -532,8 +518,6 @@ class Agents:
         WHY_20: float,
         WHY_30: float,
         reference_year: int,
-        start_year: int,
-        end_year: int,
     ):
         """
         Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
@@ -546,10 +530,6 @@ class Agents:
             The upkeep price per square meter of a well in the reference year.
         reference_year : int
             The reference year for the well prices and upkeep prices.
-        start_year : int
-            The start year for the well prices and upkeep prices.
-        end_year : int
-            The end year for the well prices and upkeep prices.
 
         Notes
         -----
@@ -576,6 +556,9 @@ class Agents:
             "why_20": WHY_20,
             "why_30": WHY_30,
         }
+
+        start_year = self.start_date.year
+        end_year = self.end_date.year
 
         # Iterate over each price type and calculate the prices across years for each region
         for price_type, initial_price in price_types.items():

@@ -661,8 +661,6 @@ class Crops:
     def setup_cultivation_costs(
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
-        project_future_until_year: Optional[int] = False,
-        project_past_until_year: Optional[int] = False,
         translate_crop_names: Optional[Dict[str, str]] = None,
     ):
         """
@@ -678,8 +676,6 @@ class Crops:
         self.logger.info("Preparing cultivation costs")
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
-            project_future_until_year=project_future_until_year,
-            project_past_until_year=project_past_until_year,
             translate_crop_names=translate_crop_names,
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")

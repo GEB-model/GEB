@@ -88,7 +88,7 @@ def reproject_and_apply_lapse_rate_pressure(
     return pressure_grid
 
 
-def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
+def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
     output_fn = folder / f"{variable}.zarr"
     if output_fn.exists():
         da = open_zarr(output_fn)
@@ -109,13 +109,13 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
             # Need to handle the split across the meridian
             # Get western hemisphere part (longitude < 0)
             west_da = da.sel(
-                time=slice(starttime, endtime),
+                time=slice(start_date, end_date),
                 y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
                 x=slice(((bounds[0] - 0.11) + 360) % 360, 360),
             )
             # Get eastern hemisphere part (longitude > 0)
             east_da = da.sel(
-                time=slice(starttime, endtime),
+                time=slice(start_date, end_date),
                 y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
                 x=slice(0, ((bounds[2] + 0.11) + 360) % 360),
             )
@@ -124,7 +124,7 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
         else:
             # Regular case - doesn't cross meridian
             da = da.sel(
-                time=slice(starttime, endtime),
+                time=slice(start_date, end_date),
                 y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
                 x=slice(
                     ((bounds[0] - 0.11) + 360) % 360, ((bounds[2] + 0.11) + 360) % 360
@@ -147,8 +147,8 @@ def download_ERA5(folder, variable, starttime, endtime, bounds, logger):
     return da
 
 
-def process_ERA5(variable, folder, starttime, endtime, bounds, logger):
-    da = download_ERA5(folder, variable, starttime, endtime, bounds, logger)
+def process_ERA5(variable, folder, start_date, end_date, bounds, logger):
+    da = download_ERA5(folder, variable, start_date, end_date, bounds, logger)
     # assert that time is monotonically increasing with a constant step size
     assert (
         da.time.diff("time").astype(np.int64)
@@ -218,8 +218,8 @@ class Forcing:
         product,
         variable,
         forcing,
-        starttime=None,
-        endtime=None,
+        start_date=None,
+        end_date=None,
         simulation_round="ISIMIP3a",
         climate_scenario="obsclim",
         resolution=None,
@@ -236,9 +236,9 @@ class Forcing:
             The name of the climate variable to download.
         forcing : str
             The name of the climate forcing to download.
-        starttime : date, optional
+        start_date : date, optional
             The start date of the data. Default is None.
-        endtime : date, optional
+        end_date : date, optional
             The end date of the data. Default is None.
         resolution : str, optional
             The resolution of the data to download. Default is None.
@@ -254,14 +254,14 @@ class Forcing:
         -----
         This method downloads ISIMIP climate data for GEB. It first retrieves the dataset
         metadata from the ISIMIP repository using the specified `product`, `variable`, `forcing`, and `resolution`
-        parameters. It then downloads the data files that match the specified `starttime` and `endtime` parameters, and
+        parameters. It then downloads the data files that match the specified `start_date` and `end_date` parameters, and
         extracts them to the specified `download_path` directory.
 
         The resulting climate data is returned as an xarray dataset. The dataset is assigned the coordinate reference system
         EPSG:4326, and the spatial dimensions are set to 'lon' and 'lat'.
         """
-        # if starttime is specified, endtime must be specified as well
-        assert (starttime is None) == (endtime is None)
+        # if start_date is specified, end_date must be specified as well
+        assert (start_date is None) == (end_date is None)
 
         client = ISIMIPClient()
         download_path = self.preprocessing_dir / "climate" / forcing / variable
@@ -307,7 +307,7 @@ class Forcing:
                 download_files = []
 
         else:
-            assert starttime is not None and endtime is not None
+            assert start_date is not None and end_date is not None
             download_files = []
             parse_files = []
             for file in files:
@@ -331,7 +331,7 @@ class Forcing:
                 else:
                     raise ValueError(f"could not parse date {date} from file {name}")
 
-                if not (end_date < starttime or start_date > endtime):
+                if not (end_date < start_date or start_date > end_date):
                     parse_files.append(file["name"].replace("_global", ""))
                     if not (
                         download_path / file["name"].replace("_global", "")
@@ -463,8 +463,8 @@ class Forcing:
         else:
             ds = datasets[0]
 
-        if starttime is not None:
-            ds = ds.sel(time=slice(starttime, endtime))
+        if start_date is not None:
+            ds = ds.sel(time=slice(start_date, end_date))
             # assert that time is monotonically increasing with a constant step size
             assert (
                 ds.time.diff("time").astype(np.int64)
@@ -886,14 +886,14 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def setup_forcing_era5(self, starttime, endtime):
+    def setup_forcing_era5(self):
         target = self.grid["mask"]
         target.raster.set_crs(4326)
 
         download_args = {
             "folder": self.preprocessing_dir / "climate" / "ERA5",
-            "starttime": starttime,
-            "endtime": endtime,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
             "bounds": target.raster.bounds,
             "logger": self.logger,
         }
@@ -1019,7 +1019,7 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="bilinear")
         self.set_sfcwind(wind_speed)
 
-    def setup_forcing_ISIMIP(self, starttime, endtime, resolution_arcsec, forcing, ssp):
+    def setup_forcing_ISIMIP(self, resolution_arcsec, forcing, ssp):
         if resolution_arcsec == 30:
             assert forcing == "chelsa-w5e5", (
                 "Only chelsa-w5e5 is supported for 30 arcsec resolution"
@@ -1027,15 +1027,15 @@ class Forcing:
             # download source data from ISIMIP
             self.logger.info("setting up forcing data")
             high_res_variables = ["pr", "rsds", "tas", "tasmax", "tasmin"]
-            self.setup_30arcsec_variables_isimip(high_res_variables, starttime, endtime)
+            self.setup_30arcsec_variables_isimip(high_res_variables)
             self.logger.info("setting up relative humidity...")
-            self.setup_hurs_isimip_30arcsec(starttime, endtime)
+            self.setup_hurs_isimip_30arcsec()
             self.logger.info("setting up longwave radiation...")
-            self.setup_longwave_isimip_30arcsec(starttime=starttime, endtime=endtime)
+            self.setup_longwave_isimip_30arcsec()
             self.logger.info("setting up pressure...")
-            self.setup_pressure_isimip_30arcsec(starttime, endtime)
+            self.setup_pressure_isimip_30arcsec()
             self.logger.info("setting up wind...")
-            self.setup_wind_isimip_30arcsec(starttime, endtime)
+            self.setup_wind_isimip_30arcsec()
         elif resolution_arcsec == 1800:
             variables = [
                 "pr",
@@ -1048,9 +1048,7 @@ class Forcing:
                 "ps",
                 "sfcwind",
             ]
-            self.setup_1800arcsec_variables_isimip(
-                forcing, variables, starttime, endtime, ssp=ssp
-            )
+            self.setup_1800arcsec_variables_isimip(forcing, variables, ssp=ssp)
         else:
             raise ValueError(
                 "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
@@ -1058,8 +1056,6 @@ class Forcing:
 
     def setup_forcing(
         self,
-        starttime: date,
-        endtime: date,
         data_source: str,
         resolution_arcsec,
         forcing,
@@ -1070,10 +1066,6 @@ class Forcing:
 
         Parameters
         ----------
-        starttime : date
-            The start time of the forcing data.
-        endtime : date
-            The end time of the forcing data.
         data_source : str, optional
             The data source to use for the forcing data. Default is 'isimip'.
 
@@ -1092,13 +1084,10 @@ class Forcing:
 
         The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
-        assert starttime < endtime, "Start time must be before end time"
         if data_source == "isimip":
-            self.setup_forcing_ISIMIP(
-                starttime, endtime, resolution_arcsec, forcing, ssp
-            )
+            self.setup_forcing_ISIMIP(resolution_arcsec, forcing, ssp)
         elif data_source == "era5":
-            self.setup_forcing_era5(starttime, endtime)
+            self.setup_forcing_era5()
         elif data_source == "cmip":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
@@ -1108,8 +1097,6 @@ class Forcing:
         self,
         forcing: str,
         variables: List[str],
-        starttime: date,
-        endtime: date,
         ssp: str,
     ):
         """
@@ -1119,10 +1106,6 @@ class Forcing:
         ----------
         variables : list of str
             The list of climate variables to set up.
-        starttime : date
-            The start time of the forcing data.
-        endtime : date
-            The end time of the forcing data.
         folder: str
             The folder to save the forcing data in.
 
@@ -1138,7 +1121,7 @@ class Forcing:
         The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable_name, forcing, ssp, starttime, endtime):
+        def download_variable(variable_name, forcing, ssp):
             self.logger.info(f"Setting up {variable_name}...")
             first_year_future_climate = 2015
             var = []
@@ -1148,17 +1131,16 @@ class Forcing:
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
                     variable=variable_name,
-                    starttime=starttime,
-                    endtime=endtime,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
                 var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
+
             if (
                 (
-                    endtime.year < first_year_future_climate
-                    or starttime.year < first_year_future_climate
+                    self.end_date.year < first_year_future_climate
+                    or self.start_date.year < first_year_future_climate
                 )
                 and ssp != "picontrol"
             ):  # isimip cutoff date between historic and future climate
@@ -1167,16 +1149,16 @@ class Forcing:
                     simulation_round="ISIMIP3b",
                     climate_scenario="historical",
                     variable=variable_name,
-                    starttime=starttime,
-                    endtime=endtime,
+                    start_date=self.start_date,
+                    end_date=self.end_date,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
                 )
                 var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
             if (
-                starttime.year >= first_year_future_climate
-                or endtime.year >= first_year_future_climate
+                self.start_date.year >= first_year_future_climate
+                or self.end_date.year >= first_year_future_climate
             ) and ssp != "picontrol":
                 assert ssp is not None, "ssp must be specified for future climate"
                 assert ssp != "historical", "historical scenarios run until 2014"
@@ -1185,8 +1167,8 @@ class Forcing:
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
                     variable=variable_name,
-                    starttime=starttime,
-                    endtime=endtime,
+                    start_date=self.start_date,
+                    end_date=self.end_date,
                     forcing=forcing,
                     resolution=None,
                     buffer=1,
@@ -1227,11 +1209,9 @@ class Forcing:
             getattr(self, f"set_{variable_name}")(var)
 
         for variable in variables:
-            download_variable(variable, forcing, ssp, starttime, endtime)
+            download_variable(variable, forcing, ssp)
 
-    def setup_30arcsec_variables_isimip(
-        self, variables: List[str], starttime: date, endtime: date
-    ):
+    def setup_30arcsec_variables_isimip(self, variables: List[str]):
         """
         Sets up the high-resolution climate variables for GEB.
 
@@ -1239,10 +1219,6 @@ class Forcing:
         ----------
         variables : list of str
             The list of climate variables to set up.
-        starttime : date
-            The start time of the forcing data.
-        endtime : date
-            The end time of the forcing data.
         folder: str
             The folder to save the forcing data in.
 
@@ -1258,13 +1234,13 @@ class Forcing:
         The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable, starttime, endtime):
+        def download_variable(variable):
             self.logger.info(f"Setting up {variable}...")
             ds = self.download_isimip(
                 product="InputData",
                 variable=variable,
-                starttime=starttime,
-                endtime=endtime,
+                start_date=self.start_date,
+                end_date=self.end_date,
                 forcing="chelsa-w5e5",
                 resolution="30arcsec",
             )
@@ -1279,18 +1255,14 @@ class Forcing:
             getattr(self, f"set_{variable}")(var)
 
         for variable in variables:
-            download_variable(variable, starttime, endtime)
+            download_variable(variable)
 
-    def setup_hurs_isimip_30arcsec(self, starttime: date, endtime: date):
+    def setup_hurs_isimip_30arcsec(self):
         """
         Sets up the relative humidity data for GEB.
 
         Parameters
         ----------
-        starttime : date
-            The start time of the relative humidity data in ISO 8601 format (YYYY-MM-DD).
-        endtime : date
-            The end time of the relative humidity data in ISO 8601 format (YYYY-MM-DD).
         folder: str
             The folder to save the forcing data in.
 
@@ -1312,15 +1284,15 @@ class Forcing:
         hurs_30_min = self.download_isimip(
             product="SecondaryInputData",
             variable="hurs",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         )  # some buffer to avoid edge effects / errors in ISIMIP API
 
         # just taking the years to simplify things
-        start_year = starttime.year
-        end_year = endtime.year
+        start_year = self.start_date.year
+        end_year = self.end_date.year
 
         chelsa_folder = self.preprocessing_dir / "climate" / "chelsa-bioclim+" / "hurs"
         chelsa_folder.mkdir(parents=True, exist_ok=True)
@@ -1404,16 +1376,12 @@ class Forcing:
 
         self.set_hurs(hurs_output)
 
-    def setup_longwave_isimip_30arcsec(self, starttime: date, endtime: date):
+    def setup_longwave_isimip_30arcsec(self):
         """
         Sets up the longwave radiation data for GEB.
 
         Parameters
         ----------
-        starttime : date
-            The start time of the longwave radiation data in ISO 8601 format (YYYY-MM-DD).
-        endtime : date
-            The end time of the longwave radiation data in ISO 8601 format (YYYY-MM-DD).
         folder: str
             The folder to save the forcing data in.
 
@@ -1443,24 +1411,24 @@ class Forcing:
         hurs_coarse = self.download_isimip(
             product="SecondaryInputData",
             variable="hurs",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).hurs  # some buffer to avoid edge effects / errors in ISIMIP API
         tas_coarse = self.download_isimip(
             product="SecondaryInputData",
             variable="tas",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).tas  # some buffer to avoid edge effects / errors in ISIMIP API
         rlds_coarse = self.download_isimip(
             product="SecondaryInputData",
             variable="rlds",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).rlds  # some buffer to avoid edge effects / errors in ISIMIP API
@@ -1511,16 +1479,12 @@ class Forcing:
         lw_fine = self.snap_to_grid(lw_fine, self.grid, relative_tollerance=0.07)
         self.set_rlds(lw_fine)
 
-    def setup_pressure_isimip_30arcsec(self, starttime: date, endtime: date):
+    def setup_pressure_isimip_30arcsec(self):
         """
         Sets up the surface pressure data for GEB.
 
         Parameters
         ----------
-        starttime : date
-            The start time of the surface pressure data in ISO 8601 format (YYYY-MM-DD).
-        endtime : date
-            The end time of the surface pressure data in ISO 8601 format (YYYY-MM-DD).
         folder: str
             The folder to save the forcing data in.
 
@@ -1545,8 +1509,8 @@ class Forcing:
         pressure_30_min = self.download_isimip(
             product="SecondaryInputData",
             variable="psl",  # pressure at sea level
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).psl  # some buffer to avoid edge effects / errors in ISIMIP API
@@ -1572,16 +1536,12 @@ class Forcing:
 
         self.set_ps(pressure_30_min_regridded_corr)
 
-    def setup_wind_isimip_30arcsec(self, starttime: date, endtime: date):
+    def setup_wind_isimip_30arcsec(self):
         """
         Sets up the wind data for GEB.
 
         Parameters
         ----------
-        starttime : date
-            The start time of the wind data in ISO 8601 format (YYYY-MM-DD).
-        endtime : date
-            The end time of the wind data in ISO 8601 format (YYYY-MM-DD).
         folder: str
             The folder to save the forcing data in.
 
@@ -1618,8 +1578,8 @@ class Forcing:
         wind_30_min_avg = self.download_isimip(
             product="SecondaryInputData",
             variable="sfcwind",
-            starttime=date(2008, 1, 1),
-            endtime=date(2017, 12, 31),
+            start_date=date(2008, 1, 1),
+            end_date=date(2017, 12, 31),
             forcing="w5e5v2.0",
             buffer=1,
         ).sfcWind.mean(
@@ -1643,8 +1603,8 @@ class Forcing:
         wind_30_min = self.download_isimip(
             product="SecondaryInputData",
             variable="sfcwind",
-            starttime=starttime,
-            endtime=endtime,
+            start_date=self.start_date,
+            end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
         ).sfcWind  # some buffer to avoid edge effects / errors in ISIMIP API
