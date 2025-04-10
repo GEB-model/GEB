@@ -299,8 +299,9 @@ class GEBModel(HazardDriver, ABM_Model):
             self.step()
 
         print("Spinup finished, saving conditions at end of spinup...")
-
         self.store.save()
+
+        self.reporter.finalize()
 
     def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""

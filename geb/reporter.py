@@ -344,9 +344,9 @@ class hydrology_reporter(ABMReporter):
                                 value = decompressed_array[int(args[0]), int(args[1])]
                                 assert not np.isnan(value)
                             elif function == "sample_coord":
-                                if conf["varname"].startswith("data.grid"):
+                                if conf["varname"].startswith("hydrology.grid"):
                                     gt = self.model.hydrology.grid.gt
-                                elif conf["varname"].startswith("data.HRU"):
+                                elif conf["varname"].startswith("hydrology.HRU"):
                                     gt = self.hydrology.HRU.gt
                                 else:
                                     raise ValueError
