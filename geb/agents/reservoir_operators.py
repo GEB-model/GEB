@@ -125,13 +125,13 @@ class ReservoirOperators(AgentBaseClass):
         self.remaining_command_area_release = self.command_area_release_m3.copy()
         self.gross_irrigation_demand_m3 = gross_irrigation_demand_m3
 
-        print(
-            "fullfillment",
-            np.round(
-                (self.command_area_release_m3 / self.gross_irrigation_demand_m3) * 100,
-                decimals=1,
-            ),
-        )
+        # print(
+        #     "fullfillment",
+        #     np.round(
+        #         (self.command_area_release_m3 / self.gross_irrigation_demand_m3) * 100,
+        #         decimals=1,
+        #     ),
+        # )
 
         return self.command_area_release_m3
 

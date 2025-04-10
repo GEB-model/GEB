@@ -681,4 +681,4 @@ class LakesReservoirs(object):
             if self.hydrology.dynamic_water_bodies:
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
-        print(self.reservoir_fill_percentage.astype(int))
+        # print(self.reservoir_fill_percentage.astype(int))
