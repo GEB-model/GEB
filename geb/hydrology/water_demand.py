@@ -23,14 +23,15 @@ import numpy as np
 from honeybees.library.raster import write_to_array
 
 from geb.HRUs import load_grid
+from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 from .lakes_reservoirs import RESERVOIR
 
 
-class WaterDemand:
+class WaterDemand(Module):
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -38,6 +39,10 @@ class WaterDemand:
 
         if self.model.in_spinup:
             self.spinup()
+
+    @property
+    def name(self):
+        return "hydrology.water_demand"
 
     def spinup(self):
         reservoir_command_areas = self.HRU.compress(
@@ -289,6 +294,8 @@ class WaterDemand:
             )
         if self.model.timing:
             print(timer)
+
+        self.report(self, locals())
 
         return (
             groundwater_abstraction_m3,

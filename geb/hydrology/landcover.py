@@ -23,6 +23,7 @@ import numpy as np
 import zarr
 from numba import njit
 
+from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 # All natural areas MUST be before the sealed and water areas
@@ -91,9 +92,9 @@ def get_crop_kc_and_root_depths(
     return kc, root_depth
 
 
-class LandCover(object):
+class LandCover(Module):
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -103,7 +104,6 @@ class LandCover(object):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("hydrology.landcover.var")
         self.HRU.var.capriseindex = self.HRU.full_compressed(0, dtype=np.float32)
 
         store = zarr.storage.LocalStore(
@@ -547,6 +547,8 @@ class LandCover(object):
         if self.model.timing:
             print(timer)
 
+        self.report(self, locals())
+
         return (
             self.hydrology.to_grid(HRU_data=interflow, fn="weightedmean"),
             self.hydrology.to_grid(HRU_data=runoff, fn="weightedmean"),
@@ -555,3 +557,7 @@ class LandCover(object):
             channel_abstraction_m,
             return_flow,
         )
+
+    @property
+    def name(self):
+        return "hydrology.landcover"

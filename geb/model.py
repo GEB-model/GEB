@@ -102,7 +102,7 @@ class GEBModel(HazardDriver, ABM_Model):
         self.sfincs.precipitation_dataarray = precipitation_dataarray
         self.multiverse_name = None
 
-    def step(self, report=True) -> None:
+    def step(self) -> None:
         """
         Forward the model by the given the number of steps.
 
@@ -130,9 +130,6 @@ class GEBModel(HazardDriver, ABM_Model):
             flush=True,
         )
 
-        if report:
-            self.reporter.step()
-
         self.current_timestep += 1
 
     def create_datetime(self, date):
@@ -152,6 +149,8 @@ class GEBModel(HazardDriver, ABM_Model):
         """Initializes the model."""
         self.in_spinup = in_spinup
         self.simulate_hydrology = simulate_hydrology
+
+        self.regions = load_geom(self.files["geoms"]["regions"])
 
         # optionally clean report model at start of run
         if clean_report_folder:
@@ -268,20 +267,19 @@ class GEBModel(HazardDriver, ABM_Model):
         assert n_timesteps > 0, "End time is before or identical to start time"
 
         # turn off any reporting for the ABM
-        self.config["report"] = {}
-
-        # export discharge as zarr file for the hydrological model
-        self.config["report_hydrology"] = {
-            "discharge_daily": {
-                "varname": "hydrology.grid.var.discharge",
-                "function": None,
-                "format": "zarr",
-                "single_file": True,
+        self.config["report"] = {
+            "hydrology.routing": {
+                "discharge_daily": {
+                    "varname": "grid.var.discharge",
+                    "type": "grid",
+                    "function": None,
+                    "format": "zarr",
+                    "single_file": True,
+                }
             }
         }
 
         self.var = self.store.create_bucket("var")
-        self.var.regions = load_geom(self.files["geoms"]["regions"])
 
         self._initialize(
             report=True,

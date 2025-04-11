@@ -130,13 +130,13 @@ draw:
       draw_every_nth: 1
 
 report:
-
-report_hydrology:
-  discharge_daily:
-    varname: hydrology.grid.discharge
-    function: null
-    format: zarr
-    single_file: true
+  hydrology.routing:
+    discharge_daily:
+      varname: grid.var.discharge
+      type: grid
+      function: null
+      format: zarr
+      single_file: true
 
 parameters:
   SnowMeltCoef: 0.004

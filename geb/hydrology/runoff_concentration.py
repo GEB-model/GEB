@@ -18,56 +18,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
+from geb.module import Module
 
 
-class RunoffConcentration(object):
-    r"""
-    Runoff concentration
-
-    this is the part between runoff generation and routing
-    for each gridcell and for each land cover class the generated runoff is concentrated at a corner of a gridcell
-    this concentration needs some lag-time (and peak time) and leads to diffusion
-    lag-time/ peak time is calculated using slope, length and land cover class
-    diffusion is calculated using a triangular-weighting-function
-
-    :math:`Q(t) = \sum_{i=0}^{max} c(i) * Q_{\mathrm{GW}} (t - i + 1)`
-
-    where :math:`c(i) = \int_{i-1}^{i} {2 \over{max}} - | u - {max \over {2}} | * {4 \over{max^2}} du`
-
-    see also:
-
-    http://stackoverflow.com/questions/24040984/transformation-using-triangular-weighting-function-in-python
-
-
-
-
-
-
-
-    **Global variables**
-
-    ====================  ================================================================================  =========
-    Variable [self.var]   Description                                                                       Unit
-    ====================  ================================================================================  =========
-    baseflow              simulated baseflow (= groundwater discharge to river)                             m
-    coverTypes            land cover types - forest - grassland - irrPaddy - irrNonPaddy - water - sealed   --
-    runoff
-    fracVegCover          Fraction of area covered by the corresponding landcover type
-    sum_interflow
-    runoff_peak           peak time of runoff in seconds for each land use class                            s
-    tpeak_interflow       peak time of interflow                                                            s
-    tpeak_baseflow        peak time of baseflow                                                             s
-    maxtime_runoff_conc   maximum time till all flow is at the outlet                                       s
-    runoff_conc           runoff after concentration - triangular-weighting method                          m
-    sum_landSurfaceRunof  Runoff concentration above the soil more interflow including all landcover types  m
-    landSurfaceRunoff     Runoff concentration above the soil more interflow                                m
-    directRunoff          Simulated surface runoff                                                          m
-    interflow             Simulated flow reaching runoff instead of groundwater                             m
-    ====================  ================================================================================  =========
-    """
-
+class RunoffConcentration(Module):
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -76,6 +32,10 @@ class RunoffConcentration(object):
         if self.model.in_spinup:
             self.spinup()
 
+    @property
+    def name(self):
+        return "hydrology.runoff_concentration"
+
     def spinup(self):
         pass
 
@@ -83,4 +43,5 @@ class RunoffConcentration(object):
         assert (runoff >= 0).all()
         assert (interflow >= 0).all()
         assert (baseflow >= 0).all()
+        self.report(self, locals())
         return interflow + baseflow + runoff

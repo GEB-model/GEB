@@ -45,7 +45,7 @@ def load_regional_crop_data_from_dict(
         data = timedata["data"]
 
         d = np.full(
-            (len(date_index), len(model.var.regions), len(data["0"])),
+            (len(date_index), len(model.regions), len(data["0"])),
             np.nan,
             dtype=np.float32,
         )  # all lengths should be the same, so just taking data from region 0.

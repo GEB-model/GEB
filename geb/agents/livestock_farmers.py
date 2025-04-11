@@ -16,7 +16,7 @@ class LiveStockFarmers(AgentBaseClass):
     """
 
     def __init__(self, model, agents, reduncancy):
-        self.model = model
+        super().__init__(model)
 
         if self.model.simulate_hydrology:
             self.HRU = model.hydrology.HRU
@@ -29,13 +29,14 @@ class LiveStockFarmers(AgentBaseClass):
             else {}
         )
 
-        AgentBaseClass.__init__(self)
-
         if self.model.in_spinup:
             self.spinup()
 
+    @property
+    def name(self):
+        return "agents.livestock_farmers"
+
     def spinup(self) -> None:
-        self.var = self.model.store.create_bucket("agents.livestock_farmers.var")
         water_demand, efficiency = self.update_water_demand()
         self.var.current_water_demand = water_demand
         self.var.current_efficiency = efficiency
@@ -110,4 +111,4 @@ class LiveStockFarmers(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
-        pass
+        self.report(self, locals())

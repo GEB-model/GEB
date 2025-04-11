@@ -19,10 +19,12 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from geb.module import Module
 
-class SmallLakesReservoirs(object):
+
+class SmallLakesReservoirs(Module):
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -31,8 +33,12 @@ class SmallLakesReservoirs(object):
         if self.model.in_spinup:
             self.spinup()
 
+    @property
+    def name(self):
+        return "hydrology.lakes_res_small"
+
     def spinup(self):
         pass
 
     def step(self):
-        pass
+        self.report(self, locals())
