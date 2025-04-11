@@ -245,7 +245,10 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False):
         cmd = [
             "singularity",
             "run",
-            "-B.:/data",
+            "-B",  ## Bind mount
+            f"{model_root.resolve()}:/data",
+            "--pwd",  ## Set working directory inside container
+            f"/data/{simulation_root.relative_to(model_root)}",
             "--nv",
             f"docker://{version}",
         ]
