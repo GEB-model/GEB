@@ -62,6 +62,9 @@ class GEBModel(HazardDriver, ABM_Model):
         self.current_timestep = timestep
 
     def multiverse(self):
+        self.agents.households.warning() 
+        self.agents.households.change_vulnerability()
+
         # copy current state of timestep and time
         store_timestep = copy.copy(self.current_timestep)
 
@@ -83,13 +86,12 @@ class GEBModel(HazardDriver, ABM_Model):
 
         for member in forecasts.member:
             self.multiverse_name = member.item()
+            self.sfincs.precipitation_dataarray = (forecasts.sel(member=member).precip / 3600)
+            
             # self.sfincs.precipitation_dataarray = (
-            #     forecasts.sel(member=member).rename({"accum_precipitation": "precip"})
-            #     / 3600
+            #     precipitation_dataarray / 100 * member.item()
             # )
-            self.sfincs.precipitation_dataarray = (
-                precipitation_dataarray / 100 * member.item()
-            )
+
             print(f"Running forecast member {member.item()}...")
             for _ in range(n_timesteps):
                 self.step()

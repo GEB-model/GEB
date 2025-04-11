@@ -125,6 +125,8 @@ class Households(AgentBaseClass):
         self.var.adaptation_costs = DynamicArray(
             np.int64(self.var.property_value.data * 0.1), max_n=self.max_n
         )
+         # initiate array for warning range [0=not reached, 1=reached]
+        self.var.warning_reached = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
         # initiate array with risk perception [dummy data for now]
         self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
@@ -166,7 +168,7 @@ class Households(AgentBaseClass):
         )
         household_points["maximum_damage"] = self.var.property_value.data
         household_points["object_type"] = (
-            "building_content"  # this must match damage curves  # this must match damage curves
+            "building_unprotected"  # this must match damage curves
         )
         self.var.household_points = household_points.to_crs(self.flood_maps["crs"])
 
@@ -265,11 +267,38 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
+    def warning(self): # dummy warning system
+        print("Issue a warning")
+
+        # Define the % of households reached by the warning
+        warning_range = 0.35
+
+        # Get random indices to change the warning 
+        number_of_warned_households = int(self.n * warning_range)
+        indices = np.random.choice(self.n, number_of_warned_households, replace=False)
+
+        # Change warning reached attribute to 1 (received a warning)
+        self.var.warning_reached[indices] = 1
+        
+        # Increase risk perception of households who received the warning
+        self.var.risk_perception[indices] *= 10  
+    
+    def change_vulnerability(self):
+                  
+        #define a risk perception threshold
+        risk_perception_threshold = 0.1
+        mask = self.var.risk_perception >= risk_perception_threshold
+        
+        #change the vulnerability curve of households content for those who received a warning  
+        self.var.household_points.loc[mask, "object_type"] = (
+            "building_protected"  
+        )
+
     def decide_household_strategy(self):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
 
         # update risk perceptions
-        self.update_risk_perceptions()
+        #self.update_risk_perceptions()
 
         # get flood risk information
         damages_do_not_adapt, damages_adapt = (
@@ -484,17 +513,23 @@ class Households(AgentBaseClass):
         )
         self.var.buildings_structure_curve.set_index("severity", inplace=True)
         self.var.buildings_structure_curve = self.var.buildings_structure_curve.rename(
-            columns={"damage_ratio": "building_structure"}
+            columns={"damage_ratio": "building_unprotected"}
         )
+
+        #create another column (curve) in the buildings structure curve for protected buildings
+        self.var.buildings_structure_curve["building_protected"] = self.var.buildings_structure_curve["building_unprotected"]*0.85   
 
         self.var.buildings_content_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
         )
         self.var.buildings_content_curve.set_index("severity", inplace=True)
         self.var.buildings_content_curve = self.var.buildings_content_curve.rename(
-            columns={"damage_ratio": "building_content"}
+            columns={"damage_ratio": "building_unprotected"}
         )
 
+        #create another column (curve) in the buildings content curve for protected buildings
+        self.var.buildings_content_curve["building_protected"] = self.var.buildings_content_curve["building_unprotected"]*0.7              
+        
         # create damage curves for adaptation
         buildings_content_curve_adapted = self.var.buildings_content_curve.copy()
         buildings_content_curve_adapted.loc[0:1] = (
@@ -517,12 +552,12 @@ class Households(AgentBaseClass):
         # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
         self.buildings_content_curve_interpolator = interpolate.interp1d(
             x=self.var.buildings_content_curve.index,
-            y=self.var.buildings_content_curve["building_content"],
+            y=self.var.buildings_content_curve["building_unprotected"],
             # fill_value="extrapolate",
         )
         self.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
             x=self.var.buildings_content_curve_adapted.index,
-            y=self.var.buildings_content_curve_adapted["building_content"],
+            y=self.var.buildings_content_curve_adapted["building_unprotected"],
             # fill_value="extrapolate",
         )
 
@@ -541,6 +576,33 @@ class Households(AgentBaseClass):
         self.var.current_efficiency = efficiency
 
     def flood(self, flood_map):
+        #Damage to households
+        damages_buildings_content = object_scanner(
+            objects=self.var.household_points,
+            hazard=flood_map,
+            curves=self.var.buildings_content_curve,
+        )
+
+        damages_buildings_structure = object_scanner(
+            objects=self.var.household_points,
+            hazard=flood_map,
+            curves=self.var.buildings_structure_curve,
+        )
+
+        # to store damages for every timestep? why the [i, :]?
+        # damages_adapt[i, :] = np.array(
+        #         object_scanner(
+        #             objects=self.var.household_points,
+        #             hazard=flood_map,
+        #             curves=self.var.buildings_content_curve_adapted,
+        #         )
+        #     )
+
+        total_flood_damages = (damages_buildings_content.sum() + damages_buildings_structure.sum()) 
+        print(f"damages to building content are: {total_flood_damages}")      
+
+        return total_flood_damages
+
         agriculture = from_landuse_raster_to_polygon(
             self.HRU.decompress(self.HRU.var.land_owners != -1),
             self.HRU.transform,

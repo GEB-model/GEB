@@ -97,7 +97,7 @@ class AsyncForcingReader:
         self.current_data = data
         return data
 
-    def get_index(self, date):
+    def get_index(self, date):       
         # convert datetime object to dtype of time coordinate. There is a very high probability
         # that the dataset is the same as the previous one or the next one in line,
         # so we can just check the current index and the next one. Only if those do not match
