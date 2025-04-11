@@ -208,26 +208,10 @@ class Households(AgentBaseClass):
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
-        # initiate array with household incomes [dummy data for now]
-        self.var.income = DynamicArray(
-            np.random.randint(16_000, 30_000, self.n), max_n=self.max_n
+        # initiate array for warning range [0=not reached, 1=reached]
+        self.var.warning_reached = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
         )
-
-        # initiate array with houshold wealth [dummy data for now]
-        self.var.wealth = DynamicArray(
-            np.int64(self.var.income.data * 2.8), max_n=self.max_n
-        )
-
-        # initiate array with property values (used as max damage) [dummy data for now]
-        self.var.property_value = DynamicArray(
-            np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
-        )
-        # initiate array with RANDOM adaptation costs [dummy data for now]
-        self.var.adaptation_costs = DynamicArray(
-            np.int64(self.var.property_value.data * 0.1), max_n=self.max_n
-        )
-         # initiate array for warning range [0=not reached, 1=reached]
-        self.var.warning_reached = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
         # initiate array with risk perception [dummy data for now]
         self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
@@ -378,38 +362,35 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
-    def warning(self): # dummy warning system
+    def warning(self):  # dummy warning system
         print("Issue a warning")
 
         # Define the % of households reached by the warning
         warning_range = 0.35
 
-        # Get random indices to change the warning 
+        # Get random indices to change the warning
         number_of_warned_households = int(self.n * warning_range)
         indices = np.random.choice(self.n, number_of_warned_households, replace=False)
 
         # Change warning reached attribute to 1 (received a warning)
         self.var.warning_reached[indices] = 1
-        
+
         # Increase risk perception of households who received the warning
-        self.var.risk_perception[indices] *= 10  
-    
+        self.var.risk_perception[indices] *= 10
+
     def change_vulnerability(self):
-                  
-        #define a risk perception threshold
+        # define a risk perception threshold
         risk_perception_threshold = 0.1
         mask = self.var.risk_perception >= risk_perception_threshold
-        
-        #change the vulnerability curve of households content for those who received a warning  
-        self.var.household_points.loc[mask, "object_type"] = (
-            "building_protected"  
-        )
+
+        # change the vulnerability curve of households content for those who received a warning
+        self.var.household_points.loc[mask, "object_type"] = "building_protected"
 
     def decide_household_strategy(self):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
 
         # update risk perceptions
-        #self.update_risk_perceptions()
+        # self.update_risk_perceptions()
 
         # get flood risk information
         damages_do_not_adapt, damages_adapt = (
@@ -627,8 +608,10 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "building_unprotected"}
         )
 
-        #create another column (curve) in the buildings structure curve for protected buildings
-        self.var.buildings_structure_curve["building_protected"] = self.var.buildings_structure_curve["building_unprotected"]*0.85   
+        # create another column (curve) in the buildings structure curve for protected buildings
+        self.var.buildings_structure_curve["building_protected"] = (
+            self.var.buildings_structure_curve["building_unprotected"] * 0.85
+        )
 
         self.var.buildings_content_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
@@ -638,9 +621,11 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "building_unprotected"}
         )
 
-        #create another column (curve) in the buildings content curve for protected buildings
-        self.var.buildings_content_curve["building_protected"] = self.var.buildings_content_curve["building_unprotected"]*0.7              
-        
+        # create another column (curve) in the buildings content curve for protected buildings
+        self.var.buildings_content_curve["building_protected"] = (
+            self.var.buildings_content_curve["building_unprotected"] * 0.7
+        )
+
         # create damage curves for adaptation
         buildings_content_curve_adapted = self.var.buildings_content_curve.copy()
         buildings_content_curve_adapted.loc[0:1] = (
@@ -683,7 +668,7 @@ class Households(AgentBaseClass):
         super().__init__()
 
     def flood(self, flood_map):
-        #Damage to households
+        # Damage to households
         damages_buildings_content = object_scanner(
             objects=self.var.household_points,
             hazard=flood_map,
@@ -705,8 +690,10 @@ class Households(AgentBaseClass):
         #         )
         #     )
 
-        total_flood_damages = (damages_buildings_content.sum() + damages_buildings_structure.sum()) 
-        print(f"damages to building content are: {total_flood_damages}")      
+        total_flood_damages = (
+            damages_buildings_content.sum() + damages_buildings_structure.sum()
+        )
+        print(f"damages to building content are: {total_flood_damages}")
 
         return total_flood_damages
 
