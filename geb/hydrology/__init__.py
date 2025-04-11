@@ -159,6 +159,7 @@ class Hydrology(Data):
             + self.grid.var.river_storage_m3.sum()
             + self.lakes_reservoirs.var.storage.sum()
             + self.groundwater.groundwater_content_m3.sum()
+            + self.lakes_reservoirs.var.total_inflow_from_other_water_bodies_m3.sum()
         )
 
         # in the first timestep of the spinup, we don't have the storage of the

@@ -1,6 +1,10 @@
 setup_region:
   subgrid_factor: 20
 
+set_time_range:
+  start_date: 1970-01-01
+  end_date: 2024-12-31
+
 setup_hydrography:
 
 setup_elevation:
@@ -30,8 +34,6 @@ setup_well_prices_by_reference_year_global:
   WHY_20: 164 # $/m
   WHY_30: 50 # $/m
   reference_year: 2017
-  start_year: 1960
-  end_year: 2020
 
 setup_irrigation_sources:
   irrigation_sources:
@@ -44,8 +46,6 @@ setup_create_farms:
 setup_household_characteristics:
 
 setup_water_demand:
-  starttime: 1961-01-01
-  endtime: 2060-12-31
   ssp: ssp2
 
 setup_farmer_household_characteristics:
@@ -335,14 +335,6 @@ setup_damage_parameters:
             - [2.00, 0.035]
             - [6.00, 0.05]
           maximum_damage: 25
-
-setup_well_prices_by_reference_year_global:
-  WHY_10: 82.0209974 # $/m
-  WHY_20: 164 # $/m
-  WHY_30: 50 # $/m
-  reference_year: 2017
-  start_year: 1960
-  end_year: 2020
 
 setup_forcing_era5:
   starttime: 2000-01-01

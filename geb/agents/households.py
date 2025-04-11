@@ -162,23 +162,27 @@ class Households(AgentBaseClass):
         Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
 
         # load household locations
-        locations = load_array(self.model.files["array"]["agents/households/locations"])
+        locations = load_array(self.model.files["array"]["agents/households/location"])
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
         self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
-        # load household sizes
-        sizes = load_array(
-            self.model.files["array"]["agents/households/household_size"]
+        self.var.region_id = load_array(
+            self.model.files["array"]["agents/households/region_id"]
         )
+
+        # load household sizes
+        sizes = load_array(self.model.files["array"]["agents/households/size"])
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
-        self.var.municipal_water_demand_m3_baseline = load_array(
+        self.var.municipal_water_demand_per_capita_m3_baseline = load_array(
             self.model.files["array"][
-                "agents/households/municipal_water_demand_m3_baseline"
+                "agents/households/municipal_water_demand_per_capita_m3_baseline"
             ]
         )
+
+        # set municipal water demand efficiency to 1.0 for all households
         self.var.water_efficiency_per_household = np.full_like(
-            self.var.municipal_water_demand_m3_baseline, 1.0, np.float32
+            self.var.municipal_water_demand_per_capita_m3_baseline, 1.0, np.float32
         )
 
         self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier = (
@@ -191,7 +195,7 @@ class Households(AgentBaseClass):
 
         # load age household head
         age_household_head = load_array(
-            self.model.files["array"]["agents/households/AGE"]
+            self.model.files["array"]["agents/households/age_household_head"]
         )
         self.var.age_household_head = DynamicArray(age_household_head, max_n=self.max_n)
 
@@ -709,11 +713,33 @@ class Households(AgentBaseClass):
         return total_flood_damages
 
     def water_demand(self):
-        water_demand_per_household_m3 = (
-            self.var.municipal_water_demand_m3_baseline
-            * self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
+        """Calculate the water demand per household in m3 per day.
+
+        This function uses a multiplier to calculate the water demand for
+        for each region with respect to the base year.
+        """
+
+        # the water demand multiplier is a function of the year and region
+        water_demand_multiplier_per_region = (
+            self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
                 self.model.current_time.year
-            ].item()
+            ]
+        )
+        assert (
+            water_demand_multiplier_per_region.index
+            == np.arange(len(water_demand_multiplier_per_region))
+        ).all()
+        water_demand_multiplier_per_household = (
+            water_demand_multiplier_per_region.values[self.var.region_id]
+        )
+
+        # water demand is the per capita water demand in the household,
+        # multiplied by the size of the household and the water demand multiplier
+        # per region and year, relative to the baseline.
+        water_demand_per_household_m3 = (
+            self.var.municipal_water_demand_per_capita_m3_baseline
+            * self.var.sizes
+            * water_demand_multiplier_per_household
         )
 
         return (

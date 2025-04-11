@@ -1,6 +1,5 @@
 import json
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Union
 
@@ -15,88 +14,6 @@ from ..workflows.conversions import (
 )
 from ..workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from ..workflows.farmers import get_farm_locations
-
-
-def project_crop_prices_past_and_future_region(
-    costs,
-    inflation,
-    region_id,
-    start_year,
-    end_year,
-):
-    assert end_year != start_year, (
-        "extra processed years must not be the same as data years"
-    )
-
-    if end_year < start_year:
-        operator = "div"
-        step = -1
-    else:
-        operator = "mul"
-        step = 1
-
-    inflation_rate_region = inflation["data"][str(region_id)]
-
-    for year in range(start_year, end_year, step):
-        year_str = str(year)
-        year_index = inflation["time"].index(year_str)
-        inflation_rate = inflation_rate_region[year_index]
-
-        # Check and add an empty row if needed
-        if (region_id, year) not in costs.index:
-            empty_row = pd.DataFrame(
-                {col: [None] for col in costs.columns},
-                index=pd.MultiIndex.from_tuples(
-                    [(region_id, year)], names=["region_id", "year"]
-                ),
-            )
-            costs = pd.concat(
-                [costs, empty_row]
-            ).sort_index()  # Ensure the index is sorted after adding new rows
-
-        # Update costs based on inflation rate and operation
-        if operator == "div":
-            costs.loc[(region_id, year)] = (
-                costs.loc[(region_id, year + 1)] / inflation_rate
-            )
-        elif operator == "mul":
-            costs.loc[(region_id, year)] = (
-                costs.loc[(region_id, year - 1)] * inflation_rate
-            )
-
-    return costs
-
-
-def project_crop_prices_past_and_future(
-    costs,
-    inflation,
-    total_years,
-    unique_regions,
-    lower_bound=None,
-    upper_bound=None,
-):
-    for _, region in unique_regions.iterrows():
-        region_id = region["region_id"]
-
-        if lower_bound:
-            costs = project_crop_prices_past_and_future_region(
-                costs=costs,
-                inflation=inflation,
-                region_id=region_id,
-                start_year=total_years[0],
-                end_year=lower_bound,
-            )
-
-        if upper_bound:
-            costs = project_crop_prices_past_and_future_region(
-                costs=costs,
-                inflation=inflation,
-                region_id=region_id,
-                start_year=total_years[-1],
-                end_year=upper_bound,
-            )
-
-    return costs
 
 
 class Crops:
@@ -203,8 +120,6 @@ class Crops:
     def process_crop_data(
         self,
         crop_prices,
-        project_past_until_year=False,
-        project_future_until_year=False,
         translate_crop_names=None,
     ):
         """
@@ -326,9 +241,18 @@ class Crops:
                 donor_data, unique_regions, GLOBIOM_regions
             )
 
-            prices_plus_crop_price_inflation = self.determine_price_variability(
-                data, unique_regions
+            # exand data to include all data empty rows from start to end year
+            data = data.reindex(
+                pd.MultiIndex.from_product(
+                    [
+                        unique_regions["region_id"],
+                        range(self.start_date.year, self.end_date.year + 1),
+                    ],
+                    names=["region_id", "year"],
+                )
             )
+
+            data = self.assign_crop_price_inflation(data, unique_regions)
 
             # combine and rename crops
             all_crop_names_model = [
@@ -348,20 +272,14 @@ class Crops:
                         data[crop_name] = data[sub_crops].mean(axis=1, skipna=True)
                     else:
                         data[crop_name] = np.nan
-                        self.logger.warning(
-                            f"No crop price data available for crop {crop_name}"
-                        )
                 else:
                     if crop_name not in data.columns:
                         data[crop_name] = np.nan
-                        self.logger.warning(
-                            f"No crop price data available for crop {crop_name}"
-                        )
 
             # Extract the crop names from the dictionary and convert them to lowercase
             crop_names = [
                 crop["name"].lower()
-                for idx, crop in self.dict["crops/crop_data"]["data"].items()
+                for crop in self.dict["crops/crop_data"]["data"].values()
             ]
 
             # Filter the columns of the data DataFrame
@@ -373,30 +291,7 @@ class Crops:
                 ]
             ]
 
-            data = self.inter_and_extrapolate_prices(
-                prices_plus_crop_price_inflation, unique_regions
-            )
-
-            total_years = data.index.get_level_values("year").unique()
-
-            if project_past_until_year:
-                assert total_years[0] > project_past_until_year, (
-                    f"Extrapolation targets must not fall inside available data time series. Current lower limit is {total_years[0]}"
-                )
-            if project_future_until_year:
-                assert total_years[-1] < project_future_until_year, (
-                    f"Extrapolation targets must not fall inside available data time series. Current upper limit is {total_years[-1]}"
-                )
-
-            if project_past_until_year or project_future_until_year:
-                data = project_crop_prices_past_and_future(
-                    costs=data,
-                    inflation=self.dict["socioeconomics/inflation_rates"],
-                    total_years=total_years,
-                    unique_regions=unique_regions,
-                    lower_bound=project_past_until_year,
-                    upper_bound=project_future_until_year,
-                )
+            data = self.inter_and_extrapolate_prices(data, unique_regions)
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
@@ -445,6 +340,12 @@ class Crops:
 
                 region_data.index.name = "year"  # Ensure index name is 'year'
 
+                crop_calendars_in_region = self.array["agents/farmers/crop_calendar"][
+                    self.array["agents/farmers/region_id"] == region_id
+                ]
+                crops_in_region = crop_calendars_in_region[..., 0].ravel()
+                crops_in_region = np.unique(crops_in_region[crops_in_region != -1])
+
                 # Ensuring all crops are present according to the crop_data keys
                 for crop_id, crop_info in crop_data.items():
                     crop_name = crop_info["name"]
@@ -453,9 +354,23 @@ class Crops:
                         crop_name = crop_name.rsplit("_", 1)[0]
 
                     if crop_name in region_data.columns:
+                        # raise an error if the crop is in the crop calendar and has NaN values
+                        if (
+                            crop_id in crops_in_region
+                            and np.isnan(region_data[crop_name]).any()
+                        ):
+                            raise ValueError(
+                                f"Crop {crop_name} has NaN values in region {region_id} data."
+                            )
                         region_dict[str(crop_id)] = region_data[crop_name].tolist()
+                    # check if crop is in the crop calendar, if is raise an error because it must be
+                    elif crop_id in crops_in_region:
+                        raise ValueError(
+                            f"Crop {crop_name} not found in region {region_id} data, but is in crop calendar."
+                        )
                     else:
-                        # Add NaN entries for the entire time period if crop is not present in the region data
+                        # If data is not available for the crop, but is not in the crop calendar, it
+                        # is no issue, so we can fill with NaNs
                         region_dict[str(crop_id)] = [np.nan] * len(
                             formatted_data["time"]
                         )
@@ -485,8 +400,8 @@ class Crops:
             # extend dataframe to include start and end years
             data = data.reindex(
                 index=pd.date_range(
-                    start=datetime(project_past_until_year, 1, 1),
-                    end=datetime(project_future_until_year, 1, 1),
+                    start=self.start_date,
+                    end=self.end_date,
                     freq="YS",
                 )
             )
@@ -504,8 +419,7 @@ class Crops:
                 level=1,
             )
 
-            data = self.determine_price_variability(data, self.geoms["regions"])
-
+            data = self.assign_crop_price_inflation(data, self.geoms["regions"])
             data = self.inter_and_extrapolate_prices(data, self.geoms["regions"])
 
             data = {
@@ -626,9 +540,10 @@ class Crops:
 
         return data_out
 
-    def determine_price_variability(self, costs, unique_regions):
+    def assign_crop_price_inflation(self, costs, unique_regions):
         """
-        Determines the price variability of all crops in the region and adds a column that describes this variability.
+        Determines the price inflation of all crops in the region and adds a column that describes this inflation.
+        If there is no data for a certain year, the inflation rate is taken from the socioeconomics data.
 
         Parameters
         ----------
@@ -746,8 +661,6 @@ class Crops:
     def setup_cultivation_costs(
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
-        project_future_until_year: Optional[int] = False,
-        project_past_until_year: Optional[int] = False,
         translate_crop_names: Optional[Dict[str, str]] = None,
     ):
         """
@@ -763,8 +676,6 @@ class Crops:
         self.logger.info("Preparing cultivation costs")
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
-            project_future_until_year=project_future_until_year,
-            project_past_until_year=project_past_until_year,
             translate_crop_names=translate_crop_names,
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")
@@ -772,8 +683,6 @@ class Crops:
     def setup_crop_prices(
         self,
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
-        project_future_until_year: Optional[int] = False,
-        project_past_until_year: Optional[int] = False,
         translate_crop_names: Optional[Dict[str, str]] = None,
     ):
         """
@@ -789,8 +698,6 @@ class Crops:
         self.logger.info("Preparing crop prices")
         crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
-            project_future_until_year=project_future_until_year,
-            project_past_until_year=project_past_until_year,
             translate_crop_names=translate_crop_names,
         )
         self.set_dict(crop_prices, name="crops/crop_prices")
@@ -945,10 +852,7 @@ class Crops:
                 )
 
     def setup_farmer_crop_calendar(
-        self,
-        year=2000,
-        reduce_crops=False,
-        replace_base=False,
+        self, year=2000, reduce_crops=False, replace_base=False, minimum_area_ratio=0.01
     ):
         n_farmers = self.array["agents/farmers/id"].size
 
@@ -971,12 +875,13 @@ class Crops:
             MIRCA_unit_grid.rio.transform(recalc=True).to_gdal(),
         )
 
-        farmer_crops, is_irrigated = self.assign_crops_irrigation_farmers(
+        farmer_crops, is_irrigated = self.assign_crops(
             crop_calendar,
             farmer_locations,
             farmer_mirca_units,
             year,
             MIRCA_unit_grid,
+            minimum_area_ratio=minimum_area_ratio,
         )
         self.setup_farmer_irrigation_source(is_irrigated, year)
 
@@ -1341,8 +1246,14 @@ class Crops:
             name="agents/farmers/crop_calendar_rotation_years",
         )
 
-    def assign_crops_irrigation_farmers(
-        self, crop_calendar, farmer_locations, farmer_mirca_units, year, MIRCA_unit_grid
+    def assign_crops(
+        self,
+        crop_calendar,
+        farmer_locations,
+        farmer_mirca_units,
+        year,
+        MIRCA_unit_grid,
+        minimum_area_ratio,
     ):
         # Define the directory and file paths
         data_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
@@ -1484,6 +1395,16 @@ class Crops:
             )
 
             # normalize the area fractions
+            area_per_crop_rotation_26 = (
+                area_per_crop_rotation_26 / area_per_crop_rotation_26.sum()
+            )
+
+            # discard crops with area smaller than minimum_area_ratio
+            area_per_crop_rotation_26[
+                area_per_crop_rotation_26 < minimum_area_ratio
+            ] = 0
+
+            # normalize the area fractions again
             area_per_crop_rotation_26 = (
                 area_per_crop_rotation_26 / area_per_crop_rotation_26.sum()
             )

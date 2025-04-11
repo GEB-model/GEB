@@ -5,16 +5,20 @@ Notes:
 """
 
 import inspect
+import itertools
 import json
 import logging
+import math
 import os
 from collections import defaultdict
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import List, Union
 
 import geopandas as gpd
 import hydromt.workflows
+import networkx
 import numpy as np
 import pandas as pd
 import pyflwdir
@@ -23,6 +27,8 @@ import xarray as xr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
+from scipy.ndimage import binary_dilation
+from shapely.geometry import Point
 
 from ..workflows.io import open_zarr, to_zarr
 from .modules import (
@@ -37,17 +43,13 @@ from .modules import (
 from .workflows.general import (
     repeat_grid,
 )
-from .workflows.hydrography import (
-    get_river_graph,
-    get_sink_subbasin_id_for_geom,
-    get_subbasin_id_from_coordinate,
-)
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
     "GDAL_HTTP_MAX_RETRY": "10",  # Number of retry attempts
     "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
     "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
+    "GDAL_CACHEMAX": 1 * 1024**3,  # 1 GB cache size
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
 
@@ -81,6 +83,189 @@ class PathEncoder(json.JSONEncoder):
             obj = obj.as_posix()
             return str(obj)
         return super().default(obj)
+
+
+def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
+    """
+    Convert a boolean mask to an undirected NetworkX graph.
+    Additional attributes can be passed as keyword arguments, which
+    will be added as attributes to the nodes of the graph.
+
+    Parameters:
+    -----------
+    mask : xarray.DataArray or numpy.ndarray
+        Boolean mask where True values are nodes in the graph
+    connectivity : int
+        4 for von Neumann neighborhood (up, down, left, right)
+        8 for Moore neighborhood (includes diagonals)
+    kwargs : dict
+        Additional attributes to be added to the nodes of the graph.
+        Must be 2D arrays with the same shape as the mask.
+
+    Returns:
+    --------
+    G : networkx.Graph
+        Undirected graph where nodes are (y,x) coordinates of True cells
+    """
+    # Create an empty undirected graph
+    G = networkx.Graph()
+
+    # Get indices of True cells
+    y_indices, x_indices = np.where(mask)
+
+    # Add all True cells as nodes
+    for y, x in zip(y_indices, x_indices, strict=True):
+        node_attrs = {}
+        for key, array in kwargs.items():
+            node_attrs[key] = array[y, x].item()
+        node_attrs["yx"] = (y, x)
+        G.add_node((y, x), **node_attrs)
+
+    # Define neighbor directions for 4-connectivity
+    if connectivity == 4:
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # right, down, left, up
+    elif connectivity == 8:  # 8-connectivity
+        directions = [
+            (0, 1),
+            (1, 0),
+            (0, -1),
+            (-1, 0),  # right, down, left, up
+            (1, 1),
+            (1, -1),
+            (-1, 1),
+            (-1, -1),
+        ]  # diagonals
+    else:
+        raise ValueError("Connectivity must be either 4 or 8.")
+
+    # Connect neighboring cells
+    for y, x in zip(y_indices, x_indices, strict=True):
+        # Check each direction for a neighbor
+        for dy, dx in directions:
+            ny, nx = y + dy, x + dx
+
+            # Check if neighbor is within bounds and is True
+            if 0 <= ny < mask.shape[0] and 0 <= nx < mask.shape[1] and mask[ny, nx]:
+                # Add an edge between current cell and neighbor
+                G.add_edge((y, x), (ny, nx))
+
+    return G
+
+
+def clip_region(hydrography, align):
+    rows, cols = np.where(hydrography["mask"])
+    mincol = cols.min()
+    maxcol = cols.max()
+    minrow = rows.min()
+    maxrow = rows.max()
+
+    minx = hydrography.x[mincol].item()
+    maxx = hydrography.x[maxcol].item()
+    miny = hydrography.y[minrow].item()
+    maxy = hydrography.y[maxrow].item()
+
+    xres, yres = hydrography.rio.resolution()
+
+    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
+    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
+    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
+    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
+
+    assert math.isclose(hydrography.x[mincol_aligned] // align % 1, 0)
+    assert math.isclose(hydrography.x[maxcol_aligned] // align % 1, 0)
+    assert math.isclose(hydrography.y[minrow_aligned] // align % 1, 0)
+    assert math.isclose(hydrography.y[maxrow_aligned] // align % 1, 0)
+
+    assert mincol_aligned <= mincol
+    assert maxcol_aligned >= maxcol
+    assert minrow_aligned <= minrow
+    assert maxrow_aligned >= maxrow
+
+    hydrography = hydrography.isel(
+        y=slice(minrow_aligned, maxrow_aligned),
+        x=slice(mincol_aligned, maxcol_aligned),
+    )
+    return hydrography
+
+
+def get_river_graph(data_catalog):
+    river_network = pd.read_parquet(
+        data_catalog.get_source("MERIT_Basins_riv").path,
+        columns=["COMID", "NextDownID"],
+    ).set_index("COMID")
+    assert river_network.index.name == "COMID", (
+        "The index of the river network is not the COMID column"
+    )
+
+    # create a directed graph for the river network
+    river_graph = networkx.DiGraph()
+
+    # add rivers with downstream connection
+    river_network_with_downstream_connection = river_network[
+        river_network["NextDownID"] != 0
+    ]
+    river_network_with_downstream_connection = (
+        river_network_with_downstream_connection.itertuples(index=True, name=None)
+    )
+    river_graph.add_edges_from(river_network_with_downstream_connection)
+
+    river_network_without_downstream_connection = river_network[
+        river_network["NextDownID"] == 0
+    ]
+    river_graph.add_nodes_from(river_network_without_downstream_connection.index)
+
+    return river_graph
+
+
+def get_subbasin_id_from_coordinate(data_catalog, lon, lat):
+    # we select the basin that contains the point. To do so
+    # we use a bounding box with the point coordinates, thus
+    # xmin == xmax and ymin == ymax
+    # geoparquet uses < and >, not <= and >=, so we need to add
+    # a small value to the coordinates to avoid missing the point
+    COMID = gpd.read_parquet(
+        data_catalog.get_source("MERIT_Basins_cat").path,
+        bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
+    ).set_index("COMID")
+
+    # get only the points where the point is inside the basin
+    COMID = COMID[COMID.geometry.contains(Point(lon, lat))]
+
+    if len(COMID) == 0:
+        raise ValueError(
+            f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.get_source('MERIT_Basins_cat').path}), ensure that the point is in a basin."
+        )
+    assert len(COMID) == 1, "The point is not in a single basin"
+    # get the COMID value from the GeoDataFrame
+    return COMID.index.values[0]
+
+
+def get_sink_subbasin_id_for_geom(data_catalog, geom, river_graph):
+    subbasins = gpd.read_parquet(
+        data_catalog.get_source("MERIT_Basins_cat").path,
+        bbox=tuple([float(c) for c in geom.total_bounds]),
+    ).set_index("COMID")
+
+    subbasins = subbasins.iloc[
+        subbasins.sindex.query(geom.union_all(), predicate="intersects")
+    ]
+
+    assert len(subbasins) > 0, "The geometry does not intersect with any subbasin."
+
+    # create a subgraph containing only the selected subbasins
+    region_river_graph = river_graph.subgraph(subbasins.index.tolist())
+
+    # get all subbasins with no downstream subbasin (out degree is 0)
+    # in the subgraph. These are the sink subbasins
+    sink_nodes = [
+        COMID_ID
+        for COMID_ID, out_degree in region_river_graph.out_degree(
+            region_river_graph.nodes
+        )
+        if out_degree == 0
+    ]
+
+    return sink_nodes
 
 
 class GEBModel(
@@ -131,8 +316,9 @@ class GEBModel(
         self,
         region: dict,
         subgrid_factor: int,
-        resolution_arcsec=30,
-    ) -> xr.DataArray:
+        resolution_arcsec: int = 30,
+        include_coastal: bool = True,
+    ) -> None:
         """Creates a 2D regular grid or reads an existing grid.
         An 2D regular grid will be created from a geometry (geom_fn) or bbox. If an existing
         grid is given, then no new grid will be generated.
@@ -206,8 +392,11 @@ class GEBModel(
                     xmax,
                     ymax,
                 ],
+                variables=["dir", "elv"],
                 buffer=10,
             )
+            hydrography["dir"].attrs["_FillValue"] = 247
+            hydrography["elv"].attrs["_FillValue"] = -9999.0
 
             self.logger.info("Preparing 2D grid.")
             if "outflow" in region:
@@ -224,13 +413,6 @@ class GEBModel(
                     geometry=[subbasins_without_outflow_basin.union_all()],
                     crs=subbasins_without_outflow_basin.crs,
                 )
-            elif "geom" in region:
-                geom = region["geom"]
-                if geom.crs is None:
-                    raise ValueError('Model region "geom" has no CRS')
-                # merge regions when more than one geom is given
-                if isinstance(geom, gpd.GeoDataFrame):
-                    geom = gpd.GeoDataFrame(geometry=[geom.union_all()], crs=geom.crs)
             else:
                 raise ValueError(f"Region {region} not understood.")
 
@@ -238,21 +420,55 @@ class GEBModel(
             # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
-                f"Approximate basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
+                f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
             )
 
-            hydrography = hydrography.raster.clip_geom(
-                geom,
-                align=resolution_arcsec
-                / 60
-                / 60,  # align grid to resolution of model grid. Conversion is to convert from arcsec to degrees
-                mask=True,
+            buffer = 1 / 120  # buffer in degrees
+            hydrography = hydrography.rio.clip_box(
+                minx=xmin - buffer,
+                miny=ymin - buffer,
+                maxx=xmax + buffer,
+                maxy=ymax + buffer,
+            ).compute()
+
+            riverine_mask = self.full_like(
+                hydrography["dir"],
+                fill_value=True,
+                nodata=False,
+                dtype=bool,
             )
+
+            assert riverine_mask.attrs["_FillValue"] is False
+            riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
+
+            if (
+                include_coastal
+                and subbasins_without_outflow_basin["is_coastal_basin"].any()
+            ):
+                mask = self.get_coastal_area(hydrography["dir"], riverine_mask)
+            else:
+                mask = riverine_mask
+
+            hydrography["mask"] = mask
+            hydrography["dir"] = xr.where(
+                mask,
+                hydrography["dir"],
+                hydrography["dir"].attrs["_FillValue"],
+            )
+
+            hydrography["elv"] = xr.where(
+                mask,
+                hydrography["elv"],
+                hydrography["elv"].attrs["_FillValue"],
+            )
+
+            # Several datasets come with ...
+            hydrography = clip_region(hydrography, align=30 / 60 / 60)
 
             d8_original = hydrography["dir"]
             d8_original.attrs["_FillValue"] = 247
             d8_original = xr.where(
-                hydrography.mask,
+                hydrography["mask"],
                 d8_original,
                 d8_original.attrs["_FillValue"],
                 keep_attrs=True,
@@ -264,7 +480,7 @@ class GEBModel(
             d8_elv_original = hydrography["elv"]
             d8_elv_original.attrs["_FillValue"] = -9999.0
             d8_elv_original = xr.where(
-                hydrography.mask,
+                hydrography["mask"],
                 d8_elv_original,
                 d8_elv_original.attrs["_FillValue"],
                 keep_attrs=True,
@@ -278,6 +494,101 @@ class GEBModel(
             )
 
         self.create_subgrid(subgrid_factor)
+
+    def get_coastal_area(self, ldd, riverine_mask):
+        pits = ldd == 0
+        # TODO: Filter non-coastline pits
+        coastline = pits
+        coastline.attrs["_FillValue"] = None
+
+        # save coastline, for now mostly for debugging purposes
+        self.set_other(coastline, name="coastline")
+
+        # first we create a graph with all coastline cells. Neighbouring cells
+        # are connected. From this graph we want to select all coastline
+        # cells in between river outlets. The riverine mask does not include
+        # any of the coastal cells. So we first grow the riverine mask by one cell
+        # and use this to set the outflow nodes in the graph.
+        coastline_graph = boolean_mask_to_graph(
+            coastline,
+            connectivity=4,
+            outflow=binary_dilation(riverine_mask.values, iterations=1),
+        )
+
+        # extract the outflow nodes from the graph, these should be included for sure
+        outflow_nodes = set(
+            [
+                node
+                for node, attrs in coastline_graph.nodes(data=True)
+                if attrs["outflow"] is True
+            ]
+        )
+
+        # then for each combination of outflow nodes, we get the shortest path between
+        # them. This should be the coastline between the two nodes. Note that this is not
+        # very efficient as the number of combinations grows quickly. So we may
+        # be able to improve this in the future.
+        coastline_nodes = set()
+        for node0, node1 in itertools.combinations(outflow_nodes, 2):
+            # get the shortest path between the two nodes
+            try:
+                coastline_nodes.update(
+                    networkx.shortest_path(coastline_graph, source=node0, target=node1)
+                )
+            except networkx.NetworkXNoPath:
+                # if there is no path, skip this combination
+                continue
+
+        # Even though we already have the shortest path, we need to find the entire coastline
+        # which may include neighbours of the nodes in the shortest path. So we need to grow the
+        # coastline. We do this iteratively, so until we found all coastline nodes.
+        # We do not search for neighbours of the outflow nodes, as this will stop the
+        # search from expanding outside the domain that we are interested in.
+        coastline_size = -1
+        new_coastline_size = len(coastline_nodes)
+        while coastline_size < new_coastline_size:
+            new_coastline_nodes = set()
+            for node in coastline_nodes:
+                if node in outflow_nodes:
+                    continue
+                # get the neighbors of the node
+                neighbors = coastline_graph.neighbors(node)
+                # add the neighbors to the included coastline
+                new_coastline_nodes.update(neighbors)
+
+            coastline_nodes.update(new_coastline_nodes)
+
+            coastline_size, new_coastline_size = (
+                new_coastline_size,
+                len(coastline_nodes),
+            )
+
+        # here we go from the graph back to a mask. We do this by creating a new mask
+        # and setting coastline cells to true
+        connected_coastline = self.full_like(
+            ldd,
+            fill_value=False,
+            nodata=None,
+            dtype=bool,
+        )
+
+        for node in coastline_nodes:
+            if node in outflow_nodes:
+                continue
+            yx = coastline_graph.nodes[node]["yx"]
+            connected_coastline[yx] = True
+
+        # save the connected coastline, for now mostly for debugging purposes
+        self.set_other(connected_coastline, name="connected_coastline")
+
+        # get all upstream cells from the selected coastline
+        flow_raster = pyflwdir.from_array(ldd.values, ftype="d8")
+        coastal_mask = (
+            flow_raster.basins(idxs=np.where(connected_coastline.values.ravel())[0]) > 0
+        )
+
+        # return the combination of the riverine mask and the coastal mask
+        return riverine_mask | coastal_mask
 
     def derive_mask(self, d8_original, transform, resolution_arcsec):
         assert d8_original.dtype == np.uint8
@@ -367,14 +678,29 @@ class GEBModel(
             data=repeat_grid(mask.data, subgrid_factor),
             coords={
                 "y": dst_transform.f
-                + np.arange(mask.raster.shape[0] * subgrid_factor) * dst_transform.e,
+                + np.arange(mask.shape[0] * subgrid_factor) * dst_transform.e,
                 "x": dst_transform.c
-                + np.arange(mask.raster.shape[1] * subgrid_factor) * dst_transform.a,
+                + np.arange(mask.shape[1] * subgrid_factor) * dst_transform.a,
             },
             attrs={"_FillValue": None},
         )
 
         submask = self.set_subgrid(submask, name="mask")
+
+    def set_time_range(self, start_date, end_date):
+        assert start_date < end_date, "Start date must be before end date."
+        self.set_dict(
+            {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+            name="model_time_range",
+        )
+
+    @property
+    def start_date(self):
+        return datetime.fromisoformat(self.dict["model_time_range"]["start_date"])
+
+    @property
+    def end_date(self):
+        return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
     def snap_to_grid(self, ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
         # make sure all datasets have more or less the same coordinates

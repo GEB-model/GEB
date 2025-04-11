@@ -256,7 +256,7 @@ class LakesReservoirs(object):
 
         self.var.capacity = self.var.water_body_data["volume_total"].values
 
-        self.var.total_inflow_from_other_water_bodies = np.zeros_like(
+        self.var.total_inflow_from_other_water_bodies_m3 = np.zeros_like(
             self.var.capacity, dtype=np.float32
         )
 
@@ -528,12 +528,12 @@ class LakesReservoirs(object):
 
         assert (total_runoff_m3 >= 0).all()
         assert (discharge_m3 >= 0).all()
-        assert (self.var.total_inflow_from_other_water_bodies >= 0).all()
+        assert (self.var.total_inflow_from_other_water_bodies_m3 >= 0).all()
 
         inflow_m3 = (
             total_runoff_m3
             + discharge_m3
-            + self.var.total_inflow_from_other_water_bodies
+            + self.var.total_inflow_from_other_water_bodies_m3
         )
 
         potential_evaporation_from_water_bodies_substep_step_m3 = (
@@ -595,7 +595,7 @@ class LakesReservoirs(object):
         )
 
         # sum up all inflow from other lakes
-        self.var.total_inflow_from_other_water_bodies = laketotal(
+        self.var.total_inflow_from_other_water_bodies_m3 = laketotal(
             outflow_to_another_lake, self.grid.var.waterBodyID, nan_class=-1
         )
 
@@ -681,4 +681,4 @@ class LakesReservoirs(object):
             if self.hydrology.dynamic_water_bodies:
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
-        print(self.reservoir_fill_percentage.astype(int))
+        # print(self.reservoir_fill_percentage.astype(int))

@@ -246,6 +246,7 @@ merit_hydro:
     source_url: http://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro
     source_version: 1.0
   path: hydrography/merit_hydro_v1.0/{variable}.vrt
+  # path: ../ivm_data_catalog/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
