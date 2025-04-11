@@ -1,8 +1,9 @@
+from random import random
+
 import numpy as np
 import pandas as pd
-from random import random
-from numba import njit
 from honeybees.library.raster import pixels_to_coords
+from numba import njit
 
 
 @njit(cache=True)

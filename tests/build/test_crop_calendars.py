@@ -1,8 +1,8 @@
 from datetime import date
 
-from geb.setup.workflows.crop_calendars import (
-    get_growing_season_length,
+from geb.build.workflows.crop_calendars import (
     get_day_index,
+    get_growing_season_length,
 )
 
 

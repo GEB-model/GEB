@@ -1,44 +1,41 @@
+import copy
 import datetime
 import shutil
 from pathlib import Path
 from time import time
-import copy
-from dateutil.relativedelta import relativedelta
-import xarray as xr
 
+import numpy as np
+import xarray as xr
+from dateutil.relativedelta import relativedelta
 from honeybees.model import Model as ABM_Model
 
-from geb.store import Store
-from geb.reporter import Reporter
 from geb.agents import Agents
 from geb.artists import Artists
-from .hydrology import Hydrology
 from geb.hazards.driver import HazardDriver
+from geb.reporter import Reporter
+from geb.store import Store
+
 from .HRUs import load_geom
+from .hydrology import Hydrology
 
 
 class GEBModel(HazardDriver, ABM_Model):
     """GEB parent class.
 
-    Args:
-        config: Filepath of the YAML-configuration file (e.g. model.yml).
-        name: Name of model.
-        xmin: Minimum x coordinate.
-        xmax: Maximum x coordinate.
-        ymin: Minimum y coordinate.
-        ymax: Maximum y coordinate.
-        args: Run arguments.
-        coordinate_system: Coordinate system that should be used. Currently only accepts WGS84.
+    Parameters
+    ----------
+    config: Filepath of the YAML-configuration file (e.g. model.yml).
+    files: Dictionary with the paths of the input files.
+    mode: Mode of the model. Either `w` (write) or `r` (read).
+    timing: Boolean indicating if the model steps should be timed.
     """
-
-    description = """GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.\nGEB aims to simulate both environment, for now the hydrological system, the behaviour of people and their interactions at large scale without sacrificing too much detail. The model does so by coupling an agent-based model which simulates millions individual people or households and a hydrological model. While the model can be expanded to other agents and environmental interactions, we focus on farmers, high-level agents, irrigation behaviour and land management for now."""
 
     def __init__(
         self,
         config: dict,
         files: dict,
-        mode="w",
-        timing=False,
+        mode: str = "w",
+        timing: bool = False,
     ):
         self.timing = timing
         self.mode = mode
@@ -53,10 +50,12 @@ class GEBModel(HazardDriver, ABM_Model):
             for key, value in data.items():
                 data[key] = self.input_folder / value
 
+        self.mask = load_geom(self.files["geoms"]["mask"])
+
         self.store = Store(self)
         self.artists = Artists(self)
 
-    def restore(self, store_location, timestep):
+    def restore(self, store_location: str, timestep: int) -> None:
         self.store.load(store_location)
         self.hydrology.groundwater.modflow.restore(self.hydrology.grid.var.heads)
         self.current_timestep = timestep
@@ -284,7 +283,7 @@ class GEBModel(HazardDriver, ABM_Model):
         }
 
         self.var = self.store.create_bucket("var")
-        self.var.regions = load_geom(self.files["geoms"]["areamaps/regions"])
+        self.var.regions = load_geom(self.files["geoms"]["regions"])
 
         self._initialize(
             report=True,
@@ -302,13 +301,14 @@ class GEBModel(HazardDriver, ABM_Model):
             self.step()
 
         print("Spinup finished, saving conditions at end of spinup...")
-
         self.store.save()
 
-    def estimate_risk(self) -> None:
+        self.reporter.finalize()
+
+    def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""
         current_time = self.create_datetime(self.config["general"]["start_time"])
-        self.config["general"]["name"] = "estimate_risk"
+        self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(
             report=False,
@@ -322,6 +322,9 @@ class GEBModel(HazardDriver, ABM_Model):
         HazardDriver.initialize(self, longest_flood_event=30)
         self.sfincs.get_return_period_maps()
 
+    def evaluate(self):
+        print("Evaluating model...")
+
     @property
     def current_day_of_year(self) -> int:
         """Gets the current day of the year.
@@ -330,6 +333,15 @@ class GEBModel(HazardDriver, ABM_Model):
             day: current day of the year.
         """
         return self.current_time.timetuple().tm_yday
+
+    @property
+    def current_time_unix_s(self) -> int:
+        """Gets the current time in unix seconds.
+
+        Returns:
+            time: current time in unix seconds.
+        """
+        return np.datetime64(self.current_time, "s").astype(np.int64).item()
 
     @property
     def simulation_root(self) -> Path:
@@ -390,6 +402,26 @@ class GEBModel(HazardDriver, ABM_Model):
     def crs(self):
         return 4326
 
+    @property
+    def bounds(self):
+        return self.mask.total_bounds
+
+    @property
+    def xmin(self):
+        return self.bounds[0]
+
+    @property
+    def xmax(self):
+        return self.bounds[2]
+
+    @property
+    def ymin(self):
+        return self.bounds[1]
+
+    @property
+    def ymax(self):
+        return self.bounds[3]
+
     def close(self) -> None:
         """Finalizes the model."""
         if (
@@ -399,7 +431,7 @@ class GEBModel(HazardDriver, ABM_Model):
         ):
             Hydrology.finalize(self)
 
-            from geb.workflows import all_async_readers
+            from geb.workflows.io import all_async_readers
 
             for reader in all_async_readers:
                 reader.close()

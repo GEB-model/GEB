@@ -2,21 +2,16 @@
 """This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `model.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`)."""
 
 import os
-import zarr
-import pandas as pd
-from collections.abc import Iterable
-import numpy as np
 import re
-from honeybees.library.raster import coord_to_pixel
-from pathlib import Path
-from numcodecs import Blosc
-import zarr.hierarchy
+from collections.abc import Iterable
 from operator import attrgetter
+from pathlib import Path
 
+import numpy as np
+import pandas as pd
+import zarr
+from honeybees.library.raster import coord_to_pixel
 from honeybees.reporter import Reporter as ABMReporter
-
-# Define the compressor for zarr files
-compressor = Blosc(cname="zlib", clevel=9, shuffle=0)  # no shuffling is most efficient
 
 
 class hydrology_reporter(ABMReporter):
@@ -45,7 +40,7 @@ class hydrology_reporter(ABMReporter):
                         assert (
                             "single_file" in config and config["single_file"] is True
                         ), "Only single_file=True is supported for zarr format."
-                        zarr_path = Path(self.export_folder, name + ".zarr.zip")
+                        zarr_path = Path(self.export_folder, name + ".zarr")
                         config["path"] = str(zarr_path)
                         if zarr_path.exists():
                             zarr_path.unlink()
@@ -106,51 +101,58 @@ class hydrology_reporter(ABMReporter):
                                     f"WARNING: None of the time ranges for {name} are in the simulation period."
                                 )
 
-                        zarr_store = zarr.ZipStore(zarr_path)
+                        zarr_store = zarr.storage.LocalStore(zarr_path, read_only=False)
                         zarr_group = zarr.open_group(zarr_store, mode="w")
 
-                        zarr_group.create_dataset(
-                            "time",
-                            data=np.array(time, dtype="datetime64[ns]"),
-                            dtype="datetime64[ns]",
+                        time = (
+                            np.array(time, dtype="datetime64[ns]")
+                            .astype("datetime64[s]")
+                            .astype(np.int64)
                         )
-
-                        zarr_group["time"].attrs.update(
+                        time_group = zarr_group.create_array(
+                            "time",
+                            shape=time.shape,
+                            dtype=time.dtype,
+                            dimension_names=["time"],
+                        )
+                        time_group[:] = time
+                        time_group.attrs.update(
                             {
                                 "standard_name": "time",
                                 "units": "seconds since 1970-01-01T00:00:00",
                                 "calendar": "gregorian",
-                                "_ARRAY_DIMENSIONS": ["time"],
                             }
                         )
 
-                        zarr_group.create_dataset(
+                        y_group = zarr_group.create_array(
                             "y",
-                            data=self.hydrology.grid.lat,
-                            dtype="float64",
+                            shape=self.hydrology.grid.lat.shape,
+                            dtype=self.hydrology.grid.lat.dtype,
+                            dimension_names=["y"],
                         )
-                        zarr_group["y"].attrs.update(
+                        y_group[:] = self.hydrology.grid.lat
+                        y_group.attrs.update(
                             {
                                 "standard_name": "latitude",
                                 "units": "degrees_north",
-                                "_ARRAY_DIMENSIONS": ["y"],
                             }
                         )
 
-                        zarr_group.create_dataset(
+                        x_group = zarr_group.create_array(
                             "x",
-                            data=self.hydrology.grid.lon,
-                            dtype="float64",
+                            shape=self.hydrology.grid.lon.shape,
+                            dtype=self.hydrology.grid.lon.dtype,
+                            dimension_names=["x"],
                         )
-                        zarr_group["x"].attrs.update(
+                        x_group[:] = self.hydrology.grid.lon
+                        x_group.attrs.update(
                             {
                                 "standard_name": "longitude",
                                 "units": "degrees_east",
-                                "_ARRAY_DIMENSIONS": ["x"],
                             }
                         )
 
-                        zarr_data = zarr_group.create_dataset(
+                        zarr_data = zarr_group.create_array(
                             name,
                             shape=(
                                 time.size,
@@ -162,9 +164,14 @@ class hydrology_reporter(ABMReporter):
                                 self.hydrology.grid.lat.size,
                                 self.hydrology.grid.lon.size,
                             ),
-                            dtype="float32",
-                            compressor=compressor,
+                            dtype=np.float32,
+                            compressor=zarr.codecs.BloscCodec(
+                                cname="zlib",
+                                clevel=9,
+                                shuffle=zarr.codecs.BloscShuffle.shuffle,
+                            ),
                             fill_value=np.nan,
+                            dimension_names=["time", "y", "x"],
                         )
 
                         zarr_data.attrs.update(
@@ -173,15 +180,9 @@ class hydrology_reporter(ABMReporter):
                                 "coordinates": "time y x",
                                 "units": "unknown",
                                 "long_name": name,
-                                "_ARRAY_DIMENSIONS": ["time", "y", "x"],
+                                "_CRS": self.hydrology.grid.crs,
                             }
                         )
-
-                        crs = self.hydrology.grid.crs
-                        if not isinstance(crs, str):
-                            crs = crs.to_string()
-                        zarr_group.attrs["crs"] = crs
-
                         self.variables[name] = zarr_store
 
                     else:
@@ -255,11 +256,11 @@ class hydrology_reporter(ABMReporter):
         if conf["format"] == "zarr":
             zarr_group = zarr.open_group(self.variables[name])
             if (
-                np.isin(np.datetime64(self.model.current_time), zarr_group.time)
+                np.isin(self.model.current_time_unix_s, zarr_group["time"][:])
                 and value is not None
             ):
                 time_index = np.where(
-                    zarr_group.time[:] == np.datetime64(self.model.current_time)
+                    zarr_group["time"][:] == self.model.current_time_unix_s
                 )[0].item()
                 if "substeps" in conf:
                     time_index_start = np.where(time_index)[0][0]
@@ -343,9 +344,9 @@ class hydrology_reporter(ABMReporter):
                                 value = decompressed_array[int(args[0]), int(args[1])]
                                 assert not np.isnan(value)
                             elif function == "sample_coord":
-                                if conf["varname"].startswith("data.grid"):
+                                if conf["varname"].startswith("hydrology.grid"):
                                     gt = self.model.hydrology.grid.gt
-                                elif conf["varname"].startswith("data.HRU"):
+                                elif conf["varname"].startswith("hydrology.HRU"):
                                     gt = self.hydrology.HRU.gt
                                 else:
                                     raise ValueError

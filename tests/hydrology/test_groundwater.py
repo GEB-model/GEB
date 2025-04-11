@@ -1,13 +1,15 @@
 import math
-import numpy as np
+from copy import deepcopy
+
 import matplotlib.pyplot as plt
+import numpy as np
+
 from geb.hydrology.groundwater.model import (
     ModFlowSimulation,
-    get_water_table_depth,
-    get_groundwater_storage_m,
     distribute_well_rate_per_layer,
+    get_groundwater_storage_m,
+    get_water_table_depth,
 )
-from copy import deepcopy
 
 from ..testconfig import output_folder, tmp_folder
 

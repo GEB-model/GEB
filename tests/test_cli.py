@@ -1,10 +1,9 @@
 import pytest
 from click.testing import CliRunner
 
+from geb.cli import cli, multi_level_merge
+
 from .testconfig import IN_GITHUB_ACTIONS
-from geb.cli import (
-    multi_level_merge,
-)
 
 
 def test_multi_level_merge():
@@ -30,4 +29,4 @@ def test_cli():
         "share",
         "evaluate",
     ):
-        assert runner.invoke(globals()[cmd], ["--help"]).exit_code == 0
+        assert runner.invoke(cli, [cmd, "--help"]).exit_code == 0

@@ -85,6 +85,8 @@ class Evaporation(object):
             - self.HRU.var.snowEvap,
         )
 
+        self.hydrology.lakes_reservoirs.set_waterbody_evaporation()
+
         return (
             potential_transpiration,
             potential_bare_soil_evaporation,

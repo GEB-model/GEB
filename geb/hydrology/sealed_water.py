@@ -20,8 +20,10 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
+
 from geb.workflows import balance_check
-from .landcover import SEALED, OPEN_WATER
+
+from .landcover import OPEN_WATER, SEALED
 
 
 class SealedWater(object):

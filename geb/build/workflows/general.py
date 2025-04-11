@@ -1,15 +1,18 @@
 import os
 import shutil
 import tempfile
-import requests
-from tqdm import tqdm
 import time
-import pandas as pd
+from collections.abc import Mapping
 from datetime import date
 from typing import Any, Union
-import xarray
+
 import numpy as np
-from collections.abc import Mapping
+import pandas as pd
+import requests
+import xarray
+import xarray as xr
+from scipy.interpolate import griddata
+from tqdm import tqdm
 
 
 def repeat_grid(data, factor):
@@ -28,7 +31,7 @@ def calculate_cell_area(affine_transform, shape):
         distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
     )
     height_m = distance_1_degree_latitude * abs(affine_transform.e)
-    return width_m * height_m
+    return (width_m * height_m).astype(np.float32)
 
 
 def clip_with_grid(ds, mask):
@@ -86,7 +89,6 @@ def pad_xy(
     :obj:`xarray.DataArray`:
         The padded object.
     """
-    # pylint: disable=too-many-locals
     left, bottom, right, top = self._internal_bounds()
     resolution_x, resolution_y = self.resolution()
     y_before = y_after = 0
@@ -215,3 +217,43 @@ def project_to_future(df, project_future_until_year, inflation_rates):
                 df.loc[source_date, region_id] * region_inflation_rate
             ).values
     return df
+
+
+def interpolate_na_along_time_dim(da):
+    def fillna_nearest_2d(arr, dims):
+        mask = np.isnan(arr)
+        if not mask.any():
+            return arr
+
+        assert dims == ("time", "y", "x")
+
+        for time_idx in range(arr.shape[0]):
+            mask_slice = mask[time_idx]
+            time_slice = arr[time_idx]
+
+            y, x = np.indices(time_slice.shape)
+            known_x, known_y = x[~mask_slice], y[~mask_slice]
+            known_v = time_slice[~mask_slice]
+            missing_x, missing_y = x[mask_slice], y[mask_slice]
+
+            filled_values = griddata(
+                (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+            )
+            arr[time_idx][mask_slice] = filled_values
+        return arr
+
+    da = xr.apply_ufunc(
+        fillna_nearest_2d,
+        da,
+        dask="parallelized",  # Enable parallelized computation
+        input_core_dims=[["y", "x"]],
+        output_core_dims=[["y", "x"]],
+        kwargs={"dims": da.dims},  # Additional arguments for the function
+        output_dtypes=[da.dtype],
+        keep_attrs=True,
+    )
+    return da
+
+
+def resample_like(source, target, method="bilinear"):
+    return source.raster.reproject_like(target, method=method)

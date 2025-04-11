@@ -1,9 +1,10 @@
 import math
+
 import numpy as np
 
 from geb.hydrology.routing import (
-    calculate_river_storage_from_discharge,
     calculate_discharge_from_storage,
+    calculate_river_storage_from_discharge,
     get_channel_ratio,
 )
 

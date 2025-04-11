@@ -1,0 +1,12 @@
+{
+    "recommendations": [
+        "charliermarsh.ruff",
+        "github.vscode-github-actions",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "github.copilot",
+        "github.copilot-chat",
+        "tonybaloney.vscode-pets",
+    ]
+}

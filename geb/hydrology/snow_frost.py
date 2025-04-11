@@ -19,8 +19,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-import numpy as np
 import math
+
+import numpy as np
 
 from geb.workflows import balance_check
 
@@ -151,7 +152,7 @@ class SnowFrost(object):
         TemperatureLapseRate = 0.0065
 
         elevation_std = self.grid.load(
-            self.model.files["grid"]["landsurface/topo/elevation_STD"]
+            self.model.files["grid"]["landsurface/elevation_standard_deviation"]
         )
         elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
 

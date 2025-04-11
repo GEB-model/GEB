@@ -18,26 +18,14 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      # - name: Install CUDA
-      #   uses: Jimver/cuda-toolkit@v0.2.4
-      #   id: cuda-toolkit
-      #   with:
-      #     cuda: '11.2.2'
-      # Set up Python
-      - name: "Set up Python"
-        uses: actions/setup-python@v5
-        with:
-            python-version-file: "pyproject.toml"
-      # Install Pandoc and xelatex engine
       - name: Install Pandoc and xelatex
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra librsvg2-bin
       - name: Set up uv
-        # Install latest uv version using the installer
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Install the project
-        run: uv sync --extra docs
+        run: uv sync --dev
       - name: Debugging information
         run: |
           echo "github.ref:" ${{github.ref}}

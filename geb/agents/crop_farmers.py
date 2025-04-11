@@ -1,44 +1,42 @@
 # -*- coding: utf-8 -*-
-import math
-from datetime import datetime
-import copy
-import os
 import calendar
+import copy
+import math
+import os
+from datetime import datetime
 from typing import Tuple, Union
 
+import numpy as np
 import pandas as pd
-from scipy.stats import genextreme
+from honeybees.library.neighbors import find_neighbors
+from honeybees.library.raster import pixels_to_coords, sample_from_map
+from numba import njit
 from scipy.optimize import curve_fit
+from scipy.stats import genextreme
 
 from geb.workflows import TimingModule
 
-import numpy as np
-from numba import njit
-
-from ..workflows import balance_check
-
-from honeybees.library.raster import pixels_to_coords, sample_from_map
-from honeybees.library.neighbors import find_neighbors
-
 from ..data import (
-    load_regional_crop_data_from_dict,
     load_crop_data,
     load_economic_data,
+    load_regional_crop_data_from_dict,
 )
+from ..HRUs import load_grid
+from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from ..store import DynamicArray
+from ..workflows import balance_check
+from ..workflows.io import load_array
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
-from ..store import DynamicArray
-from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
-from ..HRUs import load_grid
 from .workflows.crop_farmers import (
-    get_farmer_HRUs,
-    farmer_command_area,
-    get_farmer_groundwater_depth,
     abstract_water,
     crop_profit_difference_njit,
+    farmer_command_area,
+    get_farmer_groundwater_depth,
+    get_farmer_HRUs,
+    get_gross_irrigation_demand_m3,
     plant,
 )
-
 
 NO_IRRIGATION = -1
 CHANNEL_IRRIGATION = 0
@@ -81,83 +79,12 @@ def shift_and_update(array, update):
     array[:, 0] = update
 
 
-def shift_and_update_1d(array, update):
-    """Shifts the array and updates the first element with the update value.
-
-    Args:
-        array: The array that needs to be shifted.
-        update: The value that needs to be added to the first element of the array.
-    """
-    array[1:] = array[:-1]
-    array[0] = update
-
-
 def shift_and_reset_matrix(matrix: np.ndarray) -> None:
     """
     Shifts columns to the right in the matrix and sets the first column to zero.
     """
     matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
     matrix[:, 0] = 0  # Reset the first column to 0
-
-
-def rolling_mean_2d(array, window):
-    return np.apply_along_axis(
-        lambda x: np.concatenate(
-            (
-                np.convolve(x, np.ones(window) / window, mode="valid"),
-                np.full(window - 1, np.nan),
-            )
-        ),
-        axis=-1,
-        arr=array,
-    )
-
-
-def ema_2d(array, span=60):
-    """
-    Compute the exponential moving average (EMA) along the last axis (axis=-1) for a 2D array.
-    This replicates the behavior of Pandas' .ewm(span=span, adjust=False).mean() for each 1D slice.
-
-    Parameters
-    ----------
-    array : np.ndarray
-        2D NumPy array of shape (M, N), where we want to compute an EMA along each row.
-    span : int
-        The EMA span, analogous to `span` in Pandas' ewm. The effective smoothing factor alpha
-        is given by alpha = 2 / (span + 1).
-
-    Returns
-    -------
-    ema_array : np.ndarray
-        2D NumPy array of the same shape as `array`, where each row has been replaced
-        by its exponential moving average along the last axis.
-    """
-
-    # Calculate alpha using Pandas' ewm(span=...).mean() convention:
-    # alpha = 2 / (span + 1)
-    alpha = 2.0 / (span + 1)
-
-    def ema_1d(x):
-        """
-        Compute EMA for a 1D array x using iterative approach:
-        ema[i] = alpha * x[i] + (1 - alpha) * ema[i-1].
-        """
-        out = np.zeros_like(x, dtype=float)
-        if len(x) == 0:
-            return out
-
-        # Initialize first value directly
-        out[0] = x[0]
-
-        # Iteratively compute EMA
-        for i in range(1, len(x)):
-            out[i] = alpha * x[i] + (1 - alpha) * out[i - 1]
-
-        return out
-
-    # Apply ema_1d along the last axis of the 2D array
-    ema_array = np.apply_along_axis(ema_1d, axis=-1, arr=array)
-    return ema_array
 
 
 def advance_crop_rotation_year(
@@ -202,22 +129,23 @@ class CropFarmers(AgentBaseClass):
         super().__init__()
 
         self.inflation_rate = load_economic_data(
-            self.model.files["dict"]["economics/inflation_rates"]
+            self.model.files["dict"]["socioeconomics/inflation_rates"]
         )
         # self.lending_rate = load_economic_data(
-        #     self.model.files["dict"]["economics/lending_rates"]
+        #     self.model.files["dict"]["socioeconomics/lending_rates"]
         # )
         self.electricity_cost = load_economic_data(
-            self.model.files["dict"]["economics/electricity_cost"]
+            self.model.files["dict"]["socioeconomics/electricity_cost"]
         )
 
-        self.why_10 = load_economic_data(self.model.files["dict"]["economics/why_10"])
-        self.why_20 = load_economic_data(self.model.files["dict"]["economics/why_20"])
-        self.why_30 = load_economic_data(self.model.files["dict"]["economics/why_30"])
-
-        self.elevation_subgrid = load_grid(
-            self.model.files["MERIT_grid"]["landsurface/topo/subgrid_elevation"],
-            return_transform_and_crs=True,
+        self.why_10 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_10"]
+        )
+        self.why_20 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_20"]
+        )
+        self.why_30 = load_economic_data(
+            self.model.files["dict"]["socioeconomics/why_30"]
         )
 
         self.crop_prices = load_regional_crop_data_from_dict(
@@ -254,8 +182,6 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["decisions"]["expenditure_cap"]
 
-        self.var.max_paddy_water_level = 0.05
-
         # New global well variables
         self.var.pump_hours = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
@@ -290,11 +216,9 @@ class CropFarmers(AgentBaseClass):
 
         # load map of all subdistricts
         self.var.subdistrict_map = load_grid(
-            self.model.files["region_subgrid"]["areamaps/region_subgrid"]
+            self.model.files["region_subgrid"]["region_ids"]
         )
-        region_mask = load_grid(
-            self.model.files["region_subgrid"]["areamaps/region_mask"]
-        )
+        region_mask = load_grid(self.model.files["region_subgrid"]["mask"])
         self.HRU_regions_map = np.zeros_like(self.HRU.mask, dtype=np.int8)
         self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
             region_mask == 0
@@ -374,42 +298,34 @@ class CropFarmers(AgentBaseClass):
         self.var.risk_aversion = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
-        self.var.risk_aversion[:] = np.load(
-            self.model.files["binary"]["agents/farmers/risk_aversion"]
-        )["data"]
+        self.var.risk_aversion[:] = load_array(
+            self.model.files["array"]["agents/farmers/risk_aversion"]
+        )
 
         self.var.discount_rate = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
-        self.var.discount_rate[:] = np.load(
-            self.model.files["binary"]["agents/farmers/discount_rate"]
-        )["data"]
+        self.var.discount_rate[:] = load_array(
+            self.model.files["array"]["agents/farmers/discount_rate"]
+        )
 
         self.var.intention_factor = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.float32, fill_value=np.nan
         )
 
-        self.var.intention_factor[:] = np.load(
-            self.model.files["binary"]["agents/farmers/intention_factor"]
-        )["data"]
+        self.var.intention_factor[:] = load_array(
+            self.model.files["array"]["agents/farmers/intention_factor"]
+        )
 
         # Load the region_code of each farmer.
         self.var.region_id = DynamicArray(
-            input_array=np.load(self.model.files["binary"]["agents/farmers/region_id"])[
-                "data"
-            ],
-            max_n=self.max_n,
-        )
-
-        # Find the elevation of each farmer on the map based on the coordinates of the farmer as calculated before.
-        self.var.elevation = DynamicArray(
-            input_array=sample_from_map(
-                self.elevation_subgrid[0],
-                self.var.locations.data,
-                self.elevation_subgrid[1].to_gdal(),
+            input_array=load_array(
+                self.model.files["array"]["agents/farmers/region_id"]
             ),
             max_n=self.max_n,
         )
+
+        self.var.elevation = self.get_farmer_elevation()
 
         self.var.crop_calendar = DynamicArray(
             n=self.n,
@@ -419,9 +335,9 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=-1,
         )  # first dimension is the farmers, second is the rotation, third is the crop, planting and growing length
-        self.var.crop_calendar[:] = np.load(
-            self.model.files["binary"]["agents/farmers/crop_calendar"]
-        )["data"]
+        self.var.crop_calendar[:] = load_array(
+            self.model.files["array"]["agents/farmers/crop_calendar"]
+        )
         # assert self.var.crop_calendar[:, :, 0].max() < len(self.var.crop_ids)
 
         self.var.crop_calendar_rotation_years = DynamicArray(
@@ -430,9 +346,9 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=0,
         )
-        self.var.crop_calendar_rotation_years[:] = np.load(
-            self.model.files["binary"]["agents/farmers/crop_calendar_rotation_years"]
-        )["data"]
+        self.var.crop_calendar_rotation_years[:] = load_array(
+            self.model.files["array"]["agents/farmers/crop_calendar_rotation_years"]
+        )
 
         self.var.current_crop_calendar_rotation_year_index = DynamicArray(
             n=self.n,
@@ -447,7 +363,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.adaptations = DynamicArray(
-            np.load(self.model.files["binary"]["agents/farmers/adaptations"])["data"],
+            load_array(self.model.files["array"]["agents/farmers/adaptations"]),
             max_n=self.max_n,
             extra_dims_names=("adaptation_type",),
         )
@@ -513,6 +429,13 @@ class CropFarmers(AgentBaseClass):
             extra_dims_names=("abstraction_type",),
             dtype=np.float32,
             fill_value=0,
+        )
+
+        self.var.max_paddy_water_level = DynamicArray(
+            n=self.n,
+            max_n=self.max_n,
+            dtype=np.float32,
+            fill_value=0.05,
         )
 
         self.var.cumulative_SPEI_during_growing_season = DynamicArray(
@@ -622,9 +545,9 @@ class CropFarmers(AgentBaseClass):
         self.var.household_size = DynamicArray(
             n=self.n, max_n=self.max_n, dtype=np.int32, fill_value=-1
         )
-        self.var.household_size[:] = np.load(
-            self.model.files["binary"]["agents/farmers/household_size"]
-        )["data"]
+        self.var.household_size[:] = load_array(
+            self.model.files["array"]["agents/farmers/household_size"]
+        )
 
         self.var.yield_ratios_drought_event = DynamicArray(
             n=self.n,
@@ -1018,19 +941,71 @@ class CropFarmers(AgentBaseClass):
                     self.var.cumulative_water_deficit_m3[:, 364]
                 )
 
+    def get_gross_irrigation_demand_m3(
+        self, potential_evapotranspiration, available_infiltration
+    ) -> np.ndarray:
+        gross_irrigation_demand_m3 = get_gross_irrigation_demand_m3(
+            day_index=self.model.current_day_of_year - 1,
+            n=self.n,
+            currently_irrigated_fields=self.currently_irrigated_fields,
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+            field_indices=self.var.field_indices,
+            irrigation_efficiency=self.var.irrigation_efficiency.data,
+            fraction_irrigated_field=self.var.fraction_irrigated_field.data,
+            cell_area=self.model.hydrology.HRU.var.cell_area,
+            crop_map=self.HRU.var.crop_map,
+            topwater=self.HRU.var.topwater,
+            available_infiltration=available_infiltration,
+            potential_evapotranspiration=potential_evapotranspiration,
+            root_depth=self.HRU.var.root_depth,
+            soil_layer_height=self.HRU.var.soil_layer_height,
+            field_capacity=self.HRU.var.wfc,
+            wilting_point=self.HRU.var.wwp,
+            w=self.HRU.var.w,
+            ws=self.HRU.var.ws,
+            arno_beta=self.HRU.var.arnoBeta,
+            remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
+            cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
+            crop_calendar=self.var.crop_calendar.data,
+            crop_group_numbers=self.var.crop_data["crop_group_number"].values.astype(
+                np.float32
+            ),
+            paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
+            current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
+            max_paddy_water_level=self.var.max_paddy_water_level.data,
+            minimum_effective_root_depth=self.model.hydrology.soil.var.minimum_effective_root_depth,
+        )
+
+        assert (
+            gross_irrigation_demand_m3 < self.model.hydrology.HRU.var.cell_area
+        ).all()
+        return gross_irrigation_demand_m3
+
+    @property
+    def surface_irrigated(self):
+        return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0
+
+    @property
+    def well_irrigated(self):
+        return self.var.adaptations[:, WELL_ADAPTATION] > 0
+
+    @property
+    def irrigated(self):
+        return self.surface_irrigated | self.well_irrigated  # | is the OR operator
+
+    @property
+    def currently_irrigated_fields(self):
+        return self.farmer_to_field(self.is_irrigated, False) & (
+            self.HRU.var.crop_map != -1
+        )
+
     def abstract_water(
         self,
-        cell_area: np.ndarray,
-        paddy_level: np.ndarray,
-        readily_available_water: np.ndarray,
-        critical_water_level: np.ndarray,
-        max_water_content: np.ndarray,
-        potential_infiltration_capacity: np.ndarray,
+        gross_irrigation_demand_m3_per_field: np.ndarray,
         available_channel_storage_m3: np.ndarray,
         available_groundwater_m3: np.ndarray,
         groundwater_depth: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
-        command_areas: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function allows the abstraction of water by farmers for irrigation purposes. It's main purpose is to call the relevant numba function to do the actual abstraction. In addition, the function saves the abstraction from the various sources by farmer.
@@ -1069,25 +1044,16 @@ class CropFarmers(AgentBaseClass):
             returnFlowIrr_m,
             addtoevapotrans_m,
         ) = abstract_water(
-            self.model.current_day_of_year - 1,
-            self.n,
-            self.activation_order_by_elevation,
-            self.var.field_indices_by_farmer.data,
-            self.var.field_indices,
-            self.var.irrigation_efficiency.data,
-            self.var.fraction_irrigated_field.data,
-            surface_irrigated=self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0,
-            well_irrigated=self.var.adaptations[:, WELL_ADAPTATION] > 0,
-            cell_area=cell_area,
+            activation_order=self.activation_order_by_elevation,
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+            field_indices=self.var.field_indices,
+            irrigation_efficiency=self.var.irrigation_efficiency.data,
+            surface_irrigated=self.surface_irrigated,
+            well_irrigated=self.well_irrigated,
+            cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
             nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
             crop_map=self.HRU.var.crop_map,
-            field_is_paddy_irrigated=self.field_is_paddy_irrigated,
-            paddy_level=paddy_level,
-            readily_available_water=readily_available_water,
-            critical_water_level=critical_water_level,
-            max_water_content=max_water_content,
-            potential_infiltration_capacity=potential_infiltration_capacity,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
@@ -1098,11 +1064,13 @@ class CropFarmers(AgentBaseClass):
             ],
             well_depth=self.var.well_depth.data,
             remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
-            cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
-            crop_calendar=self.var.crop_calendar.data,
-            current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
-            max_paddy_water_level=self.var.max_paddy_water_level,
+            gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
         )
+
+        assert (water_withdrawal_m < 1).all()
+        assert (water_consumption_m < 1).all()
+        assert (returnFlowIrr_m < 1).all()
+        assert (addtoevapotrans_m < 1).all()
 
         if __debug__:
             # make sure the withdrawal per source is identical to the total withdrawal in m (corrected for cell area)
@@ -1114,7 +1082,9 @@ class CropFarmers(AgentBaseClass):
                     self.var.reservoir_abstraction_m3_by_farmer,
                     self.var.groundwater_abstraction_m3_by_farmer,
                 ),
-                outfluxes=[(water_withdrawal_m * cell_area)],
+                outfluxes=[
+                    (water_withdrawal_m * self.model.hydrology.HRU.var.cell_area)
+                ],
                 tollerance=50,
             )
 
@@ -1316,13 +1286,23 @@ class CropFarmers(AgentBaseClass):
 
         return yield_ratio
 
+    def field_to_farmer(self, array, method="sum"):
+        assert method == "sum", "Only sum is implemented"
+        farmer_fields = self.HRU.var.land_owners[self.HRU.var.land_owners != -1]
+        masked_array = array[self.HRU.var.land_owners != -1]
+        return np.bincount(farmer_fields, masked_array, minlength=self.n)
+
+    def farmer_to_field(self, array, nodata):
+        by_field = np.take(array, self.HRU.var.land_owners)
+        by_field[self.HRU.var.land_owners == -1] = nodata
+        return by_field
+
     def decompress(self, array):
         if np.issubdtype(array.dtype, np.floating):
             nofieldvalue = np.nan
         else:
             nofieldvalue = -1
-        by_field = np.take(array, self.HRU.var.land_owners)
-        by_field[self.HRU.var.land_owners == -1] = nofieldvalue
+        by_field = self.farmer_to_field(array, nodata=nofieldvalue)
         return self.HRU.decompress(by_field)
 
     @property
@@ -1764,18 +1744,16 @@ class CropFarmers(AgentBaseClass):
 
         assert (self.HRU.var.crop_age_days_map[self.HRU.var.crop_map > 0] >= 0).all()
 
-        self.HRU.var.land_use_type[
-            (self.HRU.var.crop_map >= 0) & (self.field_is_paddy_irrigated)
-        ] = PADDY_IRRIGATED
-        self.HRU.var.land_use_type[
-            (self.HRU.var.crop_map >= 0) & (~self.field_is_paddy_irrigated)
-        ] = NON_PADDY_IRRIGATED
-
-    @property
-    def field_is_paddy_irrigated(self):
-        return np.isin(
+        is_paddy_crop = np.isin(
             self.HRU.var.crop_map,
             self.var.crop_data[self.var.crop_data["is_paddy"]].index,
+        )
+
+        self.HRU.var.land_use_type[(self.HRU.var.crop_map >= 0) & is_paddy_crop] = (
+            PADDY_IRRIGATED
+        )
+        self.HRU.var.land_use_type[(self.HRU.var.crop_map >= 0) & (~is_paddy_crop)] = (
+            NON_PADDY_IRRIGATED
         )
 
     def water_abstraction_sum(self) -> None:
@@ -2119,8 +2097,8 @@ class CropFarmers(AgentBaseClass):
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from scipy.optimize import curve_fit
         import numpy as np
+        from scipy.optimize import curve_fit
 
         # Create unique groups based on agent properties
         crop_elevation_group = self.create_unique_groups(10)
@@ -4253,3 +4231,15 @@ class CropFarmers(AgentBaseClass):
     @n.setter
     def n(self, value):
         self.var._n = value
+
+    def get_farmer_elevation(self):
+        # get elevation per farmer
+        elevation_subgrid = load_grid(
+            self.model.files["subgrid"]["landsurface/elevation"],
+        )
+        decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)
+        mask = decompressed_land_owners != -1
+        return np.bincount(
+            decompressed_land_owners[mask],
+            weights=elevation_subgrid[mask],
+        ) / np.bincount(decompressed_land_owners[mask])

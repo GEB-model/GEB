@@ -20,8 +20,9 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-import xarray as xr
+import zarr
 from numba import njit
+
 from geb.workflows import TimingModule, balance_check
 
 # All natural areas MUST be before the sealed and water areas
@@ -105,12 +106,13 @@ class LandCover(object):
         self.var = self.model.store.create_bucket("hydrology.landcover.var")
         self.HRU.var.capriseindex = self.HRU.full_compressed(0, dtype=np.float32)
 
-        self.grid.var.forest_kc_per_10_days = xr.open_dataset(
-            self.model.files["forcing"][
-                "landcover/forest/cropCoefficientForest_10days"
-            ],
-            engine="zarr",
-        )["cropCoefficientForest_10days"].values
+        store = zarr.storage.LocalStore(
+            self.model.files["grid"]["landcover/forest/crop_coefficient"],
+            read_only=True,
+        )
+        self.grid.var.forest_kc_per_10_days = zarr.open_group(store, mode="r")[
+            "crop_coefficient"
+        ][:]
 
     def water_body_exchange(self, groundwater_recharge):
         """computing leakage from rivers"""
@@ -399,6 +401,8 @@ class LandCover(object):
             potential_transpiration_minus_interception_evaporation,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
+            natural_available_water_infiltration=self.HRU.var.natural_available_water_infiltration,
+            actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
         )
         assert not (runoff < 0).any()
         timer.new_split("Soil")

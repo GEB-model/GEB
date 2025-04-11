@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-from .general import AgentBaseClass
-from ..store import DynamicArray
-import numpy as np
 import json
-from ..data import load_regional_crop_data_from_dict
+
+import numpy as np
 import statsmodels.api as sm
+
+from ..data import load_regional_crop_data_from_dict
+from ..store import DynamicArray
+from .general import AgentBaseClass
 
 
 class Market(AgentBaseClass):
@@ -37,7 +39,7 @@ class Market(AgentBaseClass):
 
     def spinup(self) -> None:
         self.var = self.model.store.create_bucket("agents.market.var")
-        with open(self.model.files["dict"]["economics/inflation_rates"], "r") as f:
+        with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
             inflation = json.load(f)
             inflation["time"] = [int(time) for time in inflation["time"]]
             start_idx = inflation["time"].index(

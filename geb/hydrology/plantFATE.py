@@ -2,9 +2,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-
-from plantFATE import Simulator as sim
-from plantFATE import Clim
+from plantFATE import Clim, Simulator as sim
 
 
 class Model:
