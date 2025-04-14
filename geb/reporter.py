@@ -66,20 +66,26 @@ class Reporter:
     def __init__(self, model) -> None:
         self.model = model
         self.hydrology = model.hydrology
-        self.report_folder = self.model.output_folder / "reporter"
+        self.report_folder = self.model.output_folder / "reporter" / self.model.run_name
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.variables = {}
         self.timesteps = []
 
-        if self.model.mode == "w":
-            if "report" in self.model.config:
-                for module_name, configs in self.model.config["report"].items():
-                    self.variables[module_name] = {}
-                    for name, config in configs.items():
-                        self.variables[module_name][name] = self.create_variable(
-                            config, module_name, name
-                        )
+        if (
+            self.model.mode == "w"
+            and "report" in self.model.config
+            and self.model.config["report"]
+        ):
+            self.activated = True
+            for module_name, configs in self.model.config["report"].items():
+                self.variables[module_name] = {}
+                for name, config in configs.items():
+                    self.variables[module_name][name] = self.create_variable(
+                        config, module_name, name
+                    )
+        else:
+            self.activated = False
 
     def create_variable(self, config: dict, module_name: str, name: str) -> None:
         """This function creates a variable for the reporter. For
@@ -478,6 +484,8 @@ class Reporter:
                 that calls this one.
             module_name: The name of the module.
         """
+        if not self.activated:
+            return None
         report = self.model.config["report"].get(module_name, None)
         if report is not None:
             for name, config in report.items():
