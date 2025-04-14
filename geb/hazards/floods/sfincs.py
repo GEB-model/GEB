@@ -330,7 +330,13 @@ class SFINCS:
 
     @property
     def discharge_spinup_ds(self):
-        da = open_zarr(Path("report") / "spinup" / "discharge_daily.zarr")
+        da = open_zarr(
+            self.model.output_folder
+            / "report"
+            / "spinup"
+            / "hydrology.routing"
+            / "discharge_daily.zarr"
+        )
 
         # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
         # ds = ds.sel(time=slice(start_time, ds.time[-1]))
