@@ -14,7 +14,9 @@ Some of the data that is obtained from online sources and APIs requires keys. Yo
 
 1. Request access to MERIT Hydro dataset `MERIT Hydro <https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/>`_, and create a ".env"-file in the GEB repository with the following content:
 
-    MERIT_USERNAME=<your_key>
+.. code-block:: text
+
+    MERIT_USERNAME=<your_username>
     MERIT_PASSWORD=<your_password>
 
 2. To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on `Destination Earth <https://earthdatahub.destine.eu/>`_ and following the instructions `here <https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land>`_.
