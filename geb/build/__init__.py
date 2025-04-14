@@ -352,19 +352,17 @@ class GEBModel(
             else:
                 sink_subbasin_ids = [region["subbasin"]]
         elif "outflow" in region:
-            lon, lat = region["outflow"][0], region["outflow"][1]
+            lat, lon = region["outflow"]["lat"], region["outflow"]["lon"]
             sink_subbasin_ids = [
                 get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
             ]
-        elif "admin" in region:
-            admin_regions = self.data_catalog.get_geodataframe(
-                region["admin"]["source"]
-            )
-            admin_regions = admin_regions[
-                admin_regions[region["admin"]["column"]] == region["admin"]["key"]
+        elif "geom" in region:
+            regions = self.data_catalog.get_geodataframe(region["geom"]["source"])
+            regions = regions[
+                regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
             sink_subbasin_ids = get_sink_subbasin_id_for_geom(
-                self.data_catalog, admin_regions, river_graph
+                self.data_catalog, regions, river_graph
             )
         else:
             raise ValueError(f"Region {region} not understood.")
@@ -1122,7 +1120,7 @@ class GEBModel(
         """Check all opt keys and raise sensible error messages if unknown."""
         for method in opt.keys():
             if not callable(getattr(self, method, None)):
-                raise ValueError(f'Model {self._NAME} has no method "{method}"')
+                raise ValueError(f'Build has no method "{method}"')
         return opt
 
     def run_method(self, method, *args, **kwargs):
