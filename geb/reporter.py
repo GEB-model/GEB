@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 """This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `model.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`)."""
 
-import os
-import re
+import datetime
 from operator import attrgetter
-from pathlib import Path
 from typing import Any, Union
 
 import numpy as np
@@ -13,7 +11,23 @@ import zarr
 from honeybees.library.raster import coord_to_pixel
 
 
-def create_time_array(start, end, timestep, conf):
+def create_time_array(
+    start: datetime.datetime,
+    end: datetime.datetime,
+    timestep: datetime.timedelta,
+    conf: dict,
+) -> list:
+    """Create a time array based on the start and end time, the timestep, and the frequency.
+
+    Args:
+        start: The start time.
+        end: The end time.
+        timestep: The timestep length.
+        conf: The configuration for the frequency.
+
+    Returns:
+        time: The time array.
+    """
     if "frequency" not in conf:
         frequency = {"every": "day"}
     else:
@@ -45,7 +59,7 @@ def create_time_array(start, end, timestep, conf):
 
 
 class Reporter:
-    """This class is used to report CWatM data to disk. On initialization the export folder is created if it does not yet exist. Then all variables to report are on read from the configuration folder, and the datastructures to save the data are created.
+    """This class is used to report data to disk.
 
     Args:
         model: The GEB model.
@@ -54,8 +68,8 @@ class Reporter:
     def __init__(self, model) -> None:
         self.model = model
         self.hydrology = model.hydrology
-        self.folder = self.model.output_folder / "reporter"
-        self.folder.mkdir(parents=True, exist_ok=True)
+        self.report_folder = self.model.output_folder / "reporter"
+        self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.variables = {}
         self.timesteps = []
@@ -66,10 +80,20 @@ class Reporter:
                     self.variables[module_name] = {}
                     for name, config in configs.items():
                         self.variables[module_name][name] = self.create_variable(
-                            config, name
+                            config, module_name, name
                         )
 
-    def create_variable(self, config, name) -> None:
+    def create_variable(self, config: dict, module_name: str, name: str) -> None:
+        """This function creates a variable for the reporter. For
+        configurations without a aggregation function, a zarr file is created. For
+        configurations with an aggregation function, the data
+        is stored in memory and exported on the final timestep.
+
+        Args:
+            config: The configuration for the variable.
+            module_name: The name of the module to which the variable belongs.
+            name: The name of the variable.
+        """
         if config["type"] in ("grid", "HRU"):
             if config["function"] is not None:
                 return []
@@ -78,66 +102,19 @@ class Reporter:
                     raster = self.hydrology.HRU
                 else:
                     raster = self.hydrology.grid
-                zarr_path = Path(self.folder, name + ".zarr")
+                zarr_path = self.report_folder / module_name / (name + ".zarr")
+                zarr_path.parent.mkdir(parents=True, exist_ok=True)
                 config["path"] = str(zarr_path)
-                if zarr_path.exists():
-                    zarr_path.unlink()
-                if "time_ranges" not in config:
-                    if "substeps" in config:
-                        time = pd.date_range(
-                            start=self.model.current_time,
-                            periods=(self.model.n_timesteps + 1) * config["substeps"],
-                            freq=self.model.timestep_length / config["substeps"],
-                            inclusive="left",
-                        )
-                    else:
-                        time = pd.date_range(
-                            start=self.model.current_time,
-                            periods=self.model.n_timesteps,
-                            freq=self.model.timestep_length,
-                        )
-                else:
-                    time = []
-                    for time_range in config["time_ranges"]:
-                        start = time_range["start"]
-                        end = time_range["end"]
-                        if "substeps" in config:
-                            time.extend(
-                                pd.date_range(
-                                    start=start,
-                                    end=end + self.model.timestep_length,
-                                    freq=self.model.timestep_length
-                                    / config["substeps"],
-                                    inclusive="left",
-                                )
-                            )
-                        else:
-                            time.extend(
-                                pd.date_range(
-                                    start=start,
-                                    end=end,
-                                    freq=self.model.timestep_length,
-                                )
-                            )
-                    # exlude time ranges that are not in the simulation period
-                    time = [
-                        t
-                        for t in time
-                        if t >= self.model.current_time
-                        and t
-                        <= self.model.current_time
-                        + (self.model.n_timesteps + 1) * self.model.timestep_length
-                    ]
-                    # remove duplicates and sort
-                    time = list(dict.fromkeys(time))
-                    time.sort()
-                    if not time:
-                        print(
-                            f"WARNING: None of the time ranges for {name} are in the simulation period."
-                        )
 
                 zarr_store = zarr.storage.LocalStore(zarr_path, read_only=False)
                 zarr_group = zarr.open_group(zarr_store, mode="w")
+
+                time = create_time_array(
+                    start=self.model.current_time,
+                    end=self.model.end_time,
+                    timestep=self.model.timestep_length,
+                    conf=config,
+                )
 
                 time = (
                     np.array(time, dtype="datetime64[ns]")
@@ -224,7 +201,10 @@ class Reporter:
             if config["function"] is not None:
                 return []
             else:
-                filepath = Path(self.folder) / (name + ".zarr")
+                filepath = zarr_path = (
+                    self.report_folder / module_name / (name + ".zarr")
+                )
+                filepath.parent.mkdir(parents=True, exist_ok=True)
                 store = zarr.storage.LocalStore(filepath, read_only=False)
                 ds = zarr.open_group(store, mode="w")
 
@@ -261,57 +241,6 @@ class Reporter:
             raise ValueError(
                 f"Type {config['type']} not recognized. Must be 'grid', 'agents' or 'HRU'."
             )
-
-    def decompress(self, attr: str, array: np.ndarray) -> np.ndarray:
-        """This function decompresses an array for given attribute.
-
-        Args:
-            attr: Attribute which was used to get array.
-            array: The array itself.
-
-        Returns:
-            decompressed_array: The decompressed array.
-        """
-        return attrgetter(".".join(attr.split(".")[:-1]).replace(".var", ""))(
-            self.model
-        ).decompress(array)
-
-    def get_array(self, attr: str, decompress: bool = False) -> np.ndarray:
-        """This function retrieves a NumPy array from the model based the name of the variable. Optionally decompresses the array.
-
-        Args:
-            attr: Name of the variable to retrieve. Name can contain "." to specify variables are a "deeper" level.
-            decompress: Boolean value whether to decompress the array. If True, the class to which the top variable name belongs to must have an equivalent function called `decompress`.
-
-        Returns:
-            array: The requested array.
-
-        Example:
-            Read discharge from `data.grid`. Because :code:`decompress=True`, `data.grid` must have a `decompress` method.
-            ::
-
-                >>> get_array(data.grid.discharge, decompress=True)
-        """
-        slicer = re.search(r"\[([0-9]+)\]$", attr)
-        if slicer:
-            try:
-                array = attrgetter(attr[: slicer.span(0)[0]])(self.model)
-            except AttributeError:
-                return None
-            else:
-                array = array[int(slicer.group(1))]
-        else:
-            try:
-                array = attrgetter(attr)(self.model)
-            except AttributeError:
-                return None
-        if decompress:
-            decompressed_array = self.decompress(attr, array)
-            return array, decompressed_array
-
-        assert isinstance(array, np.ndarray)
-
-        return array
 
     def maybe_report_value(
         self,
@@ -376,6 +305,7 @@ class Reporter:
         """Exports an array of values to the export folder.
 
         Args:
+            module_name: Name of the module to which the value belongs.
             name: Name of the value to be exported.
             value: The array itself.
             conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
@@ -554,22 +484,32 @@ class Reporter:
                         values, columns=["date", name], index="date"
                     )
 
-                    df.to_csv(os.path.join(self.folder, name + "." + "csv"))
+                    folder = self.report_folder / module_name
+                    folder.mkdir(parents=True, exist_ok=True)
 
-    def report(self, module, variables, module_name):
+                    df.to_csv(folder / (name + ".csv"))
+
+    def report(self, module, local_variables, module_name) -> None:
+        """This method is in every step function to report data to disk.
+
+        Args:
+            module: The module to report data from.
+            variables: A dictionary of local variables from the function
+                that calls this one.
+            module_name: The name of the module.
+        """
         report = self.model.config["report"].get(module_name, None)
-
         if report is not None:
             for name, config in report.items():
                 varname = config["varname"]
                 if varname.startswith("."):
                     varname = varname[1:]
-                    value = variables[varname]
+                    value = local_variables[varname]
                 else:
                     value = attrgetter(varname)(module)
 
                 self.maybe_report_value(
-                    module_name=module.name,
+                    module_name=module_name,
                     name=name,
                     value=value,
                     conf=config,
