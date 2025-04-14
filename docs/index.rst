@@ -45,7 +45,7 @@ The figure below shows a schematic overview of some parts of the model, showing 
   
   Agents <agents/__init__>
   Households <agents/households>
-  Farmers <agents/farmers>
+  Crop farmers <agents/crop_farmers>
   Reservoir operators <agents/reservoir_operators>
   Government <agents/government>
 
@@ -54,7 +54,6 @@ The figure below shows a schematic overview of some parts of the model, showing 
   :caption: Reference
 
   Model <model>
-  CWatM Model <cwatm_model>
   Report <report>
   Farm-level HRUs <HRUs>
   Artists <artists>

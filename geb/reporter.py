@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-"""This module is used to report data to the disk. After initialization, the :meth:`reporter.Report.step` method is called every timestep, which in turn calls the equivalent methods in honeybees's reporter (to report data from the agents) and the CWatM reporter, to report data from CWatM. The variables to report can be configured in `model.yml` (see :doc:`configuration`). All data is saved in a subfolder (see :doc:`configuration`)."""
-
 import datetime
 from operator import attrgetter
 from typing import Any, Union
@@ -376,18 +374,6 @@ class Reporter:
                     value = np.nansum(
                         value * self.hydrology.HRU.var.land_use_ratio
                     ) / np.nansum(self.hydrology.HRU.var.land_use_ratio)
-                elif function == "weightedsum":
-                    if conf["type"] == "grid":
-                        raise ValueError(
-                            "weightedsum is not supported for grid variables."
-                        )
-                    value = np.sum(value * self.hydrology.HRU.var.cell_area)
-                elif function == "weightednansum":
-                    if conf["type"] == "grid":
-                        raise ValueError(
-                            "weightednansum is not supported for grid variables."
-                        )
-                    value = np.nansum(value * self.hydrology.HRU.var.cell_area)
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
