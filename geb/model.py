@@ -143,7 +143,7 @@ class GEBModel(HazardDriver, ABM_Model):
         timestep_length,
         in_spinup=False,
         simulate_hydrology=True,
-        clean_report_folder=False,
+        clean_output_folder=False,
         load_data_from_store=False,
     ) -> None:
         """Initializes the model."""
@@ -153,10 +153,10 @@ class GEBModel(HazardDriver, ABM_Model):
         self.regions = load_geom(self.files["geoms"]["regions"])
 
         # optionally clean report model at start of run
-        if clean_report_folder:
-            shutil.rmtree(self.report_folder, ignore_errors=True)
+        if clean_output_folder:
+            shutil.rmtree(self.output_folder, ignore_errors=True)
 
-        self.report_folder.mkdir(parents=True, exist_ok=True)
+        self.output_folder.mkdir(parents=True, exist_ok=True)
 
         self.spinup_start = datetime.datetime.combine(
             self.config["general"]["spinup_time"], datetime.time(0)
@@ -207,7 +207,7 @@ class GEBModel(HazardDriver, ABM_Model):
             current_time=current_time,
             n_timesteps=n_timesteps,
             timestep_length=timestep_length,
-            clean_report_folder=True,
+            clean_output_folder=True,
             load_data_from_store=True,
         )
 
@@ -239,7 +239,7 @@ class GEBModel(HazardDriver, ABM_Model):
             n_timesteps=n_timesteps,
             timestep_length=relativedelta(years=1),
             simulate_hydrology=False,
-            clean_report_folder=True,
+            clean_output_folder=True,
             load_data_from_store=True,
         )
 
@@ -286,7 +286,7 @@ class GEBModel(HazardDriver, ABM_Model):
             current_time=current_time,
             n_timesteps=n_timesteps,
             timestep_length=datetime.timedelta(days=1),
-            clean_report_folder=True,
+            clean_output_folder=True,
             in_spinup=True,
         )
 
@@ -383,12 +383,12 @@ class GEBModel(HazardDriver, ABM_Model):
         self._multiverse_name = str(value) if value else None
 
     @property
-    def report_folder_root(self):
-        return Path(self.config["general"]["report_folder"])
+    def output_folder_root(self):
+        return Path(self.config["general"]["output_folder"])
 
     @property
-    def report_folder(self):
-        return self.report_folder_root / self.run_name
+    def output_folder(self):
+        return self.output_folder_root / self.run_name
 
     @property
     def input_folder(self):

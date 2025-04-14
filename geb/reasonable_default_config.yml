@@ -7,7 +7,7 @@ general:
   spinup_time: 2000-01-01
   input_folder: input/
   preprocessing_folder: preprocessing/
-  report_folder: report/
+  output_folder: output/
   name: default
   export_inital_on_spinup: true
   simulate_forest: false

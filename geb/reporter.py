@@ -54,7 +54,7 @@ class Reporter:
     def __init__(self, model) -> None:
         self.model = model
         self.hydrology = model.hydrology
-        self.folder = self.model.report_folder / "reporter"
+        self.folder = self.model.output_folder / "reporter"
         self.folder.mkdir(parents=True, exist_ok=True)
 
         self.variables = {}
