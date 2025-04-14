@@ -3,8 +3,6 @@
 
 import os
 import re
-import warnings
-from collections.abc import Iterable
 from operator import attrgetter
 from pathlib import Path
 from typing import Any, Union
@@ -12,6 +10,7 @@ from typing import Any, Union
 import numpy as np
 import pandas as pd
 import zarr
+from honeybees.library.raster import coord_to_pixel
 
 
 def create_time_array(start, end, timestep, conf):
@@ -72,16 +71,13 @@ class Reporter:
 
     def create_variable(self, config, name) -> None:
         if config["type"] in ("grid", "HRU"):
-            if config["format"] != "zarr":
+            if config["function"] is not None:
                 return []
             else:
                 if config["type"] == "HRU":
                     raster = self.hydrology.HRU
                 else:
                     raster = self.hydrology.grid
-                assert "single_file" in config and config["single_file"] is True, (
-                    "Only single_file=True is supported for zarr format."
-                )
                 zarr_path = Path(self.folder, name + ".zarr")
                 config["path"] = str(zarr_path)
                 if zarr_path.exists():
@@ -225,9 +221,11 @@ class Reporter:
                 return zarr_store
 
         elif config["type"] == "agents":
-            if config["format"] == "zarr":
-                filepath = Path(self.folder) / (name + ".zarr.zip")
-                store = zarr.storage.ZipStore(filepath, mode="w")
+            if config["function"] is not None:
+                return []
+            else:
+                filepath = Path(self.folder) / (name + ".zarr")
+                store = zarr.storage.LocalStore(filepath, read_only=False)
                 ds = zarr.open_group(store, mode="w")
 
                 time = create_time_array(
@@ -315,7 +313,7 @@ class Reporter:
 
         return array
 
-    def report_value(
+    def maybe_report_value(
         self,
         module_name: str,
         name: Union[str, tuple[str, Any]],
@@ -329,6 +327,39 @@ class Reporter:
             value: The array itself.
             conf: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
         """
+
+        # here we return None if the value is not to be reported on this timestep
+        if "frequency" in conf:
+            if conf["frequency"] == "initial":
+                if self.model.current_timestep != 0:
+                    return None
+            elif conf["frequency"] == "final":
+                if self.model.current_timestep != self.model.n_timesteps - 1:
+                    return None
+            elif "every" in conf["frequency"]:
+                every = conf["frequency"]["every"]
+                if every == "year":
+                    month = conf["frequency"]["month"]
+                    day = conf["frequency"]["day"]
+                    if (
+                        self.model.current_time.month != month
+                        or self.model.current_time.day != day
+                    ):
+                        return None
+                elif every == "month":
+                    day = conf["frequency"]["day"]
+                    if self.model.current_time.day != day:
+                        return None
+                elif every == "day":
+                    pass
+                else:
+                    raise ValueError(
+                        f"Frequency every {conf['every']} not recognized (must be 'yearly', or 'monthly')."
+                    )
+            else:
+                raise ValueError(f"Frequency {conf['frequency']} not recognized.")
+
+        # if the value is not None, we check whether the value is valid
         if isinstance(value, list):
             value = [v.item() for v in value]
             for v in value:
@@ -337,78 +368,9 @@ class Reporter:
             value = value.item()
             self.check_value(value)
 
-        if "save" in conf:
-            if conf["save"] not in ("save", "export"):
-                raise ValueError(
-                    f"Save type for {name} in config file must be 'save', 'save+export' or 'export')."
-                )
+        self.process_value(module_name, name, value, conf)
 
-            warnings.warn(
-                "The `save` option is deprecated and will be removed in future versions. If you use 'save: export' the option can simply be removed (new default). If you use 'save: save', please replace with 'single_file: true'",
-                DeprecationWarning,
-            )
-            if conf["save"] == "save":
-                conf["single_file"] = True
-            del conf["save"]
-
-        if (
-            "single_file" in conf
-            and conf["single_file"] is True
-            and conf["format"] != "zarr"  # for zarr, we always save per timestep
-        ):
-            try:
-                if isinstance(name, tuple):
-                    name, ID = name
-                    if name not in self.variables:
-                        self.variables[name] = {}
-                    if ID not in self.variables[name]:
-                        self.variables[name][ID] = []
-                    self.variables[name][ID].append(value)
-                else:
-                    if name not in self.variables:
-                        self.variables[name] = []
-                    self.variables[name].append(value)
-            except KeyError:
-                raise KeyError(
-                    f"Variable {name} not initialized. This likely means that an agent is reporting for a group that was not is not the reporter"
-                )
-
-        else:
-            if "frequency" in conf and conf["frequency"] is not None:
-                if conf["frequency"] == "initial":
-                    if self.model.current_timestep == 0:
-                        self.export_value(module_name, name, value, conf)
-                elif conf["frequency"] == "final":
-                    if (
-                        self.model.current_timestep == self.model.n_timesteps - 1
-                    ):  # timestep is 0-indexed, so n_timesteps - 1 is the last timestep
-                        self.export_value(module_name, name, value, conf)
-                elif "every" in conf["frequency"]:
-                    every = conf["frequency"]["every"]
-                    if every == "year":
-                        month = conf["frequency"]["month"]
-                        day = conf["frequency"]["day"]
-                        if (
-                            self.model.current_time.month == month
-                            and self.model.current_time.day == day
-                        ):
-                            self.export_value(module_name, name, value, conf)
-                    elif every == "month":
-                        day = conf["frequency"]["day"]
-                        if self.model.current_time.day == day:
-                            self.export_value(module_name, name, value, conf)
-                    elif every == "day":
-                        self.export_value(module_name, name, value, conf)
-                    else:
-                        raise ValueError(
-                            f"Frequency every {conf['every']} not recognized (must be 'yearly', or 'monthly')."
-                        )
-                else:
-                    raise ValueError(f"Frequency {conf['frequency']} not recognized.")
-            else:
-                self.export_value(module_name, name, value, conf)
-
-    def export_value(
+    def process_value(
         self, module_name: str, name: str, value: np.ndarray, conf: dict
     ) -> None:
         """Exports an array of values to the export folder.
@@ -419,15 +381,12 @@ class Reporter:
             conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
         """
         if conf["type"] in ("grid", "HRU"):
-            if conf["type"] == "HRU":
-                value = self.hydrology.HRU.decompress(value)
-            else:
-                value = self.hydrology.grid.decompress(value)
-            if "format" not in conf:
-                raise ValueError(
-                    f"Export format must be specified for {name} in config file (npy/npz/csv/xlsx/zarr)."
-                )
-            if conf["format"] == "zarr":
+            if conf["function"] is None:
+                if conf["type"] == "HRU":
+                    value = self.hydrology.HRU.decompress(value)
+                else:
+                    value = self.hydrology.grid.decompress(value)
+
                 zarr_group = zarr.open_group(self.variables[module_name][name])
                 if (
                     np.isin(self.model.current_time_unix_s, zarr_group["time"][:])
@@ -442,37 +401,43 @@ class Reporter:
                         zarr_group[name][time_index_start:time_index_end, ...] = value
                     else:
                         zarr_group[name][time_index, ...] = value
+                return None
             else:
-                folder = os.path.join(self.folder, name)
-                os.makedirs(folder, exist_ok=True)
-                fn = f"{self.timesteps[-1].isoformat().replace('-', '').replace(':', '')}"
-                if conf["format"] == "npy":
-                    fn += ".npy"
-                    fp = os.path.join(folder, fn)
-                    np.save(fp, value)
-                elif conf["format"] == "npz":
-                    fn += ".npz"
-                    fp = os.path.join(folder, fn)
-                    np.savez_compressed(fp, data=value)
-                elif conf["format"] == "csv":
-                    fn += ".csv"
-                    fp = os.path.join(folder, fn)
-                    if isinstance(value, np.ndarray):
-                        value = value.tolist()
-                    if isinstance(value, (float, int)):
-                        value = [value]
-                    if len(value) > 100_000:
-                        self.model.logger.info(
-                            f"Exporting {len(value)} items to csv. This might take a long time and take a lot of space. Consider using NumPy (compressed) binary format (npy/npz)."
+                function, *args = conf["function"].split(",")
+                if function == "mean":
+                    value = np.mean(value)
+                elif function == "nanmean":
+                    value = np.nanmean(value)
+                elif function == "sum":
+                    value = np.sum(value)
+                elif function == "nansum":
+                    value = np.nansum(value)
+                elif function == "sample":
+                    decompressed_array = self.decompress(conf["varname"], value)
+                    value = decompressed_array[int(args[0]), int(args[1])]
+                elif function == "sample_coord":
+                    if conf["varname"].startswith("hydrology.grid"):
+                        gt = self.model.hydrology.grid.gt
+                    elif conf["varname"].startswith("hydrology.HRU"):
+                        gt = self.hydrology.HRU.gt
+                    else:
+                        raise ValueError
+                    px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
+                    decompressed_array = self.decompress(conf["varname"], value)
+                    try:
+                        value = decompressed_array[py, px]
+                    except IndexError:
+                        raise IndexError(
+                            f"The coordinate ({args[0]},{args[1]}) is outside the model domain."
                         )
-                    with open(fp, "w") as f:
-                        f.write("\n".join([str(v) for v in value]))
                 else:
-                    raise ValueError(f"{conf['format']} not recognized")
+                    raise ValueError(f"Function {function} not recognized")
+
         elif conf["type"] == "agents":
-            if conf["format"] == "zarr":
+            if conf["function"] is None:
                 ds = conf["_file"]
                 if name not in ds:
+                    # zarr file has not been created yet
                     if isinstance(value, (float, int)):
                         shape = (ds["time"].size,)
                         chunks = (1,)
@@ -497,7 +462,7 @@ class Reporter:
                         raise ValueError(
                             f"Value {dtype} of type {type(dtype)} not recognized."
                         )
-                    ds.create_dataset(
+                    ds.create_array(
                         name,
                         shape=shape,
                         chunks=chunks,
@@ -523,119 +488,45 @@ class Reporter:
                         else -1,
                     )
                 ds[name][index] = value
+                return None
             else:
-                folder = os.path.join(self.folder, name)
-                os.makedirs(folder, exist_ok=True)
-                fn = f"{self.timesteps[-1].isoformat().replace('-', '').replace(':', '')}"
-                if conf["format"] == "npy":
-                    fn += ".npy"
-                    fp = os.path.join(folder, fn)
-                    np.save(fp, value)
-                elif conf["format"] == "npz":
-                    fn += ".npz"
-                    fp = os.path.join(folder, fn)
-                    np.savez_compressed(fp, data=value)
-                elif conf["format"] == "csv":
-                    fn += ".csv"
-                    fp = os.path.join(folder, fn)
-                    if len(value) > 100_000:
-                        self.model.logger.info(
-                            f"Exporting {len(value)} items to csv. This might take a long time and take a lot of space. Consider using NumPy (compressed) binary format (npy/npz)."
-                        )
-                    with open(fp, "w") as f:
-                        f.write("\n".join([str(v) for v in value]))
+                function, *args = conf["function"].split(",")
+                if function == "mean":
+                    value = np.mean(value)
+                elif function == "nanmean":
+                    value = np.nanmean(value)
+                elif function == "sum":
+                    value = np.sum(value)
+                elif function == "nansum":
+                    value = np.nansum(value)
                 else:
-                    raise ValueError(f"{conf['format']} not recognized")
-        else:
-            raise ValueError(
-                f"Type {conf['type']} not recognized. Must be 'grid', 'agents' or 'HRU'."
-            )
+                    raise ValueError(f"Function {function} not recognized")
 
-    # def step(self) -> None:
-    #     """This method is called after every timestep, to collect data for reporting from the model."""
-    #     for name, conf in self.model.config["report_hydrology"].items():
-    #         array = self.get_array(conf["varname"])
-    #         if array is None:
-    #             print(
-    #                 f"variable {name} not found at timestep {self.model.current_time}"
-    #             )
-    #             self.report_value(name, None, conf)
-    #         else:
-    #             if conf["varname"].endswith("crop"):
-    #                 crop_map = self.get_array("HRU.crop_map")
-    #                 array = array[crop_map == conf["crop"]]
-    #             if array.size == 0:
-    #                 value = None
-    #             else:
-    #                 if conf["function"] is None:
-    #                     value = self.decompress(conf["varname"], array)
-    #                 else:
-    #                     function, *args = conf["function"].split(",")
-    #                     if function == "mean":
-    #                         value = np.mean(array)
-    #                         if np.isnan(value):
-    #                             value = None
-    #                     elif function == "nanmean":
-    #                         value = np.nanmean(array)
-    #                         if np.isnan(value):
-    #                             value = None
-    #                     elif function == "sum":
-    #                         value = np.sum(array)
-    #                         if np.isnan(value):
-    #                             value = None
-    #                     elif function == "nansum":
-    #                         value = np.nansum(array)
-    #                         if np.isnan(value):
-    #                             value = None
-    #                     elif function == "sample":
-    #                         decompressed_array = self.decompress(conf["varname"], array)
-    #                         value = decompressed_array[int(args[0]), int(args[1])]
-    #                         assert not np.isnan(value)
-    #                     elif function == "sample_coord":
-    #                         if conf["varname"].startswith("hydrology.grid"):
-    #                             gt = self.model.hydrology.grid.gt
-    #                         elif conf["varname"].startswith("hydrology.HRU"):
-    #                             gt = self.hydrology.HRU.gt
-    #                         else:
-    #                             raise ValueError
-    #                         px, py = coord_to_pixel(
-    #                             (float(args[0]), float(args[1])), gt
-    #                         )
-    #                         decompressed_array = self.decompress(conf["varname"], array)
-    #                         try:
-    #                             value = decompressed_array[py, px]
-    #                         except IndexError as e:
-    #                             index_error = f"{e}. Most likely the coordinate ({args[0]},{args[1]}) is outside the model domain."
-    #                             raise IndexError(index_error)
-    #                     else:
-    #                         raise ValueError(f"Function {function} not recognized")
-    #             self.report_value(name, value, conf)
+        if np.isnan(value):
+            value = None
+
+        if module_name not in self.variables:
+            self.variables[module_name] = {}
+
+        if name not in self.variables[module_name]:
+            self.variables[module_name][name] = []
+
+        self.variables[module_name][name].append((self.model.current_time, value))
+        return None
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
         for module_name, variables in self.variables.items():
             for name, values in variables.items():
-                if self.model.config["report"][module_name][name]["format"] == "zarr":
-                    continue
-                else:
-                    if isinstance(values[0], Iterable):
-                        df = pd.DataFrame.from_dict(
-                            {k: v for k, v in zip(self.timesteps, values)}
-                        )
-                    else:
-                        df = pd.DataFrame(values, index=self.timesteps, columns=[name])
-                    df.index.name = "time"
-                    export_format = self.model.config["report_hydrology"][name][
-                        "format"
-                    ]
-                    if export_format == "csv":
-                        df.to_csv(os.path.join(self.folder, name + "." + export_format))
-                    elif export_format == "xlsx":
-                        df.to_excel(
-                            os.path.join(self.folder, name + "." + export_format)
-                        )
-                    else:
-                        raise ValueError(f"save_to format {export_format} unknown")
+                if (
+                    self.model.config["report"][module_name][name]["function"]
+                    is not None
+                ):
+                    df = pd.DataFrame.from_records(
+                        values, columns=["date", name], index="date"
+                    )
+
+                    df.to_csv(os.path.join(self.folder, name + "." + "csv"))
 
     def report(self, module, variables, module_name):
         report = self.model.config["report"].get(module_name, None)
@@ -648,11 +539,8 @@ class Reporter:
                     value = variables[varname]
                 else:
                     value = attrgetter(varname)(module)
-                if "decompressor" in config:
-                    decompressor = attrgetter("hydrology.grid.decompress")(self)
-                    value = decompressor(value)
 
-                self.report_value(
+                self.maybe_report_value(
                     module_name=module.name,
                     name=name,
                     value=value,
