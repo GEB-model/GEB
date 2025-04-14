@@ -356,7 +356,7 @@ class Reporter:
                         gt = self.hydrology.HRU.gt
                     else:
                         raise ValueError
-                    px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
+                    px, py = coord_to_pixel((float(args[1]), float(args[0])), gt)
                     decompressed_array = self.decompress(conf["varname"], value)
                     try:
                         value = decompressed_array[py, px]
