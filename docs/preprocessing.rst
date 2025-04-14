@@ -19,9 +19,66 @@ Some of the data that is obtained from online sources and APIs requires keys. Yo
 
 2. To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on `Destination Earth <https://earthdatahub.destine.eu/>`_ and following the instructions `here <https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land>`_.
 
+Study region
+-------------------
+
+The `model.yml`-file specifies the configuration of the model, including the location of the model. An example of the `model.yml`-file is given in the examples folder in the GEB repository. Please refer to the yaml-section `general:region`. Examples are given below.
+
+^^^^^^^^^^
+Subbasin
+^^^^^^^^^^
+
+The subbasin option allows you to define your study region based on a hydrological basin. When using this option, the following parameter is required:
+
+- `subbasin`: The subbasin ID of the model. This is the ID of the subbasin in the `MERIT-BASINS dataset <https://www.reachhydro.org/home/params/merit-basins>`_ (version MERIT-Hydro v0.7/v1.0). This can be either a single subbasin or list of subbasins. All upstream basins are automatically included in the model, so only the most downstream subbasin of a specific catchments needs to be specified.
+
+.. code-block:: yaml
+
+    general:
+      region:
+        subbasin: 23011134
+
+or
+
+.. code-block:: yaml
+
+    general:
+      region:
+        subbasin:
+        - 23011134
+        - 23011135
+        - 23011136
+
+^^^^^^^^
+geom
+^^^^^^^^
+
+The name of a dataset specified in the `data_catalog.yml` (e.g., GADM_level0) or any other region or path that can be loaded in geopandas. Using the column and key parameters, a subset of data can be specified, for example:
+
+.. code-block:: yaml
+
+    general:
+      region:
+        geom: GADM_level0
+        column: GID_0
+        key: FRA
+
+^^^^^^^^^^^
+outflow
+^^^^^^^^^^^
+
+The outflow option allows you to define your study region based on a specific outflow point using lat, lon coordinates:
+
+.. code-block:: yaml
+
+    general:
+      region:
+        outflow:
+          lat: 48.8566
+          lon: 2.3522
+
 Building to model
 -------------------
-To set up the model you need two files, a `model.yml`-file and a `build.yml`-file. The `model.yml`-file specifies the configuration of the model, including the location of the model. The `build.yml`-file specifies the configuration of the preprocessing. An example of the `model.yml`-file and `build.yml`-file are provided in the repository in the examples folder.
 
 The `build.yml`-file contains the name of functions that should be run to preprocess the data. You can build the model using the following command, assuming you are in the working directory of the model which contains the `model.yml`-file and `build.yml`-file:
 
