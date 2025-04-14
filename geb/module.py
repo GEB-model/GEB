@@ -4,9 +4,10 @@ from abc import ABC, abstractmethod
 class Module(ABC):
     """Base class for all modules."""
 
-    def __init__(self, model):
+    def __init__(self, model, create_var: bool = True):
         self.model = model
-        self.var = self.model.store.create_bucket(f"{self.name}.var")
+        if create_var:
+            self.var = self.model.store.create_bucket(f"{self.name}.var")
 
     @property
     @abstractmethod

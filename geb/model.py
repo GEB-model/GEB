@@ -12,6 +12,7 @@ from honeybees.model import Model as ABM_Model
 from geb.agents import Agents
 from geb.artists import Artists
 from geb.hazards.driver import HazardDriver
+from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
 
@@ -19,7 +20,7 @@ from .HRUs import load_geom
 from .hydrology import Hydrology
 
 
-class GEBModel(HazardDriver, ABM_Model):
+class GEBModel(Module, HazardDriver, ABM_Model):
     """GEB parent class.
 
     Parameters
@@ -40,6 +41,8 @@ class GEBModel(HazardDriver, ABM_Model):
         self.timing = timing
         self.mode = mode
 
+        Module.__init__(self, self, create_var=False)
+
         self._multiverse_name = None
 
         self.config = self.setup_config(config)
@@ -54,6 +57,10 @@ class GEBModel(HazardDriver, ABM_Model):
 
         self.store = Store(self)
         self.artists = Artists(self)
+
+    @property
+    def name(self) -> str:
+        return ""
 
     def restore(self, store_location: str, timestep: int) -> None:
         self.store.load(store_location)
@@ -123,6 +130,8 @@ class GEBModel(HazardDriver, ABM_Model):
         self.agents.step()
         if self.simulate_hydrology:
             self.hydrology.step()
+
+        self.report(self, locals())
 
         t1 = time()
         print(

@@ -68,13 +68,46 @@ The following options are supported.
         - `weightedmean`: The mean of the variable is calculated and reported, weighted by the grid cell area.
         - `weightednanmean`: The mean of the variable is calculated and reported, weighted by the grid cell area, ignoring NaN values.
         - `sample,[y],[x]`: Sample a specific variable at specific y,x pixel. 0,0 is the top left corner of the grid. Example is `sample,1,2` to sample the variable at pixel 1,2.
-        - `sample_coord,[lon],[lat]`: Sample a specific variable at specific coordinates using the lat,lon coordinates of the grid. The coordinates are in the same coordinate system as the grid. Example is `sample_coord,52.377956,4.897070` to sample the variable at coordinates latitude 52.377956 and longitude 4.897070 (Amsterdam).
+        - `sample_coord,[lon],[lat]`: Sample a specific variable at specific coordinates using the lat,lon coordinates of the grid. The coordinates are in the same coordinate system as the grid. Example is `sample_coord,52.38,4.89` to sample the variable at coordinates latitude 52.38 and longitude 4.89 (Amsterdam). Note that when reporting discharge, it is important to make sure that the location is in the actual river you want to sample from. You can refer to the upstream area in the input files to find the actual river.
     - `agents`: The following functions are supported:
         - `null`: No function is applied. The variable is reported as is.
         - `mean`: The mean of the variable is calculated and reported.
         - `nanmean`: The mean of the variable is calculated and reported, ignoring NaN values.
         - `sum`: The sum of the variable is calculated and reported.
         - `nansum`: The sum of the variable is calculated and reported, ignoring NaN values.
+- **frequency** (optional): The frequency at which the variable is reported. The default is `every: day` This can be one of the following:
+    - `initial`: The variable is reported at the initial time step only.`
+    - `final`: The variable is reported at the final time step only.
+    - `every`: The variable is reported at specified timesteps, examples are given below.
+
+Report the data every third day of the month:
+
+.. code-block:: yaml
+
+    report:
+        module_name:
+            filename: filename
+            varname: varname
+            type: type
+            function: function
+            frequency:
+                every: month
+                day: 3
+
+Report every 15th of March every year:
+
+.. code-block:: yaml
+
+    report:
+        module_name:
+            filename: filename
+            varname: varname
+            type: type
+            function: function
+            frequency:
+                every: year
+                month: 3
+                day: 15
 
 .. automodule:: geb.reporter
     :members:
