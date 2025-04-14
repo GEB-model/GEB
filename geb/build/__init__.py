@@ -5,7 +5,6 @@ Notes:
 """
 
 import inspect
-import itertools
 import json
 import logging
 import math
@@ -27,7 +26,6 @@ import xarray as xr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
-from scipy.ndimage import binary_dilation
 from shapely.geometry import Point
 
 from ..workflows.io import open_zarr, to_zarr
@@ -502,6 +500,21 @@ class GEBModel(
         # save coastline, for now mostly for debugging purposes
         self.set_other(coastline, name="coastline")
 
+        flow_raster = pyflwdir.from_array(
+            ldd.values,
+            ftype="d8",
+            transform=ldd.rio.transform(recalc=True),
+            latlon=True,
+        )
+        downstream_indices = flow_raster.idxs_ds[riverine_mask.values.ravel()]
+        pits = flow_raster.idxs_pit
+
+        outflow_pits = np.intersect1d(pits, downstream_indices)
+
+        outflows = np.zeros(ldd.size, dtype=bool)
+        outflows[outflow_pits] = True
+        outflows = outflows.reshape(ldd.shape)
+
         # first we create a graph with all coastline cells. Neighbouring cells
         # are connected. From this graph we want to select all coastline
         # cells in between river outlets. The riverine mask does not include
@@ -510,7 +523,7 @@ class GEBModel(
         coastline_graph = boolean_mask_to_graph(
             coastline,
             connectivity=4,
-            outflow=binary_dilation(riverine_mask.values, iterations=1),
+            outflow=outflows,
         )
 
         # extract the outflow nodes from the graph, these should be included for sure
@@ -522,20 +535,38 @@ class GEBModel(
             ]
         )
 
-        # then for each combination of outflow nodes, we get the shortest path between
-        # them. This should be the coastline between the two nodes. Note that this is not
-        # very efficient as the number of combinations grows quickly. So we may
-        # be able to improve this in the future.
         coastline_nodes = set()
-        for node0, node1 in itertools.combinations(outflow_nodes, 2):
-            # get the shortest path between the two nodes
-            try:
-                coastline_nodes.update(
-                    networkx.shortest_path(coastline_graph, source=node0, target=node1)
-                )
-            except networkx.NetworkXNoPath:
-                # if there is no path, skip this combination
-                continue
+        nodes_to_search = outflow_nodes.copy()
+
+        while nodes_to_search:
+            # pick a random node from the outflow nodes and remove it from the set
+            node0 = nodes_to_search.pop()
+
+            # get all the other nodes that *could* be connected.
+            nodes_to_find = nodes_to_search.copy()
+            while nodes_to_find:
+                # pick another random node from the outflow nodes and remove it from the
+                # nodes to find.
+                node1 = nodes_to_find.pop()
+                # find the shortest path between them
+                try:
+                    path = networkx.shortest_path(
+                        coastline_graph, source=node0, target=node1
+                    )
+                # if no path was found, we can skip this pair of nodes and go
+                # to the next one
+                except networkx.NetworkXNoPath:
+                    pass
+                else:
+                    # add all the found nodes to the coastline
+                    coastline_nodes.update(path)
+
+                    # also, we don't have to find any nodes that are part
+                    # of the path, as we can be sure that all the paths
+                    # starting from these nodes are included in the other
+                    # searchers that are performed.
+                    nodes_to_find.difference_update(path)
+                    nodes_to_search.difference_update(path)
 
         # Even though we already have the shortest path, we need to find the entire coastline
         # which may include neighbours of the nodes in the shortest path. So we need to grow the
@@ -571,8 +602,6 @@ class GEBModel(
         )
 
         for node in coastline_nodes:
-            if node in outflow_nodes:
-                continue
             yx = coastline_graph.nodes[node]["yx"]
             connected_coastline[yx] = True
 
