@@ -517,5 +517,9 @@ class ReservoirOperators(AgentBaseClass):
         self.model.hydrology.lakes_reservoirs.reservoir_capacity = value
 
     @property
+    def fill_ratio(self):
+        return self.storage / self.capacity
+
+    @property
     def current_month_index(self):
         return self.model.current_time.month - 1
