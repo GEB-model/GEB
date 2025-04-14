@@ -45,7 +45,8 @@ def from_landuse_raster_to_polygon(mask, transform, crs):
 
 class Households(AgentBaseClass):
     def __init__(self, model, agents, reduncancy: float) -> None:
-        self.model = model
+        super().__init__(model)
+
         self.agents = agents
         self.reduncancy = reduncancy
 
@@ -65,6 +66,10 @@ class Households(AgentBaseClass):
 
         if self.model.in_spinup:
             self.spinup()
+
+    @property
+    def name(self):
+        return "agents.households"
 
     def reproject_locations_to_floodmap_crs(self):
         locations = self.var.locations.copy()
@@ -90,7 +95,7 @@ class Households(AgentBaseClass):
         flood_maps = {}
         for return_period in self.return_periods:
             file_path = (
-                self.model.report_folder_root
+                self.model.output_folder_root
                 / "estimate_return_periods"
                 / "flood_maps"
                 / f"{return_period}.zarr"
@@ -619,14 +624,11 @@ class Households(AgentBaseClass):
         )
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("agents.households.var")
         self.load_objects()
         self.load_max_damage_values()
         self.load_damage_curves()
         self.construct_income_distribution()
         self.assign_household_attributes()
-
-        super().__init__()
 
     def flood(self, flood_map):
         agriculture = from_landuse_raster_to_polygon(
@@ -756,6 +758,7 @@ class Households(AgentBaseClass):
         ):
             print("Thinking about adapting...")
             self.decide_household_strategy()
+        self.report(self, locals())
 
     @property
     def n(self):

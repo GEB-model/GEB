@@ -112,7 +112,7 @@ class CropFarmers(AgentBaseClass):
     """
 
     def __init__(self, model, agents, reduncancy: float) -> None:
-        self.model = model
+        super().__init__(model)
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["farmers"]
@@ -125,8 +125,6 @@ class CropFarmers(AgentBaseClass):
 
         self.redundancy = reduncancy
         self.decision_module = DecisionModule(self)
-
-        super().__init__()
 
         self.inflation_rate = load_economic_data(
             self.model.files["dict"]["socioeconomics/inflation_rates"]
@@ -159,9 +157,11 @@ class CropFarmers(AgentBaseClass):
         if self.model.in_spinup:
             self.spinup()
 
-    def spinup(self):
-        self.var = self.model.store.create_bucket("agents.crop_farmers.var")
+    @property
+    def name(self):
+        return "agents.crop_farmers"
 
+    def spinup(self):
         self.var.crop_data_type, self.var.crop_data = load_crop_data(self.model.files)
         self.var.crop_ids = self.var.crop_data["name"].to_dict()
         # reverse dictionary
@@ -1709,7 +1709,7 @@ class CropFarmers(AgentBaseClass):
         else:
             index = self.cultivation_costs[0].get(self.model.current_time)
             cultivation_cost = self.cultivation_costs[1][index]
-            assert cultivation_cost.shape[0] == len(self.model.var.regions)
+            assert cultivation_cost.shape[0] == len(self.model.regions)
             assert cultivation_cost.shape[1] == len(self.var.crop_ids)
 
         # interest_rate = self.get_value_per_farmer_from_region_id(
@@ -4068,6 +4068,8 @@ class CropFarmers(AgentBaseClass):
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         # if self.model.current_timestep == 105:
         #     self.remove_agent(farmer_idx=1000)
+
+        self.report(self, locals())
 
     def remove_agents(
         self, farmer_indices: list[int], land_use_type: int

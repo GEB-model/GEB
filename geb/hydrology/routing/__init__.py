@@ -21,6 +21,7 @@
 
 import numpy as np
 
+from geb.module import Module
 from geb.workflows import balance_check
 
 from .subroutines import (
@@ -53,7 +54,7 @@ def calculate_discharge_from_storage(
     return (river_storage / (river_length * river_alpha)) ** (1 / river_beta)
 
 
-class Routing(object):
+class Routing(Module):
     """
     ROUTING
 
@@ -71,7 +72,8 @@ class Routing(object):
     """
 
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
+
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -81,8 +83,6 @@ class Routing(object):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("hydrology.routing.var")
-
         ldd = self.grid.load(
             self.model.files["grid"]["routing/ldd"],
             compress=False,
@@ -392,3 +392,9 @@ class Routing(object):
                 + waterbody_evaporation_m3.sum()
                 + discharge_volume_at_outlets_m3.sum()
             )
+
+        self.report(self, locals())
+
+    @property
+    def name(self):
+        return "hydrology.routing"

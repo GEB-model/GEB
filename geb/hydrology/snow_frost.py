@@ -23,10 +23,11 @@ import math
 
 import numpy as np
 
+from geb.module import Module
 from geb.workflows import balance_check
 
 
-class SnowFrost(object):
+class SnowFrost(Module):
     """
     RAIN AND SNOW
 
@@ -79,7 +80,7 @@ class SnowFrost(object):
     """
 
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -88,8 +89,11 @@ class SnowFrost(object):
         if self.model.in_spinup:
             self.spinup()
 
+    @property
+    def name(self):
+        return "hydrology.snowfrost"
+
     def spinup(self):
-        self.var = self.model.store.create_bucket("hydrology.snowfrost.var")
         self.var.numberSnowLayers = 3  # default 3
         self.HRU.var.glaciertransportZone = (
             1.0  # default 1 -> highest zone is transported to middle zone
@@ -370,3 +374,5 @@ class SnowFrost(object):
         self.HRU.var.frost_index = np.maximum(
             self.HRU.var.frost_index + frost_indexChangeRate, 0
         )
+
+        self.report(self, locals())

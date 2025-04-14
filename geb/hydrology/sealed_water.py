@@ -18,15 +18,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
-
 import numpy as np
 
+from geb.module import Module
 from geb.workflows import balance_check
 
 from .landcover import OPEN_WATER, SEALED
 
 
-class SealedWater(object):
+class SealedWater(Module):
     """
     Sealed and open water runoff
 
@@ -48,7 +48,7 @@ class SealedWater(object):
     """
 
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -56,6 +56,10 @@ class SealedWater(object):
 
         if self.model.in_spinup:
             self.spinup()
+
+    @property
+    def name(self):
+        return "hydrology.sealed_water"
 
     def spinup(self):
         pass
@@ -114,5 +118,7 @@ class SealedWater(object):
                 ],
                 tollerance=1e-6,
             )
+
+        self.report(self, locals())
 
         return direct_runoff, open_water_evaporation

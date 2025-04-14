@@ -21,15 +21,17 @@
 
 import numpy as np
 
+from geb.module import Module
 
-class Evaporation(object):
+
+class Evaporation(Module):
     """
     Evaporation module
     Calculate potential evaporation and pot. transpiration
     """
 
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -37,6 +39,10 @@ class Evaporation(object):
 
         if self.model.in_spinup:
             self.spinup()
+
+    @property
+    def name(self):
+        return "hydrology.evaporation"
 
     def spinup(self):
         pass
@@ -86,6 +92,8 @@ class Evaporation(object):
         )
 
         self.hydrology.lakes_reservoirs.set_waterbody_evaporation()
+
+        self.report(self, locals())
 
         return (
             potential_transpiration,

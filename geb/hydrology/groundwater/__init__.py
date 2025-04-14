@@ -21,15 +21,16 @@
 
 import numpy as np
 
+from geb.module import Module
 from geb.workflows import balance_check
 
 from ..routing import get_channel_ratio
 from .model import ModFlowSimulation
 
 
-class GroundWater:
+class GroundWater(Module):
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -37,6 +38,10 @@ class GroundWater:
 
         if self.model.in_spinup:
             self.spinup()
+
+    @property
+    def name(self):
+        return "hydrology.groundwater"
 
     def spinup(self):
         # load hydraulic conductivity (md-1)
@@ -146,6 +151,8 @@ class GroundWater:
         self.hydrology.HRU.capriseindex = self.hydrology.to_HRU(
             data=np.float32(groundwater_drainage > 0)
         )
+
+        self.report(self, locals())
 
         return baseflow
 

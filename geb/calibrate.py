@@ -1359,7 +1359,7 @@ def run_model(individual, config, gauges, observed_streamflow):
             os.makedirs(run_directory, exist_ok=True)
             template = deepcopy(config)
 
-            template["general"]["report_folder"] = run_directory
+            template["general"]["output_folder"] = run_directory
             template["general"]["initial_conditions_folder"] = os.path.join(
                 run_directory, "initial"
             )

@@ -21,7 +21,7 @@ class ReservoirOperators(AgentBaseClass):
     """
 
     def __init__(self, model, agents):
-        self.model = model
+        super().__init__(model)
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["reservoir_operators"]
@@ -33,12 +33,11 @@ class ReservoirOperators(AgentBaseClass):
         if self.model.in_spinup:
             self.spinup()
 
-        AgentBaseClass.__init__(self)
-        super().__init__()
+    @property
+    def name(self):
+        return "agents.reservoir_operators"
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("agents.reservoir_operators.var")
-
         self.reservoirs = self.model.hydrology.lakes_reservoirs.var.water_body_data[
             self.model.hydrology.lakes_reservoirs.var.water_body_data["waterbody_type"]
             == 2
@@ -495,6 +494,7 @@ class ReservoirOperators(AgentBaseClass):
             self.var.storage_year_start = self.storage.copy()
 
         self.var.history_fill_index = max(self.var.hydrological_year_counter, 2)
+        self.report(self, locals())
 
     @property
     def storage(self):
@@ -515,6 +515,10 @@ class ReservoirOperators(AgentBaseClass):
     @capacity.setter
     def capacity(self, value):
         self.model.hydrology.lakes_reservoirs.reservoir_capacity = value
+
+    @property
+    def fill_ratio(self):
+        return self.storage / self.capacity
 
     @property
     def current_month_index(self):

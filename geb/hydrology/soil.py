@@ -25,6 +25,7 @@ import numpy as np
 from numba import float32, njit, prange
 
 from geb.HRUs import load_grid
+from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 from .landcover import (
@@ -852,9 +853,9 @@ def kv_brakensiek(thetas, clay, sand):
     return kv / 1000  # m/day
 
 
-class Soil(object):
+class Soil(Module):
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -863,9 +864,11 @@ class Soil(object):
         if self.model.in_spinup:
             self.spinup()
 
-    def spinup(self):
-        self.var = self.model.store.create_bucket("hydrology.soil.var")
+    @property
+    def name(self):
+        return "hydrology.soil"
 
+    def spinup(self):
         # use a minimum root depth of 25 cm, following AQUACROP recommendation
         # see: Reference manual for AquaCrop v7.1 – Chapter 3
         self.var.minimum_effective_root_depth = 0.25  # m
@@ -1454,6 +1457,8 @@ class Soil(object):
         timer.new_split("Finalizing")
         if self.model.timing:
             print(timer)
+
+        self.report(self, locals())
 
         return (
             interflow,

@@ -5,6 +5,7 @@ import numpy as np
 from honeybees.agents import AgentBaseClass as HoneybeesAgentBaseClass
 from numba import njit
 
+from geb.module import Module
 from geb.store import DynamicArray
 
 
@@ -97,11 +98,12 @@ def downscale_volume(
     return downscaled_array
 
 
-class AgentBaseClass(HoneybeesAgentBaseClass):
-    def __init__(self):
+class AgentBaseClass(Module, HoneybeesAgentBaseClass):
+    def __init__(self, model):
         if not hasattr(self, "redundancy"):
             self.redundancy = None  # default redundancy is None
-        super().__init__()
+        HoneybeesAgentBaseClass.__init__(self)
+        Module.__init__(self, model)
 
     def get_max_n(self, n):
         if self.redundancy is None:

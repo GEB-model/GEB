@@ -221,7 +221,7 @@ class SFINCS:
         )  # xc, yc is for x and y in rotated grid`DD`
         flood_map = to_zarr(
             flood_map,
-            self.model.report_folder / "flood_maps" / f"{start_time.isoformat()}.zarr",
+            self.model.output_folder / "flood_maps" / f"{start_time.isoformat()}.zarr",
             crs=flood_map.rio.crs,
         )
         damages = self.flood(flood_map=flood_map)
@@ -255,7 +255,7 @@ class SFINCS:
             working_dir=working_dir,
             return_periods=self.config["return_periods"],
             gpu=self.config["gpu"],
-            export_dir=self.model.report_folder / "flood_maps",
+            export_dir=self.model.output_folder / "flood_maps",
             clean_working_dir=True,
         )
 
@@ -330,7 +330,13 @@ class SFINCS:
 
     @property
     def discharge_spinup_ds(self):
-        da = open_zarr(Path("report") / "spinup" / "discharge_daily.zarr")
+        da = open_zarr(
+            self.model.output_folder
+            / "report"
+            / "spinup"
+            / "hydrology.routing"
+            / "discharge_daily.zarr"
+        )
 
         # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
         # ds = ds.sel(time=slice(start_time, ds.time[-1]))
