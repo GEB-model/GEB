@@ -65,22 +65,24 @@ def get_rivers(data_catalog, subbasin_ids):
     return rivers.set_index("COMID")
 
 
-def create_river_raster_from_river_lines(
-    rivers, flwdir_idxs_out, original_d8_elevation
-):
+def create_river_raster_from_river_lines(rivers, target, column=None, index=None):
+    if column is None and (index is None or index is True):
+        values = rivers.index
+    elif column is not None:
+        values = rivers[column]
+    else:
+        raise ValueError(
+            "Either column or index must be provided, or both must be None"
+        )
     river_raster = rasterize(
-        zip(rivers.geometry, rivers.index),
-        out_shape=original_d8_elevation.shape,
+        zip(rivers.geometry, values),
+        out_shape=target.shape,
         fill=-1,
         dtype=np.int32,
-        transform=original_d8_elevation.rio.transform(),
+        transform=target.rio.transform(),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
     )
-
-    river_raster_coarsened = river_raster.ravel()[
-        flwdir_idxs_out.values.ravel()
-    ].reshape(flwdir_idxs_out.shape)
-    return river_raster_coarsened
+    return river_raster
 
 
 def get_SWORD_translation_IDs_and_lenghts(data_catalog, rivers):
@@ -333,19 +335,22 @@ class Hydrography:
             how="left",
         )
 
-        COMID_IDs_raster_data = create_river_raster_from_river_lines(
-            rivers, self.grid["idxs_outflow"], original_d8_elevation
+        river_raster_HD = create_river_raster_from_river_lines(
+            rivers, original_d8_elevation
         )
+        river_raster_LR = river_raster_HD.ravel()[
+            self.grid["idxs_outflow"].values.ravel()
+        ].reshape(self.grid["idxs_outflow"].shape)
 
-        assert set(
-            np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1])
-        ) == set(np.unique(COMID_IDs_raster_data[COMID_IDs_raster_data != -1]))
+        assert set(np.unique(river_raster_LR[river_raster_LR != -1])) == set(
+            np.unique(river_raster_LR[river_raster_LR != -1])
+        )
 
         # Derive the xy coordinates of the river network. Here the coordinates
         # are the PIXEL coordinates for the coarse drainage network.
         rivers["hydrography_xy"] = [[]] * len(rivers)
         rivers["hydrography_upstream_area_m2"] = [[]] * len(rivers)
-        xy_per_river_segment = value_indices(COMID_IDs_raster_data, ignore_value=-1)
+        xy_per_river_segment = value_indices(river_raster_LR, ignore_value=-1)
         for COMID, (ys, xs) in xy_per_river_segment.items():
             upstream_area = upstream_area_data[ys, xs]
             up_to_downstream_ids = np.argsort(upstream_area)
@@ -360,7 +365,7 @@ class Hydrography:
         COMID_IDs_raster = self.full_like(
             outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
         )
-        COMID_IDs_raster.data = COMID_IDs_raster_data
+        COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
         SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lenghts(
