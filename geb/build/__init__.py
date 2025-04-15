@@ -404,7 +404,7 @@ class GEBModel(
                     logger=self.logger,
                     xy=(lon, lat),
                 )
-            elif "subbasin" in region or "admin" in region:
+            elif "subbasin" in region or "geom" in region:
                 geom = gpd.GeoDataFrame(
                     geometry=[subbasins_without_outflow_basin.union_all()],
                     crs=subbasins_without_outflow_basin.crs,
@@ -419,7 +419,7 @@ class GEBModel(
                 f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
             )
 
-            buffer = 1 / 120  # buffer in degrees
+            buffer = 0.5  # buffer in degrees
             hydrography = hydrography.rio.clip_box(
                 minx=xmin - buffer,
                 miny=ymin - buffer,
