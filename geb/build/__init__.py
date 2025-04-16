@@ -323,7 +323,6 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
 
         # no outflows found, we can skip this island
         if len(island_outflow_nodes_study_area) == 0:
-            assert len(island_outflow_nodes_nearby) == 0
             continue
 
         # if there is only one outflow node in the study area and no nearby
@@ -583,7 +582,7 @@ class GEBModel(
                 ],
                 variables=["dir", "elv"],
                 buffer=10,
-            )
+            ).compute()
             hydrography["dir"].attrs["_FillValue"] = 247
             hydrography["elv"].attrs["_FillValue"] = -9999.0
 
@@ -716,15 +715,6 @@ class GEBModel(
             downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
         ] = river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
         river_raster_ID = river_raster_ID.reshape(ldd.shape)
-
-        river_raster_ID_da = self.full_like(
-            ldd,
-            fill_value=-1,
-            nodata=-1,
-            dtype=np.int32,
-        )
-        river_raster_ID_da.values = river_raster_ID
-        self.set_other(river_raster_ID_da, name="drainage/river_raster_ID")
 
         pits = ldd == 0
         # TODO: Filter non-coastline pits
