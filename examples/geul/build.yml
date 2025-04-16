@@ -337,10 +337,8 @@ setup_damage_parameters:
           maximum_damage: 25
 
 setup_forcing_era5:
-  starttime: 2000-01-01
-  endtime: 2023-12-31
 
 setup_SPEI:
-  window: 7
+  window: 12
   calibration_period_start: 2000-01-01
   calibration_period_end: 2020-12-31
