@@ -203,8 +203,8 @@ class Hydrography:
         self.set_geoms(subbasins, name="routing/subbasins")
 
     def setup_hydrography(self):
-        original_d8_elevation = self.other["original_d8_elevation"]
-        original_d8_ldd = self.other["original_d8_flow_directions"]
+        original_d8_elevation = self.other["drainage/original_d8_elevation"]
+        original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
         original_d8_ldd_data = original_d8_ldd.values
 
         flow_raster_original = pyflwdir.from_array(
@@ -226,7 +226,9 @@ class Hydrography:
         ).astype(np.float32)
         original_upstream_area_data[original_upstream_area_data == -9999.0] = np.nan
         original_upstream_area.data = original_upstream_area_data
-        self.set_other(original_upstream_area, name="original_d8_upstream_area")
+        self.set_other(
+            original_upstream_area, name="drainage/original_d8_upstream_area"
+        )
 
         elevation_coarsened = original_d8_elevation.coarsen(
             x=self.ldd_scale_factor,

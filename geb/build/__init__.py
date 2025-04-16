@@ -40,8 +40,6 @@ from .modules import (
 )
 from .modules.hydrography import (
     create_river_raster_from_river_lines,
-    get_rivers,
-    get_subbasins_geometry,
 )
 from .workflows.general import (
     repeat_grid,
@@ -338,20 +336,28 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
             coastline_nodes.update(island.nodes)
             continue
 
+        for node in island.nodes:
+            island.nodes[node]["neighbor_of_study_area_outflow"] = False
+            island.nodes[node]["neighbor_of_nearby_outflow"] = False
+
         island_with_outflow_cuts = island.copy()
         for node in island_outflow_nodes_study_area:
             neighbors = island.neighbors(node)
             for neighbor in neighbors:
-                island_with_outflow_cuts.nodes[neighbor]["neighbor_type"] = (
-                    STUDY_AREA_OUTFLOW
+                island_with_outflow_cuts.nodes[neighbor][
+                    "neighbor_of_study_area_outflow"
+                ] = True
+                island_with_outflow_cuts.nodes[neighbor]["study_area_outflow_node"] = (
+                    node
                 )
 
         for node in island_outflow_nodes_nearby:
             neighbors = island.neighbors(node)
             for neighbor in neighbors:
-                island_with_outflow_cuts.nodes[neighbor]["neighbor_type"] = (
-                    NEARBY_OUTFLOW
-                )
+                island_with_outflow_cuts.nodes[neighbor][
+                    "neighbor_of_nearby_outflow"
+                ] = True
+                island_with_outflow_cuts.nodes[neighbor]["nearby_outflow_node"] = node
 
         island_with_outflow_cuts.remove_nodes_from(island_outflow_nodes_study_area)
         island_with_outflow_cuts.remove_nodes_from(island_outflow_nodes_nearby)
@@ -363,6 +369,19 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
                 coastal_segment_nodes
             ).copy()
             assert len(coastal_segment) == coastal_segment.number_of_nodes()
+
+            study_area_nodes = [
+                (node, attr)
+                for node, attr in coastal_segment.nodes(data=True)
+                if attr["neighbor_of_study_area_outflow"] is True
+            ]
+
+            nearby_nodes = [
+                (node, attr)
+                for node, attr in coastal_segment.nodes(data=True)
+                if attr["neighbor_of_nearby_outflow"] is True
+            ]
+
             outflow_neighbor_types = [
                 attrs["neighbor_type"]
                 for _, attrs in coastal_segment.nodes(data=True)
@@ -370,13 +389,65 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
             ]
             assert len(outflow_neighbor_types) <= 2
 
-            if (
-                STUDY_AREA_OUTFLOW in outflow_neighbor_types
-                and NEARBY_OUTFLOW in outflow_neighbor_types
-            ):
+            # in case the segment has both a study area outflow and a nearby outflow
+            # we divide the segment in a part that is closer to the study area outflow
+            # and a part that is not
+            if study_area_nodes and nearby_nodes:
+                assert len(study_area_nodes) == 1
+                study_area_node = study_area_nodes[0]
+
+                assert len(nearby_nodes) == 1
+                nearby_node = nearby_nodes[0]
+
+                for node in coastal_segment.nodes:
+                    # find distance to the nearest outflow node. If the path
+                    # to the study area node is shorter, we add the node to the
+                    # coastline nodes. If the path to the nearby node is shorter,
+                    # we don't add the node to the coastline nodes.
+                    path_length_to_study_area_node = len(
+                        networkx.shortest_path(
+                            coastline_graph, source=node, target=study_area_node[0]
+                        )
+                    )
+                    path_length_to_nearby_node = len(
+                        networkx.shortest_path(
+                            coastline_graph, source=node, target=nearby_node[0]
+                        )
+                    )
+
+                    # In case of break even, we need to take some special steps. We
+                    # only want to add the node in one of the two datasets, if we
+                    # also build another model for the nearby outflow. To make this
+                    # decision, we need to use parameters that behave identically
+                    # for both models. Therefore we use the relative xy location
+                    # of the outflow nodes.
+                    if path_length_to_study_area_node == path_length_to_nearby_node:
+                        study_area_outflow_node = study_area_node[1][
+                            "study_area_outflow_node"
+                        ]
+                        nearby_outflow_node = nearby_node[1]["nearby_outflow_node"]
+                        if study_area_outflow_node[0] >= nearby_outflow_node[0]:
+                            if study_area_outflow_node[0] == nearby_outflow_node[0]:
+                                if study_area_outflow_node[0] > nearby_outflow_node[0]:
+                                    coastline_nodes.add(node)
+                                else:
+                                    pass
+                            else:
+                                coastline_nodes.add(node)
+                        else:
+                            pass
+
+                    elif path_length_to_study_area_node < path_length_to_nearby_node:
+                        coastline_nodes.add(node)
+                    else:
+                        pass
+
+            # if the segment has only a study area outflow, we add all nodes to
+            # the coastline nodes
+            elif study_area_nodes:
                 coastline_nodes.update(coastal_segment.nodes)
-            elif STUDY_AREA_OUTFLOW in outflow_neighbor_types:
-                coastline_nodes.update(coastal_segment.nodes)
+            # if the segment has only a nearby outflows, we don't add any nodes to
+            # the coastline nodes
             else:
                 pass
 
@@ -645,6 +716,15 @@ class GEBModel(
             downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
         ] = river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
         river_raster_ID = river_raster_ID.reshape(ldd.shape)
+
+        river_raster_ID_da = self.full_like(
+            ldd,
+            fill_value=-1,
+            nodata=-1,
+            dtype=np.int32,
+        )
+        river_raster_ID_da.values = river_raster_ID
+        self.set_other(river_raster_ID_da, name="drainage/river_raster_ID")
 
         pits = ldd == 0
         # TODO: Filter non-coastline pits
