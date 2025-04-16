@@ -20,7 +20,11 @@ from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
 
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
-from ..workflows.general import interpolate_na_along_time_dim, resample_like
+from ..workflows.general import (
+    interpolate_na_along_time_dim,
+    resample_chunked,
+    resample_like,
+)
 
 
 def reproject_and_apply_lapse_rate_temperature(
@@ -1810,13 +1814,19 @@ class Forcing:
                 )
                 .raster.mask_nodata()
                 .fillna(0)
-            )
-            elevation_forcing = resample_like(elevation, forcing_grid, method="average")
+            ).chunk({"x": 2000, "y": 2000})
+            elevation_forcing = resample_chunked(
+                elevation,
+                forcing_grid.isel(time=0).chunk({"x": 10, "y": 10}),
+                method="bilinear",
+            )  # .chunk({"x": -1, "y": -1})
             elevation_forcing = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
                 crs=4326,
             )
-            elevation_grid = resample_like(elevation, grid, method="average")
+            elevation_grid = resample_chunked(
+                elevation, grid.chunk({"x": 50, "y": 50}), method="bilinear"
+            )
             elevation_grid = to_zarr(elevation_grid, elevation_grid_fp, crs=4326)
         return elevation_forcing, elevation_grid
