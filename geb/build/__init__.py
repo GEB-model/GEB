@@ -38,7 +38,11 @@ from .modules import (
     LandSurface,
     Observations,
 )
-from .modules.hydrography import get_rivers, get_subbasins_geometry, create_river_raster_from_river_lines
+from .modules.hydrography import (
+    create_river_raster_from_river_lines,
+    get_rivers,
+    get_subbasins_geometry,
+)
 from .workflows.general import (
     repeat_grid,
 )
@@ -106,6 +110,12 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     G : networkx.Graph
         Undirected graph where nodes are (y,x) coordinates of True cells
     """
+
+    # check dtypes
+    assert isinstance(mask, (np.ndarray))
+    for item in kwargs.values():
+        assert isinstance(item, (np.ndarray))
+
     # Create an empty undirected graph
     G = networkx.Graph()
 
@@ -291,9 +301,8 @@ def get_touching_subbasins(data_catalog, subbasins):
     return touching_subbasins.set_index("COMID")
 
 
-def get_coastline_nodes(coastline_graph, subbasins, touching_subbasins, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
+def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
     coastline_nodes = set()
-    outflow_nodes = set()
 
     for island in networkx.connected_components(coastline_graph):
         island = coastline_graph.subgraph(island)
@@ -329,69 +338,49 @@ def get_coastline_nodes(coastline_graph, subbasins, touching_subbasins, STUDY_AR
             coastline_nodes.update(island.nodes)
             continue
 
-        outflow_nodes.update(island_outflow_nodes_study_area)
-
-        nodes_to_search = island_outflow_nodes_study_area.copy()
-
-        source = nodes_to_search.pop()
-        targets = nodes_to_search.copy()
-
-        new_coastline_nodes = set()
-        while targets:
-            target = targets.pop()
-            # find the shortest path between them
-            try:
-                path = networkx.shortest_path(
-                    island, source=source, target=target
+        island_with_outflow_cuts = island.copy()
+        for node in island_outflow_nodes_study_area:
+            neighbors = island.neighbors(node)
+            for neighbor in neighbors:
+                island_with_outflow_cuts.nodes[neighbor]["neighbor_type"] = (
+                    STUDY_AREA_OUTFLOW
                 )
-            # if no path was found, we can skip this pair of nodes and go
-            # to the next one
-            except networkx.NetworkXNoPath:
-                pass
+
+        for node in island_outflow_nodes_nearby:
+            neighbors = island.neighbors(node)
+            for neighbor in neighbors:
+                island_with_outflow_cuts.nodes[neighbor]["neighbor_type"] = (
+                    NEARBY_OUTFLOW
+                )
+
+        island_with_outflow_cuts.remove_nodes_from(island_outflow_nodes_study_area)
+        island_with_outflow_cuts.remove_nodes_from(island_outflow_nodes_nearby)
+
+        for coastal_segment_nodes in networkx.connected_components(
+            island_with_outflow_cuts
+        ):
+            coastal_segment = island_with_outflow_cuts.subgraph(
+                coastal_segment_nodes
+            ).copy()
+            assert len(coastal_segment) == coastal_segment.number_of_nodes()
+            outflow_neighbor_types = [
+                attrs["neighbor_type"]
+                for _, attrs in coastal_segment.nodes(data=True)
+                if "neighbor_type" in attrs
+            ]
+            assert len(outflow_neighbor_types) <= 2
+
+            if (
+                STUDY_AREA_OUTFLOW in outflow_neighbor_types
+                and NEARBY_OUTFLOW in outflow_neighbor_types
+            ):
+                coastline_nodes.update(coastal_segment.nodes)
+            elif STUDY_AREA_OUTFLOW in outflow_neighbor_types:
+                coastline_nodes.update(coastal_segment.nodes)
             else:
-                # add all the found nodes to the coastline
-                new_coastline_nodes.update(path)
+                pass
 
-                # also, we don't have to find any nodes that are part
-                # of the path, as we can be sure that all the paths
-                # starting from these nodes are included in the other
-                # searchers that are performed.
-                targets.difference_update(path)
-        
-        coastline_nodes.update(new_coastline_nodes)
-
-        # if len(island_outflow_nodes_nearby) == 0:
-        #     continue
-        # else:
-            
-        #     import matplotlib.pyplot as plt
-        #     # clear
-        #     plt.clf()
-        #     remaining_coastline = island.copy()
-        #     remaining_coastline.remove_nodes_from(new_coastline_nodes)
-
-        #     # remove labels from the outflow nodes
-        #     pos = {}
-        #     colors = []
-        #     sizes= []
-        #     for node, attrs in remaining_coastline.nodes(data=True):
-        #         pos[node] = attrs['yx'][1], attrs['yx'][0]
-        #         if attrs["outflow_type"] == STUDY_AREA_OUTFLOW:
-        #             colors.append("red")
-        #             sizes.append(20)
-        #         elif attrs["outflow_type"] == NEARBY_OUTFLOW:
-        #             colors.append("blue")
-        #             sizes.append(20)
-        #         else:
-        #             colors.append("black")
-        #             sizes.append(1)
-        #     fig, ax = plt.subplots()
-        #     networkx.draw_networkx(remaining_coastline, with_labels=False, node_size=sizes, pos=pos, node_color=colors, ax=ax)
-        #     # invert y axis
-        #     ax.invert_yaxis()
-        #     plt.savefig('test.png')
-
-    return coastline_nodes, outflow_nodes
+    return coastline_nodes
 
 
 class GEBModel(
@@ -503,7 +492,12 @@ class GEBModel(
             ~subbasins["is_downstream_outflow_subbasin"]
         ]
 
+        buffer = 0.5  # buffer in degrees
         xmin, ymin, xmax, ymax = subbasins_without_outflow_basin.total_bounds
+        xmin -= buffer
+        ymin -= buffer
+        xmax += buffer
+        ymax += buffer
 
         with rasterio.Env(
             GDAL_HTTP_USERPWD=f"{os.environ['MERIT_USERNAME']}:{os.environ['MERIT_PASSWORD']}"
@@ -547,14 +541,6 @@ class GEBModel(
                 f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
             )
 
-            buffer = 0.5  # buffer in degrees
-            hydrography = hydrography.rio.clip_box(
-                minx=xmin - buffer,
-                miny=ymin - buffer,
-                maxx=xmax + buffer,
-                maxy=ymax + buffer,
-            ).compute()
-
             riverine_mask = self.full_like(
                 hydrography["dir"],
                 fill_value=True,
@@ -572,6 +558,9 @@ class GEBModel(
             else:
                 mask = riverine_mask
 
+            mask.attrs["_FillValue"] = None
+            self.set_other(mask, name="drainage/mask")
+
             hydrography["mask"] = mask
             hydrography["dir"] = xr.where(
                 mask,
@@ -585,7 +574,6 @@ class GEBModel(
                 hydrography["elv"].attrs["_FillValue"],
             )
 
-            # Several datasets come with ...
             hydrography = clip_region(hydrography, align=30 / 60 / 60)
 
             d8_original = hydrography["dir"]
@@ -597,7 +585,7 @@ class GEBModel(
                 keep_attrs=True,
             )
             d8_original = self.set_other(
-                d8_original, name="original_d8_flow_directions"
+                d8_original, name="drainage/original_d8_flow_directions"
             )
 
             d8_elv_original = hydrography["elv"]
@@ -610,7 +598,7 @@ class GEBModel(
             )
             d8_elv_original = d8_elv_original.raster.mask_nodata()
 
-            self.set_other(d8_elv_original, name="original_d8_elevation")
+            self.set_other(d8_elv_original, name="drainage/original_d8_elevation")
 
             self.derive_mask(
                 d8_original, hydrography.rio.transform(), resolution_arcsec
@@ -625,16 +613,16 @@ class GEBModel(
             transform=ldd.rio.transform(recalc=True),
             latlon=True,
         )
-        
-        touching_subbasins = get_touching_subbasins(self.data_catalog, subbasins)
 
         STUDY_AREA_OUTFLOW = 1
         NEARBY_OUTFLOW = 2
 
-        rivers = get_rivers(
-            self.data_catalog,
-            touching_subbasins.index.to_list() + subbasins.index.to_list(),
-        )
+        rivers = gpd.read_parquet(
+            self.data_catalog.get_source("MERIT_Basins_riv").path,
+            columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+            bbox=ldd.rio.bounds(),
+        ).set_index("COMID")
+
         rivers["outflow_type"] = rivers.apply(
             lambda row: STUDY_AREA_OUTFLOW
             if row.name in subbasins.index
@@ -645,9 +633,7 @@ class GEBModel(
         river_raster_outflow_type = create_river_raster_from_river_lines(
             rivers, ldd, column="outflow_type"
         )
-        river_raster_ID = create_river_raster_from_river_lines(
-            rivers, ldd, index=True
-        )
+        river_raster_ID = create_river_raster_from_river_lines(rivers, ldd, index=True)
         river_raster_ID = river_raster_ID.ravel()
 
         downstream_indices = flow_raster.idxs_ds
@@ -655,7 +641,9 @@ class GEBModel(
         river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
         downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
 
-        river_raster_ID[downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]] = river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
+        river_raster_ID[
+            downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
+        ] = river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
         river_raster_ID = river_raster_ID.reshape(ldd.shape)
 
         pits = ldd == 0
@@ -664,7 +652,7 @@ class GEBModel(
         coastline.attrs["_FillValue"] = None
 
         # save coastline, for now mostly for debugging purposes
-        self.set_other(coastline, name="coastline")
+        self.set_other(coastline, name="drainage/coastline")
 
         pits = flow_raster.idxs_pit
 
@@ -690,7 +678,7 @@ class GEBModel(
             dtype=bool,
         )
         outflow_da.values = outflows
-        self.set_other(outflow_da, name="outflows")
+        self.set_other(outflow_da, name="drainage/outflows")
 
         # first we create a graph with all coastline cells. Neighbouring cells
         # are connected. From this graph we want to select all coastline
@@ -698,49 +686,27 @@ class GEBModel(
         # any of the coastal cells. So we first grow the riverine mask by one cell
         # and use this to set the outflow nodes in the graph.
         coastline_graph = boolean_mask_to_graph(
-            coastline,
+            coastline.values,
             connectivity=4,
             outflow_type=outflows,
             river_id=river_raster_ID,
         )
-        coastline_nodes, outflow_nodes = get_coastline_nodes(
+        coastline_nodes = get_coastline_nodes(
             coastline_graph,
-            subbasins,
-            touching_subbasins,
             STUDY_AREA_OUTFLOW=STUDY_AREA_OUTFLOW,
             NEARBY_OUTFLOW=NEARBY_OUTFLOW,
         )
 
-        # Even though we already have the shortest path, we need to find the entire coastline
-        # which may include neighbours of the nodes in the shortest path. So we need to grow the
-        # coastline. We do this iteratively, so until we found all coastline nodes.
-        # We do not search for neighbours of the outflow nodes, as this will stop the
-        # search from expanding outside the domain that we are interested in.
-        coastline_size = -1
-        new_coastline_size = len(coastline_nodes)
-        while coastline_size < new_coastline_size:
-            new_coastline_nodes = set()
-            for node in coastline_nodes:
-                if node in outflow_nodes:
-                    continue
-                # get the neighbors of the node
-                neighbors = coastline_graph.neighbors(node)
-                # add the neighbors to the included coastline
-                new_coastline_nodes.update(neighbors)
-
-            coastline_nodes.update(new_coastline_nodes)
-
-            coastline_size, new_coastline_size = (
-                new_coastline_size,
-                len(coastline_nodes),
-            )
-
         # here we go from the graph back to a mask. We do this by creating a new mask
         # and setting coastline cells to true
-        connected_coastline = self.full_like(
+        connected_coastline_da = self.full_like(
             ldd,
             fill_value=False,
             nodata=None,
+            dtype=bool,
+        )
+        connected_coastline = np.zeros(
+            ldd.shape,
             dtype=bool,
         )
 
@@ -748,13 +714,16 @@ class GEBModel(
             yx = coastline_graph.nodes[node]["yx"]
             connected_coastline[yx] = True
 
+        connected_coastline_da.values = connected_coastline
+
         # save the connected coastline, for now mostly for debugging purposes
-        self.set_other(connected_coastline, name="connected_coastline")
+        self.set_other(connected_coastline_da, name="drainage/connected_coastline")
 
         # get all upstream cells from the selected coastline
         flow_raster = pyflwdir.from_array(ldd.values, ftype="d8")
         coastal_mask = (
-            flow_raster.basins(idxs=np.where(connected_coastline.values.ravel())[0]) > 0
+            flow_raster.basins(idxs=np.where(connected_coastline_da.values.ravel())[0])
+            > 0
         )
 
         # return the combination of the riverine mask and the coastal mask
@@ -1249,11 +1218,11 @@ class GEBModel(
     @property
     def ldd_scale_factor(self):
         scale_factor = (
-            self.other["original_d8_flow_directions"].shape[0]
+            self.other["drainage/original_d8_flow_directions"].shape[0]
             // self.grid["mask"].shape[0]
         )
         assert scale_factor == (
-            self.other["original_d8_flow_directions"].shape[1]
+            self.other["drainage/original_d8_flow_directions"].shape[1]
             // self.grid["mask"].shape[1]
         )
         return scale_factor
