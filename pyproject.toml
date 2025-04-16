@@ -97,7 +97,7 @@ geb = "geb.cli:cli"
 
 [project.optional-dependencies]
 fairstream = [
-    "pgmpy>=0.1.24",
+    "pgmpy>=1.0.0",
     "daft-pgm>=0.1.4",
     "opt-einsum>=3.3.0",
 ]
