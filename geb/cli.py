@@ -375,7 +375,7 @@ def get_model_builder(custom_model):
         return build.GEBModel
     else:
         importlib.import_module(
-            "." + custom_model.split(".")[0], package="geb.setup.custom_models"
+            "." + custom_model.split(".")[0], package="geb.build.custom_models"
         )
         return attrgetter(custom_model)(build.custom_models)
 
