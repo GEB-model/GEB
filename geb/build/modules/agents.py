@@ -299,39 +299,39 @@ class Agents:
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
-        # if project_future_until_year:
-        #     # convert to pandas dataframe
-        #     inflation_rates = pd.DataFrame(
-        #         inflation_rates_dict["data"], index=inflation_rates_dict["time"]
-        #     ).dropna()
-        #     # lending_rates = pd.DataFrame(
-        #     #     lending_rates_dict["data"], index=lending_rates_dict["time"]
-        #     # ).dropna()
+        # convert to pandas dataframe
+        inflation_rates = pd.DataFrame(
+            inflation_rates_dict["data"], index=inflation_rates_dict["time"]
+        ).dropna()
+        # lending_rates = pd.DataFrame(
+        #     lending_rates_dict["data"], index=lending_rates_dict["time"]
+        # ).dropna()
 
-        #     inflation_rates.index = inflation_rates.index.astype(int)
-        #     # extend inflation rates to future
-        #     mean_inflation_rate_since_reference_year = inflation_rates.loc[
-        #         reference_start_year:
-        #     ].mean(axis=0)
-        #     inflation_rates = inflation_rates.reindex(
-        #         range(inflation_rates.index.min(), project_future_until_year + 1)
-        #     ).fillna(mean_inflation_rate_since_reference_year)
+        inflation_rates.index = inflation_rates.index.astype(int)
+        inflation_rates = inflation_rates.reindex(
+            range(self.start_date.year, self.end_date.year + 1)
+        )
 
-        #     inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
-        #     inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
+        for column in inflation_rates.columns:
+            inflation_rates[column] = inflation_rates[column].interpolate(
+                method="linear"
+            )
 
-        #     # lending_rates.index = lending_rates.index.astype(int)
-        #     # extend lending rates to future
-        #     # mean_lending_rate_since_reference_year = lending_rates.loc[
-        #     #     reference_start_year:
-        #     # ].mean(axis=0)
-        #     # lending_rates = lending_rates.reindex(
-        #     #     range(lending_rates.index.min(), project_future_until_year + 1)
-        #     # ).fillna(mean_lending_rate_since_reference_year)
+        inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
+        inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
 
-        #     # # convert back to dictionary
-        #     # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
-        #     # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
+        # lending_rates.index = lending_rates.index.astype(int)
+        # extend lending rates to future
+        # mean_lending_rate_since_reference_year = lending_rates.loc[
+        #     reference_start_year:
+        # ].mean(axis=0)
+        # lending_rates = lending_rates.reindex(
+        #     range(lending_rates.index.min(), project_future_until_year + 1)
+        # ).fillna(mean_lending_rate_since_reference_year)
+
+        # # convert back to dictionary
+        # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
+        # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
 
         self.set_dict(inflation_rates_dict, name="socioeconomics/inflation_rates")
         # self.set_dict(lending_rates_dict, name="socioeconomics/lending_rates")
