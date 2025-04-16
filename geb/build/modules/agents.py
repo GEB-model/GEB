@@ -1406,9 +1406,7 @@ class Agents:
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
         )
-        GDL_region_per_farmer = gpd.sjoin(
-            locations, GDL_regions, how="left", predicate="within"
-        )
+        GDL_region_per_farmer = gpd.sjoin_nearest(locations, GDL_regions, how="left")
 
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
