@@ -292,14 +292,12 @@ def _fill_in_coords(target_coords, source_coords, data_dims):
 
 
 def resample_chunked(source, target, method="bilinear"):
-    if method == "nearest_neighbour":
+    if method == "nearest":
         interpolator = block_nn_interpolator
     elif method == "bilinear":
         interpolator = block_bilinear_interpolator
     else:
-        raise ValueError(
-            f"Unknown method: {method}, must be 'bilinear' or 'nearest_neighbour'"
-        )
+        raise ValueError(f"Unknown method: {method}, must be 'bilinear' or 'nearest'")
 
     assert target.dims == ("y", "x")
 

@@ -35,7 +35,7 @@ def load_soilgrids(data_catalog, subgrid, region):
         ds_variable = resample_chunked(
             ds_variable,
             subgrid_mask,
-            method="nearest_neighbour",
+            method="nearest",
         )
         ds_variable = ds_variable.where(~subgrid_mask, ds_variable.attrs["_FillValue"])
         ds_variable = ds_variable.rio.set_crs(4326)

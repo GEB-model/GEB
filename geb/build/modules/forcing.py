@@ -920,25 +920,6 @@ class Forcing:
         pr = resample_like(pr, target, method="average")
         self.set_pr(pr)
 
-        hourly_rsds = process_ERA5(
-            "ssrd",  # surface_solar_radiation_downwards
-            **download_args,
-        )
-        rsds = hourly_rsds.resample(time="D").sum() / (
-            24 * 3600
-        )  # get daily sum and convert from J/m2 to W/m2
-
-        rsds = resample_like(rsds, target, method="average")
-        self.set_rsds(rsds)
-
-        hourly_rlds = process_ERA5(
-            "strd",  # surface_thermal_radiation_downwards
-            **download_args,
-        )
-        rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        rlds = resample_like(rlds, target, method="average")
-        self.set_rlds(rlds)
-
         hourly_tas = process_ERA5("t2m", **download_args)
 
         hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
@@ -1000,6 +981,25 @@ class Forcing:
                 relative_humidity, target, method="bilinear"
             )
             self.set_hurs(relative_humidity)
+
+        hourly_rsds = process_ERA5(
+            "ssrd",  # surface_solar_radiation_downwards
+            **download_args,
+        )
+        rsds = hourly_rsds.resample(time="D").sum() / (
+            24 * 3600
+        )  # get daily sum and convert from J/m2 to W/m2
+
+        rsds = resample_like(rsds, target, method="average")
+        self.set_rsds(rsds)
+
+        hourly_rlds = process_ERA5(
+            "strd",  # surface_thermal_radiation_downwards
+            **download_args,
+        )
+        rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
+        rlds = resample_like(rlds, target, method="average")
+        self.set_rlds(rlds)
 
         pressure = process_ERA5("sp", **download_args)
         pressure = reproject_and_apply_lapse_rate_pressure(
