@@ -329,12 +329,21 @@ class LandSurface:
         """
         self.logger.info("Setting up land use parameters")
 
-        # landcover
-        landcover_classification = self.data_catalog.get_rasterdataset(
-            land_cover,
-            bbox=self.bounds,
-            buffer=200,  # 2 km buffer
+        bounds = self.geoms["routing/subbasins"].total_bounds
+        buffer = 0.1
+        landcover_classification = (
+            xr.open_dataarray(
+                self.data_catalog.get_source(land_cover).path,
+                chunks={"x": 3000, "y": 3000},
+                mask_and_scale=False,
+            )
+            .sel(
+                x=slice(bounds[0] - buffer, bounds[2] + buffer),
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+            )
+            .isel(band=0)
         )
+
         self.set_other(
             landcover_classification,
             name="landcover/classification",
