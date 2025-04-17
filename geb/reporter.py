@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 import datetime
+import re
 from operator import attrgetter
 from typing import Any, Union
-import re
+
 import numpy as np
 import pandas as pd
 import zarr
