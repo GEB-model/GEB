@@ -7,6 +7,7 @@ from ..workflows.general import (
     calculate_cell_area,
     pad_xy,
     repeat_grid,
+    resample_chunked,
 )
 from ..workflows.soilgrids import load_soilgrids
 
@@ -58,6 +59,24 @@ class LandSurface:
             repeat_grid(cell_area.data, self.subgrid_factor) / self.subgrid_factor**2
         )
         self.set_subgrid(sub_cell_area, name="cell_area")
+
+        region_subgrid_cell_area = self.full_like(
+            self.region_subgrid["mask"],
+            fill_value=np.nan,
+            nodata=np.nan,
+            dtype=np.float32,
+        )
+
+        region_subgrid_cell_area.data = calculate_cell_area(
+            region_subgrid_cell_area.rio.transform(recalc=True),
+            region_subgrid_cell_area.shape,
+        )
+
+        # set the cell area for the region subgrid
+        self.set_region_subgrid(
+            region_subgrid_cell_area,
+            name="cell_area",
+        )
 
     def setup_elevation(
         self,
@@ -199,14 +218,24 @@ class LandSurface:
         region_mask.attrs["_FillValue"] = None
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
-        land_use = self.data_catalog.get_rasterdataset(
-            land_cover,
-            geom=self.geoms["regions"],
-            buffer=200,  # 2 km buffer
+        bounds = self.geoms["regions"].total_bounds
+        land_use = (
+            xr.open_dataarray(
+                self.data_catalog.get_source(land_cover).path,
+                chunks={"x": 1000, "y": 1000},
+                mask_and_scale=False,
+            )
+            .sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
+            .isel(band=0)
         )
-        region_mask.raster.set_crs(4326)
-        reprojected_land_use = land_use.raster.reproject_like(
-            region_mask, method="nearest"
+
+        reprojected_land_use = resample_chunked(
+            land_use, region_mask.chunk({"x": 1000, "y": 1000}), method="nearest"
+        )
+
+        reprojected_land_use = self.set_region_subgrid(
+            reprojected_land_use,
+            name="landsurface/original_land_use",
         )
 
         region_ids = reprojected_land_use.raster.rasterize(
@@ -216,21 +245,6 @@ class LandSurface:
         )
         region_ids.attrs["_FillValue"] = -1
         region_ids = self.set_region_subgrid(region_ids, name="region_ids")
-
-        region_subgrid_cell_area = self.full_like(
-            region_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
-        )
-
-        region_subgrid_cell_area.data = calculate_cell_area(
-            region_subgrid_cell_area.rio.transform(recalc=True),
-            region_subgrid_cell_area.shape,
-        )
-
-        # set the cell area for the region subgrid
-        self.set_region_subgrid(
-            region_subgrid_cell_area,
-            name="cell_area",
-        )
 
         full_region_land_use_classes = reprojected_land_use.raster.reclassify(
             pd.DataFrame.from_dict(
