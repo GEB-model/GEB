@@ -390,9 +390,10 @@ class Hydrography:
 
         self.set_geoms(rivers, name="routing/rivers")
 
+        river_with_mapper = rivers["width"].to_dict()
         river_width_data = np.vectorize(
-            lambda ID: rivers["width"].to_dict().get(ID, float(MINIMUM_RIVER_WIDTH))
-        )(COMID_IDs_raster).astype(np.float32)
+            lambda ID: river_with_mapper.get(ID, float(MINIMUM_RIVER_WIDTH))
+        )(COMID_IDs_raster.values).astype(np.float32)
 
         river_width = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
