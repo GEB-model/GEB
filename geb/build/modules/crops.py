@@ -748,7 +748,7 @@ class Crops:
             for crop in crops:
                 crop_data[year][crop] = {}
                 for irrigation in irrigation_types:
-                    dataset_name = f"MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
+                    dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
                     crop_map = self.data_catalog.get_rasterdataset(
                         dataset_name,
