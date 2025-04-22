@@ -22,6 +22,7 @@
 import numpy as np
 
 from geb.HRUs import Data
+from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
@@ -40,18 +41,15 @@ from .soil import Soil
 from .water_demand import WaterDemand
 
 
-class Hydrology(Data):
+class Hydrology(Data, Module):
     def __init__(self, model):
         """
         Init part of the initial part
         defines the mask map and the outlet points
         initialization of the hydrological modules
         """
-        self.model = model
-
-        super().__init__(model)
-
-        self.var = self.model.store.create_bucket("hydrology.var")
+        Data.__init__(self, model)
+        Module.__init__(self, model)
 
         self.dynamic_water_bodies = False
         self.crop_factor_calibration_factor = 1
@@ -115,6 +113,8 @@ class Hydrology(Data):
 
         if __debug__:
             self.water_balance()
+
+        self.report(self, locals())
 
     def finalize(self) -> None:
         """
@@ -186,3 +186,7 @@ class Hydrology(Data):
 
         # update the storage for the next timestep
         self.var.system_storage = current_storage
+
+    @property
+    def name(self):
+        return "hydrology"

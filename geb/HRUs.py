@@ -521,6 +521,7 @@ class HRUs(BaseVariables):
         assert submask_width // self.data.grid.shape[1] == self.scaling
 
         self.transform = self.data.grid.transform * Affine.scale(1 / self.scaling)
+        self.crs = self.data.grid.crs
 
         self.gt = self.transform.to_gdal()
 

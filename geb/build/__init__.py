@@ -5,7 +5,6 @@ Notes:
 """
 
 import inspect
-import itertools
 import json
 import logging
 import math
@@ -27,7 +26,6 @@ import xarray as xr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
-from scipy.ndimage import binary_dilation
 from shapely.geometry import Point
 
 from ..workflows.io import open_zarr, to_zarr
@@ -39,6 +37,9 @@ from .modules import (
     Hydrography,
     LandSurface,
     Observations,
+)
+from .modules.hydrography import (
+    create_river_raster_from_river_lines,
 )
 from .workflows.general import (
     repeat_grid,
@@ -107,6 +108,12 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     G : networkx.Graph
         Undirected graph where nodes are (y,x) coordinates of True cells
     """
+
+    # check dtypes
+    assert isinstance(mask, (np.ndarray))
+    for item in kwargs.values():
+        assert isinstance(item, (np.ndarray))
+
     # Create an empty undirected graph
     G = networkx.Graph()
 
@@ -268,6 +275,184 @@ def get_sink_subbasin_id_for_geom(data_catalog, geom, river_graph):
     return sink_nodes
 
 
+def get_touching_subbasins(data_catalog, subbasins):
+    bbox = subbasins.total_bounds
+    buffer = 0.1
+    buffered_bbox = (
+        bbox[0] - buffer,
+        bbox[1] - buffer,
+        bbox[2] + buffer,
+        bbox[3] + buffer,
+    )
+    potentially_touching_basins = gpd.read_parquet(
+        data_catalog.get_source("MERIT_Basins_cat").path,
+        bbox=buffered_bbox,
+        filters=[
+            ("COMID", "not in", subbasins.index.tolist()),
+        ],
+    )
+    # get all touching subbasins
+    touching_subbasins = potentially_touching_basins[
+        potentially_touching_basins.geometry.touches(subbasins.union_all())
+    ]
+
+    return touching_subbasins.set_index("COMID")
+
+
+def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
+    coastline_nodes = set()
+
+    for island in networkx.connected_components(coastline_graph):
+        island = coastline_graph.subgraph(island)
+
+        # extract the outflow nodes from the island, these should be included for sure
+        island_outflow_nodes_study_area = set(
+            [
+                node
+                for node, attrs in island.nodes(data=True)
+                if attrs["outflow_type"] == STUDY_AREA_OUTFLOW
+            ]
+        )
+        island_outflow_nodes_nearby = set(
+            [
+                node
+                for node, attrs in island.nodes(data=True)
+                if attrs["outflow_type"] == NEARBY_OUTFLOW
+            ]
+        )
+
+        # no outflows found, we can skip this island
+        if len(island_outflow_nodes_study_area) == 0:
+            continue
+
+        # if there is only one outflow node in the study area and no nearby
+        # outflow nodes, it is an island, with only this outflow node
+        # so we can add all nodes to the coastline
+        if (
+            len(island_outflow_nodes_study_area) == 1
+            and len(island_outflow_nodes_nearby) == 0
+        ):
+            coastline_nodes.update(island.nodes)
+            continue
+
+        for node in island.nodes:
+            island.nodes[node]["neighbor_of_study_area_outflow"] = False
+            island.nodes[node]["neighbor_of_nearby_outflow"] = False
+
+        island_with_outflow_cuts = island.copy()
+        for node in island_outflow_nodes_study_area:
+            neighbors = island.neighbors(node)
+            for neighbor in neighbors:
+                island_with_outflow_cuts.nodes[neighbor][
+                    "neighbor_of_study_area_outflow"
+                ] = True
+                island_with_outflow_cuts.nodes[neighbor]["study_area_outflow_node"] = (
+                    node
+                )
+
+        for node in island_outflow_nodes_nearby:
+            neighbors = island.neighbors(node)
+            for neighbor in neighbors:
+                island_with_outflow_cuts.nodes[neighbor][
+                    "neighbor_of_nearby_outflow"
+                ] = True
+                island_with_outflow_cuts.nodes[neighbor]["nearby_outflow_node"] = node
+
+        island_with_outflow_cuts.remove_nodes_from(island_outflow_nodes_study_area)
+        island_with_outflow_cuts.remove_nodes_from(island_outflow_nodes_nearby)
+
+        for coastal_segment_nodes in networkx.connected_components(
+            island_with_outflow_cuts
+        ):
+            coastal_segment = island_with_outflow_cuts.subgraph(
+                coastal_segment_nodes
+            ).copy()
+            assert len(coastal_segment) == coastal_segment.number_of_nodes()
+
+            study_area_nodes = [
+                (node, attr)
+                for node, attr in coastal_segment.nodes(data=True)
+                if attr["neighbor_of_study_area_outflow"] is True
+            ]
+
+            nearby_nodes = [
+                (node, attr)
+                for node, attr in coastal_segment.nodes(data=True)
+                if attr["neighbor_of_nearby_outflow"] is True
+            ]
+
+            outflow_neighbor_types = [
+                attrs["neighbor_type"]
+                for _, attrs in coastal_segment.nodes(data=True)
+                if "neighbor_type" in attrs
+            ]
+            assert len(outflow_neighbor_types) <= 2
+
+            # in case the segment has both a study area outflow and a nearby outflow
+            # we divide the segment in a part that is closer to the study area outflow
+            # and a part that is not
+            if study_area_nodes and nearby_nodes:
+                assert len(study_area_nodes) == 1
+                study_area_node = study_area_nodes[0]
+
+                assert len(nearby_nodes) == 1
+                nearby_node = nearby_nodes[0]
+
+                for node in coastal_segment.nodes:
+                    # find distance to the nearest outflow node. If the path
+                    # to the study area node is shorter, we add the node to the
+                    # coastline nodes. If the path to the nearby node is shorter,
+                    # we don't add the node to the coastline nodes.
+                    path_length_to_study_area_node = len(
+                        networkx.shortest_path(
+                            coastline_graph, source=node, target=study_area_node[0]
+                        )
+                    )
+                    path_length_to_nearby_node = len(
+                        networkx.shortest_path(
+                            coastline_graph, source=node, target=nearby_node[0]
+                        )
+                    )
+
+                    # In case of break even, we need to take some special steps. We
+                    # only want to add the node in one of the two datasets, if we
+                    # also build another model for the nearby outflow. To make this
+                    # decision, we need to use parameters that behave identically
+                    # for both models. Therefore we use the relative xy location
+                    # of the outflow nodes.
+                    if path_length_to_study_area_node == path_length_to_nearby_node:
+                        study_area_outflow_node = study_area_node[1][
+                            "study_area_outflow_node"
+                        ]
+                        nearby_outflow_node = nearby_node[1]["nearby_outflow_node"]
+                        if study_area_outflow_node[0] >= nearby_outflow_node[0]:
+                            if study_area_outflow_node[0] == nearby_outflow_node[0]:
+                                if study_area_outflow_node[0] > nearby_outflow_node[0]:
+                                    coastline_nodes.add(node)
+                                else:
+                                    pass
+                            else:
+                                coastline_nodes.add(node)
+                        else:
+                            pass
+
+                    elif path_length_to_study_area_node < path_length_to_nearby_node:
+                        coastline_nodes.add(node)
+                    else:
+                        pass
+
+            # if the segment has only a study area outflow, we add all nodes to
+            # the coastline nodes
+            elif study_area_nodes:
+                coastline_nodes.update(coastal_segment.nodes)
+            # if the segment has only a nearby outflows, we don't add any nodes to
+            # the coastline nodes
+            else:
+                pass
+
+    return coastline_nodes
+
+
 class GEBModel(
     Hydrography, Forcing, Crops, LandSurface, Agents, GroundWater, Observations
 ):
@@ -352,19 +537,17 @@ class GEBModel(
             else:
                 sink_subbasin_ids = [region["subbasin"]]
         elif "outflow" in region:
-            lon, lat = region["outflow"][0], region["outflow"][1]
+            lat, lon = region["outflow"]["lat"], region["outflow"]["lon"]
             sink_subbasin_ids = [
                 get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
             ]
-        elif "admin" in region:
-            admin_regions = self.data_catalog.get_geodataframe(
-                region["admin"]["source"]
-            )
-            admin_regions = admin_regions[
-                admin_regions[region["admin"]["column"]] == region["admin"]["key"]
+        elif "geom" in region:
+            regions = self.data_catalog.get_geodataframe(region["geom"]["source"])
+            regions = regions[
+                regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
             sink_subbasin_ids = get_sink_subbasin_id_for_geom(
-                self.data_catalog, admin_regions, river_graph
+                self.data_catalog, regions, river_graph
             )
         else:
             raise ValueError(f"Region {region} not understood.")
@@ -379,7 +562,12 @@ class GEBModel(
             ~subbasins["is_downstream_outflow_subbasin"]
         ]
 
+        buffer = 0.5  # buffer in degrees
         xmin, ymin, xmax, ymax = subbasins_without_outflow_basin.total_bounds
+        xmin -= buffer
+        ymin -= buffer
+        xmax += buffer
+        ymax += buffer
 
         with rasterio.Env(
             GDAL_HTTP_USERPWD=f"{os.environ['MERIT_USERNAME']}:{os.environ['MERIT_PASSWORD']}"
@@ -394,7 +582,7 @@ class GEBModel(
                 ],
                 variables=["dir", "elv"],
                 buffer=10,
-            )
+            ).compute()
             hydrography["dir"].attrs["_FillValue"] = 247
             hydrography["elv"].attrs["_FillValue"] = -9999.0
 
@@ -408,7 +596,7 @@ class GEBModel(
                     logger=self.logger,
                     xy=(lon, lat),
                 )
-            elif "subbasin" in region or "admin" in region:
+            elif "subbasin" in region or "geom" in region:
                 geom = gpd.GeoDataFrame(
                     geometry=[subbasins_without_outflow_basin.union_all()],
                     crs=subbasins_without_outflow_basin.crs,
@@ -423,14 +611,6 @@ class GEBModel(
                 f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
             )
 
-            buffer = 1 / 120  # buffer in degrees
-            hydrography = hydrography.rio.clip_box(
-                minx=xmin - buffer,
-                miny=ymin - buffer,
-                maxx=xmax + buffer,
-                maxy=ymax + buffer,
-            ).compute()
-
             riverine_mask = self.full_like(
                 hydrography["dir"],
                 fill_value=True,
@@ -441,13 +621,15 @@ class GEBModel(
             assert riverine_mask.attrs["_FillValue"] is False
             riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
 
-            if (
-                include_coastal
-                and subbasins_without_outflow_basin["is_coastal_basin"].any()
-            ):
-                mask = self.get_coastal_area(hydrography["dir"], riverine_mask)
+            if include_coastal and subbasins["is_coastal_basin"].any():
+                mask = self.get_coastal_area(
+                    hydrography["dir"], riverine_mask, subbasins
+                )
             else:
                 mask = riverine_mask
+
+            mask.attrs["_FillValue"] = None
+            self.set_other(mask, name="drainage/mask")
 
             hydrography["mask"] = mask
             hydrography["dir"] = xr.where(
@@ -462,7 +644,6 @@ class GEBModel(
                 hydrography["elv"].attrs["_FillValue"],
             )
 
-            # Several datasets come with ...
             hydrography = clip_region(hydrography, align=30 / 60 / 60)
 
             d8_original = hydrography["dir"]
@@ -474,7 +655,7 @@ class GEBModel(
                 keep_attrs=True,
             )
             d8_original = self.set_other(
-                d8_original, name="original_d8_flow_directions"
+                d8_original, name="drainage/original_d8_flow_directions"
             )
 
             d8_elv_original = hydrography["elv"]
@@ -487,7 +668,7 @@ class GEBModel(
             )
             d8_elv_original = d8_elv_original.raster.mask_nodata()
 
-            self.set_other(d8_elv_original, name="original_d8_elevation")
+            self.set_other(d8_elv_original, name="drainage/original_d8_elevation")
 
             self.derive_mask(
                 d8_original, hydrography.rio.transform(), resolution_arcsec
@@ -495,14 +676,79 @@ class GEBModel(
 
         self.create_subgrid(subgrid_factor)
 
-    def get_coastal_area(self, ldd, riverine_mask):
+    def get_coastal_area(self, ldd, riverine_mask, subbasins):
+        flow_raster = pyflwdir.from_array(
+            ldd.values,
+            ftype="d8",
+            transform=ldd.rio.transform(recalc=True),
+            latlon=True,
+        )
+
+        STUDY_AREA_OUTFLOW = 1
+        NEARBY_OUTFLOW = 2
+
+        rivers = gpd.read_parquet(
+            self.data_catalog.get_source("MERIT_Basins_riv").path,
+            columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+            bbox=ldd.rio.bounds(),
+        ).set_index("COMID")
+
+        rivers["outflow_type"] = rivers.apply(
+            lambda row: STUDY_AREA_OUTFLOW
+            if row.name in subbasins.index
+            else NEARBY_OUTFLOW,
+            axis=1,
+        )
+
+        river_raster_outflow_type = create_river_raster_from_river_lines(
+            rivers, ldd, column="outflow_type"
+        )
+        river_raster_ID = create_river_raster_from_river_lines(rivers, ldd, index=True)
+        river_raster_ID = river_raster_ID.ravel()
+
+        downstream_indices = flow_raster.idxs_ds
+
+        river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
+        downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
+
+        river_raster_ID[
+            downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
+        ] = river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
+        river_raster_ID = river_raster_ID.reshape(ldd.shape)
+
         pits = ldd == 0
         # TODO: Filter non-coastline pits
         coastline = pits
         coastline.attrs["_FillValue"] = None
 
         # save coastline, for now mostly for debugging purposes
-        self.set_other(coastline, name="coastline")
+        self.set_other(coastline, name="drainage/coastline")
+
+        pits = flow_raster.idxs_pit
+
+        downstream_indices_study_area = flow_raster.idxs_ds[
+            river_raster_outflow_type.ravel() == STUDY_AREA_OUTFLOW
+        ]
+        outflow_pits_study_area = np.intersect1d(pits, downstream_indices_study_area)
+
+        downstream_indices_nearby = flow_raster.idxs_ds[
+            river_raster_outflow_type.ravel() == NEARBY_OUTFLOW
+        ]
+        outflow_pits_nearby = np.intersect1d(pits, downstream_indices_nearby)
+
+        outflows = np.full(ldd.size, -1, dtype=np.int8)
+        outflows[outflow_pits_study_area] = STUDY_AREA_OUTFLOW
+        outflows[outflow_pits_nearby] = NEARBY_OUTFLOW
+        outflows = outflows.reshape(ldd.shape)
+
+        outflow_da = self.full_like(
+            ldd,
+            fill_value=False,
+            nodata=-1,
+            dtype=bool,
+        )
+        outflow_da.values = outflows
+        self.set_other(outflow_da, name="drainage/outflows")
 
         # first we create a graph with all coastline cells. Neighbouring cells
         # are connected. From this graph we want to select all coastline
@@ -510,81 +756,44 @@ class GEBModel(
         # any of the coastal cells. So we first grow the riverine mask by one cell
         # and use this to set the outflow nodes in the graph.
         coastline_graph = boolean_mask_to_graph(
-            coastline,
+            coastline.values,
             connectivity=4,
-            outflow=binary_dilation(riverine_mask.values, iterations=1),
+            outflow_type=outflows,
+            river_id=river_raster_ID,
         )
-
-        # extract the outflow nodes from the graph, these should be included for sure
-        outflow_nodes = set(
-            [
-                node
-                for node, attrs in coastline_graph.nodes(data=True)
-                if attrs["outflow"] is True
-            ]
+        coastline_nodes = get_coastline_nodes(
+            coastline_graph,
+            STUDY_AREA_OUTFLOW=STUDY_AREA_OUTFLOW,
+            NEARBY_OUTFLOW=NEARBY_OUTFLOW,
         )
-
-        # then for each combination of outflow nodes, we get the shortest path between
-        # them. This should be the coastline between the two nodes. Note that this is not
-        # very efficient as the number of combinations grows quickly. So we may
-        # be able to improve this in the future.
-        coastline_nodes = set()
-        for node0, node1 in itertools.combinations(outflow_nodes, 2):
-            # get the shortest path between the two nodes
-            try:
-                coastline_nodes.update(
-                    networkx.shortest_path(coastline_graph, source=node0, target=node1)
-                )
-            except networkx.NetworkXNoPath:
-                # if there is no path, skip this combination
-                continue
-
-        # Even though we already have the shortest path, we need to find the entire coastline
-        # which may include neighbours of the nodes in the shortest path. So we need to grow the
-        # coastline. We do this iteratively, so until we found all coastline nodes.
-        # We do not search for neighbours of the outflow nodes, as this will stop the
-        # search from expanding outside the domain that we are interested in.
-        coastline_size = -1
-        new_coastline_size = len(coastline_nodes)
-        while coastline_size < new_coastline_size:
-            new_coastline_nodes = set()
-            for node in coastline_nodes:
-                if node in outflow_nodes:
-                    continue
-                # get the neighbors of the node
-                neighbors = coastline_graph.neighbors(node)
-                # add the neighbors to the included coastline
-                new_coastline_nodes.update(neighbors)
-
-            coastline_nodes.update(new_coastline_nodes)
-
-            coastline_size, new_coastline_size = (
-                new_coastline_size,
-                len(coastline_nodes),
-            )
 
         # here we go from the graph back to a mask. We do this by creating a new mask
         # and setting coastline cells to true
-        connected_coastline = self.full_like(
+        connected_coastline_da = self.full_like(
             ldd,
             fill_value=False,
             nodata=None,
             dtype=bool,
         )
+        connected_coastline = np.zeros(
+            ldd.shape,
+            dtype=bool,
+        )
 
         for node in coastline_nodes:
-            if node in outflow_nodes:
-                continue
             yx = coastline_graph.nodes[node]["yx"]
             connected_coastline[yx] = True
 
+        connected_coastline_da.values = connected_coastline
+
         # save the connected coastline, for now mostly for debugging purposes
-        self.set_other(connected_coastline, name="connected_coastline")
+        self.set_other(connected_coastline_da, name="drainage/connected_coastline")
 
         # get all upstream cells from the selected coastline
         flow_raster = pyflwdir.from_array(ldd.values, ftype="d8")
         coastal_mask = (
-            flow_raster.basins(idxs=np.where(connected_coastline.values.ravel())[0]) > 0
+            flow_raster.basins(idxs=np.where(connected_coastline_da.values.ravel())[0])
+            > 0
         )
 
         # return the combination of the riverine mask and the coastal mask
@@ -1079,11 +1288,11 @@ class GEBModel(
     @property
     def ldd_scale_factor(self):
         scale_factor = (
-            self.other["original_d8_flow_directions"].shape[0]
+            self.other["drainage/original_d8_flow_directions"].shape[0]
             // self.grid["mask"].shape[0]
         )
         assert scale_factor == (
-            self.other["original_d8_flow_directions"].shape[1]
+            self.other["drainage/original_d8_flow_directions"].shape[1]
             // self.grid["mask"].shape[1]
         )
         return scale_factor
@@ -1122,7 +1331,7 @@ class GEBModel(
         """Check all opt keys and raise sensible error messages if unknown."""
         for method in opt.keys():
             if not callable(getattr(self, method, None)):
-                raise ValueError(f'Model {self._NAME} has no method "{method}"')
+                raise ValueError(f'Build has no method "{method}"')
         return opt
 
     def run_method(self, method, *args, **kwargs):

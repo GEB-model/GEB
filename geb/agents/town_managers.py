@@ -11,7 +11,7 @@ class TownManagers(AgentBaseClass):
     """
 
     def __init__(self, model, agents):
-        self.model = model
+        super().__init__(model)
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["town_managers"]
@@ -19,7 +19,9 @@ class TownManagers(AgentBaseClass):
             else {}
         )
 
-        AgentBaseClass.__init__(self)
+    @property
+    def name(self):
+        return "agents.town_managers"
 
     def spinup(self) -> None:
         return

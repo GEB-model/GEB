@@ -92,7 +92,7 @@ def run_model(args):
         while True:
             os.mkdir(run_directory)
             template = deepcopy(config)
-            template["general"]["report_folder"] = run_directory
+            template["general"]["output_folder"] = run_directory
 
             # write the template to the specified config file
             with open(config_path, "w") as f:

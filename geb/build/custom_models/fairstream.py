@@ -4,9 +4,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
+from pgmpy.estimators import K2, BayesianEstimator, HillClimbSearch
 from pgmpy.factors.discrete import State
-from pgmpy.models import BayesianNetwork
+from pgmpy.models import DiscreteBayesianNetwork
 from pgmpy.sampling import BayesianModelSampling
 from scipy.stats import chi2_contingency, norm
 
@@ -17,7 +17,7 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 
-from ..geb import GEBModel
+from .. import GEBModel
 from ..workflows.general import repeat_grid
 
 
@@ -29,7 +29,7 @@ class Survey:
         print("Estimating network structure")
         est = HillClimbSearch(data=self.samples)
         self.model = est.estimate(
-            scoring_method=K2Score(data=self.samples),
+            scoring_method=K2(data=self.samples),
             max_indegree=max_indegree,
             max_iter=int(1e4),
             epsilon=1e-8,
@@ -37,7 +37,7 @@ class Survey:
 
     def estimate_parameters(self, plot=False, save=False):
         print("Learning network parameters")
-        self.model = BayesianNetwork(self.model)
+        self.model = DiscreteBayesianNetwork(self.model)
         self.model.fit(
             self.samples,
             estimator=BayesianEstimator,
@@ -86,7 +86,7 @@ class Survey:
 
     def read(self, path):
         print("Loading model")
-        self.model = BayesianNetwork().load(str(path), n_jobs=1)
+        self.model = DiscreteBayesianNetwork().load(str(path), n_jobs=1)
 
     def create_mapper(
         self,

@@ -22,6 +22,8 @@
 import numpy as np
 from numba import njit
 
+from geb.module import Module
+
 
 @njit(cache=True, parallel=True)
 def PET(
@@ -146,7 +148,7 @@ def PET(
     return ETRef, EWRef
 
 
-class PotentialEvapotranspiration(object):
+class PotentialEvapotranspiration(Module):
     """
     POTENTIAL REFERENCE EVAPO(TRANSPI)RATION
     Calculate potential evapotranspiration from climate data mainly based on FAO 56 and LISVAP
@@ -182,7 +184,7 @@ class PotentialEvapotranspiration(object):
     """
 
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -190,6 +192,10 @@ class PotentialEvapotranspiration(object):
 
         if self.model.in_spinup:
             self.spinup()
+
+    @property
+    def name(self):
+        return "hydrology.potential_evapotranspiration"
 
     def spinup(self):
         pass
@@ -218,3 +224,4 @@ class PotentialEvapotranspiration(object):
         assert self.HRU.var.EWRef.dtype == np.float32
 
         self.model.agents.crop_farmers.save_water_deficit()
+        self.report(self, locals())
