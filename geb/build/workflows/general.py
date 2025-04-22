@@ -11,6 +11,7 @@ import pandas as pd
 import requests
 import xarray
 import xarray as xr
+import xarray_regrid
 from pyresample import geometry
 from pyresample.gradient import (
     block_bilinear_interpolator,
@@ -263,7 +264,32 @@ def interpolate_na_along_time_dim(da):
 
 
 def resample_like(source, target, method="bilinear"):
-    return source.raster.reproject_like(target, method=method)
+    # TODO: bilinear should be conservative? Which also corrects
+    # for changes in the latitude direction
+    source_spatial_ref = source.spatial_ref
+
+    # xarray-regrid does not handle integer types well
+    assert not np.issubdtype(source.dtype, np.integer), (
+        "Source data must not be an integer type for resampling"
+    )
+
+    source = source.drop_vars("spatial_ref")
+    target = target.drop_vars("spatial_ref")  # TODO: Perhaps not needed
+
+    regridder = xarray_regrid.regrid.Regridder(source)
+
+    if method == "bilinear":
+        dst = regridder.linear(target)
+    elif method == "conservative":
+        dst = regridder.conservative(target, latitude_coord="y")
+    elif method == "nearest":
+        dst = regridder.nearest(target)
+    else:
+        raise ValueError(f"Unknown method: {method}, must be 'bilinear' or 'nearest'")
+
+    # Set the spatial reference back to the original
+    dst = dst.assign_coords({"spatial_ref": source_spatial_ref})
+    return dst
 
 
 def get_area_definition(da):

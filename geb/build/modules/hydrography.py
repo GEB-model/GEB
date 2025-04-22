@@ -10,7 +10,7 @@ from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString
 
-from geb.hydrology.lakes_reservoirs import LAKE, RESERVOIR
+from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
 
 
 def get_upstream_subbasin_ids(river_graph, subbasin_ids):
@@ -449,12 +449,15 @@ class Hydrography:
             )
             waterbodies = waterbodies.astype(dtypes)
             hydrolakes_to_geb = {
-                1: LAKE,
-                2: RESERVOIR,
+                1: np.int32(LAKE),
+                2: np.int32(RESERVOIR),
+                3: np.int32(LAKE_CONTROL),
             }
+            assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
             waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
                 hydrolakes_to_geb
             )
+            assert waterbodies["waterbody_type"].dtype == np.int32
         except NoDataException:
             self.logger.info(
                 "No water bodies found in domain, skipping water bodies setup"

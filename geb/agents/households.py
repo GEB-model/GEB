@@ -9,7 +9,7 @@ from damagescanner.core import object_scanner
 from honeybees.library.raster import sample_from_map
 from rasterio.features import shapes
 from scipy import interpolate
-from shapely.geometry import Point, shape
+from shapely.geometry import shape
 
 from ..hydrology.landcover import (
     FOREST,
@@ -265,7 +265,9 @@ class Households(AgentBaseClass):
 
         # load household points (only in use for damagescanner, could be removed)
         household_points = gpd.GeoDataFrame(
-            geometry=[Point(lon, lat) for lon, lat in self.var.locations.data],
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
             crs="EPSG:4326",
         )
         household_points["maximum_damage"] = self.var.property_value.data

@@ -47,9 +47,7 @@ def load_soilgrids(data_catalog, subgrid, region):
     #     "soilgrids_2017_BDTICM", geom=region
     # )
     # depth_to_bedrock = depth_to_bedrock.raster.mask_nodata()
-    # depth_to_bedrock = depth_to_bedrock.raster.reproject_like(
-    #     subgrid, method="bilinear"
-    # ).raster.interpolate_na("nearest")
+    # depth_to_bedrock = resample_like(depth_to_bedrock, subgrid, method="bilinear").raster.interpolate_na("nearest")
 
     soil_layer_height = xr.full_like(ds["silt"], fill_value=0.0, dtype=np.float32)
     for layer, height in enumerate((0.05, 0.10, 0.15, 0.30, 0.40, 1.00)):

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import datetime
 import re
+import shutil
 from operator import attrgetter
 from typing import Any, Union
 
@@ -64,10 +65,13 @@ class Reporter:
         model: The GEB model.
     """
 
-    def __init__(self, model) -> None:
+    def __init__(self, model, clean) -> None:
         self.model = model
         self.hydrology = model.hydrology
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
+        # optionally clean report model at start of run
+        if clean:
+            shutil.rmtree(self.report_folder, ignore_errors=True)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.variables = {}
