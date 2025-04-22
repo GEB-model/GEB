@@ -203,6 +203,9 @@ def update_sfincs_model_forcing(
             #     uparea=uparea_discharge_grid,
             # )
 
+        if "_CRS" in precipitation_grid.attrs:
+            # remove the CRS attribute from the precipitation grid, because NetCDF4 does not support it
+            del precipitation_grid.attrs["_CRS"]
         sf.setup_precip_forcing_from_grid(precip=precipitation_grid)
 
     # detect whether water level forcing should be set
