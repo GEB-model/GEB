@@ -22,6 +22,7 @@ authors = [
     {name = "Rafaella Oliveira", email = "r.gouveialoureirooliveira@vu.nl"},
 ]
 dependencies = [
+    "cartopy>=0.24.1",
     "cdsapi>=0.7.5",
     "cfgrib>=0.9.14",
     "click>=8.1.8",
@@ -96,7 +97,7 @@ geb = "geb.cli:cli"
 
 [project.optional-dependencies]
 fairstream = [
-    "pgmpy>=0.1.24",
+    "pgmpy>=1.0.0",
     "daft-pgm>=0.1.4",
     "opt-einsum>=3.3.0",
 ]

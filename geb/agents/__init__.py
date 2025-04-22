@@ -17,7 +17,6 @@ class Agents:
     """
 
     def __init__(self, model) -> None:
-        self.model = model
         self.households = Households(model, self, 0.1)
         self.crop_farmers = CropFarmers(model, self, 0.1)
         self.livestock_farmers = LiveStockFarmers(model, self, 0.1)

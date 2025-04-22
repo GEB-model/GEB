@@ -180,6 +180,43 @@ class Artists(honeybeesArtists):
         """This function is used to update the name of the variable to use for drawing the background of the map."""
         self.background_variable = option_name
 
+    def get_array(self, attr: str, decompress: bool = False) -> np.ndarray:
+        """This function retrieves a NumPy array from the model based the name of the variable. Optionally decompresses the array.
+
+        Args:
+            attr: Name of the variable to retrieve. Name can contain "." to specify variables are a "deeper" level.
+            decompress: Boolean value whether to decompress the array. If True, the class to which the top variable name belongs to must have an equivalent function called `decompress`.
+
+        Returns:
+            array: The requested array.
+
+        Example:
+            Read discharge from `data.grid`. Because :code:`decompress=True`, `data.grid` must have a `decompress` method.
+            ::
+
+                >>> get_array(data.grid.discharge, decompress=True)
+        """
+        slicer = re.search(r"\[([0-9]+)\]$", attr)
+        if slicer:
+            try:
+                array = attrgetter(attr[: slicer.span(0)[0]])(self.model)
+            except AttributeError:
+                return None
+            else:
+                array = array[int(slicer.group(1))]
+        else:
+            try:
+                array = attrgetter(attr)(self.model)
+            except AttributeError:
+                return None
+        if decompress:
+            decompressed_array = self.decompress(attr, array)
+            return array, decompressed_array
+
+        assert isinstance(array, np.ndarray)
+
+        return array
+
     def get_background(
         self,
         minvalue: Union[float, int, None] = None,
@@ -206,7 +243,7 @@ class Artists(honeybeesArtists):
 
             mask = self.hydrology.HRU.mask
         else:
-            compressed_array, array = self.model.reporter.hydrology_reporter.get_array(
+            compressed_array, array = self.get_array(
                 self.background_variable, decompress=True
             )
             mask = attrgetter(

@@ -22,6 +22,7 @@
 import numpy as np
 import zarr
 
+from geb.module import Module
 from geb.workflows import balance_check
 
 from .landcover import (
@@ -35,7 +36,7 @@ from .landcover import (
 )
 
 
-class Interception(object):
+class Interception(Module):
     """
     INTERCEPTION
 
@@ -59,7 +60,7 @@ class Interception(object):
     """
 
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -67,6 +68,10 @@ class Interception(object):
 
         if self.model.in_spinup:
             self.spinup()
+
+    @property
+    def name(self):
+        return "hydrology.interception"
 
     def spinup(self):
         self.HRU.var.minInterceptCap = self.HRU.full_compressed(
@@ -205,4 +210,6 @@ class Interception(object):
             )
 
         assert not np.isnan(potential_transpiration[bio_area]).any()
+
+        self.report(self, locals())
         return potential_transpiration, interception_evaporation

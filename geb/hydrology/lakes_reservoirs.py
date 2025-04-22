@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from geb.HRUs import load_grid
+from geb.module import Module
 from geb.workflows import balance_check
 
 from .routing.subroutines import (
@@ -159,9 +160,9 @@ def get_lake_outflow_and_storage(
     return outflow_m3, new_storage, height_above_outflow
 
 
-class LakesReservoirs(object):
+class LakesReservoirs(Module):
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -170,9 +171,11 @@ class LakesReservoirs(object):
         if self.model.in_spinup:
             self.spinup()
 
-    def spinup(self):
-        self.var = self.model.store.create_bucket("hydrology.lakes_reservoirs.var")
+    @property
+    def name(self):
+        return "hydrology.lakes_reservoirs"
 
+    def spinup(self):
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
@@ -682,3 +685,4 @@ class LakesReservoirs(object):
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
         # print(self.reservoir_fill_percentage.astype(int))
+        self.report(self, locals())

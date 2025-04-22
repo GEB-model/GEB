@@ -11,7 +11,7 @@ class Government(AgentBaseClass):
     """
 
     def __init__(self, model, agents):
-        self.model = model
+        super().__init__(model)
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["government"]
@@ -20,10 +20,12 @@ class Government(AgentBaseClass):
         )
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
 
-        AgentBaseClass.__init__(self)
+    @property
+    def name(self):
+        return "agents.government"
 
     def spinup(self) -> None:
-        self.var = self.model.store.create_bucket("agents.government.var")
+        pass
 
     def provide_subsidies(self) -> None:
         if "subsidies" not in self.config:
@@ -68,3 +70,4 @@ class Government(AgentBaseClass):
         """This function is run each timestep."""
         self.set_irrigation_limit()
         self.provide_subsidies()
+        self.report(self, locals())

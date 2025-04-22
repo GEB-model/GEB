@@ -21,6 +21,8 @@
 
 import numpy as np
 
+from geb.module import Module
+
 
 def get_kinetic_energy_direct_throughfall(direct_throughfall, precipitation_intensity):
     """
@@ -205,14 +207,14 @@ def get_flow_velocity(manning, water_depth, slope, minimum_slope=1e-5):
     )
 
 
-class HillSlopeErosion:
+class HillSlopeErosion(Module):
     """The Morgan–Morgan–Finney (MMF) model is a process-based soil erosion model
     developed by Morgan, Morgan, and Finney (1984). It is designed to estimate annual
     or event-based soil loss by considering the detachment and transport of soil
     particles separately."""
 
     def __init__(self, model, hydrology):
-        self.model = model
+        super().__init__(model)
         self.hydrology = hydrology
 
         self.HRU = hydrology.HRU
@@ -223,13 +225,13 @@ class HillSlopeErosion:
         if self.model.in_spinup:
             self.spinup()
 
+    @property
+    def name(self):
+        return "hydrology.hillslope_erosion"
+
     def spinup(self):
         if not self.simulate:
             return None
-
-        self.var = self.model.store.create_bucket(
-            "model.hydrology.hillslope_erosion.var"
-        )
 
         self.var.total_erosion = 0
 
@@ -502,6 +504,6 @@ class HillSlopeErosion:
 
         self.var.total_erosion += transported_material_kg.sum()
 
-        print(self.var.total_erosion)
+        self.report(self, locals())
 
         return transported_material

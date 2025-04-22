@@ -121,7 +121,7 @@ def run_model(args):
             os.mkdir(run_directory)
             template = deepcopy(config)
 
-            template["general"]["report_folder"] = run_directory
+            template["general"]["output_folder"] = run_directory
 
             template["general"]["sensitivity_analysis"] = True
 

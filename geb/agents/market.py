@@ -21,14 +21,13 @@ class Market(AgentBaseClass):
     """
 
     def __init__(self, model, agents):
-        self.model = model
+        super().__init__(model)
         self.agents = agents
         self.config = (
             self.model.config["agent_settings"]["market"]
             if "market" in self.model.config["agent_settings"]
             else {}
         )
-        AgentBaseClass.__init__(self)
 
         if self.model.in_spinup:
             self.spinup()
@@ -37,8 +36,11 @@ class Market(AgentBaseClass):
             self.model, "crops/crop_prices"
         )
 
+    @property
+    def name(self):
+        return "agents.market"
+
     def spinup(self) -> None:
-        self.var = self.model.store.create_bucket("agents.market.var")
         with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
             inflation = json.load(f)
             inflation["time"] = [int(time) for time in inflation["time"]]
@@ -167,6 +169,7 @@ class Market(AgentBaseClass):
         if not self.model.simulate_hydrology:
             return
         self.track_production_and_price()
+        self.report(self, locals())
 
     @property
     def crop_prices(self) -> np.ndarray:
@@ -181,7 +184,7 @@ class Market(AgentBaseClass):
                 print("WARNING: Using static crop prices")
                 return np.full(
                     (
-                        len(self.model.var.regions),
+                        len(self.model.regions),
                         len(self.agents.crop_farmers.var.crop_ids),
                     ),
                     self._crop_prices[1],

@@ -1,5 +1,5 @@
+import os
 from pathlib import Path
-from shutil import rmtree
 
 import pytest
 
@@ -32,31 +32,29 @@ def test_build():
         working_directory=working_directory,
         custom_model=None,
         data_provider=None,
-        data_root=Path("../../../../data_catalog"),
+        data_root=Path(os.getenv("GEB_DATA_ROOT")),
     )
-
-    rmtree(working_directory, ignore_errors=True)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-# @pytest.mark.dependency(name="spinup")
+@pytest.mark.dependency(name="test_build")
 def test_spinup():
     run_model_with_method(method="spinup", **DEFAULT_VARIABLES)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-# @pytest.mark.dependency(depends=["spinup"])
+@pytest.mark.dependency(depends=["test_spinup"])
 def test_run():
     run_model_with_method(method="run", **DEFAULT_VARIABLES)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-# @pytest.mark.dependency(depends=["spinup"])
+@pytest.mark.dependency(depends=["test_spinup"])
 def test_run_yearly():
     run_model_with_method(method="run_yearly", **DEFAULT_VARIABLES)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-# @pytest.mark.dependency(depends=["spinup"])
-def test_estimate_risk():
+@pytest.mark.dependency(depends=["test_spinup"])
+def test_estimate_return_periods():
     run_model_with_method(method="estimate_return_periods", **DEFAULT_VARIABLES)

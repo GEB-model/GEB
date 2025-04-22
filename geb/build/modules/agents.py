@@ -88,6 +88,10 @@ class Agents:
                 municipal_water_demand_region["Variable"]
                 == "Municipal water withdrawal"
             ]
+            assert len(municipal_water_withdrawal) > 0, (
+                f"Missing municipal water withdrawal data for {ISO3}"
+            )
+
             municipal_water_withdrawal = municipal_water_withdrawal.set_index("Year")
             municipal_water_withdrawal = municipal_water_withdrawal["Value"] * 10e9
 
@@ -299,39 +303,39 @@ class Agents:
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
-        # if project_future_until_year:
-        #     # convert to pandas dataframe
-        #     inflation_rates = pd.DataFrame(
-        #         inflation_rates_dict["data"], index=inflation_rates_dict["time"]
-        #     ).dropna()
-        #     # lending_rates = pd.DataFrame(
-        #     #     lending_rates_dict["data"], index=lending_rates_dict["time"]
-        #     # ).dropna()
+        # convert to pandas dataframe
+        inflation_rates = pd.DataFrame(
+            inflation_rates_dict["data"], index=inflation_rates_dict["time"]
+        ).dropna()
+        # lending_rates = pd.DataFrame(
+        #     lending_rates_dict["data"], index=lending_rates_dict["time"]
+        # ).dropna()
 
-        #     inflation_rates.index = inflation_rates.index.astype(int)
-        #     # extend inflation rates to future
-        #     mean_inflation_rate_since_reference_year = inflation_rates.loc[
-        #         reference_start_year:
-        #     ].mean(axis=0)
-        #     inflation_rates = inflation_rates.reindex(
-        #         range(inflation_rates.index.min(), project_future_until_year + 1)
-        #     ).fillna(mean_inflation_rate_since_reference_year)
+        inflation_rates.index = inflation_rates.index.astype(int)
+        inflation_rates = inflation_rates.reindex(
+            range(self.start_date.year, self.end_date.year + 1)
+        )
 
-        #     inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
-        #     inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
+        for column in inflation_rates.columns:
+            inflation_rates[column] = inflation_rates[column].interpolate(
+                method="linear"
+            )
 
-        #     # lending_rates.index = lending_rates.index.astype(int)
-        #     # extend lending rates to future
-        #     # mean_lending_rate_since_reference_year = lending_rates.loc[
-        #     #     reference_start_year:
-        #     # ].mean(axis=0)
-        #     # lending_rates = lending_rates.reindex(
-        #     #     range(lending_rates.index.min(), project_future_until_year + 1)
-        #     # ).fillna(mean_lending_rate_since_reference_year)
+        inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
+        inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
 
-        #     # # convert back to dictionary
-        #     # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
-        #     # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
+        # lending_rates.index = lending_rates.index.astype(int)
+        # extend lending rates to future
+        # mean_lending_rate_since_reference_year = lending_rates.loc[
+        #     reference_start_year:
+        # ].mean(axis=0)
+        # lending_rates = lending_rates.reindex(
+        #     range(lending_rates.index.min(), project_future_until_year + 1)
+        # ).fillna(mean_lending_rate_since_reference_year)
+
+        # # convert back to dictionary
+        # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
+        # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
 
         self.set_dict(inflation_rates_dict, name="socioeconomics/inflation_rates")
         # self.set_dict(lending_rates_dict, name="socioeconomics/lending_rates")
@@ -1215,6 +1219,10 @@ class Agents:
             geom=self.region,
             variables=["GDLcode", "iso_code"],
         )
+        GDL_regions = GDL_regions[
+            GDL_regions["GDLcode"] != "NA"
+        ]  # remove regions without GDL code
+
         # create list of attibutes to include (and include name to store to)
         rename = {
             "HHSIZE_CAT": "household_type",
@@ -1238,17 +1246,18 @@ class Agents:
         }
 
         # iterate over regions and sample agents from GLOPOP-S
-        for _, GDL_region in GDL_regions.iterrows():
+        for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
             GDL_code = GDL_region["GDLcode"]
+            self.logger.info(
+                f"Setting up household characteristics for {GDL_region['GDLcode']} ({i + 1}/{len(GDL_regions)})"
+            )
+
             if GDL_region["iso_code"] in skip_countries_ISO3:
                 self.logger.info(
-                    f"Skipping setting up household characteristics for {GDL_region['iso_code']}"
+                    f"Skipping setting up household characteristics for {GDL_region['GDLcode']}"
                 )
                 continue
 
-            self.logger.info(
-                f"Setting up household characteristics for {GDL_region['iso_code']}"
-            )
             GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
                 self.data_catalog, GDL_code
             )
@@ -1284,7 +1293,7 @@ class Agents:
             )
 
             # calculate age:
-            GLOPOP_S_region["age_household_head"] = np.nan
+            GLOPOP_S_region["age_household_head"] = np.uint16(np.iinfo(np.uint16).max)
             for age_class in age_class_to_age:
                 age_range = age_class_to_age[age_class]
 
@@ -1294,7 +1303,10 @@ class Agents:
                     age_range[0],
                     age_range[1],
                     size=len(GLOPOP_S_region.loc[GLOPOP_S_region["AGE"] == age_class]),
-                )
+                ).astype(np.uint16)
+            assert not (
+                GLOPOP_S_region["age_household_head"] == np.iinfo(np.uint16).max
+            ).any()
 
             # create all households
             GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
@@ -1327,16 +1339,17 @@ class Agents:
             n = len(GLOPOP_S_region)
             x_y = np.stack(
                 [
-                    GLOPOP_S_region["coord_X"]
-                    + (np.random.random(n) * abs(res_x))
+                    GLOPOP_S_region["coord_X"].astype(np.float32)
+                    + (np.random.random(n).astype(np.float32) * abs(res_x))
                     - 0.5 * res_x,
-                    GLOPOP_S_region["coord_Y"]
-                    + (np.random.random(n) * abs(res_y))
+                    GLOPOP_S_region["coord_Y"].astype(np.float32)
+                    + (np.random.random(n).astype(np.float32) * abs(res_y))
                     - 0.5 * res_y,
                 ],
                 axis=1,
             )
-            household_characteristics["location"] = x_y
+            # round to precision of ~0.11 m for lat/lon to reduce compressed file size
+            household_characteristics["location"] = np.round(x_y, 6)
 
             household_characteristics["region_id"] = sample_from_map(
                 self.region_subgrid["region_ids"].values,
@@ -1406,9 +1419,7 @@ class Agents:
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
         )
-        GDL_region_per_farmer = gpd.sjoin(
-            locations, GDL_regions, how="left", predicate="within"
-        )
+        GDL_region_per_farmer = gpd.sjoin_nearest(locations, GDL_regions, how="left")
 
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()

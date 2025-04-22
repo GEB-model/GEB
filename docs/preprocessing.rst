@@ -2,20 +2,87 @@
 Preprocessing
 ##############
 
-GEB uses HydroMT to preprocess all data required for the model. HydroMT (Hydro Model Tools) is an open-source Python package that facilitates the process of building and analyzing spatial geoscientific models with a focus on water system models. It does so by automating the workflow to go from raw data to a complete model instance which is ready to run. This plugin provides an implementation for the GEB model, which can be found `here <https://github.com/GEB-model/hydromt_geb>`_.
+GEB has a build module to preprocess all data for a specific region. This module creates a new folder "input" with all input files for the model.
 
 Obtaining the data
 ------------------
-Most of the data that the HydroMT plugin uses to create the input data for GEB is downloaded by the tool itself when it is run. However, some data needs to be aquired seperately. To obtain this data, please send an email to Jens de Bruijn (jens.de.bruijn@vu.nl).
+Most of the data that the build module uses to create the input data for GEB is downloaded by the tool itself when it is run. However, some data needs to be aquired seperately. To obtain this data, please send an email to Jens de Bruijn (jens.de.bruijn@vu.nl).
 
-.. A basin id from the MERIT Hydro IHU dataset (https://zenodo.org/records/7936280), please refer to the file 30sec_basids.tif or 30sec_basins.gpkg.
-.. An outflow point (longitude, latitude) of the river network from which the upstream subbasin can be derived automatically. Here, it is important that this point is located in the main river, which can be checked on the same MERIT Hydro IHU page, in the 30sec_uparea.tif file.
+Configuration
+-------------
+Some of the data that is obtained from online sources and APIs requires keys. You should take the following steps:
+
+1. Request access to MERIT Hydro dataset `MERIT Hydro <https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/>`_, and create a ".env"-file in the GEB repository with the following content:
+
+.. code-block:: text
+
+    MERIT_USERNAME=<your_username>
+    MERIT_PASSWORD=<your_password>
+
+2. To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on `Destination Earth <https://earthdatahub.destine.eu/>`_ and following the instructions `here <https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land>`_.
+
+Study region
+-------------------
+
+The `model.yml`-file specifies the configuration of the model, including the location of the model. An example of the `model.yml`-file is given in the examples folder in the GEB repository. Please refer to the yaml-section `general:region`. Examples are given below.
+
+^^^^^^^^^^
+Subbasin
+^^^^^^^^^^
+
+The subbasin option allows you to define your study region based on a hydrological basin. When using this option, the following parameter is required:
+
+- `subbasin`: The subbasin ID of the model. This is the ID of the subbasin in the `MERIT-BASINS dataset <https://www.reachhydro.org/home/params/merit-basins>`_ (version MERIT-Hydro v0.7/v1.0). This can be either a single subbasin or list of subbasins. All upstream basins are automatically included in the model, so only the most downstream subbasin of a specific catchments needs to be specified.
+
+.. code-block:: yaml
+
+    general:
+      region:
+        subbasin: 23011134
+
+or
+
+.. code-block:: yaml
+
+    general:
+      region:
+        subbasin:
+        - 23011134
+        - 23011135
+        - 23011136
+
+^^^^^^^^
+geom
+^^^^^^^^
+
+The name of a dataset specified in the `data_catalog.yml` (e.g., GADM_level0) or any other region or path that can be loaded in geopandas. Using the column and key parameters, a subset of data can be specified, for example:
+
+.. code-block:: yaml
+
+    general:
+      region:
+        geom: GADM_level0
+        column: GID_0
+        key: FRA
+
+^^^^^^^^^^^
+outflow
+^^^^^^^^^^^
+
+The outflow option allows you to define your study region based on a specific outflow point using lat, lon coordinates:
+
+.. code-block:: yaml
+
+    general:
+      region:
+        outflow:
+          lat: 48.8566
+          lon: 2.3522
 
 Building to model
 -------------------
-To set up the model you need two files, a `model.yml`-file and a `build.yml`-file. The `model.yml`-file specifies the configuration of the model, including start and end time of model runs, agent-paramters etc. The `build.yml`-file specifies the configuration of the preprocessing. An example of the `model.yml`-file and `build.yml`-file are provided in the repository.
 
-The `build.yml`-file contains the name of functions that should be run to preprocess the data. The functions are defined in the HydroMT-geb plugin of HydroMT. You can build the model using the following command, assuming you are in the working directory of the model which contains the `model.yml`-file and `build.yml`-file:
+The `build.yml`-file contains the name of functions that should be run to preprocess the data. You can build the model using the following command, assuming you are in the working directory of the model which contains the `model.yml`-file and `build.yml`-file:
 
 .. code-block:: python
 
@@ -42,13 +109,7 @@ For example to update the forcing data of the model, your "update.yml"-file coul
 
 .. code-block:: yaml
 
-    setup_forcing:
-        data_source: isimip
-        starttime: 1979-01-01
-        endtime: 2080-12-31
-        resolution_arcsec: 1800
-        forcing: gfdl-esm4
-        ssp: ssp370
+    setup_forcing_era5:
 
 Optionally, you can specify the path to the "update.yml"-file using the `-b/--build-config` flag, and the path to the `model.yml`-file using the `-c/--config` flag. You can find more information about the flags by running:
 
