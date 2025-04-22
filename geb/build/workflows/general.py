@@ -276,7 +276,7 @@ def resample_like(source, target, method="bilinear"):
     if method == "bilinear":
         dst = regridder.linear(target)
     elif method == "conservative":
-        dst = regridder.conservative(target, latitude_coord='y')
+        dst = regridder.conservative(target, latitude_coord="y")
     elif method == "nearest":
         dst = regridder.nearest(target)
     else:

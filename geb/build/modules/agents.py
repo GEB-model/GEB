@@ -1710,10 +1710,10 @@ class Agents:
 
         donor_data = {}
         for ISO3 in ISO3_codes_GLOBIOM_region:
-            if ISO3 == 'AND':
-                ISO3 = 'ESP'
-            elif ISO3 == 'LIE':
-                ISO3 = 'CHE'
+            if ISO3 == "AND":
+                ISO3 = "ESP"
+            elif ISO3 == "LIE":
+                ISO3 = "CHE"
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
