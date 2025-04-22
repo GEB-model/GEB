@@ -14,10 +14,10 @@ setup_regions_and_land_use:
   ISO3_column: GID_0
 
 setup_cell_area:
-  
-setup_economic_data:
 
 setup_mannings:
+  
+setup_economic_data:
 
 setup_soil_parameters:
 
