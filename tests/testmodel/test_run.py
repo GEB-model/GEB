@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,7 @@ def test_build():
         working_directory=working_directory,
         custom_model=None,
         data_provider=None,
-        data_root=Path("../../../../data_catalog"),
+        data_root=Path(os.getenv("GEB_DATA_ROOT")),
     )
 
 

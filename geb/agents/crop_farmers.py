@@ -4239,6 +4239,7 @@ class CropFarmers(AgentBaseClass):
         elevation_subgrid = load_grid(
             self.model.files["subgrid"]["landsurface/elevation"],
         )
+        elevation_subgrid = np.nan_to_num(elevation_subgrid, copy=False, nan=0.0)
         decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)
         mask = decompressed_land_owners != -1
         return np.bincount(

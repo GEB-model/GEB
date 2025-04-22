@@ -51,7 +51,7 @@ The following options are supported.
 
 * **module_name**: The name of the module in the GEB model. Both agents and hydrological modules are supported. Please refer to the name property of the module for the correct names.
 * **filename**: The name of the file to be created. This can be a .csv or .zarr file. If the file already exists, it will be overwritten. The filename will be created in the output directory specified in the model configuration file, and placed inside the subdirectory with the name of the module.
-* **varname**: The name of the variable to be reported. There are two options:
+* **varname**: The name of the variable to be reported. NumPy-style fancy indexing is supported. For example `varname[:,0]` selects the first column of a 2D array. There are two options:
 
   + **module attribute**: The variable name in the module. Any variable that can be reached from "self" in the module can be used. For example, `[self.]varname` or `[self.]grid.var.discharge`. Note that `self.` is ommited.
   + **local variable**: Any variable that exists within the `step` function of the module. This is useful for reporting variables that are not stored between timesteps. Local variables are prefixed with ".", for exampe `.actual_bare_soil_evaporation` in the example above.
