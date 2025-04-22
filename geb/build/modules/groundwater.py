@@ -128,6 +128,7 @@ class GroundWater:
             bbox=self.bounds,
             buffer=2,
         ).rename({"lon": "x", "lat": "y"})
+        hydraulic_conductivity.attrs["_FillValue"] = np.nan
 
         # because
         hydraulic_conductivity_log = np.log(hydraulic_conductivity)
@@ -154,6 +155,7 @@ class GroundWater:
             bbox=self.bounds,
             buffer=2,
         ).rename({"lon": "x", "lat": "y"})
+        specific_yield.attrs["_FillValue"] = np.nan
 
         specific_yield = resample_like(
             specific_yield,
@@ -176,16 +178,18 @@ class GroundWater:
             "why_map",
             bbox=self.bounds,
             buffer=5,
-        )
+        ).compute()
 
         why_map.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         why_map.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
+        original_dtype = why_map.dtype
         why_interpolated = resample_like(
-            why_map,
+            why_map.astype(np.float64),
             aquifer_top_elevation,
             method="nearest",
         )
+        why_interpolated = why_interpolated.astype(original_dtype)
 
         self.set_grid(why_interpolated, name="groundwater/why_map")
 

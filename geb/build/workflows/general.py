@@ -268,6 +268,11 @@ def resample_like(source, target, method="bilinear"):
     # for changes in the latitude direction
     source_spatial_ref = source.spatial_ref
 
+    # xarray-regrid does not handle integer types well
+    assert not np.issubdtype(source.dtype, np.integer), (
+        "Source data must not be an integer type for resampling"
+    )
+
     source = source.drop_vars("spatial_ref")
     target = target.drop_vars("spatial_ref")  # TODO: Perhaps not needed
 
