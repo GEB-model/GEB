@@ -74,6 +74,20 @@ class Agents:
         municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
         for _, region in self.geoms["regions"].iterrows():
             ISO3 = region["ISO3"]
+
+            if (
+                ISO3 == "AND"
+            ):  # for Andorra (not available in World Bank data), use Spain's data
+                self.logger.warning(
+                    "Andorra's economic data not available, using Spain's data"
+                )
+                ISO3 = "ESP"
+            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
+                self.logger.warning(
+                    "Liechtenstein's economic data not available, using Switzerland's data"
+                )
+                ISO3 = "CHE"
+
             region_id = region["region_id"]
 
             # select domestic water demand for the region
@@ -940,23 +954,23 @@ class Agents:
 
         all_agents = []
         self.logger.info(f"Starting processing of {len(regions_shapes)} regions")
-        for _, region in regions_shapes.iterrows():
+        for i, (_, region) in enumerate(regions_shapes.iterrows()):
             UID = region[region_id_column]
             if data_source == "lowder":
-                country_ISO3 = region[country_iso3_column]
+                ISO3 = region[country_iso3_column]
                 if farm_size_donor_countries:
                     assert isinstance(farm_size_donor_countries, dict)
-                    country_ISO3 = farm_size_donor_countries.get(
-                        country_ISO3, country_ISO3
-                    )
+                    ISO3 = farm_size_donor_countries.get(ISO3, ISO3)
+                self.logger.info(
+                    f"Processing region ({i + 1}/{len(regions_shapes)}) with ISO3 {ISO3}"
+                )
             else:
                 state, district, tehsil = (
                     region["state_name"],
                     region["district_n"],
                     region["sub_dist_1"],
                 )
-
-            self.logger.info(f"Processing region {UID}")
+                self.logger.info(f"Processing region ({i + 1}/{len(regions_shapes)})")
 
             cultivated_land_region_total_cells = (
                 ((region_ids == UID) & (cultivated_land)).sum().compute()
@@ -969,7 +983,7 @@ class Agents:
             ):  # when no agricultural area, just continue as there will be no farmers. Also avoiding some division by 0 errors.
                 continue
 
-            average_cell_area_region = (
+            average_subgrid_area_region = (
                 cell_area.where(((region_ids == UID) & (cultivated_land)))
                 .mean()
                 .compute()
@@ -977,10 +991,10 @@ class Agents:
 
             if data_source == "lowder":
                 region_farm_sizes = farm_sizes_per_region.loc[
-                    (farm_sizes_per_region["ISO3"] == country_ISO3)
+                    (farm_sizes_per_region["ISO3"] == ISO3)
                 ].drop(["Country", "Census Year", "Total"], axis=1)
                 assert len(region_farm_sizes) == 2, (
-                    f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {country_ISO3}"
+                    f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {ISO3}"
                 )
 
                 # Extract holdings and agricultural area data
@@ -1097,10 +1111,9 @@ class Agents:
                     n_cells_per_size_class.loc[size_class] = (
                         region_n_holdings[size_class]
                         * region_farm_sizes[size_class]
-                        / average_cell_area_region
-                    )
+                        / average_subgrid_area_region
+                    ).item()
                     assert not np.isnan(n_cells_per_size_class.loc[size_class])
-
             assert math.isclose(
                 cultivated_land_region_total_cells,
                 round(n_cells_per_size_class.sum().item()),
@@ -1143,15 +1156,19 @@ class Agents:
                 if max_size_m2 in (np.inf, "inf", "infinity", "Infinity"):
                     max_size_m2 = region_farm_sizes[size_class] * 2
 
-                min_size_cells = int(min_size_m2 / average_cell_area_region)
+                min_size_cells = int(min_size_m2 / average_subgrid_area_region)
                 min_size_cells = max(
                     min_size_cells, 1
                 )  # farm can never be smaller than one cell
                 max_size_cells = (
-                    int(max_size_m2 / average_cell_area_region) - 1
+                    int(max_size_m2 / average_subgrid_area_region) - 1
                 )  # otherwise they overlap with next size class
                 mean_cells_per_agent = int(
-                    region_farm_sizes[size_class] / average_cell_area_region
+                    region_farm_sizes[size_class] / average_subgrid_area_region
+                )
+
+                assert mean_cells_per_agent >= 1, (
+                    f"Mean cells per agent must be at least 1, but got {mean_cells_per_agent}, consider increasing the number of subgrids"
                 )
 
                 if (
@@ -1191,7 +1208,7 @@ class Agents:
                     self.logger,
                 )
                 assert n_farms_size_class.sum() == number_of_agents_size_class
-                assert (farm_sizes_size_class > 0).all()
+                assert (farm_sizes_size_class >= 1).all()
                 assert (
                     n_farms_size_class * farm_sizes_size_class
                 ).sum() == whole_cells_per_size_class[size_class]
@@ -1432,7 +1449,16 @@ class Agents:
                 len(GDL_region_per_farmer), -1, dtype=np.int32
             )
 
-        for GDL_region, farmers_GDL_region in GDL_region_per_farmer.groupby("GDLcode"):
+        for GDL_idx, (GDL_region, farmers_GDL_region) in enumerate(
+            GDL_region_per_farmer.groupby("GDLcode")
+        ):
+            self.logger.info(
+                f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
+            )
+            if GDL_region == "ANDt":
+                GDL_region = "ESPr112"
+            if GDL_region == "LIEt":
+                GDL_region = "CHEr105"
             GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
@@ -1684,6 +1710,10 @@ class Agents:
 
         donor_data = {}
         for ISO3 in ISO3_codes_GLOBIOM_region:
+            if ISO3 == 'AND':
+                ISO3 = 'ESP'
+            elif ISO3 == 'LIE':
+                ISO3 = 'CHE'
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
