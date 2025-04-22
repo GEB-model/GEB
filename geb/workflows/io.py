@@ -23,7 +23,12 @@ def load_table(fp):
 
 
 def load_array(fp):
-    return np.load(fp)["data"]
+    if fp.suffix == ".npz":
+        return np.load(fp)["data"]
+    elif fp.suffix == ".zarr":
+        return zarr.load(fp)
+    else:
+        raise ValueError(f"Unsupported file format: {fp.suffix}")
 
 
 def calculate_scaling(min_value, max_value, precision, offset=0):
