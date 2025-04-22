@@ -107,21 +107,23 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
 
         da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
 
+        buffer = 0.5
+
         # Check if region crosses the meridian (longitude=0)
-        # use a slightly larger slice. The resolution is 0.1 degrees, so 0.11 degrees is a bit more than that (to be sure)
+        # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
         if bounds[0] < 0 and bounds[2] > 0:
             # Need to handle the split across the meridian
             # Get western hemisphere part (longitude < 0)
             west_da = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
-                x=slice(((bounds[0] - 0.11) + 360) % 360, 360),
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(((bounds[0] - buffer) + 360) % 360, 360),
             )
             # Get eastern hemisphere part (longitude > 0)
             east_da = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
-                x=slice(0, ((bounds[2] + 0.11) + 360) % 360),
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(0, ((bounds[2] + buffer) + 360) % 360),
             )
             # Combine the two parts
             da = xr.concat([west_da, east_da], dim="x")
@@ -129,9 +131,10 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
             # Regular case - doesn't cross meridian
             da = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
                 x=slice(
-                    ((bounds[0] - 0.11) + 360) % 360, ((bounds[2] + 0.11) + 360) % 360
+                    ((bounds[0] - buffer) + 360) % 360,
+                    ((bounds[2] + buffer) + 360) % 360,
                 ),
             )
 
@@ -501,7 +504,7 @@ class Forcing:
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
         mask = self.grid["mask"]
-        data = da.where(~mask).mean(dim=("y", "x"), skipna=True).compute()
+        data = ((da * ~mask).sum(dim=("y", "x")) / (~mask).sum()).compute()
 
         # plot entire timeline on the first axis
         plot_timeline(da, data, name, axes[0])
@@ -918,7 +921,7 @@ class Forcing:
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
         pr = resample_like(pr, target, method="bilinear")
-        self.set_pr(pr)
+        pr = self.set_pr(pr)
 
         hourly_tas = process_ERA5("t2m", **download_args)
 
@@ -926,48 +929,39 @@ class Forcing:
             hourly_tas, elevation_forcing.compute(), elevation_target.compute()
         )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-            self.logger.info("Writing temporary tas to zarr")
+        tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
+        self.set_tas(tas_reprojected)
 
-            tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
-            self.set_tas(tas_reprojected)
+        tasmax = hourly_tas_reprojected.resample(time="D").max()
+        self.set_tasmax(tasmax)
 
-            tasmax = hourly_tas_reprojected.resample(time="D").max()
-            self.set_tasmax(tasmax)
+        tasmin = hourly_tas_reprojected.resample(time="D").min()
+        self.set_tasmin(tasmin)
 
-            tasmin = hourly_tas_reprojected.resample(time="D").min()
-            self.set_tasmin(tasmin)
+        dew_point_tas = process_ERA5(
+            "d2m",
+            **download_args,
+        )
+        dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
+            dew_point_tas, elevation_forcing, elevation_target
+        )
 
-            dew_point_tas = process_ERA5(
-                "d2m",
-                **download_args,
-            )
-            dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-                dew_point_tas, elevation_forcing, elevation_target
-            )
-            self.logger.info("Writing temporary dew_point_tas to zarr")
+        water_vapour_pressure = 0.6108 * np.exp(
+            17.27
+            * (dew_point_tas_reprojected - 273.15)
+            / (237.3 + (dew_point_tas_reprojected - 273.15))
+        )  # calculate water vapour pressure (kPa)
+        saturation_vapour_pressure = 0.6108 * np.exp(
+            17.27
+            * (hourly_tas_reprojected - 273.15)
+            / (237.3 + (hourly_tas_reprojected - 273.15))
+        )
 
-            water_vapour_pressure = 0.6108 * np.exp(
-                17.27
-                * (dew_point_tas_reprojected - 273.15)
-                / (237.3 + (dew_point_tas_reprojected - 273.15))
-            )  # calculate water vapour pressure (kPa)
-            saturation_vapour_pressure = 0.6108 * np.exp(
-                17.27
-                * (hourly_tas_reprojected - 273.15)
-                / (237.3 + (hourly_tas_reprojected - 273.15))
-            )
-
-            assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
-            relative_humidity = (
-                water_vapour_pressure / saturation_vapour_pressure
-            ) * 100
-            relative_humidity = relative_humidity.resample(time="D").mean()
-            relative_humidity = resample_like(
-                relative_humidity, target, method="bilinear"
-            )
-            self.set_hurs(relative_humidity)
+        assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
+        relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
+        relative_humidity = relative_humidity.resample(time="D").mean()
+        relative_humidity = resample_like(relative_humidity, target, method="bilinear")
+        self.set_hurs(relative_humidity)
 
         hourly_rsds = process_ERA5(
             "ssrd",  # surface_solar_radiation_downwards
