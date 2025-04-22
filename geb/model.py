@@ -1,6 +1,5 @@
 import copy
 import datetime
-import shutil
 from pathlib import Path
 from time import time
 
@@ -152,7 +151,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         timestep_length,
         in_spinup=False,
         simulate_hydrology=True,
-        clean_output_folder=False,
+        clean_report_folder=False,
         load_data_from_store=False,
     ) -> None:
         """Initializes the model."""
@@ -160,10 +159,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.simulate_hydrology = simulate_hydrology
 
         self.regions = load_geom(self.files["geoms"]["regions"])
-
-        # optionally clean report model at start of run
-        if clean_output_folder:
-            shutil.rmtree(self.output_folder, ignore_errors=True)
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
@@ -193,7 +188,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.hydrology.soil.set_global_variables()
 
         if create_reporter:
-            self.reporter = Reporter(self)
+            self.reporter = Reporter(self, clean=clean_report_folder)
 
     def run(self, initialize_only=False) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
@@ -216,7 +211,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             current_time=current_time,
             n_timesteps=n_timesteps,
             timestep_length=timestep_length,
-            clean_output_folder=True,
+            clean_report_folder=True,
             load_data_from_store=True,
         )
 
@@ -248,7 +243,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             n_timesteps=n_timesteps,
             timestep_length=relativedelta(years=1),
             simulate_hydrology=False,
-            clean_output_folder=True,
+            clean_report_folder=True,
             load_data_from_store=True,
         )
 
@@ -295,7 +290,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             current_time=current_time,
             n_timesteps=n_timesteps,
             timestep_length=datetime.timedelta(days=1),
-            clean_output_folder=True,
+            clean_report_folder=True,
             in_spinup=True,
         )
 
