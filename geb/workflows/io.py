@@ -167,6 +167,41 @@ def to_zarr(
     compressor=None,
     progress=True,
 ):
+    """
+    Save an xarray DataArray to a zarr file.
+
+    Parameters
+    ----------
+    da : xarray.DataArray
+        The xarray DataArray to save.
+    path : str
+        The path to the zarr file.
+    crs : int or pyproj.CRS
+        The coordinate reference system to use.
+    x_chunksize : int, optional
+        The chunk size for the x dimension. Default is 350.
+    y_chunksize : int, optional
+        The chunk size for the y dimension. Default is 350.
+    time_chunksize : int, optional
+        The chunk size for the time dimension. Default is 1.
+    time_chunks_per_shard : int, optional
+        The number of time chunks per shard. Default is 30. Set to None
+        to disable sharding.
+    byteshuffle : bool, optional
+        Whether to use byteshuffle compression. Default is True.
+    filters : list, optional
+        A list of filters to apply. Default is [].
+    compressor : numcodecs, optional
+        The compressor to use. Default is None, using the default Blosc compressor.
+    progress : bool, optional
+        Whether to show a progress bar. Default is True.
+
+    Returns
+    -------
+    da_disk : xarray.DataArray
+        The xarray DataArray saved to disk.
+
+    """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
     assert "latitudes" not in da.dims, "latitudes should be y"
@@ -225,11 +260,12 @@ def to_zarr(
             zarr_version = 3
             from numcodecs.zarr3 import Blosc
 
-            compressor = Blosc(
-                cname="zstd",
-                clevel=9,
-                shuffle=0,
-            )
+            if compressor is None:
+                compressor = Blosc(
+                    cname="zstd",
+                    clevel=9,
+                    shuffle=1 if byteshuffle else 0,
+                )
 
             check_buffer_size(da, chunks_or_shards=shards)
         else:
