@@ -31,10 +31,10 @@ def reproject_and_apply_lapse_rate_temperature(
     T, elevation_forcing, elevation_target, lapse_rate=-0.0065
 ):
     assert (T.x.values == elevation_forcing.x.values).all()
-    assert (T.y.values == elevation_forcing.y.values).all
+    assert (T.y.values == elevation_forcing.y.values).all()
     t_at_sea_level = T - elevation_forcing * lapse_rate
     t_at_sea_level_reprojected = resample_like(
-        t_at_sea_level, elevation_target, method="average"
+        t_at_sea_level, elevation_target, method="bilinear"
     )
     T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
     T_grid.name = T.name
@@ -80,7 +80,7 @@ def reproject_and_apply_lapse_rate_pressure(
         elevation_forcing, g, Mo, lapse_rate
     )  # divide by pressure factor to get pressure at sea level
     pressure_at_sea_level_reprojected = resample_like(
-        pressure_at_sea_level, elevation_target, method="average"
+        pressure_at_sea_level, elevation_target, method="bilinear"
     )
     pressure_grid = (
         pressure_at_sea_level_reprojected
@@ -917,25 +917,18 @@ class Forcing:
         pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        pr = resample_like(pr, target, method="average")
+        pr = resample_like(pr, target, method="bilinear")
         self.set_pr(pr)
 
         hourly_tas = process_ERA5("t2m", **download_args)
 
         hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-            hourly_tas, elevation_forcing, elevation_target
+            hourly_tas, elevation_forcing.compute(), elevation_target.compute()
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             self.logger.info("Writing temporary tas to zarr")
-
-            hourly_tas_reprojected = to_zarr(
-                hourly_tas_reprojected,
-                tmpdir / "reprojected_tas.zarr",
-                crs=4326,
-                time_chunksize=24,
-            )
 
             tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
             self.set_tas(tas_reprojected)
@@ -954,12 +947,6 @@ class Forcing:
                 dew_point_tas, elevation_forcing, elevation_target
             )
             self.logger.info("Writing temporary dew_point_tas to zarr")
-            dew_point_tas_reprojected = to_zarr(
-                dew_point_tas_reprojected,
-                tmpdir / "reprojected_dew_point_tas.zarr",
-                crs=4326,
-                time_chunksize=24,
-            )
 
             water_vapour_pressure = 0.6108 * np.exp(
                 17.27
@@ -990,7 +977,7 @@ class Forcing:
             24 * 3600
         )  # get daily sum and convert from J/m2 to W/m2
 
-        rsds = resample_like(rsds, target, method="average")
+        rsds = resample_like(rsds, target, method="bilinear")
         self.set_rsds(rsds)
 
         hourly_rlds = process_ERA5(
@@ -998,7 +985,7 @@ class Forcing:
             **download_args,
         )
         rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        rlds = resample_like(rlds, target, method="average")
+        rlds = resample_like(rlds, target, method="bilinear")
         self.set_rlds(rlds)
 
         pressure = process_ERA5("sp", **download_args)
@@ -1526,7 +1513,7 @@ class Forcing:
             product="InputData", variable="orog", forcing="chelsa-w5e5", buffer=1
         ).orog  # some buffer to avoid edge effects / errors in ISIMIP API
         # TODO: This can perhaps be a clipped version of the orography data
-        orography = resample_like(orography, target, method="average")
+        orography = resample_like(orography, target, method="bilinear")
 
         # pressure at sea level, so we can do bilinear interpolation before
         # applying the correction for orography
@@ -1576,7 +1563,7 @@ class Forcing:
         target.raster.set_crs(4326)
 
         global_wind_atlas_regridded = resample_like(
-            global_wind_atlas, target, method="average"
+            global_wind_atlas, target, method="bilinear"
         )
 
         wind_30_min_avg = self.download_isimip(
@@ -1819,7 +1806,7 @@ class Forcing:
                 elevation,
                 forcing_grid.isel(time=0).chunk({"x": 10, "y": 10}),
                 method="bilinear",
-            )  # .chunk({"x": -1, "y": -1})
+            )
             elevation_forcing = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
@@ -1829,4 +1816,7 @@ class Forcing:
                 elevation, grid.chunk({"x": 50, "y": 50}), method="bilinear"
             )
             elevation_grid = to_zarr(elevation_grid, elevation_grid_fp, crs=4326)
-        return elevation_forcing, elevation_grid
+
+        return elevation_forcing.chunk({"x": -1, "y": -1}), elevation_grid.chunk(
+            {"x": -1, "y": -1}
+        )

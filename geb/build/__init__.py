@@ -23,6 +23,7 @@ import pandas as pd
 import pyflwdir
 import rasterio
 import xarray as xr
+import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
@@ -722,7 +723,7 @@ class GEBModel(
         coastline.attrs["_FillValue"] = None
 
         # save coastline, for now mostly for debugging purposes
-        self.set_other(coastline, name="drainage/coastline")
+        self.set_other(coastline, name="drainage/full_coastline_in_bounding_box")
 
         pits = flow_raster.idxs_pit
 
@@ -769,30 +770,30 @@ class GEBModel(
 
         # here we go from the graph back to a mask. We do this by creating a new mask
         # and setting coastline cells to true
-        connected_coastline_da = self.full_like(
+        simulated_coastline_da = self.full_like(
             ldd,
             fill_value=False,
             nodata=None,
             dtype=bool,
         )
-        connected_coastline = np.zeros(
+        simulated_coastline = np.zeros(
             ldd.shape,
             dtype=bool,
         )
 
         for node in coastline_nodes:
             yx = coastline_graph.nodes[node]["yx"]
-            connected_coastline[yx] = True
+            simulated_coastline[yx] = True
 
-        connected_coastline_da.values = connected_coastline
+        simulated_coastline_da.values = simulated_coastline
 
         # save the connected coastline, for now mostly for debugging purposes
-        self.set_other(connected_coastline_da, name="drainage/connected_coastline")
+        self.set_other(simulated_coastline_da, name="drainage/simulated_coastline")
 
         # get all upstream cells from the selected coastline
         flow_raster = pyflwdir.from_array(ldd.values, ftype="d8")
         coastal_mask = (
-            flow_raster.basins(idxs=np.where(connected_coastline_da.values.ravel())[0])
+            flow_raster.basins(idxs=np.where(simulated_coastline_da.values.ravel())[0])
             > 0
         )
 
@@ -1026,12 +1027,12 @@ class GEBModel(
         self.array[name] = data
 
         if write:
-            fn = Path("array") / (name + ".npz")
+            fn = Path("array") / (name + ".zarr")
             self.logger.info(f"Writing file {fn}")
             self.files["array"][name] = fn
             fp = Path(self.root, fn)
             fp.parent.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(fp, data=data)
+            zarr.save(fp, data)
 
     def set_dict(self, data, name, write=True):
         self.dict[name] = data
@@ -1077,7 +1078,7 @@ class GEBModel(
                 file_library[type_name].update(type_files)
 
         with open(Path(self.root, "files.json"), "w") as f:
-            json.dump(self.files, f, indent=4, cls=PathEncoder)
+            json.dump(file_library, f, indent=4, cls=PathEncoder)
 
     def read_file_library(self):
         fp = Path(self.root, "files.json")
@@ -1095,7 +1096,7 @@ class GEBModel(
 
     def read_array(self):
         for name, fn in self.files["array"].items():
-            array = np.load(Path(self.root, fn))["data"]
+            array = zarr.load(Path(self.root, fn))
             self.set_array(array, name=name, write=False)
 
     def read_table(self):
