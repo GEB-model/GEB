@@ -60,6 +60,7 @@ dependencies = [
     "tbb>=2022.0.0",
     "tqdm>=4.66.1",
     "xarray>=2025.3.0",
+    "xarray-regrid[accel]>=0.4.1",
     "xclim>=0.56.0",
     "xmipy>=1.5.0",
     "zarr>=3.0.6",
@@ -101,7 +102,10 @@ fairstream = [
     "daft-pgm>=0.1.4",
     "opt-einsum>=3.3.0",
 ]
-floods = []
+display = [
+    "jupyter>=1.1.1",
+    "seaborn>=0.13.2",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
