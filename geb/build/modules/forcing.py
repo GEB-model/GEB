@@ -140,7 +140,6 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
 
         # Reorder x to be between -180 and 180 degrees
         da = da.assign_coords(x=((da.x + 180) % 360 - 180))
-        da = da.isel(time=slice(1, None))
 
         logger.info(f"Downloading ERA5 {variable} to {output_fn}")
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
@@ -148,7 +147,7 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
         da = to_zarr(
             da,
             output_fn,
-            time_chunksize=24,
+            time_chunksize=int(1e7 / (da.dtype.itemsize * da.x.size * da.y.size)),
             crs=4326,
         )
     return da
@@ -162,38 +161,12 @@ def process_ERA5(variable, folder, start_date, end_date, bounds, logger):
         == (da.time[1] - da.time[0]).astype(np.int64)
     ).all(), "time is not monotonically increasing with a constant step size"
     if da.attrs["GRIB_stepType"] == "accum":
+        da = xr.where(
+            da.isel(time=slice(1, None)).time.dt.hour == 1,
+            da.isel(time=slice(1, None)),
+            da.diff(dim="time", n=1),
+        )
 
-        def xr_ERA5_accumulation_to_hourly(da, dim):
-            # Identify the axis number for the given dimension
-            assert da.time.dt.hour[0] == 1, "First time step must be at 1 UTC"
-            # All chunksizes must be divisible by 24, except the last one
-            assert all(chunksize == 24 for chunksize in da.chunksizes["time"][:-1])
-
-            def diff_with_prepend(data, dim):
-                # Assert dimension is a multiple of 24
-                # As the first hour is an accumulation from the first hour of the day, prepend a 0
-                # to the data array before taking the diff. In this way, the output is also 24 hours
-                return np.diff(data, prepend=0, axis=dim)
-
-            # Apply the custom diff function using apply_ufunc
-            return xr.apply_ufunc(
-                diff_with_prepend,  # The function to apply
-                da,  # The DataArray or Dataset to which the function will be applied
-                kwargs={
-                    "dim": da.get_axis_num(dim)
-                },  # Additional arguments for the function
-                dask="parallelized",  # Enable parallelized computation
-                output_dtypes=[da.dtype],  # Specify the output data type
-                keep_attrs=True,  # Keep the attributes of the input DataArray or Dataset
-            )
-
-        # The accumulations in the short forecasts of ERA5-Land (with hourly steps from 01 to 24) are treated
-        # the same as those in ERA-Interim or ERA-Interim/Land, i.e., they are accumulated from the beginning
-        # of the forecast to the end of the forecast step. For example, runoff at day=D, step=12 will provide
-        # runoff accumulated from day=D, time=0 to day=D, time=12. The maximum accumulation is over 24 hours,
-        # i.e., from day=D, time=0 to day=D+1,time=0 (step=24).
-        # forecasts are the difference between the current and previous time step
-        da = xr_ERA5_accumulation_to_hourly(da, "time")
     elif da.attrs["GRIB_stepType"] == "instant":
         da = da
     else:
@@ -505,6 +478,7 @@ class Forcing:
 
         mask = self.grid["mask"]
         data = ((da * ~mask).sum(dim=("y", "x")) / (~mask).sum()).compute()
+        assert not np.isnan(data.values).any(), "data contains NaN values"
 
         # plot entire timeline on the first axis
         plot_timeline(da, data, name, axes[0])
