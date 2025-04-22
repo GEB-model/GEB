@@ -8,6 +8,7 @@ from ..workflows.general import (
     pad_xy,
     repeat_grid,
     resample_chunked,
+    resample_like,
 )
 from ..workflows.soilgrids import load_soilgrids
 
@@ -109,7 +110,7 @@ class LandSurface:
         target.raster.set_crs(4326)
 
         self.set_subgrid(
-            fabdem.raster.reproject_like(target, method="average"),
+            resample_like(fabdem, target, method="bilinear"),
             name="landsurface/elevation",
         )
 
@@ -365,9 +366,8 @@ class LandSurface:
 
             parameter = f"cropCoefficient{land_use_type_netcdf_name}_10days"
             crop_coefficient = land_use_ds[parameter].raster.mask_nodata()
-            crop_coefficient = crop_coefficient.raster.reproject_like(
-                target, method="nearest"
-            )
+            crop_coefficient = resample_like(crop_coefficient, target, method="nearest")
+
             crop_coefficient.attrs = {
                 key: attr
                 for key, attr in crop_coefficient.attrs.items()
@@ -380,9 +380,10 @@ class LandSurface:
             if land_use_type in ("forest", "grassland"):
                 parameter = f"interceptCap{land_use_type_netcdf_name}_10days"
                 interception_capacity = land_use_ds[parameter].raster.mask_nodata()
-                interception_capacity = interception_capacity.raster.reproject_like(
-                    target, method="nearest"
+                interception_capacity = resample_like(
+                    interception_capacity, target, method="nearest"
                 )
+
                 interception_capacity.attrs = {
                     key: attr
                     for key, attr in interception_capacity.attrs.items()
