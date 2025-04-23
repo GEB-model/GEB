@@ -18,12 +18,12 @@ working_directory.mkdir(parents=True, exist_ok=True)
 def test_build():
     build_fn(
         data_catalog=[Path("../../../geb/data_catalog.yml")],
-        config=example / "model.yml",
-        build_config=example / "build.yml",
+        config=str(example / "model.yml"),
+        build_config=str(example / "build.yml"),
         working_directory=working_directory,
         custom_model=None,
         data_provider=None,
-        data_root=Path(os.getenv("GEB_DATA_ROOT")),
+        data_root=str(Path(os.getenv("GEB_DATA_ROOT"))),
     )
 
 
