@@ -169,14 +169,14 @@ def to_zarr(
     da,
     path,
     crs,
-    x_chunksize=350,
-    y_chunksize=350,
-    time_chunksize=1,
-    time_chunks_per_shard=30,
-    byteshuffle=True,
-    filters=[],
+    x_chunksize: int = 350,
+    y_chunksize: int = 350,
+    time_chunksize: int = 1,
+    time_chunks_per_shard: int | None = 30,
+    byteshuffle: bool = True,
+    filters: list = [],
     compressor=None,
-    progress=True,
+    progress: bool = True,
 ):
     """
     Save an xarray DataArray to a zarr file.
