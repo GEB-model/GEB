@@ -285,7 +285,9 @@ def resample_like(source, target, method="bilinear"):
     elif method == "nearest":
         dst = regridder.nearest(target)
     else:
-        raise ValueError(f"Unknown method: {method}, must be 'bilinear' or 'nearest'")
+        raise ValueError(
+            f"Unknown method: {method}, must be 'bilinear', 'nearest', or 'conservative'"
+        )
 
     if source.dtype == np.float32:
         dst = dst.astype(np.float32)

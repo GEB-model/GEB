@@ -34,7 +34,7 @@ def reproject_and_apply_lapse_rate_temperature(
     assert (T.y.values == elevation_forcing.y.values).all()
     t_at_sea_level = T - elevation_forcing * lapse_rate
     t_at_sea_level_reprojected = resample_like(
-        t_at_sea_level, elevation_target, method="bilinear"
+        t_at_sea_level, elevation_target, method="conservative"
     )
     T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
     T_grid.name = T.name
@@ -80,7 +80,7 @@ def reproject_and_apply_lapse_rate_pressure(
         elevation_forcing, g, Mo, lapse_rate
     )  # divide by pressure factor to get pressure at sea level
     pressure_at_sea_level_reprojected = resample_like(
-        pressure_at_sea_level, elevation_target, method="bilinear"
+        pressure_at_sea_level, elevation_target, method="conservative"
     )
     pressure_grid = (
         pressure_at_sea_level_reprojected
@@ -961,7 +961,7 @@ class Forcing:
         pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        pr = resample_like(pr, target, method="bilinear")
+        pr = resample_like(pr, target, method="conservative")
         pr = self.set_pr(pr)
 
         hourly_tas = process_ERA5("t2m", **download_args)
@@ -1012,7 +1012,7 @@ class Forcing:
             24 * 3600
         )  # get daily sum and convert from J/m2 to W/m2
 
-        rsds = resample_like(rsds, target, method="bilinear")
+        rsds = resample_like(rsds, target, method="conservative")
         self.set_rsds(rsds)
 
         hourly_rlds = process_ERA5(
@@ -1020,7 +1020,7 @@ class Forcing:
             **download_args,
         )
         rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        rlds = resample_like(rlds, target, method="bilinear")
+        rlds = resample_like(rlds, target, method="conservative")
         self.set_rlds(rlds)
 
         pressure = process_ERA5("sp", **download_args)
@@ -1042,7 +1042,7 @@ class Forcing:
         )
         v_wind = v_wind.resample(time="D").mean()
         wind_speed = np.sqrt(u_wind**2 + v_wind**2)
-        wind_speed = resample_like(wind_speed, target, method="bilinear")
+        wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
     def setup_forcing_ISIMIP(self, resolution_arcsec, forcing, ssp):
@@ -1357,7 +1357,7 @@ class Forcing:
 
                 w5e5_30min_sel = hurs_30_min.sel(time=slice(start_month, end_month))
                 w5e5_regridded = (
-                    resample_like(w5e5_30min_sel, hurs_ds_30sec, method="bilinear")
+                    resample_like(w5e5_30min_sel, hurs_ds_30sec, method="conservative")
                     * 0.01
                 )
                 w5e5_regridded = w5e5_regridded * 0.01  # convert to fraction
@@ -1462,10 +1462,14 @@ class Forcing:
         target = self.other["climate/hurs"]
         target.raster.set_crs(4326)
 
-        hurs_coarse_regridded = resample_like(hurs_coarse, target, method="bilinear")
+        hurs_coarse_regridded = resample_like(
+            hurs_coarse, target, method="conservative"
+        )
 
-        tas_coarse_regridded = resample_like(tas_coarse, target, method="bilinear")
-        rlds_coarse_regridded = resample_like(rlds_coarse, target, method="bilinear")
+        tas_coarse_regridded = resample_like(tas_coarse, target, method="conservative")
+        rlds_coarse_regridded = resample_like(
+            rlds_coarse, target, method="conservative"
+        )
 
         hurs_fine = self.other["climate/hurs"]
         tas_fine = self.other["climate/tas"]
@@ -1553,7 +1557,7 @@ class Forcing:
         # pressure at sea level, so we can do bilinear interpolation before
         # applying the correction for orography
         pressure_30_min_regridded = resample_like(
-            pressure_30_min, target, method="bilinear"
+            pressure_30_min, target, method="conservative"
         )
 
         pressure_30_min_regridded_corr = pressure_30_min_regridded * np.exp(
@@ -1598,7 +1602,7 @@ class Forcing:
         target.raster.set_crs(4326)
 
         global_wind_atlas_regridded = resample_like(
-            global_wind_atlas, target, method="bilinear"
+            global_wind_atlas, target, method="conservative"
         )
 
         wind_30_min_avg = self.download_isimip(
@@ -1613,7 +1617,7 @@ class Forcing:
         )  # some buffer to avoid edge effects / errors in ISIMIP API
 
         wind_30_min_avg_regridded = resample_like(
-            wind_30_min_avg, target, method="bilinear"
+            wind_30_min_avg, target, method="conservative"
         )
 
         # create diff layer:
@@ -1635,7 +1639,7 @@ class Forcing:
             buffer=1,
         ).sfcWind  # some buffer to avoid edge effects / errors in ISIMIP API
 
-        wind_30min_regridded = resample_like(wind_30_min, target, method="bilinear")
+        wind_30min_regridded = resample_like(wind_30_min, target, method="conservative")
         wind_30min_regridded_log = np.log(wind_30min_regridded)
 
         wind_30min_regridded_log_corr = wind_30min_regridded_log + diff_layer
