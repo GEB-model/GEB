@@ -1320,7 +1320,9 @@ class GEBModel(
 
     @property
     def report_dir(self):
-        return Path(self.root).parent / "report"
+        path = Path(self.root).parent / "output" / "build"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def full_like(self, data, fill_value, nodata, attrs=None, *args, **kwargs):
         ds = xr.full_like(data, fill_value, *args, **kwargs)

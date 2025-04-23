@@ -107,21 +107,23 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
 
         da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
 
+        buffer = 0.5
+
         # Check if region crosses the meridian (longitude=0)
-        # use a slightly larger slice. The resolution is 0.1 degrees, so 0.11 degrees is a bit more than that (to be sure)
+        # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
         if bounds[0] < 0 and bounds[2] > 0:
             # Need to handle the split across the meridian
             # Get western hemisphere part (longitude < 0)
             west_da = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
-                x=slice(((bounds[0] - 0.11) + 360) % 360, 360),
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(((bounds[0] - buffer) + 360) % 360, 360),
             )
             # Get eastern hemisphere part (longitude > 0)
             east_da = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
-                x=slice(0, ((bounds[2] + 0.11) + 360) % 360),
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(0, ((bounds[2] + buffer) + 360) % 360),
             )
             # Combine the two parts
             da = xr.concat([west_da, east_da], dim="x")
@@ -129,15 +131,15 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
             # Regular case - doesn't cross meridian
             da = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + 0.11, bounds[1] - 0.11),
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
                 x=slice(
-                    ((bounds[0] - 0.11) + 360) % 360, ((bounds[2] + 0.11) + 360) % 360
+                    ((bounds[0] - buffer) + 360) % 360,
+                    ((bounds[2] + buffer) + 360) % 360,
                 ),
             )
 
         # Reorder x to be between -180 and 180 degrees
         da = da.assign_coords(x=((da.x + 180) % 360 - 180))
-        da = da.isel(time=slice(1, None))
 
         logger.info(f"Downloading ERA5 {variable} to {output_fn}")
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
@@ -145,7 +147,7 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
         da = to_zarr(
             da,
             output_fn,
-            time_chunksize=24,
+            time_chunksize=get_chunk_size(da, target=1e7),
             crs=4326,
         )
     return da
@@ -159,38 +161,12 @@ def process_ERA5(variable, folder, start_date, end_date, bounds, logger):
         == (da.time[1] - da.time[0]).astype(np.int64)
     ).all(), "time is not monotonically increasing with a constant step size"
     if da.attrs["GRIB_stepType"] == "accum":
+        da = xr.where(
+            da.isel(time=slice(1, None)).time.dt.hour == 1,
+            da.isel(time=slice(1, None)),
+            da.diff(dim="time", n=1),
+        )
 
-        def xr_ERA5_accumulation_to_hourly(da, dim):
-            # Identify the axis number for the given dimension
-            assert da.time.dt.hour[0] == 1, "First time step must be at 1 UTC"
-            # All chunksizes must be divisible by 24, except the last one
-            assert all(chunksize == 24 for chunksize in da.chunksizes["time"][:-1])
-
-            def diff_with_prepend(data, dim):
-                # Assert dimension is a multiple of 24
-                # As the first hour is an accumulation from the first hour of the day, prepend a 0
-                # to the data array before taking the diff. In this way, the output is also 24 hours
-                return np.diff(data, prepend=0, axis=dim)
-
-            # Apply the custom diff function using apply_ufunc
-            return xr.apply_ufunc(
-                diff_with_prepend,  # The function to apply
-                da,  # The DataArray or Dataset to which the function will be applied
-                kwargs={
-                    "dim": da.get_axis_num(dim)
-                },  # Additional arguments for the function
-                dask="parallelized",  # Enable parallelized computation
-                output_dtypes=[da.dtype],  # Specify the output data type
-                keep_attrs=True,  # Keep the attributes of the input DataArray or Dataset
-            )
-
-        # The accumulations in the short forecasts of ERA5-Land (with hourly steps from 01 to 24) are treated
-        # the same as those in ERA-Interim or ERA-Interim/Land, i.e., they are accumulated from the beginning
-        # of the forecast to the end of the forecast step. For example, runoff at day=D, step=12 will provide
-        # runoff accumulated from day=D, time=0 to day=D, time=12. The maximum accumulation is over 24 hours,
-        # i.e., from day=D, time=0 to day=D+1,time=0 (step=24).
-        # forecasts are the difference between the current and previous time step
-        da = xr_ERA5_accumulation_to_hourly(da, "time")
     elif da.attrs["GRIB_stepType"] == "instant":
         da = da
     else:
@@ -211,6 +187,10 @@ def plot_timeline(da, data, name, ax):
     ax.set_xlim(data.time[0], data.time[-1])
     ax.set_ylim(data.min(), data.max() * 1.1)
     ax.set_title(name)
+
+
+def get_chunk_size(da, target=1e8):
+    return int(target / (da.dtype.itemsize * da.x.size * da.y.size))
 
 
 class Forcing:
@@ -501,7 +481,8 @@ class Forcing:
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
         mask = self.grid["mask"]
-        data = da.where(~mask).mean(dim=("y", "x"), skipna=True).compute()
+        data = ((da * ~mask).sum(dim=("y", "x")) / (~mask).sum()).compute()
+        assert not np.isnan(data.values).any(), "data contains NaN values"
 
         # plot entire timeline on the first axis
         plot_timeline(da, data, name, axes[0])
@@ -558,7 +539,12 @@ class Forcing:
         ]
 
         da = self.set_other(
-            da, name=name, *args, **kwargs, time_chunksize=7 * 24, filters=filters
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            time_chunksize=7 * 24,
+            filters=filters,
         )
         return da
 
@@ -593,7 +579,14 @@ class Forcing:
         ]
 
         da = self._mask_forcing(da, value=-offset)
-        da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
+        da = self.set_other(
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
+        )
         self.plot_forcing(da, name)
         return da
 
@@ -621,7 +614,14 @@ class Forcing:
         ]
 
         da = self._mask_forcing(da, value=-offset)
-        da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
+        da = self.set_other(
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
+        )
         self.plot_forcing(da, name)
         return da
 
@@ -649,7 +649,14 @@ class Forcing:
         ]
 
         da = self._mask_forcing(da, value=-offset)
-        da = self.set_other(da, name=name, *args, **kwargs, filters=filters)
+        da = self.set_other(
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
+        )
         self.plot_forcing(da, name)
         return da
 
@@ -680,7 +687,13 @@ class Forcing:
 
         da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
-            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            byteshuffle=True,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
         )
 
         self.plot_forcing(da, name)
@@ -713,7 +726,13 @@ class Forcing:
 
         da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
-            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            byteshuffle=True,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
         )
         self.plot_forcing(da, name)
         return da
@@ -745,7 +764,13 @@ class Forcing:
 
         da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
-            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            byteshuffle=True,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
         )
         self.plot_forcing(da, name)
         return da
@@ -776,7 +801,13 @@ class Forcing:
 
         da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
-            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            byteshuffle=True,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
         )
         self.plot_forcing(da, name)
         return da
@@ -819,6 +850,7 @@ class Forcing:
             **kwargs,
             byteshuffle=True,
             filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
         )
         self.plot_forcing(da, name)
         return da
@@ -848,7 +880,13 @@ class Forcing:
 
         da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
-            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            byteshuffle=True,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
         )
         self.plot_forcing(da, name)
         return da
@@ -885,7 +923,13 @@ class Forcing:
 
         da = self._mask_forcing(da, value=-offset)
         da = self.set_other(
-            da, name=name, *args, **kwargs, byteshuffle=True, filters=filters
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            byteshuffle=True,
+            filters=filters,
+            time_chunks_per_shard=get_chunk_size(da),
         )
         self.plot_forcing(da, name)
         return da
@@ -918,56 +962,47 @@ class Forcing:
 
         pr = pr_hourly.resample(time="D").mean()  # get daily mean
         pr = resample_like(pr, target, method="bilinear")
-        self.set_pr(pr)
+        pr = self.set_pr(pr)
 
         hourly_tas = process_ERA5("t2m", **download_args)
 
-        hourly_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-            hourly_tas, elevation_forcing.compute(), elevation_target.compute()
+        tas_avg = hourly_tas.resample(time="D").mean()
+        tas_avg = reproject_and_apply_lapse_rate_temperature(
+            tas_avg, elevation_forcing, elevation_target
+        )
+        self.set_tas(tas_avg)
+
+        tasmax = hourly_tas.resample(time="D").max()
+        tasmax = reproject_and_apply_lapse_rate_temperature(
+            tasmax, elevation_forcing, elevation_target
+        )
+        self.set_tasmax(tasmax)
+
+        tasmin = hourly_tas.resample(time="D").min()
+        tasmin = reproject_and_apply_lapse_rate_temperature(
+            tasmin, elevation_forcing, elevation_target
+        )
+        self.set_tasmin(tasmin)
+
+        hourly_dew_point_tas = process_ERA5(
+            "d2m",
+            **download_args,
+        )
+        dew_point_tas = hourly_dew_point_tas.resample(time="D").mean()
+        dew_point_tas = reproject_and_apply_lapse_rate_temperature(
+            dew_point_tas, elevation_forcing, elevation_target
         )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-            self.logger.info("Writing temporary tas to zarr")
+        water_vapour_pressure = 0.6108 * np.exp(
+            17.27 * (dew_point_tas - 273.15) / (237.3 + (dew_point_tas - 273.15))
+        )  # calculate water vapour pressure (kPa)
+        saturation_vapour_pressure = 0.6108 * np.exp(
+            17.27 * (tas_avg - 273.15) / (237.3 + (tas_avg - 273.15))
+        )
 
-            tas_reprojected = hourly_tas_reprojected.resample(time="D").mean()
-            self.set_tas(tas_reprojected)
-
-            tasmax = hourly_tas_reprojected.resample(time="D").max()
-            self.set_tasmax(tasmax)
-
-            tasmin = hourly_tas_reprojected.resample(time="D").min()
-            self.set_tasmin(tasmin)
-
-            dew_point_tas = process_ERA5(
-                "d2m",
-                **download_args,
-            )
-            dew_point_tas_reprojected = reproject_and_apply_lapse_rate_temperature(
-                dew_point_tas, elevation_forcing, elevation_target
-            )
-            self.logger.info("Writing temporary dew_point_tas to zarr")
-
-            water_vapour_pressure = 0.6108 * np.exp(
-                17.27
-                * (dew_point_tas_reprojected - 273.15)
-                / (237.3 + (dew_point_tas_reprojected - 273.15))
-            )  # calculate water vapour pressure (kPa)
-            saturation_vapour_pressure = 0.6108 * np.exp(
-                17.27
-                * (hourly_tas_reprojected - 273.15)
-                / (237.3 + (hourly_tas_reprojected - 273.15))
-            )
-
-            assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
-            relative_humidity = (
-                water_vapour_pressure / saturation_vapour_pressure
-            ) * 100
-            relative_humidity = relative_humidity.resample(time="D").mean()
-            relative_humidity = resample_like(
-                relative_humidity, target, method="bilinear"
-            )
-            self.set_hurs(relative_humidity)
+        assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
+        relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
+        self.set_hurs(relative_humidity)
 
         hourly_rsds = process_ERA5(
             "ssrd",  # surface_solar_radiation_downwards

@@ -287,6 +287,9 @@ def resample_like(source, target, method="bilinear"):
     else:
         raise ValueError(f"Unknown method: {method}, must be 'bilinear' or 'nearest'")
 
+    if source.dtype == np.float32:
+        dst = dst.astype(np.float32)
+
     # Set the spatial reference back to the original
     dst = dst.assign_coords({"spatial_ref": source_spatial_ref})
     return dst

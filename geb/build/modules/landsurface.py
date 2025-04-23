@@ -351,48 +351,45 @@ class LandSurface:
         )
 
         target = self.grid["mask"]
-        target.raster.set_crs(4326)
 
-        for land_use_type, land_use_type_netcdf_name, simple_name in (
-            ("forest", "Forest", "forest"),
-            ("grassland", "Grassland", "grassland"),
-            ("irrPaddy", "irrPaddy", "paddy_irrigated"),
-            ("irrNonPaddy", "irrNonPaddy", "irrigated"),
-        ):
+        forect_kc = self.data_catalog.get_rasterdataset(
+            "cwatm_forest_5min", bbox=self.bounds, buffer=10
+        )["cropCoefficientForest_10days"]
+        forect_kc = forect_kc.raster.mask_nodata()
+
+        forect_kc = resample_like(forect_kc, target, method="nearest")
+
+        forect_kc.attrs = {
+            key: attr
+            for key, attr in forect_kc.attrs.items()
+            if not key.startswith("NETCDF_") and key != "units"
+        }
+        self.set_grid(
+            forect_kc,
+            name="landcover/forest/crop_coefficient",
+        )
+
+        for land_use_type in ("forest", "grassland"):
             self.logger.info(f"Setting up land use parameters for {land_use_type}")
+
             land_use_ds = self.data_catalog.get_rasterdataset(
                 f"cwatm_{land_use_type}_5min", bbox=self.bounds, buffer=10
             )
+            parameter = f"interceptCap{land_use_type.title()}_10days"
+            interception_capacity = land_use_ds[parameter].raster.mask_nodata()
+            interception_capacity = resample_like(
+                interception_capacity, target, method="nearest"
+            )
 
-            parameter = f"cropCoefficient{land_use_type_netcdf_name}_10days"
-            crop_coefficient = land_use_ds[parameter].raster.mask_nodata()
-            crop_coefficient = resample_like(crop_coefficient, target, method="nearest")
-
-            crop_coefficient.attrs = {
+            interception_capacity.attrs = {
                 key: attr
-                for key, attr in crop_coefficient.attrs.items()
+                for key, attr in interception_capacity.attrs.items()
                 if not key.startswith("NETCDF_") and key != "units"
             }
             self.set_grid(
-                crop_coefficient,
-                name=f"landcover/{simple_name}/crop_coefficient",
+                interception_capacity,
+                name=f"landcover/{land_use_type}/interception_capacity",
             )
-            if land_use_type in ("forest", "grassland"):
-                parameter = f"interceptCap{land_use_type_netcdf_name}_10days"
-                interception_capacity = land_use_ds[parameter].raster.mask_nodata()
-                interception_capacity = resample_like(
-                    interception_capacity, target, method="nearest"
-                )
-
-                interception_capacity.attrs = {
-                    key: attr
-                    for key, attr in interception_capacity.attrs.items()
-                    if not key.startswith("NETCDF_") and key != "units"
-                }
-                self.set_grid(
-                    interception_capacity,
-                    name=f"landcover/{simple_name}/interception_capacity",
-                )
 
     def setup_soil_parameters(self) -> None:
         """

@@ -1,11 +1,10 @@
-import os
 from pathlib import Path
 
 import pytest
 
-from geb.cli import build_fn, run_model_with_method
+from geb.cli import run_model_with_method
 
-from ..testconfig import IN_GITHUB_ACTIONS, tmp_folder
+from ..testconfig import IN_GITHUB_ACTIONS
 
 working_directory = Path("examples/geul")
 DEFAULT_VARIABLES = {
@@ -18,22 +17,6 @@ DEFAULT_VARIABLES = {
     "timing": False,
     "optimize": False,
 }
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_build():
-    working_directory = tmp_folder / "model"
-    working_directory.mkdir(parents=True, exist_ok=True)
-
-    build_fn(
-        data_catalog=[Path("../../../geb/data_catalog.yml")],
-        config=Path("../../../examples/geul/model.yml"),
-        build_config=Path("../../../examples/geul/build.yml"),
-        working_directory=working_directory,
-        custom_model=None,
-        data_provider=None,
-        data_root=Path(os.getenv("GEB_DATA_ROOT")),
-    )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

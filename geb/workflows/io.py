@@ -118,6 +118,7 @@ def open_zarr(zarr_folder):
 
     if "_CRS" in da.attrs:
         da.rio.write_crs(pyproj.CRS(da.attrs["_CRS"]["wkt"]), inplace=True)
+        del da.attrs["_CRS"]
 
     return da
 
@@ -134,6 +135,11 @@ def to_wkt(crs_obj):
 
 
 def check_attrs(da1, da2):
+    if "_CRS" in da1.attrs:
+        del da1.attrs["_CRS"]
+    if "_CRS" in da2.attrs:
+        del da2.attrs["_CRS"]
+
     assert len(da1.attrs) == len(da2.attrs), "number of attributes is not equal"
 
     for key, value in da1.attrs.items():
@@ -163,14 +169,14 @@ def to_zarr(
     da,
     path,
     crs,
-    x_chunksize=350,
-    y_chunksize=350,
-    time_chunksize=1,
-    time_chunks_per_shard=30,
-    byteshuffle=True,
-    filters=[],
+    x_chunksize: int = 350,
+    y_chunksize: int = 350,
+    time_chunksize: int = 1,
+    time_chunks_per_shard: int | None = 30,
+    byteshuffle: bool = True,
+    filters: list = [],
     compressor=None,
-    progress=True,
+    progress: bool = True,
 ):
     """
     Save an xarray DataArray to a zarr file.
