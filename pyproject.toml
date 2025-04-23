@@ -123,6 +123,7 @@ exclude = [
 ]
 pythonVersion = "3.13"
 pythonPlatform = "Linux"
+reportAttributeAccessIssue = "none"
 
 [tool.pytest.ini_options]
 norecursedirs = [".venv", "build", "dist", "tmp*"]
