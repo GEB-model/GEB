@@ -186,10 +186,12 @@ class Reporter:
                         raster.lon.size,
                     ),
                     dtype=np.float32,
-                    compressor=zarr.codecs.BloscCodec(
-                        cname="zlib",
-                        clevel=9,
-                        shuffle=zarr.codecs.BloscShuffle.shuffle,
+                    compressors=(
+                        zarr.codecs.BloscCodec(
+                            cname="zlib",
+                            clevel=9,
+                            shuffle=zarr.codecs.BloscShuffle.shuffle,
+                        ),
                     ),
                     fill_value=np.nan,
                     dimension_names=["time", "y", "x"],
@@ -431,7 +433,7 @@ class Reporter:
                         shape=shape,
                         chunks=chunks,
                         dtype=dtype,
-                        compressor=compressor,
+                        compressors=(compressor,),
                         fill_value=fill_value,
                     )
                     ds[name].attrs["_ARRAY_DIMENSIONS"] = array_dimensions
