@@ -5,8 +5,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
-from geb.workflows.io import to_zarr
 from hydromt_sfincs import SfincsModel
+from tqdm import tqdm
+
+from geb.workflows.io import to_zarr
 
 from .io import import_rivers
 from .postprocess_model import read_flood_map
@@ -108,7 +110,6 @@ def assign_calculation_group(rivers):
 def run_sfincs_for_return_periods(
     model_root,
     return_periods=[2, 5, 10, 20, 50, 100, 250, 500, 1000],
-    working_dir=Path(os.getenv("TMPDIR", "/tmp")),
     clean_working_dir=True,
     export=True,
     export_dir=None,
@@ -125,13 +126,16 @@ def run_sfincs_for_return_periods(
     rivers["topological_stream_order"] = get_topological_stream_order(rivers)
     rivers = assign_calculation_group(rivers)
 
+    working_dir = model_root / "working_dir"
+
     rp_maps = {}
 
     for return_period in return_periods:
+        print(f"Running SFincs for return period {return_period} years")
         rp_map = []
 
         working_dir_return_period = working_dir / f"rp_{return_period}"
-        for group, group_rivers in rivers.groupby("calculation_group"):
+        for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
             simulation_root = working_dir_return_period / str(group)
 
             shutil.rmtree(simulation_root, ignore_errors=True)

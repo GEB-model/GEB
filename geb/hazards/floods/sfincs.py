@@ -1,9 +1,6 @@
 import json
-import os
-import platform
 from collections import deque
 from datetime import datetime
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -243,16 +240,9 @@ class SFINCS:
             rivers=self.rivers,
             return_periods=self.config["return_periods"],
         )
-        if platform.system() == "Windows":
-            # On Windoes, the working dir must be a subfolder of the model_root
-            working_dir = model_root / "working_dir"
-        else:
-            # For other systems we can use a temporary directory
-            working_dir = Path(os.getenv("TMPDIR", "/tmp"))
 
         run_sfincs_for_return_periods(
             model_root=model_root,
-            working_dir=working_dir,
             return_periods=self.config["return_periods"],
             gpu=self.config["gpu"],
             export_dir=self.model.output_folder / "flood_maps",
