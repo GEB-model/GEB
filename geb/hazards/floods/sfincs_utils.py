@@ -11,6 +11,7 @@ from hydromt.log import setuplog
 from hydromt_sfincs import SfincsModel
 from pyextremes import EVA
 from shapely.geometry import Point
+from tqdm import tqdm
 
 
 def make_relative_paths(config, model_root, new_root, relpath=None):
@@ -290,18 +291,28 @@ def get_discharge_by_point(xs, ys, discharge):
 
 def assign_return_periods(rivers, discharge_series, return_periods, prefix="Q"):
     assert isinstance(return_periods, list)
-    for i, idx in enumerate(rivers.index):
+    for i, idx in tqdm(enumerate(rivers.index), total=len(rivers)):
         discharge = pd.Series(discharge_series[:, i], index=discharge_series.time)
 
-        # Fit the model and calculate return periods
-        model = EVA(discharge)
-        model.get_extremes(method="BM", block_size="365.2425D")
-        model.fit_model()
-        discharge_per_return_period = model.get_return_value(
-            return_period=return_periods
-        )[0]  # [1] and [2] are the uncertainty bounds
-        if len(return_periods) == 1:
-            discharge_per_return_period = [discharge_per_return_period]
+        if (discharge < 1e-10).all():
+            print(
+                f"Discharge is all (near) zeros, skipping return period calculation, for river {idx}"
+            )
+            discharge_per_return_period = np.zeros_like(return_periods)
+        else:
+            # Fit the model and calculate return periods
+            model = EVA(discharge)
+            model.get_extremes(method="BM", block_size="365.2425D")
+            model.fit_model()
+            discharge_per_return_period = model.get_return_value(
+                return_period=return_periods
+            )[0]  # [1] and [2] are the uncertainty bounds
+
+            # when only one return period is given, the result is a single value
+            # instead of a list, so convert it to a list for simplicty of
+            # further processing
+            if len(return_periods) == 1:
+                discharge_per_return_period = [discharge_per_return_period]
         for return_period, discharge_value in zip(
             return_periods, discharge_per_return_period
         ):
