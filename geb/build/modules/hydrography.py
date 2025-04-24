@@ -344,8 +344,19 @@ class Hydrography:
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
-        assert set(np.unique(river_raster_LR[river_raster_LR != -1])) == set(
-            np.unique(river_raster_LR[river_raster_LR != -1])
+        missing_rivers = set(
+            rivers[~rivers["is_downstream_outflow_subbasin"]].index
+        ) - set(np.unique(river_raster_LR[river_raster_LR != -1]).tolist())
+
+        rivers["represented_in_grid"] = True
+        rivers.iloc[
+            rivers.index.isin(missing_rivers),
+            rivers.columns.get_loc("represented_in_grid"),
+        ] = False
+
+        assert (rivers[~rivers["represented_in_grid"]]["lengthkm"] < 5).all(), (
+            "Some large rivers are not represented in the grid, please check the "
+            "rasterization of the river lines"
         )
 
         # Derive the xy coordinates of the river network. Here the coordinates
