@@ -315,8 +315,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
-            load_data_from_store=True,
+            load_data_from_store=False,
             simulate_hydrology=False,
+            clean_report_folder=False,
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
