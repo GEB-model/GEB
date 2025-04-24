@@ -160,6 +160,11 @@ def build_sfincs(
         river_len=0,
     )
 
+    rivers_ = rivers[rivers["hydrography_xy"].apply(len) > 0]
+    if len(rivers_) < len(rivers):
+        print('WARNING: REMOVED SMALL RIVERS, TEMPORARY "FIX"')
+        rivers = rivers_.copy()
+
     xs, ys = [], []
     for _, river in rivers.iterrows():
         if river["is_downstream_outflow_subbasin"]:

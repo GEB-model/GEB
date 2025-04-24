@@ -18,6 +18,13 @@ def estimate_discharge_for_return_periods(
     # here we only select the rivers that have an upstream forcing point
     rivers_with_forcing_point = rivers[~rivers["is_downstream_outflow_subbasin"]]
 
+    rivers_with_forcing_point_ = rivers_with_forcing_point[
+        rivers_with_forcing_point["hydrography_xy"].apply(len) > 0
+    ]
+    if len(rivers_with_forcing_point_) < len(rivers_with_forcing_point):
+        print('WARNING: REMOVED SMALL RIVERS, TEMPORARY "FIX"')
+        rivers_with_forcing_point = rivers_with_forcing_point_.copy()
+
     xs, ys = [], []
     for _, river in rivers_with_forcing_point.iterrows():
         xy = river["hydrography_xy"][0]  # get most upstream point
