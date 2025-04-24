@@ -454,13 +454,26 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
     return coastline_nodes
 
 
+class Geoms:
+    def __init__(self, reader):
+        self.reader = reader
+        self.geoms = {}
+
+    def __setitem__(self, key, value):
+        self.geoms[key] = value
+
+    def __getitem__(self, key):
+        fp = self.geoms[key]
+        return self.reader(fp)
+
+
 class GEBModel(
     Hydrography, Forcing, Crops, LandSurface, Agents, GroundWater, Observations
 ):
     def __init__(
         self,
-        root: str = None,
-        data_catalogs: List[str] = None,
+        root: str | None = None,
+        data_catalogs: List[str] | None = None,
         logger=logger,
         epsg=4326,
         data_provider: str = "default",
@@ -490,7 +503,7 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geoms = {}
+        self.geoms = Geoms(reader=gpd.read_parquet)
         self.table = {}
         self.array = {}
         self.dict = {}
@@ -1049,13 +1062,11 @@ class GEBModel(
                 json.dump(data, f, default=convert_timestamp_to_string)
 
     def set_geoms(self, geoms, name, write=True):
-        self.geoms[name] = geoms
-
+        fn = Path("geom") / (name + ".geoparquet")
+        fp = self.root / fn
         if write:
-            fn = Path("geom") / (name + ".geoparquet")
             self.logger.info(f"Writing file {fn}")
             self.files["geoms"][name] = fn
-            fp = self.root / fn
             fp.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
@@ -1065,7 +1076,7 @@ class GEBModel(
                 fp, engine="pyarrow", compression="gzip", compression_level=9
             )
 
-        return self.geoms[name]
+        self.geoms[name] = fp
 
     def write_file_library(self):
         file_library = self.read_file_library()
