@@ -15,7 +15,7 @@ class GroundWater:
         minimum_thickness_confined_layer=50,
         maximum_thickness_confined_layer=1000,
         intial_heads_source="GLOBGM",
-        force_one_layer=False,
+        force_one_layer=True,
     ):
         """
         Sets up the MODFLOW grid for GEB. This code is adopted from the GLOBGM
