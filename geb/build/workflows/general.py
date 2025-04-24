@@ -11,6 +11,14 @@ import pandas as pd
 import requests
 import xarray
 import xarray as xr
+import xarray_regrid
+from pyresample import geometry
+from pyresample.gradient import (
+    block_bilinear_interpolator,
+    block_nn_interpolator,
+    gradient_resampler_indices_block,
+)
+from pyresample.resampler import resample_blocks
 from scipy.interpolate import griddata
 from tqdm import tqdm
 
@@ -256,4 +264,104 @@ def interpolate_na_along_time_dim(da):
 
 
 def resample_like(source, target, method="bilinear"):
-    return source.raster.reproject_like(target, method=method)
+    # TODO: bilinear should be conservative? Which also corrects
+    # for changes in the latitude direction
+    source_spatial_ref = source.spatial_ref
+
+    # xarray-regrid does not handle integer types well
+    assert not np.issubdtype(source.dtype, np.integer), (
+        "Source data must not be an integer type for resampling"
+    )
+
+    source = source.drop_vars("spatial_ref")
+    target = target.drop_vars("spatial_ref")  # TODO: Perhaps not needed
+
+    regridder = xarray_regrid.regrid.Regridder(source)
+
+    if method == "bilinear":
+        dst = regridder.linear(target)
+    elif method == "conservative":
+        dst = regridder.conservative(target, latitude_coord="y")
+    elif method == "nearest":
+        dst = regridder.nearest(target)
+    else:
+        raise ValueError(
+            f"Unknown method: {method}, must be 'bilinear', 'nearest', or 'conservative'"
+        )
+
+    if source.dtype == np.float32:
+        dst = dst.astype(np.float32)
+
+    # Set the spatial reference back to the original
+    dst = dst.assign_coords({"spatial_ref": source_spatial_ref})
+    return dst
+
+
+def get_area_definition(da):
+    return geometry.AreaDefinition(
+        area_id="",
+        description="",
+        proj_id="",
+        projection=da.rio.crs.to_proj4(),
+        width=da.x.size,
+        height=da.y.size,
+        area_extent=da.rio.bounds(),
+    )
+
+
+def _fill_in_coords(target_coords, source_coords, data_dims):
+    x_coord, y_coord = target_coords["x"], target_coords["y"]
+    coords = []
+    for key in data_dims:
+        if key == "x":
+            coords.append(x_coord)
+        elif key == "y":
+            coords.append(y_coord)
+        else:
+            coords.append(source_coords[key])
+    return coords
+
+
+def resample_chunked(source, target, method="bilinear"):
+    if method == "nearest":
+        interpolator = block_nn_interpolator
+    elif method == "bilinear":
+        interpolator = block_bilinear_interpolator
+    else:
+        raise ValueError(f"Unknown method: {method}, must be 'bilinear' or 'nearest'")
+
+    assert target.dims == ("y", "x")
+
+    source_geo = get_area_definition(source)
+    target_geo = get_area_definition(target)
+
+    indices = resample_blocks(
+        gradient_resampler_indices_block,
+        source_geo,
+        [],
+        target_geo,
+        chunk_size=(2, *target.chunks),
+        dtype=np.float64,
+    )
+
+    resampled_data = resample_blocks(
+        interpolator,
+        source_geo,
+        [source.data],
+        target_geo,
+        dst_arrays=[indices],
+        chunk_size=(*source.data.shape[:-2], *target.chunks),
+        dtype=source.dtype,
+        fill_value=source.attrs["_FillValue"],
+    )
+
+    # Convert result back to xarray DataArray
+    da = xr.DataArray(
+        resampled_data,
+        dims=source.dims,
+        coords=_fill_in_coords(target.coords, source.coords, source.dims),
+        name=source.name,
+        attrs=source.attrs.copy(),
+    )
+    da.rio.set_crs(source.rio.crs)
+    return da

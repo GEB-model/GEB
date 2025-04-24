@@ -1,6 +1,10 @@
 import numpy as np
 import xarray as xr
 
+from ..workflows.general import (
+    resample_like,
+)
+
 
 class GroundWater:
     def __init__(self):
@@ -11,7 +15,7 @@ class GroundWater:
         minimum_thickness_confined_layer=50,
         maximum_thickness_confined_layer=1000,
         intial_heads_source="GLOBGM",
-        force_one_layer=False,
+        force_one_layer=True,
     ):
         """
         Sets up the MODFLOW grid for GEB. This code is adopted from the GLOBGM
@@ -106,8 +110,10 @@ class GroundWater:
 
         aquifer_top_elevation.raster.set_crs(4326)
         layer_boundary_elevation = (
-            relative_layer_boundary_elevation.raster.reproject_like(
-                aquifer_top_elevation, method="bilinear"
+            resample_like(
+                relative_layer_boundary_elevation,
+                aquifer_top_elevation,
+                method="bilinear",
             )
         ) + aquifer_top_elevation
         layer_boundary_elevation.attrs["_FillValue"] = np.nan
@@ -122,11 +128,14 @@ class GroundWater:
             bbox=self.bounds,
             buffer=2,
         ).rename({"lon": "x", "lat": "y"})
+        hydraulic_conductivity.attrs["_FillValue"] = np.nan
 
         # because
         hydraulic_conductivity_log = np.log(hydraulic_conductivity)
-        hydraulic_conductivity_log = hydraulic_conductivity_log.raster.reproject_like(
-            aquifer_top_elevation, method="bilinear"
+        hydraulic_conductivity_log = resample_like(
+            hydraulic_conductivity_log,
+            aquifer_top_elevation,
+            method="bilinear",
         )
         hydraulic_conductivity = np.exp(hydraulic_conductivity_log)
 
@@ -146,8 +155,12 @@ class GroundWater:
             bbox=self.bounds,
             buffer=2,
         ).rename({"lon": "x", "lat": "y"})
-        specific_yield = specific_yield.raster.reproject_like(
-            aquifer_top_elevation, method="bilinear"
+        specific_yield.attrs["_FillValue"] = np.nan
+
+        specific_yield = resample_like(
+            specific_yield,
+            aquifer_top_elevation,
+            method="bilinear",
         )
 
         if two_layers:
@@ -165,13 +178,18 @@ class GroundWater:
             "why_map",
             bbox=self.bounds,
             buffer=5,
-        )
+        ).compute()
 
         why_map.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         why_map.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
-        why_interpolated = why_map.raster.reproject_like(
-            aquifer_top_elevation, method="bilinear"
+
+        original_dtype = why_map.dtype
+        why_interpolated = resample_like(
+            why_map.astype(np.float64),
+            aquifer_top_elevation,
+            method="nearest",
         )
+        why_interpolated = why_interpolated.astype(original_dtype)
 
         self.set_grid(why_interpolated, name="groundwater/why_map")
 
@@ -203,9 +221,11 @@ class GroundWater:
 
             head_upper_layer = head_upper_layer.raster.mask_nodata()
             relative_head_upper_layer = head_upper_layer - dem_globgm
-            relative_head_upper_layer = relative_head_upper_layer.raster.reproject_like(
-                aquifer_top_elevation, method="bilinear"
+
+            relative_head_upper_layer = resample_like(
+                relative_head_upper_layer, aquifer_top_elevation, method="bilinear"
             )
+
             head_upper_layer = dem + relative_head_upper_layer
 
             head_lower_layer = self.data_catalog.get_rasterdataset(
@@ -215,9 +235,11 @@ class GroundWater:
             )
             head_lower_layer = head_lower_layer.raster.mask_nodata()
             relative_head_lower_layer = head_lower_layer - dem_globgm
-            relative_head_lower_layer = relative_head_lower_layer.raster.reproject_like(
-                aquifer_top_elevation, method="bilinear"
+
+            relative_head_lower_layer = resample_like(
+                relative_head_lower_layer, aquifer_top_elevation, method="bilinear"
             )
+
             # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
             relative_head_lower_layer = xr.where(
                 relative_head_lower_layer
@@ -259,9 +281,13 @@ class GroundWater:
             ).rename({"lon": "x", "lat": "y"})
 
             initial_depth_static = initial_depth.isel(time=0)
-            initial_depth = initial_depth_static.raster.reproject_like(
-                self.grid, method="average"
+
+            initial_depth = resample_like(
+                initial_depth_static,
+                self.grid,
+                method="bilinear",
             )
+
             raise NotImplementedError(
                 "Need to convert initial depth to heads for all layers"
             )

@@ -60,6 +60,7 @@ dependencies = [
     "tbb>=2022.0.0",
     "tqdm>=4.66.1",
     "xarray>=2025.3.0",
+    "xarray-regrid[accel]>=0.4.1",
     "xclim>=0.56.0",
     "xmipy>=1.5.0",
     "zarr>=3.0.6",
@@ -97,15 +98,14 @@ geb = "geb.cli:cli"
 
 [project.optional-dependencies]
 fairstream = [
-    "pgmpy>=0.1.24",
+    "pgmpy==0.1.26",
     "daft-pgm>=0.1.4",
     "opt-einsum>=3.3.0",
 ]
-floods = []
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
+display = [
+    "jupyter>=1.1.1",
+    "seaborn>=0.13.2",
+]
 
 [tool.ruff]
 target-version = "py313"
@@ -114,3 +114,17 @@ lint.extend-select = ["I"]
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
 combine-as-imports = true
+
+[tool.pyright]
+include = ["geb"]
+exclude = [
+    "**/__pycache__",
+    "**/.venv",
+]
+pythonVersion = "3.13"
+pythonPlatform = "Linux"
+reportAttributeAccessIssue = "none"
+
+[tool.pytest.ini_options]
+norecursedirs = [".venv", "build", "dist", "tmp*"]
+testpaths = ["tests"]

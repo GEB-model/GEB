@@ -17,7 +17,6 @@ import yaml
 from honeybees.visualization.canvas import Canvas
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
-from hydromt.config import configread
 
 from geb import __version__
 from geb.calibrate import calibrate as geb_calibrate
@@ -368,14 +367,14 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
-def get_model_builder(custom_model):
+def get_model_builder_class(custom_model):
     from geb import build
 
     if custom_model is None:
         return build.GEBModel
     else:
         importlib.import_module(
-            "." + custom_model.split(".")[0], package="geb.setup.custom_models"
+            "." + custom_model.split(".")[0], package="geb.build.custom_models"
         )
         return attrgetter(custom_model)(build.custom_models)
 
@@ -403,17 +402,9 @@ def customize_data_catalog(data_catalogs, data_root=None):
         return data_catalogs
 
 
-def build_fn(
-    data_catalog,
-    config,
-    build_config,
-    custom_model,
-    working_directory,
-    data_provider,
-    data_root,
+def get_builder(
+    working_directory, config, data_catalog, custom_model, data_provider, data_root
 ):
-    """Build model."""
-
     # set the working directory
     os.chdir(working_directory)
 
@@ -427,11 +418,31 @@ def build_fn(
         "data_provider": data_provider,
     }
 
-    geb_model = get_model_builder(custom_model)(**arguments)
+    return get_model_builder_class(custom_model)(**arguments)
 
-    geb_model.build(
-        methods=configread(build_config),
-        region=config["general"]["region"],
+
+def build_fn(
+    data_catalog,
+    config,
+    build_config,
+    custom_model,
+    working_directory,
+    data_provider,
+    data_root,
+):
+    """Build model."""
+
+    model = get_builder(
+        working_directory,
+        config,
+        data_catalog,
+        custom_model,
+        data_provider,
+        data_root,
+    )
+    model.build(
+        methods=parse_config(build_config),
+        region=parse_config(config)["general"]["region"],
     )
 
 
@@ -454,35 +465,25 @@ def alter(
     data_provider,
     data_root,
 ):
-    """Build model."""
-
-    # set the working directory
-    os.chdir(working_directory)
-
-    config = parse_config(config)
-    reference_model_folder = Path(model) / Path(config["general"]["input_folder"])
-
-    arguments = {
-        "root": reference_model_folder,
-        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
-        "logger": create_logger("build.log"),
-        "data_provider": data_provider,
-    }
-
-    geb_model = get_model_builder(custom_model)(**arguments)
-    geb_model.read()
-    geb_model.set_alternate_root(
+    model = get_builder(
+        working_directory,
+        config,
+        data_catalog,
+        custom_model,
+        data_provider,
+        data_root,
+    )
+    model.read()
+    model.set_alternate_root(
         Path(".") / Path(config["general"]["input_folder"]), mode="w+"
     )
-    geb_model.update(
-        opt=configread(build_config),
-        model_out=Path(".") / Path(config["general"]["input_folder"]),
+    model.update(
+        methods=parse_config(build_config),
+        # model_out=Path(".") / Path(config["general"]["input_folder"]),
     )
 
 
-@cli.command()
-@click_build_options(build_config="update.yml")
-def update(
+def update_fn(
     data_catalog,
     config,
     build_config,
@@ -492,23 +493,23 @@ def update(
     data_root,
 ):
     """Update model."""
+    model = get_builder(
+        working_directory,
+        config,
+        data_catalog,
+        custom_model,
+        data_provider,
+        data_root,
+    )
 
-    # set the working directory
-    os.chdir(working_directory)
+    model.read()
+    model.update(methods=parse_config(build_config))
 
-    config = parse_config(config)
-    input_folder = Path(config["general"]["input_folder"])
 
-    arguments = {
-        "root": input_folder,
-        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
-        "logger": create_logger("build_update.log"),
-        "data_provider": data_provider,
-    }
-
-    geb_model = get_model_builder(custom_model)(**arguments)
-    geb_model.read()
-    geb_model.update(methods=configread(build_config))
+@cli.command()
+@click_build_options(build_config="update.yml")
+def update(*args, **kwargs):
+    update_fn(*args, **kwargs)
 
 
 @cli.command()
