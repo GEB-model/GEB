@@ -442,7 +442,7 @@ def build_fn(
     )
     model.build(
         methods=parse_config(build_config),
-        region=config["general"]["region"],
+        region=parse_config(config)["general"]["region"],
     )
 
 
