@@ -454,7 +454,7 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
     return coastline_nodes
 
 
-class Geoms:
+class DelayedReader:
     def __init__(self, reader):
         self.reader = reader
         self.geoms = {}
@@ -503,7 +503,7 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geoms = Geoms(reader=gpd.read_parquet)
+        self.geoms = DelayedReader(reader=gpd.read_parquet)
         self.table = {}
         self.array = {}
         self.dict = {}
@@ -1102,8 +1102,7 @@ class GEBModel(
 
     def read_geoms(self):
         for name, fn in self.files["geoms"].items():
-            geom = gpd.read_parquet(Path(self.root, fn))
-            self.set_geoms(geom, name=name, write=False)
+            self.geoms[name] = Path(self.root, fn)
 
     def read_array(self):
         for name, fn in self.files["array"].items():
