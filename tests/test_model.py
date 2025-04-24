@@ -20,7 +20,7 @@ DEFAULT_BUILD_ARGS = {
     "working_directory": working_directory,
     "custom_model": None,
     "data_provider": None,
-    "data_root": str(Path(os.getenv("GEB_DATA_ROOT"))),
+    "data_root": str(Path(os.getenv("GEB_DATA_ROOT", ""))),
 }
 
 DEFAULT_RUN_ARGS = {
