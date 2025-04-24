@@ -377,6 +377,7 @@ class SFINCS:
             self.land_cover_mannings_rougness_classification.set_index(
                 "esa_worldcover"
             )["N"].to_dict(),
+            method="lookup",
         )
         return mannings
 

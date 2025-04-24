@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import datetime
+import re
+import shutil
 from operator import attrgetter
 from typing import Any, Union
 
@@ -63,10 +65,13 @@ class Reporter:
         model: The GEB model.
     """
 
-    def __init__(self, model) -> None:
+    def __init__(self, model, clean) -> None:
         self.model = model
         self.hydrology = model.hydrology
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
+        # optionally clean report model at start of run
+        if clean:
+            shutil.rmtree(self.report_folder, ignore_errors=True)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.variables = {}
@@ -181,10 +186,12 @@ class Reporter:
                         raster.lon.size,
                     ),
                     dtype=np.float32,
-                    compressor=zarr.codecs.BloscCodec(
-                        cname="zlib",
-                        clevel=9,
-                        shuffle=zarr.codecs.BloscShuffle.shuffle,
+                    compressors=(
+                        zarr.codecs.BloscCodec(
+                            cname="zlib",
+                            clevel=9,
+                            shuffle=zarr.codecs.BloscShuffle.shuffle,
+                        ),
                     ),
                     fill_value=np.nan,
                     dimension_names=["time", "y", "x"],
@@ -250,8 +257,9 @@ class Reporter:
         self,
         module_name: str,
         name: Union[str, tuple[str, Any]],
-        value: Any,
-        conf: dict,
+        module: Any,
+        local_variables: dict,
+        config: dict,
     ) -> None:
         """This method is used to save and/or export model values.
 
@@ -262,35 +270,49 @@ class Reporter:
         """
 
         # here we return None if the value is not to be reported on this timestep
-        if "frequency" in conf:
-            if conf["frequency"] == "initial":
+        if "frequency" in config:
+            if config["frequency"] == "initial":
                 if self.model.current_timestep != 0:
                     return None
-            elif conf["frequency"] == "final":
+            elif config["frequency"] == "final":
                 if self.model.current_timestep != self.model.n_timesteps - 1:
                     return None
-            elif "every" in conf["frequency"]:
-                every = conf["frequency"]["every"]
+            elif "every" in config["frequency"]:
+                every = config["frequency"]["every"]
                 if every == "year":
-                    month = conf["frequency"]["month"]
-                    day = conf["frequency"]["day"]
+                    month = config["frequency"]["month"]
+                    day = config["frequency"]["day"]
                     if (
                         self.model.current_time.month != month
                         or self.model.current_time.day != day
                     ):
                         return None
                 elif every == "month":
-                    day = conf["frequency"]["day"]
+                    day = config["frequency"]["day"]
                     if self.model.current_time.day != day:
                         return None
                 elif every == "day":
                     pass
                 else:
                     raise ValueError(
-                        f"Frequency every {conf['every']} not recognized (must be 'yearly', or 'monthly')."
+                        f"Frequency every {config['every']} not recognized (must be 'yearly', or 'monthly')."
                     )
             else:
-                raise ValueError(f"Frequency {conf['frequency']} not recognized.")
+                raise ValueError(f"Frequency {config['frequency']} not recognized.")
+
+        varname = config["varname"]
+        fancy_index = re.search(r"\[.*?\]", varname)
+        if fancy_index:
+            fancy_index = fancy_index.group(0)
+            varname = varname.replace(fancy_index, "")
+        if varname.startswith("."):
+            varname = varname[1:]
+            value = local_variables[varname]
+        else:
+            value = attrgetter(varname)(module)
+
+        if fancy_index:
+            value = eval(f"value{fancy_index}")
 
         # if the value is not None, we check whether the value is valid
         if isinstance(value, list):
@@ -301,10 +323,10 @@ class Reporter:
             value = value.item()
             self.check_value(value)
 
-        self.process_value(module_name, name, value, conf)
+        self.process_value(module_name, name, value, config)
 
     def process_value(
-        self, module_name: str, name: str, value: np.ndarray, conf: dict
+        self, module_name: str, name: str, value: np.ndarray, config: dict
     ) -> None:
         """Exports an array of values to the export folder.
 
@@ -314,9 +336,9 @@ class Reporter:
             value: The array itself.
             conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
         """
-        if conf["type"] in ("grid", "HRU"):
-            if conf["function"] is None:
-                if conf["type"] == "HRU":
+        if config["type"] in ("grid", "HRU"):
+            if config["function"] is None:
+                if config["type"] == "HRU":
                     value = self.hydrology.HRU.decompress(value)
                 else:
                     value = self.hydrology.grid.decompress(value)
@@ -329,15 +351,15 @@ class Reporter:
                     time_index = np.where(
                         zarr_group["time"][:] == self.model.current_time_unix_s
                     )[0].item()
-                    if "substeps" in conf:
+                    if "substeps" in config:
                         time_index_start = np.where(time_index)[0][0]
-                        time_index_end = time_index_start + conf["substeps"]
+                        time_index_end = time_index_start + config["substeps"]
                         zarr_group[name][time_index_start:time_index_end, ...] = value
                     else:
                         zarr_group[name][time_index, ...] = value
                 return None
             else:
-                function, *args = conf["function"].split(",")
+                function, *args = config["function"].split(",")
                 if function == "mean":
                     value = np.mean(value)
                 elif function == "nanmean":
@@ -347,17 +369,17 @@ class Reporter:
                 elif function == "nansum":
                     value = np.nansum(value)
                 elif function == "sample":
-                    decompressed_array = self.decompress(conf["varname"], value)
+                    decompressed_array = self.decompress(config["varname"], value)
                     value = decompressed_array[int(args[0]), int(args[1])]
                 elif function == "sample_coord":
-                    if conf["varname"].startswith("hydrology.grid"):
+                    if config["varname"].startswith("hydrology.grid"):
                         gt = self.model.hydrology.grid.gt
-                    elif conf["varname"].startswith("hydrology.HRU"):
+                    elif config["varname"].startswith("hydrology.HRU"):
                         gt = self.hydrology.HRU.gt
                     else:
                         raise ValueError
                     px, py = coord_to_pixel((float(args[1]), float(args[0])), gt)
-                    decompressed_array = self.decompress(conf["varname"], value)
+                    decompressed_array = self.decompress(config["varname"], value)
                     try:
                         value = decompressed_array[py, px]
                     except IndexError:
@@ -365,7 +387,7 @@ class Reporter:
                             f"The coordinate ({args[0]},{args[1]}) is outside the model domain."
                         )
                 elif function in ("weightedmean", "weightednanmean"):
-                    if conf["type"] == "HRU":
+                    if config["type"] == "HRU":
                         cell_area = self.hydrology.HRU.var.cell_area
                     else:
                         cell_area = self.hydrology.grid.var.cell_area
@@ -377,9 +399,9 @@ class Reporter:
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
-        elif conf["type"] == "agents":
-            if conf["function"] is None:
-                ds = conf["_file"]
+        elif config["type"] == "agents":
+            if config["function"] is None:
+                ds = config["_file"]
                 if name not in ds:
                     # zarr file has not been created yet
                     if isinstance(value, (float, int)):
@@ -411,14 +433,14 @@ class Reporter:
                         shape=shape,
                         chunks=chunks,
                         dtype=dtype,
-                        compressor=compressor,
+                        compressors=(compressor,),
                         fill_value=fill_value,
                     )
                     ds[name].attrs["_ARRAY_DIMENSIONS"] = array_dimensions
                 index = np.argwhere(
-                    conf["_time_index"]
+                    config["_time_index"]
                     == np.datetime64(self.model.current_time, "s").astype(
-                        conf["_time_index"].dtype
+                        config["_time_index"].dtype
                     )
                 ).item()
                 if value.size < ds[name][index].size:
@@ -434,7 +456,7 @@ class Reporter:
                 ds[name][index] = value
                 return None
             else:
-                function, *args = conf["function"].split(",")
+                function, *args = config["function"].split(",")
                 if function == "mean":
                     value = np.mean(value)
                 elif function == "nanmean":
@@ -489,16 +511,10 @@ class Reporter:
         report = self.model.config["report"].get(module_name, None)
         if report is not None:
             for name, config in report.items():
-                varname = config["varname"]
-                if varname.startswith("."):
-                    varname = varname[1:]
-                    value = local_variables[varname]
-                else:
-                    value = attrgetter(varname)(module)
-
                 self.maybe_report_value(
                     module_name=module_name,
                     name=name,
-                    value=value,
-                    conf=config,
+                    module=module,
+                    local_variables=local_variables,
+                    config=config,
                 )

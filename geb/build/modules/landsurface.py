@@ -7,6 +7,8 @@ from ..workflows.general import (
     calculate_cell_area,
     pad_xy,
     repeat_grid,
+    resample_chunked,
+    resample_like,
 )
 from ..workflows.soilgrids import load_soilgrids
 
@@ -59,6 +61,24 @@ class LandSurface:
         )
         self.set_subgrid(sub_cell_area, name="cell_area")
 
+        region_subgrid_cell_area = self.full_like(
+            self.region_subgrid["mask"],
+            fill_value=np.nan,
+            nodata=np.nan,
+            dtype=np.float32,
+        )
+
+        region_subgrid_cell_area.data = calculate_cell_area(
+            region_subgrid_cell_area.rio.transform(recalc=True),
+            region_subgrid_cell_area.shape,
+        )
+
+        # set the cell area for the region subgrid
+        self.set_region_subgrid(
+            region_subgrid_cell_area,
+            name="cell_area",
+        )
+
     def setup_elevation(
         self,
         DEMs=[
@@ -90,7 +110,7 @@ class LandSurface:
         target.raster.set_crs(4326)
 
         self.set_subgrid(
-            fabdem.raster.reproject_like(target, method="average"),
+            resample_like(fabdem, target, method="bilinear"),
             name="landsurface/elevation",
         )
 
@@ -199,14 +219,24 @@ class LandSurface:
         region_mask.attrs["_FillValue"] = None
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
-        land_use = self.data_catalog.get_rasterdataset(
-            land_cover,
-            geom=self.geoms["regions"],
-            buffer=200,  # 2 km buffer
+        bounds = self.geoms["regions"].total_bounds
+        land_use = (
+            xr.open_dataarray(
+                self.data_catalog.get_source(land_cover).path,
+                chunks={"x": 1000, "y": 1000},
+                mask_and_scale=False,
+            )
+            .sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
+            .isel(band=0)
         )
-        region_mask.raster.set_crs(4326)
-        reprojected_land_use = land_use.raster.reproject_like(
-            region_mask, method="nearest"
+
+        reprojected_land_use = resample_chunked(
+            land_use, region_mask.chunk({"x": 1000, "y": 1000}), method="nearest"
+        )
+
+        reprojected_land_use = self.set_region_subgrid(
+            reprojected_land_use,
+            name="landsurface/original_land_use",
         )
 
         region_ids = reprojected_land_use.raster.rasterize(
@@ -216,21 +246,6 @@ class LandSurface:
         )
         region_ids.attrs["_FillValue"] = -1
         region_ids = self.set_region_subgrid(region_ids, name="region_ids")
-
-        region_subgrid_cell_area = self.full_like(
-            region_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
-        )
-
-        region_subgrid_cell_area.data = calculate_cell_area(
-            region_subgrid_cell_area.rio.transform(recalc=True),
-            region_subgrid_cell_area.shape,
-        )
-
-        # set the cell area for the region subgrid
-        self.set_region_subgrid(
-            region_subgrid_cell_area,
-            name="cell_area",
-        )
 
         full_region_land_use_classes = reprojected_land_use.raster.reclassify(
             pd.DataFrame.from_dict(
@@ -315,60 +330,66 @@ class LandSurface:
         """
         self.logger.info("Setting up land use parameters")
 
-        # landcover
-        landcover_classification = self.data_catalog.get_rasterdataset(
-            land_cover,
-            bbox=self.bounds,
-            buffer=200,  # 2 km buffer
+        bounds = self.geoms["routing/subbasins"].total_bounds
+        buffer = 0.1
+        landcover_classification = (
+            xr.open_dataarray(
+                self.data_catalog.get_source(land_cover).path,
+                chunks={"x": 3000, "y": 3000},
+                mask_and_scale=False,
+            )
+            .sel(
+                x=slice(bounds[0] - buffer, bounds[2] + buffer),
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+            )
+            .isel(band=0)
         )
+
         self.set_other(
             landcover_classification,
             name="landcover/classification",
         )
 
         target = self.grid["mask"]
-        target.raster.set_crs(4326)
 
-        for land_use_type, land_use_type_netcdf_name, simple_name in (
-            ("forest", "Forest", "forest"),
-            ("grassland", "Grassland", "grassland"),
-            ("irrPaddy", "irrPaddy", "paddy_irrigated"),
-            ("irrNonPaddy", "irrNonPaddy", "irrigated"),
-        ):
+        forect_kc = self.data_catalog.get_rasterdataset(
+            "cwatm_forest_5min", bbox=self.bounds, buffer=10
+        )["cropCoefficientForest_10days"]
+        forect_kc = forect_kc.raster.mask_nodata()
+
+        forect_kc = resample_like(forect_kc, target, method="nearest")
+
+        forect_kc.attrs = {
+            key: attr
+            for key, attr in forect_kc.attrs.items()
+            if not key.startswith("NETCDF_") and key != "units"
+        }
+        self.set_grid(
+            forect_kc,
+            name="landcover/forest/crop_coefficient",
+        )
+
+        for land_use_type in ("forest", "grassland"):
             self.logger.info(f"Setting up land use parameters for {land_use_type}")
+
             land_use_ds = self.data_catalog.get_rasterdataset(
                 f"cwatm_{land_use_type}_5min", bbox=self.bounds, buffer=10
             )
-
-            parameter = f"cropCoefficient{land_use_type_netcdf_name}_10days"
-            crop_coefficient = land_use_ds[parameter].raster.mask_nodata()
-            crop_coefficient = crop_coefficient.raster.reproject_like(
-                target, method="nearest"
+            parameter = f"interceptCap{land_use_type.title()}_10days"
+            interception_capacity = land_use_ds[parameter].raster.mask_nodata()
+            interception_capacity = resample_like(
+                interception_capacity, target, method="nearest"
             )
-            crop_coefficient.attrs = {
+
+            interception_capacity.attrs = {
                 key: attr
-                for key, attr in crop_coefficient.attrs.items()
+                for key, attr in interception_capacity.attrs.items()
                 if not key.startswith("NETCDF_") and key != "units"
             }
             self.set_grid(
-                crop_coefficient,
-                name=f"landcover/{simple_name}/crop_coefficient",
+                interception_capacity,
+                name=f"landcover/{land_use_type}/interception_capacity",
             )
-            if land_use_type in ("forest", "grassland"):
-                parameter = f"interceptCap{land_use_type_netcdf_name}_10days"
-                interception_capacity = land_use_ds[parameter].raster.mask_nodata()
-                interception_capacity = interception_capacity.raster.reproject_like(
-                    target, method="nearest"
-                )
-                interception_capacity.attrs = {
-                    key: attr
-                    for key, attr in interception_capacity.attrs.items()
-                    if not key.startswith("NETCDF_") and key != "units"
-                }
-                self.set_grid(
-                    interception_capacity,
-                    name=f"landcover/{simple_name}/interception_capacity",
-                )
 
     def setup_soil_parameters(self) -> None:
         """
