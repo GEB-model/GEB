@@ -3924,9 +3924,15 @@ class CropFarmers(AgentBaseClass):
         if not self.model.simulate_hydrology:
             return
 
+        timer = TimingModule("crop_farmers")
+
         self.harvest()
+        timer.new_split("harvest")
         self.plant()
+        timer.new_split("planting")
+
         self.water_abstraction_sum()
+        timer.new_split("water abstraction calculation")
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
@@ -3992,8 +3998,6 @@ class CropFarmers(AgentBaseClass):
                 np.mean(self.var.yearly_yield_ratio[:, 1]),
             )
 
-            timer = TimingModule("crop_farmers")
-
             energy_cost, water_cost, average_extraction_speed = (
                 self.calculate_water_costs()
             )
@@ -4044,7 +4048,6 @@ class CropFarmers(AgentBaseClass):
                         "Cannot adapt without yield - probability relation"
                     )
 
-            print(timer)
             advance_crop_rotation_year(
                 current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index,
                 crop_calendar_rotation_years=self.var.crop_calendar_rotation_years,
@@ -4068,6 +4071,9 @@ class CropFarmers(AgentBaseClass):
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         # if self.model.current_timestep == 105:
         #     self.remove_agent(farmer_idx=1000)
+
+        if self.model.timing:
+            print(timer)
 
         self.report(self, locals())
 
