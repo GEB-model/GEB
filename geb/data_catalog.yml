@@ -10,6 +10,33 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: topography/FABDEM1-2.vrt
+
+GRDC:
+  crs: 4326
+  data_type: GeoDataset
+  driver: netcdf
+  meta:
+    category: hydrology
+    source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
+    source_url: https://grdc.bafg.de/
+  path: rivers/discharge/GRDC/GRDC-Daily_V2.nc
+
+custom_discharge_stations_{station}:
+  meta:
+    category: hydrology
+    source_author: Waterschap Limburg (and more)
+    source_url: https://www.waterstandlimburg.nl/
+  driver: csv
+  data_type: DataFrame
+  driver_kwargs:
+    header: null
+    delimiter: ","
+  path: rivers/discharge/custom_stations/{station}
+  placeholders:
+    station: ['meerssen.csv']
+
+
+
 SWORD:
   data_type: GeoDataFrame
   driver: vector
