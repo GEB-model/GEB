@@ -139,6 +139,10 @@ def check_attrs(da1, da2):
         del da1.attrs["_CRS"]
     if "_CRS" in da2.attrs:
         del da2.attrs["_CRS"]
+    if "grid_mapping" in da1.attrs:
+        del da1.attrs["grid_mapping"]
+    if "grid_mapping" in da2.attrs:
+        del da2.attrs["grid_mapping"]
 
     assert len(da1.attrs) == len(da2.attrs), "number of attributes is not equal"
 
@@ -268,7 +272,7 @@ def to_zarr(
         # subsequent QGIS support for GDAL 3.11. See https://github.com/OSGeo/gdal/pull/11787
         # For anything with a shard, we opt for zarr version 3, for anything without, we use version 2.
         if shards:
-            zarr_version = 3
+            zarr_format = 3
             from numcodecs.zarr3 import Blosc
 
             if compressor is None:
@@ -281,7 +285,7 @@ def to_zarr(
             check_buffer_size(da, chunks_or_shards=shards)
         else:
             assert not filters, "Filters are only supported for zarr version 3"
-            zarr_version = 2
+            zarr_format = 2
             from numcodecs import Blosc
 
             if compressor is None:
@@ -319,7 +323,7 @@ def to_zarr(
             "store": tmp_zarr,
             "mode": "w",
             "encoding": encoding,
-            "zarr_version": zarr_version,
+            "zarr_format": zarr_format,
             "consolidated": False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
         }
 
