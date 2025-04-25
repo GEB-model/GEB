@@ -64,6 +64,8 @@ class Households(AgentBaseClass):
         if self.config["adapt"]:
             self.load_flood_maps()
 
+        self.load_objects()
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -424,23 +426,19 @@ class Households(AgentBaseClass):
 
     def load_objects(self):
         # Load buildings
-        self.var.buildings = gpd.read_parquet(
-            self.model.files["geoms"]["assets/buildings"]
-        )
-        self.var.buildings["object_type"] = "building_structure"
-        self.var.buildings_centroid = gpd.GeoDataFrame(
-            geometry=self.var.buildings.centroid
-        )
-        self.var.buildings_centroid["object_type"] = "building_content"
+        self.buildings = gpd.read_parquet(self.model.files["geoms"]["assets/buildings"])
+        self.buildings["object_type"] = "building_structure"
+        self.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
+        self.buildings_centroid["object_type"] = "building_content"
 
         # Load roads
-        self.var.roads = gpd.read_parquet(
-            self.model.files["geoms"]["assets/roads"]
-        ).rename(columns={"highway": "object_type"})
+        self.roads = gpd.read_parquet(self.model.files["geoms"]["assets/roads"]).rename(
+            columns={"highway": "object_type"}
+        )
 
         # Load rail
-        self.var.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
-        self.var.rail["object_type"] = "rail"
+        self.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
+        self.rail["object_type"] = "rail"
 
     def load_max_damage_values(self):
         # Load maximum damages
@@ -451,7 +449,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
-        self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
+        self.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
 
         with open(
             self.model.files["dict"][
@@ -463,9 +461,7 @@ class Households(AgentBaseClass):
         self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
-        self.var.buildings_centroid["maximum_damage"] = (
-            self.var.max_dam_buildings_content
-        )
+        self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         with open(
             self.model.files["dict"][
@@ -474,7 +470,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_rail = float(json.load(f)["maximum_damage"])
-        self.var.rail["maximum_damage"] = self.var.max_dam_rail
+        self.rail["maximum_damage"] = self.var.max_dam_rail
 
         self.var.max_dam_road = {}
         road_types = [
@@ -508,7 +504,7 @@ class Households(AgentBaseClass):
                 max_damage = json.load(f)
             self.var.max_dam_road[road_type] = max_damage["maximum_damage"]
 
-        self.var.roads["maximum_damage"] = self.var.roads["object_type"].map(
+        self.roads["maximum_damage"] = self.roads["object_type"].map(
             self.var.max_dam_road
         )
 
@@ -626,7 +622,6 @@ class Households(AgentBaseClass):
         )
 
     def spinup(self):
-        self.load_objects()
         self.load_max_damage_values()
         self.load_damage_curves()
         self.construct_income_distribution()
@@ -668,7 +663,7 @@ class Households(AgentBaseClass):
         total_damages_forest = damages_forest.sum()
         print(f"damages to forest are: {total_damages_forest}")
 
-        buildings = self.var.buildings.to_crs(flood_map.rio.crs)
+        buildings = self.buildings.to_crs(flood_map.rio.crs)
         damages_buildings_structure = object_scanner(
             objects=buildings,
             hazard=flood_map,
@@ -677,7 +672,7 @@ class Households(AgentBaseClass):
         total_damage_structure = damages_buildings_structure.sum()
         print(f"damages to building structure are: {total_damage_structure}")
 
-        buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
+        buildings_centroid = self.buildings_centroid.to_crs(flood_map.rio.crs)
         damages_buildings_content = object_scanner(
             objects=buildings_centroid,
             hazard=flood_map,
@@ -686,7 +681,7 @@ class Households(AgentBaseClass):
         total_damages_content = damages_buildings_content.sum()
         print(f"damages to building content are: {total_damages_content}")
 
-        roads = self.var.roads.to_crs(flood_map.rio.crs)
+        roads = self.roads.to_crs(flood_map.rio.crs)
         damages_roads = object_scanner(
             objects=roads,
             hazard=flood_map,
@@ -695,7 +690,7 @@ class Households(AgentBaseClass):
         total_damages_roads = damages_roads.sum()
         print(f"damages to roads are: {total_damages_roads} ")
 
-        rail = self.var.rail.to_crs(flood_map.rio.crs)
+        rail = self.rail.to_crs(flood_map.rio.crs)
         damages_rail = object_scanner(
             objects=rail,
             hazard=flood_map,
