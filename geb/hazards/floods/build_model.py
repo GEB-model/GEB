@@ -8,8 +8,9 @@ from hydromt_sfincs import SfincsModel
 from .io import export_rivers
 from .sfincs_utils import (
     assign_return_periods,
-    get_discharge_by_point,
+    get_discharge_by_river,
     get_logger,
+    get_representative_river_points,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,31 +161,16 @@ def build_sfincs(
         river_len=0,
     )
 
-    rivers_ = rivers[rivers["hydrography_xy"].apply(len) > 0]
-    if len(rivers_) < len(rivers):
-        print('WARNING: REMOVED SMALL RIVERS, TEMPORARY "FIX"')
-        rivers = rivers_.copy()
+    river_representative_points = []
+    for ID in rivers.index:
+        river_representative_points.append(get_representative_river_points(ID, rivers))
 
-    xs, ys = [], []
-    for _, river in rivers.iterrows():
-        if river["is_downstream_outflow_subbasin"]:
-            upstream_rivers = river["associated_upstream_basins"]
-            if len(upstream_rivers) > 1:
-                raise NotImplementedError
-            else:
-                upstream_river = rivers.loc[upstream_rivers[0]]
-                xy = upstream_river["hydrography_xy"][-1]  # get most downstream point
-        else:
-            xy = river["hydrography_xy"][0]  # get most upstream point
-        xs.append(xy[0])
-        ys.append(xy[1])
-
-    discharge_series = get_discharge_by_point(
-        xs=xs,
-        ys=ys,
+    discharge_by_river = get_discharge_by_river(
+        rivers.index,
+        river_representative_points,
         discharge=discharge,
     )
-    rivers = assign_return_periods(rivers, discharge_series, return_periods=[2])
+    rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
 
     rivers["depth"] = get_river_depth(
         rivers, method=depth_calculation, bankfull_column="Q_2"
@@ -211,6 +197,7 @@ def build_sfincs(
         write_man_tif=True,
         nr_subgrid_pixels=nr_subgrid_pixels,
         nlevels=20,
+        nrmax=500,
     )
 
     # write all components, except forcing which must be done after the model building

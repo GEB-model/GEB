@@ -120,6 +120,7 @@ def update_forcing(
 
 
 def run_sfincs_subprocess(root, cmd):
+    print(f"Running SFINCS with: {cmd}")
     with open(join(root, "sfincs.log"), "w") as log_file:
         process = subprocess.Popen(
             cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -238,11 +239,17 @@ def check_docker_running():
 def run_sfincs_simulation(model_root, simulation_root, gpu=False):
     # Check if we are on Linux or Windows and run the appropriate script
     if gpu:
-        version = "mvanormondt/sfincs-gpu:latest"
+        version = os.getenv("SFINCS_GPU_SIF")
+        if version is None:
+            raise EnvironmentError("Environment variable SFINCS_GPU_SIF is not set")
     else:
-        version = "deltares/sfincs-cpu:sfincs-v2.1.3"
+        version = "deltares/sfincs-cpu:latest"
 
     if os.name == "posix":
+        # If not a singularity image, add docker:// prefix
+        # to the version string
+        if not version.endswith(".sif"):
+            version = "docker://" + version
         cmd = [
             "singularity",
             "run",
@@ -251,7 +258,7 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False):
             "--pwd",  ## Set working directory inside container
             f"/data/{simulation_root.relative_to(model_root)}",
             "--nv",
-            f"docker://{version}",
+            version,
         ]
 
     else:
@@ -274,7 +281,38 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False):
     assert return_code == 0, f"Error running SFINCS simulation: {return_code}"
 
 
-def get_discharge_by_point(xs, ys, discharge):
+def get_representative_river_points(river_ID: set, rivers: pd.DataFrame):
+    river = rivers.loc[river_ID]
+    if river["represented_in_grid"]:
+        river = rivers.loc[river_ID]
+        xy = river["hydrography_xy"][0]  # get most upstream point
+        return [(xy[0], xy[1])]
+    else:
+        river_IDs = set([river_ID])
+        representitative_rivers = set()
+        while river_IDs:
+            river_ID = river_IDs.pop()
+            river = rivers.loc[river_ID]
+            if not river["represented_in_grid"]:
+                upstream_rivers = rivers[rivers["downstream_ID"] == river_ID]
+                river_IDs.update(upstream_rivers.index)
+            else:
+                representitative_rivers.add(river_ID)
+
+        representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
+        xys = [
+            (river[-1][0], river[-1][1])
+            for river in representitative_rivers["hydrography_xy"]
+        ]
+        return xys
+
+
+def get_discharge_by_river(river_IDs, points_per_river, discharge):
+    xs, ys = [], []
+    for points in points_per_river:
+        xs.extend([p[0] for p in points])
+        ys.extend([p[1] for p in points])
+
     discharge_per_point = discharge.isel(
         x=xr.DataArray(
             xs,
@@ -286,6 +324,17 @@ def get_discharge_by_point(xs, ys, discharge):
         ),
     ).compute()
     assert not np.isnan(discharge_per_point).any(), "Discharge values contain NaNs"
+
+    discharge_df = pd.DataFrame(index=discharge.time)
+    i = 0
+    for river_ID, points in zip(river_IDs, points_per_river, strict=True):
+        discharge_per_river = discharge_per_point.isel(
+            points=slice(i, i + len(points))
+        ).sum(dim="points")
+        discharge_df[river_ID] = discharge_per_river
+        i += len(points)
+
+    assert i == len(xs), "Discharge values do not match the number of points"
     return discharge_per_point
 
 

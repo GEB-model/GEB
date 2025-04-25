@@ -131,7 +131,7 @@ def run_sfincs_for_return_periods(
     rp_maps = {}
 
     for return_period in return_periods:
-        print(f"Running SFincs for return period {return_period} years")
+        print(f"Running SFINCS for return period {return_period} years")
         rp_map = []
 
         working_dir_return_period = working_dir / f"rp_{return_period}"
