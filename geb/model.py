@@ -15,6 +15,7 @@ from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
 
+from .evaluate import Evaluate
 from .HRUs import load_geom
 from .hydrology import Hydrology
 
@@ -323,7 +324,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         HazardDriver.initialize(self, longest_flood_event=30)
         self.sfincs.get_return_period_maps()
 
-    def evaluate(self):
+    def evaluate(self, *args, **kwargs) -> None:
+        self.evaluate = Evaluate(self)
+        self.evaluate.run(*args, **kwargs)
         print("Evaluating model...")
 
     @property
