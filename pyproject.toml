@@ -5,9 +5,6 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 
-[tool.uv.sources]
-hydromt-sfincs = { git = "https://github.com/GEB-model/hydromt_sfincs.git" }
-
 [project]
 name = "geb"
 version = "1.0.0b5"
@@ -27,13 +24,13 @@ dependencies = [
     "cfgrib>=0.9.14",
     "click>=8.1.8",
     "damagescanner==0.8b1",
-    "dask>=2024.6,<2024.12.0", # Pinned due to chunking error, unpin when resolved.
+    "dask",
     "deap>=1.4.1",
     "flopy>=3.8.0",
     "geopandas>=1.0.1",
     "honeybees>=1.2.0",
     "hydromt==0.10.1",
-    "hydromt-sfincs",
+    "hydromt-sfincs>=1.2.0",
     "isimip-client>=1.0.1",
     "nest_asyncio>=1.6.0", # for GUI in
     "networkx",
@@ -63,6 +60,7 @@ dependencies = [
     "xarray-regrid[accel]>=0.4.1",
     "xclim>=0.56.0",
     "xmipy>=1.5.0",
+    "xugrid>=0.13.0",
     "zarr>=3.0.6",
 ]
 requires-python = ">=3.12, <3.14"
@@ -128,3 +126,4 @@ reportAttributeAccessIssue = "none"
 [tool.pytest.ini_options]
 norecursedirs = [".venv", "build", "dist", "tmp*"]
 testpaths = ["tests"]
+addopts = "--ignore=.venv"
