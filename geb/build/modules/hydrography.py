@@ -52,11 +52,16 @@ def get_subbasins_geometry(data_catalog, subbasin_ids):
 def get_rivers(data_catalog, subbasin_ids):
     rivers = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_riv").path,
-        columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+        columns=["COMID", "lengthkm", "uparea", "maxup", "NextDownID", "geometry"],
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
+    ).rename(
+        columns={
+            "NextDownID": "downstream_ID",
+        }
     )
+    rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
     # reverse the river lines to have the downstream direction
     rivers["geometry"] = rivers["geometry"].apply(
@@ -344,9 +349,9 @@ class Hydrography:
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
-        missing_rivers = set(
-            rivers[~rivers["is_downstream_outflow_subbasin"]].index
-        ) - set(np.unique(river_raster_LR[river_raster_LR != -1]).tolist())
+        missing_rivers = set(rivers.index) - set(
+            np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
+        )
 
         rivers["represented_in_grid"] = True
         rivers.iloc[
@@ -354,7 +359,13 @@ class Hydrography:
             rivers.columns.get_loc("represented_in_grid"),
         ] = False
 
-        assert (rivers[~rivers["represented_in_grid"]]["lengthkm"] < 5).all(), (
+        assert (
+            rivers[
+                (~rivers["represented_in_grid"])
+                & (~rivers["is_downstream_outflow_subbasin"])
+            ]["lengthkm"]
+            < 5
+        ).all(), (
             "Some large rivers are not represented in the grid, please check the "
             "rasterization of the river lines"
         )
@@ -370,10 +381,18 @@ class Hydrography:
             upstream_area_sorted = upstream_area[up_to_downstream_ids]
             ys = ys[up_to_downstream_ids]
             xs = xs[up_to_downstream_ids]
-            rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys))
+            assert ys.size > 0, "No xy coordinates found for river segment"
+            rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys, strict=True))
             rivers.at[COMID, "hydrography_upstream_area_m2"] = (
                 upstream_area_sorted.tolist()
             )
+
+        for river_ID, river in rivers.iterrows():
+            if river["represented_in_grid"]:
+                assert len(river["hydrography_xy"]) > 0, (
+                    f"River {river_ID} has no xy coordinates, please check the "
+                    "rasterization of the river lines"
+                )
 
         COMID_IDs_raster = self.full_like(
             outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
