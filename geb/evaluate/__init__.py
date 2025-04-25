@@ -6,7 +6,7 @@ class Evaluate(Hydrology):
         self.model = model
 
     def run(self):
-        self.plot_discharge()
+        self.evaluate_discharge_grid()
 
     @property
     def output_folder_evaluate(self):
