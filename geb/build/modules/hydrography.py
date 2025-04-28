@@ -595,9 +595,6 @@ class Hydrography:
             waterbodies.update(custom_reservoir_capacity)
             waterbodies.reset_index(inplace=True)
 
-        # spatial dimension is not required anymore, so drop it.
-        waterbodies = waterbodies.drop("geometry", axis=1)
-
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
         assert "volume_total" in waterbodies.columns, "volume_total is required"
@@ -605,4 +602,4 @@ class Hydrography:
             "average_discharge is required"
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
-        self.set_table(waterbodies, name="waterbodies/waterbody_data")
+        self.set_geoms(waterbodies, name="waterbodies/waterbody_data")
