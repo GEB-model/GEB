@@ -160,40 +160,48 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     return G
 
 
-def clip_region(hydrography, align):
-    rows, cols = np.where(hydrography["mask"])
+def clip_region(mask, *data_arrays, align):
+    rows, cols = np.where(mask)
     mincol = cols.min()
     maxcol = cols.max()
     minrow = rows.min()
     maxrow = rows.max()
 
-    minx = hydrography.x[mincol].item()
-    maxx = hydrography.x[maxcol].item()
-    miny = hydrography.y[minrow].item()
-    maxy = hydrography.y[maxrow].item()
+    minx = mask.x[mincol].item()
+    maxx = mask.x[maxcol].item()
+    miny = mask.y[minrow].item()
+    maxy = mask.y[maxrow].item()
 
-    xres, yres = hydrography.rio.resolution()
+    xres, yres = mask.rio.resolution()
 
     mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
     maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
     minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
     maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
 
-    assert math.isclose(hydrography.x[mincol_aligned] // align % 1, 0)
-    assert math.isclose(hydrography.x[maxcol_aligned] // align % 1, 0)
-    assert math.isclose(hydrography.y[minrow_aligned] // align % 1, 0)
-    assert math.isclose(hydrography.y[maxrow_aligned] // align % 1, 0)
+    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
+    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
+    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
+    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
 
     assert mincol_aligned <= mincol
     assert maxcol_aligned >= maxcol
     assert minrow_aligned <= minrow
     assert maxrow_aligned >= maxrow
 
-    hydrography = hydrography.isel(
+    mask = mask.isel(
         y=slice(minrow_aligned, maxrow_aligned),
         x=slice(mincol_aligned, maxcol_aligned),
     )
-    return hydrography
+    sliced_arrays = []
+    for da in data_arrays:
+        sliced_arrays.append(
+            da.isel(
+                y=slice(minrow_aligned, maxrow_aligned),
+                x=slice(mincol_aligned, maxcol_aligned),
+            )
+        )
+    return mask, *sliced_arrays
 
 
 def get_river_graph(data_catalog):
@@ -454,6 +462,32 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
     return coastline_nodes
 
 
+def full_like(data, fill_value, nodata, attrs=None, *args, **kwargs):
+    ds = xr.full_like(data, fill_value, *args, **kwargs)
+    ds.attrs = attrs or {}
+    ds.attrs["_FillValue"] = nodata
+    return ds
+
+
+def create_riverine_mask(ldd, ldd_network, geom):
+    riverine_mask = full_like(
+        ldd,
+        fill_value=True,
+        nodata=False,
+        dtype=bool,
+    )
+    riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
+
+    idx_ds_masked = ldd_network.idxs_ds.copy()
+    idx_ds_masked[~riverine_mask.values.ravel()] = -1
+
+    all_excluded_indices = np.arange(ldd_network.size)[~riverine_mask.values.ravel()]
+    all_pits = np.intersect1d(idx_ds_masked, all_excluded_indices)
+
+    riverine_mask.values[ldd_network.basins(idxs=all_pits) > 0] = True
+    return riverine_mask
+
+
 class DelayedReader:
     def __init__(self, reader):
         self.reader = reader
@@ -516,7 +550,7 @@ class GEBModel(
         region: dict,
         subgrid_factor: int,
         resolution_arcsec: int = 30,
-        include_coastal: bool = True,
+        include_coastal_area: bool = True,
     ) -> None:
         """Creates a 2D regular grid or reads an existing grid.
         An 2D regular grid will be created from a geometry (geom_fn) or bbox. If an existing
@@ -586,111 +620,114 @@ class GEBModel(
         with rasterio.Env(
             GDAL_HTTP_USERPWD=f"{os.environ['MERIT_USERNAME']}:{os.environ['MERIT_PASSWORD']}"
         ):
-            hydrography = self.data_catalog.get_rasterdataset(
-                "merit_hydro",
-                bbox=[
-                    xmin,
-                    ymin,
-                    xmax,
-                    ymax,
-                ],
-                variables=["dir", "elv"],
-                buffer=10,
-            ).compute()
-            hydrography["dir"].attrs["_FillValue"] = 247
-            hydrography["elv"].attrs["_FillValue"] = -9999.0
+            ldd = (
+                xr.open_dataarray(
+                    self.data_catalog.get_source("merit_hydro").path.format(
+                        variable="dir"
+                    ),
+                    mask_and_scale=False,
+                )
+                .sel(band=1, x=slice(xmin, xmax), y=slice(ymax, ymin))
+                .compute()
+            )
+            ldd.attrs["_FillValue"] = 247
+
+            ldd_network = pyflwdir.from_array(
+                ldd.values,
+                ftype="d8",
+                transform=ldd.rio.transform(recalc=True),
+                latlon=True,
+            )
 
             self.logger.info("Preparing 2D grid.")
             if "outflow" in region:
                 # get basin geometry
-                geom, _ = hydromt.workflows.get_basin_geometry(
-                    ds=hydrography,
-                    flwdir_name="dir",
-                    kind="subbasin",
-                    logger=self.logger,
-                    xy=(lon, lat),
+                riverine_mask = full_like(
+                    ldd,
+                    fill_value=False,
+                    nodata=False,
+                    dtype=bool,
                 )
+                riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
             elif "subbasin" in region or "geom" in region:
                 geom = gpd.GeoDataFrame(
                     geometry=[subbasins_without_outflow_basin.union_all()],
                     crs=subbasins_without_outflow_basin.crs,
                 )
+                # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
+                # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+                # usable between 86°S and 86°N.
+                self.logger.info(
+                    f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
+                )
+
+                riverine_mask = create_riverine_mask(ldd, ldd_network, geom)
+                assert not riverine_mask.attrs["_FillValue"]
             else:
                 raise ValueError(f"Region {region} not understood.")
 
-            # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
-            # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
-            # usable between 86°S and 86°N.
-            self.logger.info(
-                f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
-            )
-
-            riverine_mask = self.full_like(
-                hydrography["dir"],
-                fill_value=True,
-                nodata=False,
-                dtype=bool,
-            )
-
-            assert riverine_mask.attrs["_FillValue"] is False
-            riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
-
-            if include_coastal and subbasins["is_coastal_basin"].any():
-                mask = self.get_coastal_area(
-                    hydrography["dir"], riverine_mask, subbasins
-                )
+            if include_coastal_area and subbasins["is_coastal_basin"].any():
+                mask = self.extend_mask_to_coastal_area(ldd, riverine_mask, subbasins)
             else:
                 mask = riverine_mask
 
             mask.attrs["_FillValue"] = None
             self.set_other(mask, name="drainage/mask")
 
-            hydrography["mask"] = mask
-            hydrography["dir"] = xr.where(
+            ldd = xr.where(
                 mask,
-                hydrography["dir"],
-                hydrography["dir"].attrs["_FillValue"],
+                ldd,
+                ldd.attrs["_FillValue"],
             )
 
-            hydrography["elv"] = xr.where(
+            ldd_elevation = (
+                xr.open_dataarray(
+                    self.data_catalog.get_source("merit_hydro").path.format(
+                        variable="elv"
+                    ),
+                    mask_and_scale=False,
+                )
+                .sel(band=1, x=slice(xmin, xmax), y=slice(ymax, ymin))
+                .compute()
+            )
+            ldd_elevation.attrs["_FillValue"] = -9999.0
+            assert ldd_elevation.shape == ldd.shape == mask.shape
+
+            ldd_elevation = xr.where(
                 mask,
-                hydrography["elv"],
-                hydrography["elv"].attrs["_FillValue"],
+                ldd_elevation,
+                ldd_elevation.attrs["_FillValue"],
             )
 
-            hydrography = clip_region(hydrography, align=30 / 60 / 60)
+            mask, ldd, ldd_elevation = clip_region(
+                mask, ldd, ldd_elevation, align=30 / 60 / 60
+            )
 
-            d8_original = hydrography["dir"]
-            d8_original.attrs["_FillValue"] = 247
-            d8_original = xr.where(
-                hydrography["mask"],
-                d8_original,
-                d8_original.attrs["_FillValue"],
+            ldd.attrs["_FillValue"] = 247
+            ldd = xr.where(
+                mask,
+                ldd,
+                ldd.attrs["_FillValue"],
                 keep_attrs=True,
             )
-            d8_original = self.set_other(
-                d8_original, name="drainage/original_d8_flow_directions"
-            )
+            ldd = self.set_other(ldd, name="drainage/original_d8_flow_directions")
 
-            d8_elv_original = hydrography["elv"]
-            d8_elv_original.attrs["_FillValue"] = -9999.0
-            d8_elv_original = xr.where(
-                hydrography["mask"],
-                d8_elv_original,
-                d8_elv_original.attrs["_FillValue"],
+            ldd_elevation.attrs["_FillValue"] = -9999.0
+            ldd_elevation = xr.where(
+                mask,
+                ldd_elevation,
+                ldd_elevation.attrs["_FillValue"],
                 keep_attrs=True,
             )
-            d8_elv_original = d8_elv_original.raster.mask_nodata()
+            ldd_elevation = ldd_elevation.raster.mask_nodata()
 
-            self.set_other(d8_elv_original, name="drainage/original_d8_elevation")
+            self.set_other(ldd_elevation, name="drainage/original_d8_elevation")
 
-            self.derive_mask(
-                d8_original, hydrography.rio.transform(), resolution_arcsec
-            )
+            self.derive_mask(ldd, ldd.rio.transform(), resolution_arcsec)
 
         self.create_subgrid(subgrid_factor)
 
-    def get_coastal_area(self, ldd, riverine_mask, subbasins):
+    def extend_mask_to_coastal_area(self, ldd, riverine_mask, subbasins):
         flow_raster = pyflwdir.from_array(
             ldd.values,
             ftype="d8",
@@ -978,7 +1015,7 @@ class GEBModel(
         water_levels = water_levels.sel(stations=station_ids)
 
         assert len(water_levels.stations) > 0, (
-            "No stations found in the region. If no stations should be set, set include_coastal=False"
+            "No stations found in the region. If no stations should be set, set include_coastal_area=False"
         )
 
         self.set_other(
@@ -1335,10 +1372,14 @@ class GEBModel(
         return path
 
     def full_like(self, data, fill_value, nodata, attrs=None, *args, **kwargs):
-        ds = xr.full_like(data, fill_value, *args, **kwargs)
-        ds.attrs = attrs or {}
-        ds.attrs["_FillValue"] = nodata
-        return ds
+        return full_like(
+            data,
+            fill_value=fill_value,
+            nodata=nodata,
+            attrs=attrs,
+            *args,
+            **kwargs,
+        )
 
     def check_methods(self, opt):
         """Check all opt keys and raise sensible error messages if unknown."""
