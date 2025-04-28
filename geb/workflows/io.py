@@ -273,13 +273,16 @@ def to_zarr(
         # For anything with a shard, we opt for zarr version 3, for anything without, we use version 2.
         if shards:
             zarr_format = 3
-            from numcodecs.zarr3 import Blosc
+            from zarr.codecs import BloscCodec
+            from zarr.codecs.blosc import BloscShuffle
 
             if compressor is None:
-                compressor = Blosc(
+                compressor = BloscCodec(
                     cname="zstd",
                     clevel=9,
-                    shuffle=1 if byteshuffle else 0,
+                    shuffle=BloscShuffle.shuffle
+                    if byteshuffle
+                    else BloscShuffle.noshuffle,
                 )
 
             check_buffer_size(da, chunks_or_shards=shards)
