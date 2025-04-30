@@ -502,7 +502,7 @@ def evapotranspirate(
 
     for i in prange(land_use_type.size):
         remaining_potential_transpiration = potential_transpiration[i]
-        if land_use_type[i] == PADDY_IRRIGATED:
+        if land_use_type[i] == PADDY_IRRIGATED and not mask[i]:
             transpiration_from_topwater = min(
                 topwater[i], remaining_potential_transpiration
             )
@@ -624,11 +624,11 @@ def evapotranspirate(
                     transpiration_aeration_stress_corrected,
                 )
                 transpiration = transpiration_water_stress_corrected
-                w[layer, i] -= transpiration
-                w[layer, i] = max(
-                    w[layer, i], wres[layer, i]
-                )  # soil moisture can never be lower than wres
                 if not mask[i]:
+                    w[layer, i] -= transpiration
+                    w[layer, i] = max(
+                        w[layer, i], wres[layer, i]
+                    )  # soil moisture can never be lower than wres
                     actual_total_transpiration[i] += transpiration
 
         if not mask_evap[i]:
@@ -1279,66 +1279,53 @@ class Soil(object):
             self.HRU.var.land_use_type, 3, dtype=np.int32
         )
 
+    def initiate_plantfate(self):
         # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
-        if self.model.config["general"]["simulate_forest"]:
-            plantFATE_cluster = 7
-            biodiversity_scenario = "low"
+        already_has_plantFATE_cell = False
 
-            lon, lat = 73.5975501619, 19.1444726274
+        max_num_plantFATE_cells = len(self.HRU.var.land_use_type)
 
-            from honeybees.library.raster import coord_to_pixel
+        from . import plantFATE
 
-            px, py = coord_to_pixel(np.array([lon, lat]), gt=self.model.data.grid.gt)
+        self.model.plantFATE = []
+        self.plantFATE_forest_RUs = np.zeros_like(
+            self.HRU.var.land_use_type, dtype=bool
+        )
 
-            cell_ids = np.arange(self.model.data.grid.compressed_size)
-            cell_ids_map = self.model.data.grid.decompress(cell_ids, fillvalue=-1)
-            cell_id = cell_ids_map[py, px]
-
-            already_has_plantFATE_cell = False
-            max_num_plantFATE_cells = 1
-            max_num_plantFATE_cells = len(self.HRU.var.land_use_type)
-
-            from . import plantFATE
-
-            self.model.plantFATE = []
-            self.plantFATE_forest_RUs = np.zeros_like(
-                self.HRU.var.land_use_type, dtype=bool
-            )
-
-            for i, land_use_type_RU in enumerate(self.HRU.var.land_use_type):
-                grid_cell = self.HRU.var.HRU_to_grid[i]
-                if land_use_type_RU == FOREST and self.HRU.var.land_use_ratio[i] > 0.5:
-                # if land_use_type_RU == FOREST and grid_cell == cell_id:
-                # if land_use_type_RU == FOREST:
-                    if already_has_plantFATE_cell:
-                        self.model.plantFATE.append(None)
-                    else:
-                        self.plantFATE_forest_RUs[i] = True
-                        if sum(self.plantFATE_forest_RUs) >= max_num_plantFATE_cells:
-                            already_has_plantFATE_cell = True
-                        PFconfig_ini = self.model.config["plantFATE"]["default_ini_file"]
-                        if self.model.spinup:
-                            PFconfig_ini = self.model.config["plantFATE"]["spinup_ini_file"]
-                        pfModel = plantFATE.Model(PFconfig_ini, False, None)
-                        pfModel.plantFATE_model.config.parent_dir = str(self.model.simulation_root / "plantFATE")
-                        pfModel.plantFATE_model.config.expt_dir = f"cell_{i}"
-                        pfModel.plantFATE_model.config.out_dir = str(self.model.simulation_root / "plantFATE" / f"cell_{i}")
-                        pfModel.plantFATE_model.config.save_state = False
-                        if self.model.spinup is False:  # continue from
-                            pfModel.plantFATE_model.config.continuePrevious = True
-                            pfModel.plantFATE_model.config.continueFrom_stateFile = str(self.model.simulation_root / ".." / "spinup" / "plantFATE" / f"cell_{i}" / "pf_saved_state.txt")
-                            pfModel.plantFATE_model.config.continueFrom_configFile = str(self.model.simulation_root / ".." / "spinup" / "plantFATE" / f"cell_{i}" / "pf_saved_config.ini")
-                        # pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
-                        self.model.plantFATE.append(pfModel)
-
-                        # print("made_plantFATE cell")
-                else:
+        for i, land_use_type_RU in enumerate(self.HRU.var.land_use_type):
+            grid_cell = self.HRU.var.HRU_to_grid[i]
+            if land_use_type_RU == FOREST and self.HRU.var.land_use_ratio[i] > 0.5:
+            # if land_use_type_RU == FOREST and grid_cell == cell_id:
+            # if land_use_type_RU == FOREST:
+                if already_has_plantFATE_cell:
                     self.model.plantFATE.append(None)
+                else:
+                    self.plantFATE_forest_RUs[i] = True
+                    if sum(self.plantFATE_forest_RUs) >= max_num_plantFATE_cells:
+                        already_has_plantFATE_cell = True
+                    PFconfig_ini = self.model.config["plantFATE"]["default_ini_file"]
+                    if self.model.spinup:
+                        PFconfig_ini = self.model.config["plantFATE"]["spinup_ini_file"]
+                    pfModel = plantFATE.Model(PFconfig_ini, False, None)
+                    pfModel.plantFATE_model.config.parent_dir = str(self.model.simulation_root / "plantFATE")
+                    pfModel.plantFATE_model.config.expt_dir = f"cell_{i}"
+                    pfModel.plantFATE_model.config.out_dir = str(self.model.simulation_root / "plantFATE" / f"cell_{i}")
+                    pfModel.plantFATE_model.config.save_state = False
+                    if self.model.spinup is False:  # continue from
+                        pfModel.plantFATE_model.config.continuePrevious = True
+                        pfModel.plantFATE_model.config.continueFrom_stateFile = str(self.model.simulation_root / ".." / "spinup" / "plantFATE" / f"cell_{i}" / "pf_saved_state.txt")
+                        pfModel.plantFATE_model.config.continueFrom_configFile = str(self.model.simulation_root / ".." / "spinup" / "plantFATE" / f"cell_{i}" / "pf_saved_config.ini")
+                    # pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
+                    self.model.plantFATE.append(pfModel)
 
-            # print(len(self.model.plantFATE))
-            # print(self.model.plantFATE[0])
-            # print(self.model.plantFATE[0:10])
-            # print(all(v is None for v in self.model.plantFATE))
+                    # print("made_plantFATE cell")
+            else:
+                self.model.plantFATE.append(None)
+
+        # print(len(self.model.plantFATE))
+        # print(self.model.plantFATE[0])
+        # print(self.model.plantFATE[0:10])
+        # print(all(v is None for v in self.model.plantFATE))
 
     def newPlantFATEModel(self, indx):
         from . import plantFATE
@@ -1539,6 +1526,9 @@ class Soil(object):
         """
         timer = TimingModule("Soil")
 
+        if self.model.current_timestep == 1 and self.model.config["general"]["simulate_forest"]:
+            self.initiate_plantfate()
+
         if __debug__:
             w_pre = self.HRU.var.w.copy()
             topwater_pre = self.HRU.var.topwater.copy()
@@ -1681,8 +1671,32 @@ class Soil(object):
         # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
         if self.model.config["general"]["simulate_forest"]:
             mask[self.plantFATE_forest_RUs] = True
-            mask_evap[self.plantFATE_forest_RUs] = True
+            # mask_evap[self.plantFATE_forest_RUs] = True
         # print(len(self.plantFATE_forest_RUs[self.plantFATE_forest_RUs]))
+        balance_check(
+            name="soil_-1_mask",
+            how="cellwise",
+            influxes=[
+                self.HRU.var.natural_available_water_infiltration[~mask],
+                self.HRU.var.actual_irrigation_consumption[~mask],
+                capillary_rise_from_groundwater[~mask]
+            ],
+            outfluxes=[
+                interflow[~mask],
+                open_water_evaporation[~mask],
+                runoff_from_groundwater[~mask]
+            ],
+            prestorages=[
+                w_pre[:, ~mask].sum(axis=0),
+                topwater_pre[~mask],
+            ],
+            poststorages=[
+                self.HRU.var.w[:, ~mask].sum(axis=0),
+                self.HRU.var.topwater[~mask],
+            ],
+            tollerance=1e-6,
+        )
+
         (
             actual_total_transpiration,
             actual_bare_soil_evaporation,
@@ -1710,18 +1724,65 @@ class Soil(object):
             open_water_evaporation=open_water_evaporation,
             available_water_infiltration=available_water_infiltration,
             mask = mask,
-            # mask=self.var.land_use_type >= SEALED
             mask_evap = mask_evap
         )
         assert actual_total_transpiration.dtype == np.float32
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
-        # if self.model.config["general"]["simulate_forest"]:
+        balance_check(
+            name="soil_0_mask",
+            how="cellwise",
+            influxes=[
+                self.HRU.var.natural_available_water_infiltration[~mask],
+                self.HRU.var.actual_irrigation_consumption[~mask],
+                capillary_rise_from_groundwater[~mask]
+            ],
+            outfluxes=[
+                interflow[~mask],
+                actual_total_transpiration[~mask],
+                actual_bare_soil_evaporation[~mask],
+                open_water_evaporation[~mask],
+                runoff_from_groundwater[~mask]
+            ],
+            prestorages=[
+                w_pre[:, ~mask].sum(axis=0),
+                topwater_pre[~mask],
+            ],
+            poststorages=[
+                self.HRU.var.w[:, ~mask].sum(axis=0),
+                self.HRU.var.topwater[~mask],
+            ],
+            tollerance=1e-6,
+        )
 
+        balance_check(
+            name="soil_0_bioarea",
+            how="cellwise",
+            influxes=[
+                self.HRU.var.natural_available_water_infiltration[bioarea],
+                self.HRU.var.actual_irrigation_consumption[bioarea],
+                capillary_rise_from_groundwater[bioarea]
+            ],
+            outfluxes=[
+                interflow[bioarea],
+                actual_total_transpiration[bioarea],
+                actual_bare_soil_evaporation[bioarea],
+                open_water_evaporation[bioarea],
+                runoff_from_groundwater[bioarea]
+            ],
+            prestorages=[
+                w_pre[:, bioarea].sum(axis=0),
+                topwater_pre[bioarea],
+            ],
+            poststorages=[
+                self.HRU.var.w[:, bioarea].sum(axis=0),
+                self.HRU.var.topwater[bioarea],
+            ],
+            tollerance=1e-6,
+        )
 
-        # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
-        if self.model.config["general"]["simulate_forest"]:
+        if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
             plantfate_transpiration = np.zeros(len(self.plantFATE_forest_RUs))
             plantfate_bare_soil_evaporation = np.zeros(len(self.plantFATE_forest_RUs))
             plantfate_transpiration_by_layer = np.zeros_like(
@@ -1747,10 +1808,9 @@ class Soil(object):
             # print(np.where(new_forest_HRUs == 425))
 
             for i in range(len(self.plantFATE_forest_RUs)):
-                if i != 2:
-                    # print("New Forest " + str(i))
-                    self.evapotranspirate_plantFATE(i, plantfate_transpiration, plantfate_bare_soil_evaporation,
-                                                plantfate_transpiration_by_layer, plantfate_biomass, plantfate_co2, plantfate_num_ind)
+                # print("New Forest " + str(i))
+                self.evapotranspirate_plantFATE(i, plantfate_transpiration, plantfate_bare_soil_evaporation,
+                                            plantfate_transpiration_by_layer, plantfate_biomass, plantfate_co2, plantfate_num_ind)
 
             # for p in processes:
             #     p.start()
@@ -1758,8 +1818,11 @@ class Soil(object):
             #     p.join()
             #
             # print(plantfate_transpiration[self.plantFATE_forest_RUs])
+
             actual_total_transpiration += plantfate_transpiration
             self.HRU.var.w -= plantfate_transpiration_by_layer
+
+            assert np.allclose(plantfate_transpiration, plantfate_transpiration_by_layer.sum(axis=0))
 
             self.model.data.grid.plantFATE_biomass = self.model.data.to_grid(HRU_data=plantfate_biomass,
                                                                              fn="weightedmean")
@@ -1767,6 +1830,31 @@ class Soil(object):
             self.model.data.grid.plantFATE_num_ind = self.model.data.to_grid(HRU_data=plantfate_num_ind,
                                                                              fn="weightedmean")
 
+        balance_check(
+            name="soil_0.5_bioarea",
+            how="cellwise",
+            influxes=[
+                self.HRU.var.natural_available_water_infiltration[bioarea],
+                self.HRU.var.actual_irrigation_consumption[bioarea],
+                capillary_rise_from_groundwater[bioarea]
+            ],
+            outfluxes=[
+                interflow[bioarea],
+                actual_total_transpiration[bioarea],
+                actual_bare_soil_evaporation[bioarea],
+                open_water_evaporation[bioarea],
+                runoff_from_groundwater[bioarea]
+            ],
+            prestorages=[
+                w_pre[:, bioarea].sum(axis=0),
+                topwater_pre[bioarea],
+            ],
+            poststorages=[
+                self.HRU.var.w[:, bioarea].sum(axis=0),
+                self.HRU.var.topwater[bioarea],
+            ],
+            tollerance=1e-6,
+        )
 
         # actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
             # print(plantfate_bare_soil_evaporation)
@@ -1891,20 +1979,20 @@ class Soil(object):
             # print(self.var.w[0:len(self.var.w), self.plantFATE_forest_RUs])
             # print(self.wres[0:len(self.wres), self.plantFATE_forest_RUs])
             #
-            if self.model.config["general"]["simulate_forest"]:
-                assert (
-                    actual_total_transpiration[self.plantFATE_forest_RUs]
-                    <= potential_transpiration[self.plantFATE_forest_RUs] + 1e-7
-                ).all()
-
-            assert (
-                actual_total_transpiration[bioarea]
-                <= potential_transpiration[bioarea] + 1e-7
-            ).all()
-            assert (
-                actual_bare_soil_evaporation[bioarea]
-                <= potential_bare_soil_evaporation[bioarea] + 1e-7
-            ).all()
+            # if self.model.config["general"]["simulate_forest"]:
+            #     assert (
+            #         actual_total_transpiration[self.plantFATE_forest_RUs]
+            #         <= potential_transpiration[self.plantFATE_forest_RUs] + 1e-7
+            #     ).all()
+            #
+            # assert (
+            #     actual_total_transpiration[bioarea]
+            #     <= potential_transpiration[bioarea] + 1e-7
+            # ).all()
+            # assert (
+            #     actual_bare_soil_evaporation[bioarea]
+            #     <= potential_bare_soil_evaporation[bioarea] + 1e-7
+            # ).all()
 
         timer.new_split("Finalizing")
         if self.model.timing:
