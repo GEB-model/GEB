@@ -471,11 +471,13 @@ def evapotranspirate(
         # and thus transpiration is 0 this also avoids division by zero, and thus NaNs
         # likewise, if the total_transpiration_factor (full water stress) is 0
         # or full aeration stress, we can skip the loop
-        if (
-            not soil_is_frozen[i]
-            and total_transpiration_factor_water_stress > np.float32(0)
-        ):
-            maximum_transpiration = remaining_potential_transpiration * total_transpiration_factor_water_stress
+        if not soil_is_frozen[
+            i
+        ] and total_transpiration_factor_water_stress > np.float32(0):
+            maximum_transpiration = (
+                remaining_potential_transpiration
+                * total_transpiration_factor_water_stress
+            )
             # distribute the transpiration over the layers, considering the root ratios
             # and the transpiration reduction factor per layer
             for layer in range(N_SOIL_LAYERS):
