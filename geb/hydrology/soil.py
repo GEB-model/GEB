@@ -474,11 +474,8 @@ def evapotranspirate(
         if (
             not soil_is_frozen[i]
             and total_transpiration_factor_water_stress > np.float32(0)
-            and total_aeration_stress > np.float32(0)
         ):
-            maximum_transpiration = remaining_potential_transpiration * min(
-                total_transpiration_factor_water_stress, total_aeration_stress
-            )
+            maximum_transpiration = remaining_potential_transpiration * total_transpiration_factor_water_stress
             # distribute the transpiration over the layers, considering the root ratios
             # and the transpiration reduction factor per layer
             for layer in range(N_SOIL_LAYERS):

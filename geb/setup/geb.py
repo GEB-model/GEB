@@ -3736,9 +3736,11 @@ class GEBModel(GridModel):
             regions_of_interest = [
                 "VIC Goulburn-Broken",
                 "VIC Murray Above",
+                "VIC Murray Below",
                 "VIC Loddon-Campaspe",
                 "NSW Murray Below",
                 "NSW Murray Above",
+                "NSW Murrumbidgee",
             ]
 
             ################ Water price #######################
@@ -3769,10 +3771,15 @@ class GEBModel(GridModel):
                 method="time"
             )
             pivot_df["Victoria"] = pivot_df[
-                ["VIC Goulburn-Broken", "VIC Murray Above", "VIC Loddon-Campaspe"]
+                [
+                    "VIC Goulburn-Broken",
+                    "VIC Murray Above",
+                    "VIC Murray Below",
+                    "VIC Loddon-Campaspe",
+                ]
             ].mean(axis=1)
             pivot_df["New South Wales"] = pivot_df[
-                ["NSW Murray Below", "NSW Murray Above"]
+                ["NSW Murray Below", "NSW Murray Above", "NSW Murrumbidgee"]
             ].mean(axis=1)
 
             # Convert from AUD to USD if needed
@@ -3827,10 +3834,15 @@ class GEBModel(GridModel):
             ).interpolate("time")
 
             pivot_water_price_df["Victoria"] = pivot_water_price_df[
-                ["VIC Goulburn-Broken", "VIC Murray Above", "VIC Loddon-Campaspe"]
+                [
+                    "VIC Goulburn-Broken",
+                    "VIC Murray Above",
+                    "VIC Murray Below",
+                    "VIC Loddon-Campaspe",
+                ]
             ].mean(axis=1)
             pivot_water_price_df["New South Wales"] = pivot_water_price_df[
-                ["NSW Murray Below", "NSW Murray Above"]
+                ["NSW Murray Below", "NSW Murray Above", "NSW Murrumbidgee"]
             ].mean(axis=1)
 
             start_date = "2000-07-01"
@@ -3893,11 +3905,20 @@ class GEBModel(GridModel):
             ).interpolate("time")
 
             pivot_diversions_df["Victoria"] = pivot_diversions_df[
-                ["VIC Goulburn-Broken", "VIC Murray Above", "VIC Loddon-Campaspe"]
+                [
+                    "VIC Goulburn-Broken",
+                    "VIC Murray Above",
+                    "VIC Murray Below",
+                    "VIC Loddon-Campaspe",
+                ]
             ].sum(axis=1)
             pivot_diversions_df["New South Wales"] = pivot_diversions_df[
                 ["NSW Murray Below", "NSW Murray Above"]
             ].sum(axis=1)
+
+            pivot_diversions_df["New South Wales"] + (
+                pivot_diversions_df["NSW Murrumbidgee"] * 0.5
+            )
 
             return df_observed_price, pivot_diversions_df
 
