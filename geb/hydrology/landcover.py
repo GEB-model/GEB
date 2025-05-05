@@ -336,7 +336,7 @@ class LandCover(object):
             crop_stage_data=crop_stage_lenghts,
             kc_crop_stage=crop_factors,
             rooth_depths=root_depths,
-            init_root_depth=0.01,
+            init_root_depth=0.25,
         )
 
         self.var.root_depth[self.var.land_use_type == FOREST] = 2.0  # forest

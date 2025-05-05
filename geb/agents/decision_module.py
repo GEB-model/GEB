@@ -163,7 +163,7 @@ class DecisionModule:
         return EU_do_nothing_array
 
     @staticmethod
-    @njit(cache=True, parallel=True)
+    @njit(cache=True)
     def calcEU_adapt(
         expenditure_cap: float,
         loan_duration: int,
@@ -184,7 +184,8 @@ class DecisionModule:
         total_profits: np.ndarray,
     ) -> np.ndarray:
         """This function calculates the discounted subjective utility for adapting for each agent.
-        We take into account the current adaptation status of each agent, so that agents also consider the number of years of remaining loan payment.
+        We take into account the current adaptation status of each agent, so that agents also consider
+        the number of years of remaining loan payment.
 
         Args:
             expenditure_cap: expenditure cap for dry flood proofing investments.
@@ -212,26 +213,26 @@ class DecisionModule:
         # Preallocate arrays
         EU_adapt = np.full(n_agents, -np.inf, dtype=np.float32)
 
-        # Ensure p_droughts is in increasing order
-        indices = np.argsort(p_droughts)
+        # Ensure p_droughts is in increasing order; cast indices to int32 for consistency.
+        indices = np.argsort(p_droughts).astype(np.int32)
         total_profits_adaptation = total_profits_adaptation[indices]
         p_droughts = p_droughts[indices]
 
-        # Identify agents able to afford the adaptation and that have not yet adapted
+        # Identify agents able to afford the adaptation and that have not yet adapted.
         unconstrained_mask = (
             (profits_no_event * expenditure_cap > total_annual_costs)
-            & (adapted == 0)
+            & (adapted == np.int32(0))
             & extra_constraint
         )
 
-        # Iterate only through agents who can afford to adapt
-        unconstrained_indices = np.where(unconstrained_mask)[0]
+        # Iterate only through agents who can afford to adapt (cast indices to int32).
+        unconstrained_indices = np.where(unconstrained_mask)[0].astype(np.int32)
 
         for idx in prange(unconstrained_indices.size):
             i = unconstrained_indices[idx]
 
-            # Loan payment years remaining
-            payment_remainder = max(loan_duration - time_adapted[i], 0)
+            # Loan payment years remaining (ensure int32)
+            payment_remainder = np.int32(np.maximum(loan_duration - time_adapted[i], 0))
 
             # Decision horizon for the agent
             T_i = T[i]
@@ -242,28 +243,28 @@ class DecisionModule:
                 T_i, profits_no_event_adaptation[i], dtype=np.float32
             )
 
-            # Subtract adaptation costs during payment period
+            # Subtract adaptation costs during the payment period.
             for t in range(T_i):
                 if t < payment_remainder:
                     NPV_adapt_no_flood[t] -= adaptation_costs[i]
 
             # Ensure NPVs are at least a small positive number to prevent NaNs
-            NPV_adapt_no_flood = np.maximum(NPV_adapt_no_flood, 1e-6)
+            NPV_adapt_no_flood = np.maximum(NPV_adapt_no_flood, np.float32(1e-6))
 
             # Time-discounted NPVs
-            discount_factors = (1 + discount_rate[i]) ** t_agent
+            discount_factors = (np.float32(1.0) + discount_rate[i]) ** t_agent
             NPV_adapt_no_flood_discounted = NPV_adapt_no_flood / discount_factors
             NPV_adapt_no_flood_summed = np.sum(NPV_adapt_no_flood_discounted)
-
-            # Apply utility function to NPVs
-            NPV_adapt_no_flood_summed = max(
-                NPV_adapt_no_flood_summed, 1e-6
-            )  # Ensure positive
-            EU_adapt_no_flood = (NPV_adapt_no_flood_summed ** (1 - sigma[i])) / (
-                1 - sigma[i]
+            NPV_adapt_no_flood_summed = np.maximum(
+                NPV_adapt_no_flood_summed, np.float32(1e-6)
             )
 
-            # Calculate NPVs for each drought event
+            # Compute EU without drought event
+            EU_adapt_no_flood = (
+                NPV_adapt_no_flood_summed ** (np.int32(1) - sigma[i])
+            ) / (np.int32(1) - sigma[i])
+
+            # Calculate NPVs for each drought event.
             n_events = p_droughts.size
             NPV_adapt = np.empty((n_events, T_i), dtype=np.float32)
             total_profits_adaptation_i = total_profits_adaptation[:, i]
@@ -275,12 +276,12 @@ class DecisionModule:
                 for t in range(T_i):
                     if t < payment_remainder:
                         NPV_event[t] -= adaptation_costs[i]
-                NPV_event = np.maximum(NPV_event, 1e-6)  # Ensure positive
+                NPV_event = np.maximum(NPV_event, np.float32(1e-6))
                 NPV_event_discounted = NPV_event / discount_factors
                 NPV_adapt[j, :] = NPV_event_discounted
 
             NPV_adapt_summed = np.sum(NPV_adapt, axis=1)
-            NPV_adapt_summed = np.maximum(NPV_adapt_summed, 1e-6)  # Ensure positive
+            NPV_adapt_summed = np.maximum(NPV_adapt_summed, np.float32(1e-6))
 
             # Calculate expected utilities for each event
             EU_adapt_flood = (NPV_adapt_summed ** (1 - sigma[i])) / (1 - sigma[i])
@@ -290,19 +291,23 @@ class DecisionModule:
             p_all_events = np.zeros(n_events + 3, dtype=np.float32)
 
             EU_adapt_dict[1 : n_events + 1] = EU_adapt_flood
-            EU_adapt_dict[n_events + 1 : n_events + 3] = EU_adapt_no_flood
+            EU_adapt_dict[n_events + 1 : n_events + 3] = (
+                EU_adapt_no_flood  # Broadcast scalar to two positions.
+            )
             EU_adapt_dict[0] = EU_adapt_flood[0]
 
             # Adjust for perceived risk
             p_all_events[1 : n_events + 1] = risk_perception[i] * p_droughts
-            p_all_events[n_events + 1] = (
-                p_all_events[n_events] + 0.001
-            )  # Small increment
-            p_all_events[n_events + 2] = 1.0  # Ensure total probability sums to 1
-            p_all_events[0] = 0.0
+            p_all_events[n_events + 1] = p_all_events[n_events] + np.float32(
+                0.001
+            )  # Small increment.
+            p_all_events[n_events + 2] = np.float32(
+                1.0
+            )  # Ensure total probability sums to 1.
+            p_all_events[0] = np.float32(0.0)
 
-            # Integrate EU over probabilities using trapezoidal rule
-            EU_adapt[i] = np.trapz(EU_adapt_dict, p_all_events)
+            # Integrate EU over probabilities using trapezoidal rule.
+            EU_adapt[i] = np.float32(np.trapz(EU_adapt_dict, p_all_events))
 
             # Ensure no NaNs
             if np.isnan(EU_adapt[i]):

@@ -910,17 +910,17 @@ def find_matching_rows(arr, target_row):
 
 
 @njit(cache=True)
-def find_most_similar_index(target_series, yield_ratios, groups):
+def find_most_similar_index(target_series, profits, groups):
     n = groups.size
     indices = []
     for i in range(n):
         if groups[i]:
             indices.append(i)
     n_indices = len(indices)
-    distances = np.empty(n_indices, dtype=yield_ratios.dtype)
+    distances = np.empty(n_indices, dtype=profits.dtype)
     for idx in range(n_indices):
         i = indices[idx]
-        diff = yield_ratios[i] - target_series
+        diff = profits[i] - target_series
         distances[idx] = np.linalg.norm(diff)
     min_idx = 0
     min_dist = distances[0]
@@ -933,30 +933,27 @@ def find_most_similar_index(target_series, yield_ratios, groups):
 
 @njit(cache=True)
 def crop_profit_difference_njit(
-    yield_ratios,
+    yearly_profits,  # new variable: shape (n_farmers, n_years)
     crop_elevation_group,
     unique_crop_groups,
     group_indices,
     crop_calendar,
     unique_crop_calendars,
-    p_droughts,
+    p_droughts,  # may be kept for other parts of code (if needed)
+    past_window,  # new parameter controlling how many recent years to consider
 ):
     """
     For each unique crop group (rotation + metadata),
     consider all possible 'adapted' counterparts (rotations that differ)
-    and compute the yield ratio gains for switching.
+    and compute the weighted profit gains for switching.
+    The profits of the last `past_window` years are averaged using weights,
+    where the most recent year gets a higher weight (e.g. 0.5) than older years (e.g. 0.2).
     """
     n_groups = len(unique_crop_groups)
     n_calendars = len(unique_crop_calendars)
-    n_droughts = len(p_droughts)
-
-    # -- Key assumption: the first columns of each row correspond to the
-    #    crop rotation, whose length is the same as unique_crop_calendars.shape[1].
-    #    Everything after that is considered 'metadata.'
-    n_rotation = unique_crop_calendars.shape[1]
-
-    unique_yield_ratio_gain = np.full(
-        (n_groups, n_calendars, n_droughts),
+    # Instead of yield ratios per drought scenario, we now work with scalar weighted profits.
+    unique_profit_gain = np.full(
+        (n_groups, n_calendars),
         0.0,
         dtype=np.float32,
     )
@@ -974,43 +971,52 @@ def crop_profit_difference_njit(
         dtype=np.int32,
     )
 
+    # Precompute weights for the past_window years.
+    # The most recent year (index 0) gets weight 0.5, and the oldest (index past_window-1) 0.2.
+    weights = np.empty(past_window, dtype=yearly_profits.dtype)
+    weight_total = 0.0
+    if past_window > 1:
+        weight_step = (0.5 - 0.2) / (past_window - 1)
+    else:
+        weight_step = 0.0
+    for j in range(past_window):
+        weights[j] = 0.5 - j * weight_step
+        weight_total += weights[j]
+
+    # -- key assumption: the first n_rotation columns correspond to the crop rotation.
+    n_rotation = unique_crop_calendars.shape[1]
+
     for group_id in range(n_groups):
-        # The "current group" is one row from unique_crop_groups
         unique_group = unique_crop_groups[group_id]
 
         # Which farmers in crop_elevation_group match this unique_group?
         unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
 
-        # Identify which unique rotations differ from the current group's rotation.
-        # The rotation part is unique_group[:n_rotation].
+        # Identify candidate rotations that differ from current rotation.
         mask = np.empty(n_calendars, dtype=np.bool_)
         for i in range(n_calendars):
-            # Compare the candidate rotation vs. the current group's rotation columns
             match = True
             for j in range(n_rotation):
                 if unique_crop_calendars[i, j] != unique_group[j]:
                     match = False
                     break
-            # We consider only those that do NOT match => potential adaptation
             mask[i] = not match
 
-        # Collect all candidate rotations that differ from the current rotation
+        # Collect all candidate rotations that differ from current rotation.
         candidate_crop_rotations = []
         for i in range(n_calendars):
             if mask[i]:
                 candidate_crop_rotations.append(unique_crop_calendars[i])
-
         num_candidates = len(candidate_crop_rotations)
 
-        # The metadata columns start at n_rotation
-        metadata = unique_group[n_rotation:]  # shape: (original_cols - n_rotation,)
+        # The metadata columns start at index n_rotation.
+        metadata = unique_group[n_rotation:]
 
-        # Evaluate each candidate rotation
+        # Evaluate each candidate rotation.
         for crop_id in range(num_candidates):
-            unique_rotation = candidate_crop_rotations[crop_id]  # shape: (n_rotation,)
+            unique_rotation = candidate_crop_rotations[crop_id]
 
-            # Build the 'other crop' group: [candidate rotation + same metadata]
-            # This ensures the final shape matches crop_elevation_group's shape exactly.
+            # Build the 'other crop' group: [candidate rotation + same metadata].
             unique_group_other_crop = np.concatenate((unique_rotation, metadata))
 
             # Which farmers have this 'other crop' group?
@@ -1018,53 +1024,61 @@ def crop_profit_difference_njit(
                 crop_elevation_group, unique_group_other_crop
             )
 
-            # Only if that group actually exists in the data, compute yield gains
+            # Only if that group exists in the data, compute profit gains.
             if np.any(unique_farmer_groups_other_crop):
-                # Compute current yield ratio mean
-                current_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
+                # Compute the weighted profit average for the current group.
+                current_sum = 0.0
                 count_current = 0
                 for i in range(unique_farmer_groups.size):
                     if unique_farmer_groups[i]:
-                        current_sum += yield_ratios[i]
+                        # Compute weighted average over the last `past_window` years.
+                        weighted_profit = 0.0
+                        for j in range(past_window):
+                            weighted_profit += yearly_profits[i, j] * weights[j]
+                        weighted_profit /= weight_total
+                        current_sum += weighted_profit
                         count_current += 1
                 if count_current > 0:
-                    current_yield_ratio = current_sum / count_current
+                    current_profit_avg = current_sum / count_current
                 else:
-                    current_yield_ratio = current_sum  # All zeros
+                    current_profit_avg = 0.0
 
-                # Compute candidate yield ratio mean
-                candidate_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
+                # Compute the weighted profit average for the candidate group.
+                candidate_sum = 0.0
                 count_candidate = 0
                 for i in range(unique_farmer_groups_other_crop.size):
                     if unique_farmer_groups_other_crop[i]:
-                        candidate_sum += yield_ratios[i]
+                        weighted_profit = 0.0
+                        for j in range(past_window):
+                            weighted_profit += yearly_profits[i, j] * weights[j]
+                        weighted_profit /= weight_total
+                        candidate_sum += weighted_profit
                         count_candidate += 1
                 if count_candidate > 0:
-                    candidate_yield_ratio = candidate_sum / count_candidate
+                    candidate_profit_avg = candidate_sum / count_candidate
                 else:
-                    candidate_yield_ratio = candidate_sum  # All zeros
+                    candidate_profit_avg = 0.0
 
-                # The difference = potential gain
-                yield_ratio_gain = candidate_yield_ratio - current_yield_ratio
+                # The difference = potential profit gain.
+                profit_gain = candidate_profit_avg - current_profit_avg
 
-                # For example, assume the first element of the new rotation
-                # is the "crop to switch to."
+                # For example, assume the first element of the new rotation is the "crop to switch to."
                 crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
 
-                if np.all(np.isnan(yield_ratio_gain)):
-                    yield_ratio_gain = np.zeros_like(yield_ratio_gain)
+                # Check for NaN (if applicable) and then, as before, find the best matching agent.
+                if profit_gain != profit_gain:  # NaN check
+                    profit_gain = 0.0
                 else:
-                    # Find the best match in yield_ratios that looks like 'yield_ratio_gain'
                     id_to_switch_to[group_id, crop_id] = find_most_similar_index(
-                        yield_ratio_gain,
-                        yield_ratios,
+                        profit_gain,
+                        yearly_profits,
                         unique_farmer_groups_other_crop,
                     )
 
-                unique_yield_ratio_gain[group_id, crop_id, :] = yield_ratio_gain
+                unique_profit_gain[group_id, crop_id] = profit_gain
 
-    # Now re-index the results for the actual farmers
-    gains_adaptation = unique_yield_ratio_gain[group_indices, :, :]
+    # Now re-index the results for the actual farmers.
+    gains_adaptation = unique_profit_gain[group_indices, :]
     new_crop_nr = crop_to_switch_to[group_indices, :]
     new_farmer_id = id_to_switch_to[group_indices, :]
 
@@ -4137,11 +4151,11 @@ class CropFarmers(AgentBaseClass):
 
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # or who's never had access to irrigation water
-        expired_adaptations = (
-            self.time_adapted[:, adaptation_type] == self.lifespan_irrigation
-        ) | ~has_irrigation_access
-        self.adapted[expired_adaptations, adaptation_type] = 0
-        self.time_adapted[expired_adaptations, adaptation_type] = -1
+        # expired_adaptations = (
+        #     self.time_adapted[:, adaptation_type] == self.lifespan_irrigation
+        # ) | ~has_irrigation_access
+        # self.adapted[expired_adaptations, adaptation_type] = 0
+        # self.time_adapted[expired_adaptations, adaptation_type] = -1
         # self.irrigation_efficiency[expired_adaptations] = 0.5
         # self.return_fraction[expired_adaptations] = self.return_fraction_surface
 
@@ -4176,27 +4190,32 @@ class CropFarmers(AgentBaseClass):
 
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params = {
-            "loan_duration": loan_duration,
-            "expenditure_cap": self.expenditure_cap,
-            "n_agents": self.n,
-            "sigma": self.risk_aversion.data,
-            "p_droughts": 1 / self.p_droughts[:-1],
-            "total_profits_adaptation": total_profits_adaptation,
-            "profits_no_event": profits_no_event,
-            "profits_no_event_adaptation": profits_no_event_adaptation,
-            "total_profits": total_profits,
-            "risk_perception": self.risk_perception.data,
-            "total_annual_costs": total_annual_costs_m2,
-            "adaptation_costs": annual_cost_m2,
+            "loan_duration": np.int32(loan_duration),
+            "expenditure_cap": np.int32(self.expenditure_cap),
+            "n_agents": np.int32(self.n),
+            "sigma": self.risk_aversion.data.astype(np.float32),
+            "p_droughts": (1 / self.p_droughts[:-1]).astype(np.float32),
+            "total_profits_adaptation": total_profits_adaptation.astype(np.float32),
+            "profits_no_event": profits_no_event.astype(np.float32),
+            "profits_no_event_adaptation": profits_no_event_adaptation.astype(
+                np.float32
+            ),
+            "total_profits": total_profits.astype(np.float32),
+            "risk_perception": self.risk_perception.data.astype(np.float32),
+            "total_annual_costs": total_annual_costs_m2.astype(np.float32),
+            "adaptation_costs": annual_cost_m2.astype(np.float32),
             "adapted": adapted,
-            "time_adapted": self.time_adapted[:, adaptation_type],
+            "time_adapted": self.time_adapted[:, adaptation_type].astype(np.int32),
             "T": np.full(
                 self.n,
-                self.model.config["agent_settings"]["farmers"]["expected_utility"][
-                    "adaptation_sprinkler"
-                ]["decision_horizon"],
+                np.int32(
+                    self.model.config["agent_settings"]["farmers"]["expected_utility"][
+                        "adaptation_sprinkler"
+                    ]["decision_horizon"]
+                ),
+                dtype=np.int32,
             ),
-            "discount_rate": self.discount_rate.data,
+            "discount_rate": self.discount_rate.data.astype(np.float32),
             "extra_constraint": has_irrigation_access,
         }
 
@@ -4811,13 +4830,15 @@ class CropFarmers(AgentBaseClass):
             new_crop_nr,
             new_farmer_id,
         ) = crop_profit_difference_njit(
-            yield_ratios=total_profits,
+            yearly_profits=self.yearly_profits.data
+            / self.field_size_per_farmer[..., None],
             crop_elevation_group=crop_elevation_group,
             unique_crop_groups=unique_crop_groups,
             group_indices=group_indices,
             crop_calendar=self.crop_calendar.data,
             unique_crop_calendars=unique_crop_calendars,
             p_droughts=self.p_droughts,
+            past_window=5,
         )
 
         total_profits_adaptation = np.full(
@@ -4832,8 +4853,8 @@ class CropFarmers(AgentBaseClass):
         )
 
         for crop_option in range(len(unique_crop_calendars)):
-            profit_gains_option = profit_gains[:, crop_option, :]
-            profits_adaptation_option = total_profits + profit_gains_option
+            profit_gains_option = profit_gains[:, crop_option]
+            profits_adaptation_option = total_profits + profit_gains_option[..., None]
 
             (
                 total_profits_adaptation_option,
@@ -5330,7 +5351,7 @@ class CropFarmers(AgentBaseClass):
         if self.model.current_time.day == 1:
             self.water_price = self.determine_water_price_fixed.copy()  # $ / m3
 
-        if self.base_efficiency == 0.9:
+        if self.base_efficiency == 0.95:
             self.irrigation_efficiency[:] = self.base_efficiency
             self.return_fraction[:] = self.return_fraction_drip
 
