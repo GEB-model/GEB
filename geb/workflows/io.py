@@ -359,6 +359,112 @@ def to_zarr(
     return da_disk
 
 
+def get_window(
+    x: xr.DataArray,
+    y: xr.DataArray,
+    bounds: tuple[int | float, int | float, int | float, int | float],
+    buffer: int = 0,
+    raise_on_out_of_bounds: bool = True,
+    raise_on_buffer_out_of_bounds: bool = True,
+) -> dict[str, slice]:
+    if not isinstance(buffer, int):
+        raise ValueError("buffer must be an integer")
+    if buffer < 0:
+        raise ValueError("buffer must be greater than or equal to 0")
+    if len(bounds) != 4:
+        raise ValueError("bounds must be a tuple of 4 values")
+    if bounds[0] >= bounds[2]:
+        raise ValueError("bounds must be in the form (min_x, max_x, min_y, max_y)")
+    if bounds[1] >= bounds[3]:
+        raise ValueError("bounds must be in the form (min_x, max_x, min_y, max_y)")
+    if x.size <= 0:
+        raise ValueError("x must not be empty")
+    if y.size <= 0:
+        raise ValueError("y must not be empty")
+
+    # So that we can do item assignment
+    bounds = list(bounds)
+
+    if bounds[0] < x[0]:
+        if raise_on_out_of_bounds:
+            raise ValueError("xmin must be greater than x[0]")
+        else:
+            bounds[0] = x[0]
+    if bounds[2] > x[-1]:
+        if raise_on_out_of_bounds:
+            raise ValueError("xmax must be less than x[-1]")
+        else:
+            bounds[2] = x[-1]
+    if bounds[1] < y[-1]:
+        if raise_on_out_of_bounds:
+            raise ValueError("ymin must be greater than y[-1]")
+        else:
+            bounds[1] = y[-1]
+    if bounds[3] > y[0]:
+        if raise_on_out_of_bounds:
+            raise ValueError("ymax must be less than y[0]")
+        else:
+            bounds[3] = y[0]
+
+    # reverse the y array
+    y_reversed = y[::-1]
+
+    assert np.all(np.diff(x) >= 0)
+    assert np.all(np.diff(y_reversed) >= 0)
+
+    xmin = np.searchsorted(x, bounds[0], side="right")
+    xmax = np.searchsorted(x, bounds[2], side="left")
+
+    if bounds[0] - x[xmin - 1] < x[xmin] - bounds[0]:
+        xmin -= 1
+
+    if x[xmax - 1] - bounds[2] < bounds[2] - x[xmax]:
+        xmax += 1
+
+    if raise_on_buffer_out_of_bounds:
+        xmin = xmin - buffer
+        xmax = xmax + buffer
+    else:
+        xmin = max(0, xmin - buffer)
+        xmax = min(x.size, xmax + buffer)
+
+    xslice = slice(xmin, xmax)
+
+    ymin = np.searchsorted(y_reversed, bounds[1], side="right")
+    ymax = np.searchsorted(y_reversed, bounds[3], side="left")
+
+    if bounds[1] - y_reversed[ymin - 1] < y_reversed[ymin] - bounds[1]:
+        ymin -= 1
+    if y_reversed[ymax - 1] - bounds[3] < bounds[3] - y_reversed[ymax]:
+        ymax += 1
+
+    if raise_on_buffer_out_of_bounds:
+        ymin = ymin - buffer
+        ymax = ymax + buffer
+    else:
+        ymin = max(0, ymin - buffer)
+        ymax = min(y.size, ymax + buffer)
+
+    ymin = y.size - ymin
+    ymax = y.size - ymax
+
+    yslice = slice(ymax, ymin)
+
+    if xslice.start < 0:
+        raise ValueError("x slice start is negative")
+    if yslice.start < 0:
+        raise ValueError("y slice start is negative")
+    if xslice.stop > x.size:
+        raise ValueError("x slice stop is greater than x size")
+    if yslice.stop > y.size:
+        raise ValueError("y slice stop is greater than y size")
+    if xslice.stop <= xslice.start:
+        raise ValueError("x slice is empty")
+    if yslice.start >= yslice.stop:
+        raise ValueError("y slice is empty")
+    return {"x": xslice, "y": yslice}
+
+
 class AsyncForcingReader:
     def __init__(self, filepath, variable_name):
         self.variable_name = variable_name

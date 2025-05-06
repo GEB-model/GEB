@@ -978,19 +978,6 @@ class GEBModel(
         ).all()
         return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
 
-    def interpolate(self, ds, interpolation_method, ydim="y", xdim="x"):
-        out_ds = ds.interp(
-            method=interpolation_method,
-            **{
-                ydim: self.grid.y.rename({"y": ydim}),
-                xdim: self.grid.x.rename({"x": xdim}),
-            },
-        )
-        if "inplace" in out_ds.coords:
-            out_ds = out_ds.drop_vars(["dparams", "inplace"])
-        assert len(ds.dims) == len(out_ds.dims)
-        return out_ds
-
     def setup_coastal_water_levels(
         self,
     ):
