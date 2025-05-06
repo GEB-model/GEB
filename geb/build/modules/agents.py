@@ -1851,11 +1851,12 @@ class Agents:
             ).path
         )
         fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
-            get_window(
+            band=0,
+            **get_window(
                 fraction_sw_irrigation_data.x,
                 fraction_sw_irrigation_data.y,
                 self.bounds,
-            )
+            ),
         )
 
         fraction_gw_irrigation = "aeigw"
@@ -1865,11 +1866,12 @@ class Agents:
             ).path
         )
         fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
-            get_window(
+            band=0,
+            **get_window(
                 fraction_gw_irrigation_data.x,
                 fraction_gw_irrigation_data.y,
                 self.bounds,
-            )
+            ),
         )
 
         farmer_locations = get_farm_locations(
