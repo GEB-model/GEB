@@ -442,6 +442,7 @@ class Store:
 
         shutil.rmtree(path, ignore_errors=True)
         for name, bucket in self.buckets.items():
+            self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
     def load(self, path=None):
