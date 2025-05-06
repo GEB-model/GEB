@@ -647,6 +647,17 @@ wheels = [
 ]
 
 [[package]]
+name = "cppimport"
+version = "22.8.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "filelock" },
+    { name = "mako" },
+    { name = "pybind11" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/54/27/01d9078a77b9e31b79b9716e66ca4db74f4744c5232bcb3e8769395c4280/cppimport-22.8.2.tar.gz", hash = "sha256:bbb4957102db41bc99ad72c233bce92f9d1fd91be352fc07878c4361033a401f", size = 26635, upload_time = "2022-08-02T16:50:36.872Z" }
+
+[[package]]
 name = "crc32c"
 version = "2.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1167,7 +1178,6 @@ dependencies = [
     { name = "numpy" },
     { name = "openpyxl" },
     { name = "pyarrow" },
-    { name = "pybind11" },
     { name = "pyextremes" },
     { name = "pyflwdir" },
     { name = "pyogrio" },
@@ -1203,6 +1213,10 @@ fairstream = [
     { name = "opt-einsum" },
     { name = "pgmpy" },
 ]
+plantfate = [
+    { name = "cppimport" },
+    { name = "pybind11" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1221,6 +1235,7 @@ requires-dist = [
     { name = "cdsapi", specifier = ">=0.7.5" },
     { name = "cfgrib", specifier = ">=0.9.14" },
     { name = "click", specifier = ">=8.1.8" },
+    { name = "cppimport", marker = "extra == 'plantfate'", specifier = ">=22.8.2" },
     { name = "daft-pgm", marker = "extra == 'fairstream'", specifier = ">=0.1.4" },
     { name = "damagescanner", specifier = "==0.8b1" },
     { name = "dask" },
@@ -1240,7 +1255,7 @@ requires-dist = [
     { name = "opt-einsum", marker = "extra == 'fairstream'", specifier = ">=3.3.0" },
     { name = "pgmpy", marker = "extra == 'fairstream'", specifier = "==0.1.26" },
     { name = "pyarrow", specifier = ">=17.0.0" },
-    { name = "pybind11", specifier = ">=2.13.4" },
+    { name = "pybind11", marker = "extra == 'plantfate'", specifier = ">=2.13.6" },
     { name = "pyextremes", specifier = ">=2.3.3" },
     { name = "pyflwdir", specifier = ">=0.5.9" },
     { name = "pyogrio", specifier = ">=0.9.0" },
@@ -1266,7 +1281,7 @@ requires-dist = [
     { name = "xugrid", specifier = ">=0.13.0" },
     { name = "zarr", specifier = ">=3.0.6" },
 ]
-provides-extras = ["fairstream", "display"]
+provides-extras = ["fairstream", "display", "plantfate"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2118,6 +2133,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2f/83/97b29fe05cb6ae28d2dbd30b81e2e402a3eed5f460c26e9eaa5895ceacf5/locket-1.0.0.tar.gz", hash = "sha256:5c0d4c052a8bbbf750e056a8e65ccd309086f4f0f18a2eac306a8dfa4112a632", size = 4350, upload_time = "2022-04-20T22:04:44.312Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/db/bc/83e112abc66cd466c6b83f99118035867cecd41802f8d044638aa78a106e/locket-1.0.0-py2.py3-none-any.whl", hash = "sha256:b6c819a722f7b6bd955b80781788e4a66a55628b858d347536b7e81325a3a5e3", size = 4398, upload_time = "2022-04-20T22:04:42.23Z" },
+]
+
+[[package]]
+name = "mako"
+version = "1.3.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markupsafe" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9e/38/bd5b78a920a64d708fe6bc8e0a2c075e1389d53bef8413725c63ba041535/mako-1.3.10.tar.gz", hash = "sha256:99579a6f39583fa7e5630a28c3c1f440e4e97a414b80372649c0ce338da2ea28", size = 392474, upload_time = "2025-04-10T12:44:31.16Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/fb/99f81ac72ae23375f22b7afdb7642aba97c00a713c217124420147681a2f/mako-1.3.10-py3-none-any.whl", hash = "sha256:baef24a52fc4fc514a0887ac600f9f1cff3d82c61d4d700a1fa84d597b88db59", size = 78509, upload_time = "2025-04-10T12:50:53.297Z" },
 ]
 
 [[package]]

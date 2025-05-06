@@ -38,7 +38,6 @@ dependencies = [
     "numpy>=2.1",
     "openpyxl>=3.1.2",
     "pyarrow>=17.0.0",
-    "pybind11>=2.13.4",
     "pyextremes>=2.3.3",
     "pyflwdir>=0.5.9",
     "pyogrio>=0.9.0",
@@ -103,6 +102,10 @@ fairstream = [
 display = [
     "jupyter>=1.1.1",
     "seaborn>=0.13.2",
+]
+plantfate = [
+    "cppimport>=22.8.2",
+    "pybind11>=2.13.6",
 ]
 
 [tool.ruff]
