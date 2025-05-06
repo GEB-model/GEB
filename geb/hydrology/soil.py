@@ -1280,10 +1280,6 @@ class Soil(object):
         )
 
     def initiate_plantfate(self):
-        # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
-        already_has_plantFATE_cell = False
-
-        max_num_plantFATE_cells = len(self.HRU.var.land_use_type)
 
         from . import plantFATE
 
@@ -1293,32 +1289,27 @@ class Soil(object):
         )
 
         for i, land_use_type_RU in enumerate(self.HRU.var.land_use_type):
-            grid_cell = self.HRU.var.HRU_to_grid[i]
             if land_use_type_RU == FOREST and self.HRU.var.land_use_ratio[i] > 0.5:
-            # if land_use_type_RU == FOREST and grid_cell == cell_id:
-            # if land_use_type_RU == FOREST:
-                if already_has_plantFATE_cell:
-                    self.model.plantFATE.append(None)
-                else:
-                    self.plantFATE_forest_RUs[i] = True
-                    if sum(self.plantFATE_forest_RUs) >= max_num_plantFATE_cells:
-                        already_has_plantFATE_cell = True
-                    PFconfig_ini = self.model.config["plantFATE"]["default_ini_file"]
-                    if self.model.spinup:
-                        PFconfig_ini = self.model.config["plantFATE"]["spinup_ini_file"]
-                    pfModel = plantFATE.Model(PFconfig_ini, False, None)
-                    pfModel.plantFATE_model.config.parent_dir = str(self.model.simulation_root / "plantFATE")
-                    pfModel.plantFATE_model.config.expt_dir = f"cell_{i}"
-                    pfModel.plantFATE_model.config.out_dir = str(self.model.simulation_root / "plantFATE" / f"cell_{i}")
-                    pfModel.plantFATE_model.config.save_state = False
-                    if self.model.spinup is False:  # continue from
-                        pfModel.plantFATE_model.config.continuePrevious = True
-                        pfModel.plantFATE_model.config.continueFrom_stateFile = str(self.model.simulation_root / ".." / "spinup" / "plantFATE" / f"cell_{i}" / "pf_saved_state.txt")
-                        pfModel.plantFATE_model.config.continueFrom_configFile = str(self.model.simulation_root / ".." / "spinup" / "plantFATE" / f"cell_{i}" / "pf_saved_config.ini")
-                    # pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
-                    self.model.plantFATE.append(pfModel)
+                self.plantFATE_forest_RUs[i] = True
+                PFconfig_ini = self.model.config["plantFATE"]["default_ini_file"]
+                if self.model.spinup:
+                    PFconfig_ini = self.model.config["plantFATE"]["spinup_ini_file"]
+                pfModel = plantFATE.Model(PFconfig_ini, False, None)
+                pfModel.plantFATE_model.config.parent_dir = str(self.model.simulation_root / "plantFATE")
+                pfModel.plantFATE_model.config.expt_dir = f"cell_{i}"
+                pfModel.plantFATE_model.config.out_dir = str(self.model.simulation_root / "plantFATE" / f"cell_{i}")
+                pfModel.plantFATE_model.config.save_state = False
 
-                    # print("made_plantFATE cell")
+                if self.model.spinup:
+                    pfModel.plantFATE_model.config.save_state = True
+
+                if self.model.spinup is False:
+                    pfModel.plantFATE_model.config.continuePrevious = True
+                    pfModel.plantFATE_model.config.continueFrom_stateFile = str(self.model.simulation_root / ".." / "spinup" / "plantFATE" / f"cell_{i}" / "pf_saved_state.txt")
+                    pfModel.plantFATE_model.config.continueFrom_configFile = str(self.model.simulation_root / ".." / "spinup" / "plantFATE" / f"cell_{i}" / "pf_saved_config.ini")
+                # pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
+                self.model.plantFATE.append(pfModel)
+
             else:
                 self.model.plantFATE.append(None)
 
@@ -1428,7 +1419,6 @@ class Soil(object):
                                    plantfate_co2,
                                    plantfate_num_ind):
         if self.plantFATE_forest_RUs[indx]:
-            # print(indx)
             plantFATE_model = self.model.plantFATE[indx]
             if plantFATE_model is not None:
                 plantFATE_data = {
@@ -1486,16 +1476,25 @@ class Soil(object):
                     plantfate_num_ind[indx] = plantFATE_model.n_individuals
 
                     total_water_by_layer = self.HRU.var.w[0:len(self.HRU.var.w), indx] - self.HRU.var.wres[0:len(self.HRU.var.w), indx]
+                    # print("PF input data " + str(plantFATE_data))
                     # print("Total Available Water " + str(sum(total_water_by_layer)))
                     # print("Water we are taking " + str(transpiration))
-                    transpiration = min(transpiration, sum(total_water_by_layer))
+                    if transpiration > sum(total_water_by_layer):
+                        # print("Old transpiration: " + str(transpiration))
+                        transpiration = min(transpiration, sum(total_water_by_layer))
+                        # print("New transpiration: " + str(transpiration))
+                        # print("water by layer " + str(total_water_by_layer))
+                        # print("water by layer w " + str(self.HRU.var.w[0:len(self.HRU.var.w), indx]))
+                        # print("water by layer wres " + str(self.HRU.var.wres[0:len(self.HRU.var.w), indx]))
+
                     plantfate_transpiration[indx] = transpiration
-                    # print("Total Available Water after \"fix\"" + str(sum(total_water_by_layer)))
-                    # print("Water we are taking " + str(transpiration))
-                    total_water = self.HRU.var.w[0:len(self.HRU.var.w), indx].sum() - self.HRU.var.wres[0:len(self.HRU.var.w), indx].sum()
-                    for layer in range(N_SOIL_LAYERS):
-                        plantfate_transpiration_by_layer[layer, indx] = plantfate_transpiration[indx] * (
-                        total_water_by_layer[layer]) / total_water
+                    if(total_water_by_layer.sum() > 0):
+                        for layer in range(N_SOIL_LAYERS):
+                            plantfate_transpiration_by_layer[layer, indx] = plantfate_transpiration[indx] * (total_water_by_layer[layer] / total_water_by_layer.sum())
+
+
+                    print("PlantFATE transpiration: " + str(plantfate_transpiration[indx]))
+                    print("PlantFATE transpiration by layer " + str(plantfate_transpiration_by_layer[:,indx]))
                     # if self.model.current_timestep == 2:
                     #     exit()
 
@@ -1782,7 +1781,7 @@ class Soil(object):
             tollerance=1e-6,
         )
 
-        if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
+        if self.model.config["general"]["simulate_forest"]:
             plantfate_transpiration = np.zeros(len(self.plantFATE_forest_RUs))
             plantfate_bare_soil_evaporation = np.zeros(len(self.plantFATE_forest_RUs))
             plantfate_transpiration_by_layer = np.zeros_like(
@@ -1869,6 +1868,10 @@ class Soil(object):
         groundwater_recharge = np.zeros_like(
             self.HRU.var.land_use_type, dtype=np.float32
         )
+        #
+        # print(self.HRU.var.w[:, self.plantFATE_forest_RUs])
+        # print(self.HRU.var.ws[:, self.plantFATE_forest_RUs])
+        # print(self.HRU.var.wres[:, self.plantFATE_forest_RUs])
 
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
