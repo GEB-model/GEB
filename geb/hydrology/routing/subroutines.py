@@ -211,39 +211,6 @@ def downstream1(dirUp, weight):
     return downstream
 
 
-def subcatchment1(dirUp, points, ups):
-    """
-    calculates subcatchments of points
-
-    :param dirUp:
-    :param points:
-    :param ups:
-    :return: subcatchment
-    """
-
-    subcatch = np.zeros_like(
-        points, dtype=np.int64
-    )  # not sure whether int64 is necessary
-    # if subcatchment = true ->  calculation of subcatchment: every point is calculated
-    # if false : calculation of catchment: only point calculated which are not inside a bigger catchment from another point
-
-    subs = {}
-    # sort waterbodies of reverse upstream area
-    for cell in range(points.size):
-        if points[cell] > 0:
-            subs[points[cell]] = [cell, ups[cell]]
-    subsort = sorted(list(subs.items()), key=lambda x: x[1][1], reverse=True)
-
-    for sub in subsort:
-        j = sub[0]
-        cell = sub[1][0]
-        dirDown = []
-        postorder(dirUp, subcatch, cell, j, dirDown)
-        subcatch[cell] = j
-
-    return subcatch
-
-
 def define_river_network(ldd2D, grid):
     """
     defines river network
@@ -386,17 +353,14 @@ def lddrepair(lddnp, lddOrder, grid):
     return ldd_compressed, dir_compressed
 
 
-MAX_ITERS = 10
+MAX_ITERS = 1000
 
 
 @njit(cache=True)
 def IterateToQnew(Qin, Qold, sideflow, alpha, beta, deltaT, deltaX):
-    epsilon = np.float64(0.0001)
+    epsilon = np.float64(0.000001)
 
-    # If deltaX (channel length) is 0 this should be a pit, handle inflow but no outflow
-    if deltaX == 0:
-        # Inflow into the pit occurs, so return Qin
-        return max(Qin, 0)
+    assert deltaX > 0, "channel length must be greater than 0"
 
     # If no input, then output = 0
     if (Qin + Qold + sideflow) == 0:
@@ -407,34 +371,39 @@ def IterateToQnew(Qin, Qold, sideflow, alpha, beta, deltaT, deltaX):
     deltaTX = deltaT / deltaX
     C = deltaTX * Qin + alpha * Qold**beta + deltaT * sideflow
 
-    # Initial guess for Qkx and iterative process
-    Qkx = (deltaTX * Qin + Qold * ab_pQ + deltaT * sideflow) / (deltaTX + ab_pQ)
-    fQkx = deltaTX * Qkx + alpha * Qkx**beta - C
-    dfQkx = deltaTX + alpha * beta * Qkx ** (beta - 1)
-    Qkx -= fQkx / dfQkx
-    if np.isnan(Qkx):
-        Qkx = 1e-30
+    # Initial guess for Qnew and iterative process
+    Qnew = (deltaTX * Qin + Qold * ab_pQ + deltaT * sideflow) / (deltaTX + ab_pQ)
+    fQnew = deltaTX * Qnew + alpha * Qnew**beta - C
+    dfQnew = deltaTX + alpha * beta * Qnew ** (beta - 1)
+    Qnew -= fQnew / dfQnew
+    if np.isnan(Qnew):
+        Qnew = 1e-30
     else:
-        Qkx = max(Qkx, 1e-30)
+        Qnew = max(Qnew, 1e-30)
     count = 0
 
-    assert not np.isnan(Qkx)
-    while np.abs(fQkx) > epsilon and count < MAX_ITERS:
-        fQkx = deltaTX * Qkx + alpha * Qkx**beta - C
-        dfQkx = deltaTX + alpha * beta * Qkx ** (beta - 1)
-        Qkx -= fQkx / dfQkx
+    while np.abs(fQnew) > epsilon and count < MAX_ITERS:
+        fQnew = deltaTX * Qnew + alpha * Qnew**beta - C
+        dfQnew = deltaTX + alpha * beta * Qnew ** (beta - 1)
+        Qnew -= fQnew / dfQnew
         count += 1
-        assert not np.isnan(Qkx)
 
-    if np.isnan(Qkx):
-        Qkx = 0
-    else:
-        Qkx = max(Qkx, 0)
-    return Qkx
+    return max(Qnew, 0)
 
 
-@njit(cache=True)
-def kinematic(Qold, sideflow, dirDown, dirUpLen, dirUpID, alpha, beta, deltaT, deltaX):
+# @njit(cache=True)
+def kinematic(
+    Qold,
+    sideflow,
+    dirDown,
+    dirUpLen,
+    dirUpID,
+    alpha,
+    beta,
+    deltaT,
+    deltaX,
+    is_waterbody,
+):
     """
     Kinematic wave routing
 
@@ -447,13 +416,21 @@ def kinematic(Qold, sideflow, dirDown, dirUpLen, dirUpID, alpha, beta, deltaT, d
     """
     Qnew = np.zeros_like(Qold)
     for i in range(Qold.size):
-        Qin = np.float32(0.0)
         down = dirDown[i]
+
         minID = dirUpLen[down]
         maxID = dirUpLen[down + 1]
 
+        Qin = np.float32(0.0)
         for j in range(minID, maxID):
-            Qin += Qnew[dirUpID[j]]
+            upstream_ID = dirUpID[j]
+
+            # The water coming from a reservoir or lake is not routed
+            # here but instead handled in the reservoir module
+            # this water has already been handled
+            if is_waterbody[upstream_ID]:
+                continue
+            Qin += Qnew[upstream_ID]
 
         Qnew[down] = IterateToQnew(
             Qin, Qold[down], sideflow[down], alpha[down], beta, deltaT, deltaX[down]
