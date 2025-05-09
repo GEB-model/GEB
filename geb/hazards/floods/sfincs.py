@@ -312,7 +312,7 @@ class SFINCS:
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
-            self.hydrology.grid.var.discharge_substep
+            self.hydrology.grid.var.discharge_m3_s_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
     @property

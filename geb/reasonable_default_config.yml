@@ -132,7 +132,7 @@ draw:
 report:
   hydrology.routing:
     discharge_daily:
-      varname: grid.var.discharge
+      varname: grid.var.discharge_m3_s
       type: grid
       function: null
       format: zarr
