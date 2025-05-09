@@ -391,7 +391,7 @@ def IterateToQnew(Qin, Qold, sideflow, alpha, beta, deltaT, deltaX):
     return max(Qnew, 0)
 
 
-# @njit(cache=True)
+@njit(cache=True)
 def kinematic(
     Qold,
     sideflow,
@@ -403,6 +403,10 @@ def kinematic(
     deltaT,
     deltaX,
     is_waterbody,
+    is_outflow,
+    waterbody_id,
+    waterbody_storage,
+    outflow_per_waterbody_m3,
 ):
     """
     Kinematic wave routing
@@ -422,17 +426,36 @@ def kinematic(
         maxID = dirUpLen[down + 1]
 
         Qin = np.float32(0.0)
+        sideflow_node = sideflow[down]
         for j in range(minID, maxID):
             upstream_ID = dirUpID[j]
 
-            # The water coming from a reservoir or lake is not routed
-            # here but instead handled in the reservoir module
-            # this water has already been handled
-            if is_waterbody[upstream_ID]:
-                continue
-            Qin += Qnew[upstream_ID]
+            if is_outflow[upstream_ID]:
+                # if upstream node is an outflow add the outflow of the waterbody
+                # to the sideflow
+                node_waterbody_id = waterbody_id[upstream_ID]
+
+                # make sure that the waterbody ID is valid
+                assert node_waterbody_id != -1
+                waterbody_outflow_m3 = outflow_per_waterbody_m3[node_waterbody_id]
+
+                waterbody_storage[node_waterbody_id] -= waterbody_outflow_m3
+
+                # make sure that the waterbody storage does not go below 0
+                assert waterbody_storage[node_waterbody_id] >= 0
+
+                sideflow_node += waterbody_outflow_m3 / deltaT / deltaX[down]
+
+            elif is_waterbody[
+                upstream_ID
+            ]:  # if upstream node is a waterbody, but not an outflow
+                assert sideflow[upstream_ID] == 0
+                assert Qold[upstream_ID] == 0
+
+            else:  # in normal case, just take the inflow from upstream
+                Qin += Qnew[upstream_ID]
 
         Qnew[down] = IterateToQnew(
-            Qin, Qold[down], sideflow[down], alpha[down], beta, deltaT, deltaX[down]
+            Qin, Qold[down], sideflow_node, alpha[down], beta, deltaT, deltaX[down]
         )
     return Qnew

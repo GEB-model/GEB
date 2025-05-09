@@ -130,7 +130,7 @@ class WaterDemand(Module):
             farmer_command_area[farmer_command_area != -1],
             gross_irrigation_demand_m3_per_farmer[farmer_command_area != -1],
             minlength=self.hydrology.lakes_reservoirs.reservoir_storage.size,
-        )
+        ).astype(np.float32)
 
         assert (domestic_water_demand_per_household >= 0).all()
         assert (industry_water_demand >= 0).all()

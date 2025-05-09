@@ -24,6 +24,7 @@ import math
 import numpy as np
 import pyflwdir
 
+from geb.hydrology.lakes_reservoirs import OFF
 from geb.module import Module
 from geb.workflows import balance_check
 
@@ -125,9 +126,9 @@ class Routing(Module):
             _,
             _,
             _,
-            self.grid.var.dirupLen,
-            self.grid.var.dirupID,
-            self.grid.var.downstruct_no_water_bodies,
+            _,
+            _,
+            _,  # self.grid.var.downstruct_no_water_bodies,
             _,
             self.grid.var.dirDown,
             _,
@@ -135,21 +136,10 @@ class Routing(Module):
 
         # TODO: is this done in the right direction?
         self.grid.var.dirDown_ = mapper[self.river_network.idxs_seq]
-        # ldd_short = self.grid.compress(
-        #     dirID(self.grid.decompress(np.arange(self.grid.var.idx_ds.size)), ldd)
-        # )
-        # _, self.grid.var.dirupLen, self.grid.var.dirupID = dirUpstream(ldd_short)
-
-        # self.grid.var.upstream_area_n_cells = upstreamArea(
-        #     self.grid.var.dirDown,
-        #     dirshort,
-        #     self.grid.full_compressed(1, dtype=np.int32),
-        # )
-        # self.grid.var.UpArea = upstreamArea(
-        #     self.grid.var.dirDown,
-        #     dirshort,
-        #     self.grid.var.cell_area.astype(np.float64),
-        # )
+        ldd_short = self.grid.compress(
+            dirID(self.grid.decompress(np.arange(self.grid.var.idx_ds.size)), ldd)
+        )
+        _, self.grid.var.dirupLen, self.grid.var.dirupID = dirUpstream(ldd_short)
 
         # number of substep per day
         self.var.n_routing_substeps = 24
@@ -207,73 +197,42 @@ class Routing(Module):
         ) ** self.var.river_beta
 
         # Initialise water volume and discharge in rivers, just set at 0 [m3]
-        self.grid.var.river_storage_m3 = np.zeros_like(
-            self.grid.var.river_width, dtype=np.float32
+        self.grid.var.river_storage_m3 = np.ones_like(
+            self.grid.var.river_width, dtype=np.float64
         )
-        self.grid.var.river_storage_m3.fill(1)
-        self.grid.var.discharge = calculate_discharge_from_storage(
+
+        self.grid.var.discharge_m3_s = calculate_discharge_from_storage(
             self.grid.var.river_storage_m3,
             self.grid.var.river_alpha,
             self.grid.var.river_length,
             self.var.river_beta,
         )
-        self.grid.var.discharge_substep = np.full(
-            (self.var.n_routing_substeps, self.grid.var.discharge.size),
+        self.grid.var.discharge_m3_s_substep = np.full(
+            (self.var.n_routing_substeps, self.grid.var.discharge_m3_s.size),
             0,
-            dtype=self.grid.var.discharge.dtype,
+            dtype=self.grid.var.discharge_m3_s.dtype,
         )
 
     def step(self, total_runoff, channel_abstraction_m, return_flow):
-        """
-        Dynamic part of the routing module
-
-        * calculate evaporation from channels
-        * calculate riverbed exchange between riverbed and groundwater
-        * calculate sideflow -> inflow to river
-        """
-
-        print("REMOVE THIS")
-        channel_abstraction_m.fill(0)
-        return_flow.fill(0)
-        # total_runoff.fill(0)
-
         if __debug__:
             pre_river_storage_m3 = self.grid.var.river_storage_m3.copy()
             pre_storage = self.hydrology.lakes_reservoirs.var.storage.copy()
 
-        # riverbed infiltration (m3):
-        # - current implementation based on Inge's principle (later, will be based on groundater head (MODFLOW) and can be negative)
-        # - happening only if 0.0 < baseflow < nonFossilGroundwaterAbs
-        # - infiltration rate will be based on aquifer saturated conductivity
-        # - limited to fracWat
-        # - limited to available river_storage_m3
-        # - this infiltration will be handed to groundwater in the next time step
-
-        """
-        self.grid.var.riverbedExchange = np.maximum(0.0,  np.minimum(self.grid.var.river_storage_m3, np.where(self.grid.var.baseflow > 0.0, \
-                                np.where(self.grid.var.nonFossilGroundwaterAbs > self.grid.var.baseflow, \
-                                self.grid.var.kSatAquifer * self.grid.var.fracVegCover[5] * self.grid.var.cell_area, \
-                                0.0), 0.0)))
-        # to avoid flip flop
-        self.grid.var.riverbedExchange = np.minimum(self.grid.var.riverbedExchange, 0.95 * self.grid.var.river_storage_m3)
-
-
-                if self.grid.var.modflow:
-            self.grid.var.interflow[No] = np.where(self.grid.var.capriseindex == 100, toGWorInterflow,
-                                              self.grid.var.percolationImp * toGWorInterflow)
-        else:
-            self.grid.var.interflow[No] = self.grid.var.percolationImp * toGWorInterflow
-        """
-
-        # self.grid.var.riverbedExchange = np.where(self.grid.var.waterBodyID > 0, 0., self.grid.var.riverbedExchange)
-
-        # riverbedExchangeDt = self.grid.var.riverbedExchangeM3 / self.var.n_routing_substeps
-
-        net_channel_abstraction_m3_per_routing_step = (
-            (channel_abstraction_m - return_flow)
+        return_flow_m3_per_routing_step = (
+            return_flow * self.grid.var.cell_area / self.var.n_routing_substeps
+        )
+        channel_abstraction_m3_per_routing_step = (
+            channel_abstraction_m
             * self.grid.var.cell_area
             / self.var.n_routing_substeps
         )
+
+        return_flow_m3_to_water_bodies_per_routing_step = np.bincount(
+            self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
+            weights=return_flow_m3_per_routing_step[self.grid.var.waterBodyID != -1],
+        )
+        return_flow_m3_per_routing_step[self.grid.var.waterBodyID != -1] = 0.0
+
         runoff_m3_per_routing_step = (
             total_runoff * self.grid.var.cell_area / self.var.n_routing_substeps
         )
@@ -295,23 +254,35 @@ class Routing(Module):
             abs_tol=0,
         )
 
-        self.grid.var.discharge_substep = np.full(
-            (self.var.n_routing_substeps, self.grid.var.discharge.size),
+        self.grid.var.discharge_m3_s_substep = np.full(
+            (self.var.n_routing_substeps, self.grid.var.discharge_m3_s.size),
             np.nan,
-            dtype=self.grid.var.discharge.dtype,
+            dtype=self.grid.var.discharge_m3_s.dtype,
         )
 
         if self.model.current_timestep == 0 and self.model.in_spinup:
-            self.var.discharge_volume_out_of_water_bodies_into_other_water_bodies = (
+            self.var.discharge_out_of_water_bodies_into_other_water_bodies_m3 = (
                 np.zeros(
                     self.hydrology.lakes_reservoirs.var.capacity.size, dtype=np.float32
                 )
             )
             self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] = 0
 
-        total_discharge_volume_out_of_water_bodies_into_other_water_bodies_pre = (
-            self.var.discharge_volume_out_of_water_bodies_into_other_water_bodies.sum()
+        total_discharge_out_of_water_bodies_into_other_water_bodies_m3_pre = (
+            self.var.discharge_out_of_water_bodies_into_other_water_bodies_m3.sum()
         )
+
+        potential_evaporation_per_water_body_m3_per_routing_step = (
+            np.bincount(
+                self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
+                weights=self.grid.var.EWRef[self.grid.var.waterBodyID != -1],
+            )
+            / np.bincount(self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1])
+            * self.hydrology.lakes_reservoirs.var.lake_area
+        ) / self.var.n_routing_substeps
+        potential_evaporation_per_water_body_m3_per_routing_step[
+            self.hydrology.lakes_reservoirs.var.water_body_type == OFF
+        ] = 0
 
         if __debug__:
             # these are for balance checks, the sum of all routing steps
@@ -321,9 +292,6 @@ class Routing(Module):
             outflow_at_outflows_m3 = 0
 
         for subrouting_step in range(self.var.n_routing_substeps):
-            print(
-                f"Routing step {subrouting_step + 1} of {self.var.n_routing_substeps}"
-            )
             # ensure there is no river storage in the water bodies
             assert (
                 self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] == 0
@@ -351,31 +319,32 @@ class Routing(Module):
             assert (self.grid.var.river_storage_m3 >= 0).all()
 
             # when river storage is updated, discharge also needs to be updated
-            self.grid.var.discharge = calculate_discharge_from_storage(
+            self.grid.var.discharge_m3_s = calculate_discharge_from_storage(
                 river_storage=self.grid.var.river_storage_m3,
                 river_alpha=self.grid.var.river_alpha,
                 river_length=self.grid.var.river_length,
                 river_beta=self.var.river_beta,
             )
 
-            # # this variable is named outflow_toriver_network in the lakes and reservoirs module
-            # # because it is outflow from the waterbodies to the river network
-            # inflow_to_river_network, waterbody_evaporation_m3_Dt = (
-            #     self.hydrology.lakes_reservoirs.substep(
-            #         current_substep=subrouting_step,
-            #         n_routing_substeps=self.var.n_routing_substeps,
-            #         routing_step_length_seconds=self.var.routing_step_length_seconds,
-            #         discharge=self.grid.var.discharge,
-            #         total_runoff=total_runoff,
-            #     )
-            # )
+            outflow_per_waterbody_m3 = self.hydrology.lakes_reservoirs.substep(
+                current_substep=subrouting_step,
+                n_routing_substeps=self.var.n_routing_substeps,
+                routing_step_length_seconds=self.var.routing_step_length_seconds,
+            )
 
-            waterbody_evaporation_m3_Dt = np.zeros_like(
-                self.grid.var.discharge, dtype=np.float32
+            actual_evaporation_from_water_bodies_per_routing_step_m3 = np.minimum(
+                potential_evaporation_per_water_body_m3_per_routing_step,
+                self.hydrology.lakes_reservoirs.var.storage,
+            )
+
+            self.hydrology.lakes_reservoirs.var.storage -= (
+                actual_evaporation_from_water_bodies_per_routing_step_m3
             )
 
             side_flow_channel_m3_per_routing_step = (
-                runoff_m3_per_routing_step - net_channel_abstraction_m3_per_routing_step
+                runoff_m3_per_routing_step
+                + return_flow_m3_per_routing_step
+                - channel_abstraction_m3_per_routing_step
             )
             assert (
                 side_flow_channel_m3_per_routing_step[self.grid.var.waterBodyID != -1]
@@ -383,23 +352,19 @@ class Routing(Module):
             ).all()
 
             # m2 because this is per unit of channel length, see division
-            side_flow_channel_m2_per_routing_step = (
+            side_flow_channel_m2_per_s = (
                 side_flow_channel_m3_per_routing_step
                 / self.grid.var.river_length
                 / self.var.routing_step_length_seconds
             )
 
             assert (
-                side_flow_channel_m2_per_routing_step[self.grid.var.waterBodyID != -1]
-                == 0.0
+                side_flow_channel_m2_per_s[self.grid.var.waterBodyID != -1] == 0.0
             ).all()
 
-            total_river_storage_m3_pre_kinematic = self.grid.var.river_storage_m3.sum()
-
-            # TODO: Stop water from flowing once it is in a water body
-            self.grid.var.discharge = kinematic(
-                self.grid.var.discharge,
-                side_flow_channel_m2_per_routing_step.astype(np.float32),
+            self.grid.var.discharge_m3_s = kinematic(
+                self.grid.var.discharge_m3_s,
+                side_flow_channel_m2_per_s.astype(np.float64),
                 self.grid.var.dirDown,
                 self.grid.var.dirupLen,
                 self.grid.var.dirupID,
@@ -408,143 +373,94 @@ class Routing(Module):
                 self.var.routing_step_length_seconds,
                 self.grid.var.river_length,
                 is_waterbody=self.grid.var.waterBodyID != -1,
+                is_outflow=self.grid.var.waterbody_outflow_points != -1,
+                waterbody_id=self.grid.var.waterBodyID,
+                waterbody_storage=self.hydrology.lakes_reservoirs.var.storage,
+                outflow_per_waterbody_m3=outflow_per_waterbody_m3,
             )
-
-            # discharge_in_water_bodies = self.grid.var.discharge.copy()
-            # discharge_in_water_bodies = (discharge_in_water_bodies > 0).astype(np.int32)
-            # discharge_in_water_bodies[self.grid.var.waterBodyID == -1] = -1
-            # discharge_in_water_bodies[self.grid.var.waterbody_outflow_points != -1] = 2
-
-            # import matplotlib.pyplot as plt
-
-            # fig, (ax0, ax1) = plt.subplots(1, 2)
-
-            # ax0.imshow(self.grid.decompress(discharge_in_water_bodies))
-            # ax1.imshow(
-            #     self.grid.decompress(self.grid.var.waterBodyID) % 7,
-            # )
-
-            # plt.savefig("discharge_in_water_bodies.png", dpi=300)
 
             # update river storage
             self.grid.var.river_storage_m3 = calculate_river_storage_from_discharge(
-                self.grid.var.discharge,
+                self.grid.var.discharge_m3_s,
                 self.grid.var.river_alpha,
                 self.grid.var.river_length,
                 self.var.river_beta,
             )
 
             outflow_at_outflows_m3_substep = (
-                self.grid.var.discharge[self.grid.var.lddCompress == PIT].sum() * 3600
+                self.grid.var.discharge_m3_s[self.grid.var.lddCompress == PIT].sum()
+                * self.var.routing_step_length_seconds
             )
-
-            assert math.isclose(
-                total_river_storage_m3_pre_kinematic
-                + side_flow_channel_m3_per_routing_step.sum(),
-                self.grid.var.river_storage_m3.sum() + outflow_at_outflows_m3_substep,
-                rel_tol=1e-2,
-                abs_tol=100,
-            )
-
-            total_river_storage_m3_pre_step = self.grid.var.river_storage_m3.sum()
-            total_discharge_volume_out_of_water_bodies_into_other_water_bodies_pre_step = self.var.discharge_volume_out_of_water_bodies_into_other_water_bodies.sum()
 
             # get storage discharged into lakes and reservoirs
-            discharge_volume_into_water_bodies = (
+            discharge_into_water_bodies_m3 = (
                 np.bincount(
                     self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-                    weights=self.grid.var.river_storage_m3[
+                    weights=self.grid.var.discharge_m3_s[
                         self.grid.var.waterBodyID != -1
                     ],
                 )
-                + self.var.discharge_volume_out_of_water_bodies_into_other_water_bodies
+                * self.var.routing_step_length_seconds
+                + self.var.discharge_out_of_water_bodies_into_other_water_bodies_m3
                 + runoff_m3_per_routing_step_water_bodies
+                + return_flow_m3_to_water_bodies_per_routing_step
             )
-            discharge_volume_out_of_water_bodies = discharge_volume_into_water_bodies[
-                self.grid.var.waterbody_outflow_points
-            ]
-            discharge_volume_out_of_water_bodies[
-                self.grid.var.waterbody_outflow_points == -1
-            ] = 0.0
 
-            # move the water from the water bodies to the river network
-            discharge_volume_out_of_water_bodies = discharge_volume_out_of_water_bodies[
-                self.grid.var.dirDown_
-            ]
-
-            # remove storage that is discharged into lakes and reservoirs from river storage
+            # remove storage and discharge
+            # that is discharged into lakes and reservoirs from river storage
+            # and set discharge to 0 in those locations
             self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] = 0.0
+            self.grid.var.discharge_m3_s[self.grid.var.waterBodyID != -1] = 0.0
 
-            self.var.discharge_volume_out_of_water_bodies_into_other_water_bodies = (
-                np.bincount(
-                    self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-                    weights=discharge_volume_out_of_water_bodies[
-                        self.grid.var.waterBodyID != -1
-                    ],
-                )
+            self.hydrology.lakes_reservoirs.var.storage += (
+                discharge_into_water_bodies_m3
             )
-            discharge_volume_out_of_water_bodies[self.grid.var.waterBodyID != -1] = 0.0
-
-            assert math.isclose(
-                discharge_volume_into_water_bodies.sum(),
-                discharge_volume_out_of_water_bodies.sum()
-                + self.var.discharge_volume_out_of_water_bodies_into_other_water_bodies.sum(),
-                rel_tol=1e-7,
-            )
-
-            # add the water from the water bodies to the river storage
-            self.grid.var.river_storage_m3 += discharge_volume_out_of_water_bodies
 
             assert (
                 self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] == 0.0
             ).all()
 
-            assert math.isclose(
-                total_river_storage_m3_pre_step
-                + total_discharge_volume_out_of_water_bodies_into_other_water_bodies_pre_step
-                + runoff_m3_per_routing_step_water_bodies.sum(),
-                self.grid.var.river_storage_m3.sum()
-                + self.var.discharge_volume_out_of_water_bodies_into_other_water_bodies.sum(),
-                abs_tol=0,
-                rel_tol=1e-6,
-            )
-
-            self.grid.var.discharge_substep[subrouting_step, :] = (
-                self.grid.var.discharge.copy()
+            self.grid.var.discharge_m3_s_substep[subrouting_step, :] = (
+                self.grid.var.discharge_m3_s.copy()
             )
 
             if __debug__:
                 # Discharge at outlets and lakes and reservoirs
                 outflow_at_outflows_m3 += outflow_at_outflows_m3_substep
                 side_flow_channel_m3 += side_flow_channel_m3_per_routing_step
-                waterbody_evaporation_m3 += waterbody_evaporation_m3_Dt
+                waterbody_evaporation_m3 += (
+                    actual_evaporation_from_water_bodies_per_routing_step_m3
+                )
                 evaporation_in_rivers_m3 += evaporation_in_rivers_m3_per_substep
 
-        assert not np.isnan(self.grid.var.discharge).any()
+        assert not np.isnan(self.grid.var.discharge_m3_s).any()
 
         if __debug__:
             # TODO: make dependent on routing step length
-            assert balance_check(
+            balance_check(
                 how="sum",
                 influxes=[
                     total_runoff * self.grid.var.cell_area,
+                    return_flow * self.grid.var.cell_area,
                 ],
                 outfluxes=[
-                    # channel_abstraction_m * self.grid.var.cell_area,
-                    # return_flow * self.grid.var.cell_area,
+                    channel_abstraction_m * self.grid.var.cell_area,
                     outflow_at_outflows_m3,
                     evaporation_in_rivers_m3,
+                    waterbody_evaporation_m3,
                 ],
                 prestorages=[
+                    pre_storage,
                     pre_river_storage_m3,
-                    total_discharge_volume_out_of_water_bodies_into_other_water_bodies_pre,
+                    total_discharge_out_of_water_bodies_into_other_water_bodies_m3_pre,
                 ],
                 poststorages=[
+                    self.hydrology.lakes_reservoirs.var.storage,
                     self.grid.var.river_storage_m3,
-                    self.var.discharge_volume_out_of_water_bodies_into_other_water_bodies,
+                    self.var.discharge_out_of_water_bodies_into_other_water_bodies_m3,
                 ],
                 name="routing_1",
-                tollerance=1000,
+                tollerance=100_000,
             )
 
             self.routing_loss = (
@@ -552,6 +468,10 @@ class Routing(Module):
                 + waterbody_evaporation_m3.sum()
                 + outflow_at_outflows_m3.sum()
             )
+
+        assert (
+            self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] == 0.0
+        ).all()
 
         self.report(self, locals())
 

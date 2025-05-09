@@ -168,7 +168,7 @@ class Hydrology(Data, Module):
             influx = (self.HRU.var.precipitation_m_day * self.HRU.var.cell_area).sum()
             outflux = (
                 self.HRU.var.actual_evapotranspiration * self.HRU.var.cell_area
-            ).sum() + self.var.routing_loss.sum()
+            ).sum() + self.model.hydrology.routing.routing_loss
 
             balance_check(
                 name="total water balance",

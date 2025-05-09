@@ -20,21 +20,12 @@
 # --------------------------------------------------------------------------------
 
 
-import math
-
+import geopandas as gpd
 import numpy as np
-import pandas as pd
 
 from geb.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
-
-from .routing.subroutines import (
-    PIT,
-    define_river_network,
-    subcatchment1,
-    upstream1,
-)
 
 OFF = 0
 LAKE = 1
@@ -103,10 +94,9 @@ def estimate_outflow_height(lake_storage, lake_factor, lake_area, avg_outflow):
     return outflow_height
 
 
-def get_lake_outflow_and_storage(
+def get_lake_outflow(
     dt,
     storage,
-    inflow_m3,
     lake_factor,
     lake_area,
     outflow_height,
@@ -141,8 +131,6 @@ def get_lake_outflow_and_storage(
         New storage in m3
 
     """
-    storage += inflow_m3
-
     height_above_outflow = get_lake_height_above_outflow(
         storage=storage, lake_area=lake_area, outflow_height=outflow_height
     )
@@ -152,12 +140,7 @@ def get_lake_outflow_and_storage(
     outflow_m3 = outflow_m3_s * dt
 
     outflow_m3 = np.minimum(outflow_m3, storage_above_outflow)
-
-    new_storage = storage - outflow_m3
-    # this is required to avoid negative storage due to numerical errors
-    new_storage[new_storage < 0] = 0
-
-    return outflow_m3, new_storage, height_above_outflow
+    return outflow_m3, height_above_outflow
 
 
 class LakesReservoirs(Module):
@@ -181,21 +164,6 @@ class LakesReservoirs(Module):
             self.model.files["grid"]["waterbodies/water_body_id"]
         )
         waterBodyID_unmapped[waterBodyID_unmapped == OFF] = -1
-
-        waterbody_outflow_points = self.get_outflows(waterBodyID_unmapped)
-
-        # dismiss water bodies that are not a subcatchment of an outlet
-        # after this, this is the final set of water bodies
-        sub = subcatchment1(
-            self.grid.var.dirUp,
-            waterbody_outflow_points,
-            self.grid.var.upstream_area_n_cells,
-        )
-        waterBodyID_unmapped[waterBodyID_unmapped != sub] = -1
-
-        # we need to re-calculate the outflows, because the ID might have changed due
-        # to the earlier dismissal of water bodies
-        waterbody_outflow_points = self.get_outflows(waterBodyID_unmapped)
 
         self.grid.var.waterBodyID, self.var.waterbody_mapping = (
             self.map_water_bodies_IDs(waterBodyID_unmapped)
@@ -221,28 +189,6 @@ class LakesReservoirs(Module):
         self.var.water_body_data = self.var.water_body_data.sort_index()
 
         assert np.array_equal(self.var.water_body_data.index, self.var.waterBodyIDC)
-
-        # change ldd: put pits in where lakes are:
-        ldd_LR = self.hydrology.grid.decompress(
-            np.where(self.grid.var.waterBodyID != -1, 5, self.grid.var.lddCompress),
-            fillvalue=0,
-        )
-
-        # set new ldds without lakes reservoirs
-        (
-            self.grid.var.lddCompress_LR,
-            _,
-            self.grid.var.dirUp,
-            self.grid.var.dirupLen,
-            self.grid.var.dirupID,
-            self.grid.var.downstruct,
-            _,
-            self.grid.var.dirDown,
-            self.grid.var.lendirDown,
-        ) = define_river_network(
-            ldd_LR,
-            self.hydrology.grid,
-        )
 
         self.var.water_body_type = self.var.water_body_data["waterbody_type"].values
         self.var.waterBodyOrigID = self.var.water_body_data[
@@ -290,6 +236,8 @@ class LakesReservoirs(Module):
             average_discharge,
         )
 
+        self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] = 0
+
     def map_water_bodies_IDs(self, waterBodyID_unmapped):
         unique_water_bodies = np.unique(waterBodyID_unmapped)
         unique_water_bodies = unique_water_bodies[unique_water_bodies != -1]
@@ -307,8 +255,8 @@ class LakesReservoirs(Module):
             return water_body_mapping[waterBodyID_unmapped], water_body_mapping
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
-        water_body_data = pd.read_parquet(
-            self.model.files["table"]["waterbodies/waterbody_data"],
+        water_body_data = gpd.read_parquet(
+            self.model.files["geoms"]["waterbodies/waterbody_data"],
         )
         # drop all data that is not in the original ids
         waterbody_original_ids_compressed = np.unique(waterbody_original_ids)
@@ -408,50 +356,32 @@ class LakesReservoirs(Module):
 
         return waterbody_outflow_points
 
-    def routing_lakes(self, inflow_m3, routing_step_length_seconds):
+    def routing_lakes(self, routing_step_length_seconds):
         """
         Lake routine to calculate lake outflow
         :param inflowC: inflow to lakes and reservoirs [m3]
         :param NoRoutingExecuted: actual number of routing substep
         :return: QLakeOutM3DtC - lake outflow in [m3] per subtime step
         """
-        if __debug__:
-            prestorage = self.var.storage.copy()
-
         is_lake = self.is_lake
-
-        lake_outflow_m3 = np.zeros_like(inflow_m3)
-
         # check if there are any lakes in the model
         if is_lake.any():
             (
-                lake_outflow_m3[is_lake],
-                self.var.storage[is_lake],
-                height_above_outflow,
-            ) = get_lake_outflow_and_storage(
+                lake_outflow_m3,
+                _,
+            ) = get_lake_outflow(
                 routing_step_length_seconds,
                 self.var.storage[is_lake],
-                inflow_m3[is_lake],
                 self.var.lake_factor[is_lake],
                 self.var.lake_area[is_lake],
                 self.var.outflow_height[is_lake],
             )
-
-        assert (self.var.storage >= 0).all()
-
-        if __debug__:
-            balance_check(
-                influxes=[inflow_m3[is_lake]],
-                outfluxes=[lake_outflow_m3[is_lake]],
-                prestorages=[prestorage[is_lake]],
-                poststorages=[self.var.storage[is_lake]],
-                name="lake",
-                tollerance=0.1,
-            )
+        else:
+            lake_outflow_m3 = np.zeros(0, dtype=np.float32)
 
         return lake_outflow_m3
 
-    def routing_reservoirs(self, inflow_m3, n_routing_substeps, current_substep):
+    def routing_reservoirs(self, n_routing_substeps, current_substep):
         """
         Routine to update reservoir volumes and calculate reservoir outflow
 
@@ -467,149 +397,49 @@ class LakesReservoirs(Module):
         reservoir_release_m3 : np.ndarray
             Outflow from the reservoirs in m3 per routing substep
         """
-        if __debug__:
-            prestorage = self.reservoir_storage.copy()
-
-        reservoirs = self.is_reservoir
-
-        reservoir_infow_m3 = inflow_m3[reservoirs]
         main_channel_release_m3, command_area_release_m3 = (
             self.model.agents.reservoir_operators.release(
-                inflow_m3=reservoir_infow_m3,
                 daily_substeps=n_routing_substeps,
                 current_substep=current_substep,
             )
         )
 
+        self.reservoir_storage = self.reservoir_storage - command_area_release_m3
+
         assert (self.reservoir_storage >= 0).all()
 
-        if __debug__:
-            balance_check(
-                influxes=[reservoir_infow_m3],
-                outfluxes=[
-                    main_channel_release_m3,
-                    command_area_release_m3,
-                ],
-                prestorages=[prestorage],
-                poststorages=[self.reservoir_storage],
-                name="reservoirs",
-                tollerance=1e-5,
-            )
-
         return main_channel_release_m3, command_area_release_m3
-
-    def set_waterbody_evaporation(self):
-        self.potential_evaporation_per_water_body_m3 = (
-            np.bincount(
-                self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-                weights=self.grid.var.EWRef[self.grid.var.waterBodyID != -1],
-            )
-            / np.bincount(self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1])
-            * self.var.lake_area
-        )
 
     def substep(
         self,
         current_substep,
         n_routing_substeps,
         routing_step_length_seconds,
-        discharge,
-        total_runoff,
     ):
         if __debug__:
             prestorage = self.var.storage.copy()
 
-        total_runoff_m3 = total_runoff * self.grid.var.cell_area / n_routing_substeps
-        total_runoff_m3 = laketotal(
-            total_runoff_m3, self.grid.var.waterBodyID, nan_class=-1
-        )
-
-        discharge_m3 = (
-            upstream1(self.grid.var.downstruct, discharge) * routing_step_length_seconds
-        )
-        discharge_m3 = laketotal(discharge_m3, self.grid.var.waterBodyID, nan_class=-1)
-
-        assert (total_runoff_m3 >= 0).all()
-        assert (discharge_m3 >= 0).all()
         assert (self.var.total_inflow_from_other_water_bodies_m3 >= 0).all()
 
-        inflow_m3 = (
-            total_runoff_m3
-            + discharge_m3
-            + self.var.total_inflow_from_other_water_bodies_m3
+        outflow_to_drainage_network_m3 = np.zeros_like(
+            self.var.storage, dtype=np.float32
         )
 
-        potential_evaporation_from_water_bodies_substep_step_m3 = (
-            self.potential_evaporation_per_water_body_m3 / n_routing_substeps
+        outflow_to_drainage_network_m3[self.is_lake] = self.routing_lakes(
+            routing_step_length_seconds
         )
-
-        actual_evaporation_from_water_bodies_per_routing_step_m3 = np.minimum(
-            potential_evaporation_from_water_bodies_substep_step_m3, self.var.storage
-        )  # evaporation is already in m3 per routing substep
-        actual_evaporation_from_water_bodies_per_routing_step_m3[
-            self.var.water_body_type == OFF
-        ] = 0
-        self.var.storage -= actual_evaporation_from_water_bodies_per_routing_step_m3
-
-        outflow_to_drainage_network_m3 = self.routing_lakes(
-            inflow_m3, routing_step_length_seconds
-        )
-        command_area_release_m3 = np.zeros_like(inflow_m3)
+        command_area_release_m3 = np.zeros_like(outflow_to_drainage_network_m3)
         (
             outflow_to_drainage_network_m3[self.is_reservoir],
             command_area_release_m3[self.is_reservoir],
-        ) = self.routing_reservoirs(inflow_m3, n_routing_substeps, current_substep)
-
-        if outflow_to_drainage_network_m3.size > 0:
-            outflow_grid = np.take(
-                outflow_to_drainage_network_m3, self.grid.var.waterbody_outflow_points
-            )
-            outflow_grid[self.grid.var.waterbody_outflow_points == -1] = 0
-        else:
-            outflow_grid = np.zeros_like(
-                self.grid.var.waterbody_outflow_points,
-                dtype=outflow_to_drainage_network_m3.dtype,
-            )
-
-        # shift outflow 1 cell downstream
-        outflow_shifted_downstream = upstream1(
-            self.grid.var.downstruct_no_water_bodies, outflow_grid
-        )
-
-        # in this assert we exclude any outflow that is already in a pit
-        # because this should disappear when the water is shifted downstream
-        assert math.isclose(
-            outflow_shifted_downstream.sum(),
-            outflow_grid[self.grid.var.lddCompress != PIT].sum(),
-            rel_tol=0.00001,
-        )
-
-        # everything with is not going to another lake is output to river network
-        # this variable is named inflow_to_river_network in the routing
-        # module, because it is considered inflow there
-        outflow_to_river_network = np.where(
-            self.grid.var.waterBodyID != -1, 0, outflow_shifted_downstream
-        )
-        # everything what is not going to the network is going to another lake
-        # this will be added to the inflow of the other lake in the next
-        # timestep
-        outflow_to_another_lake = np.where(
-            self.grid.var.waterBodyID != -1, outflow_shifted_downstream, 0
-        )
-
-        # sum up all inflow from other lakes
-        self.var.total_inflow_from_other_water_bodies_m3 = laketotal(
-            outflow_to_another_lake, self.grid.var.waterBodyID, nan_class=-1
-        )
+        ) = self.routing_reservoirs(n_routing_substeps, current_substep)
 
         if __debug__:
             balance_check(
                 name="lakes and reservoirs",
                 how="cellwise",
-                influxes=[inflow_m3],
+                influxes=[],
                 outfluxes=[
-                    outflow_to_drainage_network_m3,
-                    actual_evaporation_from_water_bodies_per_routing_step_m3,
                     command_area_release_m3,
                 ],
                 prestorages=[prestorage],
@@ -617,10 +447,7 @@ class LakesReservoirs(Module):
                 tollerance=1,  # 1 m3
             )
 
-        return (
-            outflow_to_river_network,
-            actual_evaporation_from_water_bodies_per_routing_step_m3,
-        )
+        return outflow_to_drainage_network_m3
 
     @property
     def is_reservoir(self):
@@ -645,10 +472,6 @@ class LakesReservoirs(Module):
     @reservoir_capacity.setter
     def reservoir_capacity(self, value):
         self.var.capacity[self.is_reservoir] = value
-
-    @property
-    def potential_evaporation_per_water_body_m3_reservoir(self):
-        return self.potential_evaporation_per_water_body_m3[self.is_reservoir]
 
     @property
     def lake_storage(self):
