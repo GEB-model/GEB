@@ -28,7 +28,12 @@ from geb.hydrology.lakes_reservoirs import OFF
 from geb.module import Module
 from geb.workflows import balance_check
 
-from .subroutines import PIT, define_river_network, dirID, dirUpstream, kinematic
+from .subroutines import (
+    PIT,
+    dirDownstream,
+    dirUpstream,
+    kinematic,
+)
 
 
 def get_channel_ratio(river_width, river_length, cell_area):
@@ -122,24 +127,18 @@ class Routing(Module):
 
         self.grid.var.lddCompress = self.grid.compress(ldd)
 
-        (
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,  # self.grid.var.downstruct_no_water_bodies,
-            _,
-            self.grid.var.dirDown,
-            _,
-        ) = define_river_network(ldd, self.hydrology.grid)
-
         # TODO: is this done in the right direction?
         self.grid.var.dirDown_ = mapper[self.river_network.idxs_seq]
-        ldd_short = self.grid.compress(
-            dirID(self.grid.decompress(np.arange(self.grid.var.idx_ds.size)), ldd)
-        )
-        _, self.grid.var.dirupLen, self.grid.var.dirupID = dirUpstream(ldd_short)
+
+        # create a compressed version of the ldd
+        ldd_short = mapper[
+            self.grid.compress(self.river_network.idxs_ds.reshape(ldd.shape))
+        ]
+        # set all pits (i.e., cells with an outflow to itself) to -1
+        ldd_short[np.arange(ldd_short.size) == ldd_short] = -1
+
+        dirUp, self.grid.var.dirupLen, self.grid.var.dirupID = dirUpstream(ldd_short)
+        self.grid.var.dirDown, _ = dirDownstream(dirUp, self.grid.var.lddCompress, [])
 
         # number of substep per day
         self.var.n_routing_substeps = 24

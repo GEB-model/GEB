@@ -34,20 +34,6 @@ TOP = 8
 TOP_RIGHT = 9
 
 
-def Compress(map, mask):
-    """
-    compressing map from 2D to 1D without missing values
-
-    :param map:  input map
-    :param mask: mask map
-    :return: compressed map
-    """
-
-    maskmap = np.ma.masked_array(map, mask)
-    compmap = np.ma.compressed(maskmap)
-    return compmap
-
-
 def postorder(dirUp, catchment, node, catch, dirDown):
     """
     Routine to run a postorder tree traversal
@@ -162,150 +148,6 @@ def dirDownstream(dirUp, lddcomp, dirDown):
 
 
 @njit(cache=True)
-def upstreamArea(dirDown, dirshort, area):
-    """
-    calculates upstream area
-
-    :param dirDown: array which point from each cell to the next downstream cell
-    :param dirshort:
-    :param area: area (can be any variable)
-    :return: upstream area
-    """
-
-    upstream_area = area.copy()
-    for i in range(dirDown.size):
-        j = dirDown[i]
-        k = dirshort[j]
-        if k > -1:
-            upstream_area[k] += upstream_area[j]
-
-    return upstream_area
-
-
-def upstream1(downstruct, weight):
-    """
-    Calculates 1 cell upstream
-
-    :param downstruct:
-    :param weight:
-    :return: upstream 1cell
-    """
-    return np.bincount(downstruct, weights=weight)[:-1]
-
-
-def downstream1(dirUp, weight):
-    """
-    calculated 1 cell downstream
-
-    :param dirUp:
-    :param weight:
-    :return: dowmnstream 1 cell
-    """
-
-    downstream = weight.copy()
-    k = 0
-    for i in dirUp:
-        for j in i:
-            downstream[j] = weight[k]
-        k += 1
-    return downstream
-
-
-def define_river_network(ldd2D, grid):
-    """
-    defines river network
-
-    :param ldd: river network
-    :return: ldd variables
-    """
-    # every cell gets an order starting from 0
-    lddOrder = grid.decompress(np.arange(grid.compressed_size), fillvalue=-1)
-
-    lddCompress, dirshort = lddrepair(ldd2D, lddOrder, grid)
-    dirUp, dirupLen, dirupID = dirUpstream(dirshort)
-
-    # for upstream calculation
-    inAr = np.arange(grid.compressed_size, dtype=np.int64)
-    # each upstream pixel gets the id of the downstream pixel
-    downstruct = downstream1(dirUp, inAr).astype(np.int64)
-    # all pits gets a high number
-    downstruct[lddCompress == PIT] = grid.compressed_size
-
-    dirDown = []
-    dirDown, catchment = dirDownstream(dirUp, lddCompress, dirDown)
-    lendirDown = len(dirDown)
-
-    return (
-        lddCompress,
-        dirshort,
-        dirUp,
-        dirupLen,
-        dirupID,
-        downstruct,
-        catchment,
-        dirDown,
-        lendirDown,
-    )
-
-
-@njit(cache=True)
-def repairLdd1(ldd):
-    dirX = np.array([0, -1, 0, 1, -1, 0, 1, -1, 0, 1], dtype=np.int32)
-    dirY = np.array([0, 1, 1, 1, 0, 0, 0, -1, -1, -1], dtype=np.int32)
-
-    sizei = ldd.shape[0]
-    sizej = ldd.shape[1]
-
-    for i in range(sizei):
-        for j in range(sizej):
-            lddvalue = ldd[i, j]
-            assert lddvalue >= 0 and lddvalue < 10
-
-            if lddvalue != 0 and lddvalue != PIT:
-                y = i + dirY[lddvalue]  # y of outflow cell
-                x = j + dirX[lddvalue]  # x of outflow cell
-                if (
-                    y < 0 or y == sizei
-                ):  # if outflow cell is outside the domain, make it a pit
-                    ldd[i, j] = PIT
-                if (
-                    x < 0 or x == sizej
-                ):  # if outflow cell is outside the domain, make it a pit
-                    ldd[i, j] = PIT
-                if lddvalue != PIT:
-                    if (
-                        ldd[y, x] == 0
-                    ):  # if outflow cell has no flow, make inflow cell a pit
-                        ldd[i, j] = PIT
-    return ldd
-
-
-@njit(cache=True)
-def dirID(lddorder, ldd):
-    out_array = np.full_like(
-        ldd, -1, dtype=np.int32
-    )  # Initialize out_array with -1, same shape as ldd
-    dirX = np.array([0, -1, 0, 1, -1, 0, 1, -1, 0, 1], dtype=np.int32)
-    dirY = np.array([0, 1, 1, 1, 0, 0, 0, -1, -1, -1], dtype=np.int32)
-
-    sizei = ldd.shape[0]
-    sizej = ldd.shape[1]
-
-    for i in range(sizei):
-        for j in range(sizej):
-            lddvalue = ldd[i, j]
-            assert lddvalue >= 0 and lddvalue < 10
-
-            if lddvalue != 0 and lddvalue != PIT:
-                x = j + dirX[lddvalue]
-                y = i + dirY[lddvalue]
-                if 0 <= x < sizej and 0 <= y < sizei:
-                    out_array[i, j] = lddorder[y, x]
-
-    return out_array
-
-
-@njit(cache=True)
 def repairLdd2(ldd, dir):
     check = np.zeros(ldd.size, dtype=np.int64)
     for i in range(ldd.size):
@@ -328,29 +170,6 @@ def repairLdd2(ldd, dir):
         for id in path:
             check[id] = 1
     return ldd, dir
-
-
-def lddrepair(lddnp, lddOrder, grid):
-    """
-    repairs a river network
-
-    * eliminate unsound parts
-    * add pits at points with no connections
-
-    :param lddnp: rivernetwork as 1D array
-    :param lddOrder:
-    :return: repaired ldd
-    """
-
-    lddnp = repairLdd1(lddnp)
-    dir = dirID(lddOrder, lddnp)
-
-    dir_compressed = grid.compress(dir)
-    ldd_compressed = grid.compress(lddnp)
-
-    ldd_compressed, dir_compressed = repairLdd2(ldd_compressed, dir_compressed)
-
-    return ldd_compressed, dir_compressed
 
 
 MAX_ITERS = 1000
