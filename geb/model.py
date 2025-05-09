@@ -275,7 +275,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # self.config["report"] = {
         #     "hydrology.routing": {
         #         "discharge_daily": {
-        #             "varname": "grid.var.discharge",
+        #             "varname": "grid.var.discharge_m3_s",
         #             "type": "grid",
         #             "function": None,
         #             "format": "zarr",
