@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import List, Union
 
 import geopandas as gpd
-import hydromt.workflows
 import networkx
 import numpy as np
 import pandas as pd
