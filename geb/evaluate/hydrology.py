@@ -33,5 +33,5 @@ class Hydrology:
         ax.set_ylabel("Latitude")
 
         plt.savefig(
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.tif", dpi=300
+            self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
         )
