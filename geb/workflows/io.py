@@ -558,3 +558,37 @@ class AsyncForcingReader:
         self.executor.shutdown(wait=False)
 
         self.loop.call_soon_threadsafe(self.loop.stop)
+
+
+class WorkingDirectory:
+    """
+    A context manager for temporarily changing the current working directory.
+
+    Usage:
+        with WorkingDirectory('/path/to/new/directory'):
+            # Code executed here will have the new directory as the CWD
+    """
+
+    def __init__(self, new_path):
+        """
+        Initializes the context manager with the path to change to.
+
+        Args:
+            new_path (str): The path to the directory to change into.
+        """
+        self._new_path = new_path
+        self._original_path = None  # To store the original path
+
+    def __enter__(self):
+        # Store the current working directory
+        self._original_path = os.getcwd()
+
+        # Change to the new directory
+        os.chdir(self._new_path)
+
+        # Return self (optional, but common)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Change back to the original directory
+        os.chdir(self._original_path)
