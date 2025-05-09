@@ -1033,7 +1033,6 @@ class CropFarmers(AgentBaseClass):
         if __debug__:
             irrigation_limit_pre = self.var.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
-            available_groundwater_m3_pre = available_groundwater_m3.copy()
             available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         (
             self.var.channel_abstraction_m3_by_farmer[:],
@@ -1043,6 +1042,7 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
+            groundwater_abstraction_m3,
         ) = abstract_water(
             activation_order=self.activation_order_by_elevation,
             field_indices_by_farmer=self.var.field_indices_by_farmer.data,
@@ -1111,9 +1111,8 @@ class CropFarmers(AgentBaseClass):
                 name="water withdrawal groundwater",
                 how="sum",
                 outfluxes=self.var.groundwater_abstraction_m3_by_farmer,
-                prestorages=available_groundwater_m3_pre,
-                poststorages=available_groundwater_m3,
-                tollerance=50,
+                influxes=groundwater_abstraction_m3,
+                tollerance=10,
             )
 
             # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
@@ -1163,6 +1162,7 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
+            groundwater_abstraction_m3,
         )
 
     @staticmethod
