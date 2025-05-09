@@ -67,8 +67,34 @@ else:
     raise ValueError("Invalid shape")
 
 
-def get_lake_height_above_outflow(storage, lake_area, outflow_height):
-    height_above_outflow = storage / lake_area - outflow_height
+def get_lake_height_from_bottom(lake_storage, lake_area):
+    height_from_bottom = lake_storage / lake_area
+    return height_from_bottom
+
+
+def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
+    """
+    Calculate the storage of a lake given its height above the bottom and area.
+
+    Parameters
+    ----------
+    lake_height : float
+        Height of the lake above the bottom in m
+    lake_area : float
+        Area of the lake in m2
+
+    Returns
+    -------
+    float
+        Storage of the lake in m3
+    """
+    return lake_height * lake_area
+
+
+def get_lake_height_above_outflow(lake_storage, lake_area, outflow_height):
+    height_above_outflow = (
+        get_lake_height_from_bottom(lake_storage, lake_area) - outflow_height
+    )
     height_above_outflow[height_above_outflow < 0] = 0
     return height_above_outflow
 
@@ -87,9 +113,10 @@ def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
     )
 
 
-def estimate_outflow_height(lake_storage, lake_factor, lake_area, avg_outflow):
+def estimate_outflow_height(lake_capacity, lake_factor, lake_area, avg_outflow):
     height_above_outflow = outflow_to_height_above_outflow(lake_factor, avg_outflow)
-    outflow_height = (lake_storage / lake_area) - height_above_outflow
+    lake_height_when_full = get_lake_height_from_bottom(lake_capacity, lake_area)
+    outflow_height = lake_height_when_full - height_above_outflow
     outflow_height[outflow_height < 0] = 0
     return outflow_height
 
@@ -132,7 +159,7 @@ def get_lake_outflow(
 
     """
     height_above_outflow = get_lake_height_above_outflow(
-        storage=storage, lake_area=lake_area, outflow_height=outflow_height
+        lake_storage=storage, lake_area=lake_area, outflow_height=outflow_height
     )
     storage_above_outflow = height_above_outflow * lake_area
 
@@ -163,7 +190,6 @@ class LakesReservoirs(Module):
         waterBodyID_unmapped = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
         )
-        waterBodyID_unmapped[waterBodyID_unmapped == OFF] = -1
 
         self.grid.var.waterBodyID, self.var.waterbody_mapping = (
             self.map_water_bodies_IDs(waterBodyID_unmapped)
@@ -176,7 +202,7 @@ class LakesReservoirs(Module):
         )
 
         # we compress the waterbody_outflow_points, which we can later use to decompress
-        self.var.waterBodyIDC = np.unique(
+        waterbody_ids = np.unique(
             self.grid.var.waterbody_outflow_points[
                 self.grid.var.waterbody_outflow_points != -1
             ]
@@ -185,10 +211,10 @@ class LakesReservoirs(Module):
         self.var.water_body_data = self.load_water_body_data(
             self.var.waterbody_mapping, waterBodyID_unmapped
         )
-        # sort the water bodies in the same order as the compressed water body IDs (waterBodyIDC)
+        # sort the water bodies in the same order as the compressed water body IDs (waterbody_ids)
         self.var.water_body_data = self.var.water_body_data.sort_index()
 
-        assert np.array_equal(self.var.water_body_data.index, self.var.waterBodyIDC)
+        assert np.array_equal(self.var.water_body_data.index, waterbody_ids)
 
         self.var.water_body_type = self.var.water_body_data["waterbody_type"].values
         self.var.waterBodyOrigID = self.var.water_body_data[
@@ -196,6 +222,9 @@ class LakesReservoirs(Module):
         ].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
         self.var.water_body_type[self.var.water_body_type == LAKE_CONTROL] = LAKE
+
+        # print("setting all water body types to LAKE")
+        # self.var.water_body_type.fill(LAKE)
 
         assert (np.isin(self.var.water_body_type, [OFF, LAKE, RESERVOIR])).all()
 
@@ -225,16 +254,30 @@ class LakesReservoirs(Module):
             self.model.config["parameters"]["lakeAFactor"],
         )
 
-        # initialize storage of lakes with (full) capacity
-        self.var.storage = self.var.capacity.copy()
+        self.var.storage = np.full_like(self.var.capacity, np.nan, dtype=np.float64)
+
+        # initialize storage to 50% of the capacity. This is arbitrary, but
+        # ok since we use a spinup period
         self.reservoir_storage = self.reservoir_capacity * 0.5
-        self.lake_storage = self.lake_capacity * 0.85
         self.var.outflow_height = estimate_outflow_height(
-            self.var.storage,
+            self.var.capacity,
             self.var.lake_factor,
             self.var.lake_area,
             average_discharge,
         )
+
+        # initialize lake storage to exactly the level of the outflow height
+        self.lake_storage = get_lake_storage_from_height_above_bottom(
+            self.var.outflow_height[self.is_lake], self.var.lake_area[self.is_lake]
+        )
+        assert (
+            get_lake_height_above_outflow(
+                self.lake_storage,
+                self.var.lake_area[self.is_lake],
+                self.var.outflow_height[self.is_lake],
+            )
+            < 1e-10
+        ).all()
 
         self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] = 0
 
@@ -492,6 +535,10 @@ class LakesReservoirs(Module):
     @property
     def reservoir_fill_percentage(self):
         return self.reservoir_storage / self.reservoir_capacity * 100
+
+    @property
+    def n(self):
+        return self.var.capacity.size
 
     def decompress(self, array):
         return array

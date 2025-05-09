@@ -26,8 +26,6 @@ from geb.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
-from .lakes_reservoirs import RESERVOIR
-
 
 class WaterDemand(Module):
     def __init__(self, model, hydrology):
@@ -56,22 +54,14 @@ class WaterDemand(Module):
         )
 
     def get_available_water(self, gross_irrigation_demand_m3_per_command_area):
-        assert (
-            self.hydrology.lakes_reservoirs.var.waterBodyIDC.size
-            == self.hydrology.lakes_reservoirs.var.storage.size
-        )
-        assert (
-            self.hydrology.lakes_reservoirs.var.waterBodyIDC.size
-            == self.hydrology.lakes_reservoirs.var.water_body_type.size
-        )
-        available_reservoir_storage_m3 = np.zeros_like(
-            self.hydrology.lakes_reservoirs.var.storage
+        available_reservoir_storage_m3 = np.zeros(
+            self.hydrology.lakes_reservoirs.n, dtype=np.float32
         )
 
-        available_reservoir_storage_m3[
-            self.hydrology.lakes_reservoirs.var.water_body_type == RESERVOIR
-        ] = self.model.agents.reservoir_operators.get_command_area_release(
-            gross_irrigation_demand_m3_per_command_area
+        available_reservoir_storage_m3[self.hydrology.lakes_reservoirs.is_reservoir] = (
+            self.model.agents.reservoir_operators.get_command_area_release(
+                gross_irrigation_demand_m3_per_command_area
+            )
         )
 
         # allow maximum of 90% of river storage to be used
