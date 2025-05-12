@@ -775,7 +775,7 @@ class CropFarmers(AgentBaseClass):
     def update_field_indices(self) -> None:
         """Creates `field_indices_by_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer."""
         (
-            self.var.field_indices_by_farmer[:],
+            self.var.field_indices_by_farmer,
             self.var.field_indices,
         ) = self.update_field_indices_numba(self.HRU.var.land_owners)
 

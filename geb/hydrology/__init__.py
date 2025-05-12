@@ -126,7 +126,7 @@ class Hydrology(Data, Module):
 
         # if self.config["general"]["simulate_forest"] and self.soil.model.spinup is False:
         if self.config["general"]["simulate_forest"]:
-            for plantFATE_model in self.soil.model.plantFATE:
+            for plantFATE_model in self.plantFATE:
                 if plantFATE_model is not None:
                     plantFATE_model.finalize()
 
