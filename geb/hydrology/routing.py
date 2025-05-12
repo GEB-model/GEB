@@ -23,17 +23,11 @@ import math
 
 import numpy as np
 import pyflwdir
+from numba import njit
 
 from geb.hydrology.lakes_reservoirs import OFF
 from geb.module import Module
 from geb.workflows import balance_check
-
-from .subroutines import (
-    PIT,
-    dirDownstream,
-    dirUpstream,
-    kinematic,
-)
 
 
 def get_channel_ratio(river_width, river_length, cell_area):
@@ -58,22 +52,120 @@ def calculate_discharge_from_storage(
     return (river_storage / (river_length * river_alpha)) ** (1 / river_beta)
 
 
+MAX_ITERS = 10
+
+
+@njit(cache=True)
+def IterateToQnew(Qin, Qold, sideflow, alpha, beta, deltaT, deltaX):
+    epsilon = np.float64(0.0001)
+
+    assert deltaX > 0, "channel length must be greater than 0"
+
+    # If no input, then output = 0
+    if (Qin + Qold + sideflow) == 0:
+        return 0
+
+    # Common terms
+    ab_pQ = alpha * beta * ((Qold + Qin) / 2) ** (beta - 1)
+    deltaTX = deltaT / deltaX
+    C = deltaTX * Qin + alpha * Qold**beta + deltaT * sideflow
+
+    # Initial guess for Qnew and iterative process
+    Qnew = (deltaTX * Qin + Qold * ab_pQ + deltaT * sideflow) / (deltaTX + ab_pQ)
+    fQnew = deltaTX * Qnew + alpha * Qnew**beta - C
+    dfQnew = deltaTX + alpha * beta * Qnew ** (beta - 1)
+    Qnew -= fQnew / dfQnew
+    if np.isnan(Qnew):
+        Qnew = 1e-30
+    else:
+        Qnew = max(Qnew, 1e-30)
+    count = 0
+
+    while np.abs(fQnew) > epsilon and count < MAX_ITERS:
+        fQnew = deltaTX * Qnew + alpha * Qnew**beta - C
+        dfQnew = deltaTX + alpha * beta * Qnew ** (beta - 1)
+        Qnew -= fQnew / dfQnew
+        count += 1
+
+    return max(Qnew, 0)
+
+
+@njit(cache=True)
+def kinematic(
+    Qold,
+    sideflow,
+    upstream_matrix_from_up_to_downstream,
+    idxs_up_to_downstream,
+    alpha,
+    beta,
+    deltaT,
+    deltaX,
+    is_waterbody,
+    is_outflow,
+    waterbody_id,
+    waterbody_storage,
+    outflow_per_waterbody_m3,
+):
+    """
+    Kinematic wave routing
+
+    Parameters
+    ----------
+    deltaT: float
+        Time step, must be > 0
+    deltaX: np.ndarray
+        Array of floats containing the channel length, must be > 0
+    """
+    Qnew = np.full_like(Qold, np.nan)
+
+    count = 0
+
+    for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
+        node = idxs_up_to_downstream[i]
+        upstream_nodes = upstream_matrix_from_up_to_downstream[i]
+
+        Qin = np.float32(0.0)
+        sideflow_node = sideflow[node]
+
+        for upstream_node in upstream_nodes:
+            if upstream_node == -1:
+                break
+
+            count += 1
+
+            if is_outflow[upstream_node]:
+                # if upstream node is an outflow add the outflow of the waterbody
+                # to the sideflow
+                node_waterbody_id = waterbody_id[upstream_node]
+
+                # make sure that the waterbody ID is valid
+                assert node_waterbody_id != -1
+                waterbody_outflow_m3 = outflow_per_waterbody_m3[node_waterbody_id]
+
+                waterbody_storage[node_waterbody_id] -= waterbody_outflow_m3
+
+                # make sure that the waterbody storage does not go below 0
+                assert waterbody_storage[node_waterbody_id] >= 0
+
+                sideflow_node += waterbody_outflow_m3 / deltaT / deltaX[node]
+
+            elif is_waterbody[
+                upstream_node
+            ]:  # if upstream node is a waterbody, but not an outflow
+                assert sideflow[upstream_node] == 0
+                assert Qold[upstream_node] == 0
+
+            else:  # in normal case, just take the inflow from upstream
+                assert not np.isnan(Qnew[upstream_node])
+                Qin += Qnew[upstream_node]
+
+        Qnew[node] = IterateToQnew(
+            Qin, Qold[node], sideflow_node, alpha[node], beta, deltaT, deltaX[node]
+        )
+    return Qnew
+
+
 class Routing(Module):
-    """
-    ROUTING
-
-    routing using the kinematic wave
-
-    ====================  ================================================================================  =========
-    Variable [self.var]   Description                                                                       Unit
-    ====================  ================================================================================  =========
-    EWRef                 potential evaporation rate from water surface                                     m
-    waterBodyID           lakes/reservoirs map with a single ID for each lake/reservoir                     --
-    dirUp                 river network in upstream direction                                               --
-    routing_step_length_seconds             number of seconds per routing timestep                                            s
-    discharge             discharge                                                                         m3/s
-    """
-
     def __init__(self, model, hydrology):
         super().__init__(model)
 
@@ -98,14 +190,37 @@ class Routing(Module):
             latlon=True,
             mask=~self.grid.mask,
         )
-        self.river_network.order_cells(method="walk")
 
-        mapper = np.full(ldd.size, -1, dtype=np.int32)
+        # we create a mapper from the 2D ldd to the 1D river network
+        # the mapper size is ldd.size + 1, because we need to map the
+        # the "nan-value" of the ldd to -1 in the river network, thus
+        # mapping -1 to -1.
+        mapper = np.full(ldd.size + 1, -1, dtype=np.int32)
         indices = np.arange(ldd.size)[~self.grid.mask.ravel()]
         mapper[indices] = np.arange(indices.size)
-        self.grid.var.idx_ds = mapper[
-            self.river_network.idxs_ds[~self.grid.mask.ravel()]
+
+        self.river_network.order_cells(method="walk")
+        upstream_matrix = pyflwdir.core.upstream_matrix(
+            self.river_network.idxs_ds,
+        )
+
+        idxs_up_to_downstream = self.river_network.idxs_seq[::-1]
+
+        upstream_matrix_from_up_to_downstream = upstream_matrix[idxs_up_to_downstream]
+        self.upstream_matrix_from_up_to_downstream = mapper[
+            upstream_matrix_from_up_to_downstream
         ]
+        self.idxs_up_to_downstream = mapper[idxs_up_to_downstream]
+
+        # make sure all non-selected cells are set to -1
+        assert (
+            upstream_matrix[
+                ~np.isin(np.arange(self.river_network.size), idxs_up_to_downstream)
+            ]
+            == -1
+        ).all()
+
+        self.var.pits = mapper[self.river_network.idxs_pit]
 
         self.grid.var.upstream_area = self.river_network.upstream_area(unit="m2")
         self.grid.var.upstream_area[self.grid.var.upstream_area < 0] = np.nan
@@ -117,28 +232,6 @@ class Routing(Module):
         self.grid.var.upstream_area_n_cells = self.grid.var.upstream_area_n_cells[
             ~self.grid.mask
         ]
-
-        # in previous versions of GEB we followed the CWatM specification, where masked data
-        # was set at 0. We now use the official LDD specification where masked data is 255
-        # (max value of uint8). To still support old versions we set these values of 255 to
-        # 0 for now. When all models have been updated, this can be removed and the
-        # subroutines can be updated accordingly.
-        ldd[ldd == 255] = 0
-
-        self.grid.var.lddCompress = self.grid.compress(ldd)
-
-        # TODO: is this done in the right direction?
-        self.grid.var.dirDown_ = mapper[self.river_network.idxs_seq]
-
-        # create a compressed version of the ldd
-        ldd_short = mapper[
-            self.grid.compress(self.river_network.idxs_ds.reshape(ldd.shape))
-        ]
-        # set all pits (i.e., cells with an outflow to itself) to -1
-        ldd_short[np.arange(ldd_short.size) == ldd_short] = -1
-
-        dirUp, self.grid.var.dirupLen, self.grid.var.dirupID = dirUpstream(ldd_short)
-        self.grid.var.dirDown, _ = dirDownstream(dirUp, self.grid.var.lddCompress, [])
 
         # number of substep per day
         self.var.n_routing_substeps = 24
@@ -157,14 +250,14 @@ class Routing(Module):
         self.grid.var.river_length = self.grid.load(
             self.model.files["grid"]["routing/river_length"]
         )
-        assert (
-            self.grid.var.river_length[self.grid.var.lddCompress != PIT] > 0
-        ).all(), "Channel length must be greater than 0 for all cells except for pits"
 
         # where there is a pit, the river length is set to distance to the center of the cell,
         # thus half of the sqrt of the cell area
-        self.grid.var.river_length[self.grid.var.lddCompress == PIT] = (
-            np.sqrt(self.grid.var.cell_area[self.grid.var.lddCompress == PIT]) / 2
+        self.grid.var.river_length[self.var.pits] = (
+            np.sqrt(self.grid.var.cell_area[self.var.pits]) / 2
+        )
+        assert (self.grid.var.river_length > 0).all(), (
+            "Channel length must be greater than 0 for all cells"
         )
 
         # Channel bottom width [meters]
@@ -363,10 +456,9 @@ class Routing(Module):
 
             self.grid.var.discharge_m3_s = kinematic(
                 self.grid.var.discharge_m3_s,
-                side_flow_channel_m2_per_s.astype(np.float64),
-                self.grid.var.dirDown,
-                self.grid.var.dirupLen,
-                self.grid.var.dirupID,
+                side_flow_channel_m2_per_s.astype(np.float32),
+                self.upstream_matrix_from_up_to_downstream,
+                self.idxs_up_to_downstream,
                 self.grid.var.river_alpha,
                 self.var.river_beta,
                 self.var.routing_step_length_seconds,
@@ -374,7 +466,7 @@ class Routing(Module):
                 is_waterbody=self.grid.var.waterBodyID != -1,
                 is_outflow=self.grid.var.waterbody_outflow_points != -1,
                 waterbody_id=self.grid.var.waterBodyID,
-                waterbody_storage=self.hydrology.lakes_reservoirs.var.storage,
+                waterbody_storage=self.hydrology.lakes_reservoirs.var.storage.copy(),
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
             )
 
@@ -387,7 +479,7 @@ class Routing(Module):
             )
 
             outflow_at_outflows_m3_substep = (
-                self.grid.var.discharge_m3_s[self.grid.var.lddCompress == PIT].sum()
+                self.grid.var.discharge_m3_s[self.var.pits].sum()
                 * self.var.routing_step_length_seconds
             )
 
