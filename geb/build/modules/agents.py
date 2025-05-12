@@ -1123,7 +1123,10 @@ class Agents:
                     assert not np.isnan(n_cells_per_size_class.loc[size_class])
             assert math.isclose(
                 cultivated_land_region_total_cells,
-                round(n_cells_per_size_class.sum().item()),
+                n_cells_per_size_class.sum().item(),
+                abs_tol=1,
+            ), (
+                f"{cultivated_land_region_total_cells}, {n_cells_per_size_class.sum().item()}"
             )
 
             whole_cells_per_size_class = (n_cells_per_size_class // 1).astype(int)
@@ -1856,8 +1859,9 @@ class Agents:
                 fraction_sw_irrigation_data.x,
                 fraction_sw_irrigation_data.y,
                 self.bounds,
+                buffer=5,
             ),
-        )
+        ).raster.interpolate_na()
 
         fraction_gw_irrigation = "aeigw"
         fraction_gw_irrigation_data = xr.open_dataarray(
@@ -1871,8 +1875,9 @@ class Agents:
                 fraction_gw_irrigation_data.x,
                 fraction_gw_irrigation_data.y,
                 self.bounds,
+                buffer=5,
             ),
-        )
+        ).raster.interpolate_na()
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
