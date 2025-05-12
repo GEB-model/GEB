@@ -3,7 +3,6 @@
 __version__ = "1.0.0b5"
 
 import faulthandler
-import importlib
 import os
 import platform
 import sys
