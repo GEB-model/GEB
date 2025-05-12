@@ -504,8 +504,8 @@ class Hydrography:
                 crs=4326,
             )
             waterbodies = waterbodies.astype(dtypes)
-            water_body_id = xr.zeros_like(self.grid["mask"], dtype=np.int32)
-            sub_water_body_id = xr.zeros_like(self.subgrid["mask"], dtype=np.int32)
+            water_body_id = xr.full_like(self.grid["mask"], -1, dtype=np.int32)
+            sub_water_body_id = xr.full_like(self.subgrid["mask"], -1, dtype=np.int32)
         else:
             water_body_id = self.grid.raster.rasterize(
                 waterbodies,
