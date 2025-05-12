@@ -23,7 +23,7 @@ class Observations:
         # upstream_area_grid=self.grid["routing/upstream_area"]
 
         upstream_area = self.grid["routing/upstream_area"]
-        upstream_area_subgrid = self.other["original_d8_upstream_area"]
+        upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
         rivers = self.geoms["routing/rivers"]
         region_shapefile = self.geoms["mask"]
 
@@ -33,6 +33,7 @@ class Observations:
         discharge_snapping_df = pd.DataFrame(
             columns=[
                 "station_name",
+                "station_ID",
                 "station_coords",
                 "closest_point_coords",
                 "subgrid_pixel_coords",
@@ -100,8 +101,7 @@ class Observations:
         ############## add "external" stations to GRDC ###############
         if custom_river_stations is True:
             for station in os.listdir(
-                # data_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
-                "input\evaluation\discharge\seperate_stations"
+                Path(self.data_catalog["GRDC"].path).parent.parent / "custom_stations"
             ):
                 if not station.endswith(".csv"):
                     # raise error
@@ -169,15 +169,27 @@ class Observations:
         )  # filter GRDC stations based on the region shapefile
 
         print("GRDC dataset processed and clipped")
+        # GRDC_clipped = GRDC_clipped.load()
+        # write to zarr
+        GRDC_clipped.to_zarr(
+            Path(self.root).parent / "output" / "build" / "GRDC.zarr",
+            mode="w",
+            consolidated=True,
+            compute=True,
+        )  # save the GRDC dataset to zarr format
+        print("done")
 
         ###########################################################################################################################################################
         ############################### Snapping to river and validation of discharges ############################################################################
         ###########################################################################################################################################################
+        GRDC_clipped = GRDC_clipped.compute()
+        print("start loop")
 
         for id in GRDC_clipped.id.values:
             GRDC_station = GRDC_clipped.sel(
                 id=id
             )  # select the station from the GRDC dataset
+            print("GRDC station loaded")
             GRDC_station_name = str(
                 GRDC_station.station_name.values
             )  # get the name of the station
@@ -254,8 +266,8 @@ class Observations:
             ################ store the station snapping coordinates and plot them #############
             station_coords = list(
                 (
-                    float(GRDC_clipped.sel(id=station_id).x.values),
-                    float(GRDC_clipped.sel(id=station_id).y.values),
+                    float(GRDC_clipped.sel(id=id).x.values),
+                    float(GRDC_clipped.sel(id=id).y.values),
                 )
             )  # original station coordinates
             closest_point_coords = list(
@@ -280,14 +292,15 @@ class Observations:
                 [
                     {
                         "station_name": GRDC_station_name,
+                        "station_ID": float(id),
                         "station_coords": GRDC_station_coords,
                         "closest_point_coords": closest_point_coords,
                         "subgrid_pixel_coords": subgrid_pixel_coords,
                         "grid_pixel_coords": grid_pixel_coords,
                         "closest_tuple": closest_tuple,
-                        "upstream_area_from_subgrid": upstream_area_from_subgrid,
-                        "upstream_area_from_grid": upstream_area_from_grid,
-                        "upstream_area_ratio": ratio_upstream_area,
+                        "upstream_area_from_subgrid": float(upstream_area_from_subgrid),
+                        "upstream_area_from_grid": float(upstream_area_from_grid),
+                        "upstream_area_ratio": float(ratio_upstream_area),
                     }
                 ]
             )
@@ -295,15 +308,7 @@ class Observations:
             discharge_snapping_df = pd.concat(
                 [discharge_snapping_df, new_row], ignore_index=True
             )  # add the new row to the dataframe
-            discharge_snapping_df.to_excel(
-                Path(self.root).parent
-                / "output"
-                / "build"
-                / "snapping_discharge"
-                / "discharge_snapping.xlsx",
-                index=False,
-            )  # save the dataframe to an excel file
-
+            print("start plotting")
             # plot locations with river line and the subgrid
             fig, ax = plt.subplots(
                 subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
@@ -313,6 +318,18 @@ class Observations:
             ax.add_feature(cfeature.LAND)
             ax.add_feature(cfeature.OCEAN)
             ax.add_feature(cfeature.LAKES)
+
+            # Set the extent to zoom in around the gauge location
+            buffer = 0.05  # Adjust this value to control the zoom level
+            ax.set_extent(
+                [
+                    GRDC_station_coords[0] - buffer,
+                    GRDC_station_coords[0] + buffer,
+                    GRDC_station_coords[1] - buffer,
+                    GRDC_station_coords[1] + buffer,
+                ],
+                crs=ccrs.PlateCarree(),
+            )
 
             ax.scatter(
                 GRDC_station_coords[0],
@@ -374,20 +391,74 @@ class Observations:
 
             print("discharge snapping done for station %s" % GRDC_station_name)
 
-        discharge_snapping_df = pd.DataFrame(
-            columns=[
-                "station_name",
-                "station_coords",
-                "closest_point_coords",
-                "subgrid_pixel_coords",
-                "grid_pixel_coords",
-                "upstream_area_from_subgrid",
-                "upstream_area_from_grid",
-                "upstream_area_ratio",
-            ]
+        print("Discharge snapping done for all stations")
+
+        # convert upstream_araea_from_subgrid and upstream_area_from_grid to float
+        discharge_snapping_df["upstream_area_from_subgrid"] = discharge_snapping_df[
+            "upstream_area_from_subgrid"
+        ].astype(float)
+        discharge_snapping_df["upstream_area_from_grid"] = discharge_snapping_df[
+            "upstream_area_from_grid"
+        ].astype(float)
+
+        # create an output folder for the discharge snapping if it does not exist
+        snapping_discharge_folder = (
+            Path(self.root).parent / "output" / "build" / "snapping_discharge"
+        )
+        snapping_discharge_folder.mkdir(parents=True, exist_ok=True)
+
+        discharge_snapping_df.to_excel(
+            Path(self.root).parent
+            / "output"
+            / "build"
+            / "snapping_discharge"
+            / "discharge_snapping.xlsx",
+            index=False,
+        )  # save the dataframe to an excel file
+
+        # Convert the DataFrame to a GeoDataFrame with multiple geometry columns
+        discharge_snapping_gdf = gpd.GeoDataFrame(
+            discharge_snapping_df,
+            geometry=gpd.points_from_xy(
+                discharge_snapping_df["station_coords"].apply(lambda x: x[0]),
+                discharge_snapping_df["station_coords"].apply(lambda x: x[1]),
+            ),
+            crs="EPSG:4326",  # Set the coordinate reference system
         )
 
-        print("discharge preprocessing done")
+        discharge_snapping_gdf["station_name"] = discharge_snapping_df["station_name"]
+        discharge_snapping_gdf["station_ID"] = discharge_snapping_df["station_ID"]
+
+        output_path = (
+            Path(self.root).parent
+            / "output"
+            / "build"
+            / "snapping_discharge"
+            / "discharge_station_coords.geoparquet"
+        )
+        discharge_snapping_gdf.to_parquet(output_path, index=False)
+
+        discharge_snapping_gdf = gpd.GeoDataFrame(
+            discharge_snapping_df,
+            geometry=gpd.points_from_xy(
+                discharge_snapping_df["grid_pixel_coords"].apply(lambda x: x[0]),
+                discharge_snapping_df["grid_pixel_coords"].apply(lambda x: x[1]),
+            ),
+            crs="EPSG:4326",  # Set the coordinate reference system
+        )
+        discharge_snapping_gdf["station_name"] = discharge_snapping_df["station_name"]
+        discharge_snapping_gdf["station_ID"] = discharge_snapping_df["station_ID"]
+
+        output_path = (
+            Path(self.root).parent
+            / "output"
+            / "build"
+            / "snapping_discharge"
+            / "discharge_station_coords_snapped.geoparquet"
+        )
+
+        discharge_snapping_gdf.to_parquet(output_path, index=False)
+        print(f"GeoParquet file saved to {output_path}")
 
         # GRDC=    # later use: GRDC = data_catalog.get_source("GRDC").path
 

@@ -241,17 +241,6 @@ class Crops:
                 donor_data, unique_regions, GLOBIOM_regions
             )
 
-            # exand data to include all data empty rows from start to end year
-            data = data.reindex(
-                pd.MultiIndex.from_product(
-                    [
-                        unique_regions["region_id"],
-                        range(self.start_date.year, self.end_date.year + 1),
-                    ],
-                    names=["region_id", "year"],
-                )
-            )
-
             data = self.assign_crop_price_inflation(data, unique_regions)
 
             # combine and rename crops
@@ -292,6 +281,17 @@ class Crops:
             ]
 
             data = self.inter_and_extrapolate_prices(data, unique_regions)
+
+            # exand data to include all data empty rows from start to end year
+            data = data.reindex(
+                pd.MultiIndex.from_product(
+                    [
+                        unique_regions["region_id"],
+                        range(self.start_date.year, self.end_date.year + 1),
+                    ],
+                    names=["region_id", "year"],
+                )
+            )
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py

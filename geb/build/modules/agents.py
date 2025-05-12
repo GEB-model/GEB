@@ -326,9 +326,6 @@ class Agents:
         # ).dropna()
 
         inflation_rates.index = inflation_rates.index.astype(int)
-        inflation_rates = inflation_rates.reindex(
-            range(self.start_date.year, self.end_date.year + 1)
-        )
 
         for column in inflation_rates.columns:
             inflation_rates[column] = inflation_rates[column].interpolate(
@@ -1436,6 +1433,10 @@ class Agents:
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
         )
+        if (GDL_regions["GDLcode"] == "NA").any():
+            self.logger.warning("GDL region has a 'NA', these rows will be deleted.")
+            GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
+
         GDL_region_per_farmer = gpd.sjoin_nearest(locations, GDL_regions, how="left")
 
         # ensure that each farmer has a region
@@ -1459,6 +1460,7 @@ class Agents:
                 GDL_region = "ESPr112"
             if GDL_region == "LIEt":
                 GDL_region = "CHEr105"
+
             GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
