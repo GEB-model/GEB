@@ -62,8 +62,6 @@ load_numba_threading_layer()
 xr.set_options(use_bottleneck=False, keep_attrs=True)
 
 # set environment variable for GEB package directory
-os.environ["GEB_PACKAGE_DIR"] = str(
-    Path(importlib.util.find_spec("geb").origin).parent.parent
-)
+os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
 faulthandler.enable()

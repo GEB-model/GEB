@@ -1,0 +1,147 @@
+general:
+  # model start time (YYYY-MM-DD).
+  start_time: 2010-01-01
+  # model end time (YYYY-MM-DD).
+  end_time: 2020-01-01
+  # start of the spinup time (YYYY-MM-DD).
+  spinup_time: 2000-01-01
+  input_folder: input/
+  preprocessing_folder: preprocessing/
+  output_folder: output/
+  name: default
+  export_inital_on_spinup: true
+  simulate_forest: false
+  forecasts:
+    use: false
+
+hazards:
+  floods:
+    simulate: false
+    resolution: 150
+    nr_subgrid_pixels: 5
+    crs: auto
+    gpu: false
+    force_overwrite: true
+    return_periods:
+      - 2
+      - 5
+      - 10
+      - 25
+      - 50
+      - 100
+      - 250
+      - 500
+      - 1000
+  damage:
+    simulate: false
+  erosion:
+    simulate: false
+
+agent_settings:
+  market:
+    dynamic_market: false
+    price_frequency: yearly
+  government:
+    irrigation_limit:
+      limit: 10000  # previous tried 1700
+      per: capita
+  households:
+    adapt: false
+    expected_utility:
+      flood_risk_calculations:
+        risk_perception:
+          base: 1.6
+          coef: -2.5
+          max: 10
+          min: 0.01
+  farmers:
+    ruleset: base
+    base_management_yield_ratio: 1
+    farmers_going_out_of_business: false
+    cultivation_cost_fraction: 0.1
+    microcredit:
+      interest_rate: 0.2
+      loan_duration: 2
+      loss_threshold: 25
+    return_fraction: 0.5172748734767878
+    social_network:
+      radius: 5000 # m
+      size: 10 # nr of neighbors
+    expected_utility:
+      crop_switching: 
+        ruleset: no-adaptation
+      adaptation_sprinkler:
+        ruleset: no-adaptation
+        lifespan_base: 25
+        lifespan_sprink_drip: 15
+        loan_duration: 21
+        decision_horizon: 20
+        m2_cost: 1
+      adaptation_irrigation_expansion:
+        ruleset: no-adaptation
+      adaptation_well:
+        loan_duration: 21
+        lifespan: 20
+        decision_horizon: 20
+        ruleset: no-adaptation
+        pump_hours: 3.5
+        specific_weight_water: 9800 # (kg/m3*m/s2)
+        max_initial_sat_thickness: 50 # m
+        well_yield: 0.00005 # m3/s
+        pump_efficiency: 0.7 # $/KWh
+        energy_cost_rate: 0.074
+        maintenance_factor: 0.07
+        WHY_10: 82.0209974 # $/m
+        WHY_20: 164 # $/m
+        WHY_30: 50 # $/m
+      decisions:
+        decision_horizon: 10
+        expenditure_cap: 0.5
+      drought_risk_calculations:
+        event_perception:
+          drought_threshold: 5
+        risk_perception:
+          base: 1.6
+          coef: -2.5
+          max: 10
+          min: 0.5
+  fix_activation_order: true
+  reservoir_operators:
+    MinOutflowQ: 0.0
+    NonDamagingOutflowQ: 4.0
+    NormalOutflowQ: 0.1
+    max_reservoir_release_factor: 0.03380636312896216
+    ruleset: no-adaptation
+  sensitivity_analysis:
+    risk_aversion_factor: 1
+    discount_rate_factor: 1
+    interest_rate_factor: 1
+    well_cost_factor: 1
+    drought_threshold_factor: 1
+
+logging:
+  logfile: GEB.log  
+  # The loglevel, choose from: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  loglevel: DEBUG
+
+draw:
+  draw_agents:
+    crop_farmers:
+      draw_every_nth: 1
+
+report:
+  hydrology.routing:
+    discharge_daily:
+      varname: grid.var.discharge
+      type: grid
+      function: null
+      format: zarr
+      single_file: true
+
+parameters:
+  SnowMeltCoef: 0.004
+  arnoBeta_add: 0.6653797014119323
+  lakeAFactor: 1
+  lakeEvaFactor: 2.6777823102359894
+  manningsN: 0.8269807271111366
+  preferentialFlowConstant: 3.14300925049279
