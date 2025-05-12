@@ -4110,7 +4110,7 @@ class CropFarmers(AgentBaseClass):
         self.HRU.var.crop_map[HRUs_farmer_to_be_removed] = -1
         self.HRU.var.crop_age_days_map[HRUs_farmer_to_be_removed] = -1
         self.HRU.var.crop_harvest_age_days[HRUs_farmer_to_be_removed] = -1
-        self.HRU.var.land_use_type[HRUs_farmer_to_be_removed] = land_use_type
+        self.HRU.var.land_use_type[HRUs_farmer_to_be_removed] = new_land_use_type
 
         # reduce number of agents
         self.n -= 1
