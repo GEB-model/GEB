@@ -125,7 +125,7 @@ class Hydrology(Data, Module):
             self.groundwater.modflow.finalize()
 
         if self.config["general"]["simulate_forest"]:
-            for plantFATE_model in self.model.plantFATE:
+            for plantFATE_model in self.soil.model.plantFATE:
                 if plantFATE_model is not None:
                     plantFATE_model.finalize()
 
