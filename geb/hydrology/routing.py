@@ -183,7 +183,7 @@ class Routing(Module):
             compress=False,
         )
 
-        self.river_network = pyflwdir.from_array(
+        river_network = pyflwdir.from_array(
             ldd,
             ftype="ldd",
             transform=self.grid.transform,
@@ -199,35 +199,33 @@ class Routing(Module):
         indices = np.arange(ldd.size)[~self.grid.mask.ravel()]
         mapper[indices] = np.arange(indices.size)
 
-        self.river_network.order_cells(method="walk")
+        river_network.order_cells(method="walk")
         upstream_matrix = pyflwdir.core.upstream_matrix(
-            self.river_network.idxs_ds,
+            river_network.idxs_ds,
         )
 
-        idxs_up_to_downstream = self.river_network.idxs_seq[::-1]
+        idxs_up_to_downstream = river_network.idxs_seq[::-1]
 
         upstream_matrix_from_up_to_downstream = upstream_matrix[idxs_up_to_downstream]
-        self.upstream_matrix_from_up_to_downstream = mapper[
+        self.var.upstream_matrix_from_up_to_downstream = mapper[
             upstream_matrix_from_up_to_downstream
         ]
-        self.idxs_up_to_downstream = mapper[idxs_up_to_downstream]
+        self.var.idxs_up_to_downstream = mapper[idxs_up_to_downstream]
 
         # make sure all non-selected cells are set to -1
         assert (
             upstream_matrix[
-                ~np.isin(np.arange(self.river_network.size), idxs_up_to_downstream)
+                ~np.isin(np.arange(river_network.size), idxs_up_to_downstream)
             ]
             == -1
         ).all()
 
-        self.var.pits = mapper[self.river_network.idxs_pit]
+        self.var.pits = mapper[river_network.idxs_pit]
 
-        self.grid.var.upstream_area = self.river_network.upstream_area(unit="m2")
+        self.grid.var.upstream_area = river_network.upstream_area(unit="m2")
         self.grid.var.upstream_area[self.grid.var.upstream_area < 0] = np.nan
         self.grid.var.upstream_area = self.grid.var.upstream_area[~self.grid.mask]
-        self.grid.var.upstream_area_n_cells = self.river_network.upstream_area(
-            unit="cell"
-        )
+        self.grid.var.upstream_area_n_cells = river_network.upstream_area(unit="cell")
         self.grid.var.upstream_area_n_cells[self.grid.var.upstream_area_n_cells < 0] = 0
         self.grid.var.upstream_area_n_cells = self.grid.var.upstream_area_n_cells[
             ~self.grid.mask
@@ -457,8 +455,8 @@ class Routing(Module):
             self.grid.var.discharge_m3_s = kinematic(
                 self.grid.var.discharge_m3_s,
                 side_flow_channel_m2_per_s.astype(np.float32),
-                self.upstream_matrix_from_up_to_downstream,
-                self.idxs_up_to_downstream,
+                self.var.upstream_matrix_from_up_to_downstream,
+                self.var.idxs_up_to_downstream,
                 self.grid.var.river_alpha,
                 self.var.river_beta,
                 self.var.routing_step_length_seconds,
