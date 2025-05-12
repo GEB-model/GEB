@@ -124,6 +124,7 @@ class Hydrology(Data, Module):
         if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
 
+        # if self.config["general"]["simulate_forest"] and self.soil.model.spinup is False:
         if self.config["general"]["simulate_forest"]:
             for plantFATE_model in self.soil.model.plantFATE:
                 if plantFATE_model is not None:
