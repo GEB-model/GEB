@@ -113,6 +113,7 @@ class ReservoirOperators(AgentBaseClass):
         usable_release_m3, environmental_release_m3 = self._get_release(
             irrigation_demand_m3=gross_irrigation_demand_m3,
             daily_substeps=1,
+            enforce_minimum_usable_release_m3=False,
         )
 
         # limit command area release to the irrigation demand
@@ -150,6 +151,7 @@ class ReservoirOperators(AgentBaseClass):
         usable_release_m3, environmental_release_m3 = self._get_release(
             irrigation_demand_m3=self.gross_irrigation_demand_m3,
             daily_substeps=daily_substeps,
+            enforce_minimum_usable_release_m3=True,
         )
 
         # main channel release is the usable release, the environmental release
@@ -169,7 +171,9 @@ class ReservoirOperators(AgentBaseClass):
 
         return main_channel_release, command_area_release_substep
 
-    def _get_release(self, irrigation_demand_m3, daily_substeps):
+    def _get_release(
+        self, irrigation_demand_m3, daily_substeps, enforce_minimum_usable_release_m3
+    ):
         if irrigation_demand_m3.size == 0:
             return np.zeros_like(irrigation_demand_m3), np.zeros_like(
                 irrigation_demand_m3
@@ -244,12 +248,15 @@ class ReservoirOperators(AgentBaseClass):
 
         assert (provisional_reservoir_release_m3 >= 0).all()
         usable_release_m3, environmental_release_m3 = self._release_corrections(
-            provisional_reservoir_release_m3,
-            self.storage,
-            self.capacity,
-            environmental_flow_requirement_m3,
-            self.var.alpha,
-            daily_substeps,
+            provisional_reservoir_release_m3=provisional_reservoir_release_m3,
+            storage_m3=self.storage,
+            capacity_m3=self.capacity,
+            minimum_usable_release_m3=self.command_area_release_m3 / daily_substeps
+            if enforce_minimum_usable_release_m3
+            else None,
+            environmental_flow_requirement_m3=environmental_flow_requirement_m3,
+            alpha=self.var.alpha,
+            daily_substeps=daily_substeps,
         )
         assert (usable_release_m3 >= 0).all()
         assert (environmental_release_m3 >= 0).all()
@@ -264,10 +271,19 @@ class ReservoirOperators(AgentBaseClass):
         provisional_reservoir_release_m3,
         storage_m3,
         capacity_m3,
+        minimum_usable_release_m3,
         environmental_flow_requirement_m3,
         alpha,
         daily_substeps,
     ):
+        """
+        Parameters
+        ----------
+
+        minimum_release_m3 : float
+            The minimum release from the reservoir. This is the environmental flow requirement
+            in m3/s. It is assumed that this is the same for all reservoirs.
+        """
         # release is at least 10% of the mean monthly inflow (environmental flow)
         reservoir_release_m3 = np.maximum(
             provisional_reservoir_release_m3, environmental_flow_requirement_m3
@@ -300,14 +316,18 @@ class ReservoirOperators(AgentBaseClass):
         )
 
         assert (reservoir_release_m3_ >= 0).all()
-        assert (
-            reservoir_release_m3_ >= self.command_area_release_m3 / daily_substeps
-        ).all()
 
         environmental_flow_release_m3 = np.minimum(
             reservoir_release_m3_, environmental_flow_requirement_m3
         )
         usable_release_m3 = reservoir_release_m3_ - environmental_flow_release_m3
+        if minimum_usable_release_m3 is not None:
+            # make sure the usable release is at least the command area release
+            # divided by the number of daily substeps
+            usable_release_m3 = np.maximum(usable_release_m3, minimum_usable_release_m3)
+        assert (
+            usable_release_m3 >= self.command_area_release_m3 / daily_substeps
+        ).all()
         return usable_release_m3, environmental_flow_release_m3
 
     def get_irrigation_reservoir_release(
