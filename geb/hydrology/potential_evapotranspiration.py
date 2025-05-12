@@ -234,8 +234,8 @@ class PotentialEvapotranspiration(Module):
             self.HRU.var.land_use_type != FOREST
         ] = np.nan
 
-        self.model.data.grid.net_absorbed_radiation_vegetation_MJ_m2_day = (
-            self.model.data.to_grid(
+        self.grid.var.net_absorbed_radiation_vegetation_MJ_m2_day = (
+            self.model.hydrology.to_grid(
                 HRU_data=net_absorbed_radiation_vegetation_MJ_m2_day, fn="nanmax"
             )
         )

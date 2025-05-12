@@ -408,7 +408,7 @@ def evapotranspirate(
 
     for i in prange(land_use_type.size):
         remaining_potential_transpiration = potential_transpiration[i]
-        if land_use_type[i] == PADDY_IRRIGATED and not mask[i]:
+        if land_use_type[i] == PADDY_IRRIGATED and mask[i]:
             transpiration_from_topwater = min(
                 topwater[i], remaining_potential_transpiration
             )
@@ -490,6 +490,7 @@ def evapotranspirate(
                     w[layer, i] = max(
                         w[layer, i], wres[layer, i]
                     )  # soil moisture can never be lower than wres
+                    actual_total_transpiration[i] += transpiration
 
         if mask_evap[i]:
             # limit the bare soil evaporation to the available water in the soil
@@ -1357,7 +1358,7 @@ class Soil(Module):
                         longwave_radiation_net=self.HRU.rlds[indx],
                         albedo=0.13,  # temporary value for forest
                     ),
-                    # "net_radiation": self.model.data.grid.net_absorbed_radiation_vegetation_MJ_m2_day[i]
+                    # "net_radiation": self.grid.net_absorbed_radiation_vegetation_MJ_m2_day[i]
                 }
 
                 # print(plantFATE_data)
@@ -1445,6 +1446,11 @@ class Soil(Module):
         """
         timer = TimingModule("Soil")
 
+        bioarea = self.HRU.var.land_use_type < SEALED
+
+        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
+
         if (
             self.model.current_timestep == 1
             and self.model.config["general"]["simulate_forest"]
@@ -1519,50 +1525,46 @@ class Soil(Module):
                 self.newPlantFATEModel(i)
                 # self.plantFATE_forest_RUs[new_forest_HRUs] = True
 
-        bioarea = self.HRU.var.land_use_type < SEALED
-
         interflow = self.HRU.full_compressed(0, dtype=np.float32)
 
         timer = TimingModule("Soil")
 
-        self.model.data.grid.vapour_pressure_deficit_KPa = (
+        self.grid.vapour_pressure_deficit_KPa = (
             self.calculate_vapour_pressure_deficit_kPa(
-                temperature_K=self.model.data.grid.tas,
-                relative_humidity=self.model.data.grid.hurs,
+                temperature_K=self.grid.tas,
+                relative_humidity=self.grid.hurs,
             )
         )
-        self.model.data.grid.photosynthetic_photon_flux_density_umol_m2_s = (
+        self.grid.photosynthetic_photon_flux_density_umol_m2_s = (
             self.calculate_photosynthetic_photon_flux_density(
-                shortwave_radiation=self.model.data.grid.rsds,
+                shortwave_radiation=self.grid.rsds,
                 xi=0.5,
             )
         )
 
         w_forest = self.HRU.var.w.sum(axis=0)
         w_forest[self.HRU.var.land_use_type != FOREST] = np.nan
-        w_forest = self.model.data.to_grid(HRU_data=w_forest, fn="nanmax")
+        w_forest = self.hydrology.to_grid(HRU_data=w_forest, fn="nanmax")
 
         wwp_forest = self.HRU.var.wwp.sum(axis=0)
         wwp_forest[self.HRU.var.land_use_type != FOREST] = np.nan
-        wwp_forest = self.model.data.to_grid(HRU_data=wwp_forest, fn="nanmax")
+        wwp_forest = self.hydrology.to_grid(HRU_data=wwp_forest, fn="nanmax")
 
         wfc_forest = self.HRU.var.wfc.sum(axis=0)
         wfc_forest[self.HRU.var.land_use_type != FOREST] = np.nan
-        wfc_forest = self.model.data.to_grid(HRU_data=wfc_forest, fn="nanmax")
+        wfc_forest = self.hydrology.to_grid(HRU_data=wfc_forest, fn="nanmax")
 
         soil_height_forest = self.HRU.var.soil_layer_height.sum(axis=0)
         soil_height_forest[self.HRU.var.land_use_type != FOREST] = np.nan
-        soil_height_forest = self.model.data.to_grid(
+        soil_height_forest = self.hydrology.to_grid(
             HRU_data=soil_height_forest, fn="nanmax"
         )
 
-        self.model.data.grid.soil_water_potential_MPa = (
-            self.calculate_soil_water_potential_MPa(
-                soil_moisture=w_forest,
-                soil_moisture_wilting_point=wwp_forest,
-                soil_moisture_field_capacity=wfc_forest,
-                soil_tickness=soil_height_forest,
-            )
+        self.grid.soil_water_potential_MPa = self.calculate_soil_water_potential_MPa(
+            soil_moisture=w_forest,
+            soil_moisture_wilting_point=wwp_forest,
+            soil_moisture_field_capacity=wfc_forest,
+            soil_tickness=soil_height_forest,
         )
 
         available_water_infiltration, open_water_evaporation = (
@@ -1576,25 +1578,25 @@ class Soil(Module):
             )
         )
 
-        # assert balance_check(
-        #     name="soil_1",
-        #     how="cellwise",
-        #     influxes=[
-        #         actual_irrigation_consumption[bioarea],
-        #         natural_available_water_infiltration[bioarea],
-        #     ],
-        #     outfluxes=[
-        #         open_water_evaporation[bioarea],
-        #         available_water_infiltration[bioarea],
-        #     ],
-        #     prestorages=[
-        #         topwater_pre[bioarea],
-        #     ],
-        #     poststorages=[
-        #         self.HRU.var.topwater[bioarea],
-        #     ],
-        #     tollerance=1e-6,
-        # )
+        assert balance_check(
+            name="soil_-2",
+            how="cellwise",
+            influxes=[
+                actual_irrigation_consumption[bioarea],
+                natural_available_water_infiltration[bioarea],
+            ],
+            outfluxes=[
+                open_water_evaporation[bioarea],
+                available_water_infiltration[bioarea],
+            ],
+            prestorages=[
+                topwater_pre[bioarea],
+            ],
+            poststorages=[
+                self.HRU.var.topwater[bioarea],
+            ],
+            tollerance=1e-6,
+        )
 
         timer.new_split("Available infiltration")
 
@@ -1637,7 +1639,6 @@ class Soil(Module):
 
         mask = self.HRU.var.land_use_type < SEALED
         mask_evap = self.HRU.var.land_use_type < SEALED
-        # if self.model.config["general"]["simulate_forest"] and self.model.spinup is False:
         if self.model.config["general"]["simulate_forest"]:
             mask[self.plantFATE_forest_RUs] = False
 
@@ -1645,22 +1646,23 @@ class Soil(Module):
             name="soil_-1_mask",
             how="cellwise",
             influxes=[
-                self.HRU.var.natural_available_water_infiltration[~mask],
-                self.HRU.var.actual_irrigation_consumption[~mask],
-                capillary_rise_from_groundwater[~mask],
+                natural_available_water_infiltration[mask],
+                actual_irrigation_consumption[mask],
+                capillary_rise_from_groundwater[mask],
             ],
             outfluxes=[
-                interflow[~mask],
-                open_water_evaporation[~mask],
-                runoff_from_groundwater[~mask],
+                interflow[mask],
+                open_water_evaporation[mask],
+                runoff_from_groundwater[mask],
+                available_water_infiltration[mask],
             ],
             prestorages=[
-                w_pre[:, ~mask].sum(axis=0),
-                topwater_pre[~mask],
+                w_pre[:, mask].sum(axis=0),
+                topwater_pre[mask],
             ],
             poststorages=[
-                self.HRU.var.w[:, ~mask].sum(axis=0),
-                self.HRU.var.topwater[~mask],
+                self.HRU.var.w[:, mask].sum(axis=0),
+                self.HRU.var.topwater[mask],
             ],
             tollerance=1e-6,
         )
@@ -1700,24 +1702,25 @@ class Soil(Module):
             name="soil_0_mask",
             how="cellwise",
             influxes=[
-                self.HRU.var.natural_available_water_infiltration[~mask],
-                self.HRU.var.actual_irrigation_consumption[~mask],
-                capillary_rise_from_groundwater[~mask],
+                self.HRU.var.natural_available_water_infiltration[mask],
+                self.HRU.var.actual_irrigation_consumption[mask],
+                capillary_rise_from_groundwater[mask],
             ],
             outfluxes=[
-                interflow[~mask],
-                actual_total_transpiration[~mask],
-                actual_bare_soil_evaporation[~mask],
-                open_water_evaporation[~mask],
-                runoff_from_groundwater[~mask],
+                interflow[mask],
+                actual_total_transpiration[mask],
+                actual_bare_soil_evaporation[mask],
+                open_water_evaporation[mask],
+                runoff_from_groundwater[mask],
+                available_water_infiltration[mask],
             ],
             prestorages=[
-                w_pre[:, ~mask].sum(axis=0),
-                topwater_pre[~mask],
+                w_pre[:, mask].sum(axis=0),
+                topwater_pre[mask],
             ],
             poststorages=[
-                self.HRU.var.w[:, ~mask].sum(axis=0),
-                self.HRU.var.topwater[~mask],
+                self.HRU.var.w[:, mask].sum(axis=0),
+                self.HRU.var.topwater[mask],
             ],
             tollerance=1e-6,
         )
@@ -1736,6 +1739,7 @@ class Soil(Module):
                 actual_bare_soil_evaporation[bioarea],
                 open_water_evaporation[bioarea],
                 runoff_from_groundwater[bioarea],
+                available_water_infiltration[bioarea],
             ],
             prestorages=[
                 w_pre[:, bioarea].sum(axis=0),
@@ -1797,13 +1801,13 @@ class Soil(Module):
                 plantfate_transpiration, plantfate_transpiration_by_layer.sum(axis=0)
             )
 
-            self.model.data.grid.plantFATE_biomass = self.model.data.to_grid(
+            self.grid.plantFATE_biomass = self.hydrology.to_grid(
                 HRU_data=plantfate_biomass, fn="weightedmean"
             )
-            self.model.data.grid.plantFATE_NPP = self.model.data.to_grid(
+            self.grid.plantFATE_NPP = self.hydrology.to_grid(
                 HRU_data=plantfate_co2, fn="weightedmean"
             )
-            self.model.data.grid.plantFATE_num_ind = self.model.data.to_grid(
+            self.grid.plantFATE_num_ind = self.hydrology.to_grid(
                 HRU_data=plantfate_num_ind, fn="weightedmean"
             )
 
@@ -1821,6 +1825,7 @@ class Soil(Module):
                 actual_bare_soil_evaporation[bioarea],
                 open_water_evaporation[bioarea],
                 runoff_from_groundwater[bioarea],
+                available_water_infiltration[bioarea],
             ],
             prestorages=[
                 w_pre[:, bioarea].sum(axis=0),
