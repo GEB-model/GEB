@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from geb.workflows.io import get_window
+
 from ..workflows.general import (
     bounds_are_within,
     calculate_cell_area,
@@ -100,10 +102,15 @@ class LandSurface:
         # subbasins that are not part of the study area
         bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
 
-        fabdem = self.data_catalog.get_rasterdataset(
-            "fabdem",
-            bbox=bounds,
-            buffer=100,
+        fabdem = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
+        fabdem = fabdem.isel(
+            band=0,
+            **get_window(
+                fabdem.x,
+                fabdem.y,
+                bounds,
+                buffer=100,
+            ),
         ).raster.mask_nodata()
 
         target = self.subgrid["mask"]
@@ -118,10 +125,23 @@ class LandSurface:
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
             else:
-                DEM_raster = self.data_catalog.get_rasterdataset(
-                    DEM["name"],
-                    bbox=bounds,
-                    buffer=100,
+                DEM_raster = xr.open_dataarray(
+                    self.data_catalog.get_source(DEM["name"]).path,
+                )
+                DEM_raster = DEM_raster.isel(
+                    band=0,
+                    **get_window(
+                        DEM_raster.x,
+                        DEM_raster.y,
+                        tuple(
+                            self.geoms["routing/subbasins"]
+                            .to_crs(DEM_raster.rio.crs)
+                            .total_bounds
+                        ),
+                        buffer=100,
+                        raise_on_out_of_bounds=False,
+                        raise_on_buffer_out_of_bounds=False,
+                    ),
                 ).raster.mask_nodata()
 
             DEM_raster = DEM_raster.astype(np.float32)
@@ -352,31 +372,58 @@ class LandSurface:
 
         target = self.grid["mask"]
 
-        forect_kc = self.data_catalog.get_rasterdataset(
-            "cwatm_forest_5min", bbox=self.bounds, buffer=10
-        )["cropCoefficientForest_10days"]
-        forect_kc = forect_kc.raster.mask_nodata()
+        forest_kc = (
+            xr.open_dataarray(
+                self.data_catalog.get_source("cwatm_forest_5min").path.format(
+                    variable="cropCoefficientForest_10days"
+                ),
+            )
+            .rename({"lat": "y", "lon": "x"})
+            .rio.write_crs(4326)
+        )
+        forest_kc = forest_kc.isel(
+            **get_window(
+                forest_kc.x,
+                forest_kc.y,
+                self.bounds,
+                buffer=3,
+            ),
+        ).raster.mask_nodata()
 
-        forect_kc = resample_like(forect_kc, target, method="nearest")
+        forest_kc = resample_like(forest_kc, target, method="nearest")
 
-        forect_kc.attrs = {
+        forest_kc.attrs = {
             key: attr
-            for key, attr in forect_kc.attrs.items()
+            for key, attr in forest_kc.attrs.items()
             if not key.startswith("NETCDF_") and key != "units"
         }
         self.set_grid(
-            forect_kc,
+            forest_kc,
             name="landcover/forest/crop_coefficient",
         )
 
         for land_use_type in ("forest", "grassland"):
             self.logger.info(f"Setting up land use parameters for {land_use_type}")
 
-            land_use_ds = self.data_catalog.get_rasterdataset(
-                f"cwatm_{land_use_type}_5min", bbox=self.bounds, buffer=10
-            )
             parameter = f"interceptCap{land_use_type.title()}_10days"
-            interception_capacity = land_use_ds[parameter].raster.mask_nodata()
+            interception_capacity = (
+                xr.open_dataarray(
+                    self.data_catalog.get_source(
+                        f"cwatm_{land_use_type}_5min"
+                    ).path.format(variable=parameter),
+                )
+                .rename({"lat": "y", "lon": "x"})
+                .rio.write_crs(4326)
+            )
+            interception_capacity = interception_capacity.isel(
+                **get_window(
+                    interception_capacity.x,
+                    interception_capacity.y,
+                    self.bounds,
+                    buffer=3,
+                ),
+            ).raster.mask_nodata()
+
             interception_capacity = resample_like(
                 interception_capacity, target, method="nearest"
             )
@@ -424,8 +471,34 @@ class LandSurface:
         self.set_subgrid(ds["soc"], name="soil/soil_organic_carbon")
         self.set_subgrid(ds["height"], name="soil/soil_layer_height")
 
-        crop_group = self.data_catalog.get_rasterdataset(
-            "cwatm_soil_5min", bbox=self.bounds, buffer=10, variables=["cropgrp"]
-        ).raster.mask_nodata()
+        crop_group = (
+            xr.open_dataarray(
+                self.data_catalog.get_source("cwatm_soil_5min").path.format(
+                    variable="cropgrp"
+                ),
+            )
+            .rename({"lat": "y", "lon": "x"})
+            .rio.write_crs(4326)
+        )
+        crop_group = crop_group.isel(
+            **get_window(
+                crop_group.x,
+                crop_group.y,
+                self.bounds,
+                buffer=10,
+            ),
+        )
+        crop_group.attrs["_FillValue"] = crop_group.attrs["__FillValue"]
+        del crop_group.attrs["__FillValue"]
 
-        self.set_grid(self.interpolate(crop_group, "linear"), name="soil/crop_group")
+        crop_group = crop_group.raster.mask_nodata()
+
+        crop_group = crop_group.astype(np.float32)
+
+        crop_group = resample_like(
+            crop_group,
+            self.grid["mask"],
+            method="nearest",
+        )
+
+        self.set_grid(crop_group, name="soil/crop_group")

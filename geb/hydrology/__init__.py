@@ -124,8 +124,9 @@ class Hydrology(Data, Module):
         if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
 
+        # if self.config["general"]["simulate_forest"] and self.soil.model.spinup is False:
         if self.config["general"]["simulate_forest"]:
-            for plantFATE_model in self.model.plantFATE:
+            for plantFATE_model in self.soil.model.plantFATE:
                 if plantFATE_model is not None:
                     plantFATE_model.finalize()
 
@@ -168,7 +169,7 @@ class Hydrology(Data, Module):
             influx = (self.HRU.var.precipitation_m_day * self.HRU.var.cell_area).sum()
             outflux = (
                 self.HRU.var.actual_evapotranspiration * self.HRU.var.cell_area
-            ).sum() + self.var.routing_loss.sum()
+            ).sum() + self.model.hydrology.routing.routing_loss
 
             balance_check(
                 name="total water balance",

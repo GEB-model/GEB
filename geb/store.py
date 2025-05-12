@@ -351,9 +351,19 @@ class Bucket:
                     (path / name).with_suffix(".array.npz"), value=value
                 )
             elif isinstance(value, gpd.GeoDataFrame):
-                value.to_parquet((path / name).with_suffix(".geoparquet"))
+                value.to_parquet(
+                    (path / name).with_suffix(".geoparquet"),
+                    engine="pyarrow",
+                    compression="gzip",
+                    compression_level=9,
+                )
             elif isinstance(value, pd.DataFrame):
-                value.to_parquet((path / name).with_suffix(".parquet"))
+                value.to_parquet(
+                    (path / name).with_suffix(".parquet"),
+                    engine="pyarrow",
+                    compression="gzip",
+                    compression_level=9,
+                )
             elif isinstance(value, (list, dict)):
                 with open((path / name).with_suffix(".json"), "w") as f:
                     json.dump(value, f)
@@ -432,6 +442,7 @@ class Store:
 
         shutil.rmtree(path, ignore_errors=True)
         for name, bucket in self.buckets.items():
+            self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
     def load(self, path=None):

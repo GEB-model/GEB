@@ -1033,7 +1033,6 @@ class CropFarmers(AgentBaseClass):
         if __debug__:
             irrigation_limit_pre = self.var.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
-            available_groundwater_m3_pre = available_groundwater_m3.copy()
             available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         (
             self.var.channel_abstraction_m3_by_farmer[:],
@@ -1043,6 +1042,7 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
+            groundwater_abstraction_m3,
         ) = abstract_water(
             activation_order=self.activation_order_by_elevation,
             field_indices_by_farmer=self.var.field_indices_by_farmer.data,
@@ -1111,9 +1111,8 @@ class CropFarmers(AgentBaseClass):
                 name="water withdrawal groundwater",
                 how="sum",
                 outfluxes=self.var.groundwater_abstraction_m3_by_farmer,
-                prestorages=available_groundwater_m3_pre,
-                poststorages=available_groundwater_m3,
-                tollerance=50,
+                influxes=groundwater_abstraction_m3,
+                tollerance=10,
             )
 
             # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
@@ -1163,6 +1162,7 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
+            groundwater_abstraction_m3,
         )
 
     @staticmethod
@@ -4078,17 +4078,19 @@ class CropFarmers(AgentBaseClass):
         self.report(self, locals())
 
     def remove_agents(
-        self, farmer_indices: list[int], land_use_type: int
+        self, farmer_indices: list[int], new_land_use_type: int
     ) -> np.ndarray:
         farmer_indices = np.array(farmer_indices)
         if farmer_indices.size > 0:
             farmer_indices = np.sort(farmer_indices)[::-1]
             HRUs_with_removed_farmers = []
             for idx in farmer_indices:
-                HRUs_with_removed_farmers.append(self.remove_agent(idx, land_use_type))
+                HRUs_with_removed_farmers.append(
+                    self.remove_agent(idx, new_land_use_type)
+                )
         return np.concatenate(HRUs_with_removed_farmers)
 
-    def remove_agent(self, farmer_idx: int, land_use_type: int) -> np.ndarray:
+    def remove_agent(self, farmer_idx: int, new_land_use_type: int) -> np.ndarray:
         assert farmer_idx >= 0, "Farmer index must be positive."
         assert farmer_idx < self.n, (
             "Farmer index must be less than the number of agents."
@@ -4108,7 +4110,7 @@ class CropFarmers(AgentBaseClass):
         self.HRU.var.crop_map[HRUs_farmer_to_be_removed] = -1
         self.HRU.var.crop_age_days_map[HRUs_farmer_to_be_removed] = -1
         self.HRU.var.crop_harvest_age_days[HRUs_farmer_to_be_removed] = -1
-        self.HRU.var.land_use_type[HRUs_farmer_to_be_removed] = land_use_type
+        self.HRU.var.land_use_type[HRUs_farmer_to_be_removed] = new_land_use_type
 
         # reduce number of agents
         self.n -= 1

@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel
+from tqdm import tqdm
 
 from geb.workflows.io import to_zarr
 
@@ -61,8 +62,11 @@ def assign_calculation_group(rivers):
     order between two rivers, they can be performed in the same run. We can simplify this to running every
     even stream order in one run and every odd stream order in another run.
 
-    Furthermore, when two rivers share the same endpoint, we must also run them in different runs. Therefore,
-    we group the rivers by their endpoint and assign them to a calculation group.
+    Furthermore, when two (or in rare cases three) rivers share the same endpoint, we must also run them
+    in different runs. Therefore, we group the rivers by their endpoint and assign them to a calculation group.
+
+    The outcome is calculation groups 1-6, where 3 and 6 are only used when there are three rivers
+    sharing the same endpoint.
 
     Parameters
     ----------
@@ -76,19 +80,22 @@ def assign_calculation_group(rivers):
     """
 
     def assign(group):
-        # There cannot be three rivers with the same endpoint
-        assert len(group) <= 2, "Found more than 2 nodes with the same endpoint"
+        # There cannot be four rivers with the same endpoint (there must be an outflow point)
+        assert len(group) <= 3, "Found more than 3 nodes with the same endpoint"
         # Stream order must be the same for rivers within a group
         assert group["topological_stream_order"].nunique() == 1, (
             f"Found nodes with different topological stream order: {group['topological_stream_order'].unique()}"
         )
         # Use modulo 2 to assign even and odd stream orders to different calculation groups,
-        # then multiply by 2 to get 0 and 2 as calculation groups (leaving 1 and 3)
-        calculation_group = (group["topological_stream_order"] % 2 * 2).values
+        # then multiply by 3 to get 0 and 3 as calculation groups (leaving 1, 2 and 3)
+        calculation_group = (group["topological_stream_order"] % 2 * 3).values
         # for one of the branches in a group, increment the calculation group by 1
         # using the previously open 1 and 3 group
         if calculation_group.size == 2:
             calculation_group[1] += 1
+        elif calculation_group.size == 3:
+            calculation_group[1] += 1
+            calculation_group[2] += 2
         group["calculation_group"] = calculation_group
 
         return group
@@ -103,7 +110,6 @@ def assign_calculation_group(rivers):
 def run_sfincs_for_return_periods(
     model_root,
     return_periods=[2, 5, 10, 20, 50, 100, 250, 500, 1000],
-    working_dir=Path(os.getenv("TMPDIR", "/tmp")),
     clean_working_dir=True,
     export=True,
     export_dir=None,
@@ -120,13 +126,16 @@ def run_sfincs_for_return_periods(
     rivers["topological_stream_order"] = get_topological_stream_order(rivers)
     rivers = assign_calculation_group(rivers)
 
+    working_dir = model_root / "working_dir"
+
     rp_maps = {}
 
     for return_period in return_periods:
+        print(f"Running SFINCS for return period {return_period} years")
         rp_map = []
 
         working_dir_return_period = working_dir / f"rp_{return_period}"
-        for group, group_rivers in rivers.groupby("calculation_group"):
+        for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
             simulation_root = working_dir_return_period / str(group)
 
             shutil.rmtree(simulation_root, ignore_errors=True)

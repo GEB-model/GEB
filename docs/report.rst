@@ -38,7 +38,7 @@ For example, to export the total bare soil evaporation, gridded daily discharge,
                 function: weightednansum
         hydrology.routing:
             discharge_daily:
-                varname: grid.var.discharge
+                varname: grid.var.discharge_m3_s
                 type: grid
                 function: null
         agents.crop_farmers:
@@ -53,7 +53,7 @@ The following options are supported.
 * **filename**: The name of the file to be created. This can be a .csv or .zarr file. If the file already exists, it will be overwritten. The filename will be created in the output directory specified in the model configuration file, and placed inside the subdirectory with the name of the module.
 * **varname**: The name of the variable to be reported. NumPy-style fancy indexing is supported. For example `varname[:,0]` selects the first column of a 2D array. There are two options:
 
-  + **module attribute**: The variable name in the module. Any variable that can be reached from "self" in the module can be used. For example, `[self.]varname` or `[self.]grid.var.discharge`. Note that `self.` is ommited.
+  + **module attribute**: The variable name in the module. Any variable that can be reached from "self" in the module can be used. For example, `[self.]varname` or `[self.]grid.var.discharge_m3_s`. Note that `self.` is ommited.
   + **local variable**: Any variable that exists within the `step` function of the module. This is useful for reporting variables that are not stored between timesteps. Local variables are prefixed with ".", for exampe `.actual_bare_soil_evaporation` in the example above.
 * **type**: The type of the variable. This can be one of the following:
 

@@ -24,7 +24,7 @@ uv pip install geb --prerelease=allow
 
 To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [uv](https://docs.astral.sh/uv/#installation) and [git](https://git-scm.com/).
 
-Also create a folder where you would like to store the code and model, we call this the *working directory*. In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
+Also create a folder where you would like to store the code and model, we call this the *working directory*. Note that this folder should *NOT* be placed into a cloud synchonized folder (e.g., OneDrive). In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
 
 ```
 working directory

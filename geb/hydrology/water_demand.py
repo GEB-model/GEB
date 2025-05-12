@@ -26,8 +26,6 @@ from geb.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
-from .lakes_reservoirs import RESERVOIR
-
 
 class WaterDemand(Module):
     def __init__(self, model, hydrology):
@@ -56,27 +54,30 @@ class WaterDemand(Module):
         )
 
     def get_available_water(self, gross_irrigation_demand_m3_per_command_area):
-        assert (
-            self.hydrology.lakes_reservoirs.var.waterBodyIDC.size
-            == self.hydrology.lakes_reservoirs.var.storage.size
-        )
-        assert (
-            self.hydrology.lakes_reservoirs.var.waterBodyIDC.size
-            == self.hydrology.lakes_reservoirs.var.water_body_type.size
-        )
-        available_reservoir_storage_m3 = np.zeros_like(
-            self.hydrology.lakes_reservoirs.var.storage
+        available_reservoir_storage_m3 = np.zeros(
+            self.hydrology.lakes_reservoirs.n, dtype=np.float32
         )
 
-        available_reservoir_storage_m3[
-            self.hydrology.lakes_reservoirs.var.water_body_type == RESERVOIR
-        ] = self.model.agents.reservoir_operators.get_command_area_release(
-            gross_irrigation_demand_m3_per_command_area
+        available_reservoir_storage_m3[self.hydrology.lakes_reservoirs.is_reservoir] = (
+            self.model.agents.reservoir_operators.get_command_area_release(
+                gross_irrigation_demand_m3_per_command_area
+            )
         )
+
+        # allow maximum of 90% of river storage to be used
+        available_channel_storage_m3 = self.grid.var.river_storage_m3.copy() * 0.9
+        assert (
+            available_channel_storage_m3[self.grid.var.waterBodyID != -1] == 0.0
+        ).all()
+
+        available_groundwater_m3 = (
+            self.hydrology.groundwater.modflow.available_groundwater_m3.copy()
+        )
+
         return (
-            self.grid.var.river_storage_m3.copy(),
+            available_channel_storage_m3,
             available_reservoir_storage_m3,
-            self.hydrology.groundwater.modflow.available_groundwater_m3.copy(),
+            available_groundwater_m3,
         )
 
     def withdraw(self, source, demand):
@@ -119,7 +120,7 @@ class WaterDemand(Module):
             farmer_command_area[farmer_command_area != -1],
             gross_irrigation_demand_m3_per_farmer[farmer_command_area != -1],
             minlength=self.hydrology.lakes_reservoirs.reservoir_storage.size,
-        )
+        ).astype(np.float32)
 
         assert (domestic_water_demand_per_household >= 0).all()
         assert (industry_water_demand >= 0).all()
@@ -201,6 +202,7 @@ class WaterDemand(Module):
             irrigation_water_consumption_m,
             return_flow_irrigation_m,
             irrigation_loss_to_evaporation_m,
+            groundwater_abstraction_m3_farmers,
         ) = self.model.agents.crop_farmers.abstract_water(
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
             available_channel_storage_m3=available_channel_storage_m3,
@@ -208,6 +210,8 @@ class WaterDemand(Module):
             groundwater_depth=self.hydrology.groundwater.modflow.groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
         )
+
+        self.withdraw(available_groundwater_m3, groundwater_abstraction_m3_farmers)
 
         assert (available_reservoir_storage_m3 < 1).all(), (
             "Reservoir storage should be empty after abstraction"
@@ -270,7 +274,7 @@ class WaterDemand(Module):
                 ],
                 tollerance=1e-6,
             )
-            assert balance_check(
+            balance_check(
                 name="water_demand_2",
                 how="sum",
                 influxes=[],
@@ -278,7 +282,7 @@ class WaterDemand(Module):
                     self.hydrology.grid.domestic_withdrawal_m3,
                     self.hydrology.grid.industry_withdrawal_m3,
                     self.hydrology.grid.livestock_withdrawal_m3,
-                    self.HRU.var.cell_area,
+                    (irrigation_water_withdrawal_m * self.HRU.var.cell_area).sum(),
                 ],
                 prestorages=[
                     available_channel_storage_m3_pre,

@@ -91,8 +91,6 @@ class Evaporation(Module):
             - self.HRU.var.snowEvap,
         )
 
-        self.hydrology.lakes_reservoirs.set_waterbody_evaporation()
-
         self.report(self, locals())
 
         return (

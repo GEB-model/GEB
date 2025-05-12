@@ -8,6 +8,8 @@ import pandas as pd
 import xarray as xr
 from honeybees.library.raster import sample_from_map
 
+from geb.workflows.io import get_window
+
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
     M49_to_ISO3,
@@ -750,11 +752,14 @@ class Crops:
                 for irrigation in irrigation_types:
                     dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
-                    crop_map = self.data_catalog.get_rasterdataset(
-                        dataset_name,
-                        bbox=self.bounds,
-                        buffer=2,
+                    crop_map = xr.open_dataarray(
+                        self.data_catalog.get_source(dataset_name).path
                     )
+                    crop_map = crop_map.isel(
+                        band=0,
+                        **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
+                    )
+
                     crop_map = crop_map.fillna(0)
 
                     crop_data[year][crop][irrigation] = crop_map.assign_coords(
@@ -865,9 +870,14 @@ class Crops:
     ):
         n_farmers = self.array["agents/farmers/id"].size
 
-        MIRCA_unit_grid = self.data_catalog.get_rasterdataset(
-            "MIRCA2000_unit_grid", bbox=self.bounds, buffer=2
-        ).compute()
+        MIRCA_unit_grid = xr.open_dataarray(
+            self.data_catalog.get_source("MIRCA2000_unit_grid").path
+        )
+
+        MIRCA_unit_grid = MIRCA_unit_grid.isel(
+            band=0,
+            **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
+        )
 
         crop_calendar = parse_MIRCA2000_crop_calendar(
             self.data_catalog,

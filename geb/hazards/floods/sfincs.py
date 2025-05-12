@@ -1,9 +1,6 @@
 import json
-import os
-import platform
 from collections import deque
 from datetime import datetime
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,9 +12,6 @@ from ...HRUs import load_geom
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .build_model import build_sfincs
-from .estimate_discharge_for_return_periods import (
-    estimate_discharge_for_return_periods,
-)
 from .postprocess_model import read_flood_map
 from .run_sfincs_for_return_periods import (
     run_sfincs_for_return_periods,
@@ -237,22 +231,15 @@ class SFINCS:
             build_sfincs(
                 **self.get_build_parameters(model_root),
             )
-        estimate_discharge_for_return_periods(
-            model_root,
-            discharge=self.discharge_spinup_ds,
-            rivers=self.rivers,
-            return_periods=self.config["return_periods"],
-        )
-        if platform.system() == "Windows":
-            # On Windoes, the working dir must be a subfolder of the model_root
-            working_dir = model_root / "working_dir"
-        else:
-            # For other systems we can use a temporary directory
-            working_dir = Path(os.getenv("TMPDIR", "/tmp"))
+        # estimate_discharge_for_return_periods(
+        #     model_root,
+        #     discharge=self.discharge_spinup_ds,
+        #     rivers=self.rivers,
+        #     return_periods=self.config["return_periods"],
+        # )
 
         run_sfincs_for_return_periods(
             model_root=model_root,
-            working_dir=working_dir,
             return_periods=self.config["return_periods"],
             gpu=self.config["gpu"],
             export_dir=self.model.output_folder / "flood_maps",
@@ -325,7 +312,7 @@ class SFINCS:
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
-            self.hydrology.grid.var.discharge_substep
+            self.hydrology.grid.var.discharge_m3_s_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
     @property
