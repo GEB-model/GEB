@@ -58,6 +58,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.store = Store(self)
         self.artists = Artists(self)
 
+        # Empty list to hold plantFATE models. If forests are not used, this will be empty
+        self.plantFATE = []
+
     @property
     def name(self) -> str:
         return ""
