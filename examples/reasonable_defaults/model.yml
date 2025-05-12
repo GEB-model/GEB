@@ -145,3 +145,9 @@ parameters:
   lakeEvaFactor: 2.6777823102359894
   manningsN: 0.8269807271111366
   preferentialFlowConstant: 3.14300925049279
+
+plantFATE:
+  default_ini_file: simulation_root/default/plantFATE/p_default.ini
+  spinup_ini_file: simulation_root/spinup/plantFATE/p_default.ini
+  new_forest: false
+  new_forest_filename: null
