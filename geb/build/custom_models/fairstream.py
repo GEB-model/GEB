@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
+from pgmpy.estimators import K2, BayesianEstimator, HillClimbSearch
 from pgmpy.factors.discrete import State
 from pgmpy.models import BayesianNetwork
 from pgmpy.sampling import BayesianModelSampling
@@ -12,7 +12,9 @@ from scipy.stats import chi2_contingency, norm
 
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
+    INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
+    PERSONAL_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
@@ -29,7 +31,7 @@ class Survey:
         print("Estimating network structure")
         est = HillClimbSearch(data=self.samples)
         self.structure = est.estimate(
-            scoring_method=K2Score(data=self.samples),
+            scoring_method=K2(data=self.samples),
             max_indegree=max_indegree,
             max_iter=int(1e4),
             epsilon=1e-8,
@@ -468,6 +470,8 @@ class fairSTREAMModel(GEBModel):
                         WELL_ADAPTATION,
                         IRRIGATION_EFFICIENCY_ADAPTATION,
                         FIELD_EXPANSION_ADAPTATION,
+                        PERSONAL_INSURANCE_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
