@@ -440,9 +440,7 @@ class Households(AgentBaseClass):
 
             # Clip the flood map to the region for which we want to know the damages
             # region_path = "/scistor/ivm/vbl220/PhD/damages_region.gpkg"
-            region = gpd.read_file(self.model.files["geoms"][
-                    "damages_region_geul"
-                ])
+            region = gpd.read_file(r"C:/Users/merli/Documenten_lokaal/Master/Thesis/data thesis/models/geulnew/damages_region.gpkg")
             region_projected = region.to_crs(flood_map.rio.crs)
             flood_map_final = flood_map.rio.clip(
                 region_projected.geometry, region_projected.crs
