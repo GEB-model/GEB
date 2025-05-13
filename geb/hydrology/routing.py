@@ -413,12 +413,6 @@ class Routing(Module):
                 self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] == 0
             ).all()
 
-            outflow_per_waterbody_m3 = self.hydrology.lakes_reservoirs.substep(
-                current_substep=subrouting_step,
-                n_routing_substeps=self.var.n_routing_substeps,
-                routing_step_length_seconds=self.var.routing_step_length_seconds,
-            )
-
             actual_evaporation_from_water_bodies_per_routing_step_m3 = np.minimum(
                 potential_evaporation_per_water_body_m3_per_routing_step,
                 self.hydrology.lakes_reservoirs.var.storage,
@@ -427,6 +421,15 @@ class Routing(Module):
             self.hydrology.lakes_reservoirs.var.storage -= (
                 actual_evaporation_from_water_bodies_per_routing_step_m3
             )
+
+            outflow_per_waterbody_m3 = self.hydrology.lakes_reservoirs.substep(
+                current_substep=subrouting_step,
+                n_routing_substeps=self.var.n_routing_substeps,
+                routing_step_length_seconds=self.var.routing_step_length_seconds,
+            )
+            assert (
+                outflow_per_waterbody_m3 <= self.hydrology.lakes_reservoirs.var.storage
+            ).all()
 
             side_flow_channel_m3_per_routing_step = (
                 runoff_m3_per_routing_step
@@ -462,7 +465,7 @@ class Routing(Module):
                 is_waterbody=self.grid.var.waterBodyID != -1,
                 is_outflow=self.grid.var.waterbody_outflow_points != -1,
                 waterbody_id=self.grid.var.waterBodyID,
-                waterbody_storage=self.hydrology.lakes_reservoirs.var.storage.copy(),
+                waterbody_storage=self.hydrology.lakes_reservoirs.var.storage,
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
             )
 
