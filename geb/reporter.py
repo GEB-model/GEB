@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import datetime
 import re
+import shutil
 from operator import attrgetter
 from typing import Any, Union
 
@@ -8,6 +9,8 @@ import numpy as np
 import pandas as pd
 import zarr
 from honeybees.library.raster import coord_to_pixel
+
+from geb.store import DynamicArray
 
 
 def create_time_array(
@@ -64,10 +67,14 @@ class Reporter:
         model: The GEB model.
     """
 
-    def __init__(self, model) -> None:
+    def __init__(self, model, clean) -> None:
         self.model = model
-        self.hydrology = model.hydrology
+        if self.model.simulate_hydrology:
+            self.hydrology = model.hydrology
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
+        # optionally clean report model at start of run
+        if clean:
+            shutil.rmtree(self.report_folder, ignore_errors=True)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.variables = {}
@@ -182,10 +189,12 @@ class Reporter:
                         raster.lon.size,
                     ),
                     dtype=np.float32,
-                    compressor=zarr.codecs.BloscCodec(
-                        cname="zlib",
-                        clevel=9,
-                        shuffle=zarr.codecs.BloscShuffle.shuffle,
+                    compressors=(
+                        zarr.codecs.BloscCodec(
+                            cname="zlib",
+                            clevel=9,
+                            shuffle=zarr.codecs.BloscShuffle.shuffle,
+                        ),
                     ),
                     fill_value=np.nan,
                     dimension_names=["time", "y", "x"],
@@ -427,7 +436,7 @@ class Reporter:
                         shape=shape,
                         chunks=chunks,
                         dtype=dtype,
-                        compressor=compressor,
+                        compressors=(compressor,),
                         fill_value=fill_value,
                     )
                     ds[name].attrs["_ARRAY_DIMENSIONS"] = array_dimensions
@@ -440,7 +449,7 @@ class Reporter:
                 if value.size < ds[name][index].size:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
-                        value,
+                        value.data if isinstance(value, DynamicArray) else value,
                         (0, ds[name][index].size - value.size),
                         mode="constant",
                         constant_values=np.nan

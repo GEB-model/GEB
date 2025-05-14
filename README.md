@@ -1,4 +1,3 @@
-## Overview
 GEB (Geographical Environmental and Behavioural model) simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale. The model does so through a "deep" coupling of an agent-based model a hydrological model, a vegetation model and a hydrodynamic model. You can find full documentation [here](https://geb-model.github.io/GEB/).
 
 The figure below shows a schematic overview of the model agent-based and hydrological model.
@@ -20,11 +19,13 @@ or with [uv](https://docs.astral.sh/uv/):
 uv pip install geb --prerelease=allow
 ```
 
+To run SFINCS (the hydrodynamic model), you also need to install Docker (on Windows) or Singularity (on Linux and Mac OS X). To install Docker you need to obtain and install Docker from their website (https://www.docker.com/get-started) and make sure Docker or Singularity is running.
+
 ## Development installation and setup
 
 To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [uv](https://docs.astral.sh/uv/#installation) and [git](https://git-scm.com/).
 
-Also create a folder where you would like to store the code and model, we call this the *working directory*. In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
+Also create a folder where you would like to store the code and model, we call this the *working directory*. Note that this folder should *NOT* be placed into a cloud synchonized folder (e.g., OneDrive). In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
 
 ```
 working directory

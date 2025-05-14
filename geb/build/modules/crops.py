@@ -8,6 +8,8 @@ import pandas as pd
 import xarray as xr
 from honeybees.library.raster import sample_from_map
 
+from geb.workflows.io import get_window
+
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
     M49_to_ISO3,
@@ -478,6 +480,10 @@ class Crops:
 
         for _, region in recipient_regions.iterrows():
             ISO3 = region["ISO3"]
+            if ISO3 == "AND":
+                ISO3 = "ESP"
+            elif ISO3 == "LIE":
+                ISO3 = "CHE"
             region_id = region["region_id"]
             self.logger.info(f"Processing region {region_id}")
             # Filter the data for the current country
@@ -744,13 +750,16 @@ class Crops:
             for crop in crops:
                 crop_data[year][crop] = {}
                 for irrigation in irrigation_types:
-                    dataset_name = f"MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
+                    dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
-                    crop_map = self.data_catalog.get_rasterdataset(
-                        dataset_name,
-                        bbox=self.bounds,
-                        buffer=2,
+                    crop_map = xr.open_dataarray(
+                        self.data_catalog.get_source(dataset_name).path
                     )
+                    crop_map = crop_map.isel(
+                        band=0,
+                        **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
+                    )
+
                     crop_map = crop_map.fillna(0)
 
                     crop_data[year][crop][irrigation] = crop_map.assign_coords(
@@ -852,13 +861,23 @@ class Crops:
                 )
 
     def setup_farmer_crop_calendar(
-        self, year=2000, reduce_crops=False, replace_base=False, minimum_area_ratio=0.01
+        self,
+        year=2000,
+        reduce_crops=False,
+        replace_base=False,
+        minimum_area_ratio=0.01,
+        replace_crop_calendar_unit_code={},
     ):
         n_farmers = self.array["agents/farmers/id"].size
 
-        MIRCA_unit_grid = self.data_catalog.get_rasterdataset(
-            "MIRCA2000_unit_grid", bbox=self.bounds, buffer=2
-        ).compute()
+        MIRCA_unit_grid = xr.open_dataarray(
+            self.data_catalog.get_source("MIRCA2000_unit_grid").path
+        )
+
+        MIRCA_unit_grid = MIRCA_unit_grid.isel(
+            band=0,
+            **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
+        )
 
         crop_calendar = parse_MIRCA2000_crop_calendar(
             self.data_catalog,
@@ -882,18 +901,21 @@ class Crops:
             year,
             MIRCA_unit_grid,
             minimum_area_ratio=minimum_area_ratio,
+            replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
         )
         self.setup_farmer_irrigation_source(is_irrigated, year)
 
         all_farmers_assigned = []
 
-        crop_calendar_per_farmer = np.zeros((n_farmers, 3, 4), dtype=np.int32)
+        crop_calendar_per_farmer = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
         for mirca_unit in np.unique(farmer_mirca_units):
             farmers_in_unit = np.where(farmer_mirca_units == mirca_unit)[0]
 
             area_per_crop_rotation = []
             cropping_calenders_crop_rotation = []
-            for crop_rotation in crop_calendar[mirca_unit]:
+            for crop_rotation in crop_calendar[
+                replace_crop_calendar_unit_code.get(mirca_unit, mirca_unit)
+            ]:
                 area_per_crop_rotation.append(crop_rotation[0])
                 crop_rotation_matrix = crop_rotation[1]
                 starting_days = crop_rotation_matrix[:, 2]
@@ -960,6 +982,21 @@ class Crops:
                         :, [0, 2, 3, 4]
                     ]
                     all_farmers_assigned.append(farmer_idx)
+
+        def check_crop_calendar(crop_calendar_per_farmer):
+            # this part asserts that the crop calendar is correctly set up
+            # particulary that no two crops are planted at the same time
+            for farmer_crop_calender in crop_calendar_per_farmer:
+                farmer_crop_calender = farmer_crop_calender[
+                    farmer_crop_calender[:, -1] != -1
+                ]
+                if farmer_crop_calender.shape[0] > 1:
+                    assert (
+                        np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
+                        == farmer_crop_calender.shape[0]
+                    )
+
+        check_crop_calendar(crop_calendar_per_farmer)
 
         # Define constants for crop IDs
         WHEAT = 0
@@ -1099,6 +1136,8 @@ class Crops:
 
             return crop_calendar_per_farmer
 
+        check_crop_calendar(crop_calendar_per_farmer)
+
         # Reduces certain crops of the same GCAM category to the one that is most common in that region
         # First line checks which crop is most common, second denotes which crops will be replaced by the most common one
         if reduce_crops:
@@ -1178,17 +1217,7 @@ class Crops:
             #             crop_calendar_per_farmer, duplicate
             #         )
 
-            # this part asserts that the crop calendar is correctly set up
-            # particulary that no two crops are planted at the same time
-            for farmer_crop_calender in crop_calendar_per_farmer:
-                farmer_crop_calender = farmer_crop_calender[
-                    farmer_crop_calender[:, -1] != -1
-                ]
-                if farmer_crop_calender.shape[0] > 1:
-                    assert (
-                        np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
-                        == farmer_crop_calender.shape[0]
-                    )
+        check_crop_calendar(crop_calendar_per_farmer)
 
         if replace_base:
             base_crops = [WHEAT]
@@ -1228,17 +1257,7 @@ class Crops:
 
         assert crop_calendar_per_farmer[:, :, 3].max() == 0
 
-        # this part asserts that the crop calendar is correctly set up
-        # particulary that no two crops are planted at the same time
-        for farmer_crop_calender in crop_calendar_per_farmer:
-            farmer_crop_calender = farmer_crop_calender[
-                farmer_crop_calender[:, -1] != -1
-            ]
-            if farmer_crop_calender.shape[0] > 1:
-                assert (
-                    np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
-                    == farmer_crop_calender.shape[0]
-                )
+        check_crop_calendar(crop_calendar_per_farmer)
 
         self.set_array(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         self.set_array(
@@ -1254,6 +1273,7 @@ class Crops:
         year,
         MIRCA_unit_grid,
         minimum_area_ratio,
+        replace_crop_calendar_unit_code={},
     ):
         # Define the directory and file paths
         data_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
@@ -1343,9 +1363,18 @@ class Crops:
             nr_farmers_cell = np.count_nonzero(farmers_cell_mask)
             if nr_farmers_cell == 0:
                 continue
+
             crop_area_fraction = crop_area_fractions[farmer_cells == cell_idx][0]
 
             MIRCA_unit_cell = MIRCA_unit_grid.values.ravel()[cell_idx]
+            MIRCA_unit_cell = replace_crop_calendar_unit_code.get(
+                MIRCA_unit_cell, MIRCA_unit_cell
+            )
+
+            assert len(crop_calendar[MIRCA_unit_cell]) > 0, (
+                f"Error: No crop calendar found for cell {cell_idx} with MIRCA unit {MIRCA_unit_cell}."
+            )
+
             available_crops = np.unique(
                 np.concat([crop for _, crop in crop_calendar[MIRCA_unit_cell]])[
                     :, 0, ...

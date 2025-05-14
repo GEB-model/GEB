@@ -23,7 +23,12 @@ def load_table(fp):
 
 
 def load_array(fp):
-    return np.load(fp)["data"]
+    if fp.suffix == ".npz":
+        return np.load(fp)["data"]
+    elif fp.suffix == ".zarr":
+        return zarr.load(fp)
+    else:
+        raise ValueError(f"Unsupported file format: {fp.suffix}")
 
 
 def calculate_scaling(min_value, max_value, precision, offset=0):
@@ -113,6 +118,7 @@ def open_zarr(zarr_folder):
 
     if "_CRS" in da.attrs:
         da.rio.write_crs(pyproj.CRS(da.attrs["_CRS"]["wkt"]), inplace=True)
+        del da.attrs["_CRS"]
 
     return da
 
@@ -129,6 +135,15 @@ def to_wkt(crs_obj):
 
 
 def check_attrs(da1, da2):
+    if "_CRS" in da1.attrs:
+        del da1.attrs["_CRS"]
+    if "_CRS" in da2.attrs:
+        del da2.attrs["_CRS"]
+    if "grid_mapping" in da1.attrs:
+        del da1.attrs["grid_mapping"]
+    if "grid_mapping" in da2.attrs:
+        del da2.attrs["grid_mapping"]
+
     assert len(da1.attrs) == len(da2.attrs), "number of attributes is not equal"
 
     for key, value in da1.attrs.items():
@@ -158,15 +173,50 @@ def to_zarr(
     da,
     path,
     crs,
-    x_chunksize=350,
-    y_chunksize=350,
-    time_chunksize=1,
-    time_chunks_per_shard=30,
-    byteshuffle=True,
-    filters=[],
+    x_chunksize: int = 350,
+    y_chunksize: int = 350,
+    time_chunksize: int = 1,
+    time_chunks_per_shard: int | None = 30,
+    byteshuffle: bool = True,
+    filters: list = [],
     compressor=None,
-    progress=True,
+    progress: bool = True,
 ):
+    """
+    Save an xarray DataArray to a zarr file.
+
+    Parameters
+    ----------
+    da : xarray.DataArray
+        The xarray DataArray to save.
+    path : str
+        The path to the zarr file.
+    crs : int or pyproj.CRS
+        The coordinate reference system to use.
+    x_chunksize : int, optional
+        The chunk size for the x dimension. Default is 350.
+    y_chunksize : int, optional
+        The chunk size for the y dimension. Default is 350.
+    time_chunksize : int, optional
+        The chunk size for the time dimension. Default is 1.
+    time_chunks_per_shard : int, optional
+        The number of time chunks per shard. Default is 30. Set to None
+        to disable sharding.
+    byteshuffle : bool, optional
+        Whether to use byteshuffle compression. Default is True.
+    filters : list, optional
+        A list of filters to apply. Default is [].
+    compressor : numcodecs, optional
+        The compressor to use. Default is None, using the default Blosc compressor.
+    progress : bool, optional
+        Whether to show a progress bar. Default is True.
+
+    Returns
+    -------
+    da_disk : xarray.DataArray
+        The xarray DataArray saved to disk.
+
+    """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
     assert "latitudes" not in da.dims, "latitudes should be y"
@@ -222,19 +272,23 @@ def to_zarr(
         # subsequent QGIS support for GDAL 3.11. See https://github.com/OSGeo/gdal/pull/11787
         # For anything with a shard, we opt for zarr version 3, for anything without, we use version 2.
         if shards:
-            zarr_version = 3
-            from numcodecs.zarr3 import Blosc
+            zarr_format = 3
+            from zarr.codecs import BloscCodec
+            from zarr.codecs.blosc import BloscShuffle
 
-            compressor = Blosc(
-                cname="zstd",
-                clevel=9,
-                shuffle=0,
-            )
+            if compressor is None:
+                compressor = BloscCodec(
+                    cname="zstd",
+                    clevel=9,
+                    shuffle=BloscShuffle.shuffle
+                    if byteshuffle
+                    else BloscShuffle.noshuffle,
+                )
 
             check_buffer_size(da, chunks_or_shards=shards)
         else:
             assert not filters, "Filters are only supported for zarr version 3"
-            zarr_version = 2
+            zarr_format = 2
             from numcodecs import Blosc
 
             if compressor is None:
@@ -272,7 +326,7 @@ def to_zarr(
             "store": tmp_zarr,
             "mode": "w",
             "encoding": encoding,
-            "zarr_version": zarr_version,
+            "zarr_format": zarr_format,
             "consolidated": False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
         }
 
@@ -303,6 +357,112 @@ def to_zarr(
     assert da.shape == da_disk.shape, "shape mismatch"
 
     return da_disk
+
+
+def get_window(
+    x: xr.DataArray,
+    y: xr.DataArray,
+    bounds: tuple[int | float, int | float, int | float, int | float],
+    buffer: int = 0,
+    raise_on_out_of_bounds: bool = True,
+    raise_on_buffer_out_of_bounds: bool = True,
+) -> dict[str, slice]:
+    if not isinstance(buffer, int):
+        raise ValueError("buffer must be an integer")
+    if buffer < 0:
+        raise ValueError("buffer must be greater than or equal to 0")
+    if len(bounds) != 4:
+        raise ValueError("bounds must be a tuple of 4 values")
+    if bounds[0] >= bounds[2]:
+        raise ValueError("bounds must be in the form (min_x, max_x, min_y, max_y)")
+    if bounds[1] >= bounds[3]:
+        raise ValueError("bounds must be in the form (min_x, max_x, min_y, max_y)")
+    if x.size <= 0:
+        raise ValueError("x must not be empty")
+    if y.size <= 0:
+        raise ValueError("y must not be empty")
+
+    # So that we can do item assignment
+    bounds = list(bounds)
+
+    if bounds[0] < x[0]:
+        if raise_on_out_of_bounds:
+            raise ValueError("xmin must be greater than x[0]")
+        else:
+            bounds[0] = x[0]
+    if bounds[2] > x[-1]:
+        if raise_on_out_of_bounds:
+            raise ValueError("xmax must be less than x[-1]")
+        else:
+            bounds[2] = x[-1]
+    if bounds[1] < y[-1]:
+        if raise_on_out_of_bounds:
+            raise ValueError("ymin must be greater than y[-1]")
+        else:
+            bounds[1] = y[-1]
+    if bounds[3] > y[0]:
+        if raise_on_out_of_bounds:
+            raise ValueError("ymax must be less than y[0]")
+        else:
+            bounds[3] = y[0]
+
+    # reverse the y array
+    y_reversed = y[::-1]
+
+    assert np.all(np.diff(x) >= 0)
+    assert np.all(np.diff(y_reversed) >= 0)
+
+    xmin = np.searchsorted(x, bounds[0], side="right")
+    xmax = np.searchsorted(x, bounds[2], side="left")
+
+    if bounds[0] - x[xmin - 1] < x[xmin] - bounds[0]:
+        xmin -= 1
+
+    if x[xmax - 1] - bounds[2] < bounds[2] - x[xmax]:
+        xmax += 1
+
+    if raise_on_buffer_out_of_bounds:
+        xmin = xmin - buffer
+        xmax = xmax + buffer
+    else:
+        xmin = max(0, xmin - buffer)
+        xmax = min(x.size, xmax + buffer)
+
+    xslice = slice(xmin, xmax)
+
+    ymin = np.searchsorted(y_reversed, bounds[1], side="right")
+    ymax = np.searchsorted(y_reversed, bounds[3], side="left")
+
+    if bounds[1] - y_reversed[ymin - 1] < y_reversed[ymin] - bounds[1]:
+        ymin -= 1
+    if y_reversed[ymax - 1] - bounds[3] < bounds[3] - y_reversed[ymax]:
+        ymax += 1
+
+    if raise_on_buffer_out_of_bounds:
+        ymin = ymin - buffer
+        ymax = ymax + buffer
+    else:
+        ymin = max(0, ymin - buffer)
+        ymax = min(y.size, ymax + buffer)
+
+    ymin = y.size - ymin
+    ymax = y.size - ymax
+
+    yslice = slice(ymax, ymin)
+
+    if xslice.start < 0:
+        raise ValueError("x slice start is negative")
+    if yslice.start < 0:
+        raise ValueError("y slice start is negative")
+    if xslice.stop > x.size:
+        raise ValueError("x slice stop is greater than x size")
+    if yslice.stop > y.size:
+        raise ValueError("y slice stop is greater than y size")
+    if xslice.stop <= xslice.start:
+        raise ValueError("x slice is empty")
+    if yslice.start >= yslice.stop:
+        raise ValueError("y slice is empty")
+    return {"x": xslice, "y": yslice}
 
 
 class AsyncForcingReader:
@@ -398,3 +558,37 @@ class AsyncForcingReader:
         self.executor.shutdown(wait=False)
 
         self.loop.call_soon_threadsafe(self.loop.stop)
+
+
+class WorkingDirectory:
+    """
+    A context manager for temporarily changing the current working directory.
+
+    Usage:
+        with WorkingDirectory('/path/to/new/directory'):
+            # Code executed here will have the new directory as the CWD
+    """
+
+    def __init__(self, new_path):
+        """
+        Initializes the context manager with the path to change to.
+
+        Args:
+            new_path (str): The path to the directory to change into.
+        """
+        self._new_path = new_path
+        self._original_path = None  # To store the original path
+
+    def __enter__(self):
+        # Store the current working directory
+        self._original_path = os.getcwd()
+
+        # Change to the new directory
+        os.chdir(self._new_path)
+
+        # Return self (optional, but common)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Change back to the original directory
+        os.chdir(self._original_path)

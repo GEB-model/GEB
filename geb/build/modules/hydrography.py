@@ -10,7 +10,7 @@ from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString
 
-from geb.hydrology.lakes_reservoirs import LAKE, RESERVOIR
+from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
 
 
 def get_upstream_subbasin_ids(river_graph, subbasin_ids):
@@ -52,11 +52,16 @@ def get_subbasins_geometry(data_catalog, subbasin_ids):
 def get_rivers(data_catalog, subbasin_ids):
     rivers = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_riv").path,
-        columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+        columns=["COMID", "lengthkm", "uparea", "maxup", "NextDownID", "geometry"],
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
+    ).rename(
+        columns={
+            "NextDownID": "downstream_ID",
+        }
     )
+    rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
     # reverse the river lines to have the downstream direction
     rivers["geometry"] = rivers["geometry"].apply(
@@ -344,8 +349,25 @@ class Hydrography:
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
-        assert set(np.unique(river_raster_LR[river_raster_LR != -1])) == set(
-            np.unique(river_raster_LR[river_raster_LR != -1])
+        missing_rivers = set(rivers.index) - set(
+            np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
+        )
+
+        rivers["represented_in_grid"] = True
+        rivers.iloc[
+            rivers.index.isin(missing_rivers),
+            rivers.columns.get_loc("represented_in_grid"),
+        ] = False
+
+        assert (
+            rivers[
+                (~rivers["represented_in_grid"])
+                & (~rivers["is_downstream_outflow_subbasin"])
+            ]["lengthkm"]
+            < 5
+        ).all(), (
+            "Some large rivers are not represented in the grid, please check the "
+            "rasterization of the river lines"
         )
 
         # Derive the xy coordinates of the river network. Here the coordinates
@@ -359,10 +381,18 @@ class Hydrography:
             upstream_area_sorted = upstream_area[up_to_downstream_ids]
             ys = ys[up_to_downstream_ids]
             xs = xs[up_to_downstream_ids]
-            rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys))
+            assert ys.size > 0, "No xy coordinates found for river segment"
+            rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys, strict=True))
             rivers.at[COMID, "hydrography_upstream_area_m2"] = (
                 upstream_area_sorted.tolist()
             )
+
+        for river_ID, river in rivers.iterrows():
+            if river["represented_in_grid"]:
+                assert len(river["hydrography_xy"]) > 0, (
+                    f"River {river_ID} has no xy coordinates, please check the "
+                    "rasterization of the river lines"
+                )
 
         COMID_IDs_raster = self.full_like(
             outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
@@ -449,12 +479,15 @@ class Hydrography:
             )
             waterbodies = waterbodies.astype(dtypes)
             hydrolakes_to_geb = {
-                1: LAKE,
-                2: RESERVOIR,
+                1: np.int32(LAKE),
+                2: np.int32(RESERVOIR),
+                3: np.int32(LAKE_CONTROL),
             }
+            assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
             waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
                 hydrolakes_to_geb
             )
+            assert waterbodies["waterbody_type"].dtype == np.int32
         except NoDataException:
             self.logger.info(
                 "No water bodies found in domain, skipping water bodies setup"
@@ -471,8 +504,8 @@ class Hydrography:
                 crs=4326,
             )
             waterbodies = waterbodies.astype(dtypes)
-            water_body_id = xr.zeros_like(self.grid["mask"], dtype=np.int32)
-            sub_water_body_id = xr.zeros_like(self.subgrid["mask"], dtype=np.int32)
+            water_body_id = xr.full_like(self.grid["mask"], -1, dtype=np.int32)
+            sub_water_body_id = xr.full_like(self.subgrid["mask"], -1, dtype=np.int32)
         else:
             water_body_id = self.grid.raster.rasterize(
                 waterbodies,
@@ -562,9 +595,6 @@ class Hydrography:
             waterbodies.update(custom_reservoir_capacity)
             waterbodies.reset_index(inplace=True)
 
-        # spatial dimension is not required anymore, so drop it.
-        waterbodies = waterbodies.drop("geometry", axis=1)
-
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
         assert "volume_total" in waterbodies.columns, "volume_total is required"
@@ -572,4 +602,4 @@ class Hydrography:
             "average_discharge is required"
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
-        self.set_table(waterbodies, name="waterbodies/waterbody_data")
+        self.set_geoms(waterbodies, name="waterbodies/waterbody_data")

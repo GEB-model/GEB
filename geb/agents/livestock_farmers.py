@@ -64,7 +64,7 @@ class LiveStockFarmers(AgentBaseClass):
             / days_in_year
         )
         water_consumption = (
-            water_consumption.rio.set_crs(4326).rio.reproject(
+            water_consumption.rio.write_crs(4326).rio.reproject(
                 4326,
                 shape=self.model.hydrology.grid.shape,
                 transform=self.model.hydrology.grid.transform,

@@ -17,13 +17,13 @@ import yaml
 from honeybees.visualization.canvas import Canvas
 from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
-from hydromt.config import configread
 
 from geb import __version__
 from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
+from geb.workflows.io import WorkingDirectory
 
 
 def multi_level_merge(dict1, dict2):
@@ -195,69 +195,67 @@ def run_model_with_method(
         else:
             os.execv(sys.executable, ["-O"] + sys.argv)
 
-    # set the working directory
-    os.chdir(working_directory)
+    with WorkingDirectory(working_directory):
+        config = parse_config(config)
 
-    config = parse_config(config)
-
-    files = parse_config(
-        "input/files.json"
-        if "files" not in config["general"]
-        else config["general"]["files"]
-    )
-
-    model_params = {
-        "config": config,
-        "files": files,
-        "timing": timing,
-    }
-
-    if not gui:
-        if profiling:
-            profile = cProfile.Profile()
-            profile.enable()
-
-        with GEBModel(**model_params) as model:
-            getattr(model, method)()
-
-        if profiling:
-            profile.disable()
-            with open("profiling_stats.cprof", "w") as stream:
-                stats = Stats(profile, stream=stream)
-                stats.strip_dirs()
-                stats.sort_stats("cumtime")
-                stats.dump_stats(".prof_stats")
-                stats.print_stats()
-            profile.dump_stats("profile.prof")
-
-    else:
-        # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
-        # the event loop started for reading data, unless we use nest_asyncio.
-        # so that's what we do here.
-        import nest_asyncio
-
-        nest_asyncio.apply()
-
-        if profiling:
-            print("Profiling not available for browser version")
-        server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
-        if "draw" in config and "plot" in config["draw"] and config["draw"]["plot"]:
-            server_elements = server_elements + [
-                ChartModule(series) for series in config["draw"]["plot"]
-            ]
-
-        DISPLAY_TIMESTEPS = [1, 10, 100, 1000]
-
-        server = ModularServer(
-            "GEB",
-            GEBModel,
-            server_elements,
-            DISPLAY_TIMESTEPS,
-            model_params=model_params,
-            port=None,
-            initialization_method=method,
+        files = parse_config(
+            "input/files.json"
+            if "files" not in config["general"]
+            else config["general"]["files"]
         )
-        server.launch(port=port, browser=no_browser)
+
+        model_params = {
+            "config": config,
+            "files": files,
+            "timing": timing,
+        }
+
+        if not gui:
+            if profiling:
+                profile = cProfile.Profile()
+                profile.enable()
+
+            with GEBModel(**model_params) as model:
+                getattr(model, method)()
+
+            if profiling:
+                profile.disable()
+                with open("profiling_stats.cprof", "w") as stream:
+                    stats = Stats(profile, stream=stream)
+                    stats.strip_dirs()
+                    stats.sort_stats("cumtime")
+                    stats.dump_stats(".prof_stats")
+                    stats.print_stats()
+                profile.dump_stats("profile.prof")
+
+        else:
+            # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
+            # the event loop started for reading data, unless we use nest_asyncio.
+            # so that's what we do here.
+            import nest_asyncio
+
+            nest_asyncio.apply()
+
+            if profiling:
+                print("Profiling not available for browser version")
+            server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
+            if "draw" in config and "plot" in config["draw"] and config["draw"]["plot"]:
+                server_elements = server_elements + [
+                    ChartModule(series) for series in config["draw"]["plot"]
+                ]
+
+            DISPLAY_TIMESTEPS = [1, 10, 100, 1000]
+
+            server = ModularServer(
+                "GEB",
+                GEBModel,
+                server_elements,
+                DISPLAY_TIMESTEPS,
+                model_params=model_params,
+                port=None,
+                initialization_method=method,
+            )
+            server.launch(port=port, browser=no_browser)
 
 
 @cli.command()
@@ -285,10 +283,9 @@ def exec(method, *args, **kwargs):
     "--working-directory", "-wd", default=".", help="Working directory for model."
 )
 def calibrate(config, working_directory):
-    os.chdir(working_directory)
-
-    config = parse_config(config)
-    geb_calibrate(config, working_directory)
+    with WorkingDirectory(working_directory):
+        config = parse_config(config)
+        geb_calibrate(config, working_directory)
 
 
 @cli.command()
@@ -297,10 +294,9 @@ def calibrate(config, working_directory):
     "--working-directory", "-wd", default=".", help="Working directory for model."
 )
 def sensitivity(config, working_directory):
-    os.chdir(working_directory)
-
-    config = parse_config(config)
-    geb_sensitivity_analysis(config, working_directory)
+    with WorkingDirectory(working_directory):
+        config = parse_config(config)
+        geb_sensitivity_analysis(config, working_directory)
 
 
 @cli.command()
@@ -309,10 +305,9 @@ def sensitivity(config, working_directory):
     "--working-directory", "-wd", default=".", help="Working directory for model."
 )
 def multirun(config, working_directory):
-    os.chdir(working_directory)
-
-    config = parse_config(config)
-    geb_multi_run(config, working_directory)
+    with WorkingDirectory(working_directory):
+        config = parse_config(config)
+        geb_multi_run(config, working_directory)
 
 
 def click_build_options(build_config="build.yml"):
@@ -368,7 +363,7 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
-def get_model_builder(custom_model):
+def get_model_builder_class(custom_model):
     from geb import build
 
     if custom_model is None:
@@ -403,6 +398,20 @@ def customize_data_catalog(data_catalogs, data_root=None):
         return data_catalogs
 
 
+def get_builder(config, data_catalog, custom_model, data_provider, data_root):
+    config = parse_config(config)
+    input_folder = Path(config["general"]["input_folder"])
+
+    arguments = {
+        "root": input_folder,
+        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
+        "logger": create_logger("build.log"),
+        "data_provider": data_provider,
+    }
+
+    return get_model_builder_class(custom_model)(**arguments)
+
+
 def build_fn(
     data_catalog,
     config,
@@ -414,25 +423,18 @@ def build_fn(
 ):
     """Build model."""
 
-    # set the working directory
-    os.chdir(working_directory)
-
-    config = parse_config(config)
-    input_folder = Path(config["general"]["input_folder"])
-
-    arguments = {
-        "root": input_folder,
-        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
-        "logger": create_logger("build.log"),
-        "data_provider": data_provider,
-    }
-
-    geb_model = get_model_builder(custom_model)(**arguments)
-
-    geb_model.build(
-        methods=configread(build_config),
-        region=config["general"]["region"],
-    )
+    with WorkingDirectory(working_directory):
+        model = get_builder(
+            config,
+            data_catalog,
+            custom_model,
+            data_provider,
+            data_root,
+        )
+        model.build(
+            methods=parse_config(build_config),
+            region=parse_config(config)["general"]["region"],
+        )
 
 
 @cli.command()
@@ -454,35 +456,25 @@ def alter(
     data_provider,
     data_root,
 ):
-    """Build model."""
-
-    # set the working directory
-    os.chdir(working_directory)
-
-    config = parse_config(config)
-    reference_model_folder = Path(model) / Path(config["general"]["input_folder"])
-
-    arguments = {
-        "root": reference_model_folder,
-        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
-        "logger": create_logger("build.log"),
-        "data_provider": data_provider,
-    }
-
-    geb_model = get_model_builder(custom_model)(**arguments)
-    geb_model.read()
-    geb_model.set_alternate_root(
-        Path(".") / Path(config["general"]["input_folder"]), mode="w+"
-    )
-    geb_model.update(
-        opt=configread(build_config),
-        model_out=Path(".") / Path(config["general"]["input_folder"]),
-    )
+    with WorkingDirectory(working_directory):
+        model = get_builder(
+            config,
+            data_catalog,
+            custom_model,
+            data_provider,
+            data_root,
+        )
+        model.read()
+        model.set_alternate_root(
+            Path(".") / Path(config["general"]["input_folder"]), mode="w+"
+        )
+        model.update(
+            methods=parse_config(build_config),
+            # model_out=Path(".") / Path(config["general"]["input_folder"]),
+        )
 
 
-@cli.command()
-@click_build_options(build_config="update.yml")
-def update(
+def update_fn(
     data_catalog,
     config,
     build_config,
@@ -492,23 +484,23 @@ def update(
     data_root,
 ):
     """Update model."""
+    with WorkingDirectory(working_directory):
+        model = get_builder(
+            config,
+            data_catalog,
+            custom_model,
+            data_provider,
+            data_root,
+        )
 
-    # set the working directory
-    os.chdir(working_directory)
+        model.read()
+        model.update(methods=parse_config(build_config))
 
-    config = parse_config(config)
-    input_folder = Path(config["general"]["input_folder"])
 
-    arguments = {
-        "root": input_folder,
-        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
-        "logger": create_logger("build_update.log"),
-        "data_provider": data_provider,
-    }
-
-    geb_model = get_model_builder(custom_model)(**arguments)
-    geb_model.read()
-    geb_model.update(methods=configread(build_config))
+@cli.command()
+@click_build_options(build_config="update.yml")
+def update(*args, **kwargs):
+    update_fn(*args, **kwargs)
 
 
 @cli.command()
@@ -535,56 +527,83 @@ def evaluate(*args, **kwargs):
     default=False,
     help="Include preprocessing files in the zip file.",
 )
+@click.option(
+    "--include-output",
+    is_flag=True,
+    default=False,
+    help="Include output files in the zip file.",
+)
 @cli.command()
-def share(working_directory, name, include_preprocessing):
+def share(working_directory, name, include_preprocessing, include_output):
     """Share model."""
 
-    os.chdir(working_directory)
-
-    # create a zip file called model.zip with the folders input, and model files
-    # in the working directory
-    folders = ["input"]
-    if include_preprocessing:
-        folders.append("preprocessing")
-    files = ["model.yml", "build.yml"]
-    optional_files = ["update.yml", "data_catalog.yml"]
-    zip_filename = f"{name}.zip"
-    with zipfile.ZipFile(zip_filename, "w") as zipf:
-        total_files = (
-            sum(
-                [
-                    sum(len(files) for _, _, files in os.walk(folder))
-                    for folder in folders
-                ]
-            )
-            + len(files)
-            + len(optional_files)
-        )  # Count total number of files
-        progress = 0  # Initialize progress counter
-        for folder in folders:
-            for root, _, filenames in os.walk(folder):
-                for filename in filenames:
-                    zipf.write(os.path.join(root, filename))
-                    progress += 1  # Increment progress counter
-                    print(
-                        f"Exporting file {progress}/{total_files} to {zip_filename}",
-                        end="\r",
-                    )  # Print progress
-        for file in files:
-            zipf.write(file)
-            progress += 1  # Increment progress counter
-            print(
-                f"Exporting file {progress}/{total_files} to {zip_filename}", end="\r"
-            )  # Print progress
-        for file in optional_files:
-            if os.path.exists(file):
+    with WorkingDirectory(working_directory):
+        # create a zip file called model.zip with the folders input, and model files
+        # in the working directory
+        folders = ["input"]
+        if include_preprocessing:
+            folders.append("preprocessing")
+        if include_output:
+            folders.append("output")
+        files = ["model.yml", "build.yml"]
+        optional_files = ["update.yml", "data_catalog.yml"]
+        optional_folders = ["data"]
+        zip_filename = f"{name}.zip"
+        with zipfile.ZipFile(zip_filename, "w") as zipf:
+            total_files = (
+                sum(
+                    [
+                        sum(len(files) for _, _, files in os.walk(folder))
+                        for folder in folders
+                    ]
+                )
+                + sum(
+                    [
+                        sum(len(files) for _, _, files in os.walk(folder))
+                        for folder in optional_folders
+                        if os.path.exists(folder)
+                    ]
+                )
+                + len(files)
+                + len(optional_files)
+            )  # Count total number of files
+            progress = 0  # Initialize progress counter
+            for folder in folders:
+                for root, _, filenames in os.walk(folder):
+                    for filename in filenames:
+                        zipf.write(os.path.join(root, filename))
+                        progress += 1  # Increment progress counter
+                        print(
+                            f"Exporting file {progress}/{total_files} to {zip_filename}",
+                            end="\r",
+                        )  # Print progress
+            for folder in optional_folders:
+                if os.path.exists(folder):
+                    for root, _, filenames in os.walk(folder):
+                        for filename in filenames:
+                            zipf.write(os.path.join(root, filename))
+                            progress += 1
+                            print(
+                                f"Exporting file {progress}/{total_files} to {zip_filename}",
+                                end="\r",
+                            )
+            for file in files:
                 zipf.write(file)
-            progress += 1  # Increment progress counter
-            print(
-                f"Exporting file {progress}/{total_files} to {zip_filename}", end="\r"
-            )  # Print progress
-        print(f"Exporting file {progress}/{total_files} to {zip_filename}")
-        print("Done!")
+                progress += 1  # Increment progress counter
+                print(
+                    f"Exporting file {progress}/{total_files} to {zip_filename}",
+                    end="\r",
+                )  # Print progress
+            for file in optional_files:
+                if os.path.exists(file):
+                    zipf.write(file)
+                progress += 1  # Increment progress counter
+                print(
+                    f"Exporting file {progress}/{total_files} to {zip_filename}",
+                    end="\r",
+                )  # Print progress
+            print(f"Exporting file {progress}/{total_files} to {zip_filename}")
+            print("Done!")
 
 
 if __name__ == "__main__":

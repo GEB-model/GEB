@@ -107,14 +107,13 @@ class ReservoirOperators(AgentBaseClass):
         ] += gross_irrigation_demand_m3
 
         self.remaining_command_area_release = np.zeros_like(gross_irrigation_demand_m3)
-        self.remaining_evaporation_m3 = self.evaporation_m3
         self.command_area_release_m3 = np.zeros_like(gross_irrigation_demand_m3)
 
         # environmental release is not used for irrigation
         usable_release_m3, environmental_release_m3 = self._get_release(
-            inflow_m3=np.zeros_like(gross_irrigation_demand_m3),
             irrigation_demand_m3=gross_irrigation_demand_m3,
             daily_substeps=1,
+            enforce_minimum_usable_release_m3=False,
         )
 
         # limit command area release to the irrigation demand
@@ -134,24 +133,25 @@ class ReservoirOperators(AgentBaseClass):
 
         return self.command_area_release_m3
 
-    def release(self, inflow_m3, daily_substeps, current_substep):
+    def track_inflow(self, inflow_m3):
         if inflow_m3.size == 0:
             return np.zeros_like(inflow_m3), np.zeros_like(inflow_m3)
         # add the inflow to the multi_year_monthly_total_inflow, use the current month
         self.var.multi_year_monthly_total_inflow[:, self.current_month_index, 0] += (
             inflow_m3
         )
+        return None
 
+    def release(self, daily_substeps, current_substep):
         command_area_release_substep = self.command_area_release_m3 / daily_substeps
 
         # subtract the evaporation in this timestep from the remaining evaporation
         self.remaining_command_area_release -= command_area_release_substep
-        self.remaining_evaporation_m3 -= self.evaporation_m3 / daily_substeps
 
         usable_release_m3, environmental_release_m3 = self._get_release(
-            inflow_m3=inflow_m3,
             irrigation_demand_m3=self.gross_irrigation_demand_m3,
             daily_substeps=daily_substeps,
+            enforce_minimum_usable_release_m3=True,
         )
 
         # main channel release is the usable release, the environmental release
@@ -168,19 +168,13 @@ class ReservoirOperators(AgentBaseClass):
             np.testing.assert_allclose(
                 self.remaining_command_area_release, 0, atol=1e-7
             )
-            np.testing.assert_allclose(self.remaining_evaporation_m3, 0, atol=1e-7)
-
-        self.storage = (
-            self.storage
-            - main_channel_release
-            + inflow_m3
-            - command_area_release_substep
-        )
 
         return main_channel_release, command_area_release_substep
 
-    def _get_release(self, inflow_m3, irrigation_demand_m3, daily_substeps):
-        if inflow_m3.size == 0:
+    def _get_release(
+        self, irrigation_demand_m3, daily_substeps, enforce_minimum_usable_release_m3
+    ):
+        if irrigation_demand_m3.size == 0:
             return np.zeros_like(irrigation_demand_m3), np.zeros_like(
                 irrigation_demand_m3
             )
@@ -193,9 +187,9 @@ class ReservoirOperators(AgentBaseClass):
         month_weights = np.array(
             [31, 28.2425, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], dtype=np.float32
         )
-        month_weights = np.broadcast_to(month_weights, (inflow_m3.shape[0], 12))[
-            ..., np.newaxis
-        ].repeat(self.var.history_fill_index - 1, axis=2)
+        month_weights = np.broadcast_to(
+            month_weights, (irrigation_demand_m3.shape[0], 12)
+        )[..., np.newaxis].repeat(self.var.history_fill_index - 1, axis=2)
 
         # get the long term inflow across all time. Do not consider the current month as
         # it is not yet complete.
@@ -254,13 +248,15 @@ class ReservoirOperators(AgentBaseClass):
 
         assert (provisional_reservoir_release_m3 >= 0).all()
         usable_release_m3, environmental_release_m3 = self._release_corrections(
-            inflow_m3,
-            provisional_reservoir_release_m3,
-            self.storage,
-            self.capacity,
-            environmental_flow_requirement_m3,
-            self.var.alpha,
-            daily_substeps,
+            provisional_reservoir_release_m3=provisional_reservoir_release_m3,
+            storage_m3=self.storage,
+            capacity_m3=self.capacity,
+            minimum_usable_release_m3=self.command_area_release_m3 / daily_substeps
+            if enforce_minimum_usable_release_m3
+            else None,
+            environmental_flow_requirement_m3=environmental_flow_requirement_m3,
+            alpha=self.var.alpha,
+            daily_substeps=daily_substeps,
         )
         assert (usable_release_m3 >= 0).all()
         assert (environmental_release_m3 >= 0).all()
@@ -272,14 +268,22 @@ class ReservoirOperators(AgentBaseClass):
 
     def _release_corrections(
         self,
-        inflow_m3,
         provisional_reservoir_release_m3,
         storage_m3,
         capacity_m3,
+        minimum_usable_release_m3,
         environmental_flow_requirement_m3,
         alpha,
         daily_substeps,
     ):
+        """
+        Parameters
+        ----------
+
+        minimum_release_m3 : float
+            The minimum release from the reservoir. This is the environmental flow requirement
+            in m3/s. It is assumed that this is the same for all reservoirs.
+        """
         # release is at least 10% of the mean monthly inflow (environmental flow)
         reservoir_release_m3 = np.maximum(
             provisional_reservoir_release_m3, environmental_flow_requirement_m3
@@ -288,12 +292,7 @@ class ReservoirOperators(AgentBaseClass):
         assert (reservoir_release_m3 >= 0).all()
 
         # get provisional storage given inflow and release
-        provisional_storage_m3 = (
-            storage_m3
-            + inflow_m3
-            - reservoir_release_m3
-            - self.evaporation_m3 / daily_substeps
-        )
+        provisional_storage_m3 = storage_m3 - reservoir_release_m3
 
         # release any over capacity
         normal_capacity = alpha * capacity_m3
@@ -309,26 +308,26 @@ class ReservoirOperators(AgentBaseClass):
         # storage can never drop below 10% of the capacity
         # also make sure the remaining storage is enough to provide the command area release
         # and remaining evaporative demand
-        minimum_storage_m3 = (
-            0.1 * capacity_m3
-            + self.remaining_command_area_release
-            + self.remaining_evaporation_m3
-        )
+        minimum_storage_m3 = 0.1 * capacity_m3 + self.remaining_command_area_release
         reservoir_release_m3_ = np.where(
             provisional_storage_m3 < minimum_storage_m3,
-            np.maximum(storage_m3 + inflow_m3 - minimum_storage_m3, 0),
+            np.maximum(storage_m3 - minimum_storage_m3, 0),
             reservoir_release_m3,
         )
 
         assert (reservoir_release_m3_ >= 0).all()
-        assert (
-            reservoir_release_m3_ >= self.command_area_release_m3 / daily_substeps
-        ).all()
 
         environmental_flow_release_m3 = np.minimum(
             reservoir_release_m3_, environmental_flow_requirement_m3
         )
         usable_release_m3 = reservoir_release_m3_ - environmental_flow_release_m3
+        if minimum_usable_release_m3 is not None:
+            # make sure the usable release is at least the command area release
+            # divided by the number of daily substeps
+            usable_release_m3 = np.maximum(usable_release_m3, minimum_usable_release_m3)
+        assert (
+            usable_release_m3 >= self.command_area_release_m3 / daily_substeps
+        ).all()
         return usable_release_m3, environmental_flow_release_m3
 
     def get_irrigation_reservoir_release(
@@ -504,9 +503,9 @@ class ReservoirOperators(AgentBaseClass):
     def storage(self, value):
         self.model.hydrology.lakes_reservoirs.reservoir_storage = value
 
-    @property
-    def evaporation_m3(self):
-        return self.model.hydrology.lakes_reservoirs.potential_evaporation_per_water_body_m3_reservoir
+    # @property
+    # def evaporation_m3(self):
+    #     return self.model.hydrology.lakes_reservoirs.potential_evaporation_per_water_body_m3_reservoir
 
     @property
     def capacity(self):

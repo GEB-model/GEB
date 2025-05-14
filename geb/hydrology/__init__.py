@@ -22,6 +22,7 @@
 import numpy as np
 
 from geb.HRUs import Data
+from geb.hydrology.routing import calculate_river_storage_from_discharge
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
@@ -124,8 +125,9 @@ class Hydrology(Data, Module):
         if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
 
+        # if self.config["general"]["simulate_forest"] and self.soil.model.spinup is False:
         if self.config["general"]["simulate_forest"]:
-            for plantFATE_model in self.model.plantFATE:
+            for plantFATE_model in self.plantFATE:
                 if plantFATE_model is not None:
                     plantFATE_model.finalize()
 
@@ -156,7 +158,13 @@ class Hydrology(Data, Module):
             + self.HRU.var.interception_storage.sum()
             + np.nansum(self.HRU.var.w)
             + self.HRU.var.topwater.sum()
-            + self.grid.var.river_storage_m3.sum()
+            + calculate_river_storage_from_discharge(
+                self.grid.var.discharge_m3_s,
+                self.grid.var.river_alpha,
+                self.grid.var.river_length,
+                self.routing.var.river_beta,
+                self.grid.var.waterBodyID,
+            ).sum()
             + self.lakes_reservoirs.var.storage.sum()
             + self.groundwater.groundwater_content_m3.sum()
             + self.lakes_reservoirs.var.total_inflow_from_other_water_bodies_m3.sum()
@@ -168,7 +176,7 @@ class Hydrology(Data, Module):
             influx = (self.HRU.var.precipitation_m_day * self.HRU.var.cell_area).sum()
             outflux = (
                 self.HRU.var.actual_evapotranspiration * self.HRU.var.cell_area
-            ).sum() + self.var.routing_loss.sum()
+            ).sum() + self.model.hydrology.routing.routing_loss
 
             balance_check(
                 name="total water balance",
