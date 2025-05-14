@@ -31,7 +31,7 @@ The figure below shows a schematic overview of some parts of the model, showing 
   :maxdepth: 1
   :caption: Getting Started
 
-  Installation <installation>
+  Overview and installation <overview_and_installation>
   Configuration <configuration>
   Preprocessing <preprocessing>
   Running the model <running>

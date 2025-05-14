@@ -81,6 +81,7 @@ required-environments = [
 
 [dependency-groups]
 dev = [
+    "myst-parser>=4.0.1",
     "pypandoc>=1.15",
     "sphinx<8",
     "sphinx-autodoc-typehints>=2.3.0",
