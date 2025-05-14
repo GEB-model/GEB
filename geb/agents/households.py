@@ -65,6 +65,8 @@ class Households(AgentBaseClass):
             self.load_flood_maps()
 
         self.load_objects()
+        self.load_max_damage_values()
+        self.load_damage_curves()
 
         if self.model.in_spinup:
             self.spinup()
@@ -622,8 +624,6 @@ class Households(AgentBaseClass):
         )
 
     def spinup(self):
-        self.load_max_damage_values()
-        self.load_damage_curves()
         self.construct_income_distribution()
         self.assign_household_attributes()
 
