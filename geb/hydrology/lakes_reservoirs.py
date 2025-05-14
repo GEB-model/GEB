@@ -422,6 +422,8 @@ class LakesReservoirs(Module):
         else:
             lake_outflow_m3 = np.zeros(0, dtype=np.float32)
 
+        assert (lake_outflow_m3 <= self.lake_storage).all()
+
         return lake_outflow_m3
 
     def routing_reservoirs(self, n_routing_substeps, current_substep):
@@ -449,6 +451,7 @@ class LakesReservoirs(Module):
 
         self.reservoir_storage = self.reservoir_storage - command_area_release_m3
 
+        assert (main_channel_release_m3 <= self.reservoir_storage).all()
         assert (self.reservoir_storage >= 0).all()
 
         return main_channel_release_m3, command_area_release_m3
@@ -471,22 +474,23 @@ class LakesReservoirs(Module):
         outflow_to_drainage_network_m3[self.is_lake] = self.routing_lakes(
             routing_step_length_seconds
         )
-        command_area_release_m3 = np.zeros_like(outflow_to_drainage_network_m3)
         (
             outflow_to_drainage_network_m3[self.is_reservoir],
-            command_area_release_m3[self.is_reservoir],
+            command_area_release_m3,
         ) = self.routing_reservoirs(n_routing_substeps, current_substep)
+
+        assert (outflow_to_drainage_network_m3 <= self.var.storage).all()
 
         if __debug__:
             balance_check(
-                name="lakes and reservoirs",
+                name="command_area_release",
                 how="cellwise",
                 influxes=[],
                 outfluxes=[
                     command_area_release_m3,
                 ],
-                prestorages=[prestorage],
-                poststorages=[self.var.storage],
+                prestorages=[prestorage[self.is_reservoir]],
+                poststorages=[self.var.storage[self.is_reservoir]],
                 tollerance=1,  # 1 m3
             )
 

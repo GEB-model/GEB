@@ -16,6 +16,8 @@ class Model:
             self.acclimation_forcing = self.read_acclimation_file(acclim_forcing_file)
             self.use_acclim = use_acclim
 
+        self.first_step_was_run = False
+
     def read_acclimation_file(self, file):
         df = pd.read_csv(file)
         alldates = df["date"].map(
@@ -44,13 +46,15 @@ class Model:
         net_radiation,
         topsoil_volumetric_water_content,
     ):
+        assert self.first_step_was_run, "first step must be run before running a step"
+
         self.plantFATE_model.update_climate(
-            368.9,  # co2
-            temperature,
-            vapour_pressure_deficit,  # kPa -> Pa
-            photosynthetic_photon_flux_density,
-            soil_water_potential,
-            net_radiation,
+            np.float64(368.9),  # co2
+            np.float64(temperature),
+            np.float64(vapour_pressure_deficit),  # kPa -> Pa
+            np.float64(photosynthetic_photon_flux_density),
+            np.float64(soil_water_potential),
+            np.float64(net_radiation),
         )
         #
         # if (self.use_acclim):
@@ -119,6 +123,8 @@ class Model:
         #                                          self.acclimation_forcing.loc[index_acclim, 'shortwave.W.m2.'], albedo),
         #                                      soil_water_potential)
 
+        self.first_step_was_run = True
+
     def step(
         self,
         soil_water_potential,
@@ -161,6 +167,9 @@ class Model:
         )
 
     def finalize(self):
+        import os
+
+        print(os.getcwd())
         self.plantFATE_model.close()
 
     @property

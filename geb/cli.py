@@ -527,8 +527,14 @@ def evaluate(*args, **kwargs):
     default=False,
     help="Include preprocessing files in the zip file.",
 )
+@click.option(
+    "--include-output",
+    is_flag=True,
+    default=False,
+    help="Include output files in the zip file.",
+)
 @cli.command()
-def share(working_directory, name, include_preprocessing):
+def share(working_directory, name, include_preprocessing, include_output):
     """Share model."""
 
     with WorkingDirectory(working_directory):
@@ -537,8 +543,11 @@ def share(working_directory, name, include_preprocessing):
         folders = ["input"]
         if include_preprocessing:
             folders.append("preprocessing")
+        if include_output:
+            folders.append("output")
         files = ["model.yml", "build.yml"]
         optional_files = ["update.yml", "data_catalog.yml"]
+        optional_folders = ["data"]
         zip_filename = f"{name}.zip"
         with zipfile.ZipFile(zip_filename, "w") as zipf:
             total_files = (
@@ -546,6 +555,13 @@ def share(working_directory, name, include_preprocessing):
                     [
                         sum(len(files) for _, _, files in os.walk(folder))
                         for folder in folders
+                    ]
+                )
+                + sum(
+                    [
+                        sum(len(files) for _, _, files in os.walk(folder))
+                        for folder in optional_folders
+                        if os.path.exists(folder)
                     ]
                 )
                 + len(files)
@@ -561,6 +577,16 @@ def share(working_directory, name, include_preprocessing):
                             f"Exporting file {progress}/{total_files} to {zip_filename}",
                             end="\r",
                         )  # Print progress
+            for folder in optional_folders:
+                if os.path.exists(folder):
+                    for root, _, filenames in os.walk(folder):
+                        for filename in filenames:
+                            zipf.write(os.path.join(root, filename))
+                            progress += 1
+                            print(
+                                f"Exporting file {progress}/{total_files} to {zip_filename}",
+                                end="\r",
+                            )
             for file in files:
                 zipf.write(file)
                 progress += 1  # Increment progress counter

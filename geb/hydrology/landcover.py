@@ -216,7 +216,7 @@ class LandCover(Module):
 
         (
             interflow,
-            runoff,
+            runoff_soil,
             groundwater_recharge,
             open_water_evaporation,
             actual_total_transpiration,
@@ -229,16 +229,16 @@ class LandCover(Module):
             natural_available_water_infiltration=self.HRU.var.natural_available_water_infiltration,
             actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
         )
-        assert not (runoff < 0).any()
+        assert not (runoff_soil < 0).any()
         timer.new_split("Soil")
 
-        runoff, open_water_evaporation = self.hydrology.sealed_water.step(
-            capillar, open_water_evaporation, runoff
+        runoff_sealed_water, open_water_evaporation = self.hydrology.sealed_water.step(
+            capillar, open_water_evaporation
         )
-
-        assert not (runoff < 0).any()
-
         timer.new_split("Sealed")
+
+        runoff = np.nan_to_num(runoff_soil) + np.nan_to_num(runoff_sealed_water)
+        assert (runoff >= 0).all()
 
         self.HRU.var.actual_evapotranspiration = (
             actual_bare_soil_evaporation

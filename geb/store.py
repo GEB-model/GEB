@@ -139,7 +139,48 @@ class DynamicArray:
         self.data.__setitem__(key, value)
 
     def __getitem__(self, key):
-        return self.data.__getitem__(key)
+        # if the first key selects the entire array, we can return
+        # a new DynamicArray, but with only the extra dimensions
+        # sliced
+        if (
+            isinstance(key, tuple)
+            and isinstance(key[0], slice)
+            and key[0] == slice(None, None, None)
+        ):
+            data = self.data.__getitem__(key)
+
+            new_extra_dims_names = []
+            for i, slicer in enumerate(key[1:]):
+                if isinstance(slicer, (slice, list)):
+                    new_extra_dims_names.append(self.extra_dims_names[i])
+
+            assert len(data.shape[1:]) == len(new_extra_dims_names), (
+                "Mismatch in number of extra dimensions"
+            )
+
+            return DynamicArray(
+                data,
+                max_n=self.max_n,
+                extra_dims_names=new_extra_dims_names,
+            )
+        elif isinstance(key, slice) and key == slice(None, None, None):
+            return self.copy()
+
+        # otherwise, we return a numpy array with the sliced data
+        else:
+            return self.data.__getitem__(key)
+
+    def copy(self):
+        """Create a deep copy of this DynamicArray."""
+        new_array = DynamicArray.__new__(DynamicArray)
+        new_array._data = self._data.copy()
+        new_array._n = self._n
+        new_array._extra_dims_names = (
+            self._extra_dims_names.copy()
+            if self._extra_dims_names is not None
+            else None
+        )
+        return new_array
 
     def __repr__(self):
         return "DynamicArray(" + self.data.__str__() + ")"
