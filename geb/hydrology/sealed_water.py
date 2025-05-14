@@ -64,7 +64,7 @@ class SealedWater(Module):
     def spinup(self):
         pass
 
-    def step(self, capillar, open_water_evaporation, direct_runoff):
+    def step(self, capillar, open_water_evaporation):
         """
         Dynamic part of the sealed_water module
 
@@ -85,22 +85,26 @@ class SealedWater(Module):
         # evaporation from open water and channels is calculated in the routing module
         open_water_evaporation[sealed_area] = 0.2 * self.HRU.var.EWRef[sealed_area]
 
+        runoff = np.zeros_like(
+            self.HRU.var.natural_available_water_infiltration, dtype=np.float32
+        )
+
         # as there is no interception on sealed areas, the available water is the sum of the natural available water and the capillar rise
-        direct_runoff[sealed_water_area] = (
+        runoff[sealed_water_area] = (
             self.HRU.var.natural_available_water_infiltration[sealed_water_area]
             + capillar[sealed_water_area]
         )
 
         # limit the evaporation to the available water
         open_water_evaporation[sealed_area] = np.minimum(
-            open_water_evaporation[sealed_area], direct_runoff[sealed_area]
+            open_water_evaporation[sealed_area], runoff[sealed_area]
         )
 
         # subtract the evaporation from the runoff water
-        direct_runoff[sealed_water_area] -= open_water_evaporation[sealed_water_area]
+        runoff[sealed_water_area] -= open_water_evaporation[sealed_water_area]
 
         # make sure that the runoff is still positive
-        assert (direct_runoff[sealed_water_area] >= 0).all()
+        assert (runoff[sealed_water_area] >= 0).all()
 
         if __debug__:
             balance_check(
@@ -113,7 +117,7 @@ class SealedWater(Module):
                     capillar[sealed_water_area],
                 ],
                 outfluxes=[
-                    direct_runoff[sealed_water_area],
+                    runoff[sealed_water_area],
                     open_water_evaporation[sealed_water_area],
                 ],
                 tollerance=1e-6,
@@ -121,4 +125,4 @@ class SealedWater(Module):
 
         self.report(self, locals())
 
-        return direct_runoff, open_water_evaporation
+        return runoff, open_water_evaporation
