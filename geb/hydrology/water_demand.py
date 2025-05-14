@@ -23,6 +23,7 @@ import numpy as np
 from honeybees.library.raster import write_to_array
 
 from geb.HRUs import load_grid
+from geb.hydrology.routing import calculate_river_storage_from_discharge
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
@@ -64,11 +65,17 @@ class WaterDemand(Module):
             )
         )
 
-        # allow maximum of 90% of river storage to be used
-        available_channel_storage_m3 = self.grid.var.river_storage_m3.copy() * 0.9
-        assert (
-            available_channel_storage_m3[self.grid.var.waterBodyID != -1] == 0.0
-        ).all()
+        available_channel_storage_m3 = (
+            calculate_river_storage_from_discharge(
+                self.grid.var.discharge_m3_s,
+                self.grid.var.river_alpha,
+                self.grid.var.river_length,
+                self.hydrology.routing.var.river_beta,
+                self.grid.var.waterBodyID,
+            )
+            * 0.9
+        )
+        available_channel_storage_m3[self.grid.var.waterBodyID != -1] = 0.0
 
         available_groundwater_m3 = (
             self.hydrology.groundwater.modflow.available_groundwater_m3.copy()
