@@ -229,9 +229,6 @@ class LakesReservoirs(Module):
         assert (np.isin(self.var.water_body_type, [OFF, LAKE, RESERVOIR])).all()
 
         self.var.lake_area = self.var.water_body_data["average_area"].values
-        # a factor which increases evaporation from lake because of wind TODO: use wind to set this factor
-        self.var.lakeEvaFactor = self.model.config["parameters"]["lakeEvaFactor"]
-
         self.var.capacity = self.var.water_body_data["volume_total"].values
 
         self.var.total_inflow_from_other_water_bodies_m3 = np.zeros_like(
@@ -467,9 +464,7 @@ class LakesReservoirs(Module):
 
         assert (self.var.total_inflow_from_other_water_bodies_m3 >= 0).all()
 
-        outflow_to_drainage_network_m3 = np.zeros_like(
-            self.var.storage, dtype=np.float32
-        )
+        outflow_to_drainage_network_m3 = np.zeros_like(self.var.storage)
 
         outflow_to_drainage_network_m3[self.is_lake] = self.routing_lakes(
             routing_step_length_seconds
