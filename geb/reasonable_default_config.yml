@@ -152,3 +152,4 @@ plantFATE:
   new_forest_ini_file: data/plantFATE/p_new_forest.ini
   new_forest: false
   new_forest_filename: null
+  n_cells: 'all'

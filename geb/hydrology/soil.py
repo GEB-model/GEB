@@ -25,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 from numba import float32, njit, prange
+from tqdm import tqdm
 
 from geb.HRUs import load_grid
 from geb.module import Module
@@ -407,7 +408,7 @@ def evapotranspirate(
 
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
 
-    actual_total_transpiration = np.zeros_like(land_use_type, dtype=np.float32)
+    transpiration = np.zeros_like(land_use_type, dtype=np.float32)
     actual_bare_soil_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
 
     for i in prange(land_use_type.size):
@@ -419,7 +420,7 @@ def evapotranspirate(
             remaining_potential_transpiration -= transpiration_from_topwater
             topwater[i] -= transpiration_from_topwater
             available_water_infiltration[i] -= transpiration_from_topwater
-            actual_total_transpiration[i] += transpiration_from_topwater
+            transpiration[i] += transpiration_from_topwater
 
         # get group group numbers for natural areas
         if land_use_type[i] == FOREST or land_use_type[i] == GRASSLAND_LIKE:
@@ -483,18 +484,18 @@ def evapotranspirate(
             # distribute the transpiration over the layers, considering the root ratios
             # and the transpiration reduction factor per layer
             for layer in range(N_SOIL_LAYERS):
-                transpiration = (
+                transpiration_layer = (
                     maximum_transpiration
                     * root_distribution_per_layer_rws_corrected_matrix[layer, i]
                     / total_root_length_rws_corrected
                 )
 
                 if mask[i]:
-                    w[layer, i] -= transpiration
+                    w[layer, i] -= transpiration_layer
                     w[layer, i] = max(
                         w[layer, i], wres[layer, i]
                     )  # soil moisture can never be lower than wres
-                    actual_total_transpiration[i] += transpiration
+                    transpiration[i] += transpiration_layer
 
         if mask_transpiration[i]:
             # limit the bare soil evaporation to the available water in the soil
@@ -521,7 +522,7 @@ def evapotranspirate(
                 actual_bare_soil_evaporation[i] = np.float32(0)
 
     return (
-        actual_total_transpiration,
+        transpiration,
         actual_bare_soil_evaporation,
     )
 
@@ -1165,7 +1166,15 @@ class Soil(Module):
         )
 
         for i, land_use_type_RU in enumerate(self.HRU.var.land_use_type):
-            if land_use_type_RU == FOREST and self.HRU.var.land_use_ratio[i] > 0.5:
+            if (
+                (
+                    self.model.config["plantFATE"]["n_cells"] == "all"
+                    or self.plantFATE_forest_RUs.sum()
+                    < self.model.config["plantFATE"]["n_cells"]
+                )
+                and land_use_type_RU == FOREST
+                and self.HRU.var.land_use_ratio[i] > 0.5
+            ):
                 self.plantFATE_forest_RUs[i] = True
 
                 if self.model.in_spinup:
@@ -1420,13 +1429,13 @@ class Soil(Module):
                                 )
                             )
 
-                    print(
-                        "PlantFATE transpiration: " + str(plantfate_transpiration[indx])
-                    )
-                    print(
-                        "PlantFATE transpiration by layer "
-                        + str(plantfate_transpiration_by_layer[:, indx])
-                    )
+                    # print(
+                    #     "PlantFATE transpiration: " + str(plantfate_transpiration[indx])
+                    # )
+                    # print(
+                    #     "PlantFATE transpiration by layer "
+                    #     + str(plantfate_transpiration_by_layer[:, indx])
+                    # )
 
     def set_global_variables(self):
         # set number of soil layers as global variable for numba
@@ -1609,7 +1618,7 @@ class Soil(Module):
             mask[self.plantFATE_forest_RUs] = False
 
         (
-            actual_total_transpiration,
+            transpiration,
             actual_bare_soil_evaporation,
         ) = evapotranspirate(
             wwp=self.HRU.var.wwp,
@@ -1635,7 +1644,7 @@ class Soil(Module):
             mask=mask,
             mask_transpiration=mask_transpiration,
         )
-        assert actual_total_transpiration.dtype == np.float32
+        assert transpiration.dtype == np.float32
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
@@ -1662,7 +1671,7 @@ class Soil(Module):
 
             # print(np.where(new_forest_HRUs == 425))
 
-            for i in range(len(self.plantFATE_forest_RUs)):
+            for i in tqdm(range(len(self.plantFATE_forest_RUs))):
                 # print("New Forest " + str(i))
                 self.evapotranspirate_plantFATE(
                     i,
@@ -1681,7 +1690,7 @@ class Soil(Module):
             #
             # print(plantfate_transpiration[self.plantFATE_forest_RUs])
 
-            actual_total_transpiration += plantfate_transpiration
+            transpiration += plantfate_transpiration
             self.HRU.var.w -= plantfate_transpiration_by_layer
 
             assert np.allclose(
@@ -1771,7 +1780,7 @@ class Soil(Module):
                     runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    actual_total_transpiration[bioarea],
+                    transpiration[bioarea],
                     actual_bare_soil_evaporation[bioarea],
                     open_water_evaporation[bioarea],
                 ],
@@ -1798,7 +1807,7 @@ class Soil(Module):
                     runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    actual_total_transpiration[bioarea],
+                    transpiration[bioarea],
                     actual_bare_soil_evaporation[bioarea],
                     open_water_evaporation[bioarea],
                 ],
@@ -1813,7 +1822,7 @@ class Soil(Module):
                 tollerance=1e-6,
             )
 
-            # print(actual_total_transpiration[self.plantFATE_forest_RUs])
+            # print(transpiration[self.plantFATE_forest_RUs])
             # print(potential_transpiration[self.plantFATE_forest_RUs])
             # print(self.var.w[0:len(self.var.w), self.plantFATE_forest_RUs] - self.wres[0:len(self.var.w), self.plantFATE_forest_RUs])
             # print(self.var.w[0:len(self.var.w), self.plantFATE_forest_RUs])
@@ -1821,12 +1830,12 @@ class Soil(Module):
             #
             # if self.model.config["general"]["simulate_forest"]:
             #     assert (
-            #         actual_total_transpiration[self.plantFATE_forest_RUs]
+            #         transpiration[self.plantFATE_forest_RUs]
             #         <= potential_transpiration[self.plantFATE_forest_RUs] + 1e-7
             #     ).all()
             #
             # assert (
-            #     actual_total_transpiration[bioarea]
+            #     transpiration[bioarea]
             #     <= potential_transpiration[bioarea] + 1e-7
             # ).all()
             # assert (
@@ -1838,6 +1847,71 @@ class Soil(Module):
         if self.model.timing:
             print(timer)
 
+        if self.model.config["general"]["simulate_forest"]:
+            # Soil moisture
+            soil_moisture = np.nan_to_num(self.HRU.var.w.sum(axis=0))
+
+            soil_moisture_forest_HRU = soil_moisture.copy()
+            soil_moisture_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
+            soil_moisture_forest_grid = self.hydrology.to_grid(
+                HRU_data=soil_moisture_forest_HRU, fn="weightednanmean"
+            )
+            soil_moisture_forest_plantFATE_HRU = soil_moisture.copy()
+            soil_moisture_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
+            soil_moisture_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=soil_moisture_forest_plantFATE_HRU, fn="weightednanmean"
+            )
+
+            actual_bare_soil_evaporation_forest_HRU = (
+                actual_bare_soil_evaporation.copy()
+            )
+            actual_bare_soil_evaporation_forest_HRU[
+                self.HRU.var.land_use_type != FOREST
+            ] = np.nan
+            actual_bare_soil_evaporation_forest_grid = self.hydrology.to_grid(
+                HRU_data=actual_bare_soil_evaporation_forest_HRU, fn="weightednanmean"
+            )
+
+            # Bare soil evaporation
+            actual_bare_soil_evaporation_forest_plantFATE_HRU = (
+                actual_bare_soil_evaporation.copy()
+            )
+            actual_bare_soil_evaporation_forest_plantFATE_HRU[
+                ~self.plantFATE_forest_RUs
+            ] = np.nan
+            actual_bare_soil_evaporation_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=actual_bare_soil_evaporation_forest_plantFATE_HRU,
+                fn="weightednanmean",
+            )
+
+            # Transpiration
+            transpiration_forest_HRU = transpiration.copy()
+            transpiration_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
+            transpiration_forest_grid = self.hydrology.to_grid(
+                HRU_data=transpiration_forest_HRU, fn="weightednanmean"
+            )
+            transpiration_forest_plantFATE_HRU = transpiration.copy()
+            transpiration_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
+            transpiration_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=transpiration_forest_plantFATE_HRU, fn="weightednanmean"
+            )
+
+            # Groundwater recharge
+            groundwater_recharge_forest_HRU = groundwater_recharge.copy()
+            groundwater_recharge_forest_HRU[self.HRU.var.land_use_type != FOREST] = (
+                np.nan
+            )
+            groundwater_recharge_forest_grid = self.hydrology.to_grid(
+                HRU_data=groundwater_recharge_forest_HRU, fn="weightednanmean"
+            )
+            groundwater_recharge_forest_plantFATE_HRU = groundwater_recharge.copy()
+            groundwater_recharge_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = (
+                np.nan
+            )
+            groundwater_recharge_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=groundwater_recharge_forest_plantFATE_HRU, fn="weightednanmean"
+            )
+
         self.report(self, locals())
 
         return (
@@ -1845,6 +1919,6 @@ class Soil(Module):
             runoff,
             groundwater_recharge,
             open_water_evaporation,
-            actual_total_transpiration,
+            transpiration,
             actual_bare_soil_evaporation,
         )
