@@ -10,6 +10,8 @@ import pandas as pd
 import zarr
 from honeybees.library.raster import coord_to_pixel
 
+from geb.store import DynamicArray
+
 
 def create_time_array(
     start: datetime.datetime,
@@ -446,7 +448,7 @@ class Reporter:
                 if value.size < ds[name][index].size:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
-                        value,
+                        value.data if isinstance(value, DynamicArray) else value,
                         (0, ds[name][index].size - value.size),
                         mode="constant",
                         constant_values=np.nan

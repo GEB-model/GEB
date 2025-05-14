@@ -149,5 +149,6 @@ parameters:
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini
   run_ini_file: data/plantFATE/p_run.ini
+  new_forest_ini_file: data/plantFATE/p_new_forest.ini
   new_forest: false
   new_forest_filename: null

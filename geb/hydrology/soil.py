@@ -1225,14 +1225,14 @@ class Soil(Module):
         # print(self.model.plantFATE[0:10])
         # print(all(v is None for v in self.model.plantFATE))
 
-    def newPlantFATEModel(self, indx):
+    def plant_new_forest(self, indx):
+        assert not self.model.in_spinup
+
         from . import plantFATE
 
         self.plantFATE_forest_RUs[indx] = True
-        if self.model.in_spinup:
-            PFconfig_ini = self.model.config["plantFATE"]["spinup_ini_file"]
-        else:
-            PFconfig_ini = self.model.config["plantFATE"]["run_ini_file"]
+
+        PFconfig_ini = self.model.config["plantFATE"]["new_forest_ini_file"]
 
         pfModel = plantFATE.Model(PFconfig_ini, False, None)
         pfModel.plantFATE_model.config.parent_dir = str(
@@ -1242,15 +1242,7 @@ class Soil(Module):
         pfModel.plantFATE_model.config.out_dir = str(
             self.model.simulation_root / "plantFATE" / f"cell_{indx}"
         )
-        pfModel.plantFATE_model.config.save_state = False
 
-        pfModel.plantFATE_model.config.continuePrevious = True
-        pfModel.plantFATE_model.config.continueFrom_stateFile = str(
-            self.model.simulation_root / "plantFATE" / "pf_saved_state_from_spinup.txt"
-        )
-        pfModel.plantFATE_model.config.continueFrom_configFile = str(
-            self.model.simulation_root / "plantFATE" / "pf_saved_config_from_spinup.ini"
-        )
         self.model.plantFATE[indx] = pfModel
 
     def calculate_soil_water_potential_MPa(
@@ -1537,7 +1529,7 @@ class Soil(Module):
             ## NEW PLANTFATE CELL
 
             for i in new_forest_HRUs:
-                self.newPlantFATEModel(i)
+                self.plant_new_forest(i)
                 # self.plantFATE_forest_RUs[new_forest_HRUs] = True
 
         interflow = self.HRU.full_compressed(0, dtype=np.float32)
