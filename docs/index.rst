@@ -63,4 +63,5 @@ The figure below shows a schematic overview of some parts of the model, showing 
   :caption: About
 
   Authors <authors_page>
+  Contribution guide <contribution_guide>
   Updates <updates>
