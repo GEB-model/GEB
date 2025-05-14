@@ -99,26 +99,26 @@ def update_discharge(
 def kinematic(
     Qold,
     sideflow,
-    upstream_matrix_from_up_to_downstream,
-    idxs_up_to_downstream,
-    alpha,
-    beta,
-    deltaT,
-    deltaX,
-    is_waterbody,
-    is_outflow,
-    waterbody_id,
     waterbody_storage,
     outflow_per_waterbody_m3,
+    upstream_matrix_from_up_to_downstream,
+    idxs_up_to_downstream,
+    is_outflow,
+    is_waterbody,
+    waterbody_id,
+    alpha,
+    beta,
+    river_length,
+    dt,
 ):
     """
     Kinematic wave routing
 
     Parameters
     ----------
-    deltaT: float
+    dt: float
         Time step, must be > 0
-    deltaX: np.ndarray
+    river_length: np.ndarray
         Array of floats containing the channel length, must be > 0
     """
     Qkx = np.full_like(Qold, np.nan)
@@ -152,7 +152,7 @@ def kinematic(
                 # make sure that the waterbody storage does not go below 0
                 assert waterbody_storage[node_waterbody_id] >= 0
 
-                sideflow_node += waterbody_outflow_m3 / deltaT / deltaX[node]
+                sideflow_node += waterbody_outflow_m3 / dt / river_length[node]
 
             elif is_waterbody[
                 upstream_node
@@ -164,15 +164,82 @@ def kinematic(
                 Qin += Qkx[upstream_node]
 
         Qkx[node] = update_discharge(
-            Qin, Qold[node], sideflow_node, alpha[node], beta, deltaT, deltaX[node]
+            Qin, Qold[node], sideflow_node, alpha[node], beta, dt, river_length[node]
         )
     return Qkx
+
+
+def accuflux(
+    Qold,
+    sideflow,
+    waterbody_storage,
+    outflow_per_waterbody_m3,
+    upstream_matrix_from_up_to_downstream,
+    idxs_up_to_downstream,
+    is_outflow,
+    is_waterbody,
+    waterbody_id,
+    alpha,
+    beta,
+    river_length,
+    dt,
+):
+    pass
 
 
 def get_outflow_at_outflows(discharge_m3_s, pits, routing_step_length_seconds):
     return (
         discharge_m3_s[pits] * routing_step_length_seconds
     )  # m3, total outflow at outflows
+
+
+def prepare_routing(ldd, mask):
+    river_network = pyflwdir.from_array(
+        ldd,
+        ftype="ldd",
+        latlon=True,
+        mask=mask,
+    )
+
+    # we create a mapper from the 2D ldd to the 1D river network
+    # the mapper size is ldd.size + 1, because we need to map the
+    # the "nan-value" of the ldd to -1 in the river network, thus
+    # mapping -1 to -1.
+    mapper = np.full(ldd.size + 1, -1, dtype=np.int32)
+    indices = np.arange(ldd.size)[mask.ravel()]
+    mapper[indices] = np.arange(indices.size)
+
+    river_network.order_cells(method="walk")
+    upstream_matrix = pyflwdir.core.upstream_matrix(
+        river_network.idxs_ds,
+    )
+
+    idxs_up_to_downstream = river_network.idxs_seq[::-1]
+
+    # make sure all non-selected cells are set to -1
+    assert (
+        upstream_matrix[~np.isin(np.arange(river_network.size), idxs_up_to_downstream)]
+        == -1
+    ).all()
+
+    upstream_matrix_from_up_to_downstream = upstream_matrix[idxs_up_to_downstream]
+    upstream_matrix_from_up_to_downstream = mapper[
+        upstream_matrix_from_up_to_downstream
+    ]
+    idxs_up_to_downstream = mapper[idxs_up_to_downstream]
+
+    pits = mapper[river_network.idxs_pit]
+
+    upstream_area_n_cells = river_network.upstream_area(unit="cell")
+    upstream_area_n_cells[upstream_area_n_cells < 0] = 0
+    upstream_area_n_cells = upstream_area_n_cells[mask]
+
+    return (
+        upstream_matrix_from_up_to_downstream,
+        idxs_up_to_downstream,
+        pits,
+        upstream_area_n_cells,
+    )
 
 
 class Routing(Module):
@@ -193,53 +260,12 @@ class Routing(Module):
             compress=False,
         )
 
-        river_network = pyflwdir.from_array(
-            ldd,
-            ftype="ldd",
-            transform=self.grid.transform,
-            latlon=True,
-            mask=~self.grid.mask,
-        )
-
-        # we create a mapper from the 2D ldd to the 1D river network
-        # the mapper size is ldd.size + 1, because we need to map the
-        # the "nan-value" of the ldd to -1 in the river network, thus
-        # mapping -1 to -1.
-        mapper = np.full(ldd.size + 1, -1, dtype=np.int32)
-        indices = np.arange(ldd.size)[~self.grid.mask.ravel()]
-        mapper[indices] = np.arange(indices.size)
-
-        river_network.order_cells(method="walk")
-        upstream_matrix = pyflwdir.core.upstream_matrix(
-            river_network.idxs_ds,
-        )
-
-        idxs_up_to_downstream = river_network.idxs_seq[::-1]
-
-        upstream_matrix_from_up_to_downstream = upstream_matrix[idxs_up_to_downstream]
-        self.var.upstream_matrix_from_up_to_downstream = mapper[
-            upstream_matrix_from_up_to_downstream
-        ]
-        self.var.idxs_up_to_downstream = mapper[idxs_up_to_downstream]
-
-        # make sure all non-selected cells are set to -1
-        assert (
-            upstream_matrix[
-                ~np.isin(np.arange(river_network.size), idxs_up_to_downstream)
-            ]
-            == -1
-        ).all()
-
-        self.var.pits = mapper[river_network.idxs_pit]
-
-        self.grid.var.upstream_area = river_network.upstream_area(unit="m2")
-        self.grid.var.upstream_area[self.grid.var.upstream_area < 0] = np.nan
-        self.grid.var.upstream_area = self.grid.var.upstream_area[~self.grid.mask]
-        self.grid.var.upstream_area_n_cells = river_network.upstream_area(unit="cell")
-        self.grid.var.upstream_area_n_cells[self.grid.var.upstream_area_n_cells < 0] = 0
-        self.grid.var.upstream_area_n_cells = self.grid.var.upstream_area_n_cells[
-            ~self.grid.mask
-        ]
+        (
+            self.var.upstream_matrix_from_up_to_downstream,
+            self.var.idxs_up_to_downstream,
+            self.var.pits,
+            self.grid.var.upstream_area_n_cells,
+        ) = prepare_routing(ldd, ~self.grid.mask)
 
         # number of substep per day
         self.var.n_routing_substeps = 24
@@ -454,19 +480,19 @@ class Routing(Module):
             ).all()
 
             self.grid.var.discharge_m3_s = kinematic(
-                self.grid.var.discharge_m3_s,
-                side_flow_channel_m2_per_s.astype(np.float32),
-                self.var.upstream_matrix_from_up_to_downstream,
-                self.var.idxs_up_to_downstream,
-                self.grid.var.river_alpha,
-                self.var.river_beta,
-                self.var.routing_step_length_seconds,
-                self.grid.var.river_length,
-                is_waterbody=self.grid.var.waterBodyID != -1,
-                is_outflow=self.grid.var.waterbody_outflow_points != -1,
-                waterbody_id=self.grid.var.waterBodyID,
+                Qold=self.grid.var.discharge_m3_s,
+                sideflow=side_flow_channel_m2_per_s.astype(np.float32),
                 waterbody_storage=self.hydrology.lakes_reservoirs.var.storage,
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
+                upstream_matrix_from_up_to_downstream=self.var.upstream_matrix_from_up_to_downstream,
+                idxs_up_to_downstream=self.var.idxs_up_to_downstream,
+                is_outflow=self.grid.var.waterbody_outflow_points != -1,
+                is_waterbody=self.grid.var.waterBodyID != -1,
+                waterbody_id=self.grid.var.waterBodyID,
+                alpha=self.grid.var.river_alpha,
+                beta=self.var.river_beta,
+                river_length=self.grid.var.river_length,
+                dt=self.var.routing_step_length_seconds,
             )
 
             self.grid.var.outflow_at_outflows_m3_substep_new = get_outflow_at_outflows(
