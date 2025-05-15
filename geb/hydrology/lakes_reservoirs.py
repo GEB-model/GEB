@@ -162,11 +162,14 @@ def get_lake_outflow(
         lake_storage=storage, lake_area=lake_area, outflow_height=outflow_height
     )
     storage_above_outflow = height_above_outflow * lake_area
+    storage_above_outflow = np.minimum(storage_above_outflow, storage)
 
     outflow_m3_s = estimate_lake_outflow(lake_factor, height_above_outflow)
     outflow_m3 = outflow_m3_s * dt
 
     outflow_m3 = np.minimum(outflow_m3, storage_above_outflow)
+
+    assert (outflow_m3 <= storage).all()
     return outflow_m3, height_above_outflow
 
 
@@ -416,8 +419,6 @@ class LakesReservoirs(Module):
             )
         else:
             lake_outflow_m3 = np.zeros(0, dtype=np.float32)
-
-        assert (lake_outflow_m3 <= self.lake_storage).all()
 
         return lake_outflow_m3
 
