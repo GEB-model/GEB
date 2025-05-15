@@ -767,7 +767,7 @@ def plant(
             assert not np.isnan(cultivation_cost_farmer)
 
             interest_rate_farmer = interest_rate[farmer_idx]
-            loan_duration = 2
+            loan_duration = 1
             annual_cost_input_loan = cultivation_cost_farmer * (
                 interest_rate_farmer
                 * (1 + interest_rate_farmer) ** loan_duration
