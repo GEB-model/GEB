@@ -113,7 +113,12 @@ class Interception(Module):
                 zarr.open_group(store, mode="r")["interception_capacity"][:]
             )
 
-    def step(self, potential_transpiration: np.ndarray, rain: np.ndarray):
+    def step(
+        self,
+        potential_transpiration: np.ndarray,
+        rain: np.ndarray,
+        snow_melt: np.ndarray,
+    ):
         """
         Dynamic part of the interception module
         calculating interception for each land cover class
@@ -158,7 +163,7 @@ class Interception(Module):
 
         # availWaterInfiltration Available water for infiltration: throughfall + snow melt
         self.HRU.var.natural_available_water_infiltration = np.maximum(
-            0.0, throughfall + self.HRU.var.SnowMelt
+            0.0, throughfall + snow_melt
         )
 
         sealed_area = np.where(self.HRU.var.land_use_type == SEALED)
@@ -199,7 +204,7 @@ class Interception(Module):
             balance_check(
                 name="interception",
                 how="cellwise",
-                influxes=[rain, self.HRU.var.SnowMelt],  # In
+                influxes=[rain, snow_melt],  # In
                 outfluxes=[
                     self.HRU.var.natural_available_water_infiltration,
                     interception_evaporation,

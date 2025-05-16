@@ -243,9 +243,9 @@ class SnowFrost(Module):
         else:
             SummerSeason = 0.0
 
-        Snow = self.HRU.full_compressed(0, dtype=np.float32)
+        snow = self.HRU.full_compressed(0, dtype=np.float32)
         rain = self.HRU.full_compressed(0, dtype=np.float32)
-        self.HRU.var.SnowMelt = self.HRU.full_compressed(0, dtype=np.float32)
+        snow_melt = self.HRU.full_compressed(0, dtype=np.float32)
 
         tas_C = self.HRU.tas - 273.15
         precipitation_m_day = 0.001 * 86400.0 * self.HRU.pr  # kg/m2/s to m/day
@@ -296,9 +296,9 @@ class SnowFrost(Module):
             )
             # check if snow+ice not bigger than snowcover
             self.HRU.var.SnowCoverS[i] = self.HRU.var.SnowCoverS[i] + SnowS - SnowMeltS
-            Snow += SnowS
+            snow += SnowS
             rain += RainS
-            self.HRU.var.SnowMelt += SnowMeltS
+            snow_melt += SnowMeltS
 
             if self.HRU.var.extfrost_index:
                 Kfrost = np.where(TavgS < 0, 0.08, 0.5)
@@ -317,16 +317,16 @@ class SnowFrost(Module):
                     self.HRU.var.frost_indexS[i] + frost_indexChangeRate, 0
                 )
 
-        snow = Snow / self.var.numberSnowLayers
+        snow = snow / self.var.numberSnowLayers
         rain /= self.var.numberSnowLayers
-        self.HRU.var.SnowMelt /= self.var.numberSnowLayers
+        snow_melt /= self.var.numberSnowLayers
 
         if __debug__:
             balance_check(
                 name="snow_1",
                 how="cellwise",
                 influxes=[snow],
-                outfluxes=[self.HRU.var.SnowMelt],
+                outfluxes=[snow_melt],
                 prestorages=[
                     np.sum(self.HRU.var.prevSnowCover, axis=0)
                     / self.var.numberSnowLayers
@@ -375,4 +375,4 @@ class SnowFrost(Module):
 
         self.report(self, locals())
 
-        return snow, rain
+        return snow, rain, snow_melt

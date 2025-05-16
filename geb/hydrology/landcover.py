@@ -114,7 +114,7 @@ class LandCover(Module):
             "crop_coefficient"
         ][:]
 
-    def step(self, snow, rain):
+    def step(self, snow, rain, snow_melt):
         timer = TimingModule("Landcover")
 
         if __debug__:
@@ -189,7 +189,8 @@ class LandCover(Module):
             potential_transpiration,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
-        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef)
+            snow_melt,
+        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt)
 
         timer.new_split("PET")
 
@@ -197,7 +198,9 @@ class LandCover(Module):
             potential_transpiration_minus_interception_evaporation,
             interception_evaporation,
         ) = self.hydrology.interception.step(
-            potential_transpiration=potential_transpiration, rain=rain
+            potential_transpiration=potential_transpiration,
+            rain=rain,
+            snow_melt=snow_melt,
         )  # first thing that evaporates is the intercepted water.
 
         timer.new_split("Interception")
@@ -271,7 +274,7 @@ class LandCover(Module):
             balance_check(
                 name="landcover_1",
                 how="cellwise",
-                influxes=[rain, self.HRU.var.SnowMelt],
+                influxes=[rain, snow_melt],
                 outfluxes=[
                     self.HRU.var.natural_available_water_infiltration,
                     interception_evaporation,

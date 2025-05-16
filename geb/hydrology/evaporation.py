@@ -47,7 +47,7 @@ class Evaporation(Module):
     def spinup(self):
         pass
 
-    def step(self, ETRef):
+    def step(self, ETRef, snow_melt):
         """
         Dynamic part of the soil module
 
@@ -69,10 +69,8 @@ class Evaporation(Module):
         )
 
         # calculate snow evaporation
-        self.HRU.var.snowEvap = np.minimum(
-            self.HRU.var.SnowMelt, potential_bare_soil_evaporation
-        )
-        self.HRU.var.SnowMelt = self.HRU.var.SnowMelt - self.HRU.var.snowEvap
+        self.HRU.var.snowEvap = np.minimum(snow_melt, potential_bare_soil_evaporation)
+        snow_melt -= self.HRU.var.snowEvap
         potential_bare_soil_evaporation = (
             potential_bare_soil_evaporation - self.HRU.var.snowEvap
         )
@@ -97,4 +95,5 @@ class Evaporation(Module):
             potential_transpiration,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
+            snow_melt,
         )
