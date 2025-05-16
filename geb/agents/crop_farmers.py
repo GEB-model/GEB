@@ -2793,28 +2793,25 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_well"]["loan_duration"]
 
+        adapted = self.var.adaptations[:, WELL_ADAPTATION] > 0
+        additional_diffentiator = (
+            self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
+        )
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # and who's wells are much shallower than the groundwater depth
-        expired_adaptations = (
-            self.var.time_adapted[:, WELL_ADAPTATION] == self.var.lifespan_well
-        ) | (groundwater_depth > self.var.well_depth)
-        self.var.adaptations[expired_adaptations, WELL_ADAPTATION] = -1
-        self.var.time_adapted[expired_adaptations, WELL_ADAPTATION] = -1
+        self.reset_well_status(
+            farmer_yield_probability_relation,
+            adapted,
+            groundwater_depth,
+            additional_diffentiator,
+        )
 
         # Define extra constraints (farmers' wells must reach groundwater)
         well_reaches_groundwater = self.var.well_depth > groundwater_depth
         extra_constraint = well_reaches_groundwater
 
-        # To determine the benefit of irrigation, those who have a well are adapted
-        adapted = self.var.adaptations[:, WELL_ADAPTATION] > 0
-
         energy_cost_m2 = energy_cost / self.field_size_per_farmer
         water_cost_m2 = water_cost / self.field_size_per_farmer
-
-        # Distinguish also between those who have access to channel water and those that dont
-        additional_diffentiator = (
-            self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
-        )
 
         (
             energy_diff_m2,
@@ -3936,6 +3933,44 @@ class CropFarmers(AgentBaseClass):
         assert np.max(gains_adaptation) != np.inf, "gains adaptation value is inf"
 
         return gains_adaptation, ids_to_switch_to
+
+    def reset_well_status(
+        self,
+        farmer_yield_probability_relation,
+        adapted,
+        groundwater_depth,
+        additional_diffentiator,
+    ):
+        expired_adaptations = (
+            self.var.time_adapted[:, WELL_ADAPTATION] == self.var.lifespan_well
+        ) | (groundwater_depth > self.var.well_depth)
+        self.var.adaptations[expired_adaptations, WELL_ADAPTATION] = -1
+        self.var.time_adapted[expired_adaptations, WELL_ADAPTATION] = -1
+
+        # Determine the IDS of the most similar group of yield
+        (
+            total_profits,
+            profits_no_event,
+            total_profits_adaptation,
+            profits_no_event_adaptation,
+            ids_to_switch_to,
+        ) = self.profits_SEUT(
+            additional_diffentiator, ~adapted, farmer_yield_probability_relation
+        )
+        # Update yield-SPEI relation
+        new_id_final = ids_to_switch_to[expired_adaptations]
+        own_nr = np.arange(new_id_final.shape[0])
+        new_id_final = np.where(new_id_final == -1, own_nr, new_id_final)
+
+        self.var.yearly_income[expired_adaptations, :] = self.var.yearly_income[
+            new_id_final, :
+        ]
+        self.var.yearly_potential_income[expired_adaptations, :] = (
+            self.var.yearly_potential_income[new_id_final, :]
+        )
+        self.var.yearly_SPEI_probability[expired_adaptations, :] = (
+            self.var.yearly_SPEI_probability[new_id_final, :]
+        )
 
     def adaptation_water_cost_difference(
         self, additional_diffentiators, adapted: np.ndarray, energy_cost, water_cost
