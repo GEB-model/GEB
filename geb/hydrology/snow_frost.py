@@ -317,7 +317,7 @@ class SnowFrost(Module):
                     self.HRU.var.frost_indexS[i] + frost_indexChangeRate, 0
                 )
 
-        self.HRU.var.Snow = Snow / self.var.numberSnowLayers
+        snow = Snow / self.var.numberSnowLayers
         self.HRU.var.Rain /= self.var.numberSnowLayers
         self.HRU.var.SnowMelt /= self.var.numberSnowLayers
 
@@ -325,7 +325,7 @@ class SnowFrost(Module):
             balance_check(
                 name="snow_1",
                 how="cellwise",
-                influxes=[self.HRU.var.Snow],
+                influxes=[snow],
                 outfluxes=[self.HRU.var.SnowMelt],
                 prestorages=[
                     np.sum(self.HRU.var.prevSnowCover, axis=0)
@@ -340,7 +340,7 @@ class SnowFrost(Module):
                 name="snow_2",
                 how="cellwise",
                 influxes=[precipitation_m_day],
-                outfluxes=[self.HRU.var.Snow, self.HRU.var.Rain],
+                outfluxes=[snow, self.HRU.var.Rain],
                 tollerance=1e-7,
             )
 
@@ -374,3 +374,5 @@ class SnowFrost(Module):
         )
 
         self.report(self, locals())
+
+        return snow

@@ -114,7 +114,7 @@ class LandCover(Module):
             "crop_coefficient"
         ][:]
 
-    def step(self):
+    def step(self, snow):
         timer = TimingModule("Landcover")
 
         if __debug__:
@@ -325,6 +325,7 @@ class LandCover(Module):
                 how="cellwise",
                 influxes=[
                     self.HRU.var.Rain,
+                    snow,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
                 ],
@@ -348,6 +349,7 @@ class LandCover(Module):
                 how="cellwise",
                 influxes=[
                     self.HRU.var.Rain,
+                    snow,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
                     irrigation_loss_to_evaporation_m,  # irrigation loss is coming from external sources

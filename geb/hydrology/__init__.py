@@ -80,7 +80,7 @@ class Hydrology(Data, Module):
         self.lakes_reservoirs.step()
         timer.new_split("Waterbodies")
 
-        self.snowfrost.step()
+        snow = self.snowfrost.step()
         timer.new_split("Snow and frost")
 
         (
@@ -92,7 +92,7 @@ class Hydrology(Data, Module):
             return_flow,
             capillary_m,
             total_water_demand_loss_m3,
-        ) = self.landcover.step()
+        ) = self.landcover.step(snow)
 
         timer.new_split("Landcover")
 
