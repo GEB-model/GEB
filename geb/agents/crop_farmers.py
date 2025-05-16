@@ -1759,6 +1759,20 @@ class CropFarmers(AgentBaseClass):
 
         return credibility_premiums, potential_insured_loss
 
+    def insured_yields(self, potential_insured_loss):
+        insured_yearly_income = self.var.yearly_income + potential_insured_loss
+
+        insured_yearly_yield_ratio = (
+            insured_yearly_income / self.var.yearly_potential_income
+        )
+
+        insured_yearly_yield_ratio = np.clip(insured_yearly_yield_ratio.data, 0, 1)
+
+        insured_yield_probability_relation = self.calculate_yield_spei_relation_group(
+            insured_yearly_yield_ratio, self.var.yearly_SPEI_probability
+        )
+        return insured_yield_probability_relation
+
     @staticmethod
     @njit(cache=True)
     def set_loans_numba(
@@ -2580,15 +2594,24 @@ class CropFarmers(AgentBaseClass):
         )
         return farmer_yield_probability_relation
 
-    def adapt_crops(self) -> None:
+    def adapt_crops(self, farmer_yield_probability_relation) -> None:
         # Fetch loan configuration
         loan_duration = 2
 
         index = self.cultivation_costs[0].get(self.model.current_time)
         cultivation_cost = self.cultivation_costs[1][index]
-        cultivation_cost_current_crop = cultivation_cost[
-            self.var.region_id, self.var.crop_calendar[:, 0, 0]
+
+        # Determine the cultivation costs of the current rotation
+        current_crop_calendar = self.var.crop_calendar[:, :, 0].copy()
+        mask_valid_crops = current_crop_calendar != -1
+        rows, cols = np.nonzero(mask_valid_crops)
+        costs = cultivation_cost[
+            self.var.region_id[rows], current_crop_calendar[rows, cols]
         ]
+        cultivation_costs_current_rotation = np.bincount(
+            rows, weights=costs, minlength=current_crop_calendar.shape[0]
+        ).astype(np.float32)
+
         annual_cost_empty = np.zeros(self.n, dtype=np.float32)
 
         # No constraint
@@ -2602,10 +2625,9 @@ class CropFarmers(AgentBaseClass):
             profits_no_event,
             total_profits_adaptation,
             profits_no_event_adaptation,
-            new_crop_nr,
             new_farmer_id,
         ) = self.profits_SEUT_crops(
-            unique_crop_calendars, self.var.farmer_yield_probability_relation
+            unique_crop_calendars, farmer_yield_probability_relation
         )
 
         total_annual_costs_m2 = (
@@ -2644,15 +2666,24 @@ class CropFarmers(AgentBaseClass):
             (self.n, len(unique_crop_calendars)), 0, dtype=np.float32
         )
         for idx, crop_option in enumerate(unique_crop_calendars[:, 0]):
-            # Determine the cost difference between old and potential new crop
-            new_crop_nr_option = new_crop_nr[:, idx]
-            cultivation_cost_new_crop = cultivation_cost[
-                self.var.region_id, new_crop_nr_option
+            # Determine the cost difference between the old and potential new crop rotation
+            new_id_option = new_farmer_id[:, idx]
+            new_calendar_option = self.var.crop_calendar[new_id_option, :, 0]
+            mask_valid_crops = new_calendar_option != -1
+
+            rows, cols = np.nonzero(mask_valid_crops)
+            costs = cultivation_cost[
+                self.var.region_id[rows], new_calendar_option[rows, cols]
             ]
+            cultivation_costs_new_rotation = np.bincount(
+                rows, weights=costs, minlength=new_calendar_option.shape[0]
+            ).astype(np.float32)
+
             cost_difference_adaptation = (
-                cultivation_cost_new_crop - cultivation_cost_current_crop
+                cultivation_costs_new_rotation - cultivation_costs_current_rotation
             )
 
+            # Update the decision parameters with the values of this potential crop rotation
             decision_params_option = copy.deepcopy(decision_params)
             decision_params_option.update(
                 {
@@ -2672,8 +2703,7 @@ class CropFarmers(AgentBaseClass):
         chosen_option = np.argmax(SEUT_crop_options, axis=1)
 
         # Determine the crop of the best option
-        row_indices = np.arange(new_crop_nr.shape[0])
-        new_crop_nr_temp = new_crop_nr[row_indices, chosen_option]
+        row_indices = np.arange(new_farmer_id.shape[0])
         new_id_temp = new_farmer_id[row_indices, chosen_option]
 
         # Determine for which agents it is beneficial to switch crops
@@ -2701,12 +2731,11 @@ class CropFarmers(AgentBaseClass):
 
         # # Set the adaptation mask
         # SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
-        new_crop_nr_final = new_crop_nr_temp[SEUT_adaptation_decision]
         new_id_final = new_id_temp[SEUT_adaptation_decision]
 
         print("Crop switching farmers", np.count_nonzero(SEUT_adaptation_decision))
 
-        assert not np.any(new_crop_nr_final == -1)
+        assert not np.any(new_id_final == -1)
 
         # Switch their crops and update their yield-SPEI relation
         self.var.crop_calendar[SEUT_adaptation_decision, :, :] = self.var.crop_calendar[
@@ -2714,15 +2743,22 @@ class CropFarmers(AgentBaseClass):
         ]
 
         # Update yield-SPEI relation
-        self.var.yearly_yield_ratio[SEUT_adaptation_decision, :] = (
-            self.var.yearly_yield_ratio[new_id_final, :]
+        self.var.yearly_income[SEUT_adaptation_decision, :] = self.var.yearly_income[
+            new_id_final, :
+        ]
+        self.var.yearly_potential_income[SEUT_adaptation_decision, :] = (
+            self.var.yearly_potential_income[new_id_final, :]
         )
         self.var.yearly_SPEI_probability[SEUT_adaptation_decision, :] = (
             self.var.yearly_SPEI_probability[new_id_final, :]
         )
 
     def adapt_irrigation_well(
-        self, average_extraction_speed, energy_cost, water_cost
+        self,
+        farmer_yield_probability_relation,
+        average_extraction_speed,
+        energy_cost,
+        water_cost,
     ) -> None:
         """
         Handle the adaptation of farmers to irrigation wells.
@@ -2794,7 +2830,7 @@ class CropFarmers(AgentBaseClass):
             profits_no_event_adaptation,
             ids_to_switch_to,
         ) = self.profits_SEUT(
-            additional_diffentiator, adapted, self.var.farmer_yield_probability_relation
+            additional_diffentiator, adapted, farmer_yield_probability_relation
         )
 
         total_profits_adaptation = (
@@ -2865,7 +2901,9 @@ class CropFarmers(AgentBaseClass):
             "(-)",
         )
 
-    def adapt_irrigation_efficiency(self, energy_cost, water_cost) -> None:
+    def adapt_irrigation_efficiency(
+        self, farmer_yield_probability_relation, energy_cost, water_cost
+    ) -> None:
         """
         Handle the adaptation of farmers to irrigation wells.
 
@@ -2951,7 +2989,7 @@ class CropFarmers(AgentBaseClass):
         ) = self.profits_SEUT(
             self.main_irrigation_source,
             adapted,
-            self.var.farmer_yield_probability_relation,
+            farmer_yield_probability_relation,
         )
 
         total_profits_adaptation = (
@@ -3015,7 +3053,9 @@ class CropFarmers(AgentBaseClass):
         )
         print("Irrigation efficient farms:", percentage_adapted, "(%)")
 
-    def adapt_irrigation_expansion(self, energy_cost, water_cost) -> None:
+    def adapt_irrigation_expansion(
+        self, farmer_yield_probability_relation, energy_cost, water_cost
+    ) -> None:
         # Constants
         adaptation_type = 3
 
@@ -3081,7 +3121,7 @@ class CropFarmers(AgentBaseClass):
         ) = self.profits_SEUT(
             self.main_irrigation_source,
             adapted,
-            self.var.farmer_yield_probability_relation,
+            farmer_yield_probability_relation,
         )
 
         # Construct a dictionary of parameters to pass to the decision module functions
@@ -3138,7 +3178,12 @@ class CropFarmers(AgentBaseClass):
         )
         print("Irrigation expanded farms:", percentage_adapted, "(%)")
 
-    def adapt_personal_insurance(self, premium, potential_insured_loss):
+    def adapt_personal_insurance(
+        self,
+        farmer_yield_probability_relation_base,
+        farmer_yield_probability_relation_insured,
+        premium,
+    ):
         """
         Handle the adaptation of farmers to irrigation wells.
 
@@ -3186,24 +3231,13 @@ class CropFarmers(AgentBaseClass):
         # Determine the income of each farmer with or without insurance
         # Profits without insurance
         regular_yield_ratios = self.convert_probability_to_yield_ratio(
-            self.var.farmer_yield_probability_relation
+            farmer_yield_probability_relation_base
         )
         total_profits = self.compute_total_profits(regular_yield_ratios)
         total_profits, profits_no_event = self.format_results(total_profits)
 
-        insured_yearly_income = self.var.yearly_income + potential_insured_loss
-
-        insured_yearly_yield_ratio = (
-            insured_yearly_income / self.var.yearly_potential_income
-        )
-
-        insured_yearly_yield_ratio = np.clip(insured_yearly_yield_ratio.data, 0, 1)
-
-        insured_yield_probability_ratio = self.calculate_yield_spei_relation_group(
-            insured_yearly_yield_ratio, self.var.yearly_SPEI_probability
-        )
         insured_yield_ratios = self.convert_probability_to_yield_ratio(
-            insured_yield_probability_ratio
+            farmer_yield_probability_relation_insured
         )
 
         # Compute profits without adaptation
@@ -3324,8 +3358,11 @@ class CropFarmers(AgentBaseClass):
         # Update yield-SPEI relation
         new_id_final = ids_to_switch_to[SEUT_adaptation_decision]
 
-        self.var.yearly_yield_ratio[SEUT_adaptation_decision, :] = (
-            self.var.yearly_yield_ratio[new_id_final, :]
+        self.var.yearly_income[SEUT_adaptation_decision, :] = self.var.yearly_income[
+            new_id_final, :
+        ]
+        self.var.yearly_potential_income[SEUT_adaptation_decision, :] = (
+            self.var.yearly_potential_income[new_id_final, :]
         )
         self.var.yearly_SPEI_probability[SEUT_adaptation_decision, :] = (
             self.var.yearly_SPEI_probability[new_id_final, :]
@@ -3678,7 +3715,6 @@ class CropFarmers(AgentBaseClass):
         # Calculate the yield gains for crop switching for different farmers
         (
             profit_gains,
-            new_crop_nr,
             new_farmer_id,
         ) = crop_profit_difference_njit(
             yearly_profits=self.var.yearly_income.data
@@ -3724,7 +3760,6 @@ class CropFarmers(AgentBaseClass):
             profits_no_event,
             total_profits_adaptation,
             profits_no_event_adaptation,
-            new_crop_nr,
             new_farmer_id,
         )
 
@@ -4303,8 +4338,6 @@ class CropFarmers(AgentBaseClass):
 
             timer.new_split("water & energy costs")
 
-            personal_premium, potential_insured_loss = self.premium_personal_insurance()
-
             if (
                 not self.model.in_spinup
                 and "ruleset" in self.config
@@ -4312,16 +4345,47 @@ class CropFarmers(AgentBaseClass):
             ):
                 # Determine the relation between drought probability and yield
                 # self.calculate_yield_spei_relation()
-                self.var.farmer_yield_probability_relation = (
+                farmer_yield_probability_relation = (
                     self.calculate_yield_spei_relation_group(
                         self.var.yearly_yield_ratio, self.var.yearly_SPEI_probability
                     )
                 )
+
+                if (
+                    not self.config["expected_utility"]["insurance"][
+                        "personal_insurance"
+                    ]["ruleset"]
+                    == "no-adaptation"
+                ):
+                    # Now determine the potential (past & current) indemnity payments and recalculate
+                    # probability and yield relation
+                    personal_premium, potential_insured_loss = (
+                        self.premium_personal_insurance()
+                    )
+                    farmer_yield_probability_relation_insured = self.insured_yields(
+                        potential_insured_loss
+                    )
+
+                    # Give only the insured agents the relation with covered losses
+                    insured_agents_mask = (
+                        self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
+                    )
+                    # But save the base relations for determining the difference with and without insurance
+                    farmer_yield_probability_relation_base = (
+                        farmer_yield_probability_relation.copy()
+                    )
+
+                    farmer_yield_probability_relation[insured_agents_mask, :] = (
+                        farmer_yield_probability_relation_insured[
+                            insured_agents_mask, :
+                        ]
+                    )
+
                 # self.calculate_yield_spei_relation_test_group()
                 timer.new_split("yield-spei relation")
 
                 # These adaptations can only be done if there is a yield-probability relation
-                if not np.all(self.var.farmer_yield_probability_relation == 0):
+                if not np.all(farmer_yield_probability_relation == 0):
                     if (
                         not self.config["expected_utility"]["adaptation_well"][
                             "ruleset"
@@ -4329,7 +4393,10 @@ class CropFarmers(AgentBaseClass):
                         == "no-adaptation"
                     ):
                         self.adapt_irrigation_well(
-                            average_extraction_speed, energy_cost, water_cost
+                            farmer_yield_probability_relation,
+                            average_extraction_speed,
+                            energy_cost,
+                            water_cost,
                         )
                         timer.new_split("irr well")
                     if (
@@ -4339,7 +4406,9 @@ class CropFarmers(AgentBaseClass):
                         == "no-adaptation"
                     ):
                         self.adapt_personal_insurance(
-                            personal_premium, potential_insured_loss
+                            farmer_yield_probability_relation_base,
+                            farmer_yield_probability_relation_insured,
+                            personal_premium,
                         )
                         timer.new_split("pers. insurance")
                     if (
@@ -4348,14 +4417,16 @@ class CropFarmers(AgentBaseClass):
                         ]
                         == "no-adaptation"
                     ):
-                        self.adapt_irrigation_efficiency(energy_cost, water_cost)
+                        self.adapt_irrigation_efficiency(
+                            farmer_yield_probability_relation, energy_cost, water_cost
+                        )
 
                         timer.new_split("irr efficiency")
                     if (
                         not self.config["expected_utility"]["crop_switching"]["ruleset"]
                         == "no-adaptation"
                     ):
-                        self.adapt_crops()
+                        self.adapt_crops(farmer_yield_probability_relation)
                         timer.new_split("adapt crops")
                     # self.switch_crops_neighbors()
                 else:

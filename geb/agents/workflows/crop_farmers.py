@@ -840,127 +840,6 @@ def find_most_similar_index(target_series, yield_ratios, groups):
 
 
 @njit(cache=True)
-def crop_yield_ratio_difference_test_njit(
-    yield_ratios,
-    crop_elevation_group,
-    unique_crop_groups,
-    group_indices,
-    crop_calendar,
-    unique_crop_calendars,
-    p_droughts,
-):
-    n_groups = len(unique_crop_groups)
-    n_calendars = len(unique_crop_calendars)
-    n_droughts = len(p_droughts)
-
-    unique_yield_ratio_gain = np.full(
-        (n_groups, n_calendars, n_droughts),
-        0.0,
-        dtype=np.float32,
-    )
-
-    id_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
-
-    crop_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
-
-    for group_id in range(n_groups):
-        unique_group = unique_crop_groups[group_id]
-        unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
-
-        # Identify the adapted counterparts of the current group
-        mask = np.empty(n_calendars, dtype=np.bool_)
-        for i in range(n_calendars):
-            match = True
-            for j in range(unique_crop_calendars.shape[1]):
-                if unique_crop_calendars[i, j] != unique_group[j]:
-                    match = False
-                    break
-            mask[i] = not match
-
-        # Collect candidate crop rotations
-        candidate_crop_rotations = []
-        for i in range(n_calendars):
-            if mask[i]:
-                candidate_crop_rotations.append(unique_crop_calendars[i])
-
-        num_candidates = len(candidate_crop_rotations)
-
-        # Loop over the counterparts
-        for crop_id in range(num_candidates):
-            unique_rotation = candidate_crop_rotations[crop_id]
-            farmer_class = unique_group[-1]
-            basin_location = unique_group[-2]
-            unique_group_other_crop = np.empty(
-                len(unique_rotation) + 2, dtype=unique_rotation.dtype
-            )
-            unique_group_other_crop[: len(unique_rotation)] = unique_rotation
-            unique_group_other_crop[len(unique_rotation)] = basin_location
-            unique_group_other_crop[len(unique_rotation) + 1] = farmer_class
-
-            unique_farmer_groups_other_crop = find_matching_rows(
-                crop_elevation_group, unique_group_other_crop
-            )
-
-            if np.any(unique_farmer_groups_other_crop):
-                # Compute current yield ratio mean
-                current_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_current = 0
-                for i in range(unique_farmer_groups.size):
-                    if unique_farmer_groups[i]:
-                        current_sum += yield_ratios[i]
-                        count_current += 1
-                current_yield_ratio = (
-                    current_sum / count_current if count_current > 0 else current_sum
-                )
-
-                # Compute candidate yield ratio mean
-                candidate_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_candidate = 0
-                for i in range(unique_farmer_groups_other_crop.size):
-                    if unique_farmer_groups_other_crop[i]:
-                        candidate_sum += yield_ratios[i]
-                        count_candidate += 1
-                candidate_yield_ratio = (
-                    candidate_sum / count_candidate
-                    if count_candidate > 0
-                    else candidate_sum
-                )
-
-                yield_ratio_gain = candidate_yield_ratio - current_yield_ratio
-
-                crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
-
-                if np.all(np.isnan(yield_ratio_gain)):
-                    yield_ratio_gain = np.zeros_like(yield_ratio_gain)
-                else:
-                    id_to_switch_to[group_id, crop_id] = find_most_similar_index(
-                        yield_ratio_gain,
-                        yield_ratios,
-                        unique_farmer_groups_other_crop,
-                    )
-
-                unique_yield_ratio_gain[group_id, crop_id, :] = yield_ratio_gain
-
-    gains_adaptation = unique_yield_ratio_gain[group_indices, :, :]
-    new_crop_nr = crop_to_switch_to[group_indices, :]
-    new_farmer_id = id_to_switch_to[group_indices, :]
-
-    return (
-        gains_adaptation,
-        new_crop_nr,
-        new_farmer_id,
-    )
-
-
-@njit(cache=True)
 def crop_profit_difference_njit(
     yearly_profits,
     crop_elevation_group,
@@ -989,12 +868,6 @@ def crop_profit_difference_njit(
 
     # Store the best "farmer id" or row index to switch to
     id_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
-    # Store a representative "crop id" or similar from the adapted rotation
-    crop_to_switch_to = np.full(
         (n_groups, n_calendars),
         -1,
         dtype=np.int32,
@@ -1090,8 +963,6 @@ def crop_profit_difference_njit(
                 # The difference = potential profit gain.
                 profit_gain = candidate_profit_avg - current_profit_avg
 
-                crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
-
                 # find the best matching agent.
                 if profit_gain != profit_gain:  # NaN check
                     profit_gain = 0.0
@@ -1106,11 +977,9 @@ def crop_profit_difference_njit(
 
     # Re-index the results for the actual farmers.
     gains_adaptation = unique_profit_gain[group_indices, :]
-    new_crop_nr = crop_to_switch_to[group_indices, :]
     new_farmer_id = id_to_switch_to[group_indices, :]
 
     return (
         gains_adaptation,
-        new_crop_nr,
         new_farmer_id,
     )
