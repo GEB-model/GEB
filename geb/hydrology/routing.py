@@ -22,6 +22,7 @@
 
 import numpy as np
 import pyflwdir
+from numba import njit
 
 from geb.module import Module
 from geb.workflows import balance_check
@@ -371,6 +372,7 @@ class Accuflux(Router):
         return self.Q_prev.copy()
 
     @staticmethod
+    @njit(cache=True)
     def _step(
         Qold,
         sideflow_m3,
