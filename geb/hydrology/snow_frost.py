@@ -248,9 +248,7 @@ class SnowFrost(Module):
         self.HRU.var.SnowMelt = self.HRU.full_compressed(0, dtype=np.float32)
 
         tas_C = self.HRU.tas - 273.15
-        self.HRU.var.precipitation_m_day = (
-            0.001 * 86400.0 * self.HRU.pr
-        )  # kg/m2/s to m/day
+        precipitation_m_day = 0.001 * 86400.0 * self.HRU.pr  # kg/m2/s to m/day
 
         for i in range(self.var.numberSnowLayers):
             TavgS = tas_C + self.HRU.var.DeltaTSnow * self.HRU.var.deltaInvNorm[i]
@@ -259,7 +257,7 @@ class SnowFrost(Module):
             # i=2 -> lower zone
             SnowS = np.where(
                 TavgS < self.HRU.var.TempSnow,
-                self.HRU.var.SnowFactor * self.HRU.var.precipitation_m_day,
+                self.HRU.var.SnowFactor * precipitation_m_day,
                 self.HRU.full_compressed(0, dtype=np.float32),
             )
             # Precipitation is assumed to be snow if daily average temperature is below TempSnow
@@ -267,7 +265,7 @@ class SnowFrost(Module):
             # snow precipitation (which is common)
             RainS = np.where(
                 TavgS >= self.HRU.var.TempSnow,
-                self.HRU.var.precipitation_m_day,
+                precipitation_m_day,
                 self.HRU.full_compressed(0, dtype=np.float32),
             )
             # if it's snowing then no rain
@@ -341,7 +339,7 @@ class SnowFrost(Module):
             balance_check(
                 name="snow_2",
                 how="cellwise",
-                influxes=[self.HRU.var.precipitation_m_day],
+                influxes=[precipitation_m_day],
                 outfluxes=[self.HRU.var.Snow, self.HRU.var.Rain],
                 tollerance=1e-7,
             )

@@ -207,6 +207,7 @@ class LandCover(Module):
             channel_abstraction_m3,
             return_flow,  # from all sources
             irrigation_loss_to_evaporation_m,
+            total_water_demand_loss_m3,
         ) = self.hydrology.water_demand.step(potential_evapotranspiration)
 
         timer.new_split("Demand")
@@ -323,7 +324,7 @@ class LandCover(Module):
                 name="landcover_3",
                 how="cellwise",
                 influxes=[
-                    self.HRU.var.precipitation_m_day,
+                    self.HRU.var.Rain,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
                 ],
@@ -346,7 +347,7 @@ class LandCover(Module):
                 name="landcover_4",
                 how="cellwise",
                 influxes=[
-                    self.HRU.var.precipitation_m_day,
+                    self.HRU.var.Rain,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
                     irrigation_loss_to_evaporation_m,  # irrigation loss is coming from external sources
@@ -379,6 +380,8 @@ class LandCover(Module):
             groundwater_abstraction_m3,
             channel_abstraction_m3,
             return_flow,
+            capillar,
+            total_water_demand_loss_m3,
         )
 
     @property
