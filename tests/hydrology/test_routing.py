@@ -318,7 +318,7 @@ def test_kinematic(mask, ldd, Q_initial):
         ]
     )
 
-    Q_new = router.step(
+    router.step(
         sideflow[mask],
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
