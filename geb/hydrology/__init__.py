@@ -22,7 +22,6 @@
 import numpy as np
 
 from geb.HRUs import Data
-from geb.hydrology.routing import calculate_river_storage_from_discharge
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
@@ -89,7 +88,7 @@ class Hydrology(Data, Module):
             runoff,
             groundwater_recharge,
             groundwater_abstraction,
-            channel_abstraction,
+            channel_abstraction_m3,
             return_flow,
         ) = self.landcover.step()
         timer.new_split("Landcover")
@@ -103,7 +102,7 @@ class Hydrology(Data, Module):
         self.lakes_res_small.step()
         timer.new_split("Small waterbodies")
 
-        self.routing.step(total_runoff, channel_abstraction, return_flow)
+        self.routing.step(total_runoff, channel_abstraction_m3, return_flow)
         timer.new_split("Routing")
 
         self.hillslope_erosion.step()
@@ -154,20 +153,14 @@ class Hydrology(Data, Module):
 
     def water_balance(self):
         current_storage = (
-            np.sum(self.HRU.var.SnowCoverS) / self.snowfrost.var.numberSnowLayers
-            + self.HRU.var.interception_storage.sum()
-            + np.nansum(self.HRU.var.w)
-            + self.HRU.var.topwater.sum()
-            + calculate_river_storage_from_discharge(
-                self.grid.var.discharge_m3_s,
-                self.grid.var.river_alpha,
-                self.grid.var.river_length,
-                self.routing.var.river_beta,
-                self.grid.var.waterBodyID,
-            ).sum()
+            np.sum(self.HRU.var.SnowCoverS * self.HRU.var.cell_area)
+            / self.snowfrost.var.numberSnowLayers
+            + (self.HRU.var.interception_storage * self.HRU.var.cell_area).sum()
+            + (np.nansum(self.HRU.var.w, axis=0) * self.HRU.var.cell_area).sum()
+            + (self.HRU.var.topwater * self.HRU.var.cell_area).sum()
+            + self.routing.router.get_available_storage().sum()
             + self.lakes_reservoirs.var.storage.sum()
             + self.groundwater.groundwater_content_m3.sum()
-            + self.lakes_reservoirs.var.total_inflow_from_other_water_bodies_m3.sum()
         )
 
         # in the first timestep of the spinup, we don't have the storage of the
@@ -194,6 +187,9 @@ class Hydrology(Data, Module):
 
         # update the storage for the next timestep
         self.var.system_storage = current_storage
+        self.var.pre_groundwater_content_m3 = (
+            self.groundwater.groundwater_content_m3.copy()
+        )
 
     @property
     def name(self):

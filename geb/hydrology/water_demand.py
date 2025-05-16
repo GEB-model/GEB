@@ -23,7 +23,6 @@ import numpy as np
 from honeybees.library.raster import write_to_array
 
 from geb.HRUs import load_grid
-from geb.hydrology.routing import calculate_river_storage_from_discharge
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
@@ -66,14 +65,7 @@ class WaterDemand(Module):
         )
 
         available_channel_storage_m3 = (
-            calculate_river_storage_from_discharge(
-                self.grid.var.discharge_m3_s,
-                self.grid.var.river_alpha,
-                self.grid.var.river_length,
-                self.hydrology.routing.var.river_beta,
-                self.grid.var.waterBodyID,
-            )
-            * 0.9
+            self.hydrology.routing.router.get_available_storage()
         )
         available_channel_storage_m3[self.grid.var.waterBodyID != -1] = 0.0
 
@@ -310,7 +302,7 @@ class WaterDemand(Module):
 
         return (
             groundwater_abstraction_m3,
-            channel_abstraction_m3 / self.hydrology.grid.var.cell_area,
+            channel_abstraction_m3,
             return_flow,  # from all sources, re-added in routing
             irrigation_loss_to_evaporation_m,
         )

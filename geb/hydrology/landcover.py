@@ -204,7 +204,7 @@ class LandCover(Module):
 
         (
             groundwater_abstraction_m3,
-            channel_abstraction_m,
+            channel_abstraction_m3,
             return_flow,  # from all sources
             irrigation_loss_to_evaporation_m,
         ) = self.hydrology.water_demand.step(potential_evapotranspiration)
@@ -263,7 +263,7 @@ class LandCover(Module):
         assert not np.isnan(interflow).any()
         assert not np.isnan(groundwater_recharge).any()
         assert not np.isnan(groundwater_abstraction_m3).any()
-        assert not np.isnan(channel_abstraction_m).any()
+        assert not np.isnan(channel_abstraction_m3).any()
         assert not np.isnan(open_water_evaporation).any()
 
         if __debug__:
@@ -377,7 +377,7 @@ class LandCover(Module):
             self.hydrology.to_grid(HRU_data=runoff, fn="weightedmean"),
             groundwater_recharge,
             groundwater_abstraction_m3,
-            channel_abstraction_m,
+            channel_abstraction_m3,
             return_flow,
         )
 
