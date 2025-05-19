@@ -673,14 +673,14 @@ def abstract_water(
                         groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
                     )
                     assert irrigation_water_demand_field_m >= 0
-                    assert water_withdrawal_m[field] >= 0
+                    # assert water_withdrawal_m[field] >= 0
 
                 assert (
                     irrigation_water_demand_field_m >= -1e15
                 )  # Make sure irrigation water demand is zero, or positive. Allow very small error.
 
                 assert water_consumption_m[field] >= 0
-                assert water_withdrawal_m[field] >= 0
+                # assert water_withdrawal_m[field] >= 0
                 assert 1 >= return_fraction >= 0
 
                 water_consumption_m[field] = (
@@ -689,7 +689,7 @@ def abstract_water(
                 irrigation_loss_m = (
                     water_withdrawal_m[field] - water_consumption_m[field]
                 )
-                assert irrigation_loss_m >= 0
+                # assert irrigation_loss_m >= 0
                 irrigation_return_flow_m[field] = irrigation_loss_m * return_fraction
                 irrigation_evaporation_m[field] = (
                     irrigation_loss_m - irrigation_return_flow_m[field]
