@@ -1863,6 +1863,8 @@ class Soil(Module):
                 HRU_data=soil_moisture_forest_plantFATE_HRU, fn="weightednanmean"
             )
 
+
+        # Bare soil evaporation
         actual_bare_soil_evaporation_forest_HRU = (
             actual_bare_soil_evaporation.copy()
         )
@@ -1874,7 +1876,7 @@ class Soil(Module):
         )
 
         if self.model.config["general"]["simulate_forest"]:
-            # Bare soil evaporation
+            
             actual_bare_soil_evaporation_forest_plantFATE_HRU = (
                 actual_bare_soil_evaporation.copy()
             )
@@ -1916,6 +1918,26 @@ class Soil(Module):
             )
             groundwater_recharge_forest_plantFATE_grid = self.hydrology.to_grid(
                 HRU_data=groundwater_recharge_forest_plantFATE_HRU, fn="weightednanmean"
+            )
+
+        # PlantFATE outputs
+        if self.model.config["general"]["simulate_forest"]:
+            biomass_forest_plantFATE_HRU = plantfate_biomass.copy()
+            biomass_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = (
+                np.nan
+            )
+
+            biomass_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=biomass_forest_plantFATE_HRU, fn="weightednanmean"
+            )
+
+            NPP_forest_plantFATE_HRU = plantfate_co2.copy()
+            NPP_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = (
+                np.nan
+            )
+
+            NPP_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=NPP_forest_plantFATE_HRU, fn="weightednanmean"
             )
 
         self.report(self, locals())
