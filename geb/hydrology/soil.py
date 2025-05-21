@@ -1558,6 +1558,14 @@ class Soil(Module):
             )
         )
 
+        self.grid.net_absorbed_radiation_vegetation_MJ_m2_day = (
+            self.calculate_net_radiation(
+                shortwave_radiation_downwelling=self.grid.rsds,
+                longwave_radiation_net=self.grid.rlds,
+                albedo=0.13, # Assumption for forest  
+            )
+        )
+
         w_forest = self.HRU.var.w.sum(axis=0)
         w_forest[self.HRU.var.land_use_type != FOREST] = np.nan
         w_forest = self.hydrology.to_grid(HRU_data=w_forest, fn="nanmax")
@@ -1919,6 +1927,8 @@ class Soil(Module):
             groundwater_recharge_forest_plantFATE_grid = self.hydrology.to_grid(
                 HRU_data=groundwater_recharge_forest_plantFATE_HRU, fn="weightednanmean"
             )
+
+        self.grid.soil_water_potential_MPa
 
         # PlantFATE outputs
         if self.model.config["general"]["simulate_forest"]:
