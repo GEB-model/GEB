@@ -1,6 +1,14 @@
+from pathlib import Path
+
+import contextily as ctx
+import folium
+import geopandas as gpd
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import xarray as xr
+from permetrics.regression import RegressionMetric
 
 from geb.workflows.io import to_zarr
 
@@ -9,15 +17,38 @@ class Hydrology:
     def __init__(self):
         pass
 
-    def evaluate_discharge_grid(self):
-        discharge = xr.open_dataarray(
+    def evaluate_discharge_grid(self, correct_Q_obs=False):
+        #  create folders
+        discharge_eval_folder = Path(self.output_folder_evaluate) / "discharge"
+        eval_plot_folder = Path(self.output_folder_evaluate) / "discharge" / "plots"
+        eval_result_folder = (
+            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+        )
+
+        discharge_eval_folder.mkdir(parents=True, exist_ok=True)
+        eval_plot_folder.mkdir(parents=True, exist_ok=True)
+        eval_result_folder.mkdir(parents=True, exist_ok=True)
+
+        # load input data files
+        snapped_locations = gpd.read_parquet(
+            self.model.files["geoms"]["discharge/discharge_snapped_locations"]
+        )
+        GRDC = pd.read_parquet(self.model.files["table"]["discharge/GRDC"])
+
+        region_shapefile = gpd.read_parquet(self.model.files["geoms"]["mask"])
+        rivers = gpd.read_parquet(self.model.files["geoms"]["routing/rivers"])
+
+        # load the discharge simulation
+        discharge_sim = xr.open_dataarray(
             self.model.output_folder
             / "report"
             / "spinup"
             / "hydrology.routing"
             / "discharge_daily.zarr"
         )
-        mean_discharge = discharge.mean(dim="time")
+
+        # calculate the mean discharge over time, and plot spatially
+        mean_discharge = discharge_sim.mean(dim="time")
         mean_discharge.attrs["_FillValue"] = np.nan
 
         to_zarr(
@@ -34,4 +65,491 @@ class Hydrology:
 
         plt.savefig(
             self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
+        )
+
+        evaluation_df = pd.DataFrame(
+            columns=["station_name", "x", "y", "KGE", "NSE", "R"]
+        )
+
+        ############# start validation loop #############
+        for ID in GRDC.columns:
+            # discharge_station = GRDC[ID]
+            discharge_GRDC_df = GRDC[ID]
+            discharge_GRDC_df.columns = ["Q"]
+            discharge_GRDC_df.name = "Q"
+            GRDC_station_name = snapped_locations.loc[ID].station_name
+            snapped_xy_coords = snapped_locations.loc[ID].closest_tuple
+            GRDC_station_coords = snapped_locations.loc[ID].station_coords
+            station_upstream_area_ratio = snapped_locations.loc[ID].upstream_area_ratio
+
+            print("validating station %s" % GRDC_station_name)
+
+            ########################### Discharge from model ##########################################
+            # select data closest to meerssen point
+            discharge_sim_station = discharge_sim.isel(
+                x=snapped_xy_coords[0], y=snapped_xy_coords[1]
+            )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
+            # rename xarray dataarray to Q
+            discharge_sim_station.name = "Q"
+            discharge_sim_station_df = discharge_sim_station.to_dataframe()
+            discharge_sim_station_df = discharge_sim_station_df["Q"]
+            discharge_sim_station_df.index.name = "time"  # rename index to time
+
+            # merge to one df but keep only the rows where both have data
+            validation_df = pd.merge(
+                discharge_GRDC_df,
+                discharge_sim_station_df,
+                left_index=True,
+                right_index=True,
+                how="inner",
+                suffixes=("_obs", "_sim"),
+            )  # merge the two dataframes on the index (time)
+
+            validation_df.dropna(how="any", inplace=True)  # drop rows with nans
+
+            if correct_Q_obs:
+                """# correct the Q_obs values for the difference in upstream area between subgrid and grid """
+                validation_df["Q_obs"] = (
+                    validation_df["Q_obs"] * station_upstream_area_ratio
+                )  # correct the Q_obs values for the difference in upstream area between subgrid and grid
+
+            # skip station if validation df has less than 1 year of data (365 rows)
+            if validation_df.shape[0] < 365:
+                print(
+                    f"Validation df of {GRDC_station_name} has less than 1 year of data. Skipping this station."
+                )
+            else:  # continue
+                # calculate kupta coefficient
+                y_true = validation_df["Q_obs"].values
+                y_pred = validation_df["Q_sim"].values
+                evaluator = RegressionMetric(y_true, y_pred)
+
+                KGE = (
+                    evaluator.kling_gupta_efficiency()
+                )  # https://hess.copernicus.org/articles/23/4323/2019/
+                NSE = evaluator.nash_sutcliffe_efficiency()  # https://hess.copernicus.org/articles/27/1827/2023/hess-27-1827-2023.pdf
+                R = evaluator.pearson_correlation_coefficient()
+
+                # scatter plot
+                fig, ax = plt.subplots()
+                ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
+                ax.set_xlabel("GEB discharge [m3/s]")
+                ax.set_ylabel("Discharge observations [m3/s] (%s)" % GRDC_station_name)
+                ax.set_title("GEB vs observations (discharge)")
+                # add regression line and R
+                m, b = np.polyfit(validation_df["Q_obs"], validation_df["Q_sim"], 1)
+                ax.plot(
+                    validation_df["Q_obs"], m * validation_df["Q_obs"] + b, color="red"
+                )
+                ax.text(0.02, 0.9, f"$R^2$={R:.2f}", transform=ax.transAxes)
+                ax.text(0.02, 0.85, f"KGE={KGE:.2f}", transform=ax.transAxes)
+                ax.text(0.02, 0.8, f"NSE={NSE:.2f}", transform=ax.transAxes)
+
+                plt.savefig(
+                    eval_plot_folder / f"scatter_plot_{GRDC_station_name}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+
+                plt.show()
+                plt.close()
+
+                # timeseries plot
+                fig, ax = plt.subplots(figsize=(20, 10))
+                ax.plot(
+                    validation_df.index,
+                    validation_df["Q_sim"],
+                    label="GEB simulation",
+                )
+                ax.plot(
+                    validation_df.index,
+                    validation_df["Q_obs"],
+                    label="GRDC observations",
+                )
+                ax.set_ylabel("Discharge [m3/s]")
+                ax.set_xlabel("Time")
+                ax.legend()
+                plt.savefig(
+                    eval_plot_folder / f"timeseries_plot_{GRDC_station_name}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                plt.title(
+                    "GEB vs observations (discharge) for station %s" % GRDC_station_name
+                )
+                plt.show()
+                plt.close()
+
+                # attach to the evaluation dataframe
+                evaluation_df = pd.concat(
+                    [
+                        evaluation_df,
+                        pd.DataFrame(
+                            [
+                                {
+                                    "station_name": GRDC_station_name,
+                                    "x": GRDC_station_coords[0],
+                                    "y": GRDC_station_coords[1],
+                                    "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
+                                    "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
+                                    "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
+                                }
+                            ]
+                        ),
+                    ],
+                    ignore_index=True,
+                )  # add the new row to the dataframe
+
+        # Save evaluation metrics as as excel and parquet file
+
+        evaluation_gdf = gpd.GeoDataFrame(
+            evaluation_df,
+            geometry=gpd.points_from_xy(evaluation_df.x.values, evaluation_df.y.values),
+            crs="EPSG:4326",
+        )  # create a geodataframe from the evaluation dataframe
+        evaluation_gdf.to_parquet(
+            eval_result_folder / "evaluation_metrics.gpkg",
+        )
+
+        evaluation_df.to_excel(
+            eval_result_folder / "evaluation_metrics.xlsx",
+            index=False,
+        )
+
+        # plot the evaluation metrics (R, KGE, NSE) on a 1x3 subplot (3 columns)
+        fig, ax = plt.subplots(1, 3, figsize=(20, 10))
+
+        # Plot evaluation metrics without default colorbars
+        evaluation_gdf.plot(
+            column="R",
+            ax=ax[0],
+            legend=False,  # Disable default colorbar
+            cmap="viridis",
+            markersize=50,
+            zorder=3,
+        )
+        evaluation_gdf.plot(
+            column="KGE",
+            ax=ax[1],
+            legend=False,  # Disable default colorbar
+            cmap="viridis",
+            markersize=50,
+            zorder=3,
+        )
+        evaluation_gdf.plot(
+            column="NSE",
+            ax=ax[2],
+            legend=False,  # Disable default colorbar
+            cmap="viridis",
+            markersize=50,
+            zorder=3,
+        )
+
+        # Add the region shapefile and rivers to each subplot
+        region_shapefile.plot(
+            ax=ax[0], color="none", edgecolor="black", linewidth=1, zorder=2
+        )
+        region_shapefile.plot(
+            ax=ax[1], color="none", edgecolor="black", linewidth=1, zorder=2
+        )
+        region_shapefile.plot(
+            ax=ax[2], color="none", edgecolor="black", linewidth=1, zorder=2
+        )
+
+        rivers.plot(ax=ax[0], color="blue", linewidth=0.5, zorder=2)
+        rivers.plot(ax=ax[1], color="blue", linewidth=0.5, zorder=2)
+        rivers.plot(ax=ax[2], color="blue", linewidth=0.5, zorder=2)
+
+        # Add satellite basemap to each subplot without attribution text
+        ctx.add_basemap(
+            ax[0],
+            crs=evaluation_gdf.crs.to_string(),
+            source=ctx.providers.Esri.WorldImagery,
+            attribution=False,  # Remove attribution text
+        )
+        ctx.add_basemap(
+            ax[1],
+            crs=evaluation_gdf.crs.to_string(),
+            source=ctx.providers.Esri.WorldImagery,
+            attribution=False,  # Remove attribution text
+        )
+        ctx.add_basemap(
+            ax[2],
+            crs=evaluation_gdf.crs.to_string(),
+            source=ctx.providers.Esri.WorldImagery,
+            attribution=False,  # Remove attribution text
+        )
+
+        # Add labels with R, KGE, and NSE values at the location of the dots
+        # Add labels with R, KGE, and NSE values at the location of the dots
+        for idx, row in evaluation_gdf.iterrows():
+            y_offset = 0.005 * (idx % 2)  # Stagger labels slightly to avoid overlap
+            ax[0].text(
+                row.geometry.x - 0.03,  # Move label further to the left of the dot
+                row.geometry.y + y_offset,
+                f"{row['R']:.2f}",
+                fontsize=8,
+                ha="right",  # Align text to the right
+                color="black",
+                zorder=4,
+                bbox=dict(
+                    facecolor="white",
+                    alpha=0.0,
+                    edgecolor="black",
+                    boxstyle="round,pad=0.3",
+                ),  # Add transparent white/yellow background
+            )
+            ax[1].text(
+                row.geometry.x - 0.03,  # Move label further to the left of the dot
+                row.geometry.y + y_offset,
+                f"{row['KGE']:.2f}",
+                fontsize=8,
+                ha="right",  # Align text to the right
+                color="black",
+                zorder=4,
+                bbox=dict(
+                    facecolor="white",
+                    alpha=0.0,
+                    edgecolor="black",
+                    boxstyle="round,pad=0.3",
+                ),  # Add transparent white/yellow background
+            )
+            ax[2].text(
+                row.geometry.x - 0.03,  # Move label further to the left of the dot
+                row.geometry.y + y_offset,
+                f"{row['NSE']:.2f}",
+                fontsize=8,
+                ha="right",  # Align text to the right
+                color="black",
+                zorder=4,
+                bbox=dict(
+                    facecolor="white",
+                    alpha=0.0,
+                    edgecolor="black",
+                    boxstyle="round,pad=0.3",
+                ),  # Add transparent white/yellow background
+            )
+        # Titles
+        ax[0].set_title("R")
+        ax[1].set_title("KGE")
+        ax[2].set_title("NSE")
+
+        # Set axis labels
+        ax[0].set_xlabel("Longitude")
+        ax[0].set_ylabel("Latitude")
+        ax[1].set_xlabel("Longitude")
+        ax[2].set_xlabel("Longitude")
+
+        # Create custom colorbars
+        R_colorbar = plt.cm.ScalarMappable(
+            cmap="viridis",
+            norm=mcolors.Normalize(
+                vmin=evaluation_gdf.R.min(), vmax=evaluation_gdf.R.max()
+            ),
+        )
+
+        KGE_colorbar = plt.cm.ScalarMappable(
+            cmap="viridis",
+            norm=mcolors.Normalize(
+                vmin=evaluation_gdf.KGE.min(), vmax=evaluation_gdf.KGE.max()
+            ),
+        )
+
+        NSE_colorbar = plt.cm.ScalarMappable(
+            cmap="viridis",
+            norm=mcolors.Normalize(
+                vmin=evaluation_gdf.NSE.min(), vmax=evaluation_gdf.NSE.max()
+            ),
+        )
+
+        # Add custom colorbars and move them down
+        fig.colorbar(
+            R_colorbar,
+            ax=ax[0],
+            orientation="horizontal",
+            pad=0.1,  # Move colorbar down
+            aspect=50,
+            label="R",
+        )
+        fig.colorbar(
+            KGE_colorbar,
+            ax=ax[1],
+            orientation="horizontal",
+            pad=0.1,  # Move colorbar down
+            aspect=50,
+            label="KGE",
+        )
+        fig.colorbar(
+            NSE_colorbar,
+            ax=ax[2],
+            orientation="horizontal",
+            pad=0.1,  # Move colorbar down
+            aspect=50,
+            label="NSE",
+        )
+
+        # Set the layout of the subplots
+        plt.tight_layout()
+
+        # Save the plot
+        plt.savefig(
+            eval_result_folder / "discharge_evaluation_metrics.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.show()
+        plt.close()
+        # plt.close()
+
+        import base64
+
+        import branca.colormap as cm
+        ############################### Folium map ###########################################
+
+        # Create a Folium map centered on the mean coordinates of the stations
+        map_center = [
+            evaluation_gdf.geometry.y.mean(),
+            evaluation_gdf.geometry.x.mean(),
+        ]
+        m = folium.Map(location=map_center, zoom_start=8, tiles="CartoDB positron")
+
+        # Create colormaps for R, KGE, and NSE using branca (Red → Orange → Yellow → Blue → Green)
+        colormap_r = cm.LinearColormap(
+            colors=["red", "orange", "yellow", "blue", "green"],  # Updated color scheme
+            vmin=evaluation_gdf["R"].min(),
+            vmax=evaluation_gdf["R"].max(),
+            caption="<b>R</b>",  # Bold title for colorbar
+        )
+        colormap_kge = cm.LinearColormap(
+            colors=["red", "orange", "yellow", "blue", "green"],  # Updated color scheme
+            vmin=evaluation_gdf["KGE"].min(),
+            vmax=evaluation_gdf["KGE"].max(),
+            caption="<b>KGE</b>",  # Bold title for colorbar
+        )
+        colormap_nse = cm.LinearColormap(
+            colors=["red", "orange", "yellow", "blue", "green"],  # Updated color scheme
+            vmin=evaluation_gdf["NSE"].min(),
+            vmax=evaluation_gdf["NSE"].max(),
+            caption="<b>NSE</b>",  # Bold title for colorbar
+        )
+
+        # Increase font size for colorbar labels and tick labels
+        colormap_r.caption_font_size = "18px"  # Larger caption font size
+        colormap_kge.caption_font_size = "18px"
+        colormap_nse.caption_font_size = "18px"
+
+        # Add tick labels with larger font size
+        colormap_r.add_to(m)
+        colormap_kge.add_to(m)
+        colormap_nse.add_to(m)
+
+        # Create FeatureGroups for R, KGE, and NSE
+        layer_r = folium.FeatureGroup(name="R", show=True)
+        layer_kge = folium.FeatureGroup(name="KGE", show=False)
+        layer_nse = folium.FeatureGroup(name="NSE", show=False)
+
+        # Add markers for R, KGE, and NSE to their respective layers
+        for _, row in evaluation_gdf.iterrows():
+            coords = [row.geometry.y, row.geometry.x]
+            station_name = row["station_name"]
+
+            # Generate scatter plot for the station
+            scatter_plot_path = eval_plot_folder / f"scatter_plot_{station_name}.png"
+            # Encode the scatter plot image as a base64 string
+            with open(scatter_plot_path, "rb") as img_file:
+                encoded_image = base64.b64encode(img_file.read()).decode("utf-8")
+
+            # Create an HTML popup with the scatter plot image
+            popup_html = f"""
+            <b>Station Name:</b> {station_name}<br>
+            <b>R:</b> {row["R"]:.2f}<br>
+            <b>KGE:</b> {row["KGE"]:.2f}<br>
+            <b>NSE:</b> {row["NSE"]:.2f}<br>
+            <img src="data:image/png;base64,{encoded_image}" width="300">
+            """
+            popup = folium.Popup(popup_html, max_width=400)
+
+            # Add a marker for the station
+            folium.CircleMarker(
+                location=coords,
+                radius=10,
+                color="black",
+                fill=True,
+                fill_color=colormap_r(row["R"]),  # Use R colormap for color
+                fill_opacity=0.9,
+                popup=popup,
+            ).add_to(layer_r)
+
+            # Add KGE layer
+            color_kge = colormap_kge(row["KGE"])
+            popup_kge = folium.Popup(
+                f"<b>Station Name:</b> {station_name}<br><b>KGE:</b> {row['KGE']:.2f}",
+                max_width=300,
+            )
+            folium.CircleMarker(
+                location=coords,
+                radius=10,
+                color="black",
+                fill=True,
+                fill_color=color_kge,
+                fill_opacity=0.9,
+                popup=popup_kge,
+            ).add_to(layer_kge)
+
+            # Add NSE layer
+            color_nse = colormap_nse(row["NSE"])
+            popup_nse = folium.Popup(
+                f"<b>Station Name:</b> {station_name}<br><b>NSE:</b> {row['NSE']:.2f}",
+                max_width=300,
+            )
+            folium.CircleMarker(
+                location=coords,
+                radius=10,
+                color="black",
+                fill=True,
+                fill_color=color_nse,
+                fill_opacity=0.9,
+                popup=popup_nse,
+            ).add_to(layer_nse)
+
+        # Add the layers to the map
+        layer_r.add_to(m)
+        layer_kge.add_to(m)
+        layer_nse.add_to(m)
+
+        # Add the colormaps to the map
+        colormap_r.add_to(m)
+        colormap_kge.add_to(m)
+        colormap_nse.add_to(m)
+
+        # Add the catchment shapefile as a GeoJSON layer
+        folium.GeoJson(
+            region_shapefile,
+            name="Catchment",
+            style_function=lambda x: {
+                "fillColor": "blue",
+                "color": "blue",
+                "weight": 1,
+                "fillOpacity": 0.2,
+            },
+        ).add_to(m)
+
+        # Add rivers as a GeoJSON layer
+        folium.GeoJson(
+            rivers["geometry"],
+            name="Rivers",
+            style_function=lambda x: {"color": "blue", "weight": 1},
+        ).add_to(m)
+
+        # Add a layer control to toggle layers
+        folium.LayerControl().add_to(m)
+
+        # Save the map to an HTML file
+        m.save(eval_result_folder / "discharge_evaluation_map.html")
+
+        # Display the map in a Jupyter Notebook (if applicable)
+        m
+
+        print(
+            "Discharge evaluation map created with toggleable layers for R, KGE, and NSE."
         )
