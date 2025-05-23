@@ -2,6 +2,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -472,7 +473,12 @@ class AsyncForcingReader:
 
         store = zarr.storage.LocalStore(self.filepath, read_only=True)
         self.ds = zarr.open_group(store, mode="r")
-        self.var = self.ds[variable_name]
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
+            )
+            self.var = self.ds[variable_name]
 
         self.datetime_index = cftime.num2date(
             self.ds["time"][:],
