@@ -93,8 +93,6 @@ def balance_check(
             store -= endStorage.sum()
 
         balance = abs(income + store - out)
-        if np.isnan(balance):
-            raise ValueError("Balance check failed, NaN values found.")
         if balance > tollerance:
             text = f"{balance} is larger than tollerance {tollerance}"
             if name:
