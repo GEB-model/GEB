@@ -4,7 +4,7 @@ import copy
 import math
 import os
 from datetime import datetime
-from typing import Tuple, Union
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -31,8 +31,8 @@ from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
     crop_profit_difference_njit,
-    find_most_similar_index,
     farmer_command_area,
+    find_most_similar_index,
     get_farmer_groundwater_depth,
     get_farmer_HRUs,
     get_gross_irrigation_demand_m3,
@@ -514,6 +514,14 @@ class CropFarmers(AgentBaseClass):
         )
         # note that this is NOT inflation corrected
         self.var.yearly_income = DynamicArray(
+            n=self.n,
+            max_n=self.max_n,
+            extra_dims=(self.var.total_spinup_time,),
+            extra_dims_names=("year",),
+            dtype=np.float32,
+            fill_value=0,
+        )
+        self.var.insured_yearly_income = DynamicArray(
             n=self.n,
             max_n=self.max_n,
             extra_dims=(self.var.total_spinup_time,),
@@ -1755,6 +1763,15 @@ class CropFarmers(AgentBaseClass):
 
         potential_insured_loss[:, ~mask_columns] = np.maximum(
             self.var.avg_income_per_agent[..., None] - income_masked, 0
+        )
+
+        # Add the insured loss to the income of this year's insured farmers
+        insured_farmers_mask = (
+            self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
+        )
+
+        self.var.insured_yearly_income[insured_farmers_mask, 0] += (
+            potential_insured_loss[insured_farmers_mask, 0]
         )
 
         return credibility_premiums, potential_insured_loss
@@ -4167,6 +4184,10 @@ class CropFarmers(AgentBaseClass):
             self.var.all_loans_annual_cost / cumulative_inflation[..., None, None]
         )
 
+        self.var.adjusted_yearly_income = (
+            self.var.insured_yearly_income / cumulative_inflation[..., None]
+        )
+
     def get_value_per_farmer_from_region_id(
         self, data, time, subset=None
     ) -> np.ndarray:
@@ -4385,7 +4406,7 @@ class CropFarmers(AgentBaseClass):
                         self.var.yearly_yield_ratio, self.var.yearly_SPEI_probability
                     )
                 )
-
+                self.var.insured_yearly_income[:, 0] = self.var.yearly_income[:, 0]
                 if (
                     not self.config["expected_utility"]["insurance"][
                         "personal_insurance"
@@ -4488,6 +4509,7 @@ class CropFarmers(AgentBaseClass):
             # Shift the potential and yearly profits forward
             shift_and_reset_matrix(self.var.yearly_income)
             shift_and_reset_matrix(self.var.yearly_potential_income)
+            shift_and_reset_matrix(self.var.insured_yearly_income)
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         # if self.model.current_timestep == 105:
