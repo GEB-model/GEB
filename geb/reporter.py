@@ -216,8 +216,9 @@ class Reporter:
                     self.report_folder / module_name / (name + ".zarr")
                 )
                 filepath.parent.mkdir(parents=True, exist_ok=True)
+
                 store = zarr.storage.LocalStore(filepath, read_only=False)
-                ds = zarr.open_group(store, mode="w")
+                zarr_group = zarr.open_group(store, mode="w")
 
                 time = create_time_array(
                     start=self.model.current_time,
@@ -230,10 +231,11 @@ class Reporter:
                     dtype=np.int64,
                 )
 
-                time_group = ds.create_array(
+                time_group = zarr_group.create_array(
                     "time",
                     shape=time.shape,
                     dtype=time.dtype,
+                    dimension_names=["time"],
                 )
                 time_group[:] = time
 
@@ -242,12 +244,14 @@ class Reporter:
                         "standard_name": "time",
                         "units": "seconds since 1970-01-01T00:00:00",
                         "calendar": "gregorian",
-                        "_ARRAY_DIMENSIONS": ["time"],
                     }
                 )
 
-                config["_file"] = ds
+                config["_file"] = zarr_group
                 config["_time_index"] = time
+
+                return store
+
         else:
             raise ValueError(
                 f"Type {config['type']} not recognized. Must be 'grid', 'agents' or 'HRU'."
@@ -435,8 +439,8 @@ class Reporter:
                         dtype=dtype,
                         compressors=(compressor,),
                         fill_value=fill_value,
+                        dimension_names=array_dimensions,
                     )
-                    ds[name].attrs["_ARRAY_DIMENSIONS"] = array_dimensions
                 index = np.argwhere(
                     config["_time_index"]
                     == np.datetime64(self.model.current_time, "s").astype(
