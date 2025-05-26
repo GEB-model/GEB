@@ -1,5 +1,7 @@
+import base64
 from pathlib import Path
 
+import branca.colormap as cm
 import contextily as ctx
 import folium
 import geopandas as gpd
@@ -11,6 +13,8 @@ import xarray as xr
 from permetrics.regression import RegressionMetric
 
 from geb.workflows.io import to_zarr
+
+#!/usr/bin/env python3
 
 
 class Hydrology:
@@ -77,11 +81,12 @@ class Hydrology:
             discharge_GRDC_df = GRDC[ID]
             discharge_GRDC_df.columns = ["Q"]
             discharge_GRDC_df.name = "Q"
-            GRDC_station_name = snapped_locations.loc[ID].station_name
+            GRDC_station_name = snapped_locations.loc[ID].GRDC_station_name
             snapped_xy_coords = snapped_locations.loc[ID].closest_tuple
-            GRDC_station_coords = snapped_locations.loc[ID].station_coords
-            station_upstream_area_ratio = snapped_locations.loc[ID].upstream_area_ratio
-
+            GRDC_station_coords = snapped_locations.loc[ID].GRDC_station_coords
+            GRDC_to_GEB_upstream_area_ratio = snapped_locations.loc[
+                ID
+            ].GRDC_to_GEB_upstream_area_ratio
             print("validating station %s" % GRDC_station_name)
 
             ########################### Discharge from model ##########################################
@@ -110,7 +115,7 @@ class Hydrology:
             if correct_Q_obs:
                 """# correct the Q_obs values for the difference in upstream area between subgrid and grid """
                 validation_df["Q_obs"] = (
-                    validation_df["Q_obs"] * station_upstream_area_ratio
+                    validation_df["Q_obs"] * GRDC_to_GEB_upstream_area_ratio
                 )  # correct the Q_obs values for the difference in upstream area between subgrid and grid
 
             # skip station if validation df has less than 1 year of data (365 rows)
@@ -133,9 +138,11 @@ class Hydrology:
                 # scatter plot
                 fig, ax = plt.subplots()
                 ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
-                ax.set_xlabel("GEB discharge [m3/s]")
-                ax.set_ylabel("Discharge observations [m3/s] (%s)" % GRDC_station_name)
-                ax.set_title("GEB vs observations (discharge)")
+                ax.set_xlabel(
+                    "GRDC Discharge observations [m3/s] (%s)" % GRDC_station_name
+                )
+                ax.set_ylabel("GEB discharge simulation [m3/s]")
+                ax.set_title("GEB vs observations (dischage)")
                 # add regression line and R
                 m, b = np.polyfit(validation_df["Q_obs"], validation_df["Q_sim"], 1)
                 ax.plot(
@@ -190,6 +197,7 @@ class Hydrology:
                                     "station_name": GRDC_station_name,
                                     "x": GRDC_station_coords[0],
                                     "y": GRDC_station_coords[1],
+                                    "GRDC_to_GEB_upstream_area_ratio": GRDC_to_GEB_upstream_area_ratio,
                                     "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
                                     "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
                                     "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
@@ -280,7 +288,6 @@ class Hydrology:
             attribution=False,  # Remove attribution text
         )
 
-        # Add labels with R, KGE, and NSE values at the location of the dots
         # Add labels with R, KGE, and NSE values at the location of the dots
         for idx, row in evaluation_gdf.iterrows():
             y_offset = 0.005 * (idx % 2)  # Stagger labels slightly to avoid overlap
@@ -401,9 +408,6 @@ class Hydrology:
         plt.close()
         # plt.close()
 
-        import base64
-
-        import branca.colormap as cm
         ############################### Folium map ###########################################
 
         # Create a Folium map centered on the mean coordinates of the stations
@@ -418,35 +422,37 @@ class Hydrology:
             colors=["red", "orange", "yellow", "blue", "green"],  # Updated color scheme
             vmin=evaluation_gdf["R"].min(),
             vmax=evaluation_gdf["R"].max(),
-            caption="<b>R</b>",  # Bold title for colorbar
+            caption="R",
         )
         colormap_kge = cm.LinearColormap(
             colors=["red", "orange", "yellow", "blue", "green"],  # Updated color scheme
             vmin=evaluation_gdf["KGE"].min(),
             vmax=evaluation_gdf["KGE"].max(),
-            caption="<b>KGE</b>",  # Bold title for colorbar
+            caption="KGE",
         )
         colormap_nse = cm.LinearColormap(
             colors=["red", "orange", "yellow", "blue", "green"],  # Updated color scheme
             vmin=evaluation_gdf["NSE"].min(),
             vmax=evaluation_gdf["NSE"].max(),
-            caption="<b>NSE</b>",  # Bold title for colorbar
+            caption="NSE",
         )
-
-        # Increase font size for colorbar labels and tick labels
-        colormap_r.caption_font_size = "18px"  # Larger caption font size
-        colormap_kge.caption_font_size = "18px"
-        colormap_nse.caption_font_size = "18px"
+        colormap_upstream = cm.LinearColormap(
+            colors=["red", "orange", "yellow", "blue", "green"],  # Updated color scheme
+            vmin=evaluation_gdf["GRDC_to_GEB_upstream_area_ratio"].min(),
+            vmax=evaluation_gdf["GRDC_to_GEB_upstream_area_ratio"].max(),
+            caption="Upstream Area Ratio",
+        )
 
         # Add tick labels with larger font size
         colormap_r.add_to(m)
         colormap_kge.add_to(m)
         colormap_nse.add_to(m)
-
+        colormap_upstream.add_to(m)
         # Create FeatureGroups for R, KGE, and NSE
         layer_r = folium.FeatureGroup(name="R", show=True)
         layer_kge = folium.FeatureGroup(name="KGE", show=False)
         layer_nse = folium.FeatureGroup(name="NSE", show=False)
+        layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
 
         # Add markers for R, KGE, and NSE to their respective layers
         for _, row in evaluation_gdf.iterrows():
@@ -455,9 +461,18 @@ class Hydrology:
 
             # Generate scatter plot for the station
             scatter_plot_path = eval_plot_folder / f"scatter_plot_{station_name}.png"
+            time_series_plot_path = (
+                eval_plot_folder / f"timeseries_plot_{station_name}.png"
+            )
             # Encode the scatter plot image as a base64 string
             with open(scatter_plot_path, "rb") as img_file:
-                encoded_image = base64.b64encode(img_file.read()).decode("utf-8")
+                encoded_image_scatter = base64.b64encode(img_file.read()).decode(
+                    "utf-8"
+                )
+            with open(time_series_plot_path, "rb") as img_file:
+                encoded_image_time_series = base64.b64encode(img_file.read()).decode(
+                    "utf-8"
+                )
 
             # Create an HTML popup with the scatter plot image
             popup_html = f"""
@@ -465,19 +480,22 @@ class Hydrology:
             <b>R:</b> {row["R"]:.2f}<br>
             <b>KGE:</b> {row["KGE"]:.2f}<br>
             <b>NSE:</b> {row["NSE"]:.2f}<br>
-            <img src="data:image/png;base64,{encoded_image}" width="300">
+            <b>Upstream Area Ratio:</b> {row["GRDC_to_GEB_upstream_area_ratio"]:.2f}<br>
+            <img src="data:image/png;base64,{encoded_image_scatter}" width="500">
+            <img src="data:image/png;base64,{encoded_image_time_series}" width="500">
             """
-            popup = folium.Popup(popup_html, max_width=400)
 
-            # Add a marker for the station
+            # Add R layer
+            color_r = colormap_r(row["R"])
+            popup_r = folium.Popup(popup_html, max_width=400)
             folium.CircleMarker(
                 location=coords,
                 radius=10,
                 color="black",
                 fill=True,
-                fill_color=colormap_r(row["R"]),  # Use R colormap for color
+                fill_color=color_r,  # Use R colormap for color
                 fill_opacity=0.9,
-                popup=popup,
+                popup=popup_r,
             ).add_to(layer_r)
 
             # Add KGE layer
@@ -512,15 +530,36 @@ class Hydrology:
                 popup=popup_nse,
             ).add_to(layer_nse)
 
+            # Add Upstream Area Ratio layer
+            if ~np.isnan(row["GRDC_to_GEB_upstream_area_ratio"]):
+                color_upstream = colormap_upstream(
+                    float(row["GRDC_to_GEB_upstream_area_ratio"])
+                )
+                popup_upstream = folium.Popup(
+                    f"<b>Station Name:</b> {station_name}<br><b>Upstream Area Ratio:</b> {row['GRDC_to_GEB_upstream_area_ratio']:.2f}",
+                    max_width=300,
+                )
+                folium.CircleMarker(
+                    location=coords,
+                    radius=10,
+                    color="black",
+                    fill=True,
+                    fill_color=color_upstream,
+                    fill_opacity=0.9,
+                    popup=popup_upstream,
+                ).add_to(layer_upstream)
+
         # Add the layers to the map
         layer_r.add_to(m)
         layer_kge.add_to(m)
         layer_nse.add_to(m)
+        layer_upstream.add_to(m)
 
         # Add the colormaps to the map
         colormap_r.add_to(m)
         colormap_kge.add_to(m)
         colormap_nse.add_to(m)
+        colormap_upstream.add_to(m)
 
         # Add the catchment shapefile as a GeoJSON layer
         folium.GeoJson(
@@ -550,6 +589,8 @@ class Hydrology:
         # Display the map in a Jupyter Notebook (if applicable)
         m
 
-        print(
-            "Discharge evaluation map created with toggleable layers for R, KGE, and NSE."
-        )
+        print("Discharge evaluation dashboard created.")
+
+        # https://hess.copernicus.org/articles/27/1/2023/
+        # https://essd.copernicus.org/articles/12/2043/2020/
+        # https://www.sciencedirect.com/science/article/pii/S095965262302440X

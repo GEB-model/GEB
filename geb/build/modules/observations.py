@@ -9,8 +9,6 @@ import numpy as np
 import pandas as pd
 import shapely
 import xarray as xr
-
-# EVAL
 from shapely.ops import nearest_points
 
 
@@ -30,20 +28,7 @@ class Observations:
         GRDC = self.data_catalog.get_geodataset("GRDC")
 
         # create discharge snapping df
-        discharge_snapping_df = pd.DataFrame(
-            columns=[
-                "station_name",
-                "station_ID",
-                "station_coords",
-                "closest_point_coords",
-                "subgrid_pixel_coords",
-                "grid_pixel_coords",
-                "upstream_area_from_subgrid",
-                "upstream_area_from_grid",
-                "upstream_area_ratio",
-            ]
-        )
-
+        discharge_snapping_df = pd.DataFrame()
         # keep only GRDC stations within the catchment boundaries
 
         ############################################ GRDC functions ###########################################
@@ -168,6 +153,9 @@ class Observations:
             GRDC_merged, region_shapefile
         )  # filter GRDC stations based on the region shapefile
 
+        # convert all the -999 values to NaN
+        GRDC_clipped = GRDC_clipped.where(GRDC_clipped != -999, np.nan)
+
         ### make a parquet file with the discharge data ###
         discharge_data = GRDC_clipped.runoff_mean.to_dataframe().reset_index()
         discharge_data.rename(
@@ -190,15 +178,27 @@ class Observations:
         ############################### Snapping to river and validation of discharges ############################################################################
         ###########################################################################################################################################################
         GRDC_clipped = GRDC_clipped.compute()
+
+        for i in range(len(GRDC_clipped.id.values)):
+            # print station name, river_name and area
+            print(
+                "Station name: %s, River name: %s, Area: %s"
+                % (
+                    GRDC_clipped.station_name.values[i],
+                    GRDC_clipped.river_name.values[i],
+                    GRDC_clipped.area.values[i],
+                )
+            )
         print("start loop")
         for id in GRDC_clipped.id.values:
             GRDC_station = GRDC_clipped.sel(
                 id=id
             )  # select the station from the GRDC dataset
-            print("GRDC station loaded")
+
             GRDC_station_name = str(
                 GRDC_station.station_name.values
             )  # get the name of the station
+            print("GRDC station loaded with name %s" % GRDC_station_name)
             GRDC_station_coords = list(
                 (
                     float(GRDC_station.x.values),
@@ -210,15 +210,35 @@ class Observations:
                 crs=rivers.crs,
             )  # create a point geometry for the station
 
+            GRDC_uparea = (
+                GRDC_station.area.values.item()
+            )  # get the upstream area of the station
+            GRDC_uparea_m2 = GRDC_uparea * 1e6
+            GRDC_rivername = GRDC_station.river_name.values.item()
+
             ############## find point in river closest to the discharge station #############
             def get_distance_to_stations(rivers):
                 """This function returns the distance of each river section to the station"""
                 return rivers.distance(location_discharge_station).values.item()
 
             rivers["station_distance"] = rivers.geometry.apply(get_distance_to_stations)
-            closest_river_segment = rivers.sort_values(by="station_distance").head(
-                1
-            )  # select closest river segment
+            rivers_sorted = rivers.sort_values(by="station_distance")
+
+            if np.isnan(GRDC_uparea):
+                closest_river_segment = rivers_sorted.head(1)
+            else:
+                # add upstream area criteria
+                upstream_area_diff = 0.3 * GRDC_uparea  # 30% difference
+                closest_river_segment = rivers_sorted[
+                    (rivers_sorted.uparea > (GRDC_uparea - upstream_area_diff))
+                    & (rivers_sorted.uparea < (GRDC_uparea + upstream_area_diff))
+                ].head(1)
+
+                if closest_river_segment.station_distance.values.item() > 0.1:
+                    # raise error
+                    raise ValueError(
+                        f"Closest river segment is too far from the GRDC station {GRDC_station_name}. Distance: {closest_river_segment.station_distance.values.item()} degrees"
+                    )
             closest_river_segment_linestring = shapely.geometry.LineString(
                 closest_river_segment.geometry.iloc[0]
             )
@@ -231,7 +251,7 @@ class Observations:
             selected_subgrid_pixel = upstream_area_subgrid.sel(
                 x=closest_point.x, y=closest_point.y, method="nearest"
             )  # select subgrid value at the closest point
-            upstream_area_from_subgrid = (
+            GEB_upstream_area_from_subgrid = (
                 selected_subgrid_pixel.values
             )  # get the value of the selected pixel
 
@@ -267,12 +287,9 @@ class Observations:
             )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
 
             ############### Read the upstream area from the low-res grid and calculate upstream area ratio  #############
-            upstream_area_from_grid = (
+            GEB_upstream_area_from_grid = (
                 upstream_area_grid_pixel.values
             )  # get the value of the selected pixel
-            ratio_upstream_area = (
-                upstream_area_from_subgrid / upstream_area_from_grid
-            )  # ratio between the two grids
 
             ################ store the station snapping coordinates and plot them #############
             station_coords = list(
@@ -302,16 +319,24 @@ class Observations:
             new_row = pd.DataFrame(
                 [
                     {
-                        "station_name": GRDC_station_name,
-                        "station_ID": int(id),
-                        "station_coords": GRDC_station_coords,
+                        "GRDC_station_name": GRDC_station_name,
+                        "GRDC_station_ID": int(id),
+                        "GRDC_river_name": GRDC_rivername,
+                        "GRDC_upstream_area_m2": GRDC_uparea_m2,
+                        "GRDC_station_coords": GRDC_station_coords,
                         "closest_point_coords": closest_point_coords,
                         "subgrid_pixel_coords": subgrid_pixel_coords,
                         "grid_pixel_coords": grid_pixel_coords,
                         "closest_tuple": closest_tuple,
-                        "upstream_area_from_subgrid": float(upstream_area_from_subgrid),
-                        "upstream_area_from_grid": float(upstream_area_from_grid),
-                        "upstream_area_ratio": float(ratio_upstream_area),
+                        "GEB_upstream_area_from_subgrid": float(
+                            GEB_upstream_area_from_subgrid
+                        ),
+                        "GEB_upstream_area_from_grid": float(
+                            GEB_upstream_area_from_grid
+                        ),
+                        "GRDC_to_GEB_upstream_area_ratio": float(
+                            GEB_upstream_area_from_subgrid / GRDC_uparea_m2
+                        ),
                     }
                 ]
             )
@@ -398,7 +423,7 @@ class Observations:
             plt.savefig(
                 self.report_dir
                 / "snapping_discharge"
-                / f"snapping_discharge_{GRDC_station_name}.png",
+                / f"snapping_discharge_{GRDC_station_name}_NEW.png",
                 dpi=300,
                 bbox_inches="tight",
             )
@@ -409,12 +434,12 @@ class Observations:
 
         print("Discharge snapping done for all stations")
 
-        # convert upstream_araea_from_subgrid and upstream_area_from_grid to float
-        discharge_snapping_df["upstream_area_from_subgrid"] = discharge_snapping_df[
-            "upstream_area_from_subgrid"
+        # convert upstream_araea_from_subgrid and GEB_upstream_area_from_grid to float
+        discharge_snapping_df["GEB_upstream_area_from_subgrid"] = discharge_snapping_df[
+            "GEB_upstream_area_from_subgrid"
         ].astype(float)
-        discharge_snapping_df["upstream_area_from_grid"] = discharge_snapping_df[
-            "upstream_area_from_grid"
+        discharge_snapping_df["GEB_upstream_area_from_grid"] = discharge_snapping_df[
+            "GEB_upstream_area_from_grid"
         ].astype(float)
 
         discharge_snapping_df.to_excel(
@@ -432,7 +457,7 @@ class Observations:
             ),
             crs="EPSG:4326",  # Set the coordinate reference system
         )
-        discharge_snapping_gdf.set_index("station_ID", inplace=True)
+        discharge_snapping_gdf.set_index("GRDC_station_ID", inplace=True)
 
         # use set_geoms
         self.set_geoms(
@@ -440,7 +465,6 @@ class Observations:
         )
         print("discharge snapping geoparquet file saved")
         ("Building discharge datasets done")
-        # GRDC=    # later use: GRDC = data_catalog.get_source("GRDC").path
 
         # for i, file in enumerate(files):
         #     filename = file["filename"]
