@@ -450,24 +450,6 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
-    def warning_communication(self):  # dummy warning system
-        print("Issuing a warning...")
-
-        # Define the % of households reached by the warning
-        warning_range = 0.35
-
-        # Get random indices to change the warning
-        number_of_warned_households = int(self.n * warning_range)
-        indices = np.random.choice(self.n, number_of_warned_households, replace=False)
-
-        # Change warning reached attribute to 1 (received a warning)
-        self.var.warning_reached[indices] = 1
-
-        # Increase risk perception of households who received the warning
-        self.var.risk_perception[indices] *= 10
-
-        print(f"Warning issued to {number_of_warned_households} households.")
-
     def load_ensemble_flood_maps(self):
         # Load all the flood maps in an ensemble per each day
         days = self.model.config["general"]["forecasts"]["days"]
@@ -505,7 +487,7 @@ class Households(AgentBaseClass):
         ensemble_flood_maps = self.load_ensemble_flood_maps()
 
         days = self.model.config["general"]["forecasts"]["days"]
-        # crs = self.model.config["hazards"]["floods"]["crs"]
+        crs = self.model.config["hazards"]["floods"]["crs"]
 
         prob_folder = os.path.join(self.model.output_folder, "prob_maps")
         os.makedirs(prob_folder, exist_ok=True)
@@ -551,7 +533,7 @@ class Households(AgentBaseClass):
                         print("flipping y axis")
                         probability = probability.sortby("y", ascending=False)
 
-                    probability = probability.rio.write_crs("EPSG:28992")
+                    probability = probability.rio.write_crs(crs)
                     probability.rio.to_raster(file_path, driver="GTiff")
 
                     probability_maps[(day, range_id)] = probability
@@ -559,12 +541,15 @@ class Households(AgentBaseClass):
         return probability_maps
 
     def warning_strategy(self, prob_threshold=0.6):
-        # I probably hould use the probability_maps as argument for this function
-        # ideally have an option to choose the warning strategy
+        # I probably should use the probability_maps as argument for this function instead of getting it inside the function
+        # ideally add an option to choose the warning strategy
 
         days = self.model.config["general"]["forecasts"]["days"]
         range_ids = [1, 2, 3]
         warnings_log = []
+
+        # Create probability maps
+        self.create_probability_maps()
 
         # Load postal codes
         PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
@@ -597,36 +582,78 @@ class Households(AgentBaseClass):
                     PC4, rf_array, affine=affine, stats="max", nodata=np.nan
                 )
 
-                # Iterate through each postal code and check the minimum probability
+                # Iterate through each postal code and check the max probability
                 for i, prob_value in enumerate(stats):
-                    min_prob = prob_value["max"]
+                    max_prob = prob_value["max"]
                     pc4_code = PC4.iloc[i]["postcode"]
 
-                    if min_prob >= prob_threshold:
+                    if max_prob >= prob_threshold:
                         print(
                             f"Warning issued to postal code {pc4_code} on {day} for range {range_id}"
                         )
 
-                        # Set warning for affected households
+                        # Filter the affected households based on the postal code
                         affected_households = households[
                             households["postcode"] == pc4_code
                         ]
-                        for idx in affected_households["pointid"]:
-                            self.var.warning_reached[idx] = 1
+
+                        # Communicate the warning to the target households
+                        # This function should return the number of households that were warned
+                        n_warned_households = self.warning_communication(
+                            target_households=affected_households
+                        )
 
                         warnings_log.append(
                             {
                                 "day": day,
                                 "postcode": pc4_code,
                                 "range": range_id,
-                                "n_households": len(affected_households),
-                                "min_probability": min_prob,
+                                "n_affected_households": len(affected_households),
+                                "n_warned_households": n_warned_households,
+                                "max_probability": max_prob,
                             }
                         )
 
         # Save the warnings log to a csv file
         path = os.path.join(self.model.output_folder, "warnings_log.csv")
         pd.DataFrame(warnings_log).to_csv(path, index=False)
+
+    def warning_communication(self, target_households):  # dummy warning system
+        """This function communicates the warning based on the communication efficiency,
+        changes risk perception --> to be moved to the update risk perception function,
+        and return the number of households that were warned"""
+
+        print("Communicating the warning...")
+        # Define the % of households reached by the warning
+        warning_range = 0.35
+
+        # Total number of target households
+        n_target_households = len(target_households)
+
+        # If no target households, return 0 warned households
+        if n_target_households == 0:
+            return 0
+
+        # Get random indices to change the warning
+        n_warned_households = int(n_target_households * warning_range)
+        indices = np.random.choice(
+            n_target_households, n_warned_households, replace=False
+        )
+
+        # Get the pointids of the households that should get the warning
+        household_id = target_households.iloc[indices]["pointid"]
+
+        # Change warning reached attribute to 1 (received a warning)
+        self.var.warning_reached[household_id] = 1
+
+        # Increase risk perception of households who received the warning
+        self.var.risk_perception[household_id] *= 10
+
+        print(f"Warning targeted to reach {n_target_households} households.")
+        print(f"Warning supposed to reach {n_warned_households} households.")
+        print(f"Warning reached {len(household_id)} households.")
+
+        return n_warned_households
 
     def change_vulnerability(self, risk_perception_threshold=0.1):
         # define a risk perception threshold
@@ -918,7 +945,6 @@ class Households(AgentBaseClass):
         self.construct_income_distribution()
         self.assign_household_attributes()
         self.change_household_locations()  # ideally this should be done in the setup_population when building the model
-        self.create_probability_maps()
         self.warning_strategy()
 
         print("test")
