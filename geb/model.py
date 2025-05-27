@@ -67,7 +67,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.current_timestep = timestep
 
     def multiverse(self):
-        self.agents.households.warning() 
+        self.agents.households.warning_communication()
         self.agents.households.change_vulnerability()
 
         # copy current state of timestep and time
@@ -81,6 +81,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         forecasts = xr.open_dataset(
             self.input_folder
+            / "other"
             / "climate"
             / "forecasts"
             / f"{self.current_time.strftime('%Y%m%d')}.nc"
@@ -91,8 +92,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         for member in forecasts.member:
             self.multiverse_name = member.item()
-            self.sfincs.precipitation_dataarray = (forecasts.sel(member=member).precip / 3600)
-            
+            self.sfincs.precipitation_dataarray = (
+                forecasts.sel(member=member).precip / 3600
+            )
+
             # self.sfincs.precipitation_dataarray = (
             #     precipitation_dataarray / 100 * member.item()
             # )

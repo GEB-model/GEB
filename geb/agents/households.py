@@ -1,13 +1,17 @@
 import json
+import os
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pyproj
+import rasterio
 import xarray as xr
 from damagescanner.core import object_scanner
 from honeybees.library.raster import sample_from_map
 from rasterio.features import shapes
+from rasterstats import zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
@@ -274,9 +278,86 @@ class Households(AgentBaseClass):
         household_points["object_type"] = (
             "building_unprotected"  # this must match damage curves
         )
+
         self.var.household_points = household_points
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
+        )
+
+    def change_household_locations(self):
+        """Change the location of the household points to the centroid of the buildings.
+        This is done to get the correct geometry for the warning function"""
+
+        crs = self.model.config["hazards"]["floods"]["crs"]
+        locations = self.var.household_points.copy()
+        locations.to_crs(
+            crs, inplace=True
+        )  # Change to a projected CRS to get a distance in meters
+
+        buildings_centroid = self.var.buildings_centroid[["geometry"]].copy()
+        buildings_centroid.to_crs(crs, inplace=True)  # Change to the same projected CRS
+
+        # Copy the geometry to a new column otherwise it gets lost in the spatial join
+        buildings_centroid["new_geometry"] = buildings_centroid.geometry
+
+        # Create unique ids for household points and building centroids
+        # This is done to avoid duplicates when doing the spatial join
+        locations["pointid"] = range(locations.shape[0])
+
+        new_locations = gpd.sjoin_nearest(
+            locations,
+            buildings_centroid,
+            how="left",
+            exclusive=True,
+            distance_col="distance",
+        )
+
+        # Sort values by pointid and distance and drop duplicate pointids
+        new_locations = new_locations.sort_values(
+            by=["pointid", "distance"], ascending=True, na_position="last"
+        )
+        new_locations = new_locations.drop_duplicates(subset="pointid", keep="first")
+
+        # Change the geometry of the household points to the geometry of the building centroid
+        new_locations["geometry"] = new_locations["new_geometry"]
+        new_locations.set_geometry("geometry", inplace=True)
+
+        # Drop columns that are not needed
+        new_locations.drop(
+            columns={"index_right", "new_geometry", "distance"}, inplace=True
+        )
+
+        self.var.household_points = new_locations
+
+    def assign_household_attributes_to_buildings(self):
+        """Assign households attributes to buildings. This is done by assigning the attribute of the household (that is inside the household_points gdf)
+        to its nearest building. But later this should be done by using socioeconomic data (and considering only buildings=house?)."""
+
+        # Set the buildings to the same CRS as the household points
+        self.var.buildings.to_crs(self.var.household_points.crs, inplace=True)
+
+        # Join each building with its nearest household point
+        self.var.buildings_with_households = gpd.sjoin_nearest(
+            self.var.buildings, self.var.household_points, how="left", exclusive=True
+        )
+
+        # Take the maximum damage and object type of the household_point gdf
+        self.var.buildings_with_households["object_type_left"] = (
+            self.var.buildings_with_households["object_type_right"]
+        )
+        self.var.buildings_with_households["maximum_damage_left"] = (
+            self.var.buildings_with_households["maximum_damage_right"]
+        )
+
+        self.var.buildings_with_households = self.var.buildings_with_households.drop(
+            columns=["object_type_right", "maximum_damage_right", "index_right"]
+        )
+
+        self.var.buildings_with_households = self.var.buildings_with_households.rename(
+            columns={
+                "object_type_left": "object_type",
+                "maximum_damage_left": "maximum_damage",
+            }
         )
 
     def get_flood_risk_information_honeybees(self):
@@ -369,8 +450,8 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
-    def warning(self):  # dummy warning system
-        print("Issue a warning")
+    def warning_communication(self):  # dummy warning system
+        print("Issuing a warning...")
 
         # Define the % of households reached by the warning
         warning_range = 0.35
@@ -385,13 +466,175 @@ class Households(AgentBaseClass):
         # Increase risk perception of households who received the warning
         self.var.risk_perception[indices] *= 10
 
-    def change_vulnerability(self):
+        print(f"Warning issued to {number_of_warned_households} households.")
+
+    def load_ensemble_flood_maps(self):
+        # Load all the flood maps in an ensemble per each day
+        days = self.model.config["general"]["forecasts"]["days"]
+        ensemble_per_day = []
+
+        for day in days:
+            members = []  # Every day has its own ensemble
+            for member in range(
+                1, 4
+            ):  # Change it later to the actual number of ensemble members
+                file_path = (
+                    self.model.output_folder
+                    / "flood_maps"
+                    / "ensemble"
+                    / f"{day.strftime('%Y-%m-%d')}_member{member}.zarr"
+                )  # Think later about which date info should be in the file
+
+                members.append(
+                    xr.open_dataarray(file_path, engine="zarr")
+                )  # Do I want to use this later?
+            # Concatenate the members for each day
+            members_stacked = xr.concat(
+                members, dim="member"
+            )  # This stacks the list of dataarrays along a new "member" dimension
+            ensemble_per_day.append(members_stacked)
+
+        ensemble_flood_maps = xr.concat(
+            ensemble_per_day, dim="day"
+        )  # This stacks the list of dataarrays along a new "member" dimension
+
+        return ensemble_flood_maps
+
+    def create_probability_maps(self):
+        # Create a probability map based on the ensemble of flood maps based on the strategy (ideally)
+        ensemble_flood_maps = self.load_ensemble_flood_maps()
+
+        days = self.model.config["general"]["forecasts"]["days"]
+        # crs = self.model.config["hazards"]["floods"]["crs"]
+
+        prob_folder = os.path.join(self.model.output_folder, "prob_maps")
+        os.makedirs(prob_folder, exist_ok=True)
+
+        if self.model.config["general"]["forecasts"]["strategy_1"]:
+            # Water level ranges for the probability map
+            ranges = [
+                (1, 0.1, 1.0),
+                (2, 1.0, 2.0),
+                (3, 2.0, None),
+            ]  # Maybe I should make a parquet file with the ranges
+
+            probability_maps = {}
+
+            for i, day in enumerate(days):
+                for range_id, min, max in ranges:
+                    daily_ensemble = ensemble_flood_maps.isel(day=i)
+                    if max is not None:
+                        condition = (daily_ensemble >= min) & (daily_ensemble <= max)
+                    else:
+                        condition = daily_ensemble >= min
+                    probability = (
+                        condition.sum(dim="member") / condition.sizes["member"]
+                    )
+
+                    # save it to zarr format (TOO MUCH TROUBLE - DO IT LATER)
+                    # probability = probability.astype("float32")
+                    # probability = to_zarr(
+                    #     probability,
+                    #     self.model.output_folder
+                    #     / "prob_maps"
+                    #     / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.zarr",
+                    #     crs=crs,
+                    # )
+                    file_path = (
+                        self.model.output_folder
+                        / "prob_maps"
+                        / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.tif"
+                    )
+
+                    # SOMETHING IS WRONG WHEN WRITING THE TIFF FILE, THE Y AXIS IS FLIPPED, IDWK WHY, so doing this to fix it for now
+                    if probability.y.values[0] < probability.y.values[-1]:
+                        print("flipping y axis")
+                        probability = probability.sortby("y", ascending=False)
+
+                    probability = probability.rio.write_crs("EPSG:28992")
+                    probability.rio.to_raster(file_path, driver="GTiff")
+
+                    probability_maps[(day, range_id)] = probability
+
+        return probability_maps
+
+    def warning_strategy(self, prob_threshold=0.6):
+        # I probably hould use the probability_maps as argument for this function
+        # ideally have an option to choose the warning strategy
+
+        days = self.model.config["general"]["forecasts"]["days"]
+        range_ids = [1, 2, 3]
+        warnings_log = []
+
+        # Load postal codes
+        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        PC4["postcode"] = PC4["postcode"].astype("int32")
+
+        # Associate households with their postal codes
+        households = self.var.household_points.copy()
+        households = gpd.sjoin(
+            households,
+            PC4[["postcode", "geometry"]],
+            how="left",
+            predicate="intersects",
+        )
+
+        for day in days:
+            for range_id in range_ids:
+                # Build path to probability map (is there a way of doing it with array instead of raster?)
+                tif_path = Path(
+                    self.model.output_folder
+                    / "prob_maps"
+                    / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.tif"
+                )
+
+                rf = rasterio.open(tif_path)
+                rf_array = rf.read(1)
+                affine = rf.transform
+
+                # Run zonal stats using rasterstats
+                stats = zonal_stats(
+                    PC4, rf_array, affine=affine, stats="max", nodata=np.nan
+                )
+
+                # Iterate through each postal code and check the minimum probability
+                for i, prob_value in enumerate(stats):
+                    min_prob = prob_value["max"]
+                    pc4_code = PC4.iloc[i]["postcode"]
+
+                    if min_prob >= prob_threshold:
+                        print(
+                            f"Warning issued to postal code {pc4_code} on {day} for range {range_id}"
+                        )
+
+                        # Set warning for affected households
+                        affected_households = households[
+                            households["postcode"] == pc4_code
+                        ]
+                        for idx in affected_households["pointid"]:
+                            self.var.warning_reached[idx] = 1
+
+                        warnings_log.append(
+                            {
+                                "day": day,
+                                "postcode": pc4_code,
+                                "range": range_id,
+                                "n_households": len(affected_households),
+                                "min_probability": min_prob,
+                            }
+                        )
+
+        # Save the warnings log to a csv file
+        path = os.path.join(self.model.output_folder, "warnings_log.csv")
+        pd.DataFrame(warnings_log).to_csv(path, index=False)
+
+    def change_vulnerability(self, risk_perception_threshold=0.1):
         # define a risk perception threshold
-        risk_perception_threshold = 0.1
         mask = self.var.risk_perception >= risk_perception_threshold
 
         # change the vulnerability curve of households content for those who received a warning
         self.var.household_points.loc[mask, "object_type"] = "building_protected"
+        # before it was buildings.loc but there are more buildings than households
 
     def decide_household_strategy(self):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
@@ -456,11 +699,15 @@ class Households(AgentBaseClass):
         self.var.buildings = gpd.read_parquet(
             self.model.files["geoms"]["assets/buildings"]
         )
-        self.var.buildings["object_type"] = "building_structure"
+        self.var.buildings["object_type"] = (
+            "building_unprotected"  # before it was "building_structure"
+        )
         self.var.buildings_centroid = gpd.GeoDataFrame(
             geometry=self.var.buildings.centroid
         )
-        self.var.buildings_centroid["object_type"] = "building_content"
+        self.var.buildings_centroid["object_type"] = (
+            "building_unprotected"  # before it was "building_content"
+        )
 
         # Load roads
         self.var.roads = gpd.read_parquet(
@@ -670,20 +917,51 @@ class Households(AgentBaseClass):
         self.load_damage_curves()
         self.construct_income_distribution()
         self.assign_household_attributes()
+        self.change_household_locations()  # ideally this should be done in the setup_population when building the model
+        self.create_probability_maps()
+        self.warning_strategy()
 
-    def flood(self, flood_map):
-        # Damage to households
+        print("test")
+
+    def flood(self, flood_map, simulation_root):
+        """This function computes the damages for the assets and land use types in the model."""
+        # Assign household points to buildings
+        # This is done to get the correct geometry for the damage scanner
+        self.assign_household_attributes_to_buildings()
+
+        # Create the folder to save damage maps if it doesn't exist
+        damage_folder = os.path.join(simulation_root, "damage")
+        os.makedirs(damage_folder, exist_ok=True)
+
+        ## Compute damages for buildings content and save it to a gpkg file
+        category_name = "buildings_content"
+        filename = f"damage_map_{category_name}.gpkg"
+        save_path = os.path.join(damage_folder, filename)
+
+        buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
         damages_buildings_content = object_scanner(
-            objects=self.var.household_points,
+            objects=buildings_centroid,
             hazard=flood_map,
             curves=self.var.buildings_content_curve,
         )
 
+        buildings_centroid["damages"] = damages_buildings_content
+        buildings_centroid.to_file(save_path, driver="GPKG")
+
+        ## Compute damages for buildings structure and save it to a gpkg file
+        category_name = "buildings_structure"
+        filename = f"damage_map_{category_name}.gpkg"
+        save_path = os.path.join(damage_folder, filename)
+
+        buildings = self.var.buildings_with_households.to_crs(flood_map.rio.crs)
         damages_buildings_structure = object_scanner(
-            objects=self.var.household_points,
+            objects=buildings,
             hazard=flood_map,
             curves=self.var.buildings_structure_curve,
         )
+
+        buildings["damages"] = damages_buildings_structure
+        buildings.to_file(save_path, driver="GPKG")
 
         # to store damages for every timestep? why the [i, :]?
         # damages_adapt[i, :] = np.array(
@@ -697,7 +975,7 @@ class Households(AgentBaseClass):
         total_flood_damages = (
             damages_buildings_content.sum() + damages_buildings_structure.sum()
         )
-        print(f"damages to building content are: {total_flood_damages}")
+        print(f"Total damages to buildings are: {total_flood_damages}")
 
         return total_flood_damages
 

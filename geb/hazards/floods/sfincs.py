@@ -218,12 +218,17 @@ class SFINCS:
         flood_map = read_flood_map(
             model_root=model_root,
             simulation_root=simulation_root,
+            floodmap_name=f"floodmap_{self.model.multiverse_name}.tif",
         )  # xc, yc is for x and y in rotated grid`DD`
         flood_map = to_zarr(
             flood_map,
-            self.model.output_folder / "flood_maps" / f"{start_time.isoformat()}.zarr",
+            self.model.output_folder
+            / "flood_maps"
+            / f"{start_time.isoformat()}_member{self.model.multiverse_name}.zarr",
             crs=flood_map.rio.crs,
         )
+        print(f"Saving flood map for member: {self.model.multiverse_name}")
+
         damages = self.flood(flood_map=flood_map)
         return damages
 
@@ -319,7 +324,7 @@ class SFINCS:
 
     def flood(self, flood_map):
         damages = self.model.agents.households.flood(
-            flood_map=flood_map,
+            flood_map=flood_map, simulation_root=self.model.simulation_root
         )
         return damages
 

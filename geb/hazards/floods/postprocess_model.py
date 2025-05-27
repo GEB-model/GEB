@@ -4,7 +4,7 @@ from os.path import join
 from hydromt_sfincs import SfincsModel, utils
 
 
-def read_flood_map(model_root, simulation_root):
+def read_flood_map(model_root, simulation_root, floodmap_name):
     mod = SfincsModel(
         simulation_root,
         mode="r",
@@ -38,5 +38,7 @@ def read_flood_map(model_root, simulation_root):
         hmin=hmin,
         reproj_method="bilinear",
     )
+
+    hmax.rio.to_raster(join(simulation_root, f"{floodmap_name}.tif"))
 
     return hmax
