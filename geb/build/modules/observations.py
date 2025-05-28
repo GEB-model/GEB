@@ -11,14 +11,22 @@ import shapely
 import xarray as xr
 from shapely.ops import nearest_points
 
+"""
+This module contains the Observations class. 
+"""
+
 
 class Observations:
     def __init__(self):
         pass
 
     def setup_discharge_observations(self, custom_river_stations=False):
-        # transform = self.grid.rio.transform(recalc=True)
-        # upstream_area_grid=self.grid["routing/upstream_area"]
+        """
+        setup_discharge_observations is responsible for setting up discharge observations from the GRDC dataset.
+        It clips GRDC to the basin area, and snaps the GRDC locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in GRDC.
+        It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
+        Additional stations can be added as csv files in the custom_stations folder in the GEB data catalog.
+        """
 
         # load data
         upstream_area = self.grid["routing/upstream_area"]
@@ -27,40 +35,17 @@ class Observations:
         region_shapefile = self.geoms["mask"]
         GRDC = self.data_catalog.get_geodataset("GRDC")
 
-        # create discharge snapping df
-        discharge_snapping_df = pd.DataFrame()
-        # keep only GRDC stations within the catchment boundaries
+        # create folders
+        snapping_discharge_folder = (
+            Path(self.root).parent / "output" / "build" / "snapping_discharge"
+        )
+        snapping_discharge_folder.mkdir(parents=True, exist_ok=True)
 
-        ############################################ GRDC functions ###########################################
+        ############################### Load and process GRDC dataset ##########################################
 
-        # keep only GRDC stations within the catchment boundaries
-        def clip_GRDC(GRDC, region_shapefile):
-            """
-            Clip GRDC stations based on the region shapefile.
-            """
-            # Convert GRDC points to GeoDataFrame
-            GRDC_gdf = gpd.GeoDataFrame(
-                {
-                    "id": GRDC.id.values,
-                    "x": GRDC.x.values,
-                    "y": GRDC.y.values,
-                },
-                geometry=gpd.points_from_xy(GRDC.x.values, GRDC.y.values),
-                crs="EPSG:4326",
-            )
-
-            # Filter GRDC stations that are in the region shapefile
-            GRDC_gdf = GRDC_gdf[
-                GRDC_gdf.geometry.within(region_shapefile.geometry.unary_union)
-            ]
-
-            # select the GRDC stations from the GRDC dataset that are in the region shapefile
-            GRDC = GRDC.sel(id=GRDC_gdf.id.values)
-
-            return GRDC
-
+        # add external stations to GRDC
         def add_station_GRDC(station_name, station_coords, station_dataframe):
-            """This function adds a new station to the GRDC dataset. It should be a dataframe"""
+            """This function adds a new station to the GRDC dataset. It should be a dataframe with the first row lon, lat and data should start at index 3 (row4)"""
 
             # Convert the pandas DataFrame to an xarray Dataset
             new_station_ds = xr.Dataset(
@@ -74,8 +59,8 @@ class Observations:
                 coords={
                     "time": station_dataframe.index,  # Use the index as the time dimension
                     "id": [station_id],  # Assign the station ID
-                    "x": ("id", [station_coords[0]]),  # Longitude
-                    "y": ("id", [station_coords[1]]),  # Latitude
+                    "x": ("id", [station_coords[0]]),
+                    "y": ("id", [station_coords[1]]),
                 },
             )
             # Add the new station to the GRDC dataset
@@ -83,7 +68,41 @@ class Observations:
 
             return GRDC_merged
 
-        ############## add "external" stations to GRDC ###############
+        def process_station_data(station_df, dt_format, startrow):
+            # process data
+            station_coords = station_df.iloc[
+                0
+            ].tolist()  # get the coordinates from the first row
+
+            station_coords = [float(i) for i in station_coords]  # convert to float
+
+            station_df = station_df.iloc[startrow:]  # remove the first rows
+            station_df.rename(
+                columns={
+                    Q_station.columns[0]: "date",
+                    Q_station.columns[1]: "Q",
+                },
+                inplace=True,
+            )
+            station_df["date"] = pd.to_datetime(station_df["date"], format=dt_format)
+            station_df.set_index("date", inplace=True)
+            station_df["Q"] = station_df["Q"].astype(float)  # convert to float
+            station_df = station_df.resample("D", label="left").mean()
+            station_df.index.name = "time"  # rename index to time
+
+            # delete missing values in the dataframe
+            station_df.dropna(inplace=True)  # drop missing time steps
+
+            # checks
+            if station_df.shape[1] != 1:
+                raise ValueError(f"File {station} does not have 1 column")
+
+            if len(station_coords) != 2:
+                raise ValueError(
+                    f"File {station} does not have 2 coordinates. .csv files of discharge stations should have the coordinates in the first row of the file"
+                )
+            return station_df, station_coords
+
         if custom_river_stations is True:
             for station in os.listdir(
                 Path(self.data_catalog["GRDC"].path).parent.parent / "custom_stations"
@@ -92,49 +111,15 @@ class Observations:
                     # raise error
                     raise ValueError(f"File {station} is not a csv file")
                 else:
-                    # load station data
+                    station_name = station[:-4]
+
                     Q_station = self.data_catalog.get_dataframe(
                         f"custom_discharge_stations_{station}"
-                    )  # self.data_catalog.get_rasterdataset(f"global_irrigation_area_{fraction_gw_irrigation}",
-
-                    # process data
-                    station_coords = Q_station.iloc[
-                        0
-                    ].tolist()  # get the coordinates from the first row
-
-                    station_coords = [
-                        float(i) for i in station_coords
-                    ]  # convert to float
-
-                    Q_station = Q_station.iloc[3:]  # remove the first rows
-                    Q_station.rename(
-                        columns={
-                            Q_station.columns[0]: "date",
-                            Q_station.columns[1]: "Q",
-                        },
-                        inplace=True,
                     )
-                    Q_station["date"] = pd.to_datetime(
-                        Q_station["date"], format="%Y-%m-%d %H:%M:%S"
+
+                    Q_station, station_coords = process_station_data(
+                        Q_station, dt_format="%Y-%m-%d %H:%M:%S", startrow=3
                     )
-                    Q_station.set_index("date", inplace=True)
-                    Q_station["Q"] = Q_station["Q"].astype(float)  # convert to float
-                    Q_station = Q_station.resample("D", label="left").mean()
-                    Q_station.index.name = "time"  # rename index to time
-
-                    # delete missing values in the dataframe
-                    Q_station.dropna(inplace=True)  # drop missing time steps
-
-                    # checks
-                    if Q_station.shape[1] != 1:
-                        raise ValueError(f"File {station} does not have 1 column")
-
-                    if len(station_coords) != 2:
-                        raise ValueError(
-                            f"File {station} does not have 2 coordinates. .csv files of discharge stations should have the coordinates in the first row of the file"
-                        )
-
-                    station_name = station[:-4]
 
                     # add station to grdc if station is not already in grdc
                     if station_name not in GRDC.station_name.values:
@@ -147,8 +132,35 @@ class Observations:
                             GRDC.id.values[GRDC.station_name.values == station_name][0]
                         )  # get the id of the station in the GRDC dataset
                         GRDC_merged = GRDC.copy()
+        else:
+            GRDC_merged = GRDC.copy()
 
-        ############## Clip GRDC ###############
+        # Clip the GRDC dataset to the region shapefile
+        def clip_GRDC(GRDC_merged, region_shapefile):
+            """
+            Clip GRDC stations based on a region shapefile, to keep only GRDC stations within the catchment boundaries
+            """
+            # Convert GRDC points to GeoDataFrame
+            GRDC_gdf = gpd.GeoDataFrame(
+                {
+                    "id": GRDC_merged.id.values,
+                    "x": GRDC_merged.x.values,
+                    "y": GRDC_merged.y.values,
+                },
+                geometry=gpd.points_from_xy(GRDC_merged.x.values, GRDC_merged.y.values),
+                crs="EPSG:4326",
+            )
+
+            # Filter GRDC stations that are in the region shapefile
+            GRDC_gdf = GRDC_gdf[
+                GRDC_gdf.geometry.within(region_shapefile.geometry.unary_union)
+            ]
+
+            # select the GRDC stations from the GRDC dataset that are in the region shapefile
+            GRDC_merged = GRDC_merged.sel(id=GRDC_gdf.id.values)
+
+            return GRDC_merged
+
         GRDC_clipped = clip_GRDC(
             GRDC_merged, region_shapefile
         )  # filter GRDC stations based on the region shapefile
@@ -156,9 +168,9 @@ class Observations:
         # convert all the -999 values to NaN
         GRDC_clipped = GRDC_clipped.where(GRDC_clipped != -999, np.nan)
 
-        ### make a parquet file with the discharge data ###
-        discharge_data = GRDC_clipped.runoff_mean.to_dataframe().reset_index()
-        discharge_data.rename(
+        # save GRDC clipped data as parquet file for later use
+        discharge_df = GRDC_clipped.runoff_mean.to_dataframe().reset_index()
+        discharge_df.rename(
             columns={
                 "time": "time",
                 "id": "station_ID",
@@ -166,112 +178,118 @@ class Observations:
             },
             inplace=True,
         )
-
-        discharge_data = discharge_data.pivot(
+        discharge_df = discharge_df.pivot(
             index="time", columns="station_ID", values="discharge"
         )
-        # remove rows that are all nan
-        discharge_data.dropna(how="all", inplace=True)
-        self.set_table(discharge_data, name="discharge/GRDC")
+        discharge_df.dropna(how="all", inplace=True)  # remove rows that are all nan
+        self.set_table(
+            discharge_df, name="discharge/GRDC"
+        )  # save the discharge data as a table
 
-        ###########################################################################################################################################################
         ############################### Snapping to river and validation of discharges ############################################################################
-        ###########################################################################################################################################################
-        GRDC_clipped = GRDC_clipped.compute()
 
-        for i in range(len(GRDC_clipped.id.values)):
-            # print station name, river_name and area
-            print(
-                "Station name: %s, River name: %s, Area: %s"
-                % (
-                    GRDC_clipped.station_name.values[i],
-                    GRDC_clipped.river_name.values[i],
-                    GRDC_clipped.area.values[i],
-                )
-            )
-        print("start loop")
+        # create discharge snapping df
+        discharge_snapping_df = pd.DataFrame()
+
+        # start looping over the GRDC stations
         for id in GRDC_clipped.id.values:
+            # create GRDC variables
             GRDC_station = GRDC_clipped.sel(
                 id=id
             )  # select the station from the GRDC dataset
-
             GRDC_station_name = str(
                 GRDC_station.station_name.values
             )  # get the name of the station
-            print("GRDC station loaded with name %s" % GRDC_station_name)
             GRDC_station_coords = list(
                 (
                     float(GRDC_station.x.values),
                     float(GRDC_station.y.values),
                 )
             )  # get the coordinates of the station
-            location_discharge_station = gpd.GeoDataFrame(
+            GRDC_location = gpd.GeoDataFrame(
                 geometry=[shapely.geometry.Point(GRDC_station_coords)],
                 crs=rivers.crs,
             )  # create a point geometry for the station
-
             GRDC_uparea = (
                 GRDC_station.area.values.item()
             )  # get the upstream area of the station
             GRDC_uparea_m2 = GRDC_uparea * 1e6
             GRDC_rivername = GRDC_station.river_name.values.item()
 
-            ############## find point in river closest to the discharge station #############
+            # find river section closest to the GRDC station
             def get_distance_to_stations(rivers):
                 """This function returns the distance of each river section to the station"""
-                return rivers.distance(location_discharge_station).values.item()
+                return rivers.distance(GRDC_location).values.item()
 
-            rivers["station_distance"] = rivers.geometry.apply(get_distance_to_stations)
+            rivers["station_distance"] = rivers.geometry.apply(
+                get_distance_to_stations
+            )  # distance in degrees
             rivers_sorted = rivers.sort_values(by="station_distance")
 
-            if np.isnan(GRDC_uparea):
-                closest_river_segment = rivers_sorted.head(1)
-            else:
-                # add upstream area criteria
-                upstream_area_diff = 0.3 * GRDC_uparea  # 30% difference
-                closest_river_segment = rivers_sorted[
-                    (rivers_sorted.uparea > (GRDC_uparea - upstream_area_diff))
-                    & (rivers_sorted.uparea < (GRDC_uparea + upstream_area_diff))
-                ].head(1)
+            # select the closest river segment based on the upstream area and distance
+            def select_river_segment(max_uparea_diff, max_spatial_diff):
+                if np.isnan(
+                    GRDC_uparea
+                ):  # if GRDC upstream area is NaN, only just select the closest river segment
+                    closest_river_segment = rivers_sorted.head(1)
+                else:
+                    # add upstream area criteria
+                    upstream_area_diff = max_uparea_diff * GRDC_uparea  # 30% difference
+                    closest_river_segment = rivers_sorted[
+                        (rivers_sorted.uparea > (GRDC_uparea - upstream_area_diff))
+                        & (rivers_sorted.uparea < (GRDC_uparea + upstream_area_diff))
+                    ].head(1)
 
-                if closest_river_segment.station_distance.values.item() > 0.1:
-                    # raise error
-                    raise ValueError(
-                        f"Closest river segment is too far from the GRDC station {GRDC_station_name}. Distance: {closest_river_segment.station_distance.values.item()} degrees"
+                    if (
+                        closest_river_segment.station_distance.values.item()
+                        > max_spatial_diff
+                    ):
+                        # raise error
+                        raise ValueError(
+                            f"Closest river segment is too far from the GRDC station {GRDC_station_name}. Distance: {closest_river_segment.station_distance.values.item()} degrees while the max distance set in the model is {max_spatial_diff} degrees."
+                        )
+                    print(
+                        "distance to closest river segment: %s degrees"
+                        % closest_river_segment.station_distance.values.item()
                     )
+                return closest_river_segment
+
+            closest_river_segment = select_river_segment(
+                max_uparea_diff=0.3,  # 30% max difference
+                max_spatial_diff=0.1,  # 0.1 degrees spatial difference
+            )
             closest_river_segment_linestring = shapely.geometry.LineString(
                 closest_river_segment.geometry.iloc[0]
             )
-
-            closest_point = nearest_points(
-                location_discharge_station, closest_river_segment_linestring
+            closest_point_on_riverline = nearest_points(
+                GRDC_location, closest_river_segment_linestring
             )[1].geometry.iloc[0]  # find closest point to this nearest river segment
 
-            ############### Read the upstream area from the subgrid at this point #############
+            # Read the upstream area from the subgrid at this point
             selected_subgrid_pixel = upstream_area_subgrid.sel(
-                x=closest_point.x, y=closest_point.y, method="nearest"
-            )  # select subgrid value at the closest point
+                x=closest_point_on_riverline.x,
+                y=closest_point_on_riverline.y,
+                method="nearest",
+            )
             GEB_upstream_area_from_subgrid = (
                 selected_subgrid_pixel.values
             )  # get the value of the selected pixel
 
-            ############### Find the closest pixel in the river network in the low-res grid #############
+            # Find the closest pixel in the river network in the low-res grid
             selected_grid_pixel = upstream_area.sel(
                 x=selected_subgrid_pixel.x,
                 y=selected_subgrid_pixel.y,
                 method="nearest",
-            )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
+            )
 
-            id_x = upstream_area.x.values.tolist().index(
-                selected_grid_pixel.x.values
-            )  # find the index of the selected_grid_pixel x in the upstream_area_grid
-            id_y = upstream_area.y.values.tolist().index(
-                selected_grid_pixel.y.values
-            )  # find the index of the selected_grid_pixel y in the upstream_area_grid
-
+            # get the x and y of the selected_grid_pixel
+            id_x = upstream_area.x.values.tolist().index(selected_grid_pixel.x.values)
+            id_y = upstream_area.y.values.tolist().index(selected_grid_pixel.y.values)
             array = np.array(
                 [id_x, id_y]
             )  # create an array with the x and y index of the selected_grid_pixel
+
+            # select the closest pixel in the low-res river network
             xy_tuples = closest_river_segment[
                 "hydrography_xy"
             ].values  # get the xy of the river pixels of the grid (already prepared and stored as hydrography_xy)
@@ -286,20 +304,17 @@ class Observations:
                 x=closest_tuple[0], y=closest_tuple[1]
             )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
 
-            ############### Read the upstream area from the low-res grid and calculate upstream area ratio  #############
+            # get the upstream area from the grid pixel
             GEB_upstream_area_from_grid = (
                 upstream_area_grid_pixel.values
             )  # get the value of the selected pixel
 
-            ################ store the station snapping coordinates and plot them #############
-            station_coords = list(
-                (
-                    float(GRDC_clipped.sel(id=id).x.values),
-                    float(GRDC_clipped.sel(id=id).y.values),
-                )
-            )  # original station coordinates
+            # make variables for all the different coordinates
             closest_point_coords = list(
-                (float(closest_point.x), float(closest_point.y))
+                (
+                    float(closest_point_on_riverline.x),
+                    float(closest_point_on_riverline.y),
+                )
             )  # closest point coordinates
             subgrid_pixel_coords = list(
                 (
@@ -314,141 +329,135 @@ class Observations:
                 )
             )  # grid pixel coordinates
 
-            ################################ add the coordinates to the dataframe ###########################
-            # Create a new row as a DataFrame
-            new_row = pd.DataFrame(
-                [
-                    {
-                        "GRDC_station_name": GRDC_station_name,
-                        "GRDC_station_ID": int(id),
-                        "GRDC_river_name": GRDC_rivername,
-                        "GRDC_upstream_area_m2": GRDC_uparea_m2,
-                        "GRDC_station_coords": GRDC_station_coords,
-                        "closest_point_coords": closest_point_coords,
-                        "subgrid_pixel_coords": subgrid_pixel_coords,
-                        "grid_pixel_coords": grid_pixel_coords,
-                        "closest_tuple": closest_tuple,
-                        "GEB_upstream_area_from_subgrid": float(
-                            GEB_upstream_area_from_subgrid
-                        ),
-                        "GEB_upstream_area_from_grid": float(
-                            GEB_upstream_area_from_grid
-                        ),
-                        "GRDC_to_GEB_upstream_area_ratio": float(
-                            GEB_upstream_area_from_subgrid / GRDC_uparea_m2
-                        ),
-                    }
-                ]
-            )
+            def add_row(discharge_snapping_df):
+                new_row = pd.DataFrame(
+                    [
+                        {
+                            "GRDC_station_name": GRDC_station_name,
+                            "GRDC_station_ID": int(id),
+                            "GRDC_river_name": GRDC_rivername,
+                            "GRDC_upstream_area_m2": GRDC_uparea_m2,
+                            "GRDC_station_coords": GRDC_station_coords,
+                            "closest_point_coords": closest_point_coords,
+                            "subgrid_pixel_coords": subgrid_pixel_coords,
+                            "grid_pixel_coords": grid_pixel_coords,
+                            "closest_tuple": closest_tuple,
+                            "GEB_upstream_area_from_subgrid": float(
+                                GEB_upstream_area_from_subgrid
+                            ),
+                            "GEB_upstream_area_from_grid": float(
+                                GEB_upstream_area_from_grid
+                            ),
+                            "GRDC_to_GEB_upstream_area_ratio": float(
+                                GEB_upstream_area_from_subgrid / GRDC_uparea_m2
+                            ),
+                            "snapping_distance_degrees": float(
+                                closest_river_segment.station_distance.values.item()
+                            ),
+                        }
+                    ]
+                )
 
-            discharge_snapping_df = pd.concat(
-                [discharge_snapping_df, new_row], ignore_index=True
-            )  # add the new row to the dataframe
+                discharge_snapping_df = pd.concat(
+                    [discharge_snapping_df, new_row], ignore_index=True
+                )  # add the new row to the dataframe
+                return discharge_snapping_df
+
+            discharge_snapping_df = add_row(
+                discharge_snapping_df
+            )  # add the row to the dataframe
             print("start plotting")
 
-            # create folder
-            snapping_discharge_folder = (
-                Path(self.root).parent / "output" / "build" / "snapping_discharge"
-            )
-            snapping_discharge_folder.mkdir(parents=True, exist_ok=True)
-
             # plot locations with river line and the subgrid
-            fig, ax = plt.subplots(
-                subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
-            )
-            ax.coastlines()
-            ax.add_feature(cfeature.BORDERS)
-            ax.add_feature(cfeature.LAND)
-            ax.add_feature(cfeature.OCEAN)
-            ax.add_feature(cfeature.LAKES)
+            def plot_snapping():
+                fig, ax = plt.subplots(
+                    subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
+                )
+                ax.coastlines()
+                ax.add_feature(cfeature.BORDERS)
+                ax.add_feature(cfeature.LAND)
+                ax.add_feature(cfeature.OCEAN)
+                ax.add_feature(cfeature.LAKES)
 
-            # Set the extent to zoom in around the gauge location
-            buffer = 0.05  # Adjust this value to control the zoom level
-            ax.set_extent(
-                [
-                    GRDC_station_coords[0] - buffer,
-                    GRDC_station_coords[0] + buffer,
-                    GRDC_station_coords[1] - buffer,
-                    GRDC_station_coords[1] + buffer,
-                ],
-                crs=ccrs.PlateCarree(),
-            )
+                # Set the extent to zoom in around the gauge location
+                buffer = 0.05  # Adjust this value to control the zoom level
+                ax.set_extent(
+                    [
+                        GRDC_station_coords[0] - buffer,
+                        GRDC_station_coords[0] + buffer,
+                        GRDC_station_coords[1] - buffer,
+                        GRDC_station_coords[1] + buffer,
+                    ],
+                    crs=ccrs.PlateCarree(),
+                )
 
-            ax.scatter(
-                GRDC_station_coords[0],
-                GRDC_station_coords[1],
-                color="red",
-                marker="o",
-                s=30,
-                label="Original gauge",
-                zorder=3,
-            )
-            ax.scatter(
-                closest_point_coords[0],
-                closest_point_coords[1],
-                color="black",
-                marker="o",
-                s=30,
-                label="Closest point to river",
-                zorder=3,
-            )
-            ax.scatter(
-                grid_pixel_coords[0],
-                grid_pixel_coords[1],
-                color="blue",
-                marker="o",
-                s=30,
-                label="Grid pixel",
-                zorder=3,
-            )
+                ax.scatter(
+                    GRDC_station_coords[0],
+                    GRDC_station_coords[1],
+                    color="red",
+                    marker="o",
+                    s=30,
+                    label="Original gauge",
+                    zorder=3,
+                )
+                ax.scatter(
+                    closest_point_coords[0],
+                    closest_point_coords[1],
+                    color="black",
+                    marker="o",
+                    s=30,
+                    label="Closest point to river",
+                    zorder=3,
+                )
+                ax.scatter(
+                    grid_pixel_coords[0],
+                    grid_pixel_coords[1],
+                    color="blue",
+                    marker="o",
+                    s=30,
+                    label="Grid pixel",
+                    zorder=3,
+                )
 
-            upstream_area.plot(
-                ax=ax,
-                cmap="viridis",
-                cbar_kwargs={"label": "Upstream area [m2]"},
-                zorder=0,
-                alpha=1,
-            )
-            rivers.plot(ax=ax, color="blue", linewidth=1)
-            closest_river_segment.plot(
-                ax=ax, color="green", linewidth=3, label="Closest river segment"
-            )
+                upstream_area.plot(
+                    ax=ax,
+                    cmap="viridis",
+                    cbar_kwargs={"label": "Upstream area [m2]"},
+                    zorder=0,
+                    alpha=1,
+                )
+                rivers.plot(ax=ax, color="blue", linewidth=1)
+                closest_river_segment.plot(
+                    ax=ax, color="green", linewidth=3, label="Closest river segment"
+                )
 
-            ax.set_title(
-                "Upstream area grid and gauge snapping for %s" % GRDC_station_name
-            )
-            ax.set_xlabel("Longitude")
-            ax.set_ylabel("Latitude")
-            ax.legend()
-            plt.savefig(
-                self.report_dir
-                / "snapping_discharge"
-                / f"snapping_discharge_{GRDC_station_name}_NEW.png",
-                dpi=300,
-                bbox_inches="tight",
-            )
-            # plt.show()
-            plt.close()
+                ax.set_title(
+                    "Upstream area grid and gauge snapping for %s" % GRDC_station_name
+                )
+                ax.set_xlabel("Longitude")
+                ax.set_ylabel("Latitude")
+                ax.legend()
+                plt.savefig(
+                    self.report_dir
+                    / "snapping_discharge"
+                    / f"snapping_discharge_{GRDC_station_name}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                # plt.show()
+                plt.close()
 
+            plot_snapping()  # plot the snapping
             print("discharge snapping done for station %s" % GRDC_station_name)
 
         print("Discharge snapping done for all stations")
 
-        # convert upstream_araea_from_subgrid and GEB_upstream_area_from_grid to float
-        discharge_snapping_df["GEB_upstream_area_from_subgrid"] = discharge_snapping_df[
-            "GEB_upstream_area_from_subgrid"
-        ].astype(float)
-        discharge_snapping_df["GEB_upstream_area_from_grid"] = discharge_snapping_df[
-            "GEB_upstream_area_from_grid"
-        ].astype(float)
-
+        # save to excel and parquet files
         discharge_snapping_df.to_excel(
             self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
             index=False,
         )  # save the dataframe to an excel file
-        print("discharge snapping df saved to excel file")
 
-        ### Make a discharge snapping geoparquet file ###
         discharge_snapping_gdf = gpd.GeoDataFrame(
             discharge_snapping_df,
             geometry=gpd.points_from_xy(
@@ -459,42 +468,8 @@ class Observations:
         )
         discharge_snapping_gdf.set_index("GRDC_station_ID", inplace=True)
 
-        # use set_geoms
         self.set_geoms(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
-        print("discharge snapping geoparquet file saved")
-        ("Building discharge datasets done")
 
-        # for i, file in enumerate(files):
-        #     filename = file["filename"]
-        #     longitude, latitude = file["longitude"], file["latitude"]
-        #     data = pd.read_csv(filename, index_col=0, parse_dates=True)
-
-        #     # assert data has one column
-        #     assert data.shape[1] == 1
-
-        #     px, py = ~transform * (longitude, latitude)
-        #     px = math.floor(px)
-        #     py = math.floor(py)
-
-        #     discharge_data.append(
-        #         xr.DataArray(
-        #             np.expand_dims(data.iloc[:, 0].values, 0),
-        #             dims=["pixel", "time"],
-        #             coords={
-        #                 "time": data.index.values,
-        #                 "pixel": [i],
-        #                 "px": ("pixel", [px]),
-        #                 "py": ("pixel", [py]),
-        #             },
-        #         )
-        #     )
-        # discharge_data = xr.concat(discharge_data, dim="pixel")
-        # self.set_other(
-        #     discharge_data,
-        #     name="observations/discharge",
-        #     time_chunksize=1e99,  # no chunking
-        # )
-
-        ##
+        print("Building discharge datasets done")
