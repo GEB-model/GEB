@@ -92,9 +92,9 @@ def balance_check(
         for endStorage in poststorages:
             store -= endStorage.sum()
 
-        balance = income + store - out
+        balance = abs(income + store - out)
         if balance > tollerance:
-            text = f"{np.abs(balance).max()} is larger than tollerance {tollerance}"
+            text = f"{balance} is larger than tollerance {tollerance}"
             if name:
                 print(name, text)
             else:

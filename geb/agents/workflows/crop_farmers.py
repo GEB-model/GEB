@@ -312,6 +312,7 @@ def withdraw_groundwater(
     farmer: int,
     grid_cell: int,
     field: int,
+    groundwater_abstraction_m3: np.ndarray,
     available_groundwater_m3: np.ndarray,
     cell_area: np.ndarray,
     groundwater_depth: np.ndarray,
@@ -329,7 +330,15 @@ def withdraw_groundwater(
         )
         assert groundwater_abstraction_cell_m3 >= 0
 
-        available_groundwater_m3[grid_cell] -= groundwater_abstraction_cell_m3
+        remaining_groundwater_m3 = (
+            available_groundwater_m3[grid_cell] - groundwater_abstraction_m3[grid_cell]
+        )
+
+        groundwater_abstraction_cell_m3 = min(
+            groundwater_abstraction_cell_m3, remaining_groundwater_m3
+        )
+
+        groundwater_abstraction_m3[grid_cell] += groundwater_abstraction_cell_m3
 
         groundwater_abstraction_cell_m = (
             groundwater_abstraction_cell_m3 / cell_area[field]
@@ -588,6 +597,14 @@ def abstract_water(
         activation_order.size, dtype=np.float32
     )
 
+    # Because the groundwater source is much larger than the other
+    # sources, and taking out small amounts cannot be represented by
+    # floating point numbers, we need to use a separate array that tracks
+    # the groundwater abstraction for each field. This is used to
+    # then remove the groundwater abstraction from the available
+    # in one go, reducing the risk of (larger) floating point errors.
+    groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
+
     for activated_farmer_index in range(activation_order.size):
         farmer = activation_order[activated_farmer_index]
         farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
@@ -645,6 +662,7 @@ def abstract_water(
                         farmer=farmer,
                         field=field,
                         grid_cell=grid_cell,
+                        groundwater_abstraction_m3=groundwater_abstraction_m3,
                         available_groundwater_m3=available_groundwater_m3,
                         cell_area=cell_area,
                         groundwater_depth=groundwater_depth,
@@ -685,6 +703,7 @@ def abstract_water(
         water_consumption_m,
         irrigation_return_flow_m,
         irrigation_evaporation_m,
+        groundwater_abstraction_m3,
     )
 
 

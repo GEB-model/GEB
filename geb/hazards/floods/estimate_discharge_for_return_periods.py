@@ -2,7 +2,8 @@ from .io import export_rivers
 from .sfincs_utils import (
     assign_return_periods,
     create_hourly_hydrograph,
-    get_discharge_by_point,
+    get_discharge_by_river,
+    get_representative_river_points,
 )
 
 
@@ -18,19 +19,19 @@ def estimate_discharge_for_return_periods(
     # here we only select the rivers that have an upstream forcing point
     rivers_with_forcing_point = rivers[~rivers["is_downstream_outflow_subbasin"]]
 
-    xs, ys = [], []
-    for _, river in rivers_with_forcing_point.iterrows():
-        xy = river["hydrography_xy"][0]  # get most upstream point
-        xs.append(xy[0])
-        ys.append(xy[1])
+    river_representative_points = []
+    for ID in rivers_with_forcing_point.index:
+        river_representative_points.append(
+            get_representative_river_points(ID, rivers_with_forcing_point)
+        )
 
-    discharge_series = get_discharge_by_point(
-        xs=xs,
-        ys=ys,
+    discharge_by_river = get_discharge_by_river(
+        rivers_with_forcing_point.index,
+        river_representative_points,
         discharge=discharge,
     )
     rivers_with_forcing_point = assign_return_periods(
-        rivers_with_forcing_point, discharge_series, return_periods=return_periods
+        rivers_with_forcing_point, discharge_by_river, return_periods=return_periods
     )
 
     for return_period in return_periods:

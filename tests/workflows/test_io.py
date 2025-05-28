@@ -3,7 +3,7 @@ import pytest
 import xarray as xr
 from numcodecs import FixedScaleOffset
 
-from geb.workflows.io import calculate_scaling, to_zarr
+from geb.workflows.io import calculate_scaling, get_window, to_zarr
 
 from ..testconfig import tmp_folder
 
@@ -119,3 +119,131 @@ def test_io():
     da.attrs["_FillValue"] = np.nan
 
     to_zarr(da, tmp_folder / "test.zarr", crs=4326)
+
+
+def test_get_window():
+    x = np.linspace(-5, 5, 11, dtype=np.int32)
+    y = np.linspace(10, 0, 11, dtype=np.int32)
+    values = np.arange(x.size * y.size).reshape(y.size, x.size).astype(np.int32)
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"])
+
+    bounds = (
+        -5,
+        0,
+        5,
+        10,
+    )
+
+    window = get_window(da.x, da.y, bounds, buffer=0)  # full window, no buffer
+
+    da_slice = da.isel(window)
+    assert (da_slice.x.values == x).all()
+    assert (da_slice.y.values == y).all()
+
+    bounds = (
+        -4,
+        1,
+        4,
+        9,
+    )
+
+    window = get_window(da.x, da.y, bounds, buffer=0)
+
+    da_slice = da.isel(window)
+    assert (da_slice.x.values == x[1:-1]).all()
+    assert (da_slice.y.values == y[1:-1]).all()
+
+    top_left_bounds = (
+        -4,
+        7,
+        -2,
+        10,
+    )
+
+    window = get_window(da.x, da.y, top_left_bounds, buffer=0)
+    da_slice = da.isel(window)
+    assert (da_slice.x.values == x[1:4]).all()
+    assert (da_slice.y.values == y[0:4]).all()
+
+    with pytest.raises(ValueError, match="buffer must be an integer"):
+        window = get_window(da.x, da.y, bounds, buffer=0.1)
+    with pytest.raises(ValueError, match="buffer must be greater than or equal to 0"):
+        window = get_window(da.x, da.y, bounds, buffer=-1)
+
+    bounds = (
+        -6,
+        0,
+        5,
+        10,
+    )
+
+    with pytest.raises(ValueError, match=r"xmin must be greater than x\[0\]"):
+        window = get_window(da.x, da.y, bounds, buffer=0)
+
+    window = get_window(
+        da.x,
+        da.y,
+        (
+            -4,
+            1,
+            4,
+            9,
+        ),
+        buffer=1,
+    )
+
+    da_slice = da.isel(window)
+    assert (da_slice.x.values == x).all()
+    assert (da_slice.y.values == y).all()
+
+    window = get_window(
+        da.x,
+        da.y,
+        (
+            -4,
+            3,
+            4,
+            9,
+        ),
+        buffer=1,
+    )
+
+    da_slice = da.isel(window)
+    assert (da_slice.x.values == x).all()
+    assert (da_slice.y.values == y[:-2]).all()
+
+    bounds = (
+        -4.9,
+        0.1,
+        4.9,
+        9.9,
+    )
+
+    window = get_window(
+        da.x,
+        da.y,
+        bounds,
+        buffer=0,
+    )
+
+    da_slice = da.isel(window)
+    assert (da_slice.x.values == x).all()
+    assert (da_slice.y.values == y).all()
+
+    bounds = (
+        -4.4,
+        0.6,
+        4.4,
+        9.4,
+    )
+
+    window = get_window(
+        da.x,
+        da.y,
+        bounds,
+        buffer=0,
+    )
+
+    da_slice = da.isel(window)
+    assert (da_slice.x.values == x[1:-1]).all()
+    assert (da_slice.y.values == y[1:-1]).all()

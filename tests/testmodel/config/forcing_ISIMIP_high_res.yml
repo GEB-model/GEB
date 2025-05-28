@@ -1,8 +1,0 @@
-setup_forcing:
-  data_source: isimip
-  starttime: 2000-01-01
-  endtime: 2003-12-31
-  resolution_arcsec: 30
-  # forcing: gswp3-w5e5
-  forcing: chelsa-w5e5
-  ssp: ssp370

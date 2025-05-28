@@ -2,7 +2,7 @@ setup_region:
   subgrid_factor: 20
 
 set_time_range:
-  start_date: 1970-01-01
+  start_date: 2000-01-01
   end_date: 2024-12-31
 
 setup_hydrography:
@@ -14,10 +14,10 @@ setup_regions_and_land_use:
   ISO3_column: GID_0
 
 setup_cell_area:
-  
-setup_economic_data:
 
 setup_mannings:
+  
+setup_economic_data:
 
 setup_soil_parameters:
 
@@ -340,5 +340,5 @@ setup_forcing_era5:
 
 setup_SPEI:
   window: 12
-  calibration_period_start: 2000-01-01
-  calibration_period_end: 2020-12-31
+  calibration_period_start: 2011-01-01
+  calibration_period_end: 2021-12-31

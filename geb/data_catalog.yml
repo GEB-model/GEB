@@ -169,9 +169,9 @@ MIRCA2000_cropping_calendar_{irrigated_or_rainfed}:
     source_version: 1.1
   placeholders:
     irrigated_or_rainfed: [irrigated, rainfed]
-MIRCA2000_cropping_calendar_{irrigated_or_rainfed}_{year}:
+MIRCA-OS_cropping_calendar_{irrigated_or_rainfed}_{year}:
   data_type: Dataset
-  path: agriculture/MIRCA2000/condensed_cropping_calendars_2024/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
+  path: agriculture/MIRCA-OS/Crop Calendar/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
   meta:
     paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
     paper_ref: Kebede et al. (2024) (preprint)
@@ -180,10 +180,10 @@ MIRCA2000_cropping_calendar_{irrigated_or_rainfed}_{year}:
   placeholders:
     irrigated_or_rainfed: [irrigated, rainfed]
     year: ['2000', '2005', '2010', '2015']
-MIRCA2000_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
+MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
   data_type: RasterDataset
   driver: raster
-  path: agriculture/MIRCA2000_Annual_Harvested_Area_Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{ir_or_rf}.tif
+  path: agriculture/MIRCA-OS/Annual Harvested/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{ir_or_rf}.tif
   meta:
     paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
     paper_ref: Kebede et al. (2024) (preprint)
@@ -245,9 +245,9 @@ merit_hydro:
     source_license: CC-BY-NC 4.0 or ODbL 1.0
     source_url: http://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro
     source_version: 1.0
-  # path: hydrography/merit_hydro_v1.0/{variable}.vrt
+  path: hydrography/merit_hydro_v1.0/{variable}.vrt
   # path: ../ivm_data_catalog/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
-  path: /scistor/ivm/data_catalogue/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
+  # path: /scistor/ivm/data_catalogue/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
@@ -725,43 +725,6 @@ soilgrids_2020_{variable}_{depth}:
   placeholders:
     depth: ['0-5cm', '5-15cm', '15-30cm', '30-60cm', '60-100cm', '100-200cm']
     variable: ['bdod', 'cec', 'cfvo', 'clay', 'nitrogen', 'ocd', 'ocs', 'phh2o', 'sand', 'silt', 'soc']
-  unit_mult:
-    phh2o_0-5cm_mean: 0.1
-    phh2o_5-15cm_mean: 0.1
-    phh2o_15-30cm_mean: 0.1
-    phh2o_30-60cm_mean: 0.1
-    phh2o_60-100cm_mean: 0.1
-    phh2o_100-200cm_mean: 0.1
-    bdod_0-5cm_mean: 0.01
-    bdod_5-15cm_mean: 0.01
-    bdod_15-30cm_mean: 0.01
-    bdod_30-60cm_mean: 0.01
-    bdod_60-100cm_mean: 0.01
-    bdod_100-200cm_mean: 0.01
-    sand_0-5cm_mean: 0.1
-    sand_5-15cm_mean: 0.1
-    sand_15-30cm_mean: 0.1
-    sand_30-60cm_mean: 0.1
-    sand_60-100cm_mean: 0.1
-    sand_100-200cm_mean: 0.1
-    silt_0-5cm_mean: 0.1
-    silt_5-15cm_mean: 0.1
-    silt_15-30cm_mean: 0.1
-    silt_30-60cm_mean: 0.1
-    silt_60-100cm_mean: 0.1
-    silt_100-200cm_mean: 0.1
-    clay_0-5cm_mean: 0.1
-    clay_5-15cm_mean: 0.1
-    clay_15-30cm_mean: 0.1
-    clay_30-60cm_mean: 0.1
-    clay_60-100cm_mean: 0.1
-    clay_100-200cm_mean: 0.1
-    soc_0-5cm_mean: 0.01
-    soc_5-15cm_mean: 0.01
-    soc_15-30cm_mean: 0.01
-    soc_30-60cm_mean: 0.01
-    soc_60-100cm_mean: 0.01
-    soc_100-200cm_mean: 0.01
 soilgrids_2017_{variable}:
   data_type: RasterDataset
   driver: raster

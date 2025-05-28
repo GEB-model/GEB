@@ -1,5 +1,8 @@
 import numpy as np
+import rioxarray
 import xarray as xr
+
+from geb.workflows.io import get_window
 
 from .general import resample_chunked
 
@@ -15,13 +18,20 @@ def load_soilgrids(data_catalog, subgrid, region):
     for variable_name in variables:
         variable_layers = []
         for i, layer in enumerate(layers, start=1):
+            da = rioxarray.open_rasterio(
+                data_catalog.get_source(f"soilgrids_2020_{variable_name}_{layer}").path,
+            )
             da = (
-                data_catalog.get_rasterdataset(
-                    f"soilgrids_2020_{variable_name}_{layer}", geom=region, buffer=30
+                da.isel(
+                    band=0,
+                    **get_window(
+                        da.x, da.y, region.to_crs(da.rio.crs).total_bounds, buffer=30
+                    ),
                 )
                 .astype(np.float32)
                 .compute()
             )
+
             da = da.raster.interpolate_na("nearest")
             da.assign_coords(soil_layer=i)
             variable_layers.append(da)
@@ -43,13 +53,19 @@ def load_soilgrids(data_catalog, subgrid, region):
         ds.append(ds_variable)
 
     ds = xr.merge(ds, join="exact").transpose("soil_layer", "y", "x")
+
+    # soilgrids uses conversion factors as specified here:
+    # https://www.isric.org/explore/soilgrids/faq-soilgrids
+    ds["bdod"] = ds["bdod"] / 100  # cg/cm³ -> kg/dm³
+    ds["clay"] = ds["clay"] / 10  # g/kg -> g/100g (%)
+    ds["silt"] = ds["silt"] / 10  # g/kg -> g/100g (%)
+    ds["soc"] = ds["soc"] / 100  # g/kg -> g/100g (%)
+
     # depth_to_bedrock = data_catalog.get_rasterdataset(
     #     "soilgrids_2017_BDTICM", geom=region
     # )
     # depth_to_bedrock = depth_to_bedrock.raster.mask_nodata()
-    # depth_to_bedrock = depth_to_bedrock.raster.reproject_like(
-    #     subgrid, method="bilinear"
-    # ).raster.interpolate_na("nearest")
+    # depth_to_bedrock = resample_like(depth_to_bedrock, subgrid, method="bilinear").raster.interpolate_na("nearest")
 
     soil_layer_height = xr.full_like(ds["silt"], fill_value=0.0, dtype=np.float32)
     for layer, height in enumerate((0.05, 0.10, 0.15, 0.30, 0.40, 1.00)):

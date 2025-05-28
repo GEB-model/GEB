@@ -11,6 +11,7 @@ from hydromt.log import setuplog
 from hydromt_sfincs import SfincsModel
 from pyextremes import EVA
 from shapely.geometry import Point
+from tqdm import tqdm
 
 
 def make_relative_paths(config, model_root, new_root, relpath=None):
@@ -119,6 +120,7 @@ def update_forcing(
 
 
 def run_sfincs_subprocess(root, cmd):
+    print(f"Running SFINCS with: {cmd}")
     with open(join(root, "sfincs.log"), "w") as log_file:
         process = subprocess.Popen(
             cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -237,11 +239,17 @@ def check_docker_running():
 def run_sfincs_simulation(model_root, simulation_root, gpu=False):
     # Check if we are on Linux or Windows and run the appropriate script
     if gpu:
-        version = "mvanormondt/sfincs-gpu:latest"
+        version = os.getenv("SFINCS_GPU_SIF")
+        if version is None:
+            raise EnvironmentError("Environment variable SFINCS_GPU_SIF is not set")
     else:
-        version = "deltares/sfincs-cpu:sfincs-v2.1.3"
+        version = "deltares/sfincs-cpu:latest"
 
     if os.name == "posix":
+        # If not a singularity image, add docker:// prefix
+        # to the version string
+        if not version.endswith(".sif"):
+            version = "docker://" + version
         cmd = [
             "singularity",
             "run",
@@ -250,7 +258,7 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False):
             "--pwd",  ## Set working directory inside container
             f"/data/{simulation_root.relative_to(model_root)}",
             "--nv",
-            f"docker://{version}",
+            version,
         ]
 
     else:
@@ -273,7 +281,38 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False):
     assert return_code == 0, f"Error running SFINCS simulation: {return_code}"
 
 
-def get_discharge_by_point(xs, ys, discharge):
+def get_representative_river_points(river_ID: set, rivers: pd.DataFrame):
+    river = rivers.loc[river_ID]
+    if river["represented_in_grid"]:
+        river = rivers.loc[river_ID]
+        xy = river["hydrography_xy"][0]  # get most upstream point
+        return [(xy[0], xy[1])]
+    else:
+        river_IDs = set([river_ID])
+        representitative_rivers = set()
+        while river_IDs:
+            river_ID = river_IDs.pop()
+            river = rivers.loc[river_ID]
+            if not river["represented_in_grid"]:
+                upstream_rivers = rivers[rivers["downstream_ID"] == river_ID]
+                river_IDs.update(upstream_rivers.index)
+            else:
+                representitative_rivers.add(river_ID)
+
+        representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
+        xys = [
+            (river[-1][0], river[-1][1])
+            for river in representitative_rivers["hydrography_xy"]
+        ]
+        return xys
+
+
+def get_discharge_by_river(river_IDs, points_per_river, discharge):
+    xs, ys = [], []
+    for points in points_per_river:
+        xs.extend([p[0] for p in points])
+        ys.extend([p[1] for p in points])
+
     discharge_per_point = discharge.isel(
         x=xr.DataArray(
             xs,
@@ -285,23 +324,44 @@ def get_discharge_by_point(xs, ys, discharge):
         ),
     ).compute()
     assert not np.isnan(discharge_per_point).any(), "Discharge values contain NaNs"
+
+    discharge_df = pd.DataFrame(index=discharge.time)
+    i = 0
+    for river_ID, points in zip(river_IDs, points_per_river, strict=True):
+        discharge_per_river = discharge_per_point.isel(
+            points=slice(i, i + len(points))
+        ).sum(dim="points")
+        discharge_df[river_ID] = discharge_per_river
+        i += len(points)
+
+    assert i == len(xs), "Discharge values do not match the number of points"
     return discharge_per_point
 
 
 def assign_return_periods(rivers, discharge_series, return_periods, prefix="Q"):
     assert isinstance(return_periods, list)
-    for i, idx in enumerate(rivers.index):
+    for i, idx in tqdm(enumerate(rivers.index), total=len(rivers)):
         discharge = pd.Series(discharge_series[:, i], index=discharge_series.time)
 
-        # Fit the model and calculate return periods
-        model = EVA(discharge)
-        model.get_extremes(method="BM", block_size="365.2425D")
-        model.fit_model()
-        discharge_per_return_period = model.get_return_value(
-            return_period=return_periods
-        )[0]  # [1] and [2] are the uncertainty bounds
-        if len(return_periods) == 1:
-            discharge_per_return_period = [discharge_per_return_period]
+        if (discharge < 1e-10).all():
+            print(
+                f"Discharge is all (near) zeros, skipping return period calculation, for river {idx}"
+            )
+            discharge_per_return_period = np.zeros_like(return_periods)
+        else:
+            # Fit the model and calculate return periods
+            model = EVA(discharge)
+            model.get_extremes(method="BM", block_size="365.2425D")
+            model.fit_model()
+            discharge_per_return_period = model.get_return_value(
+                return_period=return_periods
+            )[0]  # [1] and [2] are the uncertainty bounds
+
+            # when only one return period is given, the result is a single value
+            # instead of a list, so convert it to a list for simplicty of
+            # further processing
+            if len(return_periods) == 1:
+                discharge_per_return_period = [discharge_per_return_period]
         for return_period, discharge_value in zip(
             return_periods, discharge_per_return_period
         ):

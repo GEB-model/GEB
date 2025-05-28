@@ -1,65 +1,31 @@
-1) DOWNLOAD PACKAGES
+Download Packages
+===============
 
-So PlantFATE runs with the use of 2 other packages and with the coupling package you need to checkout 4 different github repositories. 
+```bash
 
-The packages are:
+git clone git@github.com:jaideep777/Plant-FATE.git
+git switch feature_python_pckg  # switch to the feature branch
+cd Plant-FATE
 
-1) Coupling package: https://github.com/jensdebruijn/couple-plantFATE-CWatM (branch: develop)
-2) PlantFATE package: https://github.com/jaideep777/Plant-FATE (branch: feature_stepByStepSim)
-3) libpspm package: https://github.com/jaideep777/libpspm (branch: develop)
-4) Phydro package: https://github.com/jaideep777/phydro (branch: master)
+```
 
-For ease of running and set up put these in one big project root folder (not necessary for the coupling package):
+Install optional packages from plantfate extras in GEB:
 
-  root
-  |---- phydro
-  |     |--- inst/include
-  |
-  |---- libpspm
-  |     |--- include
-  |     |--- lib
-  |
-  |---- Plant-FATE
-  |     |--- inst/include
+```bash
 
-2) INSTALL PLANTFATE and PYBIND
+uv sync --extra plantfate
 
-- module load cm-eigen3/3.3.7
-- module load shared
-- module load 2022
-- module load GSL/2.7-GCC-11.3.0
+```
 
-As per instructions in PlantFATE readme, install natively in C++.
 
-You may need to install additional libraries, specifically pybind: 
+Compiling PlantFATE
+=====================
 
-* pip
+```bash
 
-  * pip install pybind11
+module load shared 2024 Eigen/3.4.0-GCCcore-12.3.0 GSL/2.7-GCC-12.3.0
+cd Plant-FATE
+make all
+uv pip install ../Plant-FATE/
 
-  * pip install cppimport
-* libpspm
-
-  * cd libpspm
-
-  * make clean testclean
-
-  * make
-
-  * make check
-
-* Phydro
-
-  * cd phydro
-
-  * make clean testclean
-
-  * make check
-
-* PlantFATE
-
-  * cd Plant-FATE
-
-  * make clean testclean
-  
-  * make python
+```

@@ -6,15 +6,60 @@ from geb.hydrology.routing import (
     calculate_discharge_from_storage,
     calculate_river_storage_from_discharge,
     get_channel_ratio,
+    update_discharge,
 )
+
+
+def test_update_discharge_1():
+    Q_new = update_discharge(
+        Qin=0.000201343,
+        Qold=0.000115866,
+        q=-0.000290263,
+        alpha=1.73684,
+        beta=0.6,
+        deltaT=15,
+        deltaX=10,
+        epsilon=1e-12,
+    )
+    Q_check = 0.000031450866300937
+    assert math.isclose(Q_new, Q_check, abs_tol=1e-12)
+
+
+def test_update_discharge_2():
+    Q_new = update_discharge(
+        Qin=0,
+        Qold=1.11659e-07,
+        q=-1.32678e-05,
+        alpha=1.6808,
+        beta=0.6,
+        deltaT=15,
+        deltaX=10,
+        epsilon=1e-12,
+    )
+    assert Q_new == 1e-30
+
+
+def test_update_discharge_no_flow():
+    Q_new = update_discharge(
+        Qin=0,
+        Qold=0,
+        q=0,
+        alpha=1.6808,
+        beta=0.6,
+        deltaT=15,
+        deltaX=10,
+        epsilon=1e-12,
+    )
+    assert Q_new == 1e-30
 
 
 def test_storage_discharge_conversions():
     # one should be the inverse of the other
-    river_alpha = 100
-    river_beta = 0.1
-    river_storage = 1000
-    river_length = 2
+    river_alpha = np.array([100, 200, 300, 300])
+    river_beta = np.array([0.1, 0.2, 0.3, 0.3])
+    river_storage = np.array([1000, 2000, 3000, 3000])
+    river_length = np.array([2, 4, 6, 6])
+    waterbody_id = np.array([-1, -1, -1, 0])
 
     discharge = calculate_discharge_from_storage(
         river_storage=river_storage,
@@ -28,9 +73,12 @@ def test_storage_discharge_conversions():
         river_length=river_length,
         river_alpha=river_alpha,
         river_beta=river_beta,
+        waterbody_id=waterbody_id,
     )
 
-    assert math.isclose(river_storage, storage_check, rel_tol=1e-9)
+    assert np.allclose(river_storage[:-1], storage_check[:-1], rtol=1e-9)
+    # storage should be 0 for the waterbody
+    assert storage_check[-1] == 0
 
 
 def test_get_channel_ratio():

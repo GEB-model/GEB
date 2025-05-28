@@ -4,9 +4,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from pgmpy.estimators import K2, BayesianEstimator, HillClimbSearch
+from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
 from pgmpy.factors.discrete import State
-from pgmpy.models import DiscreteBayesianNetwork
+from pgmpy.models import BayesianNetwork
 from pgmpy.sampling import BayesianModelSampling
 from scipy.stats import chi2_contingency, norm
 
@@ -28,16 +28,17 @@ class Survey:
     def learn_structure(self, max_indegree=3):
         print("Estimating network structure")
         est = HillClimbSearch(data=self.samples)
-        self.model = est.estimate(
-            scoring_method=K2(data=self.samples),
+        self.structure = est.estimate(
+            scoring_method=K2Score(data=self.samples),
             max_indegree=max_indegree,
             max_iter=int(1e4),
             epsilon=1e-8,
+            show_progress=True,
         )
 
     def estimate_parameters(self, plot=False, save=False):
         print("Learning network parameters")
-        self.model = DiscreteBayesianNetwork(self.model)
+        self.model = BayesianNetwork(self.structure)
         self.model.fit(
             self.samples,
             estimator=BayesianEstimator,
@@ -86,7 +87,7 @@ class Survey:
 
     def read(self, path):
         print("Loading model")
-        self.model = DiscreteBayesianNetwork().load(str(path), n_jobs=1)
+        self.model = BayesianNetwork().load(str(path), n_jobs=1)
 
     def create_mapper(
         self,
@@ -451,6 +452,8 @@ class fairSTREAMModel(GEBModel):
         self,
         seasons,
         crop_variables,
+        irrigation_status_per_tehsil_fn,
+        crop_data_per_tehsil_fn,
     ):
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
@@ -550,9 +553,7 @@ class fairSTREAMModel(GEBModel):
 
         regions = self.geoms["regions"]
 
-        irrigation_status_per_tehsil = pd.read_excel(
-            self.preprocessing_dir / "census" / "irrigation_sources.xlsx"
-        )
+        irrigation_status_per_tehsil = pd.read_excel(irrigation_status_per_tehsil_fn)
         irrigation_status_per_tehsil["size_class"] = irrigation_status_per_tehsil[
             "size_class"
         ].map(
@@ -688,9 +689,7 @@ class fairSTREAMModel(GEBModel):
 
                 # adaptations[agent_subset[well_irrigated_agents], WELL_ADAPTATION] = 1
 
-        crop_data_per_tehsil = pd.read_excel(
-            self.preprocessing_dir / "census" / "crop_data.xlsx"
-        )
+        crop_data_per_tehsil = pd.read_excel(crop_data_per_tehsil_fn)
         crop_data_per_tehsil = crop_data_per_tehsil[
             [
                 c
@@ -858,15 +857,20 @@ class fairSTREAMModel(GEBModel):
 
         farmer_survey = FarmerSurvey()
         farmer_survey.parse(path=Path("data") / "survey_results_cleaned.zip")
-        save_path = bayesian_net_folder / "farmer_survey.bif"
-        if not save_path.exists() or overwrite_bayesian_network:
-            farmer_survey.learn_structure()
-            farmer_survey.estimate_parameters(
-                plot=False, save=bayesian_net_folder / "farmer_survey.png"
-            )
-            farmer_survey.save(save_path)
-        else:
-            farmer_survey.read(save_path)
+        # save_path = bayesian_net_folder / "farmer_survey.bif"
+        # if not save_path.exists() or overwrite_bayesian_network:
+        #     farmer_survey.learn_structure()
+        #     farmer_survey.estimate_parameters(
+        #         plot=False, save=bayesian_net_folder / "farmer_survey.png"
+        #     )
+        #     farmer_survey.save(save_path)
+        # else:
+        #     farmer_survey.read(save_path)
+
+        farmer_survey.learn_structure()
+        farmer_survey.estimate_parameters(
+            plot=False, save=bayesian_net_folder / "farmer_survey.png"
+        )
 
         farmer_survey.create_mapper(
             "risk_aversion",
@@ -938,8 +942,12 @@ class fairSTREAMModel(GEBModel):
             #     show_progress=False,
             # )
 
-        risk_aversion = farmer_survey.apply_mapper("risk_aversion", risk_aversion_raw)
-        discount_rate = farmer_survey.apply_mapper("discount_rate", discount_rate_raw)
+        risk_aversion = np.array(
+            farmer_survey.apply_mapper("risk_aversion", risk_aversion_raw)
+        )
+        discount_rate = np.array(
+            farmer_survey.apply_mapper("discount_rate", discount_rate_raw)
+        )
 
         self.set_array(
             perceived_effectivity, name="agents/farmers/perceived_effectivity"
