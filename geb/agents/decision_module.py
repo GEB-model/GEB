@@ -221,7 +221,7 @@ class DecisionModule:
         unconstrained_mask = (
             (profits_no_event * expenditure_cap > total_annual_costs)
             & (~adapted)
-            & extra_constraint
+            & (extra_constraint)
         )
 
         # Iterate only through agents who can afford to adapt
