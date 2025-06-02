@@ -359,7 +359,7 @@ class KinematicWave(Router):
                     assert not np.isnan(Qnew[upstream_node])
                     Qin += Qnew[upstream_node]
 
-            Qnew[node] = update_node_kinematic(
+            Qnew_node = update_node_kinematic(
                 Qin,
                 Qold[node],
                 sideflow_node_m3 / dt / river_length[node],
@@ -368,6 +368,12 @@ class KinematicWave(Router):
                 dt,
                 river_length[node],
             )
+
+            node_waterbody_id = waterbody_id[node]
+            if node_waterbody_id != -1:
+                waterbody_storage_m3[node_waterbody_id] += Qnew_node * dt
+            else:
+                Qnew[node] = Qnew_node
         return Qnew, over_abstraction_m3
 
     def step(
@@ -569,9 +575,8 @@ class Routing(Module):
             / np.sqrt(river_slope)
         ) ** self.var.river_beta
 
-        self.routing_algorithm = "kinematic_wave"
-
-        if self.routing_algorithm == "kinematic_wave":
+        routing_algorithm = self.model.config["hydrology"]["routing"]["algorithm"]
+        if routing_algorithm == "kinematic_wave":
             self.router = KinematicWave(
                 dt=self.var.routing_step_length_seconds,
                 ldd=ldd,
@@ -582,7 +587,7 @@ class Routing(Module):
                 river_alpha=self.grid.var.river_alpha,
                 river_beta=self.var.river_beta,
             )
-        elif self.routing_algorithm == "accuflux":
+        elif routing_algorithm == "accuflux":
             self.router = Accuflux(
                 dt=self.var.routing_step_length_seconds,
                 ldd=ldd,
@@ -591,7 +596,7 @@ class Routing(Module):
             )
         else:
             raise ValueError(
-                f"Unknown routing algorithm: {self.routing_algorithm}. "
+                f"Unknown routing algorithm: {routing_algorithm}. "
                 "Available algorithms are 'kinematic_wave' and 'accuflux'."
             )
 
