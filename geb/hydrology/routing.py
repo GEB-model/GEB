@@ -190,7 +190,15 @@ class Router:
         assert (Q_initial[self.waterbody_id != -1] == 0).all()
         self.Q_prev = Q_initial
 
+    def get_total_storage(self):
+        """
+        Get the total storage of the river network, which is the sum of the
+        available storage in each cell.
+        """
+        return self.get_available_storage(maximum_abstraction_ratio=1.0)
 
+
+@njit(cache=True)
 def update_node_kinematic(
     Qin, Qold, q, alpha, beta, deltaT, deltaX, epsilon=np.float64(0.0001)
 ):
@@ -265,7 +273,25 @@ class KinematicWave(Router):
         # The momentum equation (solved for Q), see eq. 18 in https://gmd.copernicus.org/articles/13/3267/2020/
         return (river_storage / (river_length * river_alpha)) ** (1 / river_beta)
 
+    def get_available_storage(self, maximum_abstraction_ratio=0.9):
+        """
+        Get the available storage of the river network, which is the sum of the
+        available storage in each cell.
+        """
+        assert not np.isnan(self.Q_prev).any()
+        assert (self.Q_prev >= 0.0).all()
+
+        river_storage = self.calculate_river_storage_from_discharge(
+            discharge=self.Q_prev,
+            river_alpha=self.river_alpha,
+            river_length=self.river_length,
+            river_beta=self.river_beta,
+            waterbody_id=self.waterbody_id,
+        )
+        return river_storage * maximum_abstraction_ratio
+
     @staticmethod
+    @njit(cache=True)
     def _step(
         Qold,
         sideflow_m3,
@@ -290,14 +316,15 @@ class KinematicWave(Router):
         river_length: np.ndarray
             Array of floats containing the channel length, must be > 0
         """
-        Qkx = np.full_like(Qold, np.nan)
+        Qnew = np.full_like(Qold, np.nan)
+        over_abstraction_m3 = np.zeros_like(Qold, dtype=np.float32)
 
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
             node = idxs_up_to_downstream[i]
             upstream_nodes = upstream_matrix_from_up_to_downstream[i]
 
             Qin = np.float32(0.0)
-            sideflow_node = sideflow_m3[node] / dt / river_length[node]
+            sideflow_node_m3 = sideflow_m3[node]
 
             for upstream_node in upstream_nodes:
                 if upstream_node == -1:
@@ -306,18 +333,22 @@ class KinematicWave(Router):
                 if is_waterbody_outflow[upstream_node]:
                     # if upstream node is an outflow add the outflow of the waterbody
                     # to the sideflow
-                    node_waterbody_id = waterbody_id[upstream_node]
+                    upstream_node_waterbody_id = waterbody_id[upstream_node]
 
                     # make sure that the waterbody ID is valid
-                    assert node_waterbody_id != -1
-                    waterbody_outflow_m3 = outflow_per_waterbody_m3[node_waterbody_id]
+                    assert upstream_node_waterbody_id != -1
+                    waterbody_outflow_m3 = outflow_per_waterbody_m3[
+                        upstream_node_waterbody_id
+                    ]
 
-                    waterbody_storage_m3[node_waterbody_id] -= waterbody_outflow_m3
+                    waterbody_storage_m3[upstream_node_waterbody_id] -= (
+                        waterbody_outflow_m3
+                    )
 
                     # make sure that the waterbody storage does not go below 0
-                    assert waterbody_storage_m3[node_waterbody_id] >= 0
+                    assert waterbody_storage_m3[upstream_node_waterbody_id] >= 0
 
-                    sideflow_node += waterbody_outflow_m3 / dt / river_length[node]
+                    sideflow_node_m3 += waterbody_outflow_m3
 
                 elif (
                     waterbody_id[upstream_node] != -1
@@ -325,19 +356,19 @@ class KinematicWave(Router):
                     assert sideflow_m3[upstream_node] == 0
 
                 else:  # in normal case, just take the inflow from upstream
-                    assert not np.isnan(Qkx[upstream_node])
-                    Qin += Qkx[upstream_node]
+                    assert not np.isnan(Qnew[upstream_node])
+                    Qin += Qnew[upstream_node]
 
-            Qkx[node] = update_node_kinematic(
+            Qnew[node] = update_node_kinematic(
                 Qin,
                 Qold[node],
-                sideflow_node,
+                sideflow_node_m3 / dt / river_length[node],
                 river_alpha[node],
                 river_beta,
                 dt,
                 river_length[node],
             )
-        return Qkx
+        return Qnew, over_abstraction_m3
 
     def step(
         self,
@@ -345,7 +376,7 @@ class KinematicWave(Router):
         waterbody_storage_m3,
         outflow_per_waterbody_m3,
     ):
-        Q = self._step(
+        Q, over_abstraction_m3 = self._step(
             Qold=self.Q_prev,
             sideflow_m3=sideflow_m3,
             waterbody_storage_m3=waterbody_storage_m3,
@@ -364,7 +395,7 @@ class KinematicWave(Router):
 
         outflow_at_pits_m3 = (Q[self.is_pit] * self.dt).sum()
 
-        return Q, waterbody_storage_m3, outflow_at_pits_m3
+        return Q, over_abstraction_m3, waterbody_storage_m3, outflow_at_pits_m3
 
 
 class Accuflux(Router):
@@ -375,13 +406,6 @@ class Accuflux(Router):
         assert not np.isnan(self.Q_prev).any()
         assert (self.Q_prev >= 0.0).all()
         return self.Q_prev * self.dt * maximum_abstraction_ratio
-
-    def get_total_storage(self):
-        """
-        Get the total storage of the river network, which is the sum of the
-        available storage in each cell.
-        """
-        return self.get_available_storage(maximum_abstraction_ratio=1.0)
 
     @staticmethod
     @njit(cache=True)
@@ -398,6 +422,7 @@ class Accuflux(Router):
     ):
         Qold += sideflow_m3 / dt
         Qnew = np.full_like(Qold, 0.0)
+        over_abstraction_m3 = np.zeros_like(Qold, dtype=np.float32)
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
             node = idxs_up_to_downstream[i]
             upstream_nodes = upstream_matrix_from_up_to_downstream[i]
@@ -440,9 +465,14 @@ class Accuflux(Router):
             if node_waterbody_id != -1:
                 waterbody_storage_m3[node_waterbody_id] += inflow_volume
             else:
-                Qnew[node] = inflow_volume / dt
+                Qnew_node = inflow_volume / dt
+                if Qnew_node < 0.0:
+                    # if the new discharge is negative, we have over-abstraction
+                    over_abstraction_m3[node] = -Qnew_node * dt
+                    Qnew_node = 0.0
+                Qnew[node] = Qnew_node
                 assert Qnew[node] >= 0.0, "Discharge cannot be negative"
-        return Qnew
+        return Qnew, over_abstraction_m3
 
     def step(
         self,
@@ -453,7 +483,7 @@ class Accuflux(Router):
         outflow_at_pits_m3 = (
             self.get_total_storage()[self.is_pit].sum() + sideflow_m3[self.is_pit].sum()
         )
-        Q = self._step(
+        Q, over_abstraction_m3 = self._step(
             dt=self.dt,
             Qold=self.Q_prev,
             sideflow_m3=sideflow_m3,
@@ -465,7 +495,7 @@ class Accuflux(Router):
             waterbody_id=self.waterbody_id,
         )
         self.Q_prev = Q
-        return Q, waterbody_storage_m3, outflow_at_pits_m3
+        return Q, over_abstraction_m3, waterbody_storage_m3, outflow_at_pits_m3
 
 
 class Routing(Module):
@@ -539,12 +569,31 @@ class Routing(Module):
             / np.sqrt(river_slope)
         ) ** self.var.river_beta
 
-        self.router = Accuflux(
-            dt=self.var.routing_step_length_seconds,
-            ldd=ldd,
-            mask=~self.grid.mask,
-            Q_initial=self.grid.var.discharge_m3_s,
-        )
+        self.routing_algorithm = "kinematic_wave"
+
+        if self.routing_algorithm == "kinematic_wave":
+            self.router = KinematicWave(
+                dt=self.var.routing_step_length_seconds,
+                ldd=ldd,
+                mask=~self.grid.mask,
+                Q_initial=self.grid.var.discharge_m3_s,
+                river_width=self.grid.var.river_width,
+                river_length=self.grid.var.river_length,
+                river_alpha=self.grid.var.river_alpha,
+                river_beta=self.var.river_beta,
+            )
+        elif self.routing_algorithm == "accuflux":
+            self.router = Accuflux(
+                dt=self.var.routing_step_length_seconds,
+                ldd=ldd,
+                mask=~self.grid.mask,
+                Q_initial=self.grid.var.discharge_m3_s,
+            )
+        else:
+            raise ValueError(
+                f"Unknown routing algorithm: {self.routing_algorithm}. "
+                "Available algorithms are 'kinematic_wave' and 'accuflux'."
+            )
 
     def spinup(self):
         # Initialize discharge with zero
@@ -557,9 +606,15 @@ class Routing(Module):
             pre_storage = self.hydrology.lakes_reservoirs.var.storage.copy()
             pre_river_storage_m3 = self.router.get_total_storage()
 
-        self.router.Q_prev = (
-            self.router.Q_prev
-            - channel_abstraction_m3 / self.var.routing_step_length_seconds
+        channel_abstraction_m3_per_routing_step = (
+            channel_abstraction_m3 / self.var.n_routing_substeps
+        )
+        assert (
+            channel_abstraction_m3_per_routing_step[self.grid.var.waterBodyID != -1]
+            == 0.0
+        ).all(), (
+            "Channel abstraction must be zero for water bodies, "
+            "but found non-zero value."
         )
 
         return_flow_m3_per_routing_step = (
@@ -618,6 +673,7 @@ class Routing(Module):
             evaporation_in_rivers_m3 = 0
             waterbody_evaporation_m3 = 0
             outflow_at_pits_m3 = 0
+            over_abstraction_m3 = 0
 
         for subrouting_step in range(self.var.n_routing_substeps):
             self.hydrology.lakes_reservoirs.var.storage += (
@@ -647,7 +703,9 @@ class Routing(Module):
             ).all(), "outflow cannot be smaller or equal to storage"
 
             side_flow_channel_m3_per_routing_step = (
-                runoff_m3_per_routing_step + return_flow_m3_per_routing_step
+                runoff_m3_per_routing_step
+                + return_flow_m3_per_routing_step
+                - channel_abstraction_m3_per_routing_step
             )
             assert (
                 side_flow_channel_m3_per_routing_step[self.grid.var.waterBodyID != -1]
@@ -655,8 +713,7 @@ class Routing(Module):
             ).all()
 
             evaporation_in_rivers_m3_per_routing_step = np.minimum(
-                self.router.get_available_storage()
-                + side_flow_channel_m3_per_routing_step,
+                self.router.get_total_storage() + side_flow_channel_m3_per_routing_step,
                 potential_evaporation_in_rivers_m3_per_routing_step,
             )
             assert (
@@ -672,6 +729,7 @@ class Routing(Module):
 
             (
                 self.grid.var.discharge_m3_s,
+                over_abstraction_m3_routing_step,
                 self.hydrology.lakes_reservoirs.var.storage,
                 outflow_at_pits_m3_routing_step,
             ) = self.router.step(
@@ -689,6 +747,7 @@ class Routing(Module):
                     actual_evaporation_from_water_bodies_per_routing_step_m3
                 )
                 evaporation_in_rivers_m3 += evaporation_in_rivers_m3_per_routing_step
+                over_abstraction_m3 += over_abstraction_m3_routing_step
 
         assert not np.isnan(self.grid.var.discharge_m3_s).any()
 
@@ -700,6 +759,7 @@ class Routing(Module):
                 influxes=[
                     total_runoff * self.grid.var.cell_area,
                     return_flow * self.grid.var.cell_area,
+                    over_abstraction_m3,
                 ],
                 outfluxes=[
                     channel_abstraction_m3,
