@@ -40,13 +40,15 @@ MAX_ITERS = 10
 
 class Router:
     def __init__(
-        self, ldd, mask, Q_initial, is_waterbody_outflow=None, waterbody_id=None
+        self, dt, ldd, mask, Q_initial, is_waterbody_outflow=None, waterbody_id=None
     ):
         """
         Prepare the routing for the model.
 
         Parameters
         ----------
+        dt: float
+            The time step in seconds, must be greater than 0.
         ldd: np.ndarray
             The ldd array, which is a 1D array which is only valid for the masked.
         mask: np.ndarray
@@ -106,6 +108,9 @@ class Router:
         selected in the mask are included. All indices also refer to the index
         in the mask rather than the original ldd.
         """
+        assert dt > 0, "dt must be greater than 0"
+        self.dt = dt
+
         ldd_uncompressed = np.full_like(mask, 255, dtype=ldd.dtype)
         ldd_uncompressed[mask] = ldd.ravel()
 
@@ -228,6 +233,7 @@ def update_node_kinematic(
 class KinematicWave(Router):
     def __init__(
         self,
+        dt,
         ldd,
         mask,
         Q_initial,
@@ -235,9 +241,8 @@ class KinematicWave(Router):
         river_length,
         river_alpha,
         river_beta,
-        dt,
     ):
-        super().__init__(ldd, mask, Q_initial)
+        super().__init__(dt, ldd, mask, Q_initial)
 
         self.river_width = river_width.ravel()
         self.river_length = river_length.ravel()
@@ -363,17 +368,25 @@ class KinematicWave(Router):
 
 
 class Accuflux(Router):
-    def __init__(self, ldd, mask, *args, **kwargs):
-        super().__init__(ldd, mask, *args, **kwargs)
+    def __init__(self, dt, ldd, mask, *args, **kwargs):
+        super().__init__(dt, ldd, mask, *args, **kwargs)
 
-    def get_available_storage(self):
+    def get_available_storage(self, maximum_abstraction_ratio=0.9):
         assert not np.isnan(self.Q_prev).any()
         assert (self.Q_prev >= 0.0).all()
-        return self.Q_prev.copy()
+        return self.Q_prev * self.dt * maximum_abstraction_ratio
+
+    def get_total_storage(self):
+        """
+        Get the total storage of the river network, which is the sum of the
+        available storage in each cell.
+        """
+        return self.get_available_storage(maximum_abstraction_ratio=1.0)
 
     @staticmethod
     @njit(cache=True)
     def _step(
+        dt,
         Qold,
         sideflow_m3,
         waterbody_storage_m3,
@@ -383,13 +396,13 @@ class Accuflux(Router):
         is_waterbody_outflow,
         waterbody_id,
     ):
-        Qold += sideflow_m3
+        Qold += sideflow_m3 / dt
         Qnew = np.full_like(Qold, 0.0)
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
             node = idxs_up_to_downstream[i]
             upstream_nodes = upstream_matrix_from_up_to_downstream[i]
 
-            Qin = np.float32(0.0)
+            inflow_volume = np.float32(0.0)
 
             for upstream_node in upstream_nodes:
                 if upstream_node == -1:
@@ -413,7 +426,7 @@ class Accuflux(Router):
                     # make sure that the waterbody storage does not go below 0
                     assert waterbody_storage_m3[upstream_node_waterbody_id] >= 0
 
-                    Qin += waterbody_outflow_m3
+                    inflow_volume += waterbody_outflow_m3
 
                 elif (
                     waterbody_id[upstream_node] != -1
@@ -421,13 +434,13 @@ class Accuflux(Router):
                     assert sideflow_m3[upstream_node] == 0
 
                 else:  # in normal case, just take the inflow from upstream
-                    Qin += Qold[upstream_node]
+                    inflow_volume += Qold[upstream_node] * dt
 
             node_waterbody_id = waterbody_id[node]
             if node_waterbody_id != -1:
-                waterbody_storage_m3[node_waterbody_id] += Qin
+                waterbody_storage_m3[node_waterbody_id] += inflow_volume
             else:
-                Qnew[node] = Qin
+                Qnew[node] = inflow_volume / dt
                 assert Qnew[node] >= 0.0, "Discharge cannot be negative"
         return Qnew
 
@@ -438,9 +451,10 @@ class Accuflux(Router):
         outflow_per_waterbody_m3,
     ):
         outflow_at_pits_m3 = (
-            self.Q_prev[self.is_pit].sum() + sideflow_m3[self.is_pit].sum()
+            self.get_total_storage()[self.is_pit].sum() + sideflow_m3[self.is_pit].sum()
         )
         Q = self._step(
+            dt=self.dt,
             Qold=self.Q_prev,
             sideflow_m3=sideflow_m3,
             waterbody_storage_m3=waterbody_storage_m3,
@@ -526,6 +540,7 @@ class Routing(Module):
         ) ** self.var.river_beta
 
         self.router = Accuflux(
+            dt=self.var.routing_step_length_seconds,
             ldd=ldd,
             mask=~self.grid.mask,
             Q_initial=self.grid.var.discharge_m3_s,
@@ -540,9 +555,12 @@ class Routing(Module):
     def step(self, total_runoff, channel_abstraction_m3, return_flow):
         if __debug__:
             pre_storage = self.hydrology.lakes_reservoirs.var.storage.copy()
-            pre_river_storage_m3 = self.router.get_available_storage()
+            pre_river_storage_m3 = self.router.get_total_storage()
 
-        self.router.Q_prev = self.router.Q_prev - channel_abstraction_m3
+        self.router.Q_prev = (
+            self.router.Q_prev
+            - channel_abstraction_m3 / self.var.routing_step_length_seconds
+        )
 
         return_flow_m3_per_routing_step = (
             return_flow * self.grid.var.cell_area / self.var.n_routing_substeps
@@ -676,7 +694,7 @@ class Routing(Module):
 
         if __debug__:
             # TODO: make dependent on routing step length
-            river_storage_m3 = self.router.get_available_storage()
+            river_storage_m3 = self.router.get_total_storage()
             balance_check(
                 how="sum",
                 influxes=[
