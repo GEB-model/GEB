@@ -144,12 +144,14 @@ def Q_initial():
             [1, 1, 1, 1],
             [1, 1, 1, 1],
             [1, 1, 1, 1],
-        ]
+        ],
+        dtype=np.float32,
     )
 
 
 def test_accuflux(ldd, mask, Q_initial):
     router = Accuflux(
+        dt=1,
         ldd=ldd[mask],
         mask=mask,
         Q_initial=Q_initial[mask],
@@ -161,10 +163,11 @@ def test_accuflux(ldd, mask, Q_initial):
             [0, 0, 0, 0],
             [0, 0, 0, 0],
             [0, 0, 0, 0],
-        ]
+        ],
+        dtype=np.float32,
     )[mask]
 
-    Q_new, waterbody_storage_m3, outflow_at_pits_m3 = router.step(
+    Q_new, over_abstraction_m3, waterbody_storage_m3, outflow_at_pits_m3 = router.step(
         sideflow,
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
@@ -185,8 +188,48 @@ def test_accuflux(ldd, mask, Q_initial):
     assert waterbody_storage_m3.size == 0
 
 
+def test_accuflux_with_longer_dt(ldd, mask, Q_initial):
+    router = Accuflux(
+        dt=15,
+        ldd=ldd[mask],
+        mask=mask,
+        Q_initial=Q_initial[mask],
+    )
+
+    sideflow = np.array(
+        [
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ],
+        dtype=np.float32,
+    )[mask]
+
+    Q_new, over_abstraction_m3, waterbody_storage_m3, outflow_at_pits_m3 = router.step(
+        sideflow,
+        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+    )
+
+    assert (
+        Q_new
+        == np.array(
+            [
+                [0, 3, 0, 0],
+                [0, 2, 0, 1],
+                [0, 3, 0, 2],
+                [0, 1, 1, 0],
+            ]
+        )[mask]
+    ).all()
+    assert outflow_at_pits_m3 == 30
+    assert waterbody_storage_m3.size == 0
+
+
 def test_accuflux_with_sideflow(mask, ldd, Q_initial):
     router = Accuflux(
+        dt=1,
         ldd=ldd[mask],
         mask=mask,
         Q_initial=Q_initial[mask],
@@ -201,7 +244,7 @@ def test_accuflux_with_sideflow(mask, ldd, Q_initial):
         ]
     )
 
-    Q_new, waterbody_storage_m3, outflow_at_pits_m3 = router.step(
+    Q_new, over_abstraction_m3, waterbody_storage_m3, outflow_at_pits_m3 = router.step(
         sideflow[mask],
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
@@ -239,6 +282,7 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
     Q_initial[waterbody_id != -1] = 0
 
     router = Accuflux(
+        dt=1,
         ldd=ldd[mask],
         mask=mask,
         Q_initial=Q_initial[mask],
@@ -267,7 +311,7 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
 
     waterbody_storage_m3_pre = waterbody_storage_m3.copy()
 
-    Q_new, waterbody_storage_m3, outflow_at_pits_m3 = router.step(
+    Q_new, over_abstraction_m3, waterbody_storage_m3, outflow_at_pits_m3 = router.step(
         sideflow[mask],
         waterbody_storage_m3,
         outflow_per_waterbody_m3,
