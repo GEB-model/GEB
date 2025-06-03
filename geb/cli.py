@@ -172,7 +172,7 @@ def click_run_options():
 
 
 def run_model_with_method(
-    method,
+    method: str | None,
     profiling,
     config,
     working_directory,
@@ -181,6 +181,7 @@ def run_model_with_method(
     port,
     timing,
     optimize,
+    close_after_run=True,
 ):
     """Run model."""
     # check if we need to run the model in optimized mode
@@ -215,8 +216,11 @@ def run_model_with_method(
                 profile = cProfile.Profile()
                 profile.enable()
 
-            with GEBModel(**model_params) as model:
-                getattr(model, method)()
+            geb = GEBModel(**model_params)
+            if method is not None:
+                getattr(geb, method)()
+            if close_after_run:
+                geb.close()
 
             if profiling:
                 profile.disable()
@@ -227,6 +231,8 @@ def run_model_with_method(
                     stats.dump_stats(".prof_stats")
                     stats.print_stats()
                 profile.dump_stats("profile.prof")
+
+            return geb
 
         else:
             # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
