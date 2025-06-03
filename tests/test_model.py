@@ -7,6 +7,7 @@ import pytest
 import xarray as xr
 
 from geb.cli import build_fn, parse_config, run_model_with_method, update_fn
+from geb.workflows.io import WorkingDirectory
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
@@ -127,5 +128,6 @@ def test_multiverse():
     args["config"] = config
 
     geb = run_model_with_method(method=None, close_after_run=False, **args)
-    geb.run()
+    with WorkingDirectory(working_directory):
+        geb.run()
     geb.close()
