@@ -20,9 +20,9 @@ class Hydrology:
         pass
 
     def evaluate_discharge_grid(self, correct_Q_obs=False):
-        """Method to evaluate the discharge grid from GEB against observations from the GRDC database.
-        Correct_Q_obs can be flagged to correct the GRDC discharge timeseries for the diff in upstream area
-        between the GRDC station and the discharge from GEB."""
+        """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
+        Correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the diff in upstream area
+        between the Q_obs station and the discharge from GEB."""
 
         #  create folders
         eval_plot_folder = Path(self.output_folder_evaluate) / "discharge" / "plots"
@@ -36,10 +36,10 @@ class Hydrology:
         # load input data files
         snapped_locations = gpd.read_parquet(
             self.model.files["geoms"]["discharge/discharge_snapped_locations"]
-        )  # load the snapped locations of the GRDC stations
-        GRDC = pd.read_parquet(
-            self.model.files["table"]["discharge/GRDC"]
-        )  # load the GRDC discharge data
+        )  # load the snapped locations of the Q_obs stations
+        Q_obs = pd.read_parquet(
+            self.model.files["table"]["discharge/Q_obs"]
+        )  # load the Q_obs discharge data
 
         region_shapefile = gpd.read_parquet(
             self.model.files["geoms"]["mask"]
@@ -81,23 +81,23 @@ class Hydrology:
             columns=["station_name", "x", "y", "KGE", "NSE", "R"]
         )
 
-        # start validation loop over GRDC stations
-        for ID in GRDC.columns:
+        # start validation loop over Q_obs stations
+        for ID in Q_obs.columns:
             # create a discharge timeseries dataframe
-            discharge_GRDC_df = GRDC[ID]
-            discharge_GRDC_df.columns = ["Q"]
-            discharge_GRDC_df.name = "Q"
+            discharge_Q_obs_df = Q_obs[ID]
+            discharge_Q_obs_df.columns = ["Q"]
+            discharge_Q_obs_df.name = "Q"
             # extract the properties from the snapping dataframe
-            GRDC_station_name = snapped_locations.loc[ID].GRDC_station_name
+            Q_obs_station_name = snapped_locations.loc[ID].Q_obs_station_name
             snapped_xy_coords = snapped_locations.loc[ID].closest_tuple
-            GRDC_station_coords = snapped_locations.loc[ID].GRDC_station_coords
-            GRDC_to_GEB_upstream_area_ratio = snapped_locations.loc[
+            Q_obs_station_coords = snapped_locations.loc[ID].Q_obs_station_coords
+            Q_obs_to_GEB_upstream_area_ratio = snapped_locations.loc[
                 ID
-            ].GRDC_to_GEB_upstream_area_ratio
-            print("validating station %s" % GRDC_station_name)
+            ].Q_obs_to_GEB_upstream_area_ratio
+            print("validating station %s" % Q_obs_station_name)
 
             def create_validation_df():
-                """create a validation dataframe with the GRDC discharge observations and the GEB discharge simulation for the selected station"""
+                """create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station"""
                 # select data closest to meerssen point
                 GEB_discharge_station = GEB_discharge.isel(
                     x=snapped_xy_coords[0], y=snapped_xy_coords[1]
@@ -110,7 +110,7 @@ class Hydrology:
 
                 # merge to one df but keep only the rows where both have data
                 validation_df = pd.merge(
-                    discharge_GRDC_df,
+                    discharge_Q_obs_df,
                     discharge_sim_station_df,
                     left_index=True,
                     right_index=True,
@@ -123,7 +123,7 @@ class Hydrology:
                 if correct_Q_obs:
                     """ correct the Q_obs values for the difference in upstream area between subgrid and grid """
                     validation_df["Q_obs"] = (
-                        validation_df["Q_obs"] * GRDC_to_GEB_upstream_area_ratio
+                        validation_df["Q_obs"] * Q_obs_to_GEB_upstream_area_ratio
                     )  # correct the Q_obs values for the difference in upstream area between subgrid and grid
                 return validation_df
 
@@ -132,7 +132,7 @@ class Hydrology:
             # skip station if validation df has less than 1 year of data (365 rows)
             if validation_df.shape[0] < 365:
                 print(
-                    f"Validation data of {GRDC_station_name} is less than 1 year of data. Skipping this station."
+                    f"Validation data of {Q_obs_station_name} is less than 1 year of data. Skipping this station."
                 )
             else:
 
@@ -163,7 +163,7 @@ class Hydrology:
                     fig, ax = plt.subplots()
                     ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
                     ax.set_xlabel(
-                        "GRDC Discharge observations [m3/s] (%s)" % GRDC_station_name
+                        "Q_obs Discharge observations [m3/s] (%s)" % Q_obs_station_name
                     )
                     ax.set_ylabel("GEB discharge simulation [m3/s]")
                     ax.set_title("GEB vs observations (discharge)")
@@ -179,12 +179,12 @@ class Hydrology:
                     ax.text(
                         0.02,
                         0.75,
-                        f"GRDC to GEB upstream area ratio: {GRDC_to_GEB_upstream_area_ratio:.2f}",
+                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
                         transform=ax.transAxes,
                     )
 
                     plt.savefig(
-                        eval_plot_folder / f"scatter_plot_{GRDC_station_name}.png",
+                        eval_plot_folder / f"scatter_plot_{Q_obs_station_name}.png",
                         dpi=300,
                         bbox_inches="tight",
                     )
@@ -202,7 +202,7 @@ class Hydrology:
                     ax.plot(
                         validation_df.index,
                         validation_df["Q_obs"],
-                        label="GRDC observations",
+                        label="Q_obs observations",
                     )
                     ax.set_ylabel("Discharge [m3/s]")
                     ax.set_xlabel("Time")
@@ -224,15 +224,15 @@ class Hydrology:
                     ax.text(
                         0.02,
                         0.75,
-                        f"GRDC to GEB upstream area ratio: {GRDC_to_GEB_upstream_area_ratio:.2f}",
+                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
                         transform=ax.transAxes,
                         fontsize=12,
                     )
                     plt.title(
-                        f"GEB discharge vs observations for station {GRDC_station_name}"
+                        f"GEB discharge vs observations for station {Q_obs_station_name}"
                     )
                     plt.savefig(
-                        eval_plot_folder / f"timeseries_plot_{GRDC_station_name}.png",
+                        eval_plot_folder / f"timeseries_plot_{Q_obs_station_name}.png",
                         dpi=300,
                         bbox_inches="tight",
                     )
@@ -248,10 +248,10 @@ class Hydrology:
                         pd.DataFrame(
                             [
                                 {
-                                    "station_name": GRDC_station_name,
-                                    "x": GRDC_station_coords[0],
-                                    "y": GRDC_station_coords[1],
-                                    "GRDC_to_GEB_upstream_area_ratio": GRDC_to_GEB_upstream_area_ratio,
+                                    "station_name": Q_obs_station_name,
+                                    "x": Q_obs_station_coords[0],
+                                    "y": Q_obs_station_coords[1],
+                                    "Q_obs_to_GEB_upstream_area_ratio": Q_obs_to_GEB_upstream_area_ratio,
                                     "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
                                     "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
                                     "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
@@ -269,7 +269,7 @@ class Hydrology:
             crs="EPSG:4326",
         )  # create a geodataframe from the evaluation dataframe
         evaluation_gdf.to_parquet(
-            eval_result_folder / "evaluation_metrics.gpkg",
+            eval_result_folder / "evaluation_metrics.geoparquet",
         )
 
         evaluation_df.to_excel(
@@ -474,8 +474,8 @@ class Hydrology:
                     "blue",
                     "green",
                 ],  # Updated color scheme
-                vmin=evaluation_gdf["GRDC_to_GEB_upstream_area_ratio"].min(),
-                vmax=evaluation_gdf["GRDC_to_GEB_upstream_area_ratio"].max(),
+                vmin=evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].min(),
+                vmax=evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].max(),
                 caption="Upstream Area Ratio",
             )
 
@@ -519,7 +519,7 @@ class Hydrology:
                 <b>R:</b> {row["R"]:.2f}<br>
                 <b>KGE:</b> {row["KGE"]:.2f}<br>
                 <b>NSE:</b> {row["NSE"]:.2f}<br>
-                <b>Upstream Area Ratio:</b> {row["GRDC_to_GEB_upstream_area_ratio"]:.2f}<br>
+                <b>Upstream Area Ratio:</b> {row["Q_obs_to_GEB_upstream_area_ratio"]:.2f}<br>
                 <img src="data:image/png;base64,{encoded_image_scatter}" width="500">
                 <img src="data:image/png;base64,{encoded_image_time_series}" width="500">
                 """
@@ -539,10 +539,7 @@ class Hydrology:
 
                 # Add KGE layer
                 color_kge = colormap_kge(row["KGE"])
-                popup_kge = folium.Popup(
-                    f"<b>Station Name:</b> {station_name}<br><b>KGE:</b> {row['KGE']:.2f}",
-                    max_width=300,
-                )
+                popup_kge = folium.Popup(popup_html, max_width=400)
                 folium.CircleMarker(
                     location=coords,
                     radius=10,
@@ -555,10 +552,7 @@ class Hydrology:
 
                 # Add NSE layer
                 color_nse = colormap_nse(row["NSE"])
-                popup_nse = folium.Popup(
-                    f"<b>Station Name:</b> {station_name}<br><b>NSE:</b> {row['NSE']:.2f}",
-                    max_width=300,
-                )
+                popup_nse = folium.Popup(popup_html, max_width=400)
                 folium.CircleMarker(
                     location=coords,
                     radius=10,
@@ -570,14 +564,11 @@ class Hydrology:
                 ).add_to(layer_nse)
 
                 # Add Upstream Area Ratio layer
-                if ~np.isnan(row["GRDC_to_GEB_upstream_area_ratio"]):
+                if ~np.isnan(row["Q_obs_to_GEB_upstream_area_ratio"]):
                     color_upstream = colormap_upstream(
-                        float(row["GRDC_to_GEB_upstream_area_ratio"])
+                        float(row["Q_obs_to_GEB_upstream_area_ratio"])
                     )
-                    popup_upstream = folium.Popup(
-                        f"<b>Station Name:</b> {station_name}<br><b>Upstream Area Ratio:</b> {row['GRDC_to_GEB_upstream_area_ratio']:.2f}",
-                        max_width=300,
-                    )
+                    popup_upstream = folium.Popup(popup_html, max_width=400)
                     folium.CircleMarker(
                         location=coords,
                         radius=10,
