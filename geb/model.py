@@ -339,9 +339,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.sfincs.get_return_period_maps()
 
     def evaluate(self, *args, **kwargs) -> None:
+        print("Evaluating model...")
         self.evaluate = Evaluate(self)
         self.evaluate.run(*args, **kwargs)
-        print("Evaluating model...")
 
     @property
     def current_day_of_year(self) -> int:
