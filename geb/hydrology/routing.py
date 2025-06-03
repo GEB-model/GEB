@@ -610,6 +610,11 @@ class Routing(Module):
         self.grid.var.discharge_m3_s = self.grid.full_compressed(
             1e-30, dtype=np.float32
         )
+        self.grid.var.discharge_m3_s_substep = np.full(
+            (self.var.n_routing_substeps, self.grid.var.discharge_m3_s.size),
+            1e-30,
+            dtype=self.grid.var.discharge_m3_s.dtype,
+        )
 
         self.set_router()
 
@@ -748,6 +753,10 @@ class Routing(Module):
                 sideflow_m3=side_flow_channel_m3_per_routing_step.astype(np.float32),
                 waterbody_storage_m3=self.hydrology.lakes_reservoirs.var.storage,
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
+            )
+
+            self.grid.var.discharge_m3_s_substep[subrouting_step, :] = (
+                self.grid.var.discharge_m3_s.copy()
             )
 
             assert (self.router.get_available_storage() >= 0.0).all()
