@@ -28,10 +28,10 @@ We use GitHub issues for tracking bugs.
 
 - When you find a bug that affects ``main``, you MUST create a new issue describing the bug.
 - When fixing the bug:
-  - The fix MUST be reported on the issue.
+  - The fix MUST be reported on the issue page.
   - The issue MUST link to the fix.
-- It is RECOMMENDED to create the fix in a dedicated bug-fix branch created from ``main`` (i.e., not from your working branch).
-- Merge the bug-fix branch into your own branch as needed, and separately request a merge of the bug-fix branch back into ``main``.
+- It is RECOMMENDED to create the fix in a dedicated bug-fix branch created from ``main`` (i.e., not from your working branch). Then, merge the bug-fix branch into your own branch as needed, and separately request a merge of the bug-fix branch back into ``main``.
+- Alternatively, you can make a fix directly in your working branch and create a commit that fixes the bug, and only the bug. Then, use git cherry-pick to apply the fix to the ``main`` branch.
 - It is also RECOMMENDED to communicate the bug to developers who may be affected.
 
 Testing
@@ -53,7 +53,4 @@ Coding Practices
 - Monetary units MUST be nominal USD (face value) for the respective years.
 - It is RECOMMENDED to use ``assert`` statements in the model to ensure correct behaviour.
 - When there is an error, the model SHOULD fail. Do not catch exceptions and replace with dummy data.
-- All code MUST be formatted using ``ruff format`` and ``ruff check``. Imports MUST be ordered using ``isort`` (included in ``ruff``).
-- It is RECOMMENDED to install the ruff plugin and set ruff as the default formatter in Visual Studio Code.
-  Also turn on “format on paste” and “format on save”.
-- ``ruff format`` and ``ruff check`` are automatically executed when pushing to GitHub.
+- All code MUST be formatted using ``ruff format`` and ``ruff check``. Imports MUST be ordered using ``isort`` (included in ``ruff``). It is RECOMMENDED to install the ruff plugin and set ruff as the default formatter in Visual Studio Code. Also turn on “format on paste” and “format on save”. ``ruff format`` and ``ruff check`` are automatically executed when pushing to GitHub.
