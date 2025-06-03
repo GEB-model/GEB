@@ -69,7 +69,8 @@ class Reporter:
 
     def __init__(self, model, clean) -> None:
         self.model = model
-        self.hydrology = model.hydrology
+        if self.model.simulate_hydrology:
+            self.hydrology = model.hydrology
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
         # optionally clean report model at start of run
         if clean:

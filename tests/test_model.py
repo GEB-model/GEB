@@ -1,9 +1,10 @@
 import os
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from geb.cli import build_fn, run_model_with_method, update_fn
+from geb.cli import build_fn, parse_config, run_model_with_method, update_fn
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
@@ -70,7 +71,13 @@ def test_run():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.dependency(depends=["test_spinup"])
 def test_run_yearly():
-    run_model_with_method(method="run_yearly", **DEFAULT_RUN_ARGS)
+    args = DEFAULT_RUN_ARGS.copy()
+    config = parse_config(working_directory / args["config"])
+    config["general"]["start_time"] = date(2000, 1, 1)
+    config["general"]["start_time"] = date(2050, 1, 1)
+    args["config"] = config
+    args["config"]["report"] = {}
+    run_model_with_method(method="run_yearly", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

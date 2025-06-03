@@ -52,13 +52,14 @@ os.chdir("..")
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.coverage",
-    "sphinx.ext.napoleon",
+    "sphinx.ext.napoleon",  # Napoleon is a Sphinx extension that enables Sphinx to parse both NumPy and Google style docstrings
     "sphinx.ext.viewcode",
     "sphinx_rtd_theme",
     "sphinx_autodoc_typehints",
     "sphinxcontrib.autoprogram",
     "sphinxcontrib.autoyaml",
     "sphinxcontrib.bibtex",
+    "myst_parser",
 ]
 
 # Add any paths that contain templates here, relative to this directory.

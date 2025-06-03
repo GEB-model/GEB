@@ -24,7 +24,7 @@ hazards:
   floods:
     simulate: true
     resolution: 100
-    nr_subgrid_pixels: 5
+    nr_subgrid_pixels: 4
     flood_risk: false
     gpu: false
     force_overwrite: true

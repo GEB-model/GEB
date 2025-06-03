@@ -226,12 +226,9 @@ class LakesReservoirs(Module):
         # print("setting all water body types to LAKE")
         # self.var.water_body_type.fill(LAKE)
 
-        assert (np.isin(self.var.water_body_type, [OFF, LAKE, RESERVOIR])).all()
+        assert (np.isin(self.var.water_body_type, [LAKE, RESERVOIR])).all()
 
         self.var.lake_area = self.var.water_body_data["average_area"].values
-        # a factor which increases evaporation from lake because of wind TODO: use wind to set this factor
-        self.var.lakeEvaFactor = self.model.config["parameters"]["lakeEvaFactor"]
-
         self.var.capacity = self.var.water_body_data["volume_total"].values
 
         self.var.total_inflow_from_other_water_bodies_m3 = np.zeros_like(
@@ -278,8 +275,6 @@ class LakesReservoirs(Module):
             )
             < 1e-10
         ).all()
-
-        self.grid.var.river_storage_m3[self.grid.var.waterBodyID != -1] = 0
 
     def map_water_bodies_IDs(self, waterBodyID_unmapped):
         unique_water_bodies = np.unique(waterBodyID_unmapped)
@@ -467,9 +462,7 @@ class LakesReservoirs(Module):
 
         assert (self.var.total_inflow_from_other_water_bodies_m3 >= 0).all()
 
-        outflow_to_drainage_network_m3 = np.zeros_like(
-            self.var.storage, dtype=np.float32
-        )
+        outflow_to_drainage_network_m3 = np.zeros_like(self.var.storage)
 
         outflow_to_drainage_network_m3[self.is_lake] = self.routing_lakes(
             routing_step_length_seconds
