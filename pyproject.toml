@@ -56,6 +56,7 @@ dependencies = [
     "SALib>=1.4.8", # for sensitivity analysis
     "scipy>=1.14.0",
     "setuptools>=75.8.0",
+    "statsmodels>=0.14.4",
     "tbb>=2022.0.0",
     "tqdm>=4.66.1",
     "xarray>=2025.3.0",
