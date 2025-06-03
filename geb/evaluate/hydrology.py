@@ -20,11 +20,16 @@ class Hydrology:
         pass
 
     def evaluate_discharge_grid(self, correct_Q_obs=False):
+        """Method to evaluate the discharge grid from GEB against observations from the GRDC database.
+        Correct_Q_obs can be flagged to correct the GRDC discharge timeseries for the diff in upstream area
+        between the GRDC station and the discharge from GEB."""
+
         #  create folders
         eval_plot_folder = Path(self.output_folder_evaluate) / "discharge" / "plots"
         eval_result_folder = (
             Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
         )
+
         eval_plot_folder.mkdir(parents=True, exist_ok=True)
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 

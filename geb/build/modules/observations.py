@@ -20,7 +20,7 @@ class Observations:
     def __init__(self):
         pass
 
-    def setup_discharge_observations(self, custom_river_stations=False):
+    def setup_discharge_observations(self, custom_river_stations=None):
         """
         setup_discharge_observations is responsible for setting up discharge observations from the GRDC dataset.
         It clips GRDC to the basin area, and snaps the GRDC locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in GRDC.
@@ -41,11 +41,9 @@ class Observations:
         )
         snapping_discharge_folder.mkdir(parents=True, exist_ok=True)
 
-        ############################### Load and process GRDC dataset ##########################################
-
         # add external stations to GRDC
         def add_station_GRDC(station_name, station_coords, station_dataframe):
-            """This function adds a new station to the GRDC dataset. It should be a dataframe with the first row lon, lat and data should start at index 3 (row4)"""
+            """This function adds a new station to the GRDC dataset. It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4)"""
 
             # Convert the pandas DataFrame to an xarray Dataset
             new_station_ds = xr.Dataset(
@@ -68,58 +66,70 @@ class Observations:
 
             return GRDC_merged
 
-        def process_station_data(station_df, dt_format, startrow):
+        def process_station_data(Q_station, dt_format, startrow):
             # process data
-            station_coords = station_df.iloc[
+            station_coords = Q_station.iloc[
                 0
             ].tolist()  # get the coordinates from the first row
 
             station_coords = [float(i) for i in station_coords]  # convert to float
 
-            station_df = station_df.iloc[startrow:]  # remove the first rows
-            station_df.rename(
+            Q_station = Q_station.iloc[startrow:]  # remove the first rows
+            Q_station.rename(
                 columns={
                     Q_station.columns[0]: "date",
                     Q_station.columns[1]: "Q",
                 },
                 inplace=True,
             )
-            station_df["date"] = pd.to_datetime(station_df["date"], format=dt_format)
-            station_df.set_index("date", inplace=True)
-            station_df["Q"] = station_df["Q"].astype(float)  # convert to float
-            station_df = station_df.resample("D", label="left").mean()
-            station_df.index.name = "time"  # rename index to time
+            Q_station["date"] = pd.to_datetime(Q_station["date"], format=dt_format)
+            Q_station.set_index("date", inplace=True)
+            Q_station["Q"] = Q_station["Q"].astype(float)  # convert to float
+            Q_station = Q_station.resample("D", label="left").mean()
+            Q_station.index.name = "time"  # rename index to time
 
             # delete missing values in the dataframe
-            station_df.dropna(inplace=True)  # drop missing time steps
+            Q_station.dropna(inplace=True)  # drop missing time steps
 
             # checks
-            if station_df.shape[1] != 1:
+            if Q_station.shape[1] != 1:
                 raise ValueError(f"File {station} does not have 1 column")
 
             if len(station_coords) != 2:
                 raise ValueError(
                     f"File {station} does not have 2 coordinates. .csv files of discharge stations should have the coordinates in the first row of the file"
                 )
-            return station_df, station_coords
+            return Q_station, station_coords
 
-        if custom_river_stations is True:
-            for station in os.listdir(
-                Path(self.data_catalog["GRDC"].path).parent.parent / "custom_stations"
-            ):
+        if custom_river_stations is not None:
+            for station in os.listdir(custom_river_stations):
                 if not station.endswith(".csv"):
                     # raise error
                     raise ValueError(f"File {station} is not a csv file")
                 else:
                     station_name = station[:-4]
 
-                    Q_station = self.data_catalog.get_dataframe(
-                        f"custom_discharge_stations_{station}"
-                    )
+                    if not (
+                        Path(self.root).parent / Path(custom_river_stations)
+                    ).is_dir():
+                        raise ValueError(
+                            f"Path {Path(self.root).parent / Path(custom_river_stations)} does not exist or is not a directory. Create this directory if you want to use custom discharge stations, or set custom_river_stations to None"
+                        )
+                    Q_station = pd.read_csv(
+                        Path(self.root).parent / Path(custom_river_stations) / station,
+                        header=None,
+                        delimiter=",",
+                    )  # read the csv file with no header and comma delimiter
 
                     Q_station, station_coords = process_station_data(
                         Q_station, dt_format="%Y-%m-%d %H:%M:%S", startrow=3
                     )
+
+                    # Check for missing or invalid dates
+                    if Q_station.index.isnull().any():
+                        raise ValueError(
+                            "Datetime parsing failed. Found Nan values in the index."
+                        )
 
                     # add station to grdc if station is not already in grdc
                     if station_name not in GRDC.station_name.values:
@@ -186,7 +196,7 @@ class Observations:
             discharge_df, name="discharge/GRDC"
         )  # save the discharge data as a table
 
-        ############################### Snapping to river and validation of discharges ############################################################################
+        # Snapping to river and validation of discharges
 
         # create discharge snapping df
         discharge_snapping_df = pd.DataFrame()
@@ -226,8 +236,12 @@ class Observations:
             )  # distance in degrees
             rivers_sorted = rivers.sort_values(by="station_distance")
 
-            # select the closest river segment based on the upstream area and distance
             def select_river_segment(max_uparea_diff, max_spatial_diff):
+                """
+                This function selects the closest river segment to the GRDC station based on the spatial distance.
+                It returns an error if the spatial distance is larger than the max_spatial_diff. If the difference between the upstream area from MERIT (from the river centerlines)
+                and the GRDC upstream area is larger than the max_uparea_diff, it will select the closest river segment within the correct upstream area range.
+                """
                 if np.isnan(
                     GRDC_uparea
                 ):  # if GRDC upstream area is NaN, only just select the closest river segment
@@ -248,14 +262,10 @@ class Observations:
                         raise ValueError(
                             f"Closest river segment is too far from the GRDC station {GRDC_station_name}. Distance: {closest_river_segment.station_distance.values.item()} degrees while the max distance set in the model is {max_spatial_diff} degrees."
                         )
-                    print(
-                        "distance to closest river segment: %s degrees"
-                        % closest_river_segment.station_distance.values.item()
-                    )
                 return closest_river_segment
 
             closest_river_segment = select_river_segment(
-                max_uparea_diff=0.3,  # 30% max difference
+                max_uparea_diff=0.3,  # 30% max difference in upstream area
                 max_spatial_diff=0.1,  # 0.1 degrees spatial difference
             )
             closest_river_segment_linestring = shapely.geometry.LineString(
