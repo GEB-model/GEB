@@ -67,7 +67,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def restore(self, store_location: str, timestep: int) -> None:
         self.store.load(store_location)
+
+        # restore the heads of the groundwater model
         self.hydrology.groundwater.modflow.restore(self.hydrology.grid.var.heads)
+
+        # restore the discharge from the store
+        self.hydrology.routing.router.Q_prev = (
+            self.hydrology.routing.grid.var.discharge_m3_s.copy()
+        )
         self.current_timestep = timestep
 
     def multiverse(self):
@@ -82,9 +89,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         forecasts = xr.open_dataset(
             self.input_folder
+            / "other"
             / "climate"
             / "forecasts"
-            / f"{self.current_time.strftime('%Y%m%d')}.nc"
+            / f"{self.current_time.strftime('%Y%m%d')}.zarr"
         )
 
         end_date = forecasts.time[-1].dt.date.item()
@@ -123,7 +131,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # and if the current date is in the list of forecast days
         if (
             self.config["general"]["forecasts"]["use"]
-            and not self.multiverse_name
+            and self.multiverse_name
+            is None  # only start multiverse if not already in one
             and self.current_time.date() in self.config["general"]["forecasts"]["days"]
         ):
             self.multiverse()
@@ -188,6 +197,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.store.load()
 
         if self.simulate_hydrology:
+            if load_data_from_store:
+                self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
             self.hydrology.soil.set_global_variables()
 
@@ -391,7 +402,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     @multiverse_name.setter
     def multiverse_name(self, value):
-        self._multiverse_name = str(value) if value else None
+        self._multiverse_name = str(value) if value is not None else None
 
     @property
     def output_folder(self):

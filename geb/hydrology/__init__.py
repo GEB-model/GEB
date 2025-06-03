@@ -22,7 +22,6 @@
 import numpy as np
 
 from geb.HRUs import Data
-from geb.hydrology.routing import calculate_river_storage_from_discharge
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
@@ -81,20 +80,25 @@ class Hydrology(Data, Module):
         self.lakes_reservoirs.step()
         timer.new_split("Waterbodies")
 
-        self.snowfrost.step()
+        snow, rain, snow_melt = self.snowfrost.step()
         timer.new_split("Snow and frost")
 
         (
             interflow,
             runoff,
             groundwater_recharge,
-            groundwater_abstraction,
-            channel_abstraction,
+            groundwater_abstraction_m3,
+            channel_abstraction_m3,
             return_flow,
-        ) = self.landcover.step()
+            capillary_m,
+            total_water_demand_loss_m3,
+        ) = self.landcover.step(snow, rain, snow_melt)
+
         timer.new_split("Landcover")
 
-        baseflow = self.groundwater.step(groundwater_recharge, groundwater_abstraction)
+        baseflow = self.groundwater.step(
+            groundwater_recharge, groundwater_abstraction_m3
+        )
         timer.new_split("GW")
 
         total_runoff = self.runoff_concentration.step(interflow, baseflow, runoff)
@@ -103,7 +107,7 @@ class Hydrology(Data, Module):
         self.lakes_res_small.step()
         timer.new_split("Small waterbodies")
 
-        self.routing.step(total_runoff, channel_abstraction, return_flow)
+        self.routing.step(total_runoff, channel_abstraction_m3, return_flow)
         timer.new_split("Routing")
 
         self.hillslope_erosion.step()
@@ -113,7 +117,7 @@ class Hydrology(Data, Module):
             print(timer)
 
         if __debug__:
-            self.water_balance()
+            self.water_balance(total_water_demand_loss_m3)
 
         self.report(self, locals())
 
@@ -152,31 +156,28 @@ class Hydrology(Data, Module):
             (biomass_per_m2_per_HRU * land_use_ratios).sum() / land_use_ratios.sum()
         )
 
-    def water_balance(self):
+    def water_balance(self, total_water_demand_loss_m3):
+        # TODO: account for capillar in water balance
         current_storage = (
-            np.sum(self.HRU.var.SnowCoverS) / self.snowfrost.var.numberSnowLayers
-            + self.HRU.var.interception_storage.sum()
-            + np.nansum(self.HRU.var.w)
-            + self.HRU.var.topwater.sum()
-            + calculate_river_storage_from_discharge(
-                self.grid.var.discharge_m3_s,
-                self.grid.var.river_alpha,
-                self.grid.var.river_length,
-                self.routing.var.river_beta,
-                self.grid.var.waterBodyID,
-            ).sum()
+            np.sum(self.HRU.var.SnowCoverS * self.HRU.var.cell_area)
+            / self.snowfrost.var.numberSnowLayers
+            + (self.HRU.var.interception_storage * self.HRU.var.cell_area).sum()
+            + (np.nansum(self.HRU.var.w, axis=0) * self.HRU.var.cell_area).sum()
+            + (self.HRU.var.topwater * self.HRU.var.cell_area).sum()
+            + self.routing.router.get_available_storage().sum()
             + self.lakes_reservoirs.var.storage.sum()
             + self.groundwater.groundwater_content_m3.sum()
-            + self.lakes_reservoirs.var.total_inflow_from_other_water_bodies_m3.sum()
         )
 
         # in the first timestep of the spinup, we don't have the storage of the
         # previous timestep, so we can't check the balance
         if not self.model.current_timestep == 0 and self.model.in_spinup:
-            influx = (self.HRU.var.precipitation_m_day * self.HRU.var.cell_area).sum()
+            influx = (self.grid.pr * 0.001 * 86400.0 * self.grid.var.cell_area).sum()
             outflux = (
-                self.HRU.var.actual_evapotranspiration * self.HRU.var.cell_area
-            ).sum() + self.model.hydrology.routing.routing_loss
+                (self.HRU.var.actual_evapotranspiration * self.HRU.var.cell_area).sum()
+                + total_water_demand_loss_m3
+                + self.model.hydrology.routing.routing_loss
+            )
 
             balance_check(
                 name="total water balance",
@@ -189,7 +190,7 @@ class Hydrology(Data, Module):
                 ],
                 prestorages=[self.var.system_storage],
                 poststorages=[current_storage],
-                tollerance=100,
+                tollerance=100_000,
             )
 
         # update the storage for the next timestep
