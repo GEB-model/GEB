@@ -516,8 +516,39 @@ class Routing(Module):
         if self.model.in_spinup:
             self.spinup()
 
-        ldd = self.grid.load(
+    def set_router(self):
+        routing_algorithm = self.model.config["hydrology"]["routing"]["algorithm"]
+        if routing_algorithm == "kinematic_wave":
+            self.router = KinematicWave(
+                dt=self.var.routing_step_length_seconds,
+                ldd=self.grid.var.ldd,
+                mask=~self.grid.mask,
+                Q_initial=self.grid.var.discharge_m3_s,
+                river_width=self.grid.var.river_width,
+                river_length=self.grid.var.river_length,
+                river_alpha=self.grid.var.river_alpha,
+                river_beta=self.var.river_beta,
+            )
+        elif routing_algorithm == "accuflux":
+            self.router = Accuflux(
+                dt=self.var.routing_step_length_seconds,
+                ldd=self.grid.var.ldd,
+                mask=~self.grid.mask,
+                Q_initial=self.grid.var.discharge_m3_s,
+            )
+        else:
+            raise ValueError(
+                f"Unknown routing algorithm: {routing_algorithm}. "
+                "Available algorithms are 'kinematic_wave' and 'accuflux'."
+            )
+
+    def spinup(self):
+        self.grid.var.ldd = self.grid.load(
             self.model.files["grid"]["routing/ldd"],
+        )
+
+        self.grid.var.upstream_area = self.grid.load(
+            self.model.files["grid"]["routing/upstream_area"]
         )
 
         # number of substep per day
@@ -540,8 +571,8 @@ class Routing(Module):
 
         # where there is a pit, the river length is set to distance to the center of the cell,
         # thus half of the sqrt of the cell area
-        self.grid.var.river_length[ldd == 5] = (
-            np.sqrt(self.grid.var.cell_area[ldd == 5]) / 2
+        self.grid.var.river_length[self.grid.var.ldd == 5] = (
+            np.sqrt(self.grid.var.cell_area[self.grid.var.ldd == 5]) / 2
         )
         assert (self.grid.var.river_length > 0).all(), (
             "Channel length must be greater than 0 for all cells"
@@ -575,36 +606,12 @@ class Routing(Module):
             / np.sqrt(river_slope)
         ) ** self.var.river_beta
 
-        routing_algorithm = self.model.config["hydrology"]["routing"]["algorithm"]
-        if routing_algorithm == "kinematic_wave":
-            self.router = KinematicWave(
-                dt=self.var.routing_step_length_seconds,
-                ldd=ldd,
-                mask=~self.grid.mask,
-                Q_initial=self.grid.var.discharge_m3_s,
-                river_width=self.grid.var.river_width,
-                river_length=self.grid.var.river_length,
-                river_alpha=self.grid.var.river_alpha,
-                river_beta=self.var.river_beta,
-            )
-        elif routing_algorithm == "accuflux":
-            self.router = Accuflux(
-                dt=self.var.routing_step_length_seconds,
-                ldd=ldd,
-                mask=~self.grid.mask,
-                Q_initial=self.grid.var.discharge_m3_s,
-            )
-        else:
-            raise ValueError(
-                f"Unknown routing algorithm: {routing_algorithm}. "
-                "Available algorithms are 'kinematic_wave' and 'accuflux'."
-            )
-
-    def spinup(self):
         # Initialize discharge with zero
         self.grid.var.discharge_m3_s = self.grid.full_compressed(
             1e-30, dtype=np.float32
         )
+
+        self.set_router()
 
     def step(self, total_runoff, channel_abstraction_m3, return_flow):
         if __debug__:
