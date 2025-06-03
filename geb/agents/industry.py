@@ -60,16 +60,18 @@ class Industry(AgentBaseClass):
             )
             / (water_demand.rio.transform().a / self.grid.transform.a) ** 2
         )  # correct for change in cell size
-        water_demand = downscale_volume(
-            water_demand.rio.transform().to_gdal(),
-            self.grid.gt,
-            water_demand.values,
-            self.grid.mask,
-            self.model.hydrology.grid_to_HRU_uncompressed,
-            downscale_mask,
-            self.HRU.var.land_use_ratio,
-        )
-        water_demand = self.HRU.M3toM(water_demand)
+        water_demand = (
+            downscale_volume(
+                water_demand.rio.transform().to_gdal(),
+                self.grid.gt,
+                water_demand.values,
+                self.grid.mask,
+                self.model.hydrology.grid_to_HRU_uncompressed,
+                downscale_mask,
+                self.HRU.var.land_use_ratio,
+            )
+            / self.HRU.var.cell_area
+        )  # convert to m/day
 
         water_consumption = (
             self.model.industry_water_consumption_ds.sel(
@@ -86,17 +88,18 @@ class Industry(AgentBaseClass):
             )
             / (water_consumption.rio.transform().a / self.grid.transform.a) ** 2
         )
-        water_consumption = downscale_volume(
-            water_consumption.rio.transform().to_gdal(),
-            self.grid.gt,
-            water_consumption.values,
-            self.grid.mask,
-            self.model.hydrology.grid_to_HRU_uncompressed,
-            downscale_mask,
-            self.HRU.var.land_use_ratio,
-        )
-
-        water_consumption = self.HRU.M3toM(water_consumption)
+        water_consumption = (
+            downscale_volume(
+                water_consumption.rio.transform().to_gdal(),
+                self.grid.gt,
+                water_consumption.values,
+                self.grid.mask,
+                self.model.hydrology.grid_to_HRU_uncompressed,
+                downscale_mask,
+                self.HRU.var.land_use_ratio,
+            )
+            / self.HRU.var.cell_area
+        )  # convert to m/day
 
         efficiency = np.divide(
             water_consumption,
