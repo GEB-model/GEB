@@ -122,15 +122,24 @@ class Observations:
 
     def setup_discharge_observations(
         self,
-        max_uparea_difference_ratio=0.3,
-        max_spatial_difference_degrees=0.1,
-        custom_river_stations=None,
-    ):
+        max_uparea_difference_ratio: float = 0.3,
+        max_spatial_difference_degrees: float = 0.1,
+        custom_river_stations: None = None,
+    ) -> None:
         """
         setup_discharge_observations is responsible for setting up discharge observations from the Q_obs dataset.
         It clips Q_obs to the basin area, and snaps the Q_obs locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in Q_obs.
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
         Additional stations can be added as csv files in the custom_stations folder in the GEB data catalog.
+
+        Parameters
+        ----------
+        max_uparea_difference_ratio : float, optional
+            The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area. Default is 0.3 (30%).
+        max_spatial_difference_degrees : float, optional
+            The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment. Default is 0.1 degrees.
+        custom_river_stations : str, optional
+            Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
         """
 
         # load data
