@@ -20,6 +20,7 @@ This module contains the Observations class.
 
 
 def plot_snapping(
+    station_id,
     output_folder,
     rivers,
     upstream_area,
@@ -27,7 +28,6 @@ def plot_snapping(
     closest_point_coords,
     closest_river_segment,
     grid_pixel_coords,
-    Q_obs_station_name,
 ):
     fig, ax = plt.subplots(
         subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
@@ -103,12 +103,12 @@ def plot_snapping(
         ax=ax, color="green", linewidth=3, label="Closest river segment"
     )
 
-    ax.set_title("Upstream area grid and gauge snapping for %s" % Q_obs_station_name)
+    ax.set_title("Upstream area grid and gauge snapping for %s" % station_id)
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
     ax.legend()
     plt.savefig(
-        output_folder / f"snapping_discharge_{Q_obs_station_name}.png",
+        output_folder / f"snapping_discharge_{station_id}.png",
         dpi=300,
         bbox_inches="tight",
     )
@@ -386,7 +386,7 @@ class Observations:
                         return False  # no river segment found within the upstream area criteria
 
                     if (
-                        closest_river_segment.station_distance.values.item()
+                        closest_river_segment.iloc[0].station_distance
                         > max_spatial_difference_degrees
                     ):
                         # No river segment found within the max_spatial_difference_degrees, returning with False
@@ -405,7 +405,7 @@ class Observations:
                 continue
 
             closest_river_segment_linestring = shapely.geometry.LineString(
-                closest_river_segment.geometry.iloc[0]
+                closest_river_segment.iloc[0].geometry
             )
             closest_point_on_riverline = nearest_points(
                 Q_obs_location, closest_river_segment_linestring
@@ -436,10 +436,17 @@ class Observations:
             )  # create an array with the x and y index of the selected_grid_pixel
 
             # select the closest pixel in the low-res river network
-            xy_tuples = closest_river_segment[
+            xy_tuples = closest_river_segment.iloc[
+                0
+            ][
                 "hydrography_xy"
-            ].values  # get the xy of the river pixels of the grid (already prepared and stored as hydrography_xy)
-            xy_tuples = np.asarray(xy_tuples)[0]
+            ]  # get the xy of the river pixels of the grid (already prepared and stored as hydrography_xy)
+
+            if xy_tuples.size == 0:
+                self.logger.warning(
+                    f"River now found in hydrography_xy for station {Q_obs_station_name} with river id {closest_river_segment.iloc[0].name}. Skipping this station."
+                )
+                continue
 
             closest_tuple = min(
                 xy_tuples, key=lambda x: np.linalg.norm(np.array(x) - array)
@@ -493,13 +500,14 @@ class Observations:
                     "Q_obs_to_GEB_upstream_area_ratio": float(
                         GEB_upstream_area_from_subgrid / Q_obs_uparea
                     ),
-                    "snapping_distance_degrees": float(
-                        closest_river_segment.station_distance.values.item()
-                    ),
+                    "snapping_distance_degrees": closest_river_segment.station_distance.iloc[
+                        0
+                    ],
                 }
             )
 
             plot_snapping(
+                station_id,
                 self.report_dir / "snapping_discharge",
                 rivers,
                 upstream_area,
@@ -507,7 +515,6 @@ class Observations:
                 closest_point_coords,
                 closest_river_segment,
                 grid_pixel_coords,
-                Q_obs_station_name,
             )
 
         self.logger.info("Discharge snapping done for all stations")
