@@ -10,17 +10,122 @@ import pandas as pd
 import shapely
 import xarray as xr
 from shapely.ops import nearest_points
+from tqdm import tqdm
+
+from geb.workflows.io import get_window
 
 """
 This module contains the Observations class. 
 """
 
 
+def plot_snapping(
+    output_folder,
+    rivers,
+    upstream_area,
+    Q_obs_station_coords,
+    closest_point_coords,
+    closest_river_segment,
+    grid_pixel_coords,
+    Q_obs_station_name,
+):
+    fig, ax = plt.subplots(
+        subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
+    )
+    ax.coastlines()
+    ax.add_feature(cfeature.BORDERS)
+    ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.OCEAN)
+    ax.add_feature(cfeature.LAKES)
+
+    # Set the extent to zoom in around the gauge location
+    buffer = 0.05  # Adjust this value to control the zoom level
+
+    xmin = Q_obs_station_coords[0] - buffer
+    xmax = Q_obs_station_coords[0] + buffer
+    ymin = Q_obs_station_coords[1] - buffer
+    ymax = Q_obs_station_coords[1] + buffer
+
+    ax.set_extent(
+        [
+            xmin,
+            xmax,
+            ymin,
+            ymax,
+        ],
+        crs=ccrs.PlateCarree(),
+    )
+
+    ax.scatter(
+        Q_obs_station_coords[0],
+        Q_obs_station_coords[1],
+        color="red",
+        marker="o",
+        s=30,
+        label="Original gauge",
+        zorder=3,
+    )
+    ax.scatter(
+        closest_point_coords[0],
+        closest_point_coords[1],
+        color="black",
+        marker="o",
+        s=30,
+        label="Closest point to river",
+        zorder=3,
+    )
+    ax.scatter(
+        grid_pixel_coords[0],
+        grid_pixel_coords[1],
+        color="blue",
+        marker="o",
+        s=30,
+        label="Grid pixel",
+        zorder=3,
+    )
+
+    # Select the upstream area within the extent of the plot
+    upstream_area_within_extent = upstream_area.isel(
+        get_window(
+            upstream_area.x, upstream_area.y, bounds=(xmin, ymin, xmax, ymax), buffer=1
+        )
+    )
+
+    upstream_area_within_extent.plot(
+        ax=ax,
+        cmap="viridis",
+        cbar_kwargs={"label": "Upstream area [m2]"},
+        zorder=0,
+        alpha=1,
+    )
+    rivers.plot(ax=ax, color="blue", linewidth=1)
+    closest_river_segment.plot(
+        ax=ax, color="green", linewidth=3, label="Closest river segment"
+    )
+
+    ax.set_title("Upstream area grid and gauge snapping for %s" % Q_obs_station_name)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.legend()
+    plt.savefig(
+        output_folder / f"snapping_discharge_{Q_obs_station_name}.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+    # plt.show()
+    plt.close()
+
+
 class Observations:
     def __init__(self):
         pass
 
-    def setup_discharge_observations(self, custom_river_stations=None):
+    def setup_discharge_observations(
+        self,
+        max_uparea_difference_ratio=0.3,
+        max_spatial_difference_degrees=0.1,
+        custom_river_stations=None,
+    ):
         """
         setup_discharge_observations is responsible for setting up discharge observations from the Q_obs dataset.
         It clips Q_obs to the basin area, and snaps the Q_obs locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in Q_obs.
@@ -29,7 +134,9 @@ class Observations:
         """
 
         # load data
-        upstream_area = self.grid["routing/upstream_area"]
+        upstream_area = self.grid[
+            "routing/upstream_area"
+        ].compute()  # we need to use this one many times, so we compute it once
         upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
         rivers = self.geoms["routing/rivers"]
         region_shapefile = self.geoms["mask"]
@@ -201,15 +308,14 @@ class Observations:
         )  # save the discharge data as a table
 
         # Snapping to river and validation of discharges
-
-        # create discharge snapping df
-        discharge_snapping_df = pd.DataFrame()
+        # create list for results of snapping
+        discharge_snapping_results = []
 
         # start looping over the Q_obs stations
-        for id in Q_obs_clipped.id.values:
+        for station_id in tqdm(Q_obs_clipped.id.values):
             # create Q_obs variables
             Q_obs_station = Q_obs_clipped.sel(
-                id=id
+                id=station_id
             )  # select the station from the Q_obs dataset
             Q_obs_station_name = str(
                 Q_obs_station.station_name.values
@@ -226,8 +332,7 @@ class Observations:
             )  # create a point geometry for the station
             Q_obs_uparea = (
                 Q_obs_station.area.values.item()
-            )  # get the upstream area of the station
-            Q_obs_uparea_m2 = Q_obs_uparea * 1e6
+            ) * 1e6  # get the upstream area of the station
             Q_obs_rivername = Q_obs_station.river_name.values.item()
 
             # find river section closest to the Q_obs station
@@ -240,11 +345,13 @@ class Observations:
             )  # distance in degrees
             rivers_sorted = rivers.sort_values(by="station_distance")
 
-            def select_river_segment(max_uparea_diff, max_spatial_diff):
+            def select_river_segment(
+                max_uparea_difference_ratio, max_spatial_difference_degrees
+            ):
                 """
                 This function selects the closest river segment to the Q_obs station based on the spatial distance.
-                It returns an error if the spatial distance is larger than the max_spatial_diff. If the difference between the upstream area from MERIT (from the river centerlines)
-                and the Q_obs upstream area is larger than the max_uparea_diff, it will select the closest river segment within the correct upstream area range.
+                It returns an error if the spatial distance is larger than the max_spatial_difference_degrees. If the difference between the upstream area from MERIT (from the river centerlines)
+                and the Q_obs upstream area is larger than the max_uparea_difference_ratio, it will select the closest river segment within the correct upstream area range.
                 """
                 if np.isnan(
                     Q_obs_uparea
@@ -253,27 +360,41 @@ class Observations:
                 else:
                     # add upstream area criteria
                     upstream_area_diff = (
-                        max_uparea_diff * Q_obs_uparea
+                        max_uparea_difference_ratio * Q_obs_uparea
                     )  # 30% difference
                     closest_river_segment = rivers_sorted[
-                        (rivers_sorted.uparea > (Q_obs_uparea - upstream_area_diff))
-                        & (rivers_sorted.uparea < (Q_obs_uparea + upstream_area_diff))
+                        (
+                            rivers_sorted["uparea_m2"]
+                            > (Q_obs_uparea - upstream_area_diff)
+                        )
+                        & (
+                            rivers_sorted["uparea_m2"]
+                            < (Q_obs_uparea + upstream_area_diff)
+                        )
                     ].head(1)
+
+                    if closest_river_segment.empty:
+                        return False  # no river segment found within the upstream area criteria
 
                     if (
                         closest_river_segment.station_distance.values.item()
-                        > max_spatial_diff
+                        > max_spatial_difference_degrees
                     ):
-                        # raise error
-                        raise ValueError(
-                            f"Closest river segment is too far from the Q_obs (now: GRDC) station {Q_obs_station_name}. Distance: {closest_river_segment.station_distance.values.item()} degrees while the max distance set in the model is {max_spatial_diff} degrees."
-                        )
+                        # No river segment found within the max_spatial_difference_degrees, returning with False
+                        return False
+
                 return closest_river_segment
 
             closest_river_segment = select_river_segment(
-                max_uparea_diff=0.3,  # 30% max difference in upstream area
-                max_spatial_diff=0.1,  # 0.1 degrees spatial difference
+                max_uparea_difference_ratio=max_uparea_difference_ratio,
+                max_spatial_difference_degrees=max_spatial_difference_degrees,
             )
+            if closest_river_segment is False:
+                self.logger.warning(
+                    f"No river segment found within the max_uparea_difference_ratio ({max_uparea_difference_ratio}) and max_spatial_difference_degrees ({max_spatial_difference_degrees}) for station {Q_obs_station_name} with upstream area {Q_obs_uparea} m2. Skipping this station."
+                )
+                continue
+
             closest_river_segment_linestring = shapely.geometry.LineString(
                 closest_river_segment.geometry.iloc[0]
             )
@@ -345,127 +466,44 @@ class Observations:
                 )
             )  # grid pixel coordinates
 
-            def add_row(discharge_snapping_df):
-                new_row = pd.DataFrame(
-                    [
-                        {
-                            "Q_obs_station_name": Q_obs_station_name,
-                            "Q_obs_station_ID": int(id),
-                            "Q_obs_river_name": Q_obs_rivername,
-                            "Q_obs_upstream_area_m2": Q_obs_uparea_m2,
-                            "Q_obs_station_coords": Q_obs_station_coords,
-                            "closest_point_coords": closest_point_coords,
-                            "subgrid_pixel_coords": subgrid_pixel_coords,
-                            "grid_pixel_coords": grid_pixel_coords,
-                            "closest_tuple": closest_tuple,
-                            "GEB_upstream_area_from_subgrid": float(
-                                GEB_upstream_area_from_subgrid
-                            ),
-                            "GEB_upstream_area_from_grid": float(
-                                GEB_upstream_area_from_grid
-                            ),
-                            "Q_obs_to_GEB_upstream_area_ratio": float(
-                                GEB_upstream_area_from_subgrid / Q_obs_uparea_m2
-                            ),
-                            "snapping_distance_degrees": float(
-                                closest_river_segment.station_distance.values.item()
-                            ),
-                        }
-                    ]
-                )
+            discharge_snapping_results.append(
+                {
+                    "Q_obs_station_name": Q_obs_station_name,
+                    "Q_obs_station_ID": int(station_id),
+                    "Q_obs_river_name": Q_obs_rivername,
+                    "Q_obs_upstream_area_m2": Q_obs_uparea,
+                    "Q_obs_station_coords": Q_obs_station_coords,
+                    "closest_point_coords": closest_point_coords,
+                    "subgrid_pixel_coords": subgrid_pixel_coords,
+                    "grid_pixel_coords": grid_pixel_coords,
+                    "closest_tuple": closest_tuple,
+                    "GEB_upstream_area_from_subgrid": float(
+                        GEB_upstream_area_from_subgrid
+                    ),
+                    "GEB_upstream_area_from_grid": float(GEB_upstream_area_from_grid),
+                    "Q_obs_to_GEB_upstream_area_ratio": float(
+                        GEB_upstream_area_from_subgrid / Q_obs_uparea
+                    ),
+                    "snapping_distance_degrees": float(
+                        closest_river_segment.station_distance.values.item()
+                    ),
+                }
+            )
 
-                discharge_snapping_df = pd.concat(
-                    [discharge_snapping_df, new_row], ignore_index=True
-                )  # add the new row to the dataframe
-                return discharge_snapping_df
+            plot_snapping(
+                self.report_dir / "snapping_discharge",
+                rivers,
+                upstream_area,
+                Q_obs_station_coords,
+                closest_point_coords,
+                closest_river_segment,
+                grid_pixel_coords,
+                Q_obs_station_name,
+            )
 
-            discharge_snapping_df = add_row(
-                discharge_snapping_df
-            )  # add the row to the dataframe
+        self.logger.info("Discharge snapping done for all stations")
 
-            # plot locations with river line and the subgrid
-            def plot_snapping():
-                fig, ax = plt.subplots(
-                    subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
-                )
-                ax.coastlines()
-                ax.add_feature(cfeature.BORDERS)
-                ax.add_feature(cfeature.LAND)
-                ax.add_feature(cfeature.OCEAN)
-                ax.add_feature(cfeature.LAKES)
-
-                # Set the extent to zoom in around the gauge location
-                buffer = 0.05  # Adjust this value to control the zoom level
-                ax.set_extent(
-                    [
-                        Q_obs_station_coords[0] - buffer,
-                        Q_obs_station_coords[0] + buffer,
-                        Q_obs_station_coords[1] - buffer,
-                        Q_obs_station_coords[1] + buffer,
-                    ],
-                    crs=ccrs.PlateCarree(),
-                )
-
-                ax.scatter(
-                    Q_obs_station_coords[0],
-                    Q_obs_station_coords[1],
-                    color="red",
-                    marker="o",
-                    s=30,
-                    label="Original gauge",
-                    zorder=3,
-                )
-                ax.scatter(
-                    closest_point_coords[0],
-                    closest_point_coords[1],
-                    color="black",
-                    marker="o",
-                    s=30,
-                    label="Closest point to river",
-                    zorder=3,
-                )
-                ax.scatter(
-                    grid_pixel_coords[0],
-                    grid_pixel_coords[1],
-                    color="blue",
-                    marker="o",
-                    s=30,
-                    label="Grid pixel",
-                    zorder=3,
-                )
-
-                upstream_area.plot(
-                    ax=ax,
-                    cmap="viridis",
-                    cbar_kwargs={"label": "Upstream area [m2]"},
-                    zorder=0,
-                    alpha=1,
-                )
-                rivers.plot(ax=ax, color="blue", linewidth=1)
-                closest_river_segment.plot(
-                    ax=ax, color="green", linewidth=3, label="Closest river segment"
-                )
-
-                ax.set_title(
-                    "Upstream area grid and gauge snapping for %s" % Q_obs_station_name
-                )
-                ax.set_xlabel("Longitude")
-                ax.set_ylabel("Latitude")
-                ax.legend()
-                plt.savefig(
-                    self.report_dir
-                    / "snapping_discharge"
-                    / f"snapping_discharge_{Q_obs_station_name}.png",
-                    dpi=300,
-                    bbox_inches="tight",
-                )
-                # plt.show()
-                plt.close()
-
-            plot_snapping()  # plot the snapping
-            print("discharge snapping done for station %s" % Q_obs_station_name)
-
-        print("Discharge snapping done for all stations")
+        discharge_snapping_df = pd.DataFrame(discharge_snapping_results)
 
         # save to excel and parquet files
         discharge_snapping_df.to_excel(
@@ -476,15 +514,18 @@ class Observations:
         discharge_snapping_gdf = gpd.GeoDataFrame(
             discharge_snapping_df,
             geometry=gpd.points_from_xy(
-                discharge_snapping_df["grid_pixel_coords"].apply(lambda x: x[0]),
-                discharge_snapping_df["grid_pixel_coords"].apply(lambda x: x[1]),
+                discharge_snapping_df["grid_pixel_coords"].apply(
+                    lambda coord: coord[0]
+                ),
+                discharge_snapping_df["grid_pixel_coords"].apply(
+                    lambda coord: coord[1]
+                ),
             ),
             crs="EPSG:4326",  # Set the coordinate reference system
-        )
-        discharge_snapping_gdf.set_index("Q_obs_station_ID", inplace=True)
+        ).set_index("Q_obs_station_ID")
 
         self.set_geoms(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
 
-        print("Building discharge datasets done")
+        self.logger.info("Building discharge datasets done")
