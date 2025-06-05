@@ -1,7 +1,7 @@
 from typing import Union
 
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 from geb.hydrology.soil import (
     get_fraction_easily_available_soil_water,
@@ -982,4 +982,143 @@ def crop_profit_difference_njit(
     return (
         gains_adaptation,
         new_farmer_id,
+    )
+
+
+@njit
+def gev_ppf_scalar(u, c, loc, scale):
+    """Scalar GEV inverse CDF."""
+    if c != 0.0:
+        return loc + scale * ((-np.log(u)) ** (-c) - 1.0) / c
+    else:
+        return loc - scale * np.log(-np.log(u))
+
+
+@njit(cache=True, parallel=True)
+def compute_premiums_and_best_contracts_numba(
+    gev_params,
+    spei_hist,
+    losses,
+    strike_vals,
+    exit_vals,
+    rate_vals,
+    n_sims,
+    seed=42,
+):
+    """
+    For each agent, loop once over (strike, exit):
+    1) Monte Carlo → expected_ratio
+    2) Historical SPEI → sum_ratio_sq, sum_ratio_loss )
+    3) Over all rates → compute both premium = rate * expected_ratio
+                            and RMSE via quadratic form,
+        tracking the (strike_idx, exit_idx, rate_idx) that minimizes RMSE.
+
+    Returns
+    -------
+    best_strike_idx : (n_agents,)  index into strike_vals
+    best_exit_idx   : (n_agents,)  index into exit_vals
+    best_rate_idx   : (n_agents,)  index into rate_vals
+    best_rmse       : (n_agents,)  the minimal RMSE for each agent
+    best_premium    : (n_agents,)  the premium corresponding to that minimal‐RMSE contract
+    """
+    np.random.seed(seed)
+    n_agents = gev_params.shape[0]
+    n_years = spei_hist.shape[1]
+    n_strikes = strike_vals.shape[0]
+    n_exits = exit_vals.shape[0]
+    n_rates = rate_vals.shape[0]
+
+    # Output arrays
+    best_strike_idx = np.empty(n_agents, dtype=np.int64)
+    best_exit_idx = np.empty(n_agents, dtype=np.int64)
+    best_rate_idx = np.empty(n_agents, dtype=np.int64)
+    best_rmse_arr = np.empty(n_agents, dtype=np.float64)
+    best_prem_arr = np.empty(n_agents, dtype=np.float64)
+
+    for agent_idx in prange(n_agents):
+        # Extract GEV parameters
+        shape = -gev_params[agent_idx, 0]
+        loc = gev_params[agent_idx, 1]
+        scale = gev_params[agent_idx, 2]
+
+        # Precompute sum of squared losses for this agent
+        loss_sq_sum = 0.0
+        for yr in range(n_years):
+            loss_sq_sum += losses[agent_idx, yr] ** 2
+
+        # Initialize "best so far" placeholders
+        best_rmse_val = 1e20
+        best_s_idx = 0
+        best_e_idx = 0
+        best_r_idx = 0
+        best_premium = 0.0
+
+        # Loop once over all (strike, exit) pairs
+        for strike_idx in range(n_strikes):
+            strike = strike_vals[strike_idx]
+
+            for exit_idx in range(n_exits):
+                exit_threshold = exit_vals[exit_idx]
+                if exit_threshold >= strike:
+                    continue
+                denom = strike - exit_threshold
+
+                # Monte Carlo → expected_ratio
+                expected_ratio = 0.0
+                for _ in range(n_sims):
+                    u = np.random.random()  # Uniform(0,1)
+                    spei_val = gev_ppf_scalar(u, shape, loc, scale)
+                    shortfall = strike - spei_val
+                    if shortfall <= 0.0:
+                        continue
+                    if shortfall > denom:
+                        shortfall = denom
+                    expected_ratio += shortfall / denom
+                expected_ratio /= n_sims
+
+                sum_ratio_sq = 0.0
+                sum_ratio_loss = 0.0
+                for yr in range(n_years):
+                    shortfall = strike - spei_hist[agent_idx, yr]
+                    if shortfall <= 0.0:
+                        ratio = 0.0
+                    elif shortfall >= denom:
+                        ratio = 1.0
+                    else:
+                        ratio = shortfall / denom
+
+                    sum_ratio_sq += ratio * ratio
+                    sum_ratio_loss += ratio * losses[agent_idx, yr]
+
+                # Over all candidate rates, compute premium & RMSE via quadratic form
+                for rate_idx in range(n_rates):
+                    rate = rate_vals[rate_idx]
+                    # RMSE’s sum of squared errors:
+                    sse = (
+                        (rate * rate) * sum_ratio_sq
+                        - 2.0 * rate * sum_ratio_loss
+                        + loss_sq_sum
+                    )
+                    rmse_val = np.sqrt(sse / n_years)
+
+                    if rmse_val < best_rmse_val:
+                        best_rmse_val = rmse_val
+                        best_s_idx = strike_idx
+                        best_e_idx = exit_idx
+                        best_r_idx = rate_idx
+                        best_premium = rate * expected_ratio
+
+        # Store best‐so‐far for this agent
+        best_strike_idx[agent_idx] = best_s_idx
+        best_exit_idx[agent_idx] = best_e_idx
+        best_rate_idx[agent_idx] = best_r_idx
+        best_rmse_arr[agent_idx] = best_rmse_val
+        best_prem_arr[agent_idx] = best_premium
+
+    return (
+        best_strike_idx,
+        best_exit_idx,
+        best_rate_idx,
+        best_rmse_arr,
+        best_prem_arr,
     )

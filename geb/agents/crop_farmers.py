@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from honeybees.library.neighbors import find_neighbors
 from honeybees.library.raster import pixels_to_coords, sample_from_map
-from numba import njit, prange
+from numba import njit
 from scipy.optimize import curve_fit
 from scipy.stats import genextreme
 
@@ -37,6 +37,7 @@ from .workflows.crop_farmers import (
     get_farmer_HRUs,
     get_gross_irrigation_demand_m3,
     plant,
+    compute_premiums_and_best_contracts_numba,
 )
 
 NO_IRRIGATION = -1
@@ -103,15 +104,6 @@ def advance_crop_rotation_year(
     current_crop_calendar_rotation_year_index[:] = (
         current_crop_calendar_rotation_year_index + 1
     ) % crop_calendar_rotation_years
-
-
-@njit
-def gev_ppf_scalar(u, c, loc, scale):
-    """Scalar GEV inverse CDF."""
-    if c != 0.0:
-        return loc + scale * ((-np.log(u)) ** (-c) - 1.0) / c
-    else:
-        return loc - scale * np.log(-np.log(u))
 
 
 class CropFarmers(AgentBaseClass):
@@ -1752,6 +1744,38 @@ class CropFarmers(AgentBaseClass):
             annual_cost_microcredit
         )
 
+    def potential_insured_loss(self):
+        # Calculating personal pure premiums and Bühlmann-Straub parameters to get the credibility premium
+        # Mask out unfilled years
+        mask_columns = np.all(self.var.yearly_income == 0, axis=0)
+
+        # Apply the mask to data
+        income_masked = self.var.yearly_income[:, ~mask_columns]
+        n_agents, n_years = income_masked.shape
+
+        # Calculate personal loss
+        self.var.avg_income_per_agent = np.nanmean(income_masked, axis=1)
+
+        # Potential income
+        income_masked = self.var.yearly_income[:, ~mask_columns]
+
+        potential_insured_loss = np.zeros_like(self.var.yearly_income, dtype=np.float32)
+
+        potential_insured_loss[:, ~mask_columns] = np.maximum(
+            self.var.avg_income_per_agent[..., None] - income_masked, 0
+        )
+
+        # Add the insured loss to the income of this year's insured farmers
+        insured_farmers_mask = (
+            self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
+        )
+
+        self.var.insured_yearly_income[insured_farmers_mask, 0] += (
+            potential_insured_loss[insured_farmers_mask, 0]
+        )
+
+        return potential_insured_loss
+
     def premium_personal_insurance(self):
         # Calculating personal pure premiums and Bühlmann-Straub parameters to get the credibility premium
         # Mask out unfilled years
@@ -1767,8 +1791,8 @@ class CropFarmers(AgentBaseClass):
         n_agents, n_years = income_masked.shape
 
         # Calculate personal loss
-        self.var.avg_income_per_agent = np.nanmean(income_masked, axis=1)
-        losses = np.maximum(self.var.avg_income_per_agent[:, None] - income_masked, 0)
+        avg_income_per_agent = np.nanmean(income_masked, axis=1)
+        losses = np.maximum(avg_income_per_agent[:, None] - income_masked, 0)
         years_observed = np.sum(~np.isnan(income_masked), axis=1)
         self.var.agent_pure_premiums = np.mean(losses, axis=1)
 
@@ -1799,154 +1823,7 @@ class CropFarmers(AgentBaseClass):
             + (1 - credibility_weights) * group_mean_premiums[group_indices]
         )
 
-        # Potential income
-        income_masked = self.var.yearly_income[:, ~mask_columns]
-
-        potential_insured_loss = np.zeros_like(self.var.yearly_income, dtype=np.float32)
-
-        potential_insured_loss[:, ~mask_columns] = np.maximum(
-            self.var.avg_income_per_agent[..., None] - income_masked, 0
-        )
-
-        # Add the insured loss to the income of this year's insured farmers
-        insured_farmers_mask = (
-            self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
-        )
-
-        self.var.insured_yearly_income[insured_farmers_mask, 0] += (
-            potential_insured_loss[insured_farmers_mask, 0]
-        )
-
-        return credibility_premiums, potential_insured_loss
-
-    @staticmethod
-    @njit(cache=True, parallel=True)
-    def compute_premiums_numba(
-        gev_params, strike_vals, exit_vals, rate_vals, n_sims, seed=42
-    ):
-        """
-        Faster premium computation: Monte‑Carlo only once per (agent, strike, exit)
-        then scale by each candidate rate.
-
-        Returns
-        -------
-        premiums : (n_agents, n_strikes, n_exits, n_rates)
-        """
-        np.random.seed(seed)
-        n_agents = gev_params.shape[0]
-        n_strikes = strike_vals.shape[0]
-        n_exits = exit_vals.shape[0]
-        n_rates = rate_vals.shape[0]
-
-        premiums = np.zeros((n_agents, n_strikes, n_exits, n_rates), dtype=np.float64)
-
-        # per agent parallel loop
-        for agent_idx in prange(n_agents):
-            shape = -gev_params[agent_idx, 0]
-            loc = gev_params[agent_idx, 1]
-            scale = gev_params[agent_idx, 2]
-
-            for strike_idx in range(n_strikes):
-                strike = strike_vals[strike_idx]
-
-                for exit_idx in range(n_exits):
-                    exit_threshold = exit_vals[exit_idx]
-                    if exit_threshold >= strike:
-                        continue  # invalid combo
-                    denom = strike - exit_threshold
-
-                    # MC estimate of expected shortfall ratio
-                    expected_ratio = 0.0
-                    for _ in range(n_sims):
-                        u = np.random.random()  # uniform(0,1)
-                        spei_val = gev_ppf_scalar(u, shape, loc, scale)
-                        shortfall = strike - spei_val
-                        if shortfall <= 0.0:
-                            continue
-                        if shortfall > denom:
-                            shortfall = denom
-                        expected_ratio += shortfall / denom
-                    expected_ratio /= n_sims  # E[shortfall/denom]
-
-                    # scale by each candidate rate
-                    for rate_idx in range(n_rates):
-                        premiums[agent_idx, strike_idx, exit_idx, rate_idx] = (
-                            rate_vals[rate_idx] * expected_ratio
-                        )
-        return premiums
-
-    @staticmethod
-    @njit(cache=True, parallel=True)
-    def compute_best_contracts_numba(
-        spei_hist, losses, strike_vals, exit_vals, rate_vals
-    ):
-        """
-        Faster RMSE search using quadratic form in rate.
-        """
-        n_agents, n_years = spei_hist.shape
-        n_strikes = strike_vals.shape[0]
-        n_exits = exit_vals.shape[0]
-        n_rates = rate_vals.shape[0]
-
-        loss_sq_sum = np.zeros(n_agents, dtype=np.float64)
-        for agent_idx in prange(n_agents):
-            sum_sq = 0.0
-            for yr in range(n_years):
-                sum_sq += losses[agent_idx, yr] ** 2
-            loss_sq_sum[agent_idx] = sum_sq
-
-        best_indices = np.empty((n_agents, 3), dtype=np.int64)
-        best_rmse = np.zeros(n_agents, dtype=np.float64)
-
-        for agent_idx in prange(n_agents):
-            best_rmse_val = 1e20
-            best_s_idx = 0
-            best_e_idx = 0
-            best_r_idx = 0
-
-            for s_idx in range(n_strikes):
-                strike = strike_vals[s_idx]
-                for e_idx in range(n_exits):
-                    exit_thr = exit_vals[e_idx]
-                    if exit_thr >= strike:
-                        continue
-                    denom = strike - exit_thr
-
-                    # compute ratio stats
-                    sum_ratio_sq = 0.0
-                    sum_ratio_loss = 0.0
-                    for yr in range(n_years):
-                        shortfall = strike - spei_hist[agent_idx, yr]
-                        if shortfall <= 0.0:
-                            ratio = 0.0
-                        elif shortfall >= denom:
-                            ratio = 1.0
-                        else:
-                            ratio = shortfall / denom
-                        sum_ratio_sq += ratio * ratio
-                        sum_ratio_loss += ratio * losses[agent_idx, yr]
-
-                    # now loop over rates, using quadratic form
-                    for r_idx in range(n_rates):
-                        rate = rate_vals[r_idx]
-                        sse = (
-                            (rate * rate) * sum_ratio_sq
-                            - 2.0 * rate * sum_ratio_loss
-                            + loss_sq_sum[agent_idx]
-                        )
-                        rmse_val = np.sqrt(sse / n_years)
-                        if rmse_val < best_rmse_val:
-                            best_rmse_val = rmse_val
-                            best_s_idx = s_idx
-                            best_e_idx = e_idx
-                            best_r_idx = r_idx
-
-            best_indices[agent_idx, 0] = best_s_idx
-            best_indices[agent_idx, 1] = best_e_idx
-            best_indices[agent_idx, 2] = best_r_idx
-            best_rmse[agent_idx] = best_rmse_val
-
-        return best_indices, best_rmse
+        return credibility_premiums
 
     def premium_index_insurance(self, potential_insured_loss):
         mask_columns = np.all(self.var.yearly_income == 0, axis=0)
@@ -1955,15 +1832,26 @@ class CropFarmers(AgentBaseClass):
         exit_vals = np.round(np.arange(-2, -3.6, -0.1), 2)
         rate_vals = np.linspace(500, 60000, 20)
 
-        test_params = self.compute_premiums_numba(
-            gev_params, strike_vals, exit_vals, rate_vals, n_sims=100
-        )
-
         potential_insured_loss_masked = potential_insured_loss[:, ~mask_columns]
         spei_hist = self.var.yearly_SPEI[:, ~mask_columns]
-        best_idx, best_rmse = self.compute_best_contracts_numba(
-            spei_hist, potential_insured_loss_masked, strike_vals, exit_vals, rate_vals
+
+        (
+            best_strike_idx,
+            best_exit_idx,
+            best_rate_idx,
+            best_rmse,
+            best_prem,
+        ) = compute_premiums_and_best_contracts_numba(
+            gev_params,
+            spei_hist,
+            potential_insured_loss_masked,
+            strike_vals,
+            exit_vals,
+            rate_vals,
+            n_sims=100,
+            seed=42,
         )
+
         n_agents = gev_params.shape[0]
         best_strike = np.empty(n_agents, dtype=np.float64)
         best_exit = np.empty(n_agents, dtype=np.float64)
@@ -1971,13 +1859,12 @@ class CropFarmers(AgentBaseClass):
         best_prem = np.empty(n_agents, dtype=np.float64)
 
         for i in range(n_agents):
-            j, k, l = best_idx[i]
-            best_strike[i] = strike_vals[j]
-            best_exit[i] = exit_vals[k]
-            best_rate[i] = rate_vals[l]
-            best_prem[i] = test_params[i, j, k, l]
+            best_strike[i] = strike_vals[best_strike_idx[i]]
+            best_exit[i] = exit_vals[best_exit_idx[i]]
+            best_rate[i] = rate_vals[best_rate_idx[i]]
+        best_premiums = best_prem
 
-        return (best_strike, best_exit, best_rate, best_prem)
+        return (best_strike, best_exit, best_rate, best_premiums)
 
     def insured_payouts_index(self, strike, exit, rate):
         # Determine what the index insurance would have paid out in the past
@@ -3476,13 +3363,16 @@ class CropFarmers(AgentBaseClass):
 
             adapted = self.var.adaptations[:, adaptation_type] > 0
 
-            # Define extra constraints -- cant adapt another insurance type while having one before
-            other_masks = [
-                (self.var.adaptations[:, t] < 0)
-                for t in adaptation_types
-                if t != adaptation_type
-            ]
-            extra_constraint = np.logical_or.reduce(other_masks)
+            if len(adaptation_types) > 1:
+                # Define extra constraints -- cant adapt another insurance type while having one before
+                other_masks = [
+                    (self.var.adaptations[:, t] < 0)
+                    for t in adaptation_types
+                    if t != adaptation_type
+                ]
+                extra_constraint = np.logical_or.reduce(other_masks)
+            else:
+                extra_constraint = np.ones_like(adapted, dtype=bool)
 
             # Compute profits with index insurance
             annual_cost = annual_cost * (
@@ -3583,13 +3473,6 @@ class CropFarmers(AgentBaseClass):
                 np.sum(SEUT_adaptation_decision),
                 "(-)",
             )
-
-        adapted_combined = (self.var.adaptations[:, 4] > 0) & (
-            self.var.adaptations[:, 5] > 0
-        )
-        assert (
-            np.sum(adapted_combined) == 0
-        )  # Check whether farmers aren't having both insurance types
 
     def update_adaptation_decision(
         self,
@@ -4691,12 +4574,11 @@ class CropFarmers(AgentBaseClass):
                     farmer_yield_probability_relation_base = (
                         farmer_yield_probability_relation.copy()
                     )
+                    potential_insured_loss = self.potential_insured_loss()
                 if self.personal_insurance_adaptation_active:
                     # Now determine the potential (past & current) indemnity payments and recalculate
                     # probability and yield relation
-                    personal_premium, potential_insured_loss = (
-                        self.premium_personal_insurance()
-                    )
+                    personal_premium = self.premium_personal_insurance()
                     farmer_yield_probability_relation_insured_personal = (
                         self.insured_yields(potential_insured_loss)
                     )
