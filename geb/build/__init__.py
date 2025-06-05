@@ -25,6 +25,7 @@ import xarray as xr
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
+from pyflwdir import from_array
 from rasterio.env import defenv
 from shapely.geometry import Point
 
@@ -468,7 +469,26 @@ def full_like(data, fill_value, nodata, attrs=None, *args, **kwargs):
     return ds
 
 
-def create_riverine_mask(ldd, ldd_network, geom):
+def create_riverine_mask(
+    ldd: xr.DataArray, ldd_network: pyflwdir.FlwdirRaster, geom: gpd.GeoDataFrame
+) -> xr.DataArray:
+    """Create a riverine mask from the ldd and the river network.
+
+    Parameters
+    ----------
+    ldd : xarray.DataArray
+        The local drainage direction (ldd) data array.
+    ldd_network : pyflwdir.FlwdirRaster
+        The flow direction raster created from the ldd data.
+    geom : geopandas.GeoDataFrame
+        The geometry of the riverine basin, which is used to clip the mask.
+
+    Returns
+    -------
+    xarray.DataArray
+        A boolean mask where True indicates riverine cells and False indicates non-riverine cells.
+
+    """
     riverine_mask = full_like(
         ldd,
         fill_value=True,
@@ -477,13 +497,24 @@ def create_riverine_mask(ldd, ldd_network, geom):
     )
     riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
 
-    idx_ds_masked = ldd_network.idxs_ds.copy()
-    idx_ds_masked[~riverine_mask.values.ravel()] = -1
+    # because the basin mask from the source is not perfect and has some holes
+    # we need to extend the riverine mask to include all cells upstream of any
+    # riverine cell. This is done by creating a flow raster from the masked
+    # ldd, find all the pits within the riverine mask, and then get all upstream
+    # cells from these pits.
+    ldd_network_masked = from_array(
+        ldd.values,
+        ftype="d8",
+        mask=riverine_mask.values,
+        transform=ldd.rio.transform(recalc=True),
+        latlon=True,  # hydrography is specified in latlon
+    )
 
-    all_excluded_indices = np.arange(ldd_network.size)[~riverine_mask.values.ravel()]
-    all_pits = np.intersect1d(idx_ds_masked, all_excluded_indices)
+    # set all cells that are upstream of a pit to True
+    riverine_mask.values[ldd_network.basins(idxs=ldd_network_masked.idxs_pit) > 0] = (
+        True
+    )
 
-    riverine_mask.values[ldd_network.basins(idxs=all_pits) > 0] = True
     return riverine_mask
 
 
@@ -1068,7 +1099,7 @@ class GEBModel(
             self.files["array"][name] = fn
             fp = Path(self.root, fn)
             fp.parent.mkdir(parents=True, exist_ok=True)
-            zarr.save(fp, data)
+            zarr.save_array(fp, data, overwrite=True)
 
     def set_dict(self, data, name, write=True):
         self.dict[name] = data

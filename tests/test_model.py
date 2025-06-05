@@ -94,10 +94,14 @@ def test_multiverse():
     args = DEFAULT_RUN_ARGS.copy()
 
     config = parse_config(working_directory / args["config"])
-    config["general"]["forecasts"]["use"] = True
 
-    forecast_date = config["general"]["start_time"] + timedelta(days=3)
-    config["general"]["end_time"] = forecast_date + timedelta(days=5)
+    forecast_after_n_days = 3
+    forecast_n_days = 5
+
+    forecast_date = config["general"]["start_time"] + timedelta(
+        days=forecast_after_n_days
+    )
+    config["general"]["end_time"] = forecast_date + timedelta(days=forecast_n_days)
 
     input_folder = working_directory / config["general"]["input_folder"]
 
@@ -128,5 +132,17 @@ def test_multiverse():
 
     geb = run_model_with_method(method=None, close_after_run=False, **args)
     with WorkingDirectory(working_directory):
-        geb.run()
+        geb.run(initialize_only=True)
+        for i in range(forecast_after_n_days):
+            geb.step()
+        mean_discharge_after_forecast = geb.multiverse(return_mean_discharge=True)
+
+        for i in range(forecast_n_days):
+            geb.step()
+
+        mean_discharge = geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
+
+    for member, forecast_mean_discharge in mean_discharge_after_forecast.items():
+        assert forecast_mean_discharge == mean_discharge
+
     geb.close()

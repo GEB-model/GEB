@@ -335,11 +335,20 @@ setup_damage_parameters:
             - [2.00, 0.035]
             - [6.00, 0.05]
           maximum_damage: 25
+        tertiary_link:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 25
 
 setup_forcing_era5:
 
 setup_SPEI:
-  window: 12
+  window_months: 12
   calibration_period_start: 2011-01-01
   calibration_period_end: 2021-12-31
 

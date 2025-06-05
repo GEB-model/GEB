@@ -334,6 +334,20 @@ class Agents:
 
         inflation_rates.index = inflation_rates.index.astype(int)
 
+        # re-index the inflation rates to ensure that at least all years from
+        # model start to end are present. In addition, we add 10 years
+        # to the beginning, since this is used in some of the model spinup.
+        inflation_rates = inflation_rates.reindex(
+            list(
+                range(
+                    min(self.start_date.year - 10, inflation_rates.index[0]),
+                    max(self.end_date.year, inflation_rates.index[-1]) + 1,
+                )
+            )
+        )
+
+        # interpolate missing values in inflation rates. For extrapolation
+        # linear interpolation uses the first and last value
         for column in inflation_rates.columns:
             inflation_rates[column] = inflation_rates[column].interpolate(
                 method="linear"
