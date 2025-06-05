@@ -1099,7 +1099,7 @@ class GEBModel(
             self.files["array"][name] = fn
             fp = Path(self.root, fn)
             fp.parent.mkdir(parents=True, exist_ok=True)
-            zarr.save(fp, data)
+            zarr.save_array(fp, data, overwrite=True)
 
     def set_dict(self, data, name, write=True):
         self.dict[name] = data
