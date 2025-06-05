@@ -540,8 +540,8 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
         self.var.yearly_SPEI = DynamicArray(
-            n=self.n,
-            max_n=self.max_n,
+            n=self.var.n,
+            max_n=self.var.max_n,
             extra_dims=(self.var.total_spinup_time,),
             extra_dims_names=("year",),
             dtype=np.float32,
@@ -565,8 +565,8 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
         self.var.insured_yearly_income = DynamicArray(
-            n=self.n,
-            max_n=self.max_n,
+            n=self.var.n,
+            max_n=self.var.max_n,
             extra_dims=(self.var.total_spinup_time,),
             extra_dims_names=("year",),
             dtype=np.float32,
@@ -648,7 +648,7 @@ class CropFarmers(AgentBaseClass):
 
         # Set insurance adaptation data (placeholder)
         rng_personal_insurance = np.random.default_rng(15)
-        mask_personal_insurance = rng_personal_insurance.random(self.n) < 0.25
+        mask_personal_insurance = rng_personal_insurance.random(self.var.n) < 0.25
         self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION][
             mask_personal_insurance
         ] = 1
@@ -656,7 +656,7 @@ class CropFarmers(AgentBaseClass):
         free_idx = np.flatnonzero(
             self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] == -1
         )
-        num_index = int(self.n * 0.25)
+        num_index = int(self.var.n * 0.25)
         rng_index_insurance = np.random.default_rng(60)
         mask_index_insurance = rng_index_insurance.choice(
             free_idx, size=num_index, replace=False
@@ -1762,9 +1762,6 @@ class CropFarmers(AgentBaseClass):
         # Calculate personal loss
         self.var.avg_income_per_agent = np.nanmean(income_masked, axis=1)
 
-        # Potential income
-        income_masked = self.var.yearly_income[:, ~mask_columns]
-
         potential_insured_loss = np.zeros_like(self.var.yearly_income, dtype=np.float32)
 
         potential_insured_loss[:, ~mask_columns] = np.maximum(
@@ -2792,7 +2789,7 @@ class CropFarmers(AgentBaseClass):
             "total_annual_costs": total_annual_costs_m2,
             "adaptation_costs": annual_cost_empty,
             "adapted": np.zeros(self.var.n, dtype=np.bool),
-            "time_adapted": np.full(self.n, 2),
+            "time_adapted": np.full(self.var.n, 2),
             "T": np.full(
                 self.var.n,
                 2,
@@ -3350,8 +3347,10 @@ class CropFarmers(AgentBaseClass):
         total_profits = self.compute_total_profits(regular_yield_ratios)
         total_profits, profits_no_event = self.format_results(total_profits)
 
-        SEUT_insurance_options = np.full((self.n, len(premiums)), 0, dtype=np.float32)
-        annual_cost_array = np.full((self.n, len(premiums)), 0, dtype=np.float32)
+        SEUT_insurance_options = np.full(
+            (self.var.n, len(premiums)), 0, dtype=np.float32
+        )
+        annual_cost_array = np.full((self.var.n, len(premiums)), 0, dtype=np.float32)
 
         for idx, adaptation_type in enumerate(adaptation_types):
             # Parameters
@@ -3409,7 +3408,7 @@ class CropFarmers(AgentBaseClass):
             decision_params = {
                 "loan_duration": loan_duration,
                 "expenditure_cap": self.var.expenditure_cap,
-                "n_agents": self.n,
+                "n_agents": self.var.n,
                 "sigma": self.var.risk_aversion.data,
                 "p_droughts": 1 / self.var.p_droughts[:-1],
                 "total_profits_adaptation": total_profits_index_insured,
@@ -3422,7 +3421,7 @@ class CropFarmers(AgentBaseClass):
                 "adapted": adapted,
                 "time_adapted": self.var.time_adapted[:, adaptation_type],
                 "T": np.full(
-                    self.n,
+                    self.var.n,
                     self.model.config["agent_settings"]["farmers"]["expected_utility"][
                         "adaptation_well"
                     ]["decision_horizon"],
@@ -3450,7 +3449,7 @@ class CropFarmers(AgentBaseClass):
 
             mask_highest_SEUT = chosen_option == idx
 
-            SEUT_decision_array = np.full(self.n, -np.inf, dtype=np.float32)
+            SEUT_decision_array = np.full(self.var.n, -np.inf, dtype=np.float32)
             SEUT_decision_array[mask_highest_SEUT] = best_option_SEUT[mask_highest_SEUT]
 
             SEUT_adaptation_decision = self.update_adaptation_decision(
@@ -3460,14 +3459,14 @@ class CropFarmers(AgentBaseClass):
                 annual_cost=annual_cost,
                 SEUT_do_nothing=SEUT_do_nothing,
                 SEUT_adapt=SEUT_decision_array,
-                ids_to_switch_to=np.arange(self.n),
+                ids_to_switch_to=np.arange(self.var.n),
             )
 
             assert np.min(SEUT_decision_array[SEUT_adaptation_decision]) != -np.inf
 
             # Print the percentage of adapted households
             percentage_adapted = round(
-                np.sum(self.var.adaptations[:, adaptation_type] > 0) / self.n * 100,
+                np.sum(self.var.adaptations[:, adaptation_type] > 0) / self.var.n * 100,
                 2,
             )
 
@@ -4077,7 +4076,7 @@ class CropFarmers(AgentBaseClass):
             dtype=np.float32,
         )
         ids_to_switch_to = np.full(
-            self.n,
+            self.var.n,
             -1,
             dtype=np.int32,
         )
