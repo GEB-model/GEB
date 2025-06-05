@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from pgmpy.estimators import K2, BayesianEstimator, HillClimbSearch
+from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
 from pgmpy.factors.discrete import State
 from pgmpy.models import BayesianNetwork
 from pgmpy.sampling import BayesianModelSampling
@@ -31,7 +31,7 @@ class Survey:
         print("Estimating network structure")
         est = HillClimbSearch(data=self.samples)
         self.structure = est.estimate(
-            scoring_method=K2(data=self.samples),
+            scoring_method=K2Score(data=self.samples),
             max_indegree=max_indegree,
             max_iter=int(1e4),
             epsilon=1e-8,
