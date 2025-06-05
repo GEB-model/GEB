@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import xarray as xr
+
 from geb.cli import build_fn, parse_config, run_model_with_method, update_fn
 from geb.workflows.io import WorkingDirectory
 
