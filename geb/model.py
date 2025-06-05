@@ -77,7 +77,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
         self.current_timestep = timestep
 
-    def multiverse(self):
+    def multiverse(
+        self, return_mean_discharge: bool = False
+    ) -> None | dict[str, float]:
         # copy current state of timestep and time
         store_timestep = copy.copy(self.current_timestep)
 
@@ -98,6 +100,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         end_date = forecasts.time[-1].dt.date.item()
         n_timesteps = (end_date - self.current_time.date()).days
 
+        if return_mean_discharge:
+            mean_discharge = {}
+
         for member in forecasts.member:
             self.multiverse_name = member.item()
             # self.sfincs.precipitation_dataarray = (
@@ -111,6 +116,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             for _ in range(n_timesteps):
                 self.step()
 
+            if return_mean_discharge:
+                mean_discharge[member.item()] = (
+                    self.hydrology.routing.grid.var.discharge_m3_s.mean()
+                ).item()
+
             # restore the initial state of the multiverse
             self.restore(store_location=store_location, timestep=store_timestep)
 
@@ -119,6 +129,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # restore the precipitation dataarray, step out of the multiverse
         self.sfincs.precipitation_dataarray = precipitation_dataarray
         self.multiverse_name = None
+
+        if return_mean_discharge:
+            return mean_discharge
+        else:
+            return None
 
     def step(self) -> None:
         """
