@@ -375,7 +375,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @property
     def run_name(self):
         if self.mode == "w" and self.in_spinup:
-            return "spinup"
+            return self.config["general"]["spinup_name"]
         else:
             if "name" in self.config["general"]:
                 return self.config["general"]["name"]
