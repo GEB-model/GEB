@@ -72,6 +72,12 @@ agent_settings:
       radius: 5000 # m
       size: 10 # nr of neighbors
     expected_utility:
+      insurance:
+        duration: 2
+        personal_insurance: 
+          ruleset: base
+        index_insurance: 
+          ruleset: base
       crop_switching: 
         ruleset: no-adaptation
       adaptation_sprinkler:
