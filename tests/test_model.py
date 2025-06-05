@@ -88,7 +88,7 @@ def test_estimate_return_periods():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-# @pytest.mark.dependency(depends=["test_spinup"])
+@pytest.mark.dependency(depends=["test_spinup"])
 def test_multiverse():
     args = DEFAULT_RUN_ARGS.copy()
 
