@@ -339,6 +339,6 @@ setup_damage_parameters:
 setup_forcing_era5:
 
 setup_SPEI:
-  window: 12
+  window_months: 12
   calibration_period_start: 2011-01-01
   calibration_period_end: 2021-12-31
