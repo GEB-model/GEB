@@ -444,7 +444,7 @@ class Observations:
 
             if xy_tuples.size == 0:
                 self.logger.warning(
-                    f"River now found in hydrography_xy for station {Q_obs_station_name} with river id {closest_river_segment.iloc[0].name}. Skipping this station."
+                    f"River not found in hydrography_xy for station {Q_obs_station_name} with river id {closest_river_segment.iloc[0].name}. Skipping this station."
                 )
                 continue
 
