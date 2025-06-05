@@ -30,6 +30,7 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
+    compute_premiums_and_best_contracts_numba,
     crop_profit_difference_njit,
     farmer_command_area,
     find_most_similar_index,
@@ -37,7 +38,6 @@ from .workflows.crop_farmers import (
     get_farmer_HRUs,
     get_gross_irrigation_demand_m3,
     plant,
-    compute_premiums_and_best_contracts_numba,
 )
 
 NO_IRRIGATION = -1
