@@ -235,6 +235,7 @@ class Agents:
         # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
         price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
+        LCU_per_USD = self.data_catalog.get_dataframe("wb_LCU_per_USD")
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
@@ -260,6 +261,10 @@ class Agents:
         )
         years_price_ratio = extract_years(price_ratio_filtered)
         price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
+
+        lcu_filtered = filter_and_rename(LCU_per_USD, ["Country Name", "Country Code"])
+        years_lcu = extract_years(lcu_filtered)
+        lcu_dict = {"time": years_lcu, "data": {}}  # LCU per USD
 
         # Assume lending_rates and inflation_rates are available
         # years_lending_rates = extract_years(lending_rates)
@@ -326,6 +331,10 @@ class Agents:
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
+            lcu_dict["data"][region_id] = process_rates(
+                lcu_filtered, years_lcu, region["ISO3"]
+            )
+
         # convert to pandas dataframe
         inflation_rates = pd.DataFrame(
             inflation_rates_dict["data"], index=inflation_rates_dict["time"]
@@ -360,6 +369,7 @@ class Agents:
         self.set_dict(inflation_rates_dict, name="socioeconomics/inflation_rates")
         # self.set_dict(lending_rates_dict, name="socioeconomics/lending_rates")
         self.set_dict(price_ratio_dict, name="socioeconomics/price_ratio")
+        self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
