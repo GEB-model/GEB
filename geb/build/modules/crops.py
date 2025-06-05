@@ -8,6 +8,8 @@ import pandas as pd
 import xarray as xr
 from honeybees.library.raster import sample_from_map
 
+from geb.workflows.io import get_window
+
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
     M49_to_ISO3,
@@ -241,17 +243,6 @@ class Crops:
                 donor_data, unique_regions, GLOBIOM_regions
             )
 
-            # exand data to include all data empty rows from start to end year
-            data = data.reindex(
-                pd.MultiIndex.from_product(
-                    [
-                        unique_regions["region_id"],
-                        range(self.start_date.year, self.end_date.year + 1),
-                    ],
-                    names=["region_id", "year"],
-                )
-            )
-
             data = self.assign_crop_price_inflation(data, unique_regions)
 
             # combine and rename crops
@@ -292,6 +283,17 @@ class Crops:
             ]
 
             data = self.inter_and_extrapolate_prices(data, unique_regions)
+
+            # exand data to include all data empty rows from start to end year
+            data = data.reindex(
+                pd.MultiIndex.from_product(
+                    [
+                        unique_regions["region_id"],
+                        range(self.start_date.year, self.end_date.year + 1),
+                    ],
+                    names=["region_id", "year"],
+                )
+            )
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
@@ -750,11 +752,14 @@ class Crops:
                 for irrigation in irrigation_types:
                     dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
-                    crop_map = self.data_catalog.get_rasterdataset(
-                        dataset_name,
-                        bbox=self.bounds,
-                        buffer=2,
+                    crop_map = xr.open_dataarray(
+                        self.data_catalog.get_source(dataset_name).path
                     )
+                    crop_map = crop_map.isel(
+                        band=0,
+                        **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
+                    )
+
                     crop_map = crop_map.fillna(0)
 
                     crop_data[year][crop][irrigation] = crop_map.assign_coords(
@@ -865,9 +870,14 @@ class Crops:
     ):
         n_farmers = self.array["agents/farmers/id"].size
 
-        MIRCA_unit_grid = self.data_catalog.get_rasterdataset(
-            "MIRCA2000_unit_grid", bbox=self.bounds, buffer=2
-        ).compute()
+        MIRCA_unit_grid = xr.open_dataarray(
+            self.data_catalog.get_source("MIRCA2000_unit_grid").path
+        )
+
+        MIRCA_unit_grid = MIRCA_unit_grid.isel(
+            band=0,
+            **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
+        )
 
         crop_calendar = parse_MIRCA2000_crop_calendar(
             self.data_catalog,

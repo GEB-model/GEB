@@ -19,6 +19,7 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
+from geb.workflows.io import get_window
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
@@ -155,22 +156,29 @@ class Agents:
 
         self.logger.info("Setting up other water demands")
 
-        def set(file, accessor, name, ssp):
-            ds_historic = self.data_catalog.get_rasterdataset(
-                f"cwatm_{file}_historical_year", bbox=self.bounds, buffer=2
-            )
-            if accessor:
-                ds_historic = getattr(ds_historic, accessor)
-            ds_future = self.data_catalog.get_rasterdataset(
-                f"cwatm_{file}_{ssp}_year", bbox=self.bounds, buffer=2
-            )
-            if accessor:
-                ds_future = getattr(ds_future, accessor)
+        def set_demand(file, variable, name, ssp):
+            ds_historic = xr.open_dataset(
+                self.data_catalog.get_source(f"cwatm_{file}_historical_year").path,
+                decode_times=False,
+            ).rename({"lat": "y", "lon": "x"})
+            ds_historic = ds_historic.isel(
+                get_window(ds_historic.x, ds_historic.y, self.bounds, buffer=2)
+            )[variable]
+
+            ds_future = xr.open_dataset(
+                self.data_catalog.get_source(f"cwatm_{file}_{ssp}_year").path,
+                decode_times=False,
+            ).rename({"lat": "y", "lon": "x"})
+            ds_future = ds_future.isel(
+                get_window(ds_future.x, ds_future.y, self.bounds, buffer=2)
+            )[variable]
+
             ds_future = ds_future.sel(
                 time=slice(ds_historic.time[-1] + 1, ds_future.time[-1])
             )
 
             ds = xr.concat([ds_historic, ds_future], dim="time")
+            ds = ds.rio.write_crs(4326)
             # assert dataset in monotonicically increasing
             assert (ds.time.diff("time") == 1).all(), "not all years are there"
 
@@ -183,25 +191,24 @@ class Agents:
 
             assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
             ds = ds.sel(time=slice(self.start_date, self.end_date))
-            ds = ds.rename({"lat": "y", "lon": "x"})
             ds.attrs["_FillValue"] = np.nan
             self.set_other(ds, name=f"water_demand/{name}")
 
-        set(
+        set_demand(
             "industry_water_demand",
             "indWW",
             "industry_water_demand",
             ssp,
         )
-        set(
+        set_demand(
             "industry_water_demand",
             "indCon",
             "industry_water_consumption",
             ssp,
         )
-        set(
+        set_demand(
             "livestock_water_demand",
-            None,
+            "livestockConsumption",
             "livestock_water_consumption",
             ssp,
         )
@@ -328,9 +335,6 @@ class Agents:
         # ).dropna()
 
         inflation_rates.index = inflation_rates.index.astype(int)
-        inflation_rates = inflation_rates.reindex(
-            range(self.start_date.year, self.end_date.year + 1)
-        )
 
         for column in inflation_rates.columns:
             inflation_rates[column] = inflation_rates[column].interpolate(
@@ -1118,7 +1122,10 @@ class Agents:
                     assert not np.isnan(n_cells_per_size_class.loc[size_class])
             assert math.isclose(
                 cultivated_land_region_total_cells,
-                round(n_cells_per_size_class.sum().item()),
+                n_cells_per_size_class.sum().item(),
+                abs_tol=1,
+            ), (
+                f"{cultivated_land_region_total_cells}, {n_cells_per_size_class.sum().item()}"
             )
 
             whole_cells_per_size_class = (n_cells_per_size_class // 1).astype(int)
@@ -1438,6 +1445,10 @@ class Agents:
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
         )
+        if (GDL_regions["GDLcode"] == "NA").any():
+            self.logger.warning("GDL region has a 'NA', these rows will be deleted.")
+            GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
+
         GDL_region_per_farmer = gpd.sjoin_nearest(locations, GDL_regions, how="left")
 
         # ensure that each farmer has a region
@@ -1461,6 +1472,7 @@ class Agents:
                 GDL_region = "ESPr112"
             if GDL_region == "LIEt":
                 GDL_region = "CHEr105"
+
             GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
@@ -1839,17 +1851,37 @@ class Agents:
 
     def setup_farmer_irrigation_source(self, irrigating_farmers, year):
         fraction_sw_irrigation = "aeisw"
-        fraction_sw_irrigation_data = self.data_catalog.get_rasterdataset(
-            f"global_irrigation_area_{fraction_sw_irrigation}",
-            bbox=self.bounds,
-            buffer=2,
+
+        fraction_sw_irrigation_data = xr.open_dataarray(
+            self.data_catalog.get_source(
+                f"global_irrigation_area_{fraction_sw_irrigation}",
+            ).path
         )
+        fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
+            band=0,
+            **get_window(
+                fraction_sw_irrigation_data.x,
+                fraction_sw_irrigation_data.y,
+                self.bounds,
+                buffer=5,
+            ),
+        ).raster.interpolate_na()
+
         fraction_gw_irrigation = "aeigw"
-        fraction_gw_irrigation_data = self.data_catalog.get_rasterdataset(
-            f"global_irrigation_area_{fraction_gw_irrigation}",
-            bbox=self.bounds,
-            buffer=2,
+        fraction_gw_irrigation_data = xr.open_dataarray(
+            self.data_catalog.get_source(
+                f"global_irrigation_area_{fraction_gw_irrigation}",
+            ).path
         )
+        fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
+            band=0,
+            **get_window(
+                fraction_gw_irrigation_data.x,
+                fraction_gw_irrigation_data.y,
+                self.bounds,
+                buffer=5,
+            ),
+        ).raster.interpolate_na()
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"

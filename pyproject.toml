@@ -23,10 +23,12 @@ dependencies = [
     "cdsapi>=0.7.5",
     "cfgrib>=0.9.14",
     "click>=8.1.8",
+    "contextily>=1.6.2",
     "damagescanner==0.8b1",
     "dask",
     "deap>=1.4.1",
     "flopy>=3.8.0",
+    "folium>=0.19.6",
     "geopandas>=1.0.1",
     "honeybees>=1.2.0",
     "hydromt==0.10.1",
@@ -37,8 +39,8 @@ dependencies = [
     "numba>=0.61.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
+    "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
-    "pybind11>=2.13.4",
     "pyextremes>=2.3.3",
     "pyflwdir>=0.5.9",
     "pyogrio>=0.9.0",
@@ -54,6 +56,7 @@ dependencies = [
     "SALib>=1.4.8", # for sensitivity analysis
     "scipy>=1.14.0",
     "setuptools>=75.8.0",
+    "statsmodels>=0.14.4",
     "tbb>=2022.0.0",
     "tqdm>=4.66.1",
     "xarray>=2025.3.0",
@@ -82,6 +85,7 @@ required-environments = [
 
 [dependency-groups]
 dev = [
+    "myst-parser>=4.0.1",
     "pypandoc>=1.15",
     "sphinx<8",
     "sphinx-autodoc-typehints>=2.3.0",
@@ -103,6 +107,10 @@ fairstream = [
 display = [
     "jupyter>=1.1.1",
     "seaborn>=0.13.2",
+]
+plantfate = [
+    "cppimport>=22.8.2",
+    "pybind11>=2.13.6",
 ]
 
 [tool.ruff]

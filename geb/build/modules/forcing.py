@@ -19,6 +19,8 @@ from isimip_client.client import ISIMIPClient
 from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
 
+from geb.workflows.io import get_window
+
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
 from ..workflows.general import (
     interpolate_na_along_time_dim,
@@ -1831,16 +1833,18 @@ class Forcing:
             elevation_forcing = open_zarr(elevation_forcing_fp)
             elevation_grid = open_zarr(elevation_grid_fp)
         else:
+            elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
             elevation = (
-                self.data_catalog.get_rasterdataset(
-                    "fabdem",
-                    bbox=forcing_grid.rio.bounds(),  # forcing bounds are larger
-                    buffer=500,
-                    variables=["fabdem"],
+                elevation.isel(
+                    band=0,
+                    **get_window(
+                        elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
+                    ),
                 )
                 .raster.mask_nodata()
                 .fillna(0)
-            ).chunk({"x": 2000, "y": 2000})
+                .chunk({"x": 2000, "y": 2000})
+            )
             elevation_forcing = resample_chunked(
                 elevation,
                 forcing_grid.isel(time=0).chunk({"x": 10, "y": 10}),

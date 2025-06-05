@@ -37,10 +37,6 @@ hazards:
   erosion:
     simulate: false
 
-hydrology:
-  routing:
-    algorithm: kinematic_wave  # accuflux or kinematic_wave
-
 agent_settings:
   market:
     dynamic_market: false
@@ -151,9 +147,7 @@ parameters:
   preferentialFlowConstant: 3.14300925049279
 
 plantFATE:
-  spinup_ini_file: data/plantFATE/p_spinup.ini
-  run_ini_file: data/plantFATE/p_run.ini
-  new_forest_ini_file: data/plantFATE/p_new_forest.ini
+  default_ini_file: simulation_root/default/plantFATE/p_default.ini
+  spinup_ini_file: simulation_root/spinup/plantFATE/p_default.ini
   new_forest: false
   new_forest_filename: null
-  n_cells: 'all'

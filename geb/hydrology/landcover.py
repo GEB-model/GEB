@@ -114,182 +114,7 @@ class LandCover(Module):
             "crop_coefficient"
         ][:]
 
-    def water_body_exchange(self, groundwater_recharge):
-        """computing leakage from rivers"""
-        riverbedExchangeM3 = (
-            self.hydrology.grid.leakageriver_factor
-            * self.HRU.var.cell_area
-            * ((1 - self.HRU.var.capriseindex + 0.25) // 1)
-        )
-        riverbedExchangeM3[self.HRU.var.land_use_type != OPEN_WATER] = 0
-        riverbedExchangeM3 = self.hydrology.to_grid(
-            HRU_data=riverbedExchangeM3, fn="sum"
-        )
-        riverbedExchangeM3 = np.minimum(
-            riverbedExchangeM3, 0.80 * self.hydrology.grid.river_storage_m3
-        )
-        # if there is a lake in this cell, there is no leakage
-        riverbedExchangeM3[self.hydrology.grid.waterBodyID > 0] = 0
-
-        # adding leakage from river to the groundwater recharge
-        waterbed_recharge = self.hydrology.grid.M3toM(riverbedExchangeM3)
-
-        # riverbed exchange means water is being removed from the river to recharge
-        self.hydrology.grid.riverbedExchangeM3 = (
-            riverbedExchangeM3  # to be used in routing
-        )
-
-        # first, lakes variable need to be extended to their area and not only to the discharge point
-        lakeIDbyID = np.unique(self.hydrology.grid.waterBodyID)
-
-        lakestor_id = np.copy(self.hydrology.grid.lakeStorage)
-        resstor_id = np.copy(self.hydrology.grid.resStorage)
-        for id in range(len(lakeIDbyID)):  # for each lake or reservoir
-            if lakeIDbyID[id] != 0:
-                temp_map = np.where(
-                    self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                    np.where(self.hydrology.grid.lakeStorage > 0, 1, 0),
-                    0,
-                )  # Looking for the discharge point of the lake
-                if np.sum(temp_map) == 0:  # try reservoir
-                    temp_map = np.where(
-                        self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                        np.where(self.hydrology.grid.resStorage > 0, 1, 0),
-                        0,
-                    )  # Looking for the discharge point of the reservoir
-                discharge_point = np.nanargmax(
-                    temp_map
-                )  # Index of the cell where the lake outlet is stored
-                if self.hydrology.grid.waterBodyTypTemp[discharge_point] != 0:
-                    if (
-                        self.hydrology.grid.waterBodyTypTemp[discharge_point] == 1
-                    ):  # this is a lake
-                        # computing the lake area
-                        area_stor = np.sum(
-                            np.where(
-                                self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                                self.hydrology.grid.cell_area,
-                                0,
-                            )
-                        )  # required to keep mass balance rigth
-                        # computing the lake storage in meter and put this value in each cell including the lake
-                        lakestor_id = np.where(
-                            self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                            self.hydrology.grid.lakeStorage[discharge_point]
-                            / area_stor,
-                            lakestor_id,
-                        )  # in meter
-
-                    else:  # this is a reservoir
-                        # computing the reservoir area
-                        area_stor = np.sum(
-                            np.where(
-                                self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                                self.hydrology.grid.cell_area,
-                                0,
-                            )
-                        )  # required to keep mass balance rigth
-                        # computing the reservoir storage in meter and put this value in each cell including the reservoir
-                        resstor_id = np.where(
-                            self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                            self.hydrology.grid.resStorage[discharge_point] / area_stor,
-                            resstor_id,
-                        )  # in meter
-
-        # Gathering lakes and reservoirs in the same array
-        lakeResStorage = np.where(
-            self.hydrology.grid.waterBodyTypTemp == 0,
-            0.0,
-            np.where(
-                self.hydrology.grid.waterBodyTypTemp == 1, lakestor_id, resstor_id
-            ),
-        )  # in meter
-
-        minlake = np.maximum(
-            0.0, 0.98 * lakeResStorage
-        )  # reasonable but arbitrary limit
-
-        # leakage depends on water bodies storage, water bodies fraction and modflow saturated area
-        lakebedExchangeM = self.hydrology.grid.leakagelake_factor * (
-            (1 - self.HRU.var.capriseindex + 0.25) // 1
-        )
-        lakebedExchangeM[self.HRU.var.land_use_type != OPEN_WATER] = 0
-        lakebedExchangeM = self.hydrology.to_grid(HRU_data=lakebedExchangeM, fn="sum")
-        lakebedExchangeM = np.minimum(lakebedExchangeM, minlake)
-
-        # Now, leakage is converted again from the lake/reservoir area to discharge point to be removed from the lake/reservoir store
-        self.hydrology.grid.lakebedExchangeM3 = np.zeros(
-            self.hydrology.grid.compressed_size, dtype=np.float32
-        )
-        for id in range(len(lakeIDbyID)):  # for each lake or reservoir
-            if lakeIDbyID[id] != 0:
-                temp_map = np.where(
-                    self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                    np.where(self.hydrology.grid.lakeStorage > 0, 1, 0),
-                    0,
-                )  # Looking for the discharge point of the lake
-                if np.sum(temp_map) == 0:  # try reservoir
-                    temp_map = np.where(
-                        self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                        np.where(self.hydrology.grid.resStorage > 0, 1, 0),
-                        0,
-                    )  # Looking for the discharge point of the reservoir
-                discharge_point = np.nanargmax(
-                    temp_map
-                )  # Index of the cell where the lake outlet is stored
-            # Converting the lake/reservoir leakage from meter to cubic meter and put this value in the cell corresponding to the outlet
-            self.hydrology.grid.lakebedExchangeM3[discharge_point] = np.sum(
-                np.where(
-                    self.hydrology.grid.waterBodyID == lakeIDbyID[id],
-                    lakebedExchangeM * self.hydrology.grid.cell_area,
-                    0,
-                )
-            )  # in m3
-        self.hydrology.grid.lakebedExchangeM = self.hydrology.grid.M3toM(
-            self.hydrology.grid.lakebedExchangeM3
-        )
-
-        # compressed version for lakes and reservoirs
-        lakeExchangeM3 = (
-            np.compress(
-                self.hydrology.grid.compress_LR,
-                self.hydrology.grid.lakebedExchangeM,
-            )
-            * self.hydrology.grid.MtoM3C
-        )
-
-        # substract from both, because it is sorted by self.HRU.var.waterBodyTypCTemp
-        self.hydrology.grid.lakeStorageC = (
-            self.hydrology.grid.lakeStorageC - lakeExchangeM3
-        )
-        # assert (self.hydrology.grid.lakeStorageC >= 0).all()
-        self.hydrology.grid.lakeVolumeM3C = (
-            self.hydrology.grid.lakeVolumeM3C - lakeExchangeM3
-        )
-        self.hydrology.grid.reservoirStorageM3C = (
-            self.hydrology.grid.reservoirStorageM3C - lakeExchangeM3
-        )
-
-        # and from the combined one for waterbalance issues
-        self.hydrology.grid.lakeResStorageC = (
-            self.hydrology.grid.lakeResStorageC - lakeExchangeM3
-        )
-        # assert (self.hydrology.grid.lakeResStorageC >= 0).all()
-        self.hydrology.grid.lakeResStorage = self.grid.full_compressed(
-            0, dtype=np.float32
-        )
-        np.put(
-            self.hydrology.grid.lakeResStorage,
-            self.hydrology.grid.decompress_LR,
-            self.hydrology.grid.lakeResStorageC,
-        )
-
-        # adding leakage from lakes and reservoirs to the groundwater recharge
-        waterbed_recharge += lakebedExchangeM
-
-        groundwater_recharge += waterbed_recharge
-
-    def step(self):
+    def step(self, snow, rain, snow_melt):
         timer = TimingModule("Landcover")
 
         if __debug__:
@@ -364,7 +189,8 @@ class LandCover(Module):
             potential_transpiration,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
-        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef)
+            snow_melt,
+        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt)
 
         timer.new_split("PET")
 
@@ -372,16 +198,19 @@ class LandCover(Module):
             potential_transpiration_minus_interception_evaporation,
             interception_evaporation,
         ) = self.hydrology.interception.step(
-            potential_transpiration
+            potential_transpiration=potential_transpiration,
+            rain=rain,
+            snow_melt=snow_melt,
         )  # first thing that evaporates is the intercepted water.
 
         timer.new_split("Interception")
 
         (
             groundwater_abstraction_m3,
-            channel_abstraction_m,
+            channel_abstraction_m3,
             return_flow,  # from all sources
             irrigation_loss_to_evaporation_m,
+            total_water_demand_loss_m3,
         ) = self.hydrology.water_demand.step(potential_evapotranspiration)
 
         timer.new_split("Demand")
@@ -391,7 +220,7 @@ class LandCover(Module):
 
         (
             interflow,
-            runoff,
+            runoff_soil,
             groundwater_recharge,
             open_water_evaporation,
             actual_total_transpiration,
@@ -404,16 +233,16 @@ class LandCover(Module):
             natural_available_water_infiltration=self.HRU.var.natural_available_water_infiltration,
             actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
         )
-        assert not (runoff < 0).any()
+        assert not (runoff_soil < 0).any()
         timer.new_split("Soil")
 
-        runoff, open_water_evaporation = self.hydrology.sealed_water.step(
-            capillar, open_water_evaporation, runoff
+        runoff_sealed_water, open_water_evaporation = self.hydrology.sealed_water.step(
+            capillar, open_water_evaporation
         )
-
-        assert not (runoff < 0).any()
-
         timer.new_split("Sealed")
+
+        runoff = np.nan_to_num(runoff_soil) + np.nan_to_num(runoff_sealed_water)
+        assert (runoff >= 0).all()
 
         self.HRU.var.actual_evapotranspiration = (
             actual_bare_soil_evaporation
@@ -438,14 +267,14 @@ class LandCover(Module):
         assert not np.isnan(interflow).any()
         assert not np.isnan(groundwater_recharge).any()
         assert not np.isnan(groundwater_abstraction_m3).any()
-        assert not np.isnan(channel_abstraction_m).any()
+        assert not np.isnan(channel_abstraction_m3).any()
         assert not np.isnan(open_water_evaporation).any()
 
         if __debug__:
             balance_check(
                 name="landcover_1",
                 how="cellwise",
-                influxes=[self.HRU.var.Rain, self.HRU.var.SnowMelt],
+                influxes=[rain, snow_melt],
                 outfluxes=[
                     self.HRU.var.natural_available_water_infiltration,
                     interception_evaporation,
@@ -498,7 +327,8 @@ class LandCover(Module):
                 name="landcover_3",
                 how="cellwise",
                 influxes=[
-                    self.HRU.var.precipitation_m_day,
+                    rain,
+                    snow,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
                 ],
@@ -521,7 +351,8 @@ class LandCover(Module):
                 name="landcover_4",
                 how="cellwise",
                 influxes=[
-                    self.HRU.var.precipitation_m_day,
+                    rain,
+                    snow,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
                     irrigation_loss_to_evaporation_m,  # irrigation loss is coming from external sources
@@ -540,8 +371,6 @@ class LandCover(Module):
         groundwater_recharge = self.hydrology.to_grid(
             HRU_data=groundwater_recharge, fn="weightedmean"
         )
-        # self.water_body_exchange(groundwater_recharge)
-
         timer.new_split("Waterbody exchange")
 
         if self.model.timing:
@@ -554,8 +383,10 @@ class LandCover(Module):
             self.hydrology.to_grid(HRU_data=runoff, fn="weightedmean"),
             groundwater_recharge,
             groundwater_abstraction_m3,
-            channel_abstraction_m,
+            channel_abstraction_m3,
             return_flow,
+            capillar,
+            total_water_demand_loss_m3,
         )
 
     @property

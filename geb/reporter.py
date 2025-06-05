@@ -10,6 +10,8 @@ import pandas as pd
 import zarr
 from honeybees.library.raster import coord_to_pixel
 
+from geb.store import DynamicArray
+
 
 def create_time_array(
     start: datetime.datetime,
@@ -67,7 +69,8 @@ class Reporter:
 
     def __init__(self, model, clean) -> None:
         self.model = model
-        self.hydrology = model.hydrology
+        if self.model.simulate_hydrology:
+            self.hydrology = model.hydrology
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
         # optionally clean report model at start of run
         if clean:
@@ -450,7 +453,7 @@ class Reporter:
                 if value.size < ds[name][index].size:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
-                        value,
+                        value.data if isinstance(value, DynamicArray) else value,
                         (0, ds[name][index].size - value.size),
                         mode="constant",
                         constant_values=np.nan

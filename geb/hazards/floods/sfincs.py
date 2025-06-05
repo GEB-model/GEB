@@ -12,6 +12,7 @@ from ...HRUs import load_geom
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .build_model import build_sfincs
+from .estimate_discharge_for_return_periods import estimate_discharge_for_return_periods
 from .postprocess_model import read_flood_map
 from .run_sfincs_for_return_periods import (
     run_sfincs_for_return_periods,
@@ -231,12 +232,12 @@ class SFINCS:
             build_sfincs(
                 **self.get_build_parameters(model_root),
             )
-        # estimate_discharge_for_return_periods(
-        #     model_root,
-        #     discharge=self.discharge_spinup_ds,
-        #     rivers=self.rivers,
-        #     return_periods=self.config["return_periods"],
-        # )
+        estimate_discharge_for_return_periods(
+            model_root,
+            discharge=self.discharge_spinup_ds,
+            rivers=self.rivers,
+            return_periods=self.config["return_periods"],
+        )
 
         run_sfincs_for_return_periods(
             model_root=model_root,
@@ -312,7 +313,7 @@ class SFINCS:
 
     def save_discharge(self):
         self.discharge_per_timestep.append(
-            self.hydrology.grid.var.discharge_substep
+            self.hydrology.grid.var.discharge_m3_s_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
     @property
