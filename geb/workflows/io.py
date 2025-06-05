@@ -171,9 +171,9 @@ def check_buffer_size(da, chunks_or_shards, max_buffer_size=2147483647):
 
 
 def to_zarr(
-    da,
-    path,
-    crs,
+    da: xr.DataArray,
+    path: str | Path,
+    crs: int | pyproj.CRS,
     x_chunksize: int = 350,
     y_chunksize: int = 350,
     time_chunksize: int = 1,
