@@ -61,6 +61,8 @@ def get_rivers(data_catalog, subbasin_ids):
             "NextDownID": "downstream_ID",
         }
     )
+    rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
+    rivers = rivers.drop(columns=["uparea"])
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
     # reverse the river lines to have the downstream direction
@@ -413,9 +415,9 @@ class Hydrography:
         assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
 
         # set initial width guess where width is not available from SWORD
-        rivers.loc[rivers["width"].isnull(), "width"] = (
-            rivers[rivers["width"].isnull()]["uparea"] / 10
-        )
+        rivers.loc[rivers["width"].isnull(), "width"] = rivers[
+            rivers["width"].isnull()
+        ]["uparea_m2"] / (10 * 1e6)
         rivers["width"] = rivers["width"].clip(lower=float(MINIMUM_RIVER_WIDTH))
 
         self.set_geoms(rivers, name="routing/rivers")
