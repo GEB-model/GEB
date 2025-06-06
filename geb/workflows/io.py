@@ -170,9 +170,9 @@ def check_buffer_size(da, chunks_or_shards, max_buffer_size=2147483647):
 
 
 def to_zarr(
-    da,
-    path,
-    crs,
+    da: xr.DataArray,
+    path: str | Path,
+    crs: int | pyproj.CRS,
     x_chunksize: int = 350,
     y_chunksize: int = 350,
     time_chunksize: int = 1,
@@ -367,6 +367,29 @@ def get_window(
     raise_on_out_of_bounds: bool = True,
     raise_on_buffer_out_of_bounds: bool = True,
 ) -> dict[str, slice]:
+    """
+    Get a window for the given x and y coordinates based on the provided bounds and buffer.
+
+    Parameters
+    ----------
+    x : xr.DataArray
+        The x coordinates as an xarray DataArray.
+    y : xr.DataArray
+        The y coordinates as an xarray DataArray.
+    bounds : tuple
+        A tuple of four values representing the bounds in the form (min_x, min_y, max_x, max_y).
+    buffer : int, optional
+        The buffer size to apply to the bounds. Default is 0.
+    raise_on_out_of_bounds : bool, optional
+        Whether to raise an error if the bounds are out of the x or y coordinate range. Default is True.
+    raise_on_buffer_out_of_bounds : bool, optional
+        Whether to raise an error if the buffer goes out of the x or y coordinate range. Default is True.
+
+    Returns
+    -------
+    dict
+        A dictionary with slices for the x and y coordinates, e.g. {"x": slice(start, stop), "y": slice(start, stop)}.
+    """
     if not isinstance(buffer, int):
         raise ValueError("buffer must be an integer")
     if buffer < 0:
@@ -374,9 +397,9 @@ def get_window(
     if len(bounds) != 4:
         raise ValueError("bounds must be a tuple of 4 values")
     if bounds[0] >= bounds[2]:
-        raise ValueError("bounds must be in the form (min_x, max_x, min_y, max_y)")
+        raise ValueError("bounds must be in the form (min_x, min_y, max_x, max_y)")
     if bounds[1] >= bounds[3]:
-        raise ValueError("bounds must be in the form (min_x, max_x, min_y, max_y)")
+        raise ValueError("bounds must be in the form (min_x, min_y, max_x, max_y)")
     if x.size <= 0:
         raise ValueError("x must not be empty")
     if y.size <= 0:

@@ -33,7 +33,7 @@ from numba import njit
 from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
 
-MODFLOW_VERSION = "6.5.0"
+MODFLOW_VERSION = "6.6.2"
 
 
 @contextmanager

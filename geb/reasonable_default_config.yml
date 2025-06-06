@@ -38,6 +38,10 @@ hazards:
   erosion:
     simulate: false
 
+hydrology:
+  routing:
+    algorithm: kinematic_wave  # accuflux or kinematic_wave
+
 agent_settings:
   market:
     dynamic_market: false

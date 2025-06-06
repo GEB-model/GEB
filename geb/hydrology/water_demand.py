@@ -169,12 +169,15 @@ class WaterDemand(Module):
         domestic_return_flow_m = self.hydrology.grid.M3toM(
             self.hydrology.grid.domestic_withdrawal_m3 * (1 - domestic_water_efficiency)
         )
+        domestic_return_flow_m = domestic_return_flow_m3 / self.grid.var.cell_area
 
         # 2. industry (surface + ground)
         industry_water_demand = self.hydrology.to_grid(
             HRU_data=industry_water_demand, fn="weightedmean"
         )
-        industry_water_demand_m3 = self.hydrology.grid.MtoM3(industry_water_demand)
+        industry_water_demand_m3 = (
+            industry_water_demand * self.hydrology.grid.var.cell_area
+        )
         del industry_water_demand
 
         self.hydrology.grid.industry_withdrawal_m3 = self.withdraw(
@@ -186,12 +189,15 @@ class WaterDemand(Module):
         industry_return_flow_m = self.hydrology.grid.M3toM(
             self.hydrology.grid.industry_withdrawal_m3 * (1 - industry_water_efficiency)
         )
+        industry_return_flow_m = industry_return_flow_m3 / self.grid.var.cell_area
 
         # 3. livestock (surface)
         livestock_water_demand = self.hydrology.to_grid(
             HRU_data=livestock_water_demand, fn="weightedmean"
         )
-        livestock_water_demand_m3 = self.hydrology.grid.MtoM3(livestock_water_demand)
+        livestock_water_demand_m3 = (
+            livestock_water_demand * self.hydrology.grid.var.cell_area
+        )
         del livestock_water_demand
 
         self.hydrology.grid.livestock_withdrawal_m3 = self.withdraw(
@@ -201,6 +207,12 @@ class WaterDemand(Module):
             self.hydrology.grid.livestock_withdrawal_m3
             * (1 - livestock_water_efficiency)
         )
+        livestock_return_flow_m = livestock_return_flow_m3 / self.grid.var.cell_area
+
+        total_water_demand_loss_m3 += (
+            self.hydrology.grid.livestock_withdrawal_m3 - livestock_return_flow_m3
+        ).sum()
+
         timer.new_split("Water withdrawal")
 
         # 4. irrigation (surface + reservoir + ground)
@@ -243,8 +255,12 @@ class WaterDemand(Module):
 
         assert (self.HRU.var.actual_irrigation_consumption + 1e-5 >= 0).all()
 
+        actual_irrigation_consumption_m3 = (
+            self.HRU.var.actual_irrigation_consumption * self.HRU.var.cell_area
+        )
+
         self.hydrology.grid.irrigation_consumption_m3 = self.hydrology.to_grid(
-            HRU_data=self.HRU.MtoM3(self.HRU.var.actual_irrigation_consumption),
+            HRU_data=actual_irrigation_consumption_m3,
             fn="sum",
         )
 

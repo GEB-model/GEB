@@ -1,6 +1,6 @@
 GEB (Geographical Environmental and Behavioural model) simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale. The model does so through a "deep" coupling of an agent-based model a hydrological model, a vegetation model and a hydrodynamic model. You can find full documentation [here](https://geb-model.github.io/GEB/).
 
-The figure below shows a schematic overview of the model agent-based and hydrological model.
+The figure below shows a schematic overview of GEB.
 
 ![Schematic model overview of GEB.](https://raw.githubusercontent.com/GEB-model/GEB/refs/heads/main/docs/images/schematic_overview.svg "Schematic model overview")
 

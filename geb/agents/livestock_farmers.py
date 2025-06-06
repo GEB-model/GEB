@@ -75,17 +75,18 @@ class LiveStockFarmers(AgentBaseClass):
             )
             ** 2
         )
-        water_consumption = downscale_volume(
-            water_consumption.rio.transform().to_gdal(),
-            self.model.hydrology.grid.gt,
-            water_consumption.values,
-            self.model.hydrology.grid.mask,
-            self.model.hydrology.grid_to_HRU_uncompressed,
-            downscale_mask,
-            self.HRU.var.land_use_ratio,
-        )
-
-        water_consumption = self.HRU.M3toM(water_consumption)
+        water_consumption = (
+            downscale_volume(
+                water_consumption.rio.transform().to_gdal(),
+                self.model.hydrology.grid.gt,
+                water_consumption.values,
+                self.model.hydrology.grid.mask,
+                self.model.hydrology.grid_to_HRU_uncompressed,
+                downscale_mask,
+                self.HRU.var.land_use_ratio,
+            )
+            / self.HRU.var.cell_area
+        )  # convert to m/day
 
         efficiency = 1.0
         water_demand = water_consumption / efficiency

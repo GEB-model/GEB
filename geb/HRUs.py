@@ -204,28 +204,6 @@ class BaseVariables:
             plt.imshow(data)
             plt.show()
 
-    def MtoM3(self, array: np.ndarray) -> np.ndarray:
-        """Convert array from meters to cubic meters.
-
-        Args:
-            array: Data in meters.
-
-        Returns:
-            array: Data in cubic meters.
-        """
-        return array * self.var.cell_area
-
-    def M3toM(self, array: np.ndarray) -> np.ndarray:
-        """Convert array from cubic meters to meters.
-
-        Args:
-            array: Data in cubic meters.
-
-        Returns:
-            array: Data in meters.
-        """
-        return array / self.var.cell_area
-
 
 class Grid(BaseVariables):
     """This class is to store data in the 'normal' grid cells. This class works with compressed and uncompressed arrays. On initialization of the class, the mask of the study area is read from disk. This is the shape of any uncompressed array. Many values in this array, however, fall outside the stuy area as they are masked. Therefore, the array can be compressed by saving only the non-masked values.

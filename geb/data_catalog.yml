@@ -10,6 +10,17 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: topography/FABDEM1-2.vrt
+
+GRDC:
+  crs: 4326
+  data_type: GeoDataset
+  driver: netcdf
+  meta:
+    category: hydrology
+    source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
+    source_url: https://grdc.bafg.de/
+  path: rivers/discharge/GRDC/GRDC-Daily_V2.nc
+
 SWORD:
   data_type: GeoDataFrame
   driver: vector
