@@ -1,4 +1,6 @@
 import base64
+import gzip  # Add gzip for compression
+import io
 from pathlib import Path
 
 import branca.colormap as cm
@@ -12,8 +14,6 @@ import pandas as pd
 import xarray as xr
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
-
-from geb.workflows.io import to_zarr
 
 
 class Hydrology:
@@ -63,11 +63,11 @@ class Hydrology:
         mean_discharge = GEB_discharge.mean(dim="time")
         mean_discharge.attrs["_FillValue"] = np.nan
 
-        to_zarr(
-            mean_discharge,
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
-            crs=4326,
-        )
+        # to_zarr(
+        #     mean_discharge,
+        #     self.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
+        #     crs=4326,
+        # )
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
@@ -81,7 +81,11 @@ class Hydrology:
         evaluation_per_station = []
 
         # start validation loop over Q_obs stations
+        k = 0
         for ID in tqdm(Q_obs.columns):
+            k += 1
+            if k == 10:
+                break
             # create a discharge timeseries dataframe
             discharge_Q_obs_df = Q_obs[ID]
             discharge_Q_obs_df.columns = ["Q"]
@@ -418,6 +422,13 @@ class Hydrology:
             ]
             m = folium.Map(location=map_center, zoom_start=8, tiles="CartoDB positron")
 
+            # Add pako library for gzip decompression (minified version)
+            pako_js = """
+            <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+            """
+            # Inject the pako script into the map
+            m.get_root().header.add_child(folium.Element(pako_js))
+
             # Create colormaps for R, KGE, and NSE (Red → Orange → Yellow → Blue → Green)
             colormap_r = cm.LinearColormap(
                 colors=[
@@ -490,25 +501,80 @@ class Hydrology:
                 time_series_plot_path = (
                     eval_plot_folder / f"timeseries_plot_{station_ID}.svg"
                 )
-                # Encode the scatter plot image as a base64 string
+
+                # Compress and encode the scatter plot image
                 with open(scatter_plot_path, "rb") as img_file:
-                    encoded_image_scatter = base64.b64encode(img_file.read()).decode(
+                    scatter_data = img_file.read()
+                    # Compress with gzip
+                    buffer = io.BytesIO()
+                    with gzip.GzipFile(fileobj=buffer, mode="wb") as f:
+                        f.write(scatter_data)
+                    # Encode the compressed data
+                    encoded_image_scatter = base64.b64encode(buffer.getvalue()).decode(
                         "utf-8"
                     )
+
+                # Compress and encode the time series plot
                 with open(time_series_plot_path, "rb") as img_file:
+                    time_series_data = img_file.read()
+                    # Compress with gzip
+                    buffer = io.BytesIO()
+                    with gzip.GzipFile(fileobj=buffer, mode="wb") as f:
+                        f.write(time_series_data)
+                    # Encode the compressed data
                     encoded_image_time_series = base64.b64encode(
-                        img_file.read()
+                        buffer.getvalue()
                     ).decode("utf-8")
 
-                # Create an HTML popup with the 2 plots
+                # Create an HTML popup with the 2 plots and JavaScript to decompress the images
                 popup_html = f"""
                 <b>Station Name:</b> {station_name}<br>
                 <b>R:</b> {row["R"]:.2f}<br>
                 <b>KGE:</b> {row["KGE"]:.2f}<br>
                 <b>NSE:</b> {row["NSE"]:.2f}<br>
                 <b>Upstream Area Ratio:</b> {row["Q_obs_to_GEB_upstream_area_ratio"]:.2f}<br>
-                <img src="data:image/svg+xml;base64,{encoded_image_scatter}" style="width: 100%;">
-                <img src="data:image/svg+xml;base64,{encoded_image_time_series}" style="width: 100%;">
+                <div id="scatter_plot_{station_ID}"></div>
+                <div id="timeseries_plot_{station_ID}"></div>
+                
+                <script>
+                (function() {{
+                    function decompressAndDisplaySvg(compressedBase64, containerId) {{
+                        try {{
+                            const compressedData = atob(compressedBase64);
+                            
+                            const byteArray = new Uint8Array(compressedData.length);
+                            for (let i = 0; i < compressedData.length; i++) {{
+                                byteArray[i] = compressedData.charCodeAt(i);
+                            }}
+                            
+                            const inflated = pako.inflate(byteArray);
+                            
+                            const decompressedData = new TextDecoder().decode(inflated);
+                            
+                            document.getElementById(containerId).innerHTML = decompressedData;
+                        }} catch (err) {{
+                            console.error("Error decompressing data:", err);
+                            document.getElementById(containerId).innerHTML = "Error displaying image: " + err.message;
+                        }}
+                    }}
+                    
+                    setTimeout(function() {{
+                        try {{
+                            decompressAndDisplaySvg(
+                                "{encoded_image_scatter}",
+                                "scatter_plot_{station_ID}"
+                            );
+                            
+                            decompressAndDisplaySvg(
+                                "{encoded_image_time_series}",
+                                "timeseries_plot_{station_ID}"
+                            );
+                        }} catch (e) {{
+                            console.error("Failed to load plots:", e);
+                        }}
+                    }}, 100);
+                }})();
+                </script>
                 """
 
                 # Add R layer
