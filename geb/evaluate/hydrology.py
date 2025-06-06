@@ -76,9 +76,7 @@ class Hydrology:
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
 
-        plt.savefig(
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
-        )
+        plt.savefig(self.output_folder_evaluate / "mean_discharge_m3_per_s.svg")
 
         evaluation_per_station = []
 
@@ -184,8 +182,7 @@ class Hydrology:
                     )
 
                     plt.savefig(
-                        eval_plot_folder / f"scatter_plot_{ID}.png",
-                        dpi=300,
+                        eval_plot_folder / f"scatter_plot_{ID}.svg",
                         bbox_inches="tight",
                     )
 
@@ -232,8 +229,7 @@ class Hydrology:
                         f"GEB discharge vs observations for station {Q_obs_station_name}"
                     )
                     plt.savefig(
-                        eval_plot_folder / f"timeseries_plot_{ID}.png",
-                        dpi=300,
+                        eval_plot_folder / f"timeseries_plot_{ID}.svg",
                         bbox_inches="tight",
                     )
                     plt.show()
@@ -490,9 +486,9 @@ class Hydrology:
                 station_name = row["station_name"]
 
                 # Generate scatter plot for the station
-                scatter_plot_path = eval_plot_folder / f"scatter_plot_{station_ID}.png"
+                scatter_plot_path = eval_plot_folder / f"scatter_plot_{station_ID}.svg"
                 time_series_plot_path = (
-                    eval_plot_folder / f"timeseries_plot_{station_ID}.png"
+                    eval_plot_folder / f"timeseries_plot_{station_ID}.svg"
                 )
                 # Encode the scatter plot image as a base64 string
                 with open(scatter_plot_path, "rb") as img_file:
@@ -511,8 +507,8 @@ class Hydrology:
                 <b>KGE:</b> {row["KGE"]:.2f}<br>
                 <b>NSE:</b> {row["NSE"]:.2f}<br>
                 <b>Upstream Area Ratio:</b> {row["Q_obs_to_GEB_upstream_area_ratio"]:.2f}<br>
-                <img src="data:image/png;base64,{encoded_image_scatter}" width="500">
-                <img src="data:image/png;base64,{encoded_image_time_series}" width="500">
+                <img src="data:image/svg+xml;base64,{encoded_image_scatter}" style="width: 100%;">
+                <img src="data:image/svg+xml;base64,{encoded_image_time_series}" style="width: 100%;">
                 """
 
                 # Add R layer
