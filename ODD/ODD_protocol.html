@@ -1,0 +1,802 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Overview &mdash; GEB  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=5dd5ad26" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5be48651"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=27b9c81c"></script>
+      <script src="../_static/doctools.js?v=695de88e"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="copyright" title="Copyright" href="../copyright.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            GEB
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../overview_and_installation.html">Overview and installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../configuration.html">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../preprocessing.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../running.html">Running the model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visualisation.html">Visualisation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../calibration.html">Calibration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ODD.html">ODD protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../agents/__init__.html">Agents</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../agents/households.html">Households</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../agents/crop_farmers.html">Crop farmers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../agents/reservoir_operators.html">Reservoir operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../agents/government.html">Government</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../model.html">Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../report.html">Report</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../HRUs.html">Farm-level HRUs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../artists.html">Artists</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">About</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../authors_page.html">Authors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contribution_guide.html">Contribution guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../updates.html">Updates</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">GEB</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Overview</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ODD/ODD_protocol.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <p>ODD+D protocol. Based on the protocol by &#64;muller2013describing</p>
+<section id="overview">
+<h1>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h1>
+<section id="purpose">
+<h2>1.1 Purpose<a class="headerlink" href="#purpose" title="Link to this heading"></a></h2>
+<section id="what-is-the-purpose-of-the-study">
+<h3>1.1.1 What is the purpose of the study?<a class="headerlink" href="#what-is-the-purpose-of-the-study" title="Link to this heading"></a></h3>
+<p>The purpose of GEB (The Geographical, Environmental and Behavioural model, &#64;debruijn2023geb) is to analyze dynamic drought and flood risk over time and space. It does so by coupling a human adaptation model (agent-based model) with a hydrological model. The model includes adaptive behavior of heterogeneous farmer, household and reservoir agents that changes in response to varying hydroclimatic and socioeconomic conditions, while in turn also affecting those socio-hydrological conditions.</p>
+</section>
+<section id="for-whom-is-the-model-designed">
+<h3>1.1.2 For whom is the model designed?<a class="headerlink" href="#for-whom-is-the-model-designed" title="Link to this heading"></a></h3>
+<p>The model is designed for scientists and practitioners.</p>
+</section>
+</section>
+<section id="entities-state-variables-and-scales">
+<h2>1.2 Entities, state variables and scales<a class="headerlink" href="#entities-state-variables-and-scales" title="Link to this heading"></a></h2>
+<section id="what-kinds-of-entities-are-in-the-model">
+<h3>1.2.1 What kinds of entities are in the model?<a class="headerlink" href="#what-kinds-of-entities-are-in-the-model" title="Link to this heading"></a></h3>
+<p>GEB includes an agent-based model (ABM) that governs the behavior of farmers and their interaction with the water cycle, as well as reservoir operators who manage water outflow from reservoirs. The ABM is coupled with a hydrological model Community Water Model (CWatM) that simulates the water cycle, availability and demand from non-agricultural sectors (e.g., domestic, energy, industry and livestock). Additionally, CWatM and the ABM are coupled to MODFLOW, which simulates the subsurface hydrology. For a full overview of CWatM and MODFLOW see &#64;burek2020development and &#64;langevin2017documentation.</p>
+</section>
+<section id="by-what-attributes-i-e-state-variables-and-parameters-are-these-entities-characterized">
+<h3>1.2.2. By what attributes (i.e. state variables and parameters) are these entities characterized?<a class="headerlink" href="#by-what-attributes-i-e-state-variables-and-parameters-are-these-entities-characterized" title="Link to this heading"></a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable / Parameter</p></th>
+<th class="head"><p>Definition, unit</p></th>
+<th class="head"><p>Value / range</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Location</strong></p></td>
+<td><p>Where in the study area the farmers are situated (i.e., geographic coordinates of farmers)</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Elevation</strong></p></td>
+<td><p>What elevation the farm is situated at (m above sea level).</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Farm size</strong></p></td>
+<td><p>How large their farm size is.</p></td>
+<td><p>Classes are: ‘Below 0.5’ acres, ‘0.5-1.0’, ‘1.0-2.0’, ‘2.0-3.0’, ‘3.0-4.0’, ‘4.0-5.0’, ‘5.0-7.5’, ‘7.5-10.0’, ‘10.0-20.0’, ‘20.0 &amp; ABOVE’. Size is randomly generated based on class.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Groundwater levels</strong></p></td>
+<td><p>How far below the ground the groundwater is situated. (m) below ground</p></td>
+<td><p>Determined by MODFLOW, CWatM and groundwater extractions</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Irrigation class</strong></p></td>
+<td><p>Whether farmer has used most irrigation water from groundwater, river channel or reservoirs</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Crop rotation</strong></p></td>
+<td><p>Which crops the farmer are cultivating during the Kharif, Rabi and Summer seasons</p></td>
+<td><p>Initially determined based on the Indian Agricultural Census and Indian Human Development Survey (see &#64;debruijn2023geb)</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Past yearly yield ratios</strong></p></td>
+<td><p>Array of past 20 years of average yield ratio over all seasons where farmer cultivated crops. (-)</p></td>
+<td><p>Determined by eq. 10 sect</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Past yearly potential and actual incomes</strong></p></td>
+<td><p>Array of past 20 years of potential (if no water shortage) and actual (with water shortage, determined by yield ratio) income after selling crops. (Rs)</p></td>
+<td><p>Determined by the crop, yield ratio and market prices</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Past yearly drought probabilities</strong></p></td>
+<td><p>Array of past 20 years of average Standardized Precipitation Evapotranspiration Index (SPEI) of all harvests. (-)</p></td>
+<td><p>~ +2 to -2</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Yearly costs / outstanding loan payments and durations</strong></p></td>
+<td><p>Yearly loan amount that farmers have to pay and how long they have to pay it for. Consists of agricultural input loans, microcredit loans and adaptation loans.</p></td>
+<td><p>Determined by crop choice, past crop failures and well adaptation decisions</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Social parameters</strong></p></td>
+<td><p>See sect. 2.1.4</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>$\sigma$</strong></p></td>
+<td><p>Risk aversion</p></td>
+<td><p>See sect. 2.1.3 Mean: 0.02; STD: 0.82. [&#64;just2009risk]</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>r</strong></p></td>
+<td><p>Discount rate</p></td>
+<td><p>See sect. 2.1.3 Mean: 0.159; STD: 0.193. [&#64;bauer2012behavioral]</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>r</strong></p></td>
+<td><p>Annual interest rate (%), coupled to land size classes.</p></td>
+<td><p>16, 11.5, 10, 7.75, 6.5, 6.5, 6.5, 5, 3, 3</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Risk perception</strong></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>$\beta$</strong></p></td>
+<td><p>Risk perception</p></td>
+<td><p>See sect. 1.3.1 for calculation</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>c</strong></p></td>
+<td><p>Maximum overestimation of risk, calibrated</p></td>
+<td><p>Min: 2; Max: 10; Final: 4.32</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>d</strong></p></td>
+<td><p>Risk reduction factor</p></td>
+<td><p>-2.5</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>e</strong></p></td>
+<td><p>Minimum underestimation of risk</p></td>
+<td><p>0.01</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>t</strong></p></td>
+<td><p>Time since last drought. (years)</p></td>
+<td><p>0 to the maximum runtime.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Calibrated parameters</strong></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Base yield ratio</strong></p></td>
+<td><p>The base yield ratio, used to adjust the mean yield ratio for calibration</p></td>
+<td><p>Min: 0.4; Max: 1; Final: 0.99</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Expenditure cap</strong></p></td>
+<td><p>The maximum yearly costs as a fraction of income farmers can spend on loans for adaptation/inputs/etc.</p></td>
+<td><p>Min: 0.2; Max: 0.5; Final: 0.30</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Drought threshold</strong></p></td>
+<td><p>Drought loss threshold.  See sect 2.1.3</p></td>
+<td><p>Min: 5; Max: 25; Final: 15.32</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Risk perception max c</strong></p></td>
+<td><p>See risk perception above.</p></td>
+<td><p>Min: 2; Max: 10; Final: 4.32</p></td>
+</tr>
+</tbody>
+</table>
+<p>Table 1 Attributes and their values of farmer agents in GEB. “Min” and “max” refer to the minimum and maximum value used in calibration, while “Final” refers to the value resulting from the calibration process.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable / Parameter</p></th>
+<th class="head"><p>Definition, unit</p></th>
+<th class="head"><p>Value / range</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Minimum outflow</strong></p></td>
+<td><p>The minimum outflow that can be set if a baseflow needs to be guaranteed (% of average discharge)</p></td>
+<td><p>0.0</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Non-damaging outflow Q</strong></p></td>
+<td><p>The maximum non-damaging outflow Q (% of average discharge)</p></td>
+<td><p>400.0</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Normal Outflow Q</strong></p></td>
+<td><p>The normal outflow Q (% of average discharge)</p></td>
+<td><p>1</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Max reservoir release factor</strong></p></td>
+<td><p>Fraction of total reservoir storage to release for irrigating farmers daily (-)</p></td>
+<td><p>Min: 0.01; Max: 0.05; Final: 0.03</p></td>
+</tr>
+</tbody>
+</table>
+<p>Table 2 Reservoir operator agents attributes and their values in GEB</p>
+<p>CWatM and MODFLOW attributes. This table shows only the calibrated attributes. Full hydrological settings can be found in the CwatM.ini file on Zenodo [&#64;kalthof_2024_11071746].</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable / Parameter</p></th>
+<th class="head"><p>Definition, unit</p></th>
+<th class="head"><p>Value / range</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Hydrological parameters (CWATM)</strong></p></td>
+<td><p>[&#64;burek2020development; &#64;debruijn2023geb]</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>SnowMeltCoef</strong>*</p></td>
+<td><p>Snow melt coefficient. *not calibrated as no snow in study area</p></td>
+<td><p>0.004</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>arnoBeta_add</strong></p></td>
+<td><p></p></td>
+<td><p>0.14</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>factor_interflow</strong></p></td>
+<td><p></p></td>
+<td><p>0.76</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>lakeAFactor</strong></p></td>
+<td><p></p></td>
+<td><p>3.22</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>lakeEvaFactor</strong></p></td>
+<td><p></p></td>
+<td><p>2.45</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>manningsN</strong></p></td>
+<td><p></p></td>
+<td><p>1.40</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>normalStorageLimit</strong></p></td>
+<td><p></p></td>
+<td><p>0.65</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>preferentialFlowConstant</strong></p></td>
+<td><p></p></td>
+<td><p>1.43</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>recessionCoeff_factor</strong></p></td>
+<td><p></p></td>
+<td><p>4.09</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>soildepth_factor</strong></p></td>
+<td><p></p></td>
+<td><p>1.77</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>return_fraction</strong></p></td>
+<td><p></p></td>
+<td><p>0.45</p></td>
+</tr>
+</tbody>
+</table>
+<p>Table 3 Calibrated CWatM attributes and their final values in GEB</p>
+</section>
+<section id="what-are-the-exogenous-factors-drivers-of-the-model">
+<h3>1.2.3. What are the exogenous factors / drivers of the model?<a class="headerlink" href="#what-are-the-exogenous-factors-drivers-of-the-model" title="Link to this heading"></a></h3>
+<p>The forcing data consisted of Precipitation (kg/m²/s), Surface Downwelling Longwave Radiation (W/m²), Surface Downwelling Shortwave Radiation (W/m²), Relative Humidity at Surface (%, hurs), Surface Pressure [&#64;baddeley2010herding], Surface Wind Speed (m/s), Near-Surface Air Temperature (K), Daily Maximum Near-Surface Air Temperature (K), Daily Minimum Near-Surface Air Temperature (K) and Wind Speed (m/s). This data was sourced from the CHELSA-W5E5 v1.0 observational climate input data at 30 arcsec horizontal and daily temporal resolution [&#64;karger2023chelsa].</p>
+<p>The routing was determined by identifying the outlet of the Upper Bhima basin and taking all upstream cells of it from the MERIT Hydro elevation map [&#64;yamazaki2019merit], upscaled to 30’’ [&#64;eilander2021hydrography]. Routing maps for river slope and width were also obtained in a similar manner [&#64;eilander2021hydrography]. Reservoir and lake footprints came from the HydroLAKES dataset [&#64;messager2016estimating]. Where available, data on flood cushions and reservoir volumes were sourced from the Andhra Pradesh WRIMS database (https://apwrims.ap.gov.in/, last accessed on 7 September 2021). Land cover was determined from the land cover data of &#64;chen2018globeland30.</p>
+<p>Historical water demand is taken from CWatM and consists of domestic, industry and livestock demand following the method of &#64;wada2011modelling.</p>
+<p>Crop cultivation costs are sourced from the Ministry of Agriculture and Farmers Welfare in Rupees (Rs) per hectare (<a class="reference external" href="https://eands.da.gov.in/Cost_of_Cultivation.htm">https://eands.dacnet. Nic.in/Cost_of_Cultivation.htm</a>, last access: 15 July 2022) [&#64;debruijn2023geb]. Historical monthly crop market sell prices are sourced from Agmarknet (https://agmarknet.gov.in, last accessed on 27 July 2022) [&#64;debruijn2023geb] in Rupees (Rs) per kg.</p>
+</section>
+<section id="if-applicable-how-is-space-included-in-the-model">
+<h3>1.2.4. If applicable, how is space included in the model?<a class="headerlink" href="#if-applicable-how-is-space-included-in-the-model" title="Link to this heading"></a></h3>
+<p>Each field of a farmer is simulated as a single Hydrological Response Unit (HRU) [&#64;debruijn2023geb]. The HRUs are dynamically sized based on the land ownership / field size of each farmer and are independently operated by each agent. This means that land management decisions such as crop rotation, planting dates and irrigation, along with soil processes like percolation, capillary rise, and evaporation, are independently simulated within a HRU for each farmer. This allows for the simulation of multiple independently operated farms within a single grid cell of CWatM [&#64;debruijn2023geb]. The smallest HRU is at 30 m x 30 m, which is the resolution of the smallest cell of the land cover map.</p>
+<p>While vertical hydrological processes like infiltration and percolation are modeled within the HRUs, river discharge and groundwater flow are handled at the grid cell level of 30’’ grid size. This requires converting fluxes from HRUs to grid cells. Runoff is calculated for each HRU, aggregated based on their sizes, and then integrated into the grid cell’s discharge calculations.</p>
+</section>
+<section id="what-are-the-temporal-and-spatial-resolutions-and-extents-of-the-model">
+<h3>1.2.5. What are the temporal and spatial resolutions and extents of the model?<a class="headerlink" href="#what-are-the-temporal-and-spatial-resolutions-and-extents-of-the-model" title="Link to this heading"></a></h3>
+<p>In this study, the spatial extent model is the Upper Bhima basin, but it can be configured for any region globally by selecting the appropriate outflow grid point. For the spatial resolution see section 1.2.4. The temporal extent consists of a spin-up period between 1980 and 2001, and a run period from 2001 to 2015. 2001 was chosen as there was data in 2001 for how many and which farmers had irrigation wells. As the climate data started in 1979, the 12-month SPEI was available from 1980. The spin-up time between 1980 and 2001 was chosen to maximize the duration so that the drought probability-yield relation (or the “true/objective” drought risk) included as many drought events as possible.</p>
+<p>CWatM processes run at a daily timestep, except routing, which runs at a hourly sub-timestep. The interaction between both, such as choosing to irrigate or to harvest crops, run at a daily timestep as well. Adaptation decisions (switching crops or digging wells) are made at the end of each growing season for the next one.</p>
+</section>
+</section>
+<section id="process-overview-and-scheduling">
+<h2>1.3 Process overview and scheduling<a class="headerlink" href="#process-overview-and-scheduling" title="Link to this heading"></a></h2>
+<section id="what-entity-does-what-and-in-what-order">
+<h3>1.3.1. What entity does what, and in what order?<a class="headerlink" href="#what-entity-does-what-and-in-what-order" title="Link to this heading"></a></h3>
+<p>Daily timestep: CWatM simulates all daily hydrological processes depending on, e.g., the meteorological forcing, land use types, crop potential evapotranspiration etc. Reservoir agents determine reservoir release based on the current reservoir storage and inflow plus a set minimum, normal and maximum outflow, flood cushion and maximum fill. This water is made available to be released into the river channel. The water made available for irrigating farmers is a set percentage of the total volume daily, which is first available to the most upstream agents, cascading downstream. In the same timestep, farmer agents then determine whether they will irrigate (depending on whether they have access to either reservoir water, river channel water or groundwater) and how much they will irrigate (which is determined by how much water the farmer’s crop is short from fully filling field capacity so that actual evapotranspiration equals potential evapotranspiration). This water is then abstracted and added from and to the corresponding storages in CWatM, and CWatM updates all appropriate stocks, this is done asynchronously, with elevation determining the order. Each agents then checks whether it is time to plant their crops if they have no current crops planted (depending on the crop rotation of the farmer and the start of the season) and adds the input costs to their yearly costs. Additionally, they check whether it is time to harvest if they currently have a crop planted (depending on when the crop was planted and how long that specific crop grows).</p>
+<p><img alt="image of model overview" src="../_images/model_overview.svg" /></p>
+<p>Figure 1 Overview of model actions, taken from &#64;debruijn2023geb. The government and NGO agents do not affect the model in this paper.</p>
+<p>Farmers grow pearl millet, groundnut, sorghum, paddy rice, sugar cane, wheat, cotton, chickpea, maize, green gram, finger millet, sunflower and red gram. Each crop undergoes four growth stages (d1 to d4). The crop coefficient (Kc) is then calculated as follows [&#64;fischer2021global]:</p>
+<p>$$
+Kc_t =
+\begin{cases}
+Kc1, &amp; t &lt; d_1 \
+Kc1 + (t - d_1) \times \frac{Kc2 - Kc1}{d_2}, &amp; d_1 \leq t &lt; d_2 \
+Kc2, &amp; d_2 \leq t &lt; d_3 \
+Kc2 + (t - (d_1 + d_2 + d_3)) \times \frac{Kc3 - Kc2}{d_4}, &amp; \text{otherwise}
+\end{cases}
+$$</p>
+<p>where t represents the number of days since planting, and d1 to d4 are the durations of each growth stage. Each crop has their own set of these parameters. At the harvest stage, the actual yield (Ya) is determined based on a maximum reference yield (Yr; &#64;siebert2010quantifying), the water-stress reduction factor (KyT), and the ratio of actual evapotranspiration (AET) to potential evapotranspiration (PET) throughout the growth period [&#64;fischer2021global]:</p>
+<p>$$
+Y_a = Y_r \times \left( 1 - KyT \times \left( 1 - \frac{\sum_{t=0}^{t=h} \text{AET}<em>t}{\sum</em>{t=0}^{t=h} \text{PET}_t} \right) \right)
+$$</p>
+<p>After they harvest, yield is converted to income depending on the current market price of that specific crop. At the end of each season, farmers track their yield ratio of that harvest, their potential and actual profits and the 12-month SPEI of that season (from the 12-month SPEI between 1979 and 2016, calibrated from 1981-2010). They also check whether this season’s yield ratio is lower than a moving reference point plus a certain “drought threshold”. The reference point is the 5-year average difference between the reference potential yield and the actual yield, and the additional drought threshold is a calibrated factor. If it is below the moving average reference point and the drought threshold (e.g., 15% below the average yield of the last 5 years), the farmer experiences a drought. In that case, their time since the last drought (table 1) resets and their risk perception rises according to</p>
+<p>$$
+\beta_t = c \times 1.6^{-d \times t} + e
+$$</p>
+<p>Where d is  a reduction factor, e is a minimum underestimation of risk and c is the maximum overestimation of risk. The amount that is below the threshold is then multiplied by the yearly average income and added as a two year loan (with interest) to yearly costs as microcredit.</p>
+<p>Growing season / yearly timestep: At growing season / yearly timestep the agents average those seasons’ SPEI probabilities and yield ratios. The farmers are then ordered into groups of farmers that have the same crop rotation, are in the same division of the river basin (upper / middle / lower) and have wells or not. The SPEI probability and yield ratios are averaged and a relation is made between all past SPEI probabilities and yield ratios (for calculation see section 3.4), which counts as their objective risk experience (i.e. the “objective truth” of what severity/probability drought leads to what severity yield loss) (figure 2). To decide whether they will dig a well or not, they use their own objective risk experience and subjective risk perception (i.e., after a drought overestimating the probability that droughts will happen), risk aversion and discount rate to calculate the subjective expected utility (SEUT) of not adapting. As wells both increase profits during non-drought years and reduce loss during drought years, the added benefit of wells is difficult to predict. Therefore, the SEUT of wells is calculated using the objective risk experience (i.e. relation between drought probability and yield) of the same group of farmers (in the same region of the basin, with the same crop rotation) that instead do have a well, but their personal subjective risk perception, risk aversion, discount rate, interest rate for loans, and well cost (which is dependent on the local groundwater depth). For calculation see section 3.4. If the SEUT of digging a well is higher and the price of adaptation is within the farmer’s budget constraints, they then adapt and the yearly loan amount (depending on well depth / cost, interest rate and loan duration, for calculation see section 3.4) is added to their yearly costs. This is done synchronously. To determine whether farmers will switch crops, all farmers calculate only their own crop rotation’s SEUT and objective EUT (using neutral risk perception, aversion and discount rate). Then, agents compare their current crop rotation’s SEUT with the EUT of max 5 random neighboring farmers using similar irrigation sources (within a 1 km radius, using reservoir, surface, groundwater or no irrigation). The EUT is used since using a neighbor’s SEUT would mean using another agent’s subjective factors. They then adopt the crop rotation of the neighbor who’s EUT is highest, if this exceeds their own SEUT. This is done asynchronously, following the same order as used for irrigation.</p>
+<p><img alt="image of model behaviour concepts" src="../_images/model_behaviour.jpg" /></p>
+<p>Figure 2 Specific overview of the updated behavior in this study.</p>
+<p>Design concepts</p>
+</section>
+</section>
+<section id="theoretical-and-empirical-background">
+<h2>2.1 Theoretical and Empirical Background<a class="headerlink" href="#theoretical-and-empirical-background" title="Link to this heading"></a></h2>
+<section id="which-general-concepts-theories-or-hypotheses-are-underlying-the-models-design-at-the-system-level-or-at-the-level-s-of-the-submodel-s-what-is-the-link-to-complexity-and-the-purpose-of-the-model">
+<h3>2.1.1 Which general concepts, theories or hypotheses are underlying the model’s design at the system level or at the level(s) of the submodel(s)? What is the link to complexity and the purpose of the model?<a class="headerlink" href="#which-general-concepts-theories-or-hypotheses-are-underlying-the-models-design-at-the-system-level-or-at-the-level-s-of-the-submodel-s-what-is-the-link-to-complexity-and-the-purpose-of-the-model" title="Link to this heading"></a></h3>
+<p>The modelling approach in GEB is based on a quantitative socio-hydrology framework. In this framework, we assume two-way feedback between humans and the hydrological cycle, i.e. farmers both affect and are affected by the physical (drought) environment, but also between humans and economic factors such as changing market crop prices. Furthermore, the agent-based nature of GEB acknowledges the heterogeneity of actual farmers and attempts to capture this by varying social and physical factors to produce farmer agents that are similar to the ones we see in real life.</p>
+</section>
+<section id="on-what-assumptions-is-are-the-agents-decision-model-s-based">
+<h3>2.1.2 On what assumptions is/are the agents’ decision model(s) based?<a class="headerlink" href="#on-what-assumptions-is-are-the-agents-decision-model-s-based" title="Link to this heading"></a></h3>
+<p>Agents are boundedly rational and use the subjective expected utility (SEUT) [&#64;savage1972foundations] to choose between actions they can take. They are further influenced by the adaptive choices of their neighbors, or “imitation” (source) and by elements of prospect theory [&#64;kahneman2013prospect; &#64;ribeiro2023hess].</p>
+</section>
+<section id="why-are-certain-decision-models-chosen">
+<h3>2.1.3 Why are certain decision models chosen?<a class="headerlink" href="#why-are-certain-decision-models-chosen" title="Link to this heading"></a></h3>
+<p>The SEUT builds on the EUT [&#64;von1947theory], by incorporating the concept of “bounded rationality”, where agents remain rational utility maximizers but base their decisions on subjective estimates of drought probability. Their subjective estimates overestimate probabilities following a drought and underestimate probabilities after periods of no drought. Such boundedly rational behavior, observed in reality [&#64;aerts2018integrating; &#64;kunreuther1996mitigating], aligns more closely with actual adaptation behavior than fully rational models [&#64;haer2020safe; &#64;wens2020simulating]. As the model’s application interest is in consecutive (drought) events, this behavioral theory fit our research goals best.</p>
+<p>However, literature indicates that human adaptive behavior is also influenced by social factors [&#64;baddeley2010herding; &#64;haer2016effectiveness]. Thus, agents also make decisions influenced by the (earlier) adaptive decisions and behavior of their neighbors. Lastly, farmers do not necessarily experience a meteorological drought as a drought, but experience drought when they experience crop loss, which is a factor of the meteorological drought, crop choice and irrigation capabilities [&#64;van2016drought]. Furthermore, farmers also do not judge crop loss as a drought based on whether they have achieved the theoretical maximum yield if they never achieve this. Thus, we set that they only experience a drought if they have a loss against their expected gain or reference point, i.e., if the last 5 years they had  on average 60% of total yield, they will experience loss if it is below this 60%. This is based on how people experience loss which is described by elements of prospect theory [&#64;kahneman2013prospect; &#64;ribeiro2023hess]. The moving reference point can change based on farmer’s changed situation, e.g., if the farmer now uses irrigation and gets higher yields, if there has not been a drought for some time or if there has been a drought for a longer time [&#64;ribeiro2023hess] and yields were higher or if the farmer now has more drought resistant crops.</p>
+</section>
+<section id="if-the-model-a-submodel-e-g-the-decision-model-is-based-on-empirical-data-where-does-the-data-come-from">
+<h3>2.1.4 If the model / a submodel (e.g. the decision model) is based on empirical data, where does the data come from?<a class="headerlink" href="#if-the-model-a-submodel-e-g-the-decision-model-is-based-on-empirical-data-where-does-the-data-come-from" title="Link to this heading"></a></h3>
+<p>Agent initialization: To generate heterogeneous farmer plots and agents with characteristics statistically similar to those observed within the Bhima basin, factors from the India Human Development Survey (IHDS), such as agricultural net income, farm size, irrigation type or household size, were combined with Agricultural census data. For this, we use the iterative proportional fitting algorithm, which reweights IHDS survey data such that it fits the distribution of crop types, farm sizes and irrigation status at sub-district level reported in the Agricultural Census [&#64;debruijn2023geb]. The farmer agents and their plots were randomly distributed over their respective sub-districts on land designated as agricultural land [&#64;chen2018globeland30] at 1.5² resolution (50 meter at the equator). There were a total of 1432923 agents. The number of agents remained constant over the simulation period.</p>
+<p>Risk aversion &amp; discount rate: To set risk aversion and discount rate, we first normalized the distribution of agricultural net income. Then, as risk aversion and discount rate correlate with household income [&#64;bauer2012behavioral; &#64;just2009risk; &#64;maertens2014farmers], we rescaled the normalized income distribution with the mean and standard deviation of the (marginal) risk aversion  (0.02, 0.82; &#64;just2009risk) and discount rate r (0.159, 0.193; &#64;bauer2012behavioral) of Indian farmers. Noise was added to both to prevent that each present-biased agent is also risk taking by definition.</p>
+<p>Interest rates: To account for the variation in access to credit and interest rates among farmers, we assigned each agent an interest rate based on their total landholding size, with smaller farmers receiving higher and larger farmers lower rates (Table 4, &#64;maertens2014farmers; &#64;udmale2015did). This is based on the interest rates observed among Indian farmers [&#64;hoda2015credit; &#64;udmale2015did]. The average for all farmers comes out at approximately 10.6%, near the observed 10.7% of [&#64;udmale2015did]. Below is the table relating landholding size to interest rate:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Size class (ha)</p></th>
+<th class="head"><p>&lt; 0.5</p></th>
+<th class="head"><p>0.5-1.0</p></th>
+<th class="head"><p>1.0-2.0</p></th>
+<th class="head"><p>2.0-3.0</p></th>
+<th class="head"><p>3.0-4.0</p></th>
+<th class="head"><p>4.0-5.0</p></th>
+<th class="head"><p>5.0-7.5</p></th>
+<th class="head"><p>7.5-10.0</p></th>
+<th class="head"><p>10.0-20.0</p></th>
+<th class="head"><p>&gt; 20.0</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Interest rate (%)</strong></p></td>
+<td><p>16</p></td>
+<td><p>11.5</p></td>
+<td><p>10</p></td>
+<td><p>7.75</p></td>
+<td><p>6.5</p></td>
+<td><p>6.5</p></td>
+<td><p>6.5</p></td>
+<td><p>5</p></td>
+<td><p>3</p></td>
+<td><p>3</p></td>
+</tr>
+</tbody>
+</table>
+<p>Table 4 Interest rates per landholding size</p>
+<p><img alt="image of distribution of characteristics" src="../_images/distributions_of_characteristics.png" /></p>
+<p>Figure 3 Distributions of the farm sizes, risk aversion, discount and interest rates.</p>
+<p>Calibration: We calibrated the model from 2001 to 2010 using observed daily discharge data and yield data. The daily discharge data was obtained from 5 discharge stations at various locations in the Bhima Basin from India-WRIS (https://indiawris.gov.in/wris/#/). The yield data was obtained by dividing the total production by the total cropped area from the ICRISAT meso-level database to determine yield in tons per hectare. This figure was then divided by the reference maximum yield in tons per hectare to calculate the percentage of maximum yield.</p>
+<p>Crop market prices: Cultivation costs which include expenses such as purchasing seeds, manure, and labor are sourced from the Ministry of Agriculture and Farmers Welfare in Rupees (Rs) per hectare (https://eands.dacnet. Nic.in/Cost_of_Cultivation.htm, last access: 15 July 2022) [&#64;debruijn2023geb]. Historical monthly market prices are sourced from Agmarknet (https://agmarknet.gov.in, last accessed on 27 July 2022) [&#64;debruijn2023geb] in Rupees (Rs) per kg.</p>
+</section>
+<section id="at-which-level-of-aggregation-were-the-data-available">
+<h3>2.1.5 At which level of aggregation were the data available?<a class="headerlink" href="#at-which-level-of-aggregation-were-the-data-available" title="Link to this heading"></a></h3>
+<p>The IHDS is reported at household level, the agricultural census data available at the sub-district level and the ICRISAT meso-level database are available at the sub-district level yearly. &#64;just2009risk and &#64;bauer2012behavioral were field study experiments done at the village level in Maharastra and Karnataka, respectively. Interest rates were at the national level [&#64;hoda2015credit].</p>
+</section>
+</section>
+<section id="individual-decision-making">
+<h2>2.2 Individual decision making<a class="headerlink" href="#individual-decision-making" title="Link to this heading"></a></h2>
+<section id="what-are-the-subjects-and-objects-of-decision-making-on-which-level-of-aggregation-is-decision-making-modeled-are-multiple-levels-of-decision-making-included">
+<h3>2.2.1 What are the subjects and objects of decision-making? On which level of aggregation is decision-making modeled? Are multiple levels of decision making included?<a class="headerlink" href="#what-are-the-subjects-and-objects-of-decision-making-on-which-level-of-aggregation-is-decision-making-modeled-are-multiple-levels-of-decision-making-included" title="Link to this heading"></a></h3>
+<p>Farmers make decisions between whether to change their crop rotation or stay with the same rotation, or whether to dig a well or do nothing.</p>
+</section>
+<section id="what-is-the-basic-rationality-behind-agents-decision-making-in-the-model-do-agents-pursue-an-explicit-objective-or-have-other-success-criteria">
+<h3>2.2.2 What is the basic rationality behind agents’ decision-making in the model? Do agents pursue an explicit objective or have other success criteria?<a class="headerlink" href="#what-is-the-basic-rationality-behind-agents-decision-making-in-the-model-do-agents-pursue-an-explicit-objective-or-have-other-success-criteria" title="Link to this heading"></a></h3>
+<p>Households want to maximize their subjective expected utility. This is dependent on the effectiveness of wells given their crop yield &amp; income and drought relation, which is affected by their crop rotation and past water availability. Furthermore, this is dependent on the yearly costs of wells, which is determined by the groundwater depth at their location and their interest rate.</p>
+</section>
+<section id="how-do-agents-make-their-decisions">
+<h3>2.2.3 How do agents make their decisions?<a class="headerlink" href="#how-do-agents-make-their-decisions" title="Link to this heading"></a></h3>
+<p>Agents make decisions using the Subjective Expected Utility Theory, weighing the expected utility of digging a well against not digging one, and choosing the option that offers the highest utility. For crop choices, they compare the expected utility of their current crop rotation with that of their neighbors’ (with similar irrigation status), selecting the crop rotation that maximizes utility.</p>
+</section>
+<section id="do-the-agents-adapt-their-behavior-to-changing-endogenous-and-exogenous-state-variables-and-if-yes-how">
+<h3>2.2.4 Do the agents adapt their behavior to changing endogenous and exogenous state variables? And if yes, how?<a class="headerlink" href="#do-the-agents-adapt-their-behavior-to-changing-endogenous-and-exogenous-state-variables-and-if-yes-how" title="Link to this heading"></a></h3>
+<p>If agents switch their crops they adapt the yield – drought probability of their neighbor whom they copied. In combination with the new sell prices of their new crops, this changes the profitability of digging wells. Reversely, if a farmer digs a well, the increased water availability now changes the profitability of their crops, leading to different behavior. If loans are taken to adapt, the yearly costs change and thus the budget constraints are tighter.</p>
+<p>If total groundwater abstraction rises (either due to more water hungry crops or more agents with wells), groundwater levels decline and well prices rise and vice versa, leading to different behavior. Furthermore, if groundwater levels decline substantially, farmer’s wells can dry, which can lead to different yields and crop decisions. If more upstream agents abstract reservoir or channel water, there is less availability for downstream farmers, leading to different profits and behavior. If crop market prices change (either input or sell costs), their profitability changes, which can lead to different crop choices.</p>
+<p>If several years of increased yields follow, the drought reference level increases, leading to a different frequency of drought loss threshold exceedance and vice versa. Similarly, risk perception rises and falls in response to drought threshold exceedance (i.e. after a drought), leading to different behavior.</p>
+<p>If droughts occur, incomes go down and loans go up and budget constraint change. Vice versa for wet periods. If over a longer period of time droughts become more or less frequent or severe, the yield-drought probability relation changes and behavior changes.</p>
+</section>
+<section id="do-social-norms-or-cultural-values-play-a-role-in-the-decision-making-process">
+<h3>2.2.5 Do social norms or cultural values play a role in the decision-making process?<a class="headerlink" href="#do-social-norms-or-cultural-values-play-a-role-in-the-decision-making-process" title="Link to this heading"></a></h3>
+<p>No.</p>
+</section>
+<section id="do-spatial-aspects-play-a-role-in-the-decision-process">
+<h3>2.2.6 Do spatial aspects play a role in the decision process?<a class="headerlink" href="#do-spatial-aspects-play-a-role-in-the-decision-process" title="Link to this heading"></a></h3>
+<p>Climatic factors depend on the location of the farmer, the number of neighboring farmers / farmer density depends on the location (a higher density downstream and a lower density upstream), both these factors and the topography and hydrology determine the groundwater depth, which is thus also dependent on the location of the farmer.</p>
+</section>
+<section id="do-temporal-aspects-play-a-role-in-the-decision-process">
+<h3>2.2.7 Do temporal aspects play a role in the decision process?<a class="headerlink" href="#do-temporal-aspects-play-a-role-in-the-decision-process" title="Link to this heading"></a></h3>
+<p>Farmers calculate the subjective time-discounted expected utility of each behavioral strategy by applying a decision horizon and a time discounting factor. Furthermore, the farmers have a “memory” of the past 20 years of yields and droughts, and use this to make predictions for future investments (through using the probability-yield relation in the expected utility). Lastly, just after a drought has been experienced, farmers risk perception is higher, and this goes down after time without a drought.</p>
+</section>
+<section id="to-which-extent-and-how-is-uncertainty-included-in-the-agents-decision-rules">
+<h3>2.2.8 To which extent and how is uncertainty included in the agents’ decision rules?<a class="headerlink" href="#to-which-extent-and-how-is-uncertainty-included-in-the-agents-decision-rules" title="Link to this heading"></a></h3>
+<p>When farmers who do not have a well are grouped based on similarity and check their similar other farmer group that has adapted for how much yield gain per drought a well gives, a probability is given to the yield increase if the second group is much smaller than the first (e.g., the first has 100 farmers and the second only 5). The bigger the difference, the lower the probability. The probability becomes 100% if the groups are of equal size or the adapted group is bigger. If the probability estimation fails, we assume no added benefit. This is to prevent very few farmers from changing a much larger group (e.g., 3 farmers who have exceptional added benefit of wells cause 400 farmers to adapt).</p>
+<p>When searching for neighbors with similar irrigation status (reservoir, channel or groundwater), a random selection of neighbors is taken.</p>
+</section>
+</section>
+<section id="learning">
+<h2>2.3 Learning<a class="headerlink" href="#learning" title="Link to this heading"></a></h2>
+<section id="is-individual-learning-included-in-the-decision-process-how-do-individuals-change-their-decision-rules-over-time-as-consequence-of-their-experience">
+<h3>2.3.1 Is individual learning included in the decision process? How do individuals change their decision rules over time as consequence of their experience?<a class="headerlink" href="#is-individual-learning-included-in-the-decision-process-how-do-individuals-change-their-decision-rules-over-time-as-consequence-of-their-experience" title="Link to this heading"></a></h3>
+<p>Experience with droughts increases their risk experience and modifies their expected utility calculation and behavior. Second, through the “drought probability vs yield”-relation all farmers learn. This is both when more or less severe droughts are recorded, and the relation changes, but also when for example the farmers switches to a different crop rotation or suddenly has more water available.</p>
+</section>
+<section id="is-collective-learning-implemented-in-the-model">
+<h3>2.3.2 Is collective learning implemented in the model?<a class="headerlink" href="#is-collective-learning-implemented-in-the-model" title="Link to this heading"></a></h3>
+<p>The drought probability – yield relation is calculated of averaged values of larger groups that are similar in terms of having wells, basin location and crop rotation. This grouping is done to get more robust relations for the “objective” relation between drought probability and yield. However, one farmer may have experienced slightly different past precipitation, and will thus learn from others’ drought experiences.</p>
+</section>
+<section id="id1">
+<h3>2.3.3 Is collective learning implemented in the model?<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
+</section>
+</section>
+<section id="individual-sensing">
+<h2>2.4 Individual sensing<a class="headerlink" href="#individual-sensing" title="Link to this heading"></a></h2>
+<section id="what-endogenous-and-exogenous-state-variables-are-individuals-assumed-to-sense-and-consider-in-their-decisions-is-the-sensing-process-erroneous">
+<h3>2.4.1 What endogenous and exogenous state variables are individuals assumed to sense and consider in their decisions? Is the sensing process erroneous?<a class="headerlink" href="#what-endogenous-and-exogenous-state-variables-are-individuals-assumed-to-sense-and-consider-in-their-decisions-is-the-sensing-process-erroneous" title="Link to this heading"></a></h3>
+<p>Farmers sense groundwater depths, well costs, irrigation class, risk perception, interest rates non-erroneous. Farmers sense future drought risk and yield, future benefits from wells and the expected utility of their own and neighbor’s (with similar irrigation status) crop rotation erroneously, as these are estimations based on past and partial (risk) information and also depend on future exogeneous state variables.</p>
+</section>
+<section id="what-state-variables-of-which-other-individuals-can-an-individual-perceive-is-the-sensing-process-erroneous">
+<h3>2.4.2 What state variables of which other individuals can an individual perceive? Is the sensing process erroneous?<a class="headerlink" href="#what-state-variables-of-which-other-individuals-can-an-individual-perceive-is-the-sensing-process-erroneous" title="Link to this heading"></a></h3>
+<p>Farmers can sense the expected utility of other farmers with similar irrigation status’s crop rotation. As this process is erroneous for the farmer itself, it is also erroneous for the farmer sensing that of the other farmer.</p>
+</section>
+<section id="what-is-the-spatial-scale-of-sensing">
+<h3>2.4.3 What is the spatial scale of sensing?<a class="headerlink" href="#what-is-the-spatial-scale-of-sensing" title="Link to this heading"></a></h3>
+<p>The relation between drought probability and yield is made for groups formed in the upper, middle and lower basin (regional). The expected utility of neighbors with similar irrigation status (reservoir, channel or groundwater)  is within a 1 km radius / local. All other sensing is done at the farmer’s own location.</p>
+</section>
+<section id="are-the-mechanisms-by-which-agents-obtain-information-modeled-explicitly-or-are-individuals-simply-assumed-to-know-these-variables">
+<h3>2.4.4 Are the mechanisms by which agents obtain information modeled explicitly, or are individuals simply assumed to know these variables?<a class="headerlink" href="#are-the-mechanisms-by-which-agents-obtain-information-modeled-explicitly-or-are-individuals-simply-assumed-to-know-these-variables" title="Link to this heading"></a></h3>
+<p>The drought probability – yield relation, well costs and expected utilities are modelled explicitly, while the other factors are just known by farmers.</p>
+</section>
+<section id="are-costs-for-cognition-and-costs-for-gathering-information-included-in-the-model">
+<h3>2.4.5 Are costs for cognition and costs for gathering information included in the model?<a class="headerlink" href="#are-costs-for-cognition-and-costs-for-gathering-information-included-in-the-model" title="Link to this heading"></a></h3>
+<p>No</p>
+</section>
+</section>
+<section id="individual-prediction">
+<h2>2.5 Individual prediction<a class="headerlink" href="#individual-prediction" title="Link to this heading"></a></h2>
+<section id="which-data-does-the-agent-use-to-predict-future-conditions">
+<h3>2.5.1 Which data does the agent use to predict future conditions?<a class="headerlink" href="#which-data-does-the-agent-use-to-predict-future-conditions" title="Link to this heading"></a></h3>
+<p>Farmer agents use the last 20 years of drought probability and yield relation plus their risk perception, adaptation costs and crop market prices to predict future conditions.</p>
+</section>
+<section id="might-agents-be-erroneous-in-the-prediction-process-and-how-is-it-implemented">
+<h3>2.5.2 Might agents be erroneous in the prediction process, and how is it implemented?<a class="headerlink" href="#might-agents-be-erroneous-in-the-prediction-process-and-how-is-it-implemented" title="Link to this heading"></a></h3>
+<p>Yes. The drought probability-yield relation is based on the SPEI between 1979 and 2016 and events that happened to the farmer for the last 20 years and is assumed to be the fully “objective” drought risk. It thus does not know what their yield would be for an, e.g., severe drought that was not present in those last 20 years, or what a drought SPEI would be if it was not present during the 1979-2016 data series. Furthermore, when determining the added benefit of wells, it is assumed that they will remain able to extract water indefinitely, which can be changed if groundwater levels drop due to weather conditions or other agents extracting. Similarly, agents are not aware of future market price changes.</p>
+</section>
+</section>
+<section id="interaction">
+<h2>2.6 Interaction<a class="headerlink" href="#interaction" title="Link to this heading"></a></h2>
+<section id="are-interactions-among-agents-and-entities-assumed-as-direct-or-indirect">
+<h3>2.6.1 Are interactions among agents and entities assumed as direct or indirect?<a class="headerlink" href="#are-interactions-among-agents-and-entities-assumed-as-direct-or-indirect" title="Link to this heading"></a></h3>
+<p>Direct among agents through neighbor expected utility sharing and through calculating the drought probability-yield relation. Indirect through accessing shared irrigation resources, i.e., groundwater, channel water and reservoir water.</p>
+</section>
+<section id="on-what-do-the-interactions-depend">
+<h3>2.6.2 On what do the interactions depend?<a class="headerlink" href="#on-what-do-the-interactions-depend" title="Link to this heading"></a></h3>
+<p>Whether farmers are similar (drought probability-yield relations) and their spatial location (upstream/downstream, many agents abstracting groundwater or relatively few, inside neighbor radius or outside).</p>
+</section>
+<section id="if-the-interactions-involve-communication-how-are-such-communications-represented">
+<h3>2.6.3 If the interactions involve communication, how are such communications represented?<a class="headerlink" href="#if-the-interactions-involve-communication-how-are-such-communications-represented" title="Link to this heading"></a></h3>
+<p>Communication for crop switching is limited to a spatial radius of 1 km of neighboring farmers with similar irrigation status (reservoir, channel or groundwater), from which a random group of 5 farmers is selected. For determining the drought probability-yield relation the communication is limited to farmers that are similar in terms of well status, basin location and crop rotation.</p>
+</section>
+<section id="if-a-coordination-network-exists-how-does-it-affect-the-agent-behaviour-is-the-structure-of-the-network-imposed-or-emergent">
+<h3>2.6.4 If a coordination network exists, how does it affect the agent behaviour? Is the structure of the network imposed or emergent?<a class="headerlink" href="#if-a-coordination-network-exists-how-does-it-affect-the-agent-behaviour-is-the-structure-of-the-network-imposed-or-emergent" title="Link to this heading"></a></h3>
+<p>The group of neighbors to which farmers compare the expected utility of their own crop rotation is randomized each year.</p>
+</section>
+</section>
+<section id="collectives">
+<h2>2.7 Collectives<a class="headerlink" href="#collectives" title="Link to this heading"></a></h2>
+<section id="do-the-individuals-form-or-belong-to-aggregations-that-affect-and-are-affected-by-the-individuals-are-these-aggregations-imposed-by-the-modeller-or-do-they-emerge-during-the-simulation">
+<h3>2.7.1 Do the individuals form or belong to aggregations that affect, and are affected by, the individuals? Are these aggregations imposed by the modeller or do they emerge during the simulation?<a class="headerlink" href="#do-the-individuals-form-or-belong-to-aggregations-that-affect-and-are-affected-by-the-individuals-are-these-aggregations-imposed-by-the-modeller-or-do-they-emerge-during-the-simulation" title="Link to this heading"></a></h3>
+<p>For every farmer in the Bhima basin, we model one farmer agent (or “one-to-one” scale), thus there is no initial aggregation of agents. We do this first and foremost because we do not know what a representative agent for our area is [&#64;bauer2012behavioral] and by pre-emptively aggregating agents, we may lose interactions that we were not aware existed in the first place [&#64;bauer2012behavioral]. This is especially true in an area as heterogeneous as the Bhima basin in India, where there are extreme differences in landholder size, which factor through in other agent attributes such as which crops they initially cultivate, their access to credit or their social factors [&#64;hoda2015credit; &#64;maertens2014farmers; &#64;udmale2015did]. Aggregating while coupling to a hydrological model may also give additional issues. For example, without aggregation, if a small farmer HRU is next to a larger farmer HRU, but share the same modflow cell, they directly experience the additional groundwater decline as a result of the larger farmer extracting. If agents were aggregated and scaled, cells of groundwater would need to be crossed by the water before the decline affects each adjacent farmer. Furthermore, the idea of “representative individuals” is in itself disputed and aggregating agents, even if they are all rational utility maximizers, can lead to wrong conclusions [&#64;axtell2022agent; &#64;kirman1992whom]. Secondly, the vectorized design of GEB allows us to simulate more agents with only a relatively low increase in computational demand. Lastly, although it is not researched whether this has benefited the current analysis, the first step to determine the effects of aggregation is ensuring that modelling at the highest detail is possible.</p>
+<p>During the model run, farmers are aggregated into groups that are similar in terms of well status, basin location and crop rotation. The yearly values of the drought probability and yield of those groups are averaged to determine the drought probability – yield relation. These aggregations are initially imposed by the modeler, but change throughout the simulation as agent’s well status and crop rotation changes. For comparing the expected utility of farmer’s current crop rotation and that of potential different farmer, neighboring farmers with similar irrigation status within a spatial radius of 1 km are searched, from which a random group of max 5 farmers is selected and the expected utilities are compared.</p>
+</section>
+<section id="how-are-collectives-represented">
+<h3>2.7.2 How are collectives represented?<a class="headerlink" href="#how-are-collectives-represented" title="Link to this heading"></a></h3>
+<p>As a property based on a predefined combination of traits (well status, basin location and crop rotation).</p>
+</section>
+</section>
+<section id="heterogeneity">
+<h2>2.8 Heterogeneity<a class="headerlink" href="#heterogeneity" title="Link to this heading"></a></h2>
+<section id="are-the-agents-heterogeneous-if-yes-which-state-variables-and-or-processes-differ-between-the-agents">
+<h3>2.8.1 Are the agents heterogeneous? If yes, which state variables and/or processes differ between the agents?<a class="headerlink" href="#are-the-agents-heterogeneous-if-yes-which-state-variables-and-or-processes-differ-between-the-agents" title="Link to this heading"></a></h3>
+<p>Agents are heterogeneous in spatial location, which affects climatic conditions and hydrological conditions (proximity to a river or reservoir, reservoir size, upstream or downstream, groundwater depth). Agents are also heterogeneous in socio-economic conditions: they vary in accessible interest rates, discount rate and risk aversion. Farmers are heterogeneous in agricultural conditions: there are 300 different unique crop rotations, different farm sizes, differences in initial well status.</p>
+</section>
+<section id="are-the-agents-heterogeneous-in-their-decision-making-if-yes-which-decision-models-or-decision-objects-differ-between-the-agents">
+<h3>2.8.2 Are the agents heterogeneous in their decision-making? If yes, which decision models or decision objects differ between the agents?<a class="headerlink" href="#are-the-agents-heterogeneous-in-their-decision-making-if-yes-which-decision-models-or-decision-objects-differ-between-the-agents" title="Link to this heading"></a></h3>
+<p>Although the objective risk experience is made by aggregating the farmers into groups based on similarities, adaptation decisions are made on a personal level with all their personal characteristics (which are also dependent on earlier personal decisions, such as the yearly loan costs).</p>
+</section>
+</section>
+<section id="stochasticity">
+<h2>2.9 Stochasticity<a class="headerlink" href="#stochasticity" title="Link to this heading"></a></h2>
+<section id="what-processes-including-initialization-are-modeled-by-assuming-they-are-random-or-partly-random">
+<h3>2.9.1 What processes (including initialization) are modeled by assuming they are random or partly random?<a class="headerlink" href="#what-processes-including-initialization-are-modeled-by-assuming-they-are-random-or-partly-random" title="Link to this heading"></a></h3>
+<p>When farmers who do not have a well are grouped based on similarity and check their similar other farmer group that has adapted for how much yield gain per drought a well gives, a probability is given to the yield increase if the second group is much smaller than the first (e.g., the first has 100 farmers and the second only 5). The bigger the difference, the lower the probability. . If the probability estimation fails, we assume no added benefit. This is to prevent very few farmers from changing a much larger group (e.g., 3 farmers who have exceptional added benefit of wells cause 400 farmers to adapt).</p>
+<p>When searching for neighbors with similar irrigation status (reservoir, channel or groundwater), a random selection of neighbors is taken from the found group each time. To account for stochasticity, the model had been run 60 times and the averages of these runs have been taken.</p>
+<p>During initialization, the farmer agents and their plots are randomly distributed over their respective sub-districts on land designated as agricultural land, which is based on the maps of &#64;chen2018globeland30.</p>
+</section>
+</section>
+<section id="observation">
+<h2>2.10 Observation<a class="headerlink" href="#observation" title="Link to this heading"></a></h2>
+<section id="what-data-are-collected-from-the-abm-for-testing-understanding-and-analyzing-it-and-how-and-when-are-they-collected">
+<h3>2.10.1 What data are collected from the ABM for testing, understanding, and analyzing it, and how and when are they collected?<a class="headerlink" href="#what-data-are-collected-from-the-abm-for-testing-understanding-and-analyzing-it-and-how-and-when-are-they-collected" title="Link to this heading"></a></h3>
+<p>GEB includes the options to report daily, monthly or yearly on all parameters. These are exported as arrays of values of the farmers. These are how much each farmer irrigates per source, their elevation, which crops they cultivate during which seasons, the groundwater depth at their location, the monthly 12-month SPEI, risk perception, yearly income, yearly yield ratio, loan payments, whether they are adapted, discharge at multiple hydrological stations, precipitation, reservoirs storages.</p>
+</section>
+<section id="what-key-results-outputs-or-characteristics-of-the-model-are-emerging-from-the-individuals-emergence">
+<h3>2.10.2 What key results, outputs or characteristics of the model are emerging from the individuals? (Emergence)<a class="headerlink" href="#what-key-results-outputs-or-characteristics-of-the-model-are-emerging-from-the-individuals-emergence" title="Link to this heading"></a></h3>
+<p>See the main text for the analysis.</p>
+<p>Details</p>
+</section>
+</section>
+<section id="implementation-details">
+<h2>3.1 Implementation details<a class="headerlink" href="#implementation-details" title="Link to this heading"></a></h2>
+<section id="how-has-the-model-been-implemented">
+<h3>3.1.1 How has the model been implemented?<a class="headerlink" href="#how-has-the-model-been-implemented" title="Link to this heading"></a></h3>
+<p>Python 3 is used to implement the model, incorporating compiled Python libraries like NumPy [&#64;harris2020array] and Numba [&#64;lam2015numba] for computationally intensive parts. Additionally, it features optional GPU vectorization of soil components via CuPy.</p>
+</section>
+<section id="is-the-model-accessible-and-if-so-where">
+<h3>3.1.2 Is the model accessible and if so where?<a class="headerlink" href="#is-the-model-accessible-and-if-so-where" title="Link to this heading"></a></h3>
+<p>The most recent version of the GEB and adapted CWatM model, as well as scripts for data acquisition and model setup can be found on <a class="reference external" href="https://github.com/GEB-model">GitHub</a>. The model inputs, parametrization and code used for this manuscript are accessible through Zenodo [&#64;kalthof_2024_11071746]. This page also includes the averages and standard deviations of the 60 runs of the adaptation and non-adaptation scenario which are featured in all figures.</p>
+</section>
+</section>
+<section id="initialization">
+<h2>3.2 Initialization<a class="headerlink" href="#initialization" title="Link to this heading"></a></h2>
+<section id="what-is-the-initial-state-of-the-model-world-i-e-at-time-t-0-of-a-simulation-run">
+<h3>3.2.1 What is the initial state of the model world, i.e. at time t=0 of a simulation run?<a class="headerlink" href="#what-is-the-initial-state-of-the-model-world-i-e-at-time-t-0-of-a-simulation-run" title="Link to this heading"></a></h3>
+<p>At the start of the spin-up in 1980 there are 1432923 farmers that have a personal interest rate, discount rate, risk aversion irrigation source, crop rotation, farm size, location and elevation. These agents remained constant over the simulated period. There are reservoirs with a certain capacity that is 90% filled and their reservoir command areas that determine which farmers have access, there are certain soil properties per land cover type and river routing information. During the spin-up there is no switching of crops or digging wells, but farmers are able to irrigate if they have access to an irrigation source.</p>
+<p>At the end of this spin-up, all farmer parameters (table 1) are saved (including the past 20 years of drought probabilities and yields). In 2001, the “run” starts with the same values as where the spin-up ended, during which farmers can choose to dig a well or change their crop rotation. 2001 was chosen as there was data in 2001 for how many and which farmers had irrigation wells. As the climate data started in 1979, the 12-month SPEI was available from 1980. The spin-up time between 1980 and 2001 was chosen to maximize the duration so that the drought probability-yield relation (or the “true/objective” drought risk) included as many drought events as possible.</p>
+</section>
+<section id="is-the-initialisation-always-the-same-or-is-it-allowed-to-vary-among-simulations">
+<h3>3.2.2 Is the initialisation always the same, or is it allowed to vary among simulations?<a class="headerlink" href="#is-the-initialisation-always-the-same-or-is-it-allowed-to-vary-among-simulations" title="Link to this heading"></a></h3>
+<p>The initialization is always the same</p>
+</section>
+<section id="are-the-initial-values-chosen-arbitrarily-or-based-on-data">
+<h3>3.2.3 Are the initial values chosen arbitrarily or based on data?<a class="headerlink" href="#are-the-initial-values-chosen-arbitrarily-or-based-on-data" title="Link to this heading"></a></h3>
+<p>Almost all initial values are chosen based on data. See section 2.1.4. Initial groundwater levels at the spin-up were not based on data, which we would recommend for future studies.</p>
+</section>
+</section>
+<section id="input-data">
+<h2>3.3 Input data<a class="headerlink" href="#input-data" title="Link to this heading"></a></h2>
+<section id="does-the-model-use-input-from-external-sources-such-as-data-files-or-other-models-to-represent-processes-that-change-over-time">
+<h3>3.3.1 Does the model use input from external sources such as data files or other models to represent processes that change over time?<a class="headerlink" href="#does-the-model-use-input-from-external-sources-such-as-data-files-or-other-models-to-represent-processes-that-change-over-time" title="Link to this heading"></a></h3>
+<p>Yes, see section 1.2.3.</p>
+</section>
+</section>
+<section id="submodels">
+<h2>3.4 Submodels<a class="headerlink" href="#submodels" title="Link to this heading"></a></h2>
+<section id="what-in-detail-are-the-submodels-that-represent-the-processes-listed-in-process-overview-and-scheduling">
+<h3>3.4.1 What, in detail, are the submodels that represent the processes listed in ‘Process overview and scheduling’?<a class="headerlink" href="#what-in-detail-are-the-submodels-that-represent-the-processes-listed-in-process-overview-and-scheduling" title="Link to this heading"></a></h3>
+<p>For a full overview of CWatM and MODFLOW see &#64;burek2020development and &#64;langevin2017documentation.</p>
+<p>The following submodels were not described yet in process overview and scheduling:</p>
+<p>Submodel expected utility calculations:</p>
+<p>$$
+\text{SEUT}<em>{\text{no_action}} = \int</em>{p_2}^{p_1} \beta_t \times p_i \times U \left( \sum_{t=0}^{T} \frac{\text{Inc}_{i,x,t}}{(1 + r)^t} \right) dp
+$$</p>
+<p>$$
+\text{SEUT}<em>{\text{tube_well}} = \int</em>{p_2}^{p_1} \beta_t \times p_i \times U \left( \sum_{t=0}^{T} \frac{\text{Inc}<em>{i,x,t}^{\text{adapt}} - C</em>{t,d}^{\text{adapt}}}{(1 + r)^t} \right) dp
+$$</p>
+<p>$$
+\text{SEUT}<em>{\text{own_crop_rotation}} = \int</em>{p_2}^{p_1} \beta_t \times p_i \times U \left( \sum_{t=0}^{T} \frac{\text{Inc}<em>{i,x,t} - C</em>{t,m}^{\text{input}}}{(1 + r)^t} \right) dp
+$$</p>
+<p>$$
+\text{EUT}<em>{\text{own_crop_rotation}} = \int</em>{p_2}^{p_1} p_i \times U \left( \sum_{t=0}^{T} \frac{\text{Inc}<em>{i,x,t} - C</em>{t,m}^{\text{input}}}{(1 + r)^t} \right) dp
+$$</p>
+<p>Utility U(x) is a function of expected income Inc and potential adapted income Incadapt per event i and adaptation costs Cadapt. In eq. 2, Cadapt is dependent on groundwater levels and in eq. 4 on current market prices. To calculate the utility of all decisions, we take the integral of the summed and time (t, years) discounted (r) utility under all possible events i with a probability of pi and adjust pi with the subjective risk perception $\beta$t. See table B1 for an overview of all model parameters. The utility U (x) as a function of risk aversion $\sigma$ is as follows:</p>
+<p>$$
+U(x) = \frac{x^{1-\sigma}}{1-\sigma}
+$$</p>
+<p>Submodel drought probability – yield calculations:</p>
+<p>The SPEI relation is fitted with by determining a and b in  following formula, which was chosen as it they returned the highest R-squared between drought probability and yield ratio for this region (~ 0.50):</p>
+<p>$$
+\text{SPEI}<em>{i,t} = a \times \log_2\left( \text{yield}</em>{i,t} \right) + b
+$$</p>
+<p>Submodel annual well investment costs calculations:</p>
+<p>Annual investment cost: The yearly adaptation costs are a function of the well depth, the pump’s horsepower (HP), its maintenance costs and the cost of groundwater pumping. This is adjusted for the loan duration (n) using the agent’s yearly interest rate (r).</p>
+<p>$$
+C_{t,d}^{\text{adapt}} = \left( C_D + C_{HP} \right) \times \frac{r \times (1 + r)^n}{(1 + r)^n - 1} + C_M + C_I
+$$</p>
+<p>Borewell construction cost: The borewell construction cost is dependent on the probability of well failure (prD) and the groundwater depth for the agent (D). The constants are adjusted yearly based on inflation.</p>
+<p>$$
+C_{t,d}^{\text{adapt}} = \left( C_D + C_{HP} \right) \times \frac{r \times (1 + r)^n}{(1 + r)^n - 1} + C_M + C_I
+$$</p>
+<p>Initial borewell depth: Initial borewell depth (DI) of agents who had wells before the adaptation started was based on the average groundwater depth in the Bhima basin + 20 m.</p>
+<p>$$
+C_{HP} = 3570 \times HP
+$$</p>
+<p>Pump Cost: The pump cost is dependent on the horsepower (HP) of the pump. The constant is adjusted yearly based on inflation.</p>
+<p>$$
+C_M = 6598 \times W^{0.16}
+$$</p>
+<p>Irrigation maintenance cost: The irrigation maintenance cost is dependent on the potential amount of water pumped (W). The constant is adjusted yearly based on inflation.</p>
+<p>$$
+W_t = FR \times L \times A_t \times pr_I
+$$</p>
+<p>Potential amount of water: The potential amount of water pumped is dependent on the flow rate (FR), the total planted time (L), the number of hours pumping per day (At) and the proportion of available water for pumping prI.</p>
+<p>$$
+W_t = FR \times L \times A_t \times pr_I
+$$</p>
+<p>Flow rate: The flow rate is dependent on the groundwater table (G).</p>
+<p>$$
+FR = 79.93 \times G^{-0.728}
+$$</p>
+<p>Cost of groundwater pumping: The yearly cost of groundwater irrigation (CI)  is dependent on the total planted time (L), the number of hours pumping per day (At), the proportion of available water for pumping prI, the electric power (E) and the electricity unit costs (CE).</p>
+<p>$$
+C_I = L \times A_t \times pr_I \times E \times C_E
+$$</p>
+<p>Electric power (kilowatt hour): The electric power is dependent on the horsepower  (HP) to watt conversion.</p>
+<p>$$
+E = 745.7 \times HP
+$$</p>
+</section>
+<section id="what-are-the-model-parameters-their-dimensions-and-reference-values">
+<h3>3.4.2 What are the model parameters, their dimensions and reference values?<a class="headerlink" href="#what-are-the-model-parameters-their-dimensions-and-reference-values" title="Link to this heading"></a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable / Parameter</p></th>
+<th class="head"><p>Definition, unit</p></th>
+<th class="head"><p>Value / range</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Cadapt</strong></p></td>
+<td><p>Annual irrigation investment cost (Rs)</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>D</strong></p></td>
+<td><p>Depth of Borewell (m)</p></td>
+<td><p>Current groundwater depth + 20 m</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>DI</strong></p></td>
+<td><p>Initial depth of borewell of agents with well during spin-up</p></td>
+<td><p>42.5 m</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>prD</strong></p></td>
+<td><p>Probability of well failure</p></td>
+<td><p>0.2</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Lifespan = Loan duration (n) = Time horizon (Rt)</strong></p></td>
+<td><p>Years</p></td>
+<td><p>30</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>CD</strong></p></td>
+<td><p>Cost of drilling well</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Cm</strong></p></td>
+<td><p>Maintenance costs (Rs)</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>W</strong></p></td>
+<td><p>Potential amount of water pumped</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>FR</strong></p></td>
+<td><p>Flow rate (cubic meter per hour)</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>PrI</strong></p></td>
+<td><p>Proportion of available water for irrigation</p></td>
+<td><p>1</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>HP</strong></p></td>
+<td><p>Pump horse power (HP)</p></td>
+<td><p>10</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>CHP</strong></p></td>
+<td><p>Pump unit purchase costs (Rs)</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>At</strong></p></td>
+<td><p>Daily power supply (hours per day)</p></td>
+<td><p>3.5</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>L</strong></p></td>
+<td><p>Total planted time (days)</p></td>
+<td><p>Dependent on agent crop rotation, total nr of days crop is planted.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>CI</strong></p></td>
+<td><p>Cost of pumping (Rs)</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>E</strong></p></td>
+<td><p>Electric power used for irrigation (Rs per kilowatt hour)</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>H</strong></p></td>
+<td><p>Number of hours pumping</p></td>
+<td><p>See 3.4.1</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>CE</strong></p></td>
+<td><p>Electricity unit costs (Rs per kilowatt hour)</p></td>
+<td><p>0</p></td>
+</tr>
+</tbody>
+</table>
+<p>Table 5 Well cost parameters and their values in GEB</p>
+</section>
+</section>
+</section>
+<section id="bibliography">
+<h1>Bibliography<a class="headerlink" href="#bibliography" title="Link to this heading"></a></h1>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; <a href="../copyright.html">Copyright</a> 2023, VU-IVM and IIASA.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

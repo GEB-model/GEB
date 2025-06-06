@@ -1,0 +1,673 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>geb.reporter &mdash; GEB  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=5dd5ad26" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../../_static/jquery.js?v=5be48651"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=27b9c81c"></script>
+      <script src="../../_static/doctools.js?v=695de88e"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="copyright" title="Copyright" href="../../copyright.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            GEB
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../overview_and_installation.html">Overview and installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../configuration.html">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../preprocessing.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../running.html">Running the model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../visualisation.html">Visualisation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../calibration.html">Calibration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ODD/ODD.html">ODD protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../agents/__init__.html">Agents</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../agents/households.html">Households</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../agents/crop_farmers.html">Crop farmers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../agents/reservoir_operators.html">Reservoir operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../agents/government.html">Government</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../model.html">Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../report.html">Report</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../HRUs.html">Farm-level HRUs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../artists.html">Artists</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">About</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../authors_page.html">Authors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contribution_guide.html">Contribution guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../updates.html">Updates</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">GEB</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">geb.reporter</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for geb.reporter</h1><div class="highlight"><pre>
+<span></span><span class="c1"># -*- coding: utf-8 -*-</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">datetime</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">shutil</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">operator</span><span class="w"> </span><span class="kn">import</span> <span class="n">attrgetter</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Union</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">zarr</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">honeybees.library.raster</span><span class="w"> </span><span class="kn">import</span> <span class="n">coord_to_pixel</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">geb.store</span><span class="w"> </span><span class="kn">import</span> <span class="n">DynamicArray</span>
+
+
+<div class="viewcode-block" id="create_time_array">
+<a class="viewcode-back" href="../../report.html#geb.reporter.create_time_array">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">create_time_array</span><span class="p">(</span>
+    <span class="n">start</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">,</span>
+    <span class="n">end</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">,</span>
+    <span class="n">timestep</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">,</span>
+    <span class="n">conf</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create a time array based on the start and end time, the timestep, and the frequency.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        start: The start time.</span>
+<span class="sd">        end: The end time.</span>
+<span class="sd">        timestep: The timestep length.</span>
+<span class="sd">        conf: The configuration for the frequency.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        time: The time array.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="s2">&quot;frequency&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">conf</span><span class="p">:</span>
+        <span class="n">frequency</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;every&quot;</span><span class="p">:</span> <span class="s2">&quot;day&quot;</span><span class="p">}</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">frequency</span> <span class="o">=</span> <span class="n">conf</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="s2">&quot;every&quot;</span> <span class="ow">in</span> <span class="n">frequency</span><span class="p">:</span>
+        <span class="n">every</span> <span class="o">=</span> <span class="n">frequency</span><span class="p">[</span><span class="s2">&quot;every&quot;</span><span class="p">]</span>
+        <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">current_time</span> <span class="o">=</span> <span class="n">start</span>
+        <span class="k">while</span> <span class="n">current_time</span> <span class="o">&lt;=</span> <span class="n">end</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">every</span> <span class="o">==</span> <span class="s2">&quot;year&quot;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="p">(</span>
+                    <span class="n">frequency</span><span class="p">[</span><span class="s2">&quot;month&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">current_time</span><span class="o">.</span><span class="n">month</span>
+                    <span class="ow">and</span> <span class="n">frequency</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">current_time</span><span class="o">.</span><span class="n">day</span>
+                <span class="p">):</span>
+                    <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">current_time</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">every</span> <span class="o">==</span> <span class="s2">&quot;month&quot;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">frequency</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">current_time</span><span class="o">.</span><span class="n">day</span><span class="p">:</span>
+                    <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">current_time</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">every</span> <span class="o">==</span> <span class="s2">&quot;day&quot;</span><span class="p">:</span>
+                <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">current_time</span><span class="p">)</span>
+            <span class="n">current_time</span> <span class="o">+=</span> <span class="n">timestep</span>
+        <span class="k">return</span> <span class="n">time</span>
+    <span class="k">elif</span> <span class="n">frequency</span> <span class="o">==</span> <span class="s2">&quot;initial&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">start</span><span class="p">]</span>
+    <span class="k">elif</span> <span class="n">frequency</span> <span class="o">==</span> <span class="s2">&quot;final&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">end</span><span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Frequency </span><span class="si">{</span><span class="n">frequency</span><span class="si">}</span><span class="s2"> not recognized.&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="Reporter">
+<a class="viewcode-back" href="../../report.html#geb.reporter.Reporter">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">Reporter</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;This class is used to report data to disk.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: The GEB model.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">clean</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span> <span class="o">=</span> <span class="n">model</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">simulate_hydrology</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">hydrology</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">hydrology</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">report_folder</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">output_folder</span> <span class="o">/</span> <span class="s2">&quot;report&quot;</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">run_name</span>
+        <span class="c1"># optionally clean report model at start of run</span>
+        <span class="k">if</span> <span class="n">clean</span><span class="p">:</span>
+            <span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">report_folder</span><span class="p">,</span> <span class="n">ignore_errors</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">report_folder</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">variables</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">timesteps</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;w&quot;</span>
+            <span class="ow">and</span> <span class="s2">&quot;report&quot;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">config</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;report&quot;</span><span class="p">]</span>
+        <span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">activated</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">for</span> <span class="n">module_name</span><span class="p">,</span> <span class="n">configs</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;report&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="p">[</span><span class="n">module_name</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+                <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">configs</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="p">[</span><span class="n">module_name</span><span class="p">][</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">create_variable</span><span class="p">(</span>
+                        <span class="n">config</span><span class="p">,</span> <span class="n">module_name</span><span class="p">,</span> <span class="n">name</span>
+                    <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">activated</span> <span class="o">=</span> <span class="kc">False</span>
+
+<div class="viewcode-block" id="Reporter.create_variable">
+<a class="viewcode-back" href="../../report.html#geb.reporter.Reporter.create_variable">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">create_variable</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">module_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;This function creates a variable for the reporter. For</span>
+<span class="sd">        configurations without a aggregation function, a zarr file is created. For</span>
+<span class="sd">        configurations with an aggregation function, the data</span>
+<span class="sd">        is stored in memory and exported on the final timestep.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            config: The configuration for the variable.</span>
+<span class="sd">            module_name: The name of the module to which the variable belongs.</span>
+<span class="sd">            name: The name of the variable.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;grid&quot;</span><span class="p">,</span> <span class="s2">&quot;HRU&quot;</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;function&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">return</span> <span class="p">[]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;HRU&quot;</span><span class="p">:</span>
+                    <span class="n">raster</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">HRU</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">raster</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">grid</span>
+                <span class="n">zarr_path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">report_folder</span> <span class="o">/</span> <span class="n">module_name</span> <span class="o">/</span> <span class="p">(</span><span class="n">name</span> <span class="o">+</span> <span class="s2">&quot;.zarr&quot;</span><span class="p">)</span>
+                <span class="n">zarr_path</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="n">config</span><span class="p">[</span><span class="s2">&quot;path&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">zarr_path</span><span class="p">)</span>
+
+                <span class="n">zarr_store</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">LocalStore</span><span class="p">(</span><span class="n">zarr_path</span><span class="p">,</span> <span class="n">read_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+                <span class="n">zarr_group</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">open_group</span><span class="p">(</span><span class="n">zarr_store</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;w&quot;</span><span class="p">)</span>
+
+                <span class="n">time</span> <span class="o">=</span> <span class="n">create_time_array</span><span class="p">(</span>
+                    <span class="n">start</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="p">,</span>
+                    <span class="n">end</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">end_time</span><span class="p">,</span>
+                    <span class="n">timestep</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">timestep_length</span><span class="p">,</span>
+                    <span class="n">conf</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+                <span class="p">)</span>
+
+                <span class="n">time</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;datetime64[ns]&quot;</span><span class="p">)</span>
+                    <span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;datetime64[s]&quot;</span><span class="p">)</span>
+                    <span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+                <span class="p">)</span>
+                <span class="n">time_group</span> <span class="o">=</span> <span class="n">zarr_group</span><span class="o">.</span><span class="n">create_array</span><span class="p">(</span>
+                    <span class="s2">&quot;time&quot;</span><span class="p">,</span>
+                    <span class="n">shape</span><span class="o">=</span><span class="n">time</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+                    <span class="n">dtype</span><span class="o">=</span><span class="n">time</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+                    <span class="n">dimension_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">],</span>
+                <span class="p">)</span>
+                <span class="n">time_group</span><span class="p">[:]</span> <span class="o">=</span> <span class="n">time</span>
+                <span class="n">time_group</span><span class="o">.</span><span class="n">attrs</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                    <span class="p">{</span>
+                        <span class="s2">&quot;standard_name&quot;</span><span class="p">:</span> <span class="s2">&quot;time&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;seconds since 1970-01-01T00:00:00&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;calendar&quot;</span><span class="p">:</span> <span class="s2">&quot;gregorian&quot;</span><span class="p">,</span>
+                    <span class="p">}</span>
+                <span class="p">)</span>
+
+                <span class="n">y_group</span> <span class="o">=</span> <span class="n">zarr_group</span><span class="o">.</span><span class="n">create_array</span><span class="p">(</span>
+                    <span class="s2">&quot;y&quot;</span><span class="p">,</span>
+                    <span class="n">shape</span><span class="o">=</span><span class="n">raster</span><span class="o">.</span><span class="n">lat</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+                    <span class="n">dtype</span><span class="o">=</span><span class="n">raster</span><span class="o">.</span><span class="n">lat</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+                    <span class="n">dimension_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;y&quot;</span><span class="p">],</span>
+                <span class="p">)</span>
+                <span class="n">y_group</span><span class="p">[:]</span> <span class="o">=</span> <span class="n">raster</span><span class="o">.</span><span class="n">lat</span>
+                <span class="n">y_group</span><span class="o">.</span><span class="n">attrs</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                    <span class="p">{</span>
+                        <span class="s2">&quot;standard_name&quot;</span><span class="p">:</span> <span class="s2">&quot;latitude&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;degrees_north&quot;</span><span class="p">,</span>
+                    <span class="p">}</span>
+                <span class="p">)</span>
+
+                <span class="n">x_group</span> <span class="o">=</span> <span class="n">zarr_group</span><span class="o">.</span><span class="n">create_array</span><span class="p">(</span>
+                    <span class="s2">&quot;x&quot;</span><span class="p">,</span>
+                    <span class="n">shape</span><span class="o">=</span><span class="n">raster</span><span class="o">.</span><span class="n">lon</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+                    <span class="n">dtype</span><span class="o">=</span><span class="n">raster</span><span class="o">.</span><span class="n">lon</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+                    <span class="n">dimension_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;x&quot;</span><span class="p">],</span>
+                <span class="p">)</span>
+                <span class="n">x_group</span><span class="p">[:]</span> <span class="o">=</span> <span class="n">raster</span><span class="o">.</span><span class="n">lon</span>
+                <span class="n">x_group</span><span class="o">.</span><span class="n">attrs</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                    <span class="p">{</span>
+                        <span class="s2">&quot;standard_name&quot;</span><span class="p">:</span> <span class="s2">&quot;longitude&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;degrees_east&quot;</span><span class="p">,</span>
+                    <span class="p">}</span>
+                <span class="p">)</span>
+
+                <span class="n">zarr_data</span> <span class="o">=</span> <span class="n">zarr_group</span><span class="o">.</span><span class="n">create_array</span><span class="p">(</span>
+                    <span class="n">name</span><span class="p">,</span>
+                    <span class="n">shape</span><span class="o">=</span><span class="p">(</span>
+                        <span class="n">time</span><span class="o">.</span><span class="n">size</span><span class="p">,</span>
+                        <span class="n">raster</span><span class="o">.</span><span class="n">lat</span><span class="o">.</span><span class="n">size</span><span class="p">,</span>
+                        <span class="n">raster</span><span class="o">.</span><span class="n">lon</span><span class="o">.</span><span class="n">size</span><span class="p">,</span>
+                    <span class="p">),</span>
+                    <span class="n">chunks</span><span class="o">=</span><span class="p">(</span>
+                        <span class="mi">1</span><span class="p">,</span>
+                        <span class="n">raster</span><span class="o">.</span><span class="n">lat</span><span class="o">.</span><span class="n">size</span><span class="p">,</span>
+                        <span class="n">raster</span><span class="o">.</span><span class="n">lon</span><span class="o">.</span><span class="n">size</span><span class="p">,</span>
+                    <span class="p">),</span>
+                    <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+                    <span class="n">compressors</span><span class="o">=</span><span class="p">(</span>
+                        <span class="n">zarr</span><span class="o">.</span><span class="n">codecs</span><span class="o">.</span><span class="n">BloscCodec</span><span class="p">(</span>
+                            <span class="n">cname</span><span class="o">=</span><span class="s2">&quot;zlib&quot;</span><span class="p">,</span>
+                            <span class="n">clevel</span><span class="o">=</span><span class="mi">9</span><span class="p">,</span>
+                            <span class="n">shuffle</span><span class="o">=</span><span class="n">zarr</span><span class="o">.</span><span class="n">codecs</span><span class="o">.</span><span class="n">BloscShuffle</span><span class="o">.</span><span class="n">shuffle</span><span class="p">,</span>
+                        <span class="p">),</span>
+                    <span class="p">),</span>
+                    <span class="n">fill_value</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span>
+                    <span class="n">dimension_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">,</span> <span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="s2">&quot;x&quot;</span><span class="p">],</span>
+                <span class="p">)</span>
+
+                <span class="n">zarr_data</span><span class="o">.</span><span class="n">attrs</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                    <span class="p">{</span>
+                        <span class="s2">&quot;grid_mapping&quot;</span><span class="p">:</span> <span class="s2">&quot;crs&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;coordinates&quot;</span><span class="p">:</span> <span class="s2">&quot;time y x&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;unknown&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;long_name&quot;</span><span class="p">:</span> <span class="n">name</span><span class="p">,</span>
+                        <span class="s2">&quot;_CRS&quot;</span><span class="p">:</span> <span class="n">raster</span><span class="o">.</span><span class="n">crs</span><span class="p">,</span>
+                    <span class="p">}</span>
+                <span class="p">)</span>
+                <span class="k">return</span> <span class="n">zarr_store</span>
+
+        <span class="k">elif</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;agents&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;function&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">return</span> <span class="p">[]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">filepath</span> <span class="o">=</span> <span class="n">zarr_path</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">report_folder</span> <span class="o">/</span> <span class="n">module_name</span> <span class="o">/</span> <span class="p">(</span><span class="n">name</span> <span class="o">+</span> <span class="s2">&quot;.zarr&quot;</span><span class="p">)</span>
+                <span class="p">)</span>
+                <span class="n">filepath</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="n">store</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">LocalStore</span><span class="p">(</span><span class="n">filepath</span><span class="p">,</span> <span class="n">read_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+                <span class="n">ds</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">open_group</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;w&quot;</span><span class="p">)</span>
+
+                <span class="n">time</span> <span class="o">=</span> <span class="n">create_time_array</span><span class="p">(</span>
+                    <span class="n">start</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="p">,</span>
+                    <span class="n">end</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">end_time</span><span class="p">,</span>
+                    <span class="n">timestep</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">timestep_length</span><span class="p">,</span>
+                    <span class="n">conf</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">time</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+                    <span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">datetime64</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="s2">&quot;s&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">time</span><span class="p">],</span>
+                    <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+                <span class="p">)</span>
+
+                <span class="n">time_group</span> <span class="o">=</span> <span class="n">ds</span><span class="o">.</span><span class="n">create_array</span><span class="p">(</span>
+                    <span class="s2">&quot;time&quot;</span><span class="p">,</span>
+                    <span class="n">shape</span><span class="o">=</span><span class="n">time</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+                    <span class="n">dtype</span><span class="o">=</span><span class="n">time</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">time_group</span><span class="p">[:]</span> <span class="o">=</span> <span class="n">time</span>
+
+                <span class="n">time_group</span><span class="o">.</span><span class="n">attrs</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                    <span class="p">{</span>
+                        <span class="s2">&quot;standard_name&quot;</span><span class="p">:</span> <span class="s2">&quot;time&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;seconds since 1970-01-01T00:00:00&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;calendar&quot;</span><span class="p">:</span> <span class="s2">&quot;gregorian&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;_ARRAY_DIMENSIONS&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">],</span>
+                    <span class="p">}</span>
+                <span class="p">)</span>
+
+                <span class="n">config</span><span class="p">[</span><span class="s2">&quot;_file&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">ds</span>
+                <span class="n">config</span><span class="p">[</span><span class="s2">&quot;_time_index&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Type </span><span class="si">{</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> not recognized. Must be &#39;grid&#39;, &#39;agents&#39; or &#39;HRU&#39;.&quot;</span>
+            <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Reporter.maybe_report_value">
+<a class="viewcode-back" href="../../report.html#geb.reporter.Reporter.maybe_report_value">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">maybe_report_value</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">module_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
+        <span class="n">module</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">local_variables</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+        <span class="n">config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;This method is used to save and/or export model values.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            name: Name of the value to be exported.</span>
+<span class="sd">            value: The array itself.</span>
+<span class="sd">            conf: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># here we return None if the value is not to be reported on this timestep</span>
+        <span class="k">if</span> <span class="s2">&quot;frequency&quot;</span> <span class="ow">in</span> <span class="n">config</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;initial&quot;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_timestep</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="kc">None</span>
+            <span class="k">elif</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;final&quot;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_timestep</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">n_timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="kc">None</span>
+            <span class="k">elif</span> <span class="s2">&quot;every&quot;</span> <span class="ow">in</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">]:</span>
+                <span class="n">every</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">][</span><span class="s2">&quot;every&quot;</span><span class="p">]</span>
+                <span class="k">if</span> <span class="n">every</span> <span class="o">==</span> <span class="s2">&quot;year&quot;</span><span class="p">:</span>
+                    <span class="n">month</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">][</span><span class="s2">&quot;month&quot;</span><span class="p">]</span>
+                    <span class="n">day</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">][</span><span class="s2">&quot;day&quot;</span><span class="p">]</span>
+                    <span class="k">if</span> <span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="o">.</span><span class="n">month</span> <span class="o">!=</span> <span class="n">month</span>
+                        <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="o">.</span><span class="n">day</span> <span class="o">!=</span> <span class="n">day</span>
+                    <span class="p">):</span>
+                        <span class="k">return</span> <span class="kc">None</span>
+                <span class="k">elif</span> <span class="n">every</span> <span class="o">==</span> <span class="s2">&quot;month&quot;</span><span class="p">:</span>
+                    <span class="n">day</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">][</span><span class="s2">&quot;day&quot;</span><span class="p">]</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="o">.</span><span class="n">day</span> <span class="o">!=</span> <span class="n">day</span><span class="p">:</span>
+                        <span class="k">return</span> <span class="kc">None</span>
+                <span class="k">elif</span> <span class="n">every</span> <span class="o">==</span> <span class="s2">&quot;day&quot;</span><span class="p">:</span>
+                    <span class="k">pass</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;Frequency every </span><span class="si">{</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;every&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> not recognized (must be &#39;yearly&#39;, or &#39;monthly&#39;).&quot;</span>
+                    <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Frequency </span><span class="si">{</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;frequency&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> not recognized.&quot;</span><span class="p">)</span>
+
+        <span class="n">varname</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;varname&quot;</span><span class="p">]</span>
+        <span class="n">fancy_index</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;\[.*?\]&quot;</span><span class="p">,</span> <span class="n">varname</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">fancy_index</span><span class="p">:</span>
+            <span class="n">fancy_index</span> <span class="o">=</span> <span class="n">fancy_index</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+            <span class="n">varname</span> <span class="o">=</span> <span class="n">varname</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">fancy_index</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">varname</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">):</span>
+            <span class="n">varname</span> <span class="o">=</span> <span class="n">varname</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">local_variables</span><span class="p">[</span><span class="n">varname</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">attrgetter</span><span class="p">(</span><span class="n">varname</span><span class="p">)(</span><span class="n">module</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">fancy_index</span><span class="p">:</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="nb">eval</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;value</span><span class="si">{</span><span class="n">fancy_index</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># if the value is not None, we check whether the value is valid</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="p">[</span><span class="n">v</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">check_value</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">np</span><span class="o">.</span><span class="n">isscalar</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">value</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">check_value</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">process_value</span><span class="p">(</span><span class="n">module_name</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Reporter.process_value">
+<a class="viewcode-back" href="../../report.html#geb.reporter.Reporter.process_value">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">process_value</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">module_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="nb">dict</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Exports an array of values to the export folder.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            module_name: Name of the module to which the value belongs.</span>
+<span class="sd">            name: Name of the value to be exported.</span>
+<span class="sd">            value: The array itself.</span>
+<span class="sd">            conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;grid&quot;</span><span class="p">,</span> <span class="s2">&quot;HRU&quot;</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;function&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;HRU&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">HRU</span><span class="o">.</span><span class="n">decompress</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">decompress</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+                <span class="n">zarr_group</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">open_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="p">[</span><span class="n">module_name</span><span class="p">][</span><span class="n">name</span><span class="p">])</span>
+                <span class="k">if</span> <span class="p">(</span>
+                    <span class="n">np</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time_unix_s</span><span class="p">,</span> <span class="n">zarr_group</span><span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">][:])</span>
+                    <span class="ow">and</span> <span class="n">value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="p">):</span>
+                    <span class="n">time_index</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+                        <span class="n">zarr_group</span><span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">][:]</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time_unix_s</span>
+                    <span class="p">)[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="s2">&quot;substeps&quot;</span> <span class="ow">in</span> <span class="n">config</span><span class="p">:</span>
+                        <span class="n">time_index_start</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">time_index</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+                        <span class="n">time_index_end</span> <span class="o">=</span> <span class="n">time_index_start</span> <span class="o">+</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;substeps&quot;</span><span class="p">]</span>
+                        <span class="n">zarr_group</span><span class="p">[</span><span class="n">name</span><span class="p">][</span><span class="n">time_index_start</span><span class="p">:</span><span class="n">time_index_end</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">zarr_group</span><span class="p">[</span><span class="n">name</span><span class="p">][</span><span class="n">time_index</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+                <span class="k">return</span> <span class="kc">None</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">function</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;function&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;mean&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;nanmean&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nanmean</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;sum&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;nansum&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nansum</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;sample&quot;</span><span class="p">:</span>
+                    <span class="n">decompressed_array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decompress</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;varname&quot;</span><span class="p">],</span> <span class="n">value</span><span class="p">)</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">decompressed_array</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="nb">int</span><span class="p">(</span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;sample_coord&quot;</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;varname&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;hydrology.grid&quot;</span><span class="p">):</span>
+                        <span class="n">gt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">gt</span>
+                    <span class="k">elif</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;varname&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;hydrology.HRU&quot;</span><span class="p">):</span>
+                        <span class="n">gt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">HRU</span><span class="o">.</span><span class="n">gt</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="k">raise</span> <span class="ne">ValueError</span>
+                    <span class="n">px</span><span class="p">,</span> <span class="n">py</span> <span class="o">=</span> <span class="n">coord_to_pixel</span><span class="p">((</span><span class="nb">float</span><span class="p">(</span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">])),</span> <span class="n">gt</span><span class="p">)</span>
+                    <span class="n">decompressed_array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decompress</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;varname&quot;</span><span class="p">],</span> <span class="n">value</span><span class="p">)</span>
+                    <span class="k">try</span><span class="p">:</span>
+                        <span class="n">value</span> <span class="o">=</span> <span class="n">decompressed_array</span><span class="p">[</span><span class="n">py</span><span class="p">,</span> <span class="n">px</span><span class="p">]</span>
+                    <span class="k">except</span> <span class="ne">IndexError</span><span class="p">:</span>
+                        <span class="k">raise</span> <span class="ne">IndexError</span><span class="p">(</span>
+                            <span class="sa">f</span><span class="s2">&quot;The coordinate (</span><span class="si">{</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">,</span><span class="si">{</span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">) is outside the model domain.&quot;</span>
+                        <span class="p">)</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;weightedmean&quot;</span><span class="p">,</span> <span class="s2">&quot;weightednanmean&quot;</span><span class="p">):</span>
+                    <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;HRU&quot;</span><span class="p">:</span>
+                        <span class="n">cell_area</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">HRU</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">cell_area</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">cell_area</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">cell_area</span>
+                    <span class="k">if</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;weightedmean&quot;</span><span class="p">:</span>
+                        <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">average</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="n">cell_area</span><span class="p">)</span>
+                    <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;weightednanmean&quot;</span><span class="p">:</span>
+                        <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nansum</span><span class="p">(</span><span class="n">value</span> <span class="o">*</span> <span class="n">cell_area</span><span class="p">)</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">cell_area</span><span class="p">)</span>
+
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Function </span><span class="si">{</span><span class="n">function</span><span class="si">}</span><span class="s2"> not recognized&quot;</span><span class="p">)</span>
+
+        <span class="k">elif</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;agents&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;function&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">ds</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;_file&quot;</span><span class="p">]</span>
+                <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ds</span><span class="p">:</span>
+                    <span class="c1"># zarr file has not been created yet</span>
+                    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="nb">int</span><span class="p">)):</span>
+                        <span class="n">shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">ds</span><span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">size</span><span class="p">,)</span>
+                        <span class="n">chunks</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,)</span>
+                        <span class="n">compressor</span> <span class="o">=</span> <span class="kc">None</span>
+                        <span class="n">dtype</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                        <span class="n">array_dimensions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">]</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">ds</span><span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="n">value</span><span class="o">.</span><span class="n">size</span><span class="p">)</span>
+                        <span class="n">chunks</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">value</span><span class="o">.</span><span class="n">size</span><span class="p">)</span>
+                        <span class="n">compressor</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">codecs</span><span class="o">.</span><span class="n">BloscCodec</span><span class="p">(</span>
+                            <span class="n">cname</span><span class="o">=</span><span class="s2">&quot;zlib&quot;</span><span class="p">,</span>
+                            <span class="n">clevel</span><span class="o">=</span><span class="mi">9</span><span class="p">,</span>
+                            <span class="n">shuffle</span><span class="o">=</span><span class="n">zarr</span><span class="o">.</span><span class="n">codecs</span><span class="o">.</span><span class="n">BloscShuffle</span><span class="o">.</span><span class="n">shuffle</span><span class="p">,</span>
+                        <span class="p">)</span>
+                        <span class="n">dtype</span> <span class="o">=</span> <span class="n">value</span><span class="o">.</span><span class="n">dtype</span>
+                        <span class="n">array_dimensions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;time&quot;</span><span class="p">,</span> <span class="s2">&quot;agents&quot;</span><span class="p">]</span>
+                    <span class="k">if</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">):</span>
+                        <span class="n">fill_value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+                    <span class="k">elif</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">):</span>
+                        <span class="n">fill_value</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                            <span class="sa">f</span><span class="s2">&quot;Value </span><span class="si">{</span><span class="n">dtype</span><span class="si">}</span><span class="s2"> of type </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span><span class="si">}</span><span class="s2"> not recognized.&quot;</span>
+                        <span class="p">)</span>
+                    <span class="n">ds</span><span class="o">.</span><span class="n">create_array</span><span class="p">(</span>
+                        <span class="n">name</span><span class="p">,</span>
+                        <span class="n">shape</span><span class="o">=</span><span class="n">shape</span><span class="p">,</span>
+                        <span class="n">chunks</span><span class="o">=</span><span class="n">chunks</span><span class="p">,</span>
+                        <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span>
+                        <span class="n">compressors</span><span class="o">=</span><span class="p">(</span><span class="n">compressor</span><span class="p">,),</span>
+                        <span class="n">fill_value</span><span class="o">=</span><span class="n">fill_value</span><span class="p">,</span>
+                    <span class="p">)</span>
+                    <span class="n">ds</span><span class="p">[</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">attrs</span><span class="p">[</span><span class="s2">&quot;_ARRAY_DIMENSIONS&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">array_dimensions</span>
+                <span class="n">index</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argwhere</span><span class="p">(</span>
+                    <span class="n">config</span><span class="p">[</span><span class="s2">&quot;_time_index&quot;</span><span class="p">]</span>
+                    <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">datetime64</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="p">,</span> <span class="s2">&quot;s&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span>
+                        <span class="n">config</span><span class="p">[</span><span class="s2">&quot;_time_index&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span>
+                    <span class="p">)</span>
+                <span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">value</span><span class="o">.</span><span class="n">size</span> <span class="o">&lt;</span> <span class="n">ds</span><span class="p">[</span><span class="n">name</span><span class="p">][</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">size</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Padding array with NaNs or -1 - temporary solution&quot;</span><span class="p">)</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span>
+                        <span class="n">value</span><span class="o">.</span><span class="n">data</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">DynamicArray</span><span class="p">)</span> <span class="k">else</span> <span class="n">value</span><span class="p">,</span>
+                        <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">ds</span><span class="p">[</span><span class="n">name</span><span class="p">][</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">size</span> <span class="o">-</span> <span class="n">value</span><span class="o">.</span><span class="n">size</span><span class="p">),</span>
+                        <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;constant&quot;</span><span class="p">,</span>
+                        <span class="n">constant_values</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+                        <span class="k">if</span> <span class="n">value</span><span class="o">.</span><span class="n">dtype</span> <span class="ow">in</span> <span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+                        <span class="k">else</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span>
+                    <span class="p">)</span>
+                <span class="n">ds</span><span class="p">[</span><span class="n">name</span><span class="p">][</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+                <span class="k">return</span> <span class="kc">None</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">function</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;function&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;mean&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;nanmean&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nanmean</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;sum&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="n">function</span> <span class="o">==</span> <span class="s2">&quot;nansum&quot;</span><span class="p">:</span>
+                    <span class="n">value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nansum</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Function </span><span class="si">{</span><span class="n">function</span><span class="si">}</span><span class="s2"> not recognized&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">module_name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="p">[</span><span class="n">module_name</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="p">[</span><span class="n">module_name</span><span class="p">]:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="p">[</span><span class="n">module_name</span><span class="p">][</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="p">[</span><span class="n">module_name</span><span class="p">][</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="p">,</span> <span class="n">value</span><span class="p">))</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="Reporter.finalize">
+<a class="viewcode-back" href="../../report.html#geb.reporter.Reporter.finalize">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">finalize</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;At the end of the model run, all previously collected data is reported to disk.&quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">module_name</span><span class="p">,</span> <span class="n">variables</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">variables</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">variables</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="k">if</span> <span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;report&quot;</span><span class="p">][</span><span class="n">module_name</span><span class="p">][</span><span class="n">name</span><span class="p">][</span><span class="s2">&quot;function&quot;</span><span class="p">]</span>
+                    <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="p">):</span>
+                    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="o">.</span><span class="n">from_records</span><span class="p">(</span>
+                        <span class="n">values</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="n">name</span><span class="p">],</span> <span class="n">index</span><span class="o">=</span><span class="s2">&quot;date&quot;</span>
+                    <span class="p">)</span>
+
+                    <span class="n">folder</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">report_folder</span> <span class="o">/</span> <span class="n">module_name</span>
+                    <span class="n">folder</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+                    <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">folder</span> <span class="o">/</span> <span class="p">(</span><span class="n">name</span> <span class="o">+</span> <span class="s2">&quot;.csv&quot;</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="Reporter.report">
+<a class="viewcode-back" href="../../report.html#geb.reporter.Reporter.report">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">module</span><span class="p">,</span> <span class="n">local_variables</span><span class="p">,</span> <span class="n">module_name</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;This method is in every step function to report data to disk.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            module: The module to report data from.</span>
+<span class="sd">            variables: A dictionary of local variables from the function</span>
+<span class="sd">                that calls this one.</span>
+<span class="sd">            module_name: The name of the module.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">activated</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="n">report</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;report&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">module_name</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">report</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">report</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">maybe_report_value</span><span class="p">(</span>
+                    <span class="n">module_name</span><span class="o">=</span><span class="n">module_name</span><span class="p">,</span>
+                    <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+                    <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span>
+                    <span class="n">local_variables</span><span class="o">=</span><span class="n">local_variables</span><span class="p">,</span>
+                    <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+                <span class="p">)</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; <a href="../../copyright.html">Copyright</a> 2023, VU-IVM and IIASA.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

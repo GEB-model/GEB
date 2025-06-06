@@ -1,0 +1,665 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>geb.agents.reservoir_operators &mdash; GEB  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=5dd5ad26" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../../../_static/jquery.js?v=5be48651"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=27b9c81c"></script>
+      <script src="../../../_static/doctools.js?v=695de88e"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="copyright" title="Copyright" href="../../../copyright.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            GEB
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../overview_and_installation.html">Overview and installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../configuration.html">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../preprocessing.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../running.html">Running the model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../visualisation.html">Visualisation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../calibration.html">Calibration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ODD/ODD.html">ODD protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../agents/__init__.html">Agents</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../agents/households.html">Households</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../agents/crop_farmers.html">Crop farmers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../agents/reservoir_operators.html">Reservoir operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../agents/government.html">Government</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../model.html">Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../report.html">Report</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../HRUs.html">Farm-level HRUs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../artists.html">Artists</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">About</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../authors_page.html">Authors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../contribution_guide.html">Contribution guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../updates.html">Updates</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">GEB</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+          <li class="breadcrumb-item"><a href="../agents.html">geb.agents</a></li>
+      <li class="breadcrumb-item active">geb.agents.reservoir_operators</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for geb.agents.reservoir_operators</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">calendar</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">..hydrology.lakes_reservoirs</span><span class="w"> </span><span class="kn">import</span> <span class="n">RESERVOIR</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">..store</span><span class="w"> </span><span class="kn">import</span> <span class="n">DynamicArray</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.general</span><span class="w"> </span><span class="kn">import</span> <span class="n">AgentBaseClass</span>
+
+<span class="n">IRRIGATION_RESERVOIR</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">FLOOD_RESERVOIR</span> <span class="o">=</span> <span class="mi">2</span>
+
+<span class="n">RESERVOIR_MEMORY_YEARS</span> <span class="o">=</span> <span class="mi">20</span>
+
+
+<div class="viewcode-block" id="ReservoirOperators">
+<a class="viewcode-back" href="../../../agents/reservoir_operators.html#geb.agents.reservoir_operators.ReservoirOperators">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">ReservoirOperators</span><span class="p">(</span><span class="n">AgentBaseClass</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;This class is used to simulate the government.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: The GEB model.</span>
+<span class="sd">        agents: The class that includes all agent types (allowing easier communication between agents).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">agents</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">agents</span> <span class="o">=</span> <span class="n">agents</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;agent_settings&quot;</span><span class="p">][</span><span class="s2">&quot;reservoir_operators&quot;</span><span class="p">]</span>
+            <span class="k">if</span> <span class="s2">&quot;reservoir_operators&quot;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;agent_settings&quot;</span><span class="p">]</span>
+            <span class="k">else</span> <span class="p">{}</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">environmental_flow_requirement</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">in_spinup</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spinup</span><span class="p">()</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s2">&quot;agents.reservoir_operators&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">spinup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reservoirs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">lakes_reservoirs</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">water_body_data</span><span class="p">[</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">lakes_reservoirs</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">water_body_data</span><span class="p">[</span><span class="s2">&quot;waterbody_type&quot;</span><span class="p">]</span>
+            <span class="o">==</span> <span class="mi">2</span>
+        <span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+        <span class="k">assert</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reservoirs</span><span class="p">[</span><span class="s2">&quot;volume_total&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">active_reservoirs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reservoirs</span><span class="p">[</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reservoirs</span><span class="p">[</span><span class="s2">&quot;waterbody_type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">RESERVOIR</span>
+        <span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">reservoir_release_factors</span> <span class="o">=</span> <span class="n">DynamicArray</span><span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+                <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">active_reservoirs</span><span class="p">),</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;agent_settings&quot;</span><span class="p">][</span><span class="s2">&quot;reservoir_operators&quot;</span><span class="p">][</span>
+                    <span class="s2">&quot;max_reservoir_release_factor&quot;</span>
+                <span class="p">],</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">dis_avg</span> <span class="o">=</span> <span class="n">DynamicArray</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">active_reservoirs</span><span class="p">[</span><span class="s2">&quot;average_discharge&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+        <span class="p">)</span>
+
+        <span class="c1"># set the storage at the beginning of the year</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">storage_year_start</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+        <span class="c1"># set all reservoirs to a capacity reduction factor of 0.85 (Hanasaki et al., 2006)</span>
+        <span class="c1"># https://doi.org/10.1016/j.jhydrol.2005.11.011</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">alpha</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full_like</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">storage_year_start</span><span class="p">,</span> <span class="mf">0.85</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span>
+        <span class="p">)</span>
+
+        <span class="n">total_monthly_inflow</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">active_reservoirs</span><span class="p">[</span><span class="s2">&quot;average_discharge&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span> <span class="o">*</span> <span class="mi">30</span> <span class="o">*</span> <span class="mi">24</span> <span class="o">*</span> <span class="mi">3600</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Make all reservoirs irrigation reservoirs. This could be changed in the future</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">reservoir_purpose</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full_like</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="p">,</span> <span class="n">IRRIGATION_RESERVOIR</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Create arrays for n year moving averages of mean total inflow and mean irrigation demand.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="n">RESERVOIR_MEMORY_YEARS</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span>
+        <span class="p">)</span>
+
+        <span class="c1"># set this hydrological year to 0 so that we can start counting</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">total_monthly_inflow</span><span class="p">[</span>
+            <span class="p">:,</span> <span class="n">np</span><span class="o">.</span><span class="n">newaxis</span>
+        <span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_irrigation</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span>
+        <span class="p">)</span> <span class="o">*</span> <span class="mf">0.25</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">hydrological_year_counter</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="mi">0</span>  <span class="c1"># Number of hydrological years for each reservoir</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_command_area_release</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gross_irrigation_demand_m3</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="n">gross_irrigation_demand_m3</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">size</span>
+
+        <span class="c1"># add the irrigation demand to the multi_year_monthly_total_irrigation, use the current month</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_irrigation</span><span class="p">[</span>
+            <span class="p">:,</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_month_index</span><span class="p">,</span> <span class="mi">0</span>
+        <span class="p">]</span> <span class="o">+=</span> <span class="n">gross_irrigation_demand_m3</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">remaining_command_area_release</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">gross_irrigation_demand_m3</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">command_area_release_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">gross_irrigation_demand_m3</span><span class="p">)</span>
+
+        <span class="c1"># environmental release is not used for irrigation</span>
+        <span class="n">usable_release_m3</span><span class="p">,</span> <span class="n">environmental_release_m3</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_release</span><span class="p">(</span>
+            <span class="n">irrigation_demand_m3</span><span class="o">=</span><span class="n">gross_irrigation_demand_m3</span><span class="p">,</span>
+            <span class="n">daily_substeps</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+            <span class="n">enforce_minimum_usable_release_m3</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># limit command area release to the irrigation demand</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">command_area_release_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span>
+            <span class="n">usable_release_m3</span><span class="p">,</span> <span class="n">gross_irrigation_demand_m3</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remaining_command_area_release</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">command_area_release_m3</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gross_irrigation_demand_m3</span> <span class="o">=</span> <span class="n">gross_irrigation_demand_m3</span>
+
+        <span class="c1"># print(</span>
+        <span class="c1">#     &quot;fullfillment&quot;,</span>
+        <span class="c1">#     np.round(</span>
+        <span class="c1">#         (self.command_area_release_m3 / self.gross_irrigation_demand_m3) * 100,</span>
+        <span class="c1">#         decimals=1,</span>
+        <span class="c1">#     ),</span>
+        <span class="c1"># )</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">command_area_release_m3</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">track_inflow</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inflow_m3</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">inflow_m3</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">inflow_m3</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">inflow_m3</span><span class="p">)</span>
+        <span class="c1"># add the inflow to the multi_year_monthly_total_inflow, use the current month</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[:,</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_month_index</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">+=</span> <span class="p">(</span>
+            <span class="n">inflow_m3</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">release</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">daily_substeps</span><span class="p">,</span> <span class="n">current_substep</span><span class="p">):</span>
+        <span class="n">command_area_release_substep</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">command_area_release_m3</span> <span class="o">/</span> <span class="n">daily_substeps</span>
+
+        <span class="c1"># subtract the evaporation in this timestep from the remaining evaporation</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remaining_command_area_release</span> <span class="o">-=</span> <span class="n">command_area_release_substep</span>
+
+        <span class="n">usable_release_m3</span><span class="p">,</span> <span class="n">environmental_release_m3</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_release</span><span class="p">(</span>
+            <span class="n">irrigation_demand_m3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gross_irrigation_demand_m3</span><span class="p">,</span>
+            <span class="n">daily_substeps</span><span class="o">=</span><span class="n">daily_substeps</span><span class="p">,</span>
+            <span class="n">enforce_minimum_usable_release_m3</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># main channel release is the usable release, the environmental release</span>
+        <span class="c1"># minus the command area release. The command area release</span>
+        <span class="c1"># is divided by the daily timesteps to get the release per timestep.</span>
+        <span class="n">main_channel_release</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">usable_release_m3</span> <span class="o">+</span> <span class="n">environmental_release_m3</span> <span class="o">-</span> <span class="n">command_area_release_substep</span>
+        <span class="p">)</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">main_channel_release</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">current_substep</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">==</span> <span class="n">daily_substeps</span> <span class="ow">and</span> <span class="n">__debug__</span>
+        <span class="p">):</span>  <span class="c1"># current_substep starts counting at 0</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_allclose</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">remaining_command_area_release</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-7</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">main_channel_release</span><span class="p">,</span> <span class="n">command_area_release_substep</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_get_release</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">irrigation_demand_m3</span><span class="p">,</span> <span class="n">daily_substeps</span><span class="p">,</span> <span class="n">enforce_minimum_usable_release_m3</span>
+    <span class="p">):</span>
+        <span class="k">if</span> <span class="n">irrigation_demand_m3</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">irrigation_demand_m3</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span>
+                <span class="n">irrigation_demand_m3</span>
+            <span class="p">)</span>
+        <span class="n">days_in_month</span> <span class="o">=</span> <span class="n">calendar</span><span class="o">.</span><span class="n">monthrange</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="o">.</span><span class="n">year</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="o">.</span><span class="n">month</span>
+        <span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="n">n_monthly_substeps</span> <span class="o">=</span> <span class="n">daily_substeps</span> <span class="o">*</span> <span class="n">days_in_month</span>
+
+        <span class="n">month_weights</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+            <span class="p">[</span><span class="mi">31</span><span class="p">,</span> <span class="mf">28.2425</span><span class="p">,</span> <span class="mi">31</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">31</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">31</span><span class="p">,</span> <span class="mi">31</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">31</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">31</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span>
+        <span class="p">)</span>
+        <span class="n">month_weights</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span>
+            <span class="n">month_weights</span><span class="p">,</span> <span class="p">(</span><span class="n">irrigation_demand_m3</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">12</span><span class="p">)</span>
+        <span class="p">)[</span><span class="o">...</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">newaxis</span><span class="p">]</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">history_fill_index</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="c1"># get the long term inflow across all time. Do not consider the current month as</span>
+        <span class="c1"># it is not yet complete.</span>
+        <span class="n">long_term_monthly_inflow_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">average</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[</span>
+                <span class="o">...</span><span class="p">,</span> <span class="mi">1</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">history_fill_index</span>
+            <span class="p">],</span>
+            <span class="n">axis</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+            <span class="n">weights</span><span class="o">=</span><span class="n">month_weights</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># get the long term inflow for this month. Do not consider the current month as</span>
+        <span class="c1"># it is not yet complete.</span>
+        <span class="n">long_term_monthly_inflow_this_month_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">average</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[</span>
+                <span class="p">:,</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_month_index</span><span class="p">,</span> <span class="mi">1</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">history_fill_index</span>
+            <span class="p">],</span>
+            <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">long_term_monthly_irrigation_demand_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">average</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_irrigation</span><span class="p">[</span>
+                <span class="o">...</span><span class="p">,</span> <span class="mi">1</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">history_fill_index</span>
+            <span class="p">],</span>
+            <span class="n">axis</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+            <span class="n">weights</span><span class="o">=</span><span class="n">month_weights</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">provisional_reservoir_release_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full_like</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span>
+        <span class="p">)</span>
+        <span class="c1"># Calculate reservoir release for each reservoir type in m3/s. Only execute if there are reservoirs of that type.</span>
+        <span class="n">irrigation_reservoirs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">reservoir_purpose</span> <span class="o">==</span> <span class="n">IRRIGATION_RESERVOIR</span>
+        <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">irrigation_reservoirs</span><span class="p">):</span>
+            <span class="n">provisional_reservoir_release_m3</span><span class="p">[</span><span class="n">irrigation_reservoirs</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">get_irrigation_reservoir_release</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">capacity</span><span class="p">[</span><span class="n">irrigation_reservoirs</span><span class="p">],</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">storage_year_start</span><span class="p">[</span><span class="n">irrigation_reservoirs</span><span class="p">],</span>
+                    <span class="n">long_term_monthly_inflow_m3</span><span class="p">[</span><span class="n">irrigation_reservoirs</span><span class="p">],</span>
+                    <span class="n">long_term_monthly_inflow_this_month_m3</span><span class="p">[</span><span class="n">irrigation_reservoirs</span><span class="p">],</span>
+                    <span class="n">irrigation_demand_m3</span><span class="p">[</span><span class="n">irrigation_reservoirs</span><span class="p">],</span>
+                    <span class="n">long_term_monthly_irrigation_demand_m3</span><span class="p">[</span><span class="n">irrigation_reservoirs</span><span class="p">],</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">alpha</span><span class="p">[</span><span class="n">irrigation_reservoirs</span><span class="p">],</span>
+                    <span class="n">n_monthly_substeps</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">reservoir_purpose</span> <span class="o">==</span> <span class="n">FLOOD_RESERVOIR</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+        <span class="n">environmental_flow_requirement_m3</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">long_term_monthly_inflow_m3</span>
+            <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">environmental_flow_requirement</span>
+            <span class="o">/</span> <span class="n">n_monthly_substeps</span>
+        <span class="p">)</span>
+
+        <span class="k">assert</span> <span class="p">(</span><span class="n">provisional_reservoir_release_m3</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+        <span class="n">usable_release_m3</span><span class="p">,</span> <span class="n">environmental_release_m3</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_release_corrections</span><span class="p">(</span>
+            <span class="n">provisional_reservoir_release_m3</span><span class="o">=</span><span class="n">provisional_reservoir_release_m3</span><span class="p">,</span>
+            <span class="n">storage_m3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="p">,</span>
+            <span class="n">capacity_m3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">capacity</span><span class="p">,</span>
+            <span class="n">minimum_usable_release_m3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">command_area_release_m3</span> <span class="o">/</span> <span class="n">daily_substeps</span>
+            <span class="k">if</span> <span class="n">enforce_minimum_usable_release_m3</span>
+            <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">environmental_flow_requirement_m3</span><span class="o">=</span><span class="n">environmental_flow_requirement_m3</span><span class="p">,</span>
+            <span class="n">alpha</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">alpha</span><span class="p">,</span>
+            <span class="n">daily_substeps</span><span class="o">=</span><span class="n">daily_substeps</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">usable_release_m3</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">environmental_release_m3</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+        <span class="k">assert</span> <span class="p">(</span>
+            <span class="n">usable_release_m3</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">command_area_release_m3</span> <span class="o">/</span> <span class="n">daily_substeps</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+        <span class="k">return</span> <span class="n">usable_release_m3</span><span class="p">,</span> <span class="n">environmental_release_m3</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_release_corrections</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">provisional_reservoir_release_m3</span><span class="p">,</span>
+        <span class="n">storage_m3</span><span class="p">,</span>
+        <span class="n">capacity_m3</span><span class="p">,</span>
+        <span class="n">minimum_usable_release_m3</span><span class="p">,</span>
+        <span class="n">environmental_flow_requirement_m3</span><span class="p">,</span>
+        <span class="n">alpha</span><span class="p">,</span>
+        <span class="n">daily_substeps</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+
+<span class="sd">        minimum_release_m3 : float</span>
+<span class="sd">            The minimum release from the reservoir. This is the environmental flow requirement</span>
+<span class="sd">            in m3/s. It is assumed that this is the same for all reservoirs.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># release is at least 10% of the mean monthly inflow (environmental flow)</span>
+        <span class="n">reservoir_release_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span>
+            <span class="n">provisional_reservoir_release_m3</span><span class="p">,</span> <span class="n">environmental_flow_requirement_m3</span>
+        <span class="p">)</span>
+
+        <span class="k">assert</span> <span class="p">(</span><span class="n">reservoir_release_m3</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+        <span class="c1"># get provisional storage given inflow and release</span>
+        <span class="n">provisional_storage_m3</span> <span class="o">=</span> <span class="n">storage_m3</span> <span class="o">-</span> <span class="n">reservoir_release_m3</span>
+
+        <span class="c1"># release any over capacity</span>
+        <span class="n">normal_capacity</span> <span class="o">=</span> <span class="n">alpha</span> <span class="o">*</span> <span class="n">capacity_m3</span>
+        <span class="n">over_capacity</span> <span class="o">=</span> <span class="n">provisional_storage_m3</span> <span class="o">-</span> <span class="n">normal_capacity</span>
+        <span class="n">reservoir_release_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+            <span class="n">over_capacity</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="n">reservoir_release_m3</span> <span class="o">+</span> <span class="n">over_capacity</span><span class="p">,</span>
+            <span class="n">reservoir_release_m3</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="k">assert</span> <span class="p">(</span><span class="n">reservoir_release_m3</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+        <span class="c1"># storage can never drop below 10% of the capacity</span>
+        <span class="c1"># also make sure the remaining storage is enough to provide the command area release</span>
+        <span class="c1"># and remaining evaporative demand</span>
+        <span class="n">minimum_storage_m3</span> <span class="o">=</span> <span class="mf">0.1</span> <span class="o">*</span> <span class="n">capacity_m3</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">remaining_command_area_release</span>
+        <span class="n">reservoir_release_m3_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+            <span class="n">provisional_storage_m3</span> <span class="o">&lt;</span> <span class="n">minimum_storage_m3</span><span class="p">,</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">storage_m3</span> <span class="o">-</span> <span class="n">minimum_storage_m3</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
+            <span class="n">reservoir_release_m3</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="k">assert</span> <span class="p">(</span><span class="n">reservoir_release_m3_</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+        <span class="n">environmental_flow_release_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span>
+            <span class="n">reservoir_release_m3_</span><span class="p">,</span> <span class="n">environmental_flow_requirement_m3</span>
+        <span class="p">)</span>
+        <span class="n">usable_release_m3</span> <span class="o">=</span> <span class="n">reservoir_release_m3_</span> <span class="o">-</span> <span class="n">environmental_flow_release_m3</span>
+        <span class="k">if</span> <span class="n">minimum_usable_release_m3</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># make sure the usable release is at least the command area release</span>
+            <span class="c1"># divided by the number of daily substeps</span>
+            <span class="n">usable_release_m3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">usable_release_m3</span><span class="p">,</span> <span class="n">minimum_usable_release_m3</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="p">(</span>
+            <span class="n">usable_release_m3</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">command_area_release_m3</span> <span class="o">/</span> <span class="n">daily_substeps</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">usable_release_m3</span><span class="p">,</span> <span class="n">environmental_flow_release_m3</span>
+
+<div class="viewcode-block" id="ReservoirOperators.get_irrigation_reservoir_release">
+<a class="viewcode-back" href="../../../agents/reservoir_operators.html#geb.agents.reservoir_operators.ReservoirOperators.get_irrigation_reservoir_release">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_irrigation_reservoir_release</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">capacity</span><span class="p">,</span>
+        <span class="n">storage_year_start</span><span class="p">,</span>
+        <span class="n">long_term_monthly_inflow_m3</span><span class="p">,</span>
+        <span class="n">long_term_monthly_inflow_this_month_m3</span><span class="p">,</span>
+        <span class="n">current_irrigation_demand_m3</span><span class="p">,</span>
+        <span class="n">long_term_monthly_irrigation_demand_m3</span><span class="p">,</span>
+        <span class="n">alpha</span><span class="p">,</span>
+        <span class="n">n_monthly_substeps</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Based on Shin et al. (2019)</span>
+        <span class="c1"># https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025</span>
+        <span class="n">M</span> <span class="o">=</span> <span class="mf">0.1</span>
+
+        <span class="n">ratio_long_term_demand_to_inflow</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">long_term_monthly_irrigation_demand_m3</span> <span class="o">/</span> <span class="n">long_term_monthly_inflow_m3</span>
+        <span class="p">)</span>  <span class="c1"># here the units don&#39;t matter as long as they are the same</span>
+        <span class="n">irrigation_dominant_reservoirs</span> <span class="o">=</span> <span class="n">ratio_long_term_demand_to_inflow</span> <span class="o">&gt;</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">M</span>
+
+        <span class="n">provisional_release</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full_like</span><span class="p">(</span><span class="n">capacity</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+        <span class="c1"># equation 2a in Shin et al. (2019)</span>
+        <span class="c1"># if the irrigation demand is not dominant, this assumes there is sufficient</span>
+        <span class="c1"># water in the reservoir to meet the demand</span>
+        <span class="n">long_term_inflow_irrigation_delta_m3</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">long_term_monthly_inflow_m3</span><span class="p">[</span><span class="o">~</span><span class="n">irrigation_dominant_reservoirs</span><span class="p">]</span>
+            <span class="o">-</span> <span class="n">long_term_monthly_irrigation_demand_m3</span><span class="p">[</span><span class="o">~</span><span class="n">irrigation_dominant_reservoirs</span><span class="p">]</span>
+        <span class="p">)</span>
+        <span class="n">provisional_release</span><span class="p">[</span><span class="o">~</span><span class="n">irrigation_dominant_reservoirs</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">long_term_inflow_irrigation_delta_m3</span> <span class="o">/</span> <span class="n">n_monthly_substeps</span>
+            <span class="o">+</span> <span class="n">current_irrigation_demand_m3</span><span class="p">[</span><span class="o">~</span><span class="n">irrigation_dominant_reservoirs</span><span class="p">]</span>
+        <span class="p">)</span>
+
+        <span class="n">provisional_release</span><span class="p">[</span><span class="n">irrigation_dominant_reservoirs</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">long_term_monthly_inflow_m3</span><span class="p">[</span><span class="n">irrigation_dominant_reservoirs</span><span class="p">]</span>
+            <span class="o">/</span> <span class="n">n_monthly_substeps</span>
+            <span class="o">*</span> <span class="p">(</span>
+                <span class="n">M</span>
+                <span class="o">+</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">M</span><span class="p">)</span>
+                <span class="o">*</span> <span class="n">current_irrigation_demand_m3</span><span class="p">[</span><span class="n">irrigation_dominant_reservoirs</span><span class="p">]</span>
+                <span class="o">/</span> <span class="p">(</span>
+                    <span class="n">long_term_monthly_irrigation_demand_m3</span><span class="p">[</span>
+                        <span class="n">irrigation_dominant_reservoirs</span>
+                    <span class="p">]</span>
+                    <span class="o">/</span> <span class="n">n_monthly_substeps</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+        <span class="p">)</span>  <span class="c1"># equation 2b in Shin et al. (2019)</span>
+
+        <span class="c1"># Targeted monthly release (Shin et al., 2019)</span>
+        <span class="n">ratio_capacity_to_total_inflow</span> <span class="o">=</span> <span class="n">capacity</span> <span class="o">/</span> <span class="p">(</span><span class="n">long_term_monthly_inflow_m3</span> <span class="o">*</span> <span class="mi">12</span><span class="p">)</span>
+        <span class="c1"># R in Shin et al. (2019). &quot;As R varies from 0 to 1, the reservoir release changes</span>
+        <span class="c1"># from run-of-the-river flow to demand-controlled release.&quot;&quot;</span>
+        <span class="n">demand_controlled_release_ratio</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span>
+            <span class="n">alpha</span> <span class="o">*</span> <span class="n">ratio_capacity_to_total_inflow</span><span class="p">,</span> <span class="mf">1.0</span>
+        <span class="p">)</span>
+
+        <span class="c1"># kᵣₗₛ [−], &quot;the ratio between the initial storage at the</span>
+        <span class="c1"># beginning of the operational year (S0 [L3])</span>
+        <span class="c1"># and the long-term target storage (αC [L3])&quot; (Shin et al., 2019)</span>
+        <span class="n">release_coefficient</span> <span class="o">=</span> <span class="n">storage_year_start</span> <span class="o">/</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">*</span> <span class="n">capacity</span><span class="p">)</span>
+
+        <span class="n">final_release</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">demand_controlled_release_ratio</span> <span class="o">*</span> <span class="n">release_coefficient</span> <span class="o">*</span> <span class="n">provisional_release</span>
+            <span class="o">+</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">demand_controlled_release_ratio</span><span class="p">)</span>
+            <span class="o">*</span> <span class="n">long_term_monthly_inflow_this_month_m3</span>
+            <span class="o">/</span> <span class="n">n_monthly_substeps</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">final_release</span></div>
+
+
+<div class="viewcode-block" id="ReservoirOperators.get_flood_control_reservoir_release">
+<a class="viewcode-back" href="../../../agents/reservoir_operators.html#geb.agents.reservoir_operators.ReservoirOperators.get_flood_control_reservoir_release">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_flood_control_reservoir_release</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">cpa</span><span class="p">,</span> <span class="n">cond_ppose</span><span class="p">,</span> <span class="n">qin</span><span class="p">,</span> <span class="n">S_begin_yr</span><span class="p">,</span> <span class="n">mtifl</span><span class="p">,</span> <span class="n">alpha</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Computes release from flood control reservoirs</span>
+<span class="sd">        cpa = reservoir capacity                                    (m^3)</span>
+<span class="sd">        cond_ppose = array containing irrigation reservoir cells</span>
+<span class="sd">        based on selection mask</span>
+<span class="sd">        qin = inflow                                                (m^3/s)</span>
+<span class="sd">        Sini = initial storage                                      (m^3)</span>
+<span class="sd">        mtifl = annual mean total annual inflow                     (m^3/s)</span>
+<span class="sd">        alpha = reservoir capacity reduction factor                 (dimensionless)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># flood Reservoirs</span>
+        <span class="c1"># initialization</span>
+        <span class="n">Nx</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">cond_ppose</span><span class="p">)</span>
+        <span class="n">Rprovisional</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="n">Nx</span><span class="p">,</span>
+            <span class="p">]</span>
+        <span class="p">)</span>  <span class="c1"># Provisional Release</span>
+        <span class="n">Rflood_final</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="n">Nx</span><span class="p">,</span>
+            <span class="p">]</span>
+        <span class="p">)</span>  <span class="c1"># Final Release</span>
+        <span class="c1"># water management</span>
+        <span class="n">mtifl_flood</span> <span class="o">=</span> <span class="n">mtifl</span><span class="p">[</span><span class="n">cond_ppose</span><span class="p">]</span>  <span class="c1"># mean flow:  m^3/s</span>
+        <span class="n">cpa_flood</span> <span class="o">=</span> <span class="n">cpa</span><span class="p">[</span><span class="n">cond_ppose</span><span class="p">]</span>  <span class="c1"># capacity:   m^3</span>
+        <span class="n">qin_flood</span> <span class="o">=</span> <span class="n">qin</span><span class="p">[</span><span class="n">cond_ppose</span><span class="p">]</span>  <span class="c1"># mean flow:  m^3/s</span>
+        <span class="n">Sbeginning_ofyear</span> <span class="o">=</span> <span class="n">S_begin_yr</span><span class="p">[</span><span class="n">cond_ppose</span><span class="p">]</span>  <span class="c1"># capacity:   m^3</span>
+        <span class="c1"># Provisional Release</span>
+        <span class="n">Rprovisional</span> <span class="o">=</span> <span class="n">mtifl_flood</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="c1"># Final Release</span>
+        <span class="c1"># capacity &amp; annual total infow</span>
+        <span class="n">c</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">divide</span><span class="p">(</span><span class="n">cpa_flood</span><span class="p">,</span> <span class="p">(</span><span class="n">mtifl_flood</span> <span class="o">*</span> <span class="mi">365</span> <span class="o">*</span> <span class="mi">24</span> <span class="o">*</span> <span class="mi">3600</span><span class="p">))</span>
+        <span class="n">cond1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">c</span> <span class="o">&gt;=</span> <span class="mf">0.5</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># c = capacity/imean &gt;= 0.5</span>
+        <span class="n">cond2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">c</span> <span class="o">&lt;</span> <span class="mf">0.5</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># c = capacity/imean &lt; 0.5</span>
+        <span class="c1"># c = capacity/imean &gt;= 0.5</span>
+        <span class="n">Krls</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">divide</span><span class="p">(</span><span class="n">Sbeginning_ofyear</span><span class="p">,</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">*</span> <span class="n">cpa_flood</span><span class="p">))</span>
+        <span class="n">Rflood_final</span><span class="p">[</span><span class="n">cond1</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">Krls</span><span class="p">[</span><span class="n">cond1</span><span class="p">],</span> <span class="n">mtifl_flood</span><span class="p">[</span><span class="n">cond1</span><span class="p">])</span>
+        <span class="c1"># c = capacity/imean &lt; 0.5</span>
+        <span class="n">temp1</span> <span class="o">=</span> <span class="p">(</span><span class="n">c</span><span class="p">[</span><span class="n">cond2</span><span class="p">]</span> <span class="o">/</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span>
+        <span class="n">temp2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">temp1</span><span class="p">,</span> <span class="n">Krls</span><span class="p">[</span><span class="n">cond2</span><span class="p">])</span>
+        <span class="n">temp3</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">temp2</span><span class="p">,</span> <span class="n">Rprovisional</span><span class="p">[</span><span class="n">cond2</span><span class="p">])</span>
+        <span class="n">temp4</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">multiply</span><span class="p">((</span><span class="mi">1</span> <span class="o">-</span> <span class="n">temp1</span><span class="p">),</span> <span class="n">qin_flood</span><span class="p">[</span><span class="n">cond2</span><span class="p">])</span>
+        <span class="n">Rflood_final</span><span class="p">[</span><span class="n">cond2</span><span class="p">]</span> <span class="o">=</span> <span class="n">temp3</span> <span class="o">+</span> <span class="n">temp4</span>
+        <span class="k">return</span> <span class="n">Rflood_final</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_available_water_reservoir_command_areas</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gross_irrigation_demand_m3</span><span class="p">):</span>
+        <span class="c1"># TODO: only farmers that use surface irrigation</span>
+        <span class="n">command_areas</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">HRU</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">reservoir_command_areas</span>
+        <span class="n">irrigation_demand_per_command_area</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">bincount</span><span class="p">(</span>
+            <span class="n">command_areas</span><span class="p">[</span><span class="n">command_areas</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+            <span class="n">weights</span><span class="o">=</span><span class="n">gross_irrigation_demand_m3</span><span class="p">[</span><span class="n">command_areas</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+        <span class="p">)</span>
+        <span class="k">assert</span> <span class="n">irrigation_demand_per_command_area</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">size</span>
+        <span class="k">return</span> <span class="mi">0</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># operational year should start after the end of the rainy season</span>
+        <span class="c1"># this could also maybe be determined based on the start of the irrigation season</span>
+        <span class="c1"># thus crop calendars</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="o">.</span><span class="n">day</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="o">.</span><span class="n">month</span> <span class="o">==</span> <span class="mi">10</span><span class="p">:</span>
+            <span class="c1"># in the second year, we want to discard the default data that was estimated</span>
+            <span class="c1"># from external sources</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">hydrological_year_counter</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_irrigation</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+
+            <span class="c1"># in the first year, we don&#39;t want to save the data, because we don&#39;t have a full year yet</span>
+            <span class="c1"># so no shifting should be done</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">hydrological_year_counter</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">:]</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+                <span class="p">)</span>
+
+                <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_irrigation</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">:]</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_irrigation</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+                <span class="p">)</span>
+
+            <span class="c1"># always reset the counters for the next year</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_inflow</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">multi_year_monthly_total_irrigation</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">hydrological_year_counter</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">storage_year_start</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">history_fill_index</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span>
+            <span class="mi">2</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="n">RESERVOIR_MEMORY_YEARS</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">var</span><span class="o">.</span><span class="n">hydrological_year_counter</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">locals</span><span class="p">())</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">storage</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">lakes_reservoirs</span><span class="o">.</span><span class="n">reservoir_storage</span>
+
+    <span class="nd">@storage</span><span class="o">.</span><span class="n">setter</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">storage</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">lakes_reservoirs</span><span class="o">.</span><span class="n">reservoir_storage</span> <span class="o">=</span> <span class="n">value</span>
+
+    <span class="c1"># @property</span>
+    <span class="c1"># def evaporation_m3(self):</span>
+    <span class="c1">#     return self.model.hydrology.lakes_reservoirs.potential_evaporation_per_water_body_m3_reservoir</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">capacity</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">lakes_reservoirs</span><span class="o">.</span><span class="n">reservoir_capacity</span>
+
+    <span class="nd">@capacity</span><span class="o">.</span><span class="n">setter</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">capacity</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">hydrology</span><span class="o">.</span><span class="n">lakes_reservoirs</span><span class="o">.</span><span class="n">reservoir_capacity</span> <span class="o">=</span> <span class="n">value</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">fill_ratio</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">capacity</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">current_month_index</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_time</span><span class="o">.</span><span class="n">month</span> <span class="o">-</span> <span class="mi">1</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; <a href="../../../copyright.html">Copyright</a> 2023, VU-IVM and IIASA.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

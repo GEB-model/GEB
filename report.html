@@ -1,0 +1,391 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Report &mdash; GEB  documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5dd5ad26" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="_static/jquery.js?v=5be48651"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=27b9c81c"></script>
+      <script src="_static/doctools.js?v=695de88e"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="copyright" title="Copyright" href="copyright.html" />
+    <link rel="next" title="Hydrological response units" href="HRUs.html" />
+    <link rel="prev" title="Model" href="model.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            GEB
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="overview_and_installation.html">Overview and installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="preprocessing.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="running.html">Running the model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="visualisation.html">Visualisation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="calibration.html">Calibration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ODD/ODD.html">ODD protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="agents/__init__.html">Agents</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agents/households.html">Households</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agents/crop_farmers.html">Crop farmers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agents/reservoir_operators.html">Reservoir operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agents/government.html">Government</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="model.html">Model</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Report</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#module-geb.reporter">Package contents</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#geb.reporter.Reporter"><code class="docutils literal notranslate"><span class="pre">Reporter</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#geb.reporter.Reporter.create_variable"><code class="docutils literal notranslate"><span class="pre">Reporter.create_variable()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#geb.reporter.Reporter.finalize"><code class="docutils literal notranslate"><span class="pre">Reporter.finalize()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#geb.reporter.Reporter.maybe_report_value"><code class="docutils literal notranslate"><span class="pre">Reporter.maybe_report_value()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#geb.reporter.Reporter.process_value"><code class="docutils literal notranslate"><span class="pre">Reporter.process_value()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#geb.reporter.Reporter.report"><code class="docutils literal notranslate"><span class="pre">Reporter.report()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.reporter.create_time_array"><code class="docutils literal notranslate"><span class="pre">create_time_array()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="HRUs.html">Farm-level HRUs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="artists.html">Artists</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">About</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="authors_page.html">Authors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contribution_guide.html">Contribution guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="updates.html">Updates</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">GEB</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Report</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/report.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="report">
+<h1>Report<a class="headerlink" href="#report" title="Link to this heading"></a></h1>
+<p>The report module provides functionality for to report model data to disk. This can be configured in <cite>model.yml</cite> under the <cite>report</cite> key. The structure is as follows:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">report</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">module_name</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">filename</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">varname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">varname</span>
+<span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">type</span>
+<span class="w">            </span><span class="nt">function</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">function</span>
+<span class="w">            </span><span class="nt">frequency</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">frequency</span><span class="w">  </span><span class="c1"># optional</span>
+<span class="w">        </span><span class="nt">other_filename</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">varname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">varname</span>
+<span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">type</span>
+<span class="w">            </span><span class="nt">function</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">function</span>
+<span class="w">            </span><span class="nt">frequency</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">frequency</span><span class="w">  </span><span class="c1"># optional</span>
+<span class="w">    </span><span class="nt">other_module_name</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">filename</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">varname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">varname</span>
+<span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">type</span>
+<span class="w">            </span><span class="nt">function</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">function</span>
+<span class="w">            </span><span class="nt">frequency</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">frequency</span><span class="w">  </span><span class="c1"># optional</span>
+</pre></div>
+</div>
+<p>For example, to export the total bare soil evaporation, gridded daily discharge, and the mean channel abstraction by crop_farmers, you would use the following configuration:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">report</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">hydrology.soil</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">actual_bare_soil_evaporation_weighted_sum</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">varname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.actual_bare_soil_evaporation</span>
+<span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HRU</span>
+<span class="w">            </span><span class="nt">function</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">weightednansum</span>
+<span class="w">    </span><span class="nt">hydrology.routing</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">discharge_daily</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">varname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">grid.var.discharge_m3_s</span>
+<span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">grid</span>
+<span class="w">            </span><span class="nt">function</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span>
+<span class="w">    </span><span class="nt">agents.crop_farmers</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">channel_abstraction_m3_by_farmer_mean</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">varname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">var.channel_abstraction_m3_by_farmer</span>
+<span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">agents</span>
+<span class="w">            </span><span class="nt">function</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mean</span>
+</pre></div>
+</div>
+<p>The following options are supported.</p>
+<ul class="simple">
+<li><p><strong>module_name</strong>: The name of the module in the GEB model. Both agents and hydrological modules are supported. Please refer to the name property of the module for the correct names.</p></li>
+<li><p><strong>filename</strong>: The name of the file to be created. This can be a .csv or .zarr file. If the file already exists, it will be overwritten. The filename will be created in the output directory specified in the model configuration file, and placed inside the subdirectory with the name of the module.</p></li>
+<li><p><strong>varname</strong>: The name of the variable to be reported. NumPy-style fancy indexing is supported. For example <cite>varname[:,0]</cite> selects the first column of a 2D array. There are two options:</p>
+<ul>
+<li><p><strong>module attribute</strong>: The variable name in the module. Any variable that can be reached from “self” in the module can be used. For example, <cite>[self.]varname</cite> or <cite>[self.]grid.var.discharge_m3_s</cite>. Note that <cite>self.</cite> is ommited.</p></li>
+<li><p><strong>local variable</strong>: Any variable that exists within the <cite>step</cite> function of the module. This is useful for reporting variables that are not stored between timesteps. Local variables are prefixed with “.”, for exampe <cite>.actual_bare_soil_evaporation</cite> in the example above.</p></li>
+</ul>
+</li>
+<li><p><strong>type</strong>: The type of the variable. This can be one of the following:</p>
+<ul>
+<li><p><strong>grid</strong>: A variable that is stored in the grid structure of GEB.</p></li>
+<li><p><strong>HRU</strong>: A variable that is stored in the hydrological response unit (HRU) structure of GEB.</p></li>
+<li><p><strong>agents</strong>: A variable that is stored in the agents. This is a 1D array with the same length as the number of agents. The variable will be reported as a 1D array.</p></li>
+</ul>
+</li>
+<li><p><strong>function</strong>: The function to be used to process the variable before reporting. The supported options vary per type. Each type supports the <strong>null</strong> function, which means that no function is applied and the variable is reported as is in a zarr file. In all other cases the variable is reported at the end of the model run in a csv file. The following functions are supported:</p>
+<ul>
+<li><p><strong>agents</strong>:</p>
+<ul>
+<li><p><strong>null</strong>: No function is applied. The variable is reported as is.</p></li>
+<li><p><strong>mean</strong>: The mean of the variable is calculated and reported.</p></li>
+<li><p><strong>nanmean</strong>: The mean of the variable is calculated and reported, ignoring NaN values.</p></li>
+<li><p><strong>sum</strong>: The sum of the variable is calculated and reported.</p></li>
+<li><p><strong>nansum</strong>: The sum of the variable is calculated and reported, ignoring NaN values.</p></li>
+</ul>
+</li>
+<li><p><strong>grid</strong> and <strong>HRU</strong>:</p>
+<ul>
+<li><p><strong>null</strong>: No function is applied. The variable is reported as is.</p></li>
+<li><p><strong>mean</strong>: The mean of the variable is calculated and reported.</p></li>
+<li><p><strong>nanmean</strong>: The mean of the variable is calculated and reported, ignoring NaN values.</p></li>
+<li><p><strong>sum</strong>: The sum of the variable is calculated and reported.</p></li>
+<li><p><strong>nansum</strong>: The sum of the variable is calculated and reported, ignoring NaN values.</p></li>
+<li><p><strong>weightedmean</strong>: The mean of the variable is calculated and reported, weighted by the grid cell area.</p></li>
+<li><p><strong>weightednanmean</strong>: The mean of the variable is calculated and reported, weighted by the grid cell area, ignoring NaN values.</p></li>
+<li><p><strong>sample,[y],[x]</strong>: Sample a specific variable at specific y,x pixel. 0,0 is the top left corner of the grid. Example is <strong>sample,1,2</strong> to sample the variable at pixel 1,2.</p></li>
+<li><p><strong>sample_coord,[lat],[lon]</strong>: Sample a specific variable at specific coordinates using the lat,lon coordinates of the grid. The coordinates are in the same coordinate system as the grid. Example is <strong>sample_coord,52.38,4.89</strong> to sample the variable at coordinates latitude 52.38 and longitude 4.89 (Amsterdam). Note that when reporting discharge, it is important to make sure that the location is in the actual river you want to sample from. You can refer to the upstream area in the input files to find the actual river.</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p><strong>frequency</strong> (optional): The frequency at which the variable is reported. The default is <strong>every: day</strong> This can be one of the following:</p>
+<ul>
+<li><p><strong>initial</strong>: The variable is reported at the initial time step only.`</p></li>
+<li><p><strong>final</strong>: The variable is reported at the final time step only.</p></li>
+<li><p><strong>every</strong>: The variable is reported at specified timesteps, examples are given below.</p></li>
+</ul>
+</li>
+</ul>
+<p>Report the data every third day of the month:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">report</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">module_name</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">filename</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">filename</span>
+<span class="w">        </span><span class="nt">varname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">varname</span>
+<span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">type</span>
+<span class="w">        </span><span class="nt">function</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">function</span>
+<span class="w">        </span><span class="nt">frequency</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">every</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">month</span>
+<span class="w">            </span><span class="nt">day</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+</pre></div>
+</div>
+<p>Report every 15th of March every year:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">report</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">module_name</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">filename</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">filename</span>
+<span class="w">        </span><span class="nt">varname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">varname</span>
+<span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">type</span>
+<span class="w">        </span><span class="nt">function</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">function</span>
+<span class="w">        </span><span class="nt">frequency</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">every</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">year</span>
+<span class="w">            </span><span class="nt">month</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<span class="w">            </span><span class="nt">day</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15</span>
+</pre></div>
+</div>
+<section id="module-geb.reporter">
+<span id="package-contents"></span><h2>Package contents<a class="headerlink" href="#module-geb.reporter" title="Link to this heading"></a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="geb.reporter.Reporter">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">Reporter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">clean</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/geb/reporter.html#Reporter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.reporter.Reporter" title="Link to this definition"></a></dt>
+<dd><p>This class is used to report data to disk.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>model</strong> – The GEB model.</p>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.reporter.Reporter.create_variable">
+<span class="sig-name descname"><span class="pre">create_variable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">module_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/geb/reporter.html#Reporter.create_variable"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.reporter.Reporter.create_variable" title="Link to this definition"></a></dt>
+<dd><p>This function creates a variable for the reporter. For
+configurations without a aggregation function, a zarr file is created. For
+configurations with an aggregation function, the data
+is stored in memory and exported on the final timestep.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></span>) – The configuration for the variable.</p></li>
+<li><p><strong>module_name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>) – The name of the module to which the variable belongs.</p></li>
+<li><p><strong>name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>) – The name of the variable.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.reporter.Reporter.finalize">
+<span class="sig-name descname"><span class="pre">finalize</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/geb/reporter.html#Reporter.finalize"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.reporter.Reporter.finalize" title="Link to this definition"></a></dt>
+<dd><p>At the end of the model run, all previously collected data is reported to disk.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.reporter.Reporter.maybe_report_value">
+<span class="sig-name descname"><span class="pre">maybe_report_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">module_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">module</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">local_variables</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/geb/reporter.html#Reporter.maybe_report_value"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.reporter.Reporter.maybe_report_value" title="Link to this definition"></a></dt>
+<dd><p>This method is used to save and/or export model values.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Union</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">Any</span></code>]]</span>) – Name of the value to be exported.</p></li>
+<li><p><strong>value</strong> – The array itself.</p></li>
+<li><p><strong>conf</strong> – Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.reporter.Reporter.process_value">
+<span class="sig-name descname"><span class="pre">process_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">module_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/geb/reporter.html#Reporter.process_value"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.reporter.Reporter.process_value" title="Link to this definition"></a></dt>
+<dd><p>Exports an array of values to the export folder.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>module_name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>) – Name of the module to which the value belongs.</p></li>
+<li><p><strong>name</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></span>) – Name of the value to be exported.</p></li>
+<li><p><strong>value</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – The array itself.</p></li>
+<li><p><strong>conf</strong> – Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.reporter.Reporter.report">
+<span class="sig-name descname"><span class="pre">report</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">module</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">local_variables</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">module_name</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/geb/reporter.html#Reporter.report"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.reporter.Reporter.report" title="Link to this definition"></a></dt>
+<dd><p>This method is in every step function to report data to disk.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>module</strong> – The module to report data from.</p></li>
+<li><p><strong>variables</strong> – A dictionary of local variables from the function
+that calls this one.</p></li>
+<li><p><strong>module_name</strong> – The name of the module.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geb.reporter.create_time_array">
+<span class="sig-name descname"><span class="pre">create_time_array</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">end</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timestep</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conf</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/geb/reporter.html#create_time_array"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.reporter.create_time_array" title="Link to this definition"></a></dt>
+<dd><p>Create a time array based on the start and end time, the timestep, and the frequency.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>start</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">datetime</span></code></span>) – The start time.</p></li>
+<li><p><strong>end</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">datetime</span></code></span>) – The end time.</p></li>
+<li><p><strong>timestep</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">timedelta</span></code></span>) – The timestep length.</p></li>
+<li><p><strong>conf</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></span>) – The configuration for the frequency.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>time</strong> – The time array.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="model.html" class="btn btn-neutral float-left" title="Model" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="HRUs.html" class="btn btn-neutral float-right" title="Hydrological response units" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; <a href="copyright.html">Copyright</a> 2023, VU-IVM and IIASA.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
