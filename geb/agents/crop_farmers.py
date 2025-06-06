@@ -2716,7 +2716,7 @@ class CropFarmers(AgentBaseClass):
             "total_annual_costs": total_annual_costs_m2,
             "adaptation_costs": annual_cost_m2,
             "adapted": adapted,
-            "time_adapted": self.var.time_adapted[:, WELL_ADAPTATION],
+            "time_adapted": self.var.time_adapted.data[:, WELL_ADAPTATION],
             "T": np.full(
                 self.var.n,
                 self.model.config["agent_settings"]["farmers"]["expected_utility"][
