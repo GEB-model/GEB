@@ -162,14 +162,11 @@ def get_lake_outflow(
         lake_storage=storage, lake_area=lake_area, outflow_height=outflow_height
     )
     storage_above_outflow = height_above_outflow * lake_area
-    storage_above_outflow = np.minimum(storage_above_outflow, storage)
 
     outflow_m3_s = estimate_lake_outflow(lake_factor, height_above_outflow)
     outflow_m3 = outflow_m3_s * dt
 
     outflow_m3 = np.minimum(outflow_m3, storage_above_outflow)
-
-    assert (outflow_m3 <= storage).all()
     return outflow_m3, height_above_outflow
 
 
@@ -193,6 +190,7 @@ class LakesReservoirs(Module):
         waterBodyID_unmapped = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
         )
+
         self.grid.var.waterBodyID, self.var.waterbody_mapping = (
             self.map_water_bodies_IDs(waterBodyID_unmapped)
         )
@@ -232,6 +230,10 @@ class LakesReservoirs(Module):
 
         self.var.lake_area = self.var.water_body_data["average_area"].values
         self.var.capacity = self.var.water_body_data["volume_total"].values
+
+        self.var.total_inflow_from_other_water_bodies_m3 = np.zeros_like(
+            self.var.capacity, dtype=np.float32
+        )
 
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
         # Lake parameter A (suggested  value equal to outflow width in [m])
@@ -314,14 +316,13 @@ class LakesReservoirs(Module):
     def get_outflows(self, waterBodyID):
         # calculate biggest outlet = biggest accumulation of ldd network
         upstream_area_within_waterbodies = np.zeros_like(
-            self.hydrology.routing.router.upstream_area_n_cells,
-            shape=waterBodyID.max() + 2,
+            self.grid.var.upstream_area_n_cells, shape=waterBodyID.max() + 2
         )
         upstream_area_within_waterbodies[-1] = -1
         np.maximum.at(
             upstream_area_within_waterbodies,
             waterBodyID[waterBodyID != -1],
-            self.hydrology.routing.router.upstream_area_n_cells[waterBodyID != -1],
+            self.grid.var.upstream_area_n_cells[waterBodyID != -1],
         )
         upstream_area_within_waterbodies = np.take(
             upstream_area_within_waterbodies, waterBodyID
@@ -337,8 +338,7 @@ class LakesReservoirs(Module):
         outflow_elevation = self.grid.compress(outflow_elevation)
 
         waterbody_outflow_points = np.where(
-            self.hydrology.routing.router.upstream_area_n_cells
-            == upstream_area_within_waterbodies,
+            self.grid.var.upstream_area_n_cells == upstream_area_within_waterbodies,
             waterBodyID,
             -1,
         )
@@ -417,6 +417,8 @@ class LakesReservoirs(Module):
         else:
             lake_outflow_m3 = np.zeros(0, dtype=np.float32)
 
+        assert (lake_outflow_m3 <= self.lake_storage).all()
+
         return lake_outflow_m3
 
     def routing_reservoirs(self, n_routing_substeps, current_substep):
@@ -457,6 +459,8 @@ class LakesReservoirs(Module):
     ):
         if __debug__:
             prestorage = self.var.storage.copy()
+
+        assert (self.var.total_inflow_from_other_water_bodies_m3 >= 0).all()
 
         outflow_to_drainage_network_m3 = np.zeros_like(self.var.storage)
 

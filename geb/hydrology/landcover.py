@@ -114,7 +114,7 @@ class LandCover(Module):
             "crop_coefficient"
         ][:]
 
-    def step(self, snow, rain, snow_melt):
+    def step(self):
         timer = TimingModule("Landcover")
 
         if __debug__:
@@ -189,8 +189,7 @@ class LandCover(Module):
             potential_transpiration,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
-            snow_melt,
-        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt)
+        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef)
 
         timer.new_split("PET")
 
@@ -198,19 +197,16 @@ class LandCover(Module):
             potential_transpiration_minus_interception_evaporation,
             interception_evaporation,
         ) = self.hydrology.interception.step(
-            potential_transpiration=potential_transpiration,
-            rain=rain,
-            snow_melt=snow_melt,
+            potential_transpiration
         )  # first thing that evaporates is the intercepted water.
 
         timer.new_split("Interception")
 
         (
             groundwater_abstraction_m3,
-            channel_abstraction_m3,
+            channel_abstraction_m,
             return_flow,  # from all sources
             irrigation_loss_to_evaporation_m,
-            total_water_demand_loss_m3,
         ) = self.hydrology.water_demand.step(potential_evapotranspiration)
 
         timer.new_split("Demand")
@@ -267,14 +263,14 @@ class LandCover(Module):
         assert not np.isnan(interflow).any()
         assert not np.isnan(groundwater_recharge).any()
         assert not np.isnan(groundwater_abstraction_m3).any()
-        assert not np.isnan(channel_abstraction_m3).any()
+        assert not np.isnan(channel_abstraction_m).any()
         assert not np.isnan(open_water_evaporation).any()
 
         if __debug__:
             balance_check(
                 name="landcover_1",
                 how="cellwise",
-                influxes=[rain, snow_melt],
+                influxes=[self.HRU.var.Rain, self.HRU.var.SnowMelt],
                 outfluxes=[
                     self.HRU.var.natural_available_water_infiltration,
                     interception_evaporation,
@@ -327,8 +323,7 @@ class LandCover(Module):
                 name="landcover_3",
                 how="cellwise",
                 influxes=[
-                    rain,
-                    snow,
+                    self.HRU.var.precipitation_m_day,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
                 ],
@@ -351,8 +346,7 @@ class LandCover(Module):
                 name="landcover_4",
                 how="cellwise",
                 influxes=[
-                    rain,
-                    snow,
+                    self.HRU.var.precipitation_m_day,
                     self.HRU.var.actual_irrigation_consumption,
                     capillar,
                     irrigation_loss_to_evaporation_m,  # irrigation loss is coming from external sources
@@ -383,10 +377,8 @@ class LandCover(Module):
             self.hydrology.to_grid(HRU_data=runoff, fn="weightedmean"),
             groundwater_recharge,
             groundwater_abstraction_m3,
-            channel_abstraction_m3,
+            channel_abstraction_m,
             return_flow,
-            capillar,
-            total_water_demand_loss_m3,
         )
 
     @property
