@@ -69,14 +69,14 @@ class Hydrology:
         #     crs=4326,
         # )
 
-        fig, ax = plt.subplots(figsize=(10, 10))
+        # fig, ax = plt.subplots(figsize=(10, 10))
 
-        mean_discharge.plot(ax=ax, cmap="Blues", norm=mcolors.LogNorm(vmin=1))
+        # mean_discharge.plot(ax=ax, cmap="Blues", norm=mcolors.LogNorm(vmin=1))
 
-        ax.set_xlabel("Longitude")
-        ax.set_ylabel("Latitude")
+        # ax.set_xlabel("Longitude")
+        # ax.set_ylabel("Latitude")
 
-        plt.savefig(self.output_folder_evaluate / "mean_discharge_m3_per_s.svg")
+        # plt.savefig(self.output_folder_evaluate / "mean_discharge_m3_per_s.svg")
 
         evaluation_per_station = []
 
@@ -84,7 +84,7 @@ class Hydrology:
         k = 0
         for ID in tqdm(Q_obs.columns):
             k += 1
-            if k == 10:
+            if k == 50:
                 break
             # create a discharge timeseries dataframe
             discharge_Q_obs_df = Q_obs[ID]
@@ -254,6 +254,10 @@ class Hydrology:
                         "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
                     }
                 )
+
+        if len(evaluation_per_station) == 0:
+            print("No stations with sufficient data for validation.")
+            return
 
         evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
         evaluation_df.to_excel(
@@ -429,6 +433,40 @@ class Hydrology:
             # Inject the pako script into the map
             m.get_root().header.add_child(folium.Element(pako_js))
 
+            # Add global SVG decompression utility function to the map's header
+            global_decompression_js = """
+            <script>
+                window.gebDecompressAndDisplaySvg = function(compressedBase64, targetElementId) {
+                    const targetElement = document.getElementById(targetElementId);
+                    if (!targetElement) {
+                        console.error("Target element " + targetElementId + " not found for SVG.");
+                        return; // Exit if target element doesn't exist
+                    }
+                    try {
+                        if (typeof pako === 'undefined') {
+                            console.error("Pako library is not loaded!");
+                            targetElement.innerHTML = "<div style='color:red; padding:5px;'>Pako.js not loaded.</div>";
+                            return;
+                        }
+                        const compressedData = atob(compressedBase64);
+                        const byteArray = new Uint8Array(compressedData.length);
+                        for (let i = 0; i < compressedData.length; i++) {
+                            byteArray[i] = compressedData.charCodeAt(i);
+                        }
+                        const inflated = pako.inflate(byteArray);
+                        const decompressedData = new TextDecoder().decode(inflated);
+                        targetElement.innerHTML = decompressedData;
+                    } catch (err) {
+                        console.error("Error decompressing/displaying SVG for " + targetElementId + ":", err);
+                        targetElement.innerHTML = 
+                            "<div style='color:red; padding:10px; border:1px solid red;'>Error displaying image: " + 
+                            err.message + "</div>";
+                    }
+                };
+            </script>
+            """
+            m.get_root().header.add_child(folium.Element(global_decompression_js))
+
             # Create colormaps for R, KGE, and NSE (Red → Orange → Yellow → Blue → Green)
             colormap_r = cm.LinearColormap(
                 colors=[
@@ -526,55 +564,20 @@ class Hydrology:
                         buffer.getvalue()
                     ).decode("utf-8")
 
-                # Create an HTML popup with the 2 plots and JavaScript to decompress the images
+                # Create an HTML popup. The button's onclick will call the global function.
                 popup_html = f"""
                 <b>Station Name:</b> {station_name}<br>
                 <b>R:</b> {row["R"]:.2f}<br>
                 <b>KGE:</b> {row["KGE"]:.2f}<br>
                 <b>NSE:</b> {row["NSE"]:.2f}<br>
                 <b>Upstream Area Ratio:</b> {row["Q_obs_to_GEB_upstream_area_ratio"]:.2f}<br>
-                <div id="scatter_plot_{station_ID}"></div>
-                <div id="timeseries_plot_{station_ID}"></div>
-                
-                <script>
-                (function() {{
-                    function decompressAndDisplaySvg(compressedBase64, containerId) {{
-                        try {{
-                            const compressedData = atob(compressedBase64);
-                            
-                            const byteArray = new Uint8Array(compressedData.length);
-                            for (let i = 0; i < compressedData.length; i++) {{
-                                byteArray[i] = compressedData.charCodeAt(i);
-                            }}
-                            
-                            const inflated = pako.inflate(byteArray);
-                            
-                            const decompressedData = new TextDecoder().decode(inflated);
-                            
-                            document.getElementById(containerId).innerHTML = decompressedData;
-                        }} catch (err) {{
-                            console.error("Error decompressing data:", err);
-                            document.getElementById(containerId).innerHTML = "Error displaying image: " + err.message;
-                        }}
-                    }}
-                    
-                    setTimeout(function() {{
-                        try {{
-                            decompressAndDisplaySvg(
-                                "{encoded_image_scatter}",
-                                "scatter_plot_{station_ID}"
-                            );
-                            
-                            decompressAndDisplaySvg(
-                                "{encoded_image_time_series}",
-                                "timeseries_plot_{station_ID}"
-                            );
-                        }} catch (e) {{
-                            console.error("Failed to load plots:", e);
-                        }}
-                    }}, 100);
-                }})();
-                </script>
+                <div id="scatter_plot_{station_ID}" style="width:100%;"></div>
+                <div id="timeseries_plot_{station_ID}" style="width:100%;"></div>
+                <button onclick="
+                    window.gebDecompressAndDisplaySvg('{encoded_image_scatter}', 'scatter_plot_{station_ID}');
+                    window.gebDecompressAndDisplaySvg('{encoded_image_time_series}', 'timeseries_plot_{station_ID}');
+                    this.style.display='none';
+                ">Load Plots</button>
                 """
 
                 # Add R layer
@@ -644,24 +647,24 @@ class Hydrology:
             colormap_nse.add_to(m)
             colormap_upstream.add_to(m)
 
-            # Add the catchment shapefile as a GeoJSON layer
-            folium.GeoJson(
-                region_shapefile,
-                name="Catchment",
-                style_function=lambda x: {
-                    "fillColor": "blue",
-                    "color": "blue",
-                    "weight": 1,
-                    "fillOpacity": 0.2,
-                },
-            ).add_to(m)
+            # # Add the catchment shapefile as a GeoJSON layer
+            # folium.GeoJson(
+            #     region_shapefile,
+            #     name="Catchment",
+            #     style_function=lambda x: {
+            #         "fillColor": "blue",
+            #         "color": "blue",
+            #         "weight": 1,
+            #         "fillOpacity": 0.2,
+            #     },
+            # ).add_to(m)
 
             # Add rivers as a GeoJSON layer
-            folium.GeoJson(
-                rivers["geometry"],
-                name="Rivers",
-                style_function=lambda x: {"color": "blue", "weight": 1},
-            ).add_to(m)
+            # folium.GeoJson(
+            #     rivers["geometry"],
+            #     name="Rivers",
+            #     style_function=lambda x: {"color": "blue", "weight": 1},
+            # ).add_to(m)
 
             # Add a layer control to toggle layers
             folium.LayerControl().add_to(m)
