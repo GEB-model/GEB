@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from permetrics.regression import RegressionMetric
+from tqdm import tqdm
 
 from geb.workflows.io import to_zarr
 
@@ -22,7 +23,8 @@ class Hydrology:
     def evaluate_discharge_grid(self, correct_Q_obs=False):
         """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
         Correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the diff in upstream area
-        between the Q_obs station and the discharge from GEB."""
+        between the Q_obs station and the discharge from GEB.
+        """
 
         #  create folders
         eval_plot_folder = Path(self.output_folder_evaluate) / "discharge" / "plots"
@@ -69,7 +71,8 @@ class Hydrology:
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        mean_discharge.plot(ax=ax, cmap="Blues", vmax=1)
+        mean_discharge.plot(ax=ax, cmap="Blues", norm=mcolors.LogNorm(vmin=1))
+
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
 
@@ -77,12 +80,10 @@ class Hydrology:
             self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
         )
 
-        evaluation_df = pd.DataFrame(
-            columns=["station_name", "x", "y", "KGE", "NSE", "R"]
-        )
+        evaluation_per_station = []
 
         # start validation loop over Q_obs stations
-        for ID in Q_obs.columns:
+        for ID in tqdm(Q_obs.columns):
             # create a discharge timeseries dataframe
             discharge_Q_obs_df = Q_obs[ID]
             discharge_Q_obs_df.columns = ["Q"]
@@ -94,7 +95,6 @@ class Hydrology:
             Q_obs_to_GEB_upstream_area_ratio = snapped_locations.loc[
                 ID
             ].Q_obs_to_GEB_upstream_area_ratio
-            print("validating station %s" % Q_obs_station_name)
 
             def create_validation_df():
                 """create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station"""
@@ -156,7 +156,7 @@ class Hydrology:
 
                 KGE, NSE, R = calculate_validation_metrics()
 
-                def plot_validation_graphs():
+                def plot_validation_graphs(ID):
                     """plot the validation results for the current station"""
 
                     # scatter plot
@@ -184,7 +184,7 @@ class Hydrology:
                     )
 
                     plt.savefig(
-                        eval_plot_folder / f"scatter_plot_{Q_obs_station_name}.png",
+                        eval_plot_folder / f"scatter_plot_{ID}.png",
                         dpi=300,
                         bbox_inches="tight",
                     )
@@ -232,35 +232,34 @@ class Hydrology:
                         f"GEB discharge vs observations for station {Q_obs_station_name}"
                     )
                     plt.savefig(
-                        eval_plot_folder / f"timeseries_plot_{Q_obs_station_name}.png",
+                        eval_plot_folder / f"timeseries_plot_{ID}.png",
                         dpi=300,
                         bbox_inches="tight",
                     )
                     plt.show()
                     plt.close()
 
-                plot_validation_graphs()
+                plot_validation_graphs(ID)
 
                 # attach to the evaluation dataframe
-                evaluation_df = pd.concat(
-                    [
-                        evaluation_df,
-                        pd.DataFrame(
-                            [
-                                {
-                                    "station_name": Q_obs_station_name,
-                                    "x": Q_obs_station_coords[0],
-                                    "y": Q_obs_station_coords[1],
-                                    "Q_obs_to_GEB_upstream_area_ratio": Q_obs_to_GEB_upstream_area_ratio,
-                                    "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
-                                    "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
-                                    "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
-                                }
-                            ]
-                        ),
-                    ],
-                    ignore_index=True,
-                )  # add the new row to the dataframe
+                evaluation_per_station.append(
+                    {
+                        "station_ID": ID,
+                        "station_name": Q_obs_station_name,
+                        "x": Q_obs_station_coords[0],
+                        "y": Q_obs_station_coords[1],
+                        "Q_obs_to_GEB_upstream_area_ratio": Q_obs_to_GEB_upstream_area_ratio,
+                        "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
+                        "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
+                        "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
+                    }
+                )
+
+        evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
+        evaluation_df.to_excel(
+            eval_result_folder / "evaluation_metrics.xlsx",
+            index=False,
+        )
 
         # Save evaluation metrics as as excel and parquet file
         evaluation_gdf = gpd.GeoDataFrame(
@@ -270,11 +269,6 @@ class Hydrology:
         )  # create a geodataframe from the evaluation dataframe
         evaluation_gdf.to_parquet(
             eval_result_folder / "evaluation_metrics.geoparquet",
-        )
-
-        evaluation_df.to_excel(
-            eval_result_folder / "evaluation_metrics.xlsx",
-            index=False,
         )
 
         # plot the evaluation metrics (R, KGE, NSE) on a 1x3 subplot
@@ -418,8 +412,7 @@ class Hydrology:
 
         plot_validation_map()
 
-        # Create a Folium map
-        def create_folium_map():
+        def create_folium_map(evaluation_gdf):
             """Create a Folium map with evaluation results and station markers."""
 
             # Create a Folium map centered on the mean coordinates of the stations
@@ -492,16 +485,14 @@ class Hydrology:
             layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
 
             # Add markers for R, KGE, and NSE to their respective layers
-            for _, row in evaluation_gdf.iterrows():
+            for station_ID, row in evaluation_gdf.iterrows():
                 coords = [row.geometry.y, row.geometry.x]
                 station_name = row["station_name"]
 
                 # Generate scatter plot for the station
-                scatter_plot_path = (
-                    eval_plot_folder / f"scatter_plot_{station_name}.png"
-                )
+                scatter_plot_path = eval_plot_folder / f"scatter_plot_{station_ID}.png"
                 time_series_plot_path = (
-                    eval_plot_folder / f"timeseries_plot_{station_name}.png"
+                    eval_plot_folder / f"timeseries_plot_{station_ID}.png"
                 )
                 # Encode the scatter plot image as a base64 string
                 with open(scatter_plot_path, "rb") as img_file:
@@ -619,10 +610,6 @@ class Hydrology:
             # Display the map in a Jupyter Notebook (if applicable)
             return m
 
-        create_folium_map()
+        create_folium_map(evaluation_gdf)
 
         print("Discharge evaluation dashboard created.")
-
-        # https://hess.copernicus.org/articles/27/1/2023/
-        # https://essd.copernicus.org/articles/12/2043/2020/
-        # https://www.sciencedirect.com/science/article/pii/S095965262302440X

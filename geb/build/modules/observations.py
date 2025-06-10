@@ -312,9 +312,6 @@ class Observations:
             index="time", columns="station_ID", values="discharge"
         )
         discharge_df.dropna(how="all", inplace=True)  # remove rows that are all nan
-        self.set_table(
-            discharge_df, name="discharge/Q_obs"
-        )  # save the discharge data as a table
 
         # Snapping to river and validation of discharges
         # create list for results of snapping
@@ -539,6 +536,13 @@ class Observations:
             ),
             crs="EPSG:4326",  # Set the coordinate reference system
         ).set_index("Q_obs_station_ID")
+
+        # drop the columns that have not associated snapped stations
+        discharge_df = discharge_df[discharge_snapping_gdf.index]
+
+        self.set_table(
+            discharge_df, name="discharge/Q_obs"
+        )  # save the discharge data as a table
 
         self.set_geoms(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"

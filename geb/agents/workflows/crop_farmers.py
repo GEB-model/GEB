@@ -337,6 +337,8 @@ def withdraw_groundwater(
         groundwater_abstraction_cell_m3 = min(
             groundwater_abstraction_cell_m3, remaining_groundwater_m3
         )
+        # ensure groundwater abstraction is non-negative
+        groundwater_abstraction_cell_m3 = max(groundwater_abstraction_cell_m3, 0)
 
         groundwater_abstraction_m3[grid_cell] += groundwater_abstraction_cell_m3
 

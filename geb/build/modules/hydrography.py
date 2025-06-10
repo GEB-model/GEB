@@ -72,7 +72,9 @@ def get_rivers(data_catalog, subbasin_ids):
     return rivers.set_index("COMID")
 
 
-def create_river_raster_from_river_lines(rivers, target, column=None, index=None):
+def create_river_raster_from_river_lines(
+    rivers, target, original_upstream_area, column=None, index=None
+):
     if column is None and (index is None or index is True):
         values = rivers.index
     elif column is not None:
@@ -89,6 +91,10 @@ def create_river_raster_from_river_lines(rivers, target, column=None, index=None
         transform=target.rio.transform(),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
     )
+
+    # check that upstream area of all rivers is larger than 25 km^2. But because there are some rounding errors, we use a threshold of 24 km^2
+    assert np.nanmin(original_upstream_area.values[river_raster != -1]) > 24 * 1e6
+
     return river_raster
 
 
@@ -345,7 +351,7 @@ class Hydrography:
         )
 
         river_raster_HD = create_river_raster_from_river_lines(
-            rivers, original_d8_elevation
+            rivers, original_d8_elevation, original_upstream_area
         )
         river_raster_LR = river_raster_HD.ravel()[
             self.grid["idxs_outflow"].values.ravel()
@@ -381,6 +387,11 @@ class Hydrography:
             upstream_area = upstream_area_data[ys, xs]
             up_to_downstream_ids = np.argsort(upstream_area)
             upstream_area_sorted = upstream_area[up_to_downstream_ids]
+
+            assert (river_raster_LR[ys, xs] == COMID).all(), (
+                f"River segment {COMID} has inconsistent raster values"
+            )
+
             ys = ys[up_to_downstream_ids]
             xs = xs[up_to_downstream_ids]
             assert ys.size > 0, "No xy coordinates found for river segment"
