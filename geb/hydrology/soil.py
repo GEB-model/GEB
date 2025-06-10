@@ -1210,7 +1210,7 @@ class Soil(Module):
                     pfModel.plantFATE_model.config.continueFrom_stateFile = str(
                         self.model.simulation_root
                         / ".."
-                        / "spinup"
+                        / self.model.config["general"]["spinup_name"]
                         / "plantFATE"
                         / f"cell_{i}"
                         / "pf_saved_state.txt"
