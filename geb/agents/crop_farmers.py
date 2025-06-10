@@ -341,6 +341,13 @@ class CropFarmers(AgentBaseClass):
             self.model.files["array"]["agents/farmers/intention_factor"]
         )
 
+        self.var.interest_rate = DynamicArray(
+            n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=0.05
+        )
+        self.var.interest_rate[:] = load_array(
+            self.model.files["array"]["agents/farmers/interest_rate"]
+        )
+
         # Load the region_code of each farmer.
         self.var.region_id = DynamicArray(
             input_array=load_array(
@@ -1118,7 +1125,7 @@ class CropFarmers(AgentBaseClass):
             groundwater_abstraction_m3,
         ) = abstract_water(
             activation_order=self.activation_order_by_elevation.data,
-            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+            field_indices_by_farmer=self.var.field_indices_by_farmer,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
             surface_irrigated=self.surface_irrigated,
@@ -1726,7 +1733,7 @@ class CropFarmers(AgentBaseClass):
         # interest_rate = self.get_value_per_farmer_from_region_id(
         #     self.var.lending_rate, self.model.current_time
         # )
-        interest_rate = np.full(self.var.n, 0.05, dtype=np.float32)
+        interest_rate = self.var.interest_rate.data
 
         # Compute the annual cost of the loan using the interest rate and loan duration
         annual_cost_microcredit = total_loan * (
@@ -1945,11 +1952,6 @@ class CropFarmers(AgentBaseClass):
             assert cultivation_cost.shape[0] == len(self.model.regions)
             assert cultivation_cost.shape[1] == len(self.var.crop_ids)
 
-        # interest_rate = self.get_value_per_farmer_from_region_id(
-        #     self.var.lending_rate, self.model.current_time
-        # )
-        interest_rate = np.full(self.var.n, 0.05, dtype=np.float32)
-
         plant_map, farmers_selling_land = plant(
             n=self.var.n,
             day_index=self.model.current_time.timetuple().tm_yday - 1,  # 0-indexed
@@ -1964,7 +1966,7 @@ class CropFarmers(AgentBaseClass):
             field_size_per_farmer=self.field_size_per_farmer.data,
             all_loans_annual_cost=self.var.all_loans_annual_cost.data,
             loan_tracker=self.var.loan_tracker.data,
-            interest_rate=interest_rate,
+            interest_rate=self.var.interest_rate.data,
             farmers_going_out_of_business=False,
         )
         if farmers_selling_land.size > 0:
@@ -3069,10 +3071,7 @@ class CropFarmers(AgentBaseClass):
         # Placeholder
         costs_irrigation_system = m2_adaptation_costs * self.field_size_per_farmer
 
-        # interest_rate = self.get_value_per_farmer_from_region_id(
-        #     self.var.lending_rate, self.model.current_time
-        # )
-        interest_rate = 0.05
+        interest_rate = self.var.interest_rate.data
 
         annual_cost = costs_irrigation_system * (
             interest_rate
@@ -3206,10 +3205,7 @@ class CropFarmers(AgentBaseClass):
         total_costs = np.zeros(self.var.n, dtype=np.float32)
         total_costs[adapted_irr_eff] = 2 * self.field_size_per_farmer * 0.5
 
-        # interest_rate = self.get_value_per_farmer_from_region_id(
-        #     self.var.lending_rate, self.model.current_time
-        # )
-        interest_rate = 0.05
+        interest_rate = self.var.interest_rate.data
 
         annual_cost = total_costs * (
             interest_rate
@@ -3337,7 +3333,7 @@ class CropFarmers(AgentBaseClass):
         """
 
         loan_duration = self.var.insurance_duration
-        interest_rate = 0.05
+        interest_rate = self.var.interest_rate.data
 
         # Determine the income of each farmer with or without insurance
         # Profits without insurance
@@ -3776,7 +3772,7 @@ class CropFarmers(AgentBaseClass):
         # Calculate annuity factor for loan repayment using the annuity formula
         # A = P * [r(1+r)^n] / [(1+r)^n -1], where:
         # A = annual payment, P = principal amount (install_cost), r = interest rate, n = loan duration
-        interest_rate = 0.05
+        interest_rate = self.var.interest_rate.data
 
         n = loan_duration
         annuity_factor = (interest_rate * (1 + interest_rate) ** n) / (

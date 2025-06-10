@@ -638,11 +638,16 @@ class fairSTREAMModel(GEBModel):
 
         region_ids = np.unique(region_id)
         size_classes = np.unique(farm_size_class)
+        rate_array = (
+            np.array([16.5, 11.5, 10.0, 7.75, 6.5, 6.5, 6.5, 5.0, 3.0, 3.0]) / 100
+        )
+        interest_rates = np.full(n_farmers, 0.05, dtype=np.float32)
 
         WELL_DEPTH_THRESHOLD = 80
 
         for region_id_class in region_ids:
             for size_class in size_classes:
+                interest_rate_per_agent = rate_array[size_class]
                 agent_subset = np.where(
                     (region_id_class == region_id) & (size_class == farm_size_class)
                 )[0]
@@ -666,6 +671,7 @@ class fairSTREAMModel(GEBModel):
                 )
 
                 adaptations[well_irrigated_agents, WELL_ADAPTATION] = 1
+                interest_rates[agent_subset] = interest_rate_per_agent
 
                 # not_yet_irrigated_agents = np.where(
                 #     adaptations[agent_subset, SURFACE_IRRIGATION_EQUIPMENT] == -1
@@ -829,6 +835,7 @@ class fairSTREAMModel(GEBModel):
                 ]
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
+        self.set_array(interest_rates, name="agents/farmers/interest_rate")
         self.set_array(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         self.set_array(
             crop_calendar_rotation_years,

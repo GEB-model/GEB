@@ -683,6 +683,7 @@ class Crops:
 
         # assert no nan values in costs
         data = data.drop(columns=["_crop_price_inflation"])
+        data = data.drop(columns=["_crop_price_LCU_USD"])
         return data
 
     def setup_cultivation_costs(
