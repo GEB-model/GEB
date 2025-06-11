@@ -1,9 +1,8 @@
 import base64
-import gzip  # Add gzip for compression
-import io
 from pathlib import Path
 
 import branca.colormap as cm
+import brotli
 import contextily as ctx
 import folium
 import geopandas as gpd
@@ -426,12 +425,13 @@ class Hydrology:
             ]
             m = folium.Map(location=map_center, zoom_start=8, tiles="CartoDB positron")
 
-            # Add pako library for gzip decompression (minified version)
-            pako_js = """
-            <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+            # Add brotli-js library for brotli decompression (minified version)
+            # We'll specifically load the 'decode.min.js' which exposes BrotliDecode globally
+            brotli_js = """
+            <script src="https://cdn.jsdelivr.net/npm/brotli-js@1.3.1/decode.min.js"></script>
             """
-            # Inject the pako script into the map
-            m.get_root().header.add_child(folium.Element(pako_js))
+            # Inject the brotli-js script into the map
+            m.get_root().header.add_child(folium.Element(brotli_js))
 
             # Add global SVG decompression utility function to the map's header
             global_decompression_js = """
@@ -443,19 +443,26 @@ class Hydrology:
                         return; // Exit if target element doesn't exist
                     }
                     try {
-                        if (typeof pako === 'undefined') {
-                            console.error("Pako library is not loaded!");
-                            targetElement.innerHTML = "<div style='color:red; padding:5px;'>Pako.js not loaded.</div>";
-                            return;
-                        }
+                        // Check for BrotliDecode, which is typically exposed by decode.min.js
                         const compressedData = atob(compressedBase64);
                         const byteArray = new Uint8Array(compressedData.length);
                         for (let i = 0; i < compressedData.length; i++) {
                             byteArray[i] = compressedData.charCodeAt(i);
                         }
-                        const inflated = pako.inflate(byteArray);
-                        const decompressedData = new TextDecoder().decode(inflated);
+                        
+                        // Decompress using BrotliDecode
+                        const decompressedUint8Array = BrotliDecode(byteArray); 
+                        const decompressedData = new TextDecoder().decode(decompressedUint8Array);
+                        
                         targetElement.innerHTML = decompressedData;
+
+                        // Ensure the SVG scales correctly
+                        const svgElement = targetElement.querySelector('svg');
+                        if (svgElement) {
+                            svgElement.style.width = '100%';
+                            svgElement.style.height = 'auto';
+                            svgElement.style.maxWidth = '100%';
+                        }
                     } catch (err) {
                         console.error("Error decompressing/displaying SVG for " + targetElementId + ":", err);
                         targetElement.innerHTML = 
@@ -543,25 +550,24 @@ class Hydrology:
                 # Compress and encode the scatter plot image
                 with open(scatter_plot_path, "rb") as img_file:
                     scatter_data = img_file.read()
-                    # Compress with gzip
-                    buffer = io.BytesIO()
-                    with gzip.GzipFile(fileobj=buffer, mode="wb") as f:
-                        f.write(scatter_data)
+
                     # Encode the compressed data
-                    encoded_image_scatter = base64.b64encode(buffer.getvalue()).decode(
-                        "utf-8"
-                    )
+                    compressed_scatter_data = brotli.compress(scatter_data, quality=11)
+
+                    encoded_image_scatter = base64.b64encode(
+                        compressed_scatter_data
+                    ).decode("utf-8")
 
                 # Compress and encode the time series plot
                 with open(time_series_plot_path, "rb") as img_file:
                     time_series_data = img_file.read()
-                    # Compress with gzip
-                    buffer = io.BytesIO()
-                    with gzip.GzipFile(fileobj=buffer, mode="wb") as f:
-                        f.write(time_series_data)
                     # Encode the compressed data
+                    compressed_time_series_data = brotli.compress(
+                        time_series_data, quality=11
+                    )
+
                     encoded_image_time_series = base64.b64encode(
-                        buffer.getvalue()
+                        compressed_time_series_data
                     ).decode("utf-8")
 
                 # Create an HTML popup. The button's onclick will call the global function.
