@@ -31,7 +31,7 @@ from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
     compute_premiums_and_best_contracts_numba,
-    crop_profit_difference_njit,
+    crop_profit_difference_njit_parallel,
     farmer_command_area,
     find_most_similar_index,
     get_farmer_groundwater_depth,
@@ -2751,6 +2751,8 @@ class CropFarmers(AgentBaseClass):
         # Set variable which indicates all possible crop options
         unique_crop_calendars = np.unique(self.var.crop_calendar[:, :, 0], axis=0)
 
+        timer_crops = TimingModule("crops_adaptation")
+
         (
             total_profits,
             profits_no_event,
@@ -2760,7 +2762,7 @@ class CropFarmers(AgentBaseClass):
         ) = self.profits_SEUT_crops(
             unique_crop_calendars, farmer_yield_probability_relation
         )
-
+        timer_crops.new_split("profit_difference")
         total_annual_costs_m2 = (
             self.var.all_loans_annual_cost[:, -1, 0] / self.field_size_per_farmer
         )
@@ -2828,7 +2830,7 @@ class CropFarmers(AgentBaseClass):
             )
 
         assert np.any(SEUT_do_nothing != -1) or np.any(SEUT_crop_options != -1)
-
+        timer_crops.new_split("SEUT")
         # Determine the best adaptation option
         best_option_SEUT = np.max(SEUT_crop_options, axis=1)
         chosen_option = np.argmax(SEUT_crop_options, axis=1)
@@ -2885,6 +2887,8 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_SPEI_probability[SEUT_adaptation_decision, :] = (
             self.var.yearly_SPEI_probability[new_id_final, :]
         )
+        timer_crops.new_split("final steps")
+        print(timer_crops)
 
     def adapt_irrigation_well(
         self,
@@ -3881,7 +3885,7 @@ class CropFarmers(AgentBaseClass):
         (
             profit_gains,
             new_farmer_id,
-        ) = crop_profit_difference_njit(
+        ) = crop_profit_difference_njit_parallel(
             yearly_profits=self.var.yearly_income.data
             / self.field_size_per_farmer[..., None],
             crop_elevation_group=crop_elevation_group,

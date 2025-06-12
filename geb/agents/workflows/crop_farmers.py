@@ -860,8 +860,8 @@ def find_most_similar_index(target_series, yield_ratios, groups):
     return indices[min_idx]
 
 
-@njit(cache=True)
-def crop_profit_difference_njit(
+@njit(cache=True, parallel=True)
+def crop_profit_difference_njit_parallel(
     yearly_profits,
     crop_elevation_group,
     unique_crop_groups,
@@ -872,138 +872,104 @@ def crop_profit_difference_njit(
     past_window,
 ):
     """
-    For each unique crop group (rotation + metadata),
-    consider all possible 'adapted' counterparts (rotations that differ)
-    and compute the weighted profit gains for switching.
-    The profits of the last `past_window` years are averaged using weights,
-    where the most recent year gets a higher weight (e.g. 0.5) than older years (e.g. 0.2).
+    Parallelized only over unique crop groups; everything else follows your original logic exactly.
     """
     n_groups = len(unique_crop_groups)
     n_calendars = len(unique_crop_calendars)
-    # Instead of yield ratios per drought scenario, we now work with scalar weighted profits.
-    unique_profit_gain = np.full(
-        (n_groups, n_calendars),
-        0.0,
-        dtype=np.float32,
-    )
+    n_rotation = unique_crop_calendars.shape[1]
 
-    # Store the best "farmer id" or row index to switch to
-    id_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    unique_profit_gain = np.full((n_groups, n_calendars), 0.0, dtype=np.float32)
+    id_to_switch_to = np.full((n_groups, n_calendars), -1, dtype=np.int32)
 
-    # Precompute weights for the past_window years.
+    # Precompute weights
     weights = np.empty(past_window, dtype=yearly_profits.dtype)
     weight_total = 0.0
     if past_window > 1:
         weight_step = (0.5 - 0.2) / (past_window - 1)
     else:
         weight_step = 0.0
+
     for j in range(past_window):
-        weights[j] = 0.5 - j * weight_step
-        weight_total += weights[j]
+        w = 0.5 - j * weight_step
+        weights[j] = w
+        weight_total += w
 
-    # the first n_rotation columns correspond to the crop rotation.
-    n_rotation = unique_crop_calendars.shape[1]
-
-    for group_id in range(n_groups):
+    # Parallel only over groups
+    for group_id in prange(n_groups):
         unique_group = unique_crop_groups[group_id]
-
-        # Which farmers in crop_elevation_group match this unique_group?
         unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
 
-        # Identify candidate rotations that differ from current rotation.
-        mask = np.empty(n_calendars, dtype=np.bool_)
+        # build mask & collect candidate calendar‐indices
+        candidate_idxs = np.empty(n_calendars, dtype=np.int32)
+        num_cand = 0
         for i in range(n_calendars):
             match = True
             for j in range(n_rotation):
                 if unique_crop_calendars[i, j] != unique_group[j]:
                     match = False
                     break
-            mask[i] = not match
+            if not match:
+                candidate_idxs[num_cand] = i
+                num_cand += 1
 
-        # Collect all candidate rotations that differ from current rotation.
-        candidate_crop_rotations = []
-        for i in range(n_calendars):
-            if mask[i]:
-                candidate_crop_rotations.append(unique_crop_calendars[i])
-        num_candidates = len(candidate_crop_rotations)
-
-        # The metadata columns start at index n_rotation.
         metadata = unique_group[n_rotation:]
 
-        # Evaluate each candidate rotation.
-        for crop_id in range(num_candidates):
-            unique_rotation = candidate_crop_rotations[crop_id]
+        # sequentially over each candidate (same order as original)
+        for c in range(num_cand):
+            cal_idx = candidate_idxs[c]
+            unique_rotation = unique_crop_calendars[cal_idx]
 
-            # Build the 'other crop' group: [candidate rotation + same metadata].
-            unique_group_other_crop = np.concatenate((unique_rotation, metadata))
+            # form the “other” group key
+            other_key = np.empty(unique_group.shape[0], unique_group.dtype)
+            for k in range(n_rotation):
+                other_key[k] = unique_rotation[k]
+            for k in range(n_rotation, other_key.shape[0]):
+                other_key[k] = metadata[k - n_rotation]
 
-            # Which farmers have 'other crop' group
-            unique_farmer_groups_other_crop = find_matching_rows(
-                crop_elevation_group, unique_group_other_crop
-            )
+            unique_farmer_other = find_matching_rows(crop_elevation_group, other_key)
 
-            # Only if that group exists in the data, compute profit gains.
-            if np.any(unique_farmer_groups_other_crop):
-                # Compute the weighted profit average for the current group.
-                current_sum = 0.0
-                count_current = 0
-                for i in range(unique_farmer_groups.size):
-                    if unique_farmer_groups[i]:
-                        # Compute weighted average over the last `past_window` years.
-                        weighted_profit = 0.0
-                        for j in range(past_window):
-                            weighted_profit += yearly_profits[i, j] * weights[j]
-                        weighted_profit /= weight_total
-                        current_sum += weighted_profit
-                        count_current += 1
-                if count_current > 0:
-                    current_profit_avg = current_sum / count_current
-                else:
-                    current_profit_avg = 0.0
+            if not np.any(unique_farmer_other):
+                continue
 
-                # Compute the weighted profit average for the candidate group.
-                candidate_sum = 0.0
-                count_candidate = 0
-                for i in range(unique_farmer_groups_other_crop.size):
-                    if unique_farmer_groups_other_crop[i]:
-                        weighted_profit = 0.0
-                        for j in range(past_window):
-                            weighted_profit += yearly_profits[i, j] * weights[j]
-                        weighted_profit /= weight_total
-                        candidate_sum += weighted_profit
-                        count_candidate += 1
-                if count_candidate > 0:
-                    candidate_profit_avg = candidate_sum / count_candidate
-                else:
-                    candidate_profit_avg = 0.0
+            # current group weighted average
+            current_sum = 0.0
+            count_cur = 0
+            for i in range(unique_farmer_groups.size):
+                if unique_farmer_groups[i]:
+                    wp = 0.0
+                    for j in range(past_window):
+                        wp += yearly_profits[i, j] * weights[j]
+                    current_sum += wp / weight_total
+                    count_cur += 1
+            current_avg = current_sum / count_cur if count_cur > 0 else 0.0
 
-                # The difference = potential profit gain.
-                profit_gain = candidate_profit_avg - current_profit_avg
+            # candidate group weighted average
+            cand_sum = 0.0
+            count_cand = 0
+            for i in range(unique_farmer_other.size):
+                if unique_farmer_other[i]:
+                    wp = 0.0
+                    for j in range(past_window):
+                        wp += yearly_profits[i, j] * weights[j]
+                    cand_sum += wp / weight_total
+                    count_cand += 1
+            cand_avg = cand_sum / count_cand if count_cand > 0 else 0.0
 
-                # find the best matching agent.
-                if profit_gain != profit_gain:  # NaN check
-                    profit_gain = 0.0
-                else:
-                    id_to_switch_to[group_id, crop_id] = find_most_similar_index(
-                        profit_gain,
-                        yearly_profits,
-                        unique_farmer_groups_other_crop,
-                    )
+            gain = cand_avg - current_avg
+            if gain != gain:  # NaN check
+                gain = 0.0
+            else:
+                id_to_switch_to[group_id, c] = find_most_similar_index(
+                    gain, yearly_profits, unique_farmer_other
+                )
 
-                unique_profit_gain[group_id, crop_id] = profit_gain
+            unique_profit_gain[group_id, c] = gain
 
-    # Re-index the results for the actual farmers.
+    # Re‐index per‐farmer
     gains_adaptation = unique_profit_gain[group_indices, :]
     new_farmer_id = id_to_switch_to[group_indices, :]
 
-    return (
-        gains_adaptation,
-        new_farmer_id,
-    )
+    return gains_adaptation, new_farmer_id
 
 
 @njit
