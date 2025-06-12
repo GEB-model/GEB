@@ -23,7 +23,6 @@ import numpy as np
 from honeybees.library.raster import write_to_array
 
 from geb.HRUs import load_grid
-from geb.hydrology.routing import calculate_river_storage_from_discharge
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
@@ -66,14 +65,7 @@ class WaterDemand(Module):
         )
 
         available_channel_storage_m3 = (
-            calculate_river_storage_from_discharge(
-                self.grid.var.discharge_m3_s,
-                self.grid.var.river_alpha,
-                self.grid.var.river_length,
-                self.hydrology.routing.var.river_beta,
-                self.grid.var.waterBodyID,
-            )
-            * 0.9
+            self.hydrology.routing.router.get_available_storage()
         )
         available_channel_storage_m3[self.grid.var.waterBodyID != -1] = 0.0
 
@@ -95,6 +87,8 @@ class WaterDemand(Module):
 
     def step(self, potential_evapotranspiration):
         timer = TimingModule("Water demand")
+
+        total_water_demand_loss_m3 = 0
 
         (
             domestic_water_demand_per_household,
@@ -166,15 +160,22 @@ class WaterDemand(Module):
         self.hydrology.grid.domestic_withdrawal_m3 += self.withdraw(
             available_groundwater_m3, domestic_water_demand_m3
         )  # withdraw from groundwater
-        domestic_return_flow_m = self.hydrology.grid.M3toM(
-            self.hydrology.grid.domestic_withdrawal_m3 * (1 - domestic_water_efficiency)
+        domestic_return_flow_m3 = self.hydrology.grid.domestic_withdrawal_m3 * (
+            1 - domestic_water_efficiency
         )
+        domestic_return_flow_m = domestic_return_flow_m3 / self.grid.var.cell_area
+
+        total_water_demand_loss_m3 += (
+            self.hydrology.grid.domestic_withdrawal_m3 - domestic_return_flow_m3
+        ).sum()
 
         # 2. industry (surface + ground)
         industry_water_demand = self.hydrology.to_grid(
             HRU_data=industry_water_demand, fn="weightedmean"
         )
-        industry_water_demand_m3 = self.hydrology.grid.MtoM3(industry_water_demand)
+        industry_water_demand_m3 = (
+            industry_water_demand * self.hydrology.grid.var.cell_area
+        )
         del industry_water_demand
 
         self.hydrology.grid.industry_withdrawal_m3 = self.withdraw(
@@ -183,24 +184,36 @@ class WaterDemand(Module):
         self.hydrology.grid.industry_withdrawal_m3 += self.withdraw(
             available_groundwater_m3, industry_water_demand_m3
         )  # withdraw from groundwater
-        industry_return_flow_m = self.hydrology.grid.M3toM(
-            self.hydrology.grid.industry_withdrawal_m3 * (1 - industry_water_efficiency)
+        industry_return_flow_m3 = self.hydrology.grid.industry_withdrawal_m3 * (
+            1 - industry_water_efficiency
         )
+        industry_return_flow_m = industry_return_flow_m3 / self.grid.var.cell_area
+
+        total_water_demand_loss_m3 += (
+            self.hydrology.grid.industry_withdrawal_m3 - industry_return_flow_m3
+        ).sum()
 
         # 3. livestock (surface)
         livestock_water_demand = self.hydrology.to_grid(
             HRU_data=livestock_water_demand, fn="weightedmean"
         )
-        livestock_water_demand_m3 = self.hydrology.grid.MtoM3(livestock_water_demand)
+        livestock_water_demand_m3 = (
+            livestock_water_demand * self.hydrology.grid.var.cell_area
+        )
         del livestock_water_demand
 
         self.hydrology.grid.livestock_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, livestock_water_demand_m3
         )  # withdraw from surface water
-        livestock_return_flow_m = self.hydrology.grid.M3toM(
-            self.hydrology.grid.livestock_withdrawal_m3
-            * (1 - livestock_water_efficiency)
+        livestock_return_flow_m3 = self.hydrology.grid.livestock_withdrawal_m3 * (
+            1 - livestock_water_efficiency
         )
+        livestock_return_flow_m = livestock_return_flow_m3 / self.grid.var.cell_area
+
+        total_water_demand_loss_m3 += (
+            self.hydrology.grid.livestock_withdrawal_m3 - livestock_return_flow_m3
+        ).sum()
+
         timer.new_split("Water withdrawal")
 
         # 4. irrigation (surface + reservoir + ground)
@@ -243,8 +256,12 @@ class WaterDemand(Module):
 
         assert (self.HRU.var.actual_irrigation_consumption + 1e-5 >= 0).all()
 
+        actual_irrigation_consumption_m3 = (
+            self.HRU.var.actual_irrigation_consumption * self.HRU.var.cell_area
+        )
+
         self.hydrology.grid.irrigation_consumption_m3 = self.hydrology.to_grid(
-            HRU_data=self.HRU.MtoM3(self.HRU.var.actual_irrigation_consumption),
+            HRU_data=actual_irrigation_consumption_m3,
             fn="sum",
         )
 
@@ -310,7 +327,8 @@ class WaterDemand(Module):
 
         return (
             groundwater_abstraction_m3,
-            channel_abstraction_m3 / self.hydrology.grid.var.cell_area,
+            channel_abstraction_m3,
             return_flow,  # from all sources, re-added in routing
             irrigation_loss_to_evaporation_m,
+            total_water_demand_loss_m3,
         )

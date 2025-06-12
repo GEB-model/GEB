@@ -942,7 +942,10 @@ class Forcing:
 
         download_args = {
             "folder": self.preprocessing_dir / "climate" / "ERA5",
-            "start_date": self.start_date,
+            "start_date": self.start_date
+            - relativedelta(
+                years=1
+            ),  # include one year before the start date for SPEI calculation
             "end_date": self.end_date,
             "bounds": target.raster.bounds,
             "logger": self.logger,
@@ -1658,7 +1661,7 @@ class Forcing:
         self,
         calibration_period_start: date = date(1981, 1, 1),
         calibration_period_end: date = date(2010, 1, 1),
-        window: int = 12,
+        window_months: int = 12,
     ):
         """
         Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
@@ -1679,10 +1682,17 @@ class Forcing:
             The start time of the reSPEI data in ISO 8601 format (YYYY-MM-DD).
         calibration_period_end : date
             The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
-        window : int
+        window_months : int
             The window size in months for the SPEI calculation. Default is 12 months.
         """
         self.logger.info("setting up SPEI...")
+
+        assert window_months <= 12, (
+            "window_months must be less than or equal to 12 (otherwise we run out of climate data)"
+        )
+        assert window_months >= 1, (
+            "window_months must be greater than or equal to 1 (otherwise we have no sliding window)"
+        )
 
         # assert input data have the same coordinates
         assert np.array_equal(
@@ -1766,10 +1776,10 @@ class Forcing:
             # a non-zero floc may better fit the distribution. However, this is not typical in routine applications.
             SPEI = xci.standardized_precipitation_evapotranspiration_index(
                 wb=water_budget,
-                cal_start=calibration_period_start,
-                cal_end=calibration_period_end,
+                cal_start=calibration_period_start.strftime("%Y-%m-%d"),
+                cal_end=calibration_period_end.strftime("%Y-%m-%d"),
                 freq=None,
-                window=window,
+                window=window_months,
                 dist="fisk",  # log-logistic distribution
                 method="APP",  # approximative method
                 fitkwargs={
@@ -1778,7 +1788,7 @@ class Forcing:
             ).astype(np.float32)
 
             # remove all nan values as a result of the sliding window
-            SPEI = SPEI.isel(time=slice(window - 1, -1))
+            SPEI = SPEI.isel(time=slice(window_months - 1, -1))
 
             with tempfile.TemporaryDirectory() as tmp_spei_folder:
                 tmp_spei_file = Path(tmp_spei_folder) / "tmp_spei_file.zarr"

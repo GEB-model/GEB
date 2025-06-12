@@ -67,10 +67,19 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def restore(self, store_location: str, timestep: int) -> None:
         self.store.load(store_location)
+
+        # restore the heads of the groundwater model
         self.hydrology.groundwater.modflow.restore(self.hydrology.grid.var.heads)
+
+        # restore the discharge from the store
+        self.hydrology.routing.router.Q_prev = (
+            self.hydrology.routing.grid.var.discharge_m3_s.copy()
+        )
         self.current_timestep = timestep
 
-    def multiverse(self):
+    def multiverse(
+        self, return_mean_discharge: bool = False
+    ) -> None | dict[str, float]:
         # copy current state of timestep and time
         store_timestep = copy.copy(self.current_timestep)
 
@@ -82,13 +91,17 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         forecasts = xr.open_dataset(
             self.input_folder
+            / "other"
             / "climate"
             / "forecasts"
-            / f"{self.current_time.strftime('%Y%m%d')}.nc"
+            / f"{self.current_time.strftime('%Y%m%d')}.zarr"
         )
 
         end_date = forecasts.time[-1].dt.date.item()
         n_timesteps = (end_date - self.current_time.date()).days
+
+        if return_mean_discharge:
+            mean_discharge = {}
 
         for member in forecasts.member:
             self.multiverse_name = member.item()
@@ -103,6 +116,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             for _ in range(n_timesteps):
                 self.step()
 
+            if return_mean_discharge:
+                mean_discharge[member.item()] = (
+                    self.hydrology.routing.grid.var.discharge_m3_s.mean()
+                ).item()
+
             # restore the initial state of the multiverse
             self.restore(store_location=store_location, timestep=store_timestep)
 
@@ -111,6 +129,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # restore the precipitation dataarray, step out of the multiverse
         self.sfincs.precipitation_dataarray = precipitation_dataarray
         self.multiverse_name = None
+
+        if return_mean_discharge:
+            return mean_discharge
+        else:
+            return None
 
     def step(self) -> None:
         """
@@ -123,7 +146,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # and if the current date is in the list of forecast days
         if (
             self.config["general"]["forecasts"]["use"]
-            and not self.multiverse_name
+            and self.multiverse_name
+            is None  # only start multiverse if not already in one
             and self.current_time.date() in self.config["general"]["forecasts"]["days"]
         ):
             self.multiverse()
@@ -188,6 +212,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.store.load()
 
         if self.simulate_hydrology:
+            if load_data_from_store:
+                self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
             self.hydrology.soil.set_global_variables()
 
@@ -328,9 +354,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.sfincs.get_return_period_maps()
 
     def evaluate(self, *args, **kwargs) -> None:
+        print("Evaluating model...")
         self.evaluate = Evaluate(self)
         self.evaluate.run(*args, **kwargs)
-        print("Evaluating model...")
 
     @property
     def current_day_of_year(self) -> int:
@@ -375,7 +401,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @property
     def run_name(self):
         if self.mode == "w" and self.in_spinup:
-            return "spinup"
+            return self.config["general"]["spinup_name"]
         else:
             if "name" in self.config["general"]:
                 return self.config["general"]["name"]
@@ -391,7 +417,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     @multiverse_name.setter
     def multiverse_name(self, value):
-        self._multiverse_name = str(value) if value else None
+        self._multiverse_name = str(value) if value is not None else None
 
     @property
     def output_folder(self):
