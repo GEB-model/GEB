@@ -149,18 +149,7 @@ class CropFarmers(AgentBaseClass):
         self.why_30 = load_economic_data(
             self.model.files["dict"]["socioeconomics/why_30"]
         )
-        self.borewell_cost_1 = load_economic_data(
-            self.model.files["dict"]["socioeconomics/borewell_cost_1"]
-        )
-        self.borewell_cost_2 = load_economic_data(
-            self.model.files["dict"]["socioeconomics/borewell_cost_2"]
-        )
-        self.pump_cost = load_economic_data(
-            self.model.files["dict"]["socioeconomics/pump_cost"]
-        )
-        self.irrigation_maintenance = load_economic_data(
-            self.model.files["dict"]["socioeconomics/irrigation_maintenance"]
-        )
+
         # Local well variables
         self.probability_well_failure = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
@@ -2933,10 +2922,6 @@ class CropFarmers(AgentBaseClass):
             groundwater_depth, average_extraction_speed
         )
 
-        annual_cost_local, well_depth_local = self.calculate_well_costs(
-            groundwater_depth
-        )
-
         # Compute the total annual per square meter costs if farmers adapt during this cycle
         # This cost is the cost if the farmer would adapt, plus its current costs of previous
         # adaptations
@@ -3699,105 +3684,6 @@ class CropFarmers(AgentBaseClass):
         self.var.all_loans_annual_cost.data[:, -1, 0] += annual_cost_water_energy
 
         return energy_costs, water_costs, average_extraction_speed
-
-    def calculate_well_costs(self, groundwater_depth) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Calculate the construction and yearly costs of well and pump for irrigation, based on various parameters
-        such as well depth, crop growth seasons, pump horsepower, and regional costs. The function considers
-        different seasonal durations, well failure probabilities, and irrigation efficiency. Based on Robert, M.,
-        Bergez, J. E., & Thomas, A. (2018). A stochastic dynamic programming approach to analyze adaptation to climate change â€“
-        Application to groundwater irrigation in India. European Journal of Operational Research, 265(3), 1033â€“1045.
-        https://doi.org/10.1016/j.ejor.2017.08.029
-
-        Returns:
-        - fixed_investment_cost (np.ndarray): An array representing the fixed construction costs of wells and pumps.
-        - yearly_costs (np.ndarray): An array representing the yearly operational costs for irrigation maintenance
-        and groundwater pumping.
-
-        Notes:
-        - `self.n` is assumed to be the number of farmers or irrigation units.
-        - `self.get_value_per_farmer_from_region_id` is a method to retrieve cost data for the current time step.
-        - All costs are calculated per farmer/irrigation unit.
-        """
-
-        # Initialize costs arrays with region-specific values
-        borewell_cost_1 = self.get_value_per_farmer_from_region_id(
-            self.borewell_cost_1, self.model.current_time
-        )
-        borewell_cost_2 = self.get_value_per_farmer_from_region_id(
-            self.borewell_cost_2, self.model.current_time
-        )
-        pump_cost = self.get_value_per_farmer_from_region_id(
-            self.pump_cost, self.model.current_time
-        )
-        irrigation_maintenance = self.get_value_per_farmer_from_region_id(
-            self.irrigation_maintenance, self.model.current_time
-        )
-        electricity_costs = self.get_value_per_farmer_from_region_id(
-            self.electricity_cost, self.model.current_time
-        )
-        # Calculate new pump depth as a function of groundwater depth
-        new_pump_depth = groundwater_depth + 50
-
-        crop_growth_duration = self.var.crop_calendar[:, :, 2].data
-        total_pump_duration = np.where(
-            crop_growth_duration == -1, 0, crop_growth_duration
-        ).sum(axis=1)
-
-        # Calculate total hours per year that the pump is active
-        total_pumping_hours_yearly = self.var.pump_hours * total_pump_duration
-
-        # Calculate the electric power in kilowatt for irrigation
-        electric_power_irrigation = 0.7457 * self.pump_horse_power
-
-        # Calculate yearly groundwater pumping cost
-        groundwater_pumping_cost_yearly = (
-            total_pumping_hours_yearly
-            * electricity_costs
-            * electric_power_irrigation
-            * self.proportion_irrigation_water_available
-        )
-
-        # Calculate the construction cost of the well and pump
-        construction_cost_well = (1 + 100 * self.probability_well_failure) * (
-            borewell_cost_1 * new_pump_depth - borewell_cost_2 * new_pump_depth**2
-        )
-        pump_cost = pump_cost * self.pump_horse_power
-
-        # Calculate the irrigation maintenance costs
-        flow_rate = 79.93 * groundwater_depth**-0.728
-        expected_water_availability = flow_rate * total_pumping_hours_yearly
-        irrigation_maintenance_costs = (
-            irrigation_maintenance * expected_water_availability**0.16
-        )
-
-        # Determine fixed and yearly costs
-        fixed_investment_cost = construction_cost_well + pump_cost
-
-        # Fetch loan configuration for well installation
-        loan_config = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["adaptation_well"]
-        loan_duration = loan_config["loan_duration"]  # Loan duration in years
-
-        # Calculate annuity factor for loan repayment using the annuity formula
-        # A = P * [r(1+r)^n] / [(1+r)^n -1], where:
-        # A = annual payment, P = principal amount (install_cost), r = interest rate, n = loan duration
-        interest_rate = self.var.interest_rate.data
-
-        n = loan_duration
-        annuity_factor = (interest_rate * (1 + interest_rate) ** n) / (
-            (1 + interest_rate) ** n - 1
-        )
-
-        # Calculate the annual cost per agent (local currency units per year)
-        annual_cost = (
-            (fixed_investment_cost * annuity_factor)
-            + irrigation_maintenance_costs
-            + groundwater_pumping_cost_yearly
-        )
-
-        return annual_cost, new_pump_depth
 
     def calculate_well_costs_global(
         self, groundwater_depth: np.ndarray, average_extraction_speed: np.ndarray

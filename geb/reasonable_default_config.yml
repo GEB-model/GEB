@@ -65,6 +65,7 @@ agent_settings:
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
     microcredit:
+      ruleset: base
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
@@ -105,9 +106,6 @@ agent_settings:
         WHY_10: 82.0209974 # $/m
         WHY_20: 164 # $/m
         WHY_30: 50 # $/m
-        probability_well_failure: 0.2
-        proportion_irrigation_water_available: 1
-        pump_horse_power: 10
       decisions:
         decision_horizon: 10
         expenditure_cap: 0.5
