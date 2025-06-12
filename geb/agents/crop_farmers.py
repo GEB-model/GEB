@@ -150,18 +150,6 @@ class CropFarmers(AgentBaseClass):
             self.model.files["dict"]["socioeconomics/why_30"]
         )
 
-        # Local well variables
-        self.probability_well_failure = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["adaptation_well"]["probability_well_failure"]
-        self.pump_horse_power = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["adaptation_well"]["pump_horse_power"]
-        self.proportion_irrigation_water_available = self.model.config[
-            "agent_settings"
-        ]["farmers"]["expected_utility"]["adaptation_well"][
-            "proportion_irrigation_water_available"
-        ]
         self.crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"
         )
