@@ -2842,26 +2842,28 @@ class CropFarmers(AgentBaseClass):
             (best_option_SEUT > (SEUT_do_nothing)) & (new_id_temp != -1)
         )  # Filter out crops chosen due to small diff in do_nothing and adapt SEUT calculation
 
-        # # Adjust the intention threshold based on whether neighbors already have similar crop
-        # # Check for each farmer which crops their neighbors are cultivating
-        # social_network_crops = self.var.crop_calendar[self.var.social_network, 0, 0]
+        # Adjust the intention threshold based on whether neighbors already have similar crop
+        # Check for each farmer which crops their neighbors are cultivating
+        social_network_crops = self.var.crop_calendar[self.var.social_network, :, 0]
 
-        # # Check whether adapting agents have adaptation type in their network and create mask
-        # network_has_crop = np.any(
-        #     social_network_crops == new_crop_nr_temp[:, None],
-        #     axis=1,
-        # )
+        potential_new_rotation = self.var.crop_calendar[new_id_temp, :, 0]
 
-        # # Increase intention factor if someone in network has crop
-        # intention_factor_adjusted = self.var.intention_factor.copy()
-        # intention_factor_adjusted[network_has_crop] += 0.3
+        matches_per_neighbor = np.all(
+            social_network_crops == potential_new_rotation[:, None, :], axis=2
+        )
+        # Check whether adapting agents have adaptation type in their network and create mask
+        network_has_rotation = np.any(matches_per_neighbor, axis=1)
 
-        # # Determine whether it passed the intention threshold
-        # random_values = np.random.rand(*intention_factor_adjusted.shape)
-        # intention_mask = random_values < intention_factor_adjusted
+        # Increase intention factor if someone in network has crop
+        intention_factor_adjusted = self.var.intention_factor.copy()
+        intention_factor_adjusted[network_has_rotation] += 0.333
+
+        # Determine whether it passed the intention threshold
+        random_values = np.random.rand(*intention_factor_adjusted.shape)
+        intention_mask = random_values < intention_factor_adjusted
 
         # # Set the adaptation mask
-        # SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
+        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
         new_id_final = new_id_temp[SEUT_adaptation_decision]
 
         print("Crop switching farmers", np.count_nonzero(SEUT_adaptation_decision))
@@ -3447,7 +3449,8 @@ class CropFarmers(AgentBaseClass):
                 ids_to_switch_to=np.arange(self.var.n),
             )
 
-            assert np.min(SEUT_decision_array[SEUT_adaptation_decision]) != -np.inf
+            if np.count_nonzero(SEUT_adaptation_decision) > 0:
+                assert np.min(SEUT_decision_array[SEUT_adaptation_decision]) != -np.inf
 
             # Print the percentage of adapted households
             percentage_adapted = round(
@@ -3477,20 +3480,20 @@ class CropFarmers(AgentBaseClass):
         # Compare EU values for those who haven't adapted yet and get boolean results
         SEUT_adaptation_decision = SEUT_adapt > SEUT_do_nothing
 
-        # social_network_adaptation = adapted[self.var.social_network]
+        social_network_adaptation = adapted[self.var.social_network]
 
-        # # Check whether adapting agents have adaptation type in their network and create mask
-        # network_has_adaptation = np.any(social_network_adaptation == 1, axis=1)
+        # Check whether adapting agents have adaptation type in their network and create mask
+        network_has_adaptation = np.any(social_network_adaptation == 1, axis=1)
 
-        # # Increase intention factor if someone in network has crop
-        # intention_factor_adjusted = self.var.intention_factor.copy()
-        # intention_factor_adjusted[network_has_adaptation] += 0.3
+        # Increase intention factor if someone in network has crop
+        intention_factor_adjusted = self.var.intention_factor.copy()
+        intention_factor_adjusted[network_has_adaptation] += 0.33
 
-        # # Determine whether it passed the intention threshold
-        # random_values = np.random.rand(*intention_factor_adjusted.shape)
-        # intention_mask = random_values < intention_factor_adjusted
+        # Determine whether it passed the intention threshold
+        random_values = np.random.rand(*intention_factor_adjusted.shape)
+        intention_mask = random_values < intention_factor_adjusted
 
-        SEUT_adaptation_decision = SEUT_adaptation_decision  # & intention_mask
+        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
 
         # Update the adaptation status
         self.var.adaptations[SEUT_adaptation_decision, adaptation_type] = 1
@@ -4683,6 +4686,8 @@ class CropFarmers(AgentBaseClass):
             shift_and_reset_matrix(self.var.yearly_income)
             shift_and_reset_matrix(self.var.yearly_potential_income)
             shift_and_reset_matrix(self.var.insured_yearly_income)
+
+            print(timer)
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         # if self.model.current_timestep == 105:
