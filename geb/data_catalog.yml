@@ -331,6 +331,18 @@ custom_reservoir_capacity_krishna:
     volume_flood: 1_000_000_000
     volume_total: 1_000_000_000
     flood_cushion: 1_000_000_000
+
+UN_dev_index:
+  meta:
+    category: economics
+    source_author: UNDP
+    source_url: https://hdr.undp.org/  
+  path: socioeconomic/UN_HDI/human-development-index.csv
+  driver: csv
+  data_type: DataFrame
+  driver_kwargs:
+    index_col: 'Year'
+
 wb_inflation_rate:
   meta:
     category: economics

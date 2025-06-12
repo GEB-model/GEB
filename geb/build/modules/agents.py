@@ -233,6 +233,18 @@ class Agents:
         # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
         price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
+        dev_index = self.data_catalog.get_dataframe(
+            "UN_dev_index"
+        )  # Human Development Index
+        dev_index.rename(columns={"Human Development Index": "HDI"}, inplace=True)
+
+        world_countries = self.data_catalog.get_geodataframe(
+            "GADM_level0",
+        ).rename(columns={"GID_0": "ISO3"})
+
+        dev_index = (
+            dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")
+        )  # calculate mean HDI for each country
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
@@ -294,6 +306,7 @@ class Agents:
             #     convert_percent_to_ratio=True,
             # )
             ISO3 = region["ISO3"]
+
             if (
                 ISO3 == "AND"
             ):  # for Andorra (not available in World Bank data), use Spain's data
@@ -313,6 +326,91 @@ class Agents:
                 ISO3,
                 convert_percent_to_ratio=True,
             )
+
+            if np.isnan(local_inflation_rates).any():
+                """
+                Loads in the Human Development Index (HDI) data. In case economic data is missing, it fills the data by:
+                1) checking which countries have data
+                2) make a top 10 based on similar HDI
+                3) make a top 3 based on neighrest distance
+                4) fill the missing data with the average of the top 3
+                """
+                self.logger.warning(
+                    f"Missing inflation rates for {ISO3}, filling with similar countries based on HDI"
+                )
+                # Get the HDI for the region
+                hdi = float(dev_index.loc[dev_index.index == ISO3, "HDI"])
+
+                # get index of nans in local_inflation_rates
+                nan_indices = np.where(np.isnan(local_inflation_rates))[0]
+                nan_years = [years_inflation_rates[i] for i in nan_indices]
+
+                # Filter countries with no NaN values for the specified years
+                inflation_rates_country_index = inflation_rates.set_index(
+                    "Country Code"
+                )
+                countries_with_complete_data = (
+                    inflation_rates_country_index[nan_years]
+                    .dropna(axis=0, how="any")
+                    .index.tolist()
+                )
+                dev_selection = dev_index.loc[
+                    dev_index.index.isin(countries_with_complete_data)
+                ]
+
+                # give 10 countries with HDI closest to hdi variable
+                dev_selection["HDI_diff"] = (dev_selection["HDI"] - hdi).abs()
+                # calculate distances from target country to similar countries
+                fill_countries = (
+                    dev_selection.sort_values("HDI_diff").head(10).index.to_list()
+                )
+
+                # calculate the centroid of the world countries and use that as geometry
+                world_countries["geometry"] = world_countries.centroid
+
+                fill_country_geometries = world_countries.loc[
+                    world_countries["ISO3"].isin(fill_countries)
+                ]
+
+                # get geometries of target country
+                target_country_geometry = world_countries.loc[
+                    world_countries["ISO3"] == ISO3
+                ].geometry.iloc[0]
+
+                for index, country in fill_country_geometries.iterrows():
+                    fill_country_geometry = country.geometry
+                    # Calculate distance to target country
+                    distance = target_country_geometry.distance(fill_country_geometry)
+                    # Add this distance to the fill countries DataFrame on the correct row
+                    fill_country_geometries.at[index, "distance"] = distance
+
+                # sort by distance and take the 3 closest countries
+                similar_countries_top_3 = (
+                    fill_country_geometries.sort_values("distance").head(3)
+                ).ISO3.to_list()
+
+                print(
+                    f"for region {ISO3} using countries {similar_countries_top_3} to fill missing inflation rates"
+                )
+                # average the inflation rates of the top 3 similar countries
+                similar_country_df = pd.DataFrame()
+                for similar_country in similar_countries_top_3:
+                    country_inflation_rates = process_rates(
+                        inflation_rates,
+                        years_inflation_rates,
+                        similar_country,
+                        convert_percent_to_ratio=True,
+                    )
+                    similar_country_df[similar_country] = country_inflation_rates
+                similar_country_average_inflation = similar_country_df.mean(
+                    axis=1
+                ).to_list()
+
+                # fill the missing values in local_inflation_rates with the similar_country_average_inflation. The location of the missing years (index) can be found in nan_years
+                # Replace NaN values in local_inflation_rates with values from similar_country_average_inflation
+                for idx, value in zip(nan_indices, similar_country_average_inflation):
+                    local_inflation_rates[idx] = value
+
             assert not np.isnan(local_inflation_rates).any(), (
                 f"Missing inflation rates for {region['ISO3']}"
             )
