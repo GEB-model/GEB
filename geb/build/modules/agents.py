@@ -398,6 +398,7 @@ class Agents:
         reference_year: int,
         start_year: int,
         end_year: int,
+        conversion=False,
     ):
         """
         Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
@@ -432,6 +433,9 @@ class Agents:
 
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
+        region_currency_conversion_rates = self.dict["socioeconomics/LCU_per_USD"][
+                "data"
+            ]
         regions = list(inflation_rates["data"].keys())
 
         # Create a dictionary to store the various types of prices with their initial reference year values
@@ -450,23 +454,36 @@ class Agents:
             for region in regions:
                 prices = pd.Series(index=range(start_year, end_year + 1))
                 prices.loc[reference_year] = initial_price
+                region_currency_conversion_rates = self.dict["socioeconomics/LCU_per_USD"][
+                    "data"
+                ][region]
 
                 # Forward calculation from the reference year
                 for year in range(reference_year + 1, end_year + 1):
+                    year_currency_conversion = region_currency_conversion_rates[
+                        self.dict["socioeconomics/LCU_per_USD"]["time"].index(str(year))
+                    ]
                     prices.loc[year] = (
                         prices[year - 1]
                         * inflation_rates["data"][region][
                             inflation_rates["time"].index(str(year))
                         ]
-                    )
+                    ) 
+                    if conversion:
+                        prices.loc[year] /= year_currency_conversion
                 # Backward calculation from the reference year
                 for year in range(reference_year - 1, start_year - 1, -1):
+                    year_currency_conversion = region_currency_conversion_rates[
+                        self.dict["socioeconomics/LCU_per_USD"]["time"].index(str(year))
+                    ]
                     prices.loc[year] = (
                         prices[year + 1]
                         / inflation_rates["data"][region][
                             inflation_rates["time"].index(str(year + 1))
                         ]
-                    )
+                    ) 
+                    if conversion:
+                        prices.loc[year] /= year_currency_conversion
 
                 prices_dict["data"][region] = prices.tolist()
 
