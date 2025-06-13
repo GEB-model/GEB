@@ -163,7 +163,7 @@ class DecisionModule:
         return EU_do_nothing_array
 
     @staticmethod
-    @njit(cache=True)
+    @njit(cache=True, parallel=True)
     def calcEU_adapt_numba(
         expenditure_cap: float,
         loan_duration: int,
