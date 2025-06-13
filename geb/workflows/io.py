@@ -407,7 +407,7 @@ def get_window(
         raise ValueError("y must not be empty")
 
     # So that we can do item assignment
-    bounds = list(bounds)
+    bounds: list = list(bounds)
 
     if bounds[0] < x[0]:
         if raise_on_out_of_bounds:
