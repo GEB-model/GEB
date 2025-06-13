@@ -338,7 +338,7 @@ wb_inflation_rate:
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/FP.CPI.TOTL.ZG
     sorce_version: 5551656
-  path: socioeconomic/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_77.csv
+  path: socioeconomic/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_402281.csv
   driver: csv
   data_type: DataFrame
   driver_kwargs:
@@ -362,6 +362,17 @@ world_bank_price_ratio:
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
   path: socioeconomic/price_ratio/API_PA.NUS.PPPC.RF_DS2_en_csv_v2_4549.csv
+  driver: csv
+  data_type: DataFrame
+  driver_kwargs:
+    skiprows: 4
+wb_LCU_per_USD:
+  meta:
+    category: economics
+    source_author: World Bank
+    source_license: CC-BY-4.0
+    source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
+  path: socioeconomic/currency_conversion/API_PA.NUS.FCRF_DS2_en_csv_v2_399523.csv
   driver: csv
   data_type: DataFrame
   driver_kwargs:
