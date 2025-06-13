@@ -656,7 +656,7 @@ class CropFarmers(AgentBaseClass):
         free_idx = np.flatnonzero(
             self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] == -1
         )
-        num_index = int(self.var.n * 0.25)
+        num_index: int = int(self.var.n * 0.25)
         rng_index_insurance = np.random.default_rng(60)
         mask_index_insurance = rng_index_insurance.choice(
             free_idx, size=num_index, replace=False
@@ -727,7 +727,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
-        why_map = load_grid(self.model.files["grid"]["groundwater/why_map"])
+        why_map: np.ndarray = load_grid(self.model.files["grid"]["groundwater/why_map"])
 
         self.var.why_class[:] = sample_from_map(
             why_map, self.var.locations.data, self.grid.gt
