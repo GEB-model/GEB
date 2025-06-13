@@ -297,14 +297,6 @@ class Agents:
 
         for _, region in self.geoms["regions"].iterrows():
             region_id = str(region["region_id"])
-
-            # Store data in dictionaries
-            # lending_rates_dict["data"][region_id] = process_rates(
-            #     lending_rates,
-            #     years_lending_rates,
-            #     region["ISO3"],
-            #     convert_percent_to_ratio=True,
-            # )
             ISO3 = region["ISO3"]
 
             if (
@@ -336,7 +328,7 @@ class Agents:
                 4) fill the missing data with the average of the top 3
                 """
                 self.logger.warning(
-                    f"Missing inflation rates for {ISO3}, filling with similar countries based on HDI"
+                    f"Missing inflation data found for {ISO3}, filling with similar countries based on HDI"
                 )
                 # Get the HDI for the region
                 hdi = float(dev_index.loc[dev_index.index == ISO3, "HDI"])
@@ -389,7 +381,7 @@ class Agents:
                     fill_country_geometries.sort_values("distance").head(3)
                 ).ISO3.to_list()
 
-                print(
+                self.logger.info(
                     f"for region {ISO3} using countries {similar_countries_top_3} to fill missing inflation rates"
                 )
                 # average the inflation rates of the top 3 similar countries
@@ -976,6 +968,79 @@ class Agents:
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
+    def setup_farm_size_doner_countries(self):
+        """
+        Sets up the farm size donor countries for GEB.
+
+        Notes
+        -----
+        This method sets up the farm size donor countries for GEB. It creates a dictionary with key, value pairs of ISO3 codes.
+        The value-country is used as donor for the key-country.
+        """
+
+        # Load the world countries geodataframe
+        world_countries = self.data_catalog.get_geodataframe(
+            "GADM_level0",
+        ).rename(columns={"GID_0": "ISO3"})
+        world_countries["geometry"] = world_countries.centroid
+        world_countries = world_countries.set_index("ISO3")
+
+        # find countries in model domain
+        region_iso = self.geoms["regions"]["ISO3"].unique().tolist()
+
+        # identify which countries do have farm size data
+        farm_sizes_per_region = (
+            self.data_catalog.get_dataframe("lowder_farm_sizes")
+            .dropna(subset=["Total"], axis=0)
+            .drop(["empty", "income class"], axis=1)
+        )
+        farm_sizes_per_region["Country"] = farm_sizes_per_region["Country"].ffill()
+        # Remove preceding and trailing white space from country names
+        farm_sizes_per_region["Country"] = farm_sizes_per_region["Country"].str.strip()
+        farm_sizes_per_region["Census Year"] = farm_sizes_per_region["Country"].ffill()
+
+        farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
+            COUNTRY_NAME_TO_ISO3
+        )
+        farm_sizes_iso = farm_sizes_per_region["ISO3"].unique().tolist()
+
+        # find countries in model domain that do not have farm size data
+        missing_farm_sizes_iso = list(set(region_iso) - set(farm_sizes_iso))
+
+        self.logger.info(
+            f"Missing farm sizes for {len(missing_farm_sizes_iso)}, countries: {missing_farm_sizes_iso}"
+        )
+        # create farm_size_doner_countries dictionary
+        # empty dictionary to store farm size donor countries
+        farm_size_donor_countries = {}
+        for iso in missing_farm_sizes_iso:
+            print(iso)
+            # find closest country with data based on euclidian distance
+            missing_country_location = world_countries.loc[world_countries.index == iso]
+            # calculate distances to all countries with farm size data
+            countries_with_data_location = world_countries.loc[
+                world_countries.index.isin(farm_sizes_iso)
+            ]
+            countries_with_data_location["distance"] = (
+                countries_with_data_location.geometry.distance(
+                    missing_country_location.geometry.iloc[0]
+                )
+            )
+            # find the closest country with data
+            closest_country = countries_with_data_location["distance"].idxmin()
+
+            # add the doner country and the original country to the dictionary
+            # add the country with missing data (iso) as key and the closest country with data as value
+
+            farm_size_donor_countries[iso] = closest_country
+
+        self.logger.info(f"Farm size donor countries: {farm_size_donor_countries}")
+
+        self.set_dict(
+            farm_size_donor_countries,
+            name="agents/farmers/farm_size_donor_countries",
+        )
+
     def setup_create_farms(
         self,
         region_id_column="region_id",
@@ -1002,7 +1067,7 @@ class Agents:
         -----
         This method sets up the farmers for GEB. This is a simplified method that generates an example set of agent data.
         It first calculates the number of farmers and their farm sizes for each region based on the agricultural data for
-        that region based on theamount of farm land and data from a global database on farm sizes per country. It then
+        that region based on the amount of farm land and data from a global database on farm sizes per country. It then
         randomly assigns crops, irrigation sources, household sizes, and daily incomes and consumption levels to each farmer.
 
         A paper that reports risk aversion values for 75 countries is this one: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2646134
@@ -1070,13 +1135,27 @@ class Agents:
 
         all_agents = []
         self.logger.info(f"Starting processing of {len(regions_shapes)} regions")
+
+        # load the farm size donor countries
+        if farm_size_donor_countries:
+            farm_size_donor_countries = self.dict.get(
+                "agents/farmers/farm_size_donor_countries", {}
+            )
+
         for i, (_, region) in enumerate(regions_shapes.iterrows()):
             UID = region[region_id_column]
             if data_source == "lowder":
                 ISO3 = region[country_iso3_column]
+
                 if farm_size_donor_countries:
                     assert isinstance(farm_size_donor_countries, dict)
+
                     ISO3 = farm_size_donor_countries.get(ISO3, ISO3)
+
+                    self.logger.info(
+                        f"Using farm size donor country {ISO3} for region {region['ISO3']}"
+                    )
+
                 self.logger.info(
                     f"Processing region ({i + 1}/{len(regions_shapes)}) with ISO3 {ISO3}"
                 )
