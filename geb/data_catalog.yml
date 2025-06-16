@@ -432,7 +432,7 @@ GDL_regions_v4:
     source_license: https://globaldatalab.org/termsofuse/
 GLOPOP-S:
   data_type: Dataset
-  path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz
+  path: population/GLOPOP-S/synthpop_{region}.dat.gz
 GLOPOP-S_grid:
   data_type: RasterDataset
   driver: raster
