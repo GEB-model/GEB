@@ -729,9 +729,12 @@ class Routing(Module):
                 == 0
             ).all()
 
-            evaporation_in_rivers_m3_per_routing_step = np.minimum(
+            evaporation_in_rivers_m3_per_routing_step: np.ndarray = np.minimum(
                 self.router.get_total_storage() + side_flow_channel_m3_per_routing_step,
                 potential_evaporation_in_rivers_m3_per_routing_step,
+            )
+            evaporation_in_rivers_m3_per_routing_step: np.ndarray = np.maximum(
+                evaporation_in_rivers_m3_per_routing_step, 0
             )
             assert (
                 evaporation_in_rivers_m3_per_routing_step[
@@ -774,8 +777,8 @@ class Routing(Module):
 
         if __debug__:
             # TODO: make dependent on routing step length
-            river_storage_m3 = self.router.get_total_storage()
-            balance_check(
+            river_storage_m3: np.ndarray = self.router.get_total_storage()
+            assert balance_check(
                 how="sum",
                 influxes=[
                     total_runoff * self.grid.var.cell_area,
