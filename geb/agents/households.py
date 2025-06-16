@@ -456,33 +456,55 @@ class Households(AgentBaseClass):
         ensemble_per_day = []
 
         for day in days:
-            members = []  # Every day has its own ensemble
-            for member in range(
-                1, 4
-            ):  # Change it later to the actual number of ensemble members
+            members = []  # Every day has its own ensemble -- CHANGE IT LATER TO THE ACTUAL NUMBER OF MEMBERS
+            for member in range(1, 4):
                 file_path = (
                     self.model.output_folder
                     / "flood_maps"
                     / "ensemble"
                     / f"{day.strftime('%Y-%m-%d')}_member{member}.zarr"
-                )  # Think later about which date info should be in the file
+                )  # Think later about which date info should be in the file: start time or forecast days?
 
                 members.append(
                     xr.open_dataarray(file_path, engine="zarr")
                 )  # Do I want to use this later?
-            # Concatenate the members for each day
-            members_stacked = xr.concat(
-                members, dim="member"
-            )  # This stacks the list of dataarrays along a new "member" dimension
+
+            # Concatenate the members for each day (This stacks the list of dataarrays along a new "member" dimension)
+            members_stacked = xr.concat(members, dim="member")
             ensemble_per_day.append(members_stacked)
 
-        ensemble_flood_maps = xr.concat(
-            ensemble_per_day, dim="day"
-        )  # This stacks the list of dataarrays along a new "member" dimension
+        ensemble_flood_maps = xr.concat(ensemble_per_day, dim="day")
 
         return ensemble_flood_maps
 
-    def create_probability_maps(self):
+    def load_ensemble_damage_maps(self):
+        start_time = (
+            "2021-07-13"  # CHECK LATER IF YOU WANT THE START TIME OR THE FORECAST DAYS
+        )
+
+        damage_maps = []
+        # Load the damage maps for each ensemble member -- CHANGE IT LATER TO THE ACTUAL NUMBER OF MEMBERS
+        for member in range(1, 4):
+            file_path = (
+                self.model.output_folder
+                / "damage_maps"
+                / f"damage_map_buildings_content_{start_time}_member{member}.gpkg"
+            )
+            damage_map = gpd.read_file(file_path)
+
+            # Add member and building_id columns
+            damage_map["member"] = member
+            damage_map["building_id"] = damage_map.index + 1
+
+            # Aggregate all damage maps
+            damage_maps.append(damage_map)
+
+        # Concatenate all damage maps into a single dataframe
+        ensemble_damage_maps = pd.concat(damage_maps)
+
+        return ensemble_damage_maps
+
+    def create_flood_probability_maps(self):
         # Create a probability map based on the ensemble of flood maps based on the strategy (ideally)
         ensemble_flood_maps = self.load_ensemble_flood_maps()
 
@@ -492,13 +514,13 @@ class Households(AgentBaseClass):
         prob_folder = os.path.join(self.model.output_folder, "prob_maps")
         os.makedirs(prob_folder, exist_ok=True)
 
-        if self.model.config["general"]["forecasts"]["strategy_1"]:
+        if self.model.config["general"]["forecasts"]["strategy"] == 1:
             # Water level ranges for the probability map
             ranges = [
                 (1, 0.1, 1.0),
                 (2, 1.0, 2.0),
                 (3, 2.0, None),
-            ]  # Maybe I should make a parquet file with the ranges
+            ]  # NEED TO CREATE A PARQUET FILE WITH THE RIGHT RANGES
 
             probability_maps = {}
 
@@ -525,7 +547,7 @@ class Households(AgentBaseClass):
                     file_path = (
                         self.model.output_folder
                         / "prob_maps"
-                        / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.tif"
+                        / f"flood_prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.tif"
                     )
 
                     # SOMETHING IS WRONG WHEN WRITING THE TIFF FILE, THE Y AXIS IS FLIPPED, IDWK WHY, so doing this to fix it for now
@@ -540,7 +562,80 @@ class Households(AgentBaseClass):
 
         return probability_maps
 
-    def warning_strategy(self, prob_threshold=0.6):
+    def create_damage_probability_maps(self):
+        """Creates an object-based (buildings) probability map based on the ensemble of damage maps."""
+
+        crs = self.model.config["hazards"]["floods"]["crs"]
+        days = self.model.config["general"]["forecasts"]["days"]
+
+        # Create a list to store the probability dataframes
+        # probabilities = []
+
+        # Damage ranges for the probability map
+        damage_ranges = [
+            (1, 0, 1),
+            (2, 0, 1500000),
+            (3, 1500000, 7500000),
+            (4, 7500000, None),
+        ]
+        # NEED TO CREATE A PARQUET FILE WITH THE RIGHT RANGES
+
+        # Load the ensemble of damage maps
+        damage_ensemble = self.load_ensemble_damage_maps()
+
+        # Get buildings geometry from one ensemble member (needed for the merges later)
+        building_geometry = damage_ensemble[damage_ensemble["member"] == 1][
+            ["building_id", "geometry"]
+        ].copy()
+
+        # Total number of ensemble members
+        n_members = damage_ensemble["member"].nunique()
+
+        # Loop over damage ranges and calculate probabilities
+        for range_id, min_d, max_d in damage_ranges:
+            if max_d is not None:
+                condition = damage_ensemble["damages"].between(
+                    min_d, max_d, inclusive="left"
+                )
+            else:
+                condition = damage_ensemble["damages"] >= min_d
+
+            # Count how many times each building falls in the range
+            range_counts = (
+                damage_ensemble[condition]
+                .groupby("building_id")
+                .size()
+                .rename("count")
+                .reset_index()
+            )
+
+            # Include all buildings and calculate the probability for each building in the range
+            range_counts = pd.merge(
+                building_geometry[["building_id"]],
+                range_counts,
+                on="building_id",
+                how="left",
+            )
+            range_counts["count"] = range_counts["count"].fillna(0)
+            range_counts["range_id"] = range_id
+            range_counts["probability"] = range_counts["count"] / n_members
+
+            damage_probability_map = pd.merge(
+                range_counts, building_geometry, on="building_id", how="left"
+            )
+            damage_probability_map = gpd.GeoDataFrame(
+                damage_probability_map, geometry="geometry", crs=crs
+            )
+
+            output_path = (
+                self.model.output_folder
+                / "prob_maps"
+                / f"damage_prob_map_range{range_id}_forecast{days[0].strftime('%Y-%m-%d')}.gpkg"
+            )
+
+            damage_probability_map.to_file(output_path)
+
+    def warning_strategy_1(self, prob_threshold=0.6):
         # I probably should use the probability_maps as argument for this function instead of getting it inside the function
         # ideally add an option to choose the warning strategy
 
@@ -549,8 +644,9 @@ class Households(AgentBaseClass):
         warnings_log = []
 
         # Create probability maps
-        self.create_probability_maps()
+        self.create_flood_probability_maps()
 
+        # --
         # Load postal codes
         PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
         PC4["postcode"] = PC4["postcode"].astype("int32")
@@ -563,6 +659,7 @@ class Households(AgentBaseClass):
             how="left",
             predicate="intersects",
         )
+        # -- This part maybe should be done when setting up the households (outside this function), or in the change_household_locations function
 
         for day in days:
             for range_id in range_ids:
@@ -945,7 +1042,8 @@ class Households(AgentBaseClass):
         self.construct_income_distribution()
         self.assign_household_attributes()
         self.change_household_locations()  # ideally this should be done in the setup_population when building the model
-        self.warning_strategy()
+        self.warning_strategy_1()
+        self.create_damage_probability_maps()
 
         print("test")
 
@@ -956,7 +1054,7 @@ class Households(AgentBaseClass):
         self.assign_household_attributes_to_buildings()
 
         # Create the folder to save damage maps if it doesn't exist
-        damage_folder = os.path.join(simulation_root, "damage")
+        damage_folder = os.path.join(self.model.output_folder, "damage_maps")
         os.makedirs(damage_folder, exist_ok=True)
 
         ## Compute damages for buildings content and save it to a gpkg file
