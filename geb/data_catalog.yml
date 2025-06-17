@@ -433,6 +433,12 @@ GDL_regions_v4:
 GLOPOP-S:
   data_type: Dataset
   path: population/GLOPOP-S/synthpop_{region}.dat.gz
+  meta:
+    category: population
+    source_author: Martijn Ton
+    source_url: https://doi.org/10.7910/DVN/KJC3RH
+    source_version: 4
+    source_license: CC BY 4.0
 GLOPOP-S_grid:
   data_type: RasterDataset
   driver: raster

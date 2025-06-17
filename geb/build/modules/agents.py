@@ -1469,12 +1469,10 @@ class Agents:
             assert GLOPOP_S_region_sampled["HID"].unique().size == len(
                 farmers_GDL_region
             )
-
             households_region = GLOPOP_S_region_sampled.groupby("HID")
-            # select only household heads
-            household_heads = households_region.apply(
-                lambda x: x[x["RELATE_HEAD"] == 1]
-            )
+
+            idx = GLOPOP_S_region_sampled.groupby("HID")["RELATE_HEAD"].idxmax()
+            household_heads = GLOPOP_S_region_sampled.loc[idx].reset_index(drop=True)
             assert len(household_heads) == len(farmers_GDL_region)
 
             # # age
