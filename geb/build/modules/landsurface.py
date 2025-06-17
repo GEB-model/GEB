@@ -193,6 +193,15 @@ class LandSurface:
             geom=self.region,
             predicate="intersects",
         ).rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
+
+        # save global countries and their centroids (used for calculating euclidian distances)
+        global_countries = self.data_catalog.get_geodataframe("GADM_level0").rename(
+            columns={"GID_0": "ISO3"}
+        )
+        global_countries["geometry"] = global_countries.centroid
+        global_countries = global_countries.set_index("ISO3")
+        self.set_geoms(global_countries, name="global_countries")
+
         assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
             f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
         )

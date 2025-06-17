@@ -27,8 +27,6 @@ def load_GLOPOP_S(data_catalog, GDL_region):
     ]
 
     GLOPOP_S = data_catalog.get_source("GLOPOP-S")
-    # get path to GLOPOP grid
-    GLOPOP_S_GRID = data_catalog.get_source("GLOPOP-S_grid")
 
     with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
         GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
@@ -43,7 +41,7 @@ def load_GLOPOP_S(data_catalog, GDL_region):
 
     # load grid
     GLOPOP_GRID_region = rioxarray.open_rasterio(
-        GLOPOP_S_GRID.path.format(region=GDL_region)
+        GLOPOP_SG.path.format(region=GDL_region)
     )
 
     # Get coordinates of each GRID_CELL in GLOPOP_GRID_region

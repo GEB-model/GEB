@@ -434,10 +434,10 @@ GDL_regions_v4:
 GLOPOP-S:
   data_type: Dataset
   path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz
-GLOPOP-S_grid:
+GLOPOP-SG:
   data_type: RasterDataset
   driver: raster
-  path: population/GLOPOP-S/{region}_grid_nr.tif
+  path: population/GLOPOP-SG/{region}_grid_nr.tif
 AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel

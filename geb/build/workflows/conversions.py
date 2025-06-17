@@ -1,3 +1,72 @@
+def setup_donor_countries(self, countries_with_data):
+    """
+    Sets up the donor countries for GEB.
+    Output: a dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
+    Right now, we return one donor country per country with missing data. This is the country with most similar Human Development Index (HDI) and closest distance to the target country.
+
+    Parameters
+    ----------
+    countries_with_data: list
+    Countries (ISO3 codes) that have data available.
+
+    """
+
+    dev_index = self.data_catalog.get_dataframe(
+        "UN_dev_index"
+    )  # Human Development Index
+    dev_index.rename(columns={"Human Development Index": "HDI"}, inplace=True)
+    dev_index = (
+        dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")
+    )  # calculate mean HDI for each country
+
+    global_countries = self.geoms["global_countries"]
+    potential_donors = global_countries.loc[
+        global_countries.index.isin(countries_with_data)
+    ]
+
+    potential_donors = potential_donors[
+        potential_donors.index.isin(dev_index.index)
+    ]  # delete potential donors that do not have HDI data
+
+    potential_donors["HDI"] = dev_index.loc[potential_donors.index, "HDI"].values
+
+    # find countries in model domain
+    region_countries = self.geoms["regions"]["ISO3"].unique().tolist()
+
+    # find countries in model domain that do not have data
+    countries_without_data = list(set(region_countries) - set(countries_with_data))
+
+    # empty dictionary to store farm size donor countries
+    donor_country_dict = {}
+    for country in countries_without_data:
+        # calculate the HDI of the target country
+        if country not in dev_index.index:
+            raise ValueError(
+                f"Tried to fill data for country {country}, but this country is not present in the Human Development Index data"
+            )
+        # calculate the HDI difference from countries with data
+        hdi = dev_index.loc[country, "HDI"]
+
+        donors = potential_donors.copy()
+
+        donors["HDI_diff"] = (potential_donors["HDI"] - hdi).abs()
+
+        # calculate distances from target country to donors
+        donors = donors.sort_values("HDI_diff").head(10)
+
+        donors["distance"] = donors.geometry.distance(
+            global_countries.loc[country].geometry
+        )
+
+        # select the top 3 closest donors based on distance
+        donor_country = (
+            donors.sort_values("distance").head(1).index.item()
+        )  # get the ISO3 code of the donor country
+        donor_country_dict[country] = donor_country
+
+    return donor_country_dict
+
+
 M49_to_ISO3 = {
     4: "AFG",
     8: "ALB",

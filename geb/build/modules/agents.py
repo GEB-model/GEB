@@ -24,6 +24,7 @@ from ..workflows.conversions import (
     COUNTRY_NAME_TO_ISO3,
     GLOBIOM_NAME_TO_ISO3,
     SUPERWELL_NAME_TO_ISO3,
+    setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
 from ..workflows.general import (
@@ -75,20 +76,6 @@ class Agents:
         municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
         for _, region in self.geoms["regions"].iterrows():
             ISO3 = region["ISO3"]
-
-            if (
-                ISO3 == "AND"
-            ):  # for Andorra (not available in World Bank data), use Spain's data
-                self.logger.warning(
-                    "Andorra's economic data not available, using Spain's data"
-                )
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
-                self.logger.warning(
-                    "Liechtenstein's economic data not available, using Switzerland's data"
-                )
-                ISO3 = "CHE"
-
             region_id = region["region_id"]
 
             # select domestic water demand for the region
@@ -232,19 +219,8 @@ class Agents:
 
         # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
+        inflation_rates_country_index = inflation_rates.set_index("Country Code")
         price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
-        dev_index = self.data_catalog.get_dataframe(
-            "UN_dev_index"
-        )  # Human Development Index
-        dev_index.rename(columns={"Human Development Index": "HDI"}, inplace=True)
-
-        world_countries = self.data_catalog.get_geodataframe(
-            "GADM_level0",
-        ).rename(columns={"GID_0": "ISO3"})
-
-        dev_index = (
-            dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")
-        )  # calculate mean HDI for each country
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
@@ -299,19 +275,6 @@ class Agents:
             region_id = str(region["region_id"])
             ISO3 = region["ISO3"]
 
-            if (
-                ISO3 == "AND"
-            ):  # for Andorra (not available in World Bank data), use Spain's data
-                self.logger.warning(
-                    "Andorra's economic data not available, using Spain's data"
-                )
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
-                self.logger.warning(
-                    "Liechtenstein's economic data not available, using Switzerland's data"
-                )
-                ISO3 = "CHE"
-
             local_inflation_rates = process_rates(
                 inflation_rates,
                 years_inflation_rates,
@@ -320,87 +283,35 @@ class Agents:
             )
 
             if np.isnan(local_inflation_rates).any():
-                """
-                Loads in the Human Development Index (HDI) data. In case economic data is missing, it fills the data by:
-                1) checking which countries have data
-                2) make a top 10 based on similar HDI
-                3) make a top 3 based on neighrest distance
-                4) fill the missing data with the average of the top 3
-                """
-                self.logger.warning(
-                    f"Missing inflation data found for {ISO3}, filling with similar countries based on HDI"
-                )
-                # Get the HDI for the region
-                hdi = float(dev_index.loc[dev_index.index == ISO3, "HDI"])
-
                 # get index of nans in local_inflation_rates
                 nan_indices = np.where(np.isnan(local_inflation_rates))[0]
                 nan_years = [years_inflation_rates[i] for i in nan_indices]
 
-                # Filter countries with no NaN values for the specified years
-                inflation_rates_country_index = inflation_rates.set_index(
-                    "Country Code"
-                )
-                countries_with_complete_data = (
+                countries_with_data = (
                     inflation_rates_country_index[nan_years]
                     .dropna(axis=0, how="any")
                     .index.tolist()
                 )
-                dev_selection = dev_index.loc[
-                    dev_index.index.isin(countries_with_complete_data)
-                ]
 
-                # give 10 countries with HDI closest to hdi variable
-                dev_selection["HDI_diff"] = (dev_selection["HDI"] - hdi).abs()
-                # calculate distances from target country to similar countries
-                fill_countries = (
-                    dev_selection.sort_values("HDI_diff").head(10).index.to_list()
+                ## get all the donor countries for countries in the dataset
+                inflation_donor_countries = setup_donor_countries(
+                    self, countries_with_data
                 )
-
-                # calculate the centroid of the world countries and use that as geometry
-                world_countries["geometry"] = world_countries.centroid
-
-                fill_country_geometries = world_countries.loc[
-                    world_countries["ISO3"].isin(fill_countries)
-                ]
-
-                # get geometries of target country
-                target_country_geometry = world_countries.loc[
-                    world_countries["ISO3"] == ISO3
-                ].geometry.iloc[0]
-
-                for index, country in fill_country_geometries.iterrows():
-                    fill_country_geometry = country.geometry
-                    # Calculate distance to target country
-                    distance = target_country_geometry.distance(fill_country_geometry)
-                    # Add this distance to the fill countries DataFrame on the correct row
-                    fill_country_geometries.at[index, "distance"] = distance
-
-                # sort by distance and take the 3 closest countries
-                similar_countries_top_3 = (
-                    fill_country_geometries.sort_values("distance").head(3)
-                ).ISO3.to_list()
+                inflation_donor_country = inflation_donor_countries.get(ISO3, None)
 
                 self.logger.info(
-                    f"for region {ISO3} using countries {similar_countries_top_3} to fill missing inflation rates"
+                    f"Using inflation donor country {inflation_donor_country} for a region in country {ISO3}"
                 )
-                # average the inflation rates of the top 3 similar countries
-                similar_country_df = pd.DataFrame()
-                for similar_country in similar_countries_top_3:
-                    country_inflation_rates = process_rates(
-                        inflation_rates,
-                        years_inflation_rates,
-                        similar_country,
-                        convert_percent_to_ratio=True,
-                    )
-                    similar_country_df[similar_country] = country_inflation_rates
-                similar_country_average_inflation = similar_country_df.mean(
-                    axis=1
-                ).to_list()
 
-                # fill the missing values in local_inflation_rates with the similar_country_average_inflation. The location of the missing years (index) can be found in nan_years
+                donor_country_inflation_rates = process_rates(
+                    inflation_rates,
+                    years_inflation_rates,
+                    inflation_donor_country,
+                    convert_percent_to_ratio=True,
+                )
+
                 # Replace NaN values in local_inflation_rates with values from similar_country_average_inflation
-                for idx, value in zip(nan_indices, similar_country_average_inflation):
+                for idx, value in zip(nan_indices, donor_country_inflation_rates):
                     local_inflation_rates[idx] = value
 
             assert not np.isnan(local_inflation_rates).any(), (
@@ -968,84 +879,10 @@ class Agents:
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
-    def setup_farm_size_doner_countries(self):
-        """
-        Sets up the farm size donor countries for GEB.
-
-        Notes
-        -----
-        This method sets up the farm size donor countries for GEB. It creates a dictionary with key, value pairs of ISO3 codes.
-        The value-country is used as donor for the key-country.
-        """
-
-        # Load the world countries geodataframe
-        world_countries = self.data_catalog.get_geodataframe(
-            "GADM_level0",
-        ).rename(columns={"GID_0": "ISO3"})
-        world_countries["geometry"] = world_countries.centroid
-        world_countries = world_countries.set_index("ISO3")
-
-        # find countries in model domain
-        region_iso = self.geoms["regions"]["ISO3"].unique().tolist()
-
-        # identify which countries do have farm size data
-        farm_sizes_per_region = (
-            self.data_catalog.get_dataframe("lowder_farm_sizes")
-            .dropna(subset=["Total"], axis=0)
-            .drop(["empty", "income class"], axis=1)
-        )
-        farm_sizes_per_region["Country"] = farm_sizes_per_region["Country"].ffill()
-        # Remove preceding and trailing white space from country names
-        farm_sizes_per_region["Country"] = farm_sizes_per_region["Country"].str.strip()
-        farm_sizes_per_region["Census Year"] = farm_sizes_per_region["Country"].ffill()
-
-        farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
-            COUNTRY_NAME_TO_ISO3
-        )
-        farm_sizes_iso = farm_sizes_per_region["ISO3"].unique().tolist()
-
-        # find countries in model domain that do not have farm size data
-        missing_farm_sizes_iso = list(set(region_iso) - set(farm_sizes_iso))
-
-        self.logger.info(
-            f"Missing farm sizes for {len(missing_farm_sizes_iso)}, countries: {missing_farm_sizes_iso}"
-        )
-        # create farm_size_doner_countries dictionary
-        # empty dictionary to store farm size donor countries
-        farm_size_donor_countries = {}
-        for iso in missing_farm_sizes_iso:
-            print(iso)
-            # find closest country with data based on euclidian distance
-            missing_country_location = world_countries.loc[world_countries.index == iso]
-            # calculate distances to all countries with farm size data
-            countries_with_data_location = world_countries.loc[
-                world_countries.index.isin(farm_sizes_iso)
-            ]
-            countries_with_data_location["distance"] = (
-                countries_with_data_location.geometry.distance(
-                    missing_country_location.geometry.iloc[0]
-                )
-            )
-            # find the closest country with data
-            closest_country = countries_with_data_location["distance"].idxmin()
-
-            # add the doner country and the original country to the dictionary
-            # add the country with missing data (iso) as key and the closest country with data as value
-
-            farm_size_donor_countries[iso] = closest_country
-
-        self.logger.info(f"Farm size donor countries: {farm_size_donor_countries}")
-
-        self.set_dict(
-            farm_size_donor_countries,
-            name="agents/farmers/farm_size_donor_countries",
-        )
-
     def setup_create_farms(
         self,
         region_id_column="region_id",
         country_iso3_column="ISO3",
-        farm_size_donor_countries=None,
         data_source="lowder",
         size_class_boundaries=None,
     ):
@@ -1088,9 +925,6 @@ class Agents:
             }
         else:
             assert size_class_boundaries is not None
-            assert farm_size_donor_countries is None, (
-                "farm_size_donor_countries is only used for lowder data"
-            )
 
         cultivated_land = self.region_subgrid["landsurface/full_region_cultivated_land"]
         assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
@@ -1137,28 +971,24 @@ class Agents:
         self.logger.info(f"Starting processing of {len(regions_shapes)} regions")
 
         # load the farm size donor countries
-        if farm_size_donor_countries:
-            farm_size_donor_countries = self.dict.get(
-                "agents/farmers/farm_size_donor_countries", {}
-            )
+
+        farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
+        farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
 
         for i, (_, region) in enumerate(regions_shapes.iterrows()):
             UID = region[region_id_column]
             if data_source == "lowder":
                 ISO3 = region[country_iso3_column]
-
-                if farm_size_donor_countries:
-                    assert isinstance(farm_size_donor_countries, dict)
-
-                    ISO3 = farm_size_donor_countries.get(ISO3, ISO3)
-
-                    self.logger.info(
-                        f"Using farm size donor country {ISO3} for region {region['ISO3']}"
-                    )
-
                 self.logger.info(
                     f"Processing region ({i + 1}/{len(regions_shapes)}) with ISO3 {ISO3}"
                 )
+
+                if ISO3 in farm_size_donor_country.keys():
+                    ISO3 = farm_size_donor_country.get(ISO3)
+                    self.logger.info(
+                        f"Using farm size donor country {ISO3} for a region in country {region['ISO3']}"
+                    )
+
             else:
                 state, district, tehsil = (
                     region["state_name"],
