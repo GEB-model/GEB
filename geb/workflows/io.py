@@ -16,14 +16,14 @@ import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
 
-all_async_readers = []
+all_async_readers: list = []
 
 
 def load_table(fp):
     return pd.read_parquet(fp, engine="pyarrow")
 
 
-def load_array(fp):
+def load_array(fp: Path) -> np.ndarray:
     if fp.suffix == ".npz":
         return np.load(fp)["data"]
     elif fp.suffix == ".zarr":
@@ -244,7 +244,7 @@ def to_zarr(
             f"Fill value must be nan, not {da.attrs['_FillValue']}"
         )
 
-    path = Path(path)
+    path: Path = Path(path)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_zarr = Path(tmp_dir) / path.name
@@ -407,7 +407,7 @@ def get_window(
         raise ValueError("y must not be empty")
 
     # So that we can do item assignment
-    bounds = list(bounds)
+    bounds: list = list(bounds)
 
     if bounds[0] < x[0]:
         if raise_on_out_of_bounds:

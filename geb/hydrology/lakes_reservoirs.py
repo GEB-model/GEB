@@ -27,10 +27,10 @@ from geb.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
 
-OFF = 0
-LAKE = 1
-RESERVOIR = 2
-LAKE_CONTROL = 3  # currently modelled as normal lake
+OFF: int = 0
+LAKE: int = 1
+RESERVOIR: int = 2
+LAKE_CONTROL: int = 3  # currently modelled as normal lake
 
 
 def laketotal(values, areaclass, nan_class):
@@ -39,12 +39,12 @@ def laketotal(values, areaclass, nan_class):
     return class_totals.astype(values.dtype)
 
 
-GRAVITY = 9.81
-SHAPE = "parabola"
+GRAVITY: float = 9.81
+SHAPE: str = "parabola"
 # http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
 
 if SHAPE == "rectangular":
-    overflow_coefficient_mu = 0.577
+    overflow_coefficient_mu: float = 0.577
 
     def estimate_lake_outflow(lake_factor, height_above_outflow):
         return lake_factor * height_above_outflow**1.5
@@ -54,7 +54,7 @@ if SHAPE == "rectangular":
         return (outflow / lake_factor) ** (2 / 3)
 
 elif SHAPE == "parabola":
-    overflow_coefficient_mu = 0.612
+    overflow_coefficient_mu: float = 0.612
 
     def estimate_lake_outflow(lake_factor, height_above_outflow):
         return lake_factor * height_above_outflow**2
@@ -190,15 +190,13 @@ class LakesReservoirs(Module):
 
     def spinup(self):
         # load lakes/reservoirs map with a single ID for each lake/reservoir
-        waterBodyID_unmapped = self.grid.load(
+        waterBodyID_unmapped: np.ndarray = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
         )
         self.grid.var.waterBodyID, self.var.waterbody_mapping = (
             self.map_water_bodies_IDs(waterBodyID_unmapped)
         )
 
-        # we need to re-calculate the outflows, because the ID might have changed due
-        # to the earlier operations. This is the final one as IDs have now been mapped
         self.grid.var.waterbody_outflow_points = self.get_outflows(
             self.grid.var.waterBodyID
         )
@@ -313,15 +311,18 @@ class LakesReservoirs(Module):
 
     def get_outflows(self, waterBodyID):
         # calculate biggest outlet = biggest accumulation of ldd network
+        upstream_area_n_cells = self.hydrology.routing.river_network.upstream_area(
+            unit="cell"
+        )[~self.grid.mask]
         upstream_area_within_waterbodies = np.zeros_like(
-            self.hydrology.routing.router.upstream_area_n_cells,
+            upstream_area_n_cells,
             shape=waterBodyID.max() + 2,
         )
         upstream_area_within_waterbodies[-1] = -1
         np.maximum.at(
             upstream_area_within_waterbodies,
             waterBodyID[waterBodyID != -1],
-            self.hydrology.routing.router.upstream_area_n_cells[waterBodyID != -1],
+            upstream_area_n_cells[waterBodyID != -1],
         )
         upstream_area_within_waterbodies = np.take(
             upstream_area_within_waterbodies, waterBodyID
@@ -337,8 +338,7 @@ class LakesReservoirs(Module):
         outflow_elevation = self.grid.compress(outflow_elevation)
 
         waterbody_outflow_points = np.where(
-            self.hydrology.routing.router.upstream_area_n_cells
-            == upstream_area_within_waterbodies,
+            upstream_area_n_cells == upstream_area_within_waterbodies,
             waterBodyID,
             -1,
         )
@@ -483,7 +483,7 @@ class LakesReservoirs(Module):
                 tollerance=1,  # 1 m3
             )
 
-        return outflow_to_drainage_network_m3
+        return outflow_to_drainage_network_m3, command_area_release_m3
 
     @property
     def is_reservoir(self):

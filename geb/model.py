@@ -212,8 +212,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.store.load()
 
         if self.simulate_hydrology:
-            if load_data_from_store:
-                self.hydrology.routing.set_router()
+            self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
             self.hydrology.soil.set_global_variables()
 
