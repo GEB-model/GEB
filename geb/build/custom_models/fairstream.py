@@ -53,7 +53,7 @@ class Survey:
             # get correlation between two variables
             cross_tab = pd.crosstab(self.samples[edge[0]], self.samples[edge[1]])
             chi_stat = chi2_contingency(cross_tab)[0]
-            N = len(self.samples)
+            N: int = len(self.samples)
             minimum_dimension = min(cross_tab.shape) - 1
 
             # Cramer’s V value
