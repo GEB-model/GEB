@@ -36,6 +36,24 @@ class Market(AgentBaseClass):
             self.model, "crops/crop_prices"
         )
 
+        if (
+            "calibration" in self.model.config
+            and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
+        ):
+            self.production_influence_calibration_factor = np.array(
+                [
+                    self.model.config["agent_settings"]["calibration_crops"][
+                        f"price_{i}"
+                    ]
+                    for i in range(self._crop_prices[1].shape[2])
+                ],
+                dtype=np.float32,
+            )
+        else:
+            self.production_influence_calibration_factor = np.ones(
+                self._crop_prices[1].shape[2], dtype=np.float32
+            )
+
     @property
     def name(self):
         return "agents.market"
@@ -78,9 +96,16 @@ class Market(AgentBaseClass):
             extra_dims_names=("years",),
         )
 
-    def estimate_price_model(self) -> None:
-        self.var.parameters = np.full((self.var.production.shape[0], 2), np.nan)
+        self.var.parameters = DynamicArray(
+            n=n_crops,
+            max_n=n_crops,
+            dtype=np.float32,
+            fill_value=np.nan,
+            extra_dims=(2,),
+            extra_dims_names=("params",),
+        )
 
+    def estimate_price_model(self) -> None:
         estimation_start_year = 1  # skip first year
         estimation_end_year = (
             self.model.config["general"]["start_time"].year
@@ -130,7 +155,9 @@ class Market(AgentBaseClass):
             ]  # for now taking the previous year, should be updated
             price_pred = np.exp(
                 1 * self.var.parameters[:, 0]
-                + np.log(production) * self.var.parameters[:, 1]
+                + self.production_influence_calibration_factor
+                * np.log(production)
+                * self.var.parameters[:, 1]
             )
             price_pred_per_region[region_idx, :] = price_pred
 
@@ -169,6 +196,8 @@ class Market(AgentBaseClass):
         if not self.model.simulate_hydrology:
             return
         self.track_production_and_price()
+        if self.model.current_time == self.model.end_time and self.model.in_spinup:
+            self.estimate_price_model()
         self.report(self, locals())
 
     @property
