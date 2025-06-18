@@ -1825,6 +1825,8 @@ class CropFarmers(AgentBaseClass):
         return credibility_premiums
 
     def premium_index_insurance(self, potential_insured_loss):
+        # Make a series of candidate insurance contracts and find the optimal contract
+        # with the least basis risk considering past losses
         mask_columns = np.all(self.var.yearly_income == 0, axis=0)
         gev_params = self.var.GEV_parameters.data
         strike_vals = np.round(np.arange(0.0, -2.0, -0.1), 2)
