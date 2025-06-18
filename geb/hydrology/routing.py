@@ -502,16 +502,19 @@ class Routing(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
+        self.ldd: npt.NDArray[np.uint8] = self.grid.load(
+            self.model.files["grid"]["routing/ldd"],
+        )
+
         if self.model.in_spinup:
             self.spinup()
 
-        ldd: npt.NDArray[np.uint8] = self.grid.var.ldd
         mask: npt.NDArray[bool] = ~self.grid.mask
 
         ldd_uncompressed: npt.NDArray[np.uint8] = np.full_like(
-            mask, 255, dtype=ldd.dtype
+            mask, 255, dtype=self.ldd.dtype
         )
-        ldd_uncompressed[mask] = ldd.ravel()
+        ldd_uncompressed[mask] = self.ldd.ravel()
 
         self.river_network: pyflwdir.pyflwdir.FlwdirRaster = pyflwdir.from_array(
             ldd_uncompressed,
@@ -552,19 +555,15 @@ class Routing(Module):
             )
 
     def spinup(self):
-        self.grid.var.ldd = self.grid.load(
-            self.model.files["grid"]["routing/ldd"],
-        )
-
         self.grid.var.upstream_area = self.grid.load(
             self.model.files["grid"]["routing/upstream_area"]
         )
 
         # number of substep per day
-        self.var.n_routing_substeps = 24
+        self.var.n_routing_substeps: int = 24
         # kinematic wave parameter: 0.6 is for broad sheet flow
 
-        self.var.river_beta = 0.6  # TODO: Make this a parameter
+        self.var.river_beta: float = 0.6  # TODO: Make this a parameter
 
         # Channel Manning's n
         self.grid.var.river_mannings = (
@@ -580,8 +579,8 @@ class Routing(Module):
 
         # where there is a pit, the river length is set to distance to the center of the cell,
         # thus half of the sqrt of the cell area
-        self.grid.var.river_length[self.grid.var.ldd == 5] = (
-            np.sqrt(self.grid.var.cell_area[self.grid.var.ldd == 5]) / 2
+        self.grid.var.river_length[self.ldd == 5] = (
+            np.sqrt(self.grid.var.cell_area[self.ldd == 5]) / 2
         )
         assert (self.grid.var.river_length > 0).all(), (
             "Channel length must be greater than 0 for all cells"
@@ -728,6 +727,10 @@ class Routing(Module):
                 )
             )
 
+            self.hydrology.lakes_reservoirs.var.storage -= (
+                command_area_release_m3_routing_step
+            )
+
             assert (
                 outflow_per_waterbody_m3 <= self.hydrology.lakes_reservoirs.var.storage
             ).all(), "outflow cannot be smaller or equal to storage"
@@ -822,15 +825,16 @@ class Routing(Module):
                 tollerance=100,
             )
 
-            self.routing_loss: float = (
+            self.routing_loss: np.float64 = (
                 evaporation_in_rivers_m3.sum()
                 + waterbody_evaporation_m3.sum()
                 + outflow_at_pits_m3.sum()
             )
+
             assert self.routing_loss >= 0, "Routing loss cannot be negative"
 
         self.report(self, locals())
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.routing"

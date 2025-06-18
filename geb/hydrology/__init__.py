@@ -190,7 +190,7 @@ class Hydrology(Data, Module):
                 ],
                 prestorages=[self.var.system_storage],
                 poststorages=[current_storage],
-                tollerance=100_000,
+                tollerance=10_000,
             )
 
         # update the storage for the next timestep

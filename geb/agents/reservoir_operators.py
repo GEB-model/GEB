@@ -1,6 +1,7 @@
 import calendar
 
 import numpy as np
+import numpy.typing as npt
 
 from ..hydrology.lakes_reservoirs import RESERVOIR
 from ..store import DynamicArray
@@ -33,7 +34,7 @@ class ReservoirOperators(AgentBaseClass):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.reservoir_operators"
 
     def spinup(self):
@@ -141,8 +142,12 @@ class ReservoirOperators(AgentBaseClass):
         )
         return None
 
-    def release(self, daily_substeps, current_substep):
-        command_area_release_substep = self.command_area_release_m3 / daily_substeps
+    def release(
+        self, daily_substeps: int, current_substep: int
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+        command_area_release_substep: npt.NDArray[np.float64] = (
+            self.command_area_release_m3 / daily_substeps
+        )
 
         # subtract the evaporation in this timestep from the remaining evaporation
         self.remaining_command_area_release -= command_area_release_substep
@@ -156,7 +161,7 @@ class ReservoirOperators(AgentBaseClass):
         # main channel release is the usable release, the environmental release
         # minus the command area release. The command area release
         # is divided by the daily timesteps to get the release per timestep.
-        main_channel_release = (
+        main_channel_release: npt.NDArray[np.float64] = (
             usable_release_m3 + environmental_release_m3 - command_area_release_substep
         )
         assert (main_channel_release >= 0).all()
@@ -168,25 +173,31 @@ class ReservoirOperators(AgentBaseClass):
                 self.remaining_command_area_release, 0, atol=1e-7
             )
 
+        np.testing.assert_allclose(
+            main_channel_release + command_area_release_substep,
+            usable_release_m3 + environmental_release_m3,
+            atol=1e-7,
+        )
+
         return main_channel_release, command_area_release_substep
 
     def _get_release(
         self, irrigation_demand_m3, daily_substeps, enforce_minimum_usable_release_m3
-    ):
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         if irrigation_demand_m3.size == 0:
             return np.zeros_like(irrigation_demand_m3), np.zeros_like(
                 irrigation_demand_m3
             )
-        days_in_month = calendar.monthrange(
+        days_in_month: int = calendar.monthrange(
             self.model.current_time.year, self.model.current_time.month
         )[1]
 
-        n_monthly_substeps = daily_substeps * days_in_month
+        n_monthly_substeps: int = daily_substeps * days_in_month
 
-        month_weights = np.array(
+        month_weights: npt.NDArray[np.float32] = np.array(
             [31, 28.2425, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], dtype=np.float32
         )
-        month_weights = np.broadcast_to(
+        month_weights: npt.NDArray[np.float32] = np.broadcast_to(
             month_weights, (irrigation_demand_m3.shape[0], 12)
         )[..., np.newaxis].repeat(self.var.history_fill_index - 1, axis=2)
 
