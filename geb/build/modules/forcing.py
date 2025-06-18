@@ -1050,7 +1050,22 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
-    def setup_forcing_ISIMIP(self, resolution_arcsec, forcing, ssp):
+    def setup_forcing_ISIMIP(
+        self, resolution_arcsec: int, forcing: str, ssp: str
+    ) -> None:
+        """
+        Sets up the forcing data for GEB using ISIMIP data.
+
+        Parameters
+        ----------
+        resolution_arcsec : int
+            The resolution of the data in arcseconds. Supported values are 30 and 1800.
+        forcing : str
+            The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
+            and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
+        ssp: str
+            The Shared Socioeconomic Pathway (SSP) scenario to use. Supported values are ssp126, ssp370, and ssp585.
+        """
         if resolution_arcsec == 30:
             assert forcing == "chelsa-w5e5", (
                 "Only chelsa-w5e5 is supported for 30 arcsec resolution"
@@ -1090,7 +1105,7 @@ class Forcing:
         data_source: str,
         resolution_arcsec,
         forcing,
-        ssp=None,
+        ssp: None | str = None,
     ):
         """
         Sets up the forcing data for GEB.
@@ -1116,6 +1131,7 @@ class Forcing:
         The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
         if data_source == "isimip":
+            assert ssp is not None, "ssp must be specified for ISIMIP data"
             self.setup_forcing_ISIMIP(resolution_arcsec, forcing, ssp)
         elif data_source == "era5":
             self.setup_forcing_era5()
@@ -1788,7 +1804,7 @@ class Forcing:
             ).astype(np.float32)
 
             # remove all nan values as a result of the sliding window
-            SPEI = SPEI.isel(time=slice(window_months - 1, -1))
+            SPEI: xr.DataArray = SPEI.isel(time=slice(window_months - 1, None))
 
             with tempfile.TemporaryDirectory() as tmp_spei_folder:
                 tmp_spei_file = Path(tmp_spei_folder) / "tmp_spei_file.zarr"
