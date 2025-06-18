@@ -53,24 +53,8 @@ class WaterDemand(Module):
             water_body_mapping, reservoir_command_areas, mode="clip"
         )
 
-    def get_available_water(
-        self, gross_irrigation_demand_m3_per_command_area: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Get available water from reservoirs, channels, and groundwater.
-
-        Parameters
-        ----------
-        gross_irrigation_demand_m3_per_command_area : np.ndarray
-            Gross irrigation demand in m3 per command area.
-
-        Returns
-        -------
-        tuple[np.ndarray, np.ndarray, np.ndarray]
-            Available water in m3 from channels, reservoirs, and groundwater.
-        """
-
-        available_reservoir_storage_m3: np.ndarray = np.zeros(
+    def get_available_water(self, gross_irrigation_demand_m3_per_command_area):
+        available_reservoir_storage_m3 = np.zeros(
             self.hydrology.lakes_reservoirs.n, dtype=np.float32
         )
 
@@ -80,12 +64,12 @@ class WaterDemand(Module):
             )
         )
 
-        available_channel_storage_m3: np.ndarray = (
+        available_channel_storage_m3 = (
             self.hydrology.routing.router.get_available_storage()
         )
         available_channel_storage_m3[self.grid.var.waterBodyID != -1] = 0.0
 
-        available_groundwater_m3: np.ndarray = (
+        available_groundwater_m3 = (
             self.hydrology.groundwater.modflow.available_groundwater_m3.copy()
         )
 
@@ -112,7 +96,7 @@ class WaterDemand(Module):
         return out
 
     def step(self, potential_evapotranspiration):
-        timer: TimingModule = TimingModule("Water demand")
+        timer = TimingModule("Water demand")
 
         total_water_demand_loss_m3 = 0
 
