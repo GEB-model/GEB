@@ -7,10 +7,9 @@ from ..hydrology.lakes_reservoirs import RESERVOIR
 from ..store import DynamicArray
 from .general import AgentBaseClass
 
-IRRIGATION_RESERVOIR = 1
-FLOOD_RESERVOIR = 2
-
-RESERVOIR_MEMORY_YEARS = 20
+IRRIGATION_RESERVOIR: int = 1
+FLOOD_RESERVOIR: int = 2
+RESERVOIR_MEMORY_YEARS: int = 20
 
 
 class ReservoirOperators(AgentBaseClass):

@@ -22,6 +22,7 @@
 
 import numpy as np
 import numpy.typing as npt
+import numpy.typing as npt
 import pyflwdir
 from numba import njit
 

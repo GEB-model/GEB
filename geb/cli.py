@@ -185,7 +185,7 @@ def click_run_options():
 
 def run_model_with_method(
     method: str | None,
-    profiling,
+    profiling: bool,
     config,
     working_directory,
     gui,
@@ -193,6 +193,7 @@ def run_model_with_method(
     port,
     timing,
     optimize,
+    method_args: dict = {},
     close_after_run=True,
 ):
     """Run model."""
@@ -230,7 +231,7 @@ def run_model_with_method(
 
             geb = GEBModel(**model_params)
             if method is not None:
-                getattr(geb, method)()
+                getattr(geb, method)(**method_args)
             if close_after_run:
                 geb.close()
 
@@ -618,8 +619,15 @@ def update(*args, **kwargs):
 
 @cli.command()
 @click_run_options()
-def evaluate(*args, **kwargs):
-    run_model_with_method(method="evaluate", *args, **kwargs)
+@click.option(
+    "--methods", default=None, help="Comma-seperated list of methods to evaluate."
+)
+def evaluate(methods: list | None, *args, **kwargs) -> None:
+    # If no methods are provided, pass None to run_model_with_method
+    methods: list | None = None if not methods else methods.split(",")
+    run_model_with_method(
+        method="evaluate", method_args={"methods": methods}, *args, **kwargs
+    )
 
 
 @working_directory_option
