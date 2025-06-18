@@ -27,7 +27,7 @@ DEFAULT_BUILD_ARGS = {
 }
 
 DEFAULT_RUN_ARGS = {
-    "config": str(example / "model.yml"),
+    "config": "model.yml",
     "working_directory": working_directory,
     "gui": False,
     "no_browser": True,
