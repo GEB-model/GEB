@@ -36,6 +36,17 @@ def get_channel_ratio(river_width, river_length, cell_area):
     )
 
 
+def create_river_network(
+    ldd_uncompressed: npt.NDArray[np.uint8], mask: npt.NDArray[np.bool]
+) -> pyflwdir.FlwdirRaster:
+    return pyflwdir.from_array(
+        ldd_uncompressed,
+        ftype="ldd",
+        latlon=True,
+        mask=mask,
+    )
+
+
 MAX_ITERS: int = 10
 
 
@@ -43,7 +54,7 @@ class Router:
     def __init__(
         self,
         dt: float | int,
-        river_network: pyflwdir.pyflwdir.FlwdirRaster,
+        river_network: pyflwdir.FlwdirRaster,
         Q_initial: np.ndarray,
         waterbody_id: np.ndarray,
         is_waterbody_outflow: np.ndarray,
@@ -509,18 +520,15 @@ class Routing(Module):
         if self.model.in_spinup:
             self.spinup()
 
-        mask: npt.NDArray[bool] = ~self.grid.mask
+        mask: npt.NDArray[np.bool] = ~self.grid.mask
 
         ldd_uncompressed: npt.NDArray[np.uint8] = np.full_like(
             mask, 255, dtype=self.ldd.dtype
         )
         ldd_uncompressed[mask] = self.ldd.ravel()
 
-        self.river_network: pyflwdir.pyflwdir.FlwdirRaster = pyflwdir.from_array(
-            ldd_uncompressed,
-            ftype="ldd",
-            latlon=True,
-            mask=mask,
+        self.river_network: pyflwdir.FlwdirRaster = create_river_network(
+            ldd_uncompressed=ldd_uncompressed, mask=mask
         )
 
     def set_router(self):
