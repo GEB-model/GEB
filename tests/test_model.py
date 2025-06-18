@@ -28,7 +28,7 @@ DEFAULT_BUILD_ARGS = {
 }
 
 DEFAULT_RUN_ARGS = {
-    "config": str(example / "model.yml"),
+    "config": "model.yml",
     "working_directory": working_directory,
     "gui": False,
     "no_browser": True,
@@ -89,6 +89,9 @@ def test_update_with_dict():
     [
         "setup_crop_prices",
         "setup_discharge_observations",
+        "setup_forcing_era5",
+        "setup_water_demand",
+        "setup_SPEI",
     ],
 )
 def test_update_with_method(method: str):
@@ -119,7 +122,7 @@ def test_run_yearly():
     args = DEFAULT_RUN_ARGS.copy()
     config = parse_config(working_directory / args["config"])
     config["general"]["start_time"] = date(2000, 1, 1)
-    config["general"]["start_time"] = date(2050, 1, 1)
+    config["general"]["end_time"] = date(2049, 12, 31)
     args["config"] = config
     args["config"]["report"] = {}
     run_model_with_method(method="run_yearly", **args)
@@ -187,3 +190,36 @@ def test_multiverse():
         assert forecast_mean_discharge == mean_discharge
 
     geb.close()
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_ISIMIP_forcing():
+    """
+    Test the ISIMIP forcing update function.
+    This is a special case that requires a specific setup.
+    """
+    args = DEFAULT_BUILD_ARGS.copy()
+
+    build_config = parse_config(working_directory / args["build_config"])
+
+    original_time_range = build_config["set_time_range"]
+
+    args["build_config"] = {
+        # "set_time_range": {
+        #     "start_date": date(2000, 1, 1),
+        #     "end_date": date(2024, 12, 31),
+        # },
+        "setup_forcing_ISIMIP": {
+            "resolution_arcsec": 30,
+            "forcing": "chelsa-w5e5",
+            "ssp": "ssp370",
+        },
+    }
+    update_fn(**args)
+
+    # Reset the time range to the original one
+    args["build_config"] = {
+        "set_time_range": original_time_range,
+    }
+
+    update_fn(**args)
