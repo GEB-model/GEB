@@ -557,7 +557,7 @@ class AsyncForcingReader:
         # that the dataset is the same as the previous one or the next one in line,
         # so we can just check the current index and the next one. Only if those do not match
         # we have to search for the correct index.
-        numpy_date = np.datetime64(date, "ns")
+        numpy_date: np.datetime64 = np.datetime64(date, "ns")
         if self.datetime_index[self.current_index] == numpy_date:
             return self.current_index
         elif self.datetime_index[self.current_index + 1] == numpy_date:
