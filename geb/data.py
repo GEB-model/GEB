@@ -3,20 +3,26 @@ from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 
 
 class DateIndex:
     def __init__(self, dates):
         self.dates = np.array(dates)
 
+        self.last_valid_date = self.dates[-1] + relativedelta(
+            self.dates[-1], self.dates[-2]
+        )  # extrapolate last date.
+
     def get(self, date):
         # find first date where date is larger or equal to date in self.dates
-        assert date >= self.dates[0], (
-            f"Date {date} is before first date {self.dates[0]}"
-        )
-        assert date <= self.dates[-1], (
-            f"Date {date} is after last date {self.dates[-1]}"
-        )
+        if date < self.dates[0]:
+            raise ValueError(f"Date {date} is before first valid date {self.dates[0]}")
+        if date > self.last_valid_date:
+            raise ValueError(
+                f"Date {date} is after last valid date {self.last_valid_date}"
+            )
+
         return np.searchsorted(self.dates, date, side="right") - 1
 
     def __len__(self):
