@@ -85,6 +85,16 @@ class WaterDemand(Module):
         demand -= withdrawal  # update in place
         return withdrawal
 
+    def weighted_sum_per_reservoir(self, farmer_command_area, weights):
+        mask = farmer_command_area != -1
+        codes = farmer_command_area[mask]
+        wts = weights[mask]
+        reservoir_ids = np.unique(farmer_command_area[mask])
+        idx = np.searchsorted(reservoir_ids, codes)
+        out = np.zeros(len(reservoir_ids), dtype=np.float32)
+        np.add.at(out, idx, wts)
+        return out
+
     def step(self, potential_evapotranspiration):
         timer = TimingModule("Water demand")
 
@@ -117,11 +127,9 @@ class WaterDemand(Module):
         )
 
         farmer_command_area = self.model.agents.crop_farmers.farmer_command_area
-        gross_irrigation_demand_m3_per_command_area = np.bincount(
-            farmer_command_area[farmer_command_area != -1],
-            gross_irrigation_demand_m3_per_farmer[farmer_command_area != -1],
-            minlength=self.hydrology.lakes_reservoirs.reservoir_storage.size,
-        ).astype(np.float32)
+        gross_irrigation_demand_m3_per_command_area = self.weighted_sum_per_reservoir(
+            farmer_command_area, gross_irrigation_demand_m3_per_farmer
+        )
 
         assert (domestic_water_demand_per_household >= 0).all()
         assert (industry_water_demand >= 0).all()
