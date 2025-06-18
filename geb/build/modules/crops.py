@@ -290,11 +290,16 @@ class Crops:
                 [
                     col
                     for col in data.columns
-                    if col.lower() in crop_names or col == "_crop_price_inflation"
+                    if col.lower() in crop_names
+                    or col in ("_crop_price_inflation", "_crop_price_LCU_USD")
                 ]
             ]
 
             data = self.inter_and_extrapolate_prices(data, unique_regions)
+
+            # remove columns that are not needed anymore
+            data = data.drop(columns=["_crop_price_inflation"])
+            data = data.drop(columns=["_crop_price_LCU_USD"])
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
@@ -681,9 +686,6 @@ class Crops:
                 else:
                     data.loc[region_id, crop] = crop_data
 
-        # assert no nan values in costs
-        data = data.drop(columns=["_crop_price_inflation"])
-        data = data.drop(columns=["_crop_price_LCU_USD"])
         return data
 
     def setup_cultivation_costs(
