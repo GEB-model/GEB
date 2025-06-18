@@ -1,13 +1,11 @@
 import math
 
 import numpy as np
-import pyflwdir
 import pytest
 
 from geb.hydrology.routing import (
     Accuflux,
     KinematicWave,
-    create_river_network,
     get_channel_ratio,
     update_node_kinematic,
 )
@@ -22,7 +20,7 @@ def test_update_node_kinematic_1():
         beta=0.6,
         deltaT=15,
         deltaX=10,
-        epsilon=np.float32(1e-12),
+        epsilon=1e-12,
     )
     Q_check = 0.000031450866300937
     assert math.isclose(Q_new, Q_check, abs_tol=1e-12)
@@ -37,9 +35,9 @@ def test_update_node_kinematic_2():
         beta=0.6,
         deltaT=15,
         deltaX=10,
-        epsilon=np.float32(1e-12),
+        epsilon=1e-12,
     )
-    assert math.isclose(Q_new, 1e-30, abs_tol=1e-12)
+    assert Q_new == 1e-30
 
 
 def test_update_node_kinematic_no_flow():
@@ -51,9 +49,9 @@ def test_update_node_kinematic_no_flow():
         beta=0.6,
         deltaT=15,
         deltaX=10,
-        epsilon=np.float32(1e-12),
+        epsilon=1e-12,
     )
-    assert math.isclose(Q_new, 1e-30, abs_tol=1e-12)
+    assert Q_new == 1e-30
 
 
 # def test_storage_discharge_conversions():
@@ -152,14 +150,11 @@ def Q_initial():
 
 
 def test_accuflux(ldd, mask, Q_initial):
-    river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
-
-    router: Accuflux = Accuflux(
+    router = Accuflux(
         dt=1,
-        river_network=river_network,
+        ldd=ldd[mask],
+        mask=mask,
         Q_initial=Q_initial[mask],
-        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
-        is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
     )
 
     sideflow = np.array(
@@ -194,13 +189,11 @@ def test_accuflux(ldd, mask, Q_initial):
 
 
 def test_accuflux_with_longer_dt(ldd, mask, Q_initial):
-    river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
-    router: Accuflux = Accuflux(
+    router = Accuflux(
         dt=15,
-        river_network=river_network,
+        ldd=ldd[mask],
+        mask=mask,
         Q_initial=Q_initial[mask],
-        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
-        is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
     )
 
     sideflow = np.array(
@@ -235,13 +228,11 @@ def test_accuflux_with_longer_dt(ldd, mask, Q_initial):
 
 
 def test_accuflux_with_sideflow(mask, ldd, Q_initial):
-    river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router = Accuflux(
         dt=1,
-        river_network=river_network,
+        ldd=ldd[mask],
+        mask=mask,
         Q_initial=Q_initial[mask],
-        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
-        is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
     )
 
     sideflow = np.array(
@@ -280,8 +271,6 @@ def test_accuflux_with_sideflow(mask, ldd, Q_initial):
 
 
 def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
-    river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
-
     waterbody_id = np.array(
         [
             [-1, -1, -1, -1],
@@ -292,9 +281,10 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
     )
     Q_initial[waterbody_id != -1] = 0
 
-    router: Accuflux = Accuflux(
+    router = Accuflux(
         dt=1,
-        river_network=river_network,
+        ldd=ldd[mask],
+        mask=mask,
         Q_initial=Q_initial[mask],
         is_waterbody_outflow=np.array(
             [
@@ -352,17 +342,15 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
 
 
 def test_kinematic(mask, ldd, Q_initial):
-    river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
-    router: KinematicWave = KinematicWave(
-        river_network=river_network,
+    router = KinematicWave(
+        ldd=ldd[mask],
+        mask=mask,
         Q_initial=Q_initial[mask],
         river_width=np.full_like(mask, 2.0)[mask],
         river_length=np.full_like(mask, 5.0)[mask],
         river_alpha=np.full_like(mask, 1.0)[mask],
         river_beta=0.6,
         dt=15,
-        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
-        is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
     )
 
     sideflow = np.array(

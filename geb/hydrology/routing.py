@@ -36,29 +36,13 @@ def get_channel_ratio(river_width, river_length, cell_area):
     )
 
 
-def create_river_network(
-    ldd_uncompressed: npt.NDArray[np.uint8], mask: npt.NDArray[np.bool]
-) -> pyflwdir.FlwdirRaster:
-    return pyflwdir.from_array(
-        ldd_uncompressed,
-        ftype="ldd",
-        latlon=True,
-        mask=mask,
-    )
-
-
-MAX_ITERS: int = 10
+MAX_ITERS = 10
 
 
 class Router:
     def __init__(
-        self,
-        dt: float | int,
-        river_network: pyflwdir.FlwdirRaster,
-        Q_initial: np.ndarray,
-        waterbody_id: np.ndarray,
-        is_waterbody_outflow: np.ndarray,
-    ) -> None:
+        self, dt, ldd, mask, Q_initial, is_waterbody_outflow=None, waterbody_id=None
+    ):
         """
         Prepare the routing for the model.
 
@@ -513,23 +497,8 @@ class Routing(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.ldd: npt.NDArray[np.uint8] = self.grid.load(
-            self.model.files["grid"]["routing/ldd"],
-        )
-
         if self.model.in_spinup:
             self.spinup()
-
-        mask: npt.NDArray[np.bool] = ~self.grid.mask
-
-        ldd_uncompressed: npt.NDArray[np.uint8] = np.full_like(
-            mask, 255, dtype=self.ldd.dtype
-        )
-        ldd_uncompressed[mask] = self.ldd.ravel()
-
-        self.river_network: pyflwdir.FlwdirRaster = create_river_network(
-            ldd_uncompressed=ldd_uncompressed, mask=mask
-        )
 
     def set_router(self):
         routing_algorithm: str = self.model.config["hydrology"]["routing"]["algorithm"]
@@ -563,15 +532,19 @@ class Routing(Module):
             )
 
     def spinup(self):
+        self.grid.var.ldd = self.grid.load(
+            self.model.files["grid"]["routing/ldd"],
+        )
+
         self.grid.var.upstream_area = self.grid.load(
             self.model.files["grid"]["routing/upstream_area"]
         )
 
         # number of substep per day
-        self.var.n_routing_substeps: int = 24
+        self.var.n_routing_substeps = 24
         # kinematic wave parameter: 0.6 is for broad sheet flow
 
-        self.var.river_beta: float = 0.6  # TODO: Make this a parameter
+        self.var.river_beta = 0.6  # TODO: Make this a parameter
 
         # Channel Manning's n
         self.grid.var.river_mannings = (
@@ -587,8 +560,8 @@ class Routing(Module):
 
         # where there is a pit, the river length is set to distance to the center of the cell,
         # thus half of the sqrt of the cell area
-        self.grid.var.river_length[self.ldd == 5] = (
-            np.sqrt(self.grid.var.cell_area[self.ldd == 5]) / 2
+        self.grid.var.river_length[self.grid.var.ldd == 5] = (
+            np.sqrt(self.grid.var.cell_area[self.grid.var.ldd == 5]) / 2
         )
         assert (self.grid.var.river_length > 0).all(), (
             "Channel length must be greater than 0 for all cells"
@@ -727,18 +700,11 @@ class Routing(Module):
                 actual_evaporation_from_water_bodies_per_routing_step_m3
             )
 
-            outflow_per_waterbody_m3, command_area_release_m3_routing_step = (
-                self.hydrology.lakes_reservoirs.substep(
-                    current_substep=subrouting_step,
-                    n_routing_substeps=self.var.n_routing_substeps,
-                    routing_step_length_seconds=self.var.routing_step_length_seconds,
-                )
+            outflow_per_waterbody_m3 = self.hydrology.lakes_reservoirs.substep(
+                current_substep=subrouting_step,
+                n_routing_substeps=self.var.n_routing_substeps,
+                routing_step_length_seconds=self.var.routing_step_length_seconds,
             )
-
-            self.hydrology.lakes_reservoirs.var.storage -= (
-                command_area_release_m3_routing_step
-            )
-
             assert (
                 outflow_per_waterbody_m3 <= self.hydrology.lakes_reservoirs.var.storage
             ).all(), "outflow cannot be smaller or equal to storage"
@@ -833,16 +799,15 @@ class Routing(Module):
                 tollerance=100,
             )
 
-            self.routing_loss: np.float64 = (
+            self.routing_loss = (
                 evaporation_in_rivers_m3.sum()
                 + waterbody_evaporation_m3.sum()
                 + outflow_at_pits_m3.sum()
             )
-
             assert self.routing_loss >= 0, "Routing loss cannot be negative"
 
         self.report(self, locals())
 
     @property
-    def name(self) -> str:
+    def name(self):
         return "hydrology.routing"

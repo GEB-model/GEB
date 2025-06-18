@@ -135,6 +135,3 @@ reportAttributeAccessIssue = "none"
 norecursedirs = [".venv", "build", "dist", "tmp*"]
 testpaths = ["tests"]
 addopts = "--ignore=.venv"
-
-[tool.ty.environment]
-python-version = "3.13"

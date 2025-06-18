@@ -1,7 +1,6 @@
 from typing import Union
 
 import numpy as np
-import numpy.typing as npt
 from numba import njit, prange
 
 from geb.hydrology.soil import (
@@ -727,7 +726,7 @@ def plant(
     loan_tracker: np.ndarray,
     interest_rate: np.ndarray,
     farmers_going_out_of_business: bool,
-) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int64]]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
 
     Args:
@@ -746,39 +745,35 @@ def plant(
         "Farmers going out of business not implemented."
     )
 
-    plant: npt.NDArray[np.int32] = np.full_like(crop_map, -1, dtype=np.int32)
-    sell_land: npt.NDArray[bool] = np.zeros(n, dtype=np.bool_)
+    plant = np.full_like(crop_map, -1, dtype=np.int32)
+    sell_land = np.zeros(n, dtype=np.bool_)
 
-    planting_farmers_per_season: npt.NDArray[bool] = (
-        crop_calendar[:, :, 1] == day_index
-    ) & (
+    planting_farmers_per_season = (crop_calendar[:, :, 1] == day_index) & (
         crop_calendar[:, :, 3]
         == current_crop_calendar_rotation_year_index[:, np.newaxis]
     )
-    planting_farmers: npt.NDArray[np.int64] = planting_farmers_per_season.sum(axis=1)
+    planting_farmers = planting_farmers_per_season.sum(axis=1)
 
     assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
 
-    planting_farmers_idx: npt.NDArray[np.int64] = np.where(planting_farmers == 1)[0]
+    planting_farmers_idx = np.where(planting_farmers == 1)[0]
     if not planting_farmers_idx.size == 0:
-        crop_rotation: npt.NDArray[np.int64] = np.argmax(
+        crop_rotation = np.argmax(
             planting_farmers_per_season[planting_farmers_idx], axis=1
         )
 
         assert planting_farmers_idx.size == crop_rotation.size
 
         for i in range(planting_farmers_idx.size):
-            farmer_idx: np.int64 = planting_farmers_idx[i]
-            farmer_crop_rotation: np.int64 = crop_rotation[i]
+            farmer_idx = planting_farmers_idx[i]
+            farmer_crop_rotation = crop_rotation[i]
 
-            farmer_fields: npt.NDArray[np.int32] = get_farmer_HRUs(
+            farmer_fields = get_farmer_HRUs(
                 field_indices, field_indices_by_farmer, farmer_idx
             )
-            farmer_crop_data: npt.NDArray[np.int32] = crop_calendar[
-                farmer_idx, farmer_crop_rotation
-            ]
-            farmer_crop: np.int32 = farmer_crop_data[0]
-            field_harvest_age: np.int32 = farmer_crop_data[2]
+            farmer_crop_data = crop_calendar[farmer_idx, farmer_crop_rotation]
+            farmer_crop = farmer_crop_data[0]
+            field_harvest_age = farmer_crop_data[2]
 
             assert farmer_crop != -1
 

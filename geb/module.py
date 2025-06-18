@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import Any
 
 
 class Module(ABC):
@@ -12,7 +11,7 @@ class Module(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str:
+    def name(self):
         pass
 
     @abstractmethod
@@ -20,7 +19,7 @@ class Module(ABC):
         pass
 
     @abstractmethod
-    def step(self) -> Any | tuple[Any, ...]:
+    def step(self):
         pass
 
     def report(self, module, local_variables):
