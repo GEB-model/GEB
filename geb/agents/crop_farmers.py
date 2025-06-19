@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Tuple
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from honeybees.library.neighbors import find_neighbors
 from honeybees.library.raster import pixels_to_coords, sample_from_map
@@ -1359,11 +1360,19 @@ class CropFarmers(AgentBaseClass):
 
         return yield_ratio
 
-    def field_to_farmer(self, array, method="sum"):
+    def field_to_farmer(
+        self,
+        array: npt.NDArray[np.floating],
+        method: str = "sum",
+    ) -> npt.NDArray[np.floating]:
         assert method == "sum", "Only sum is implemented"
-        farmer_fields = self.HRU.var.land_owners[self.HRU.var.land_owners != -1]
-        masked_array = array[self.HRU.var.land_owners != -1]
-        return np.bincount(farmer_fields, masked_array, minlength=self.var.n)
+        farmer_fields: npt.NDArray[np.int32] = self.HRU.var.land_owners[
+            self.HRU.var.land_owners != -1
+        ]
+        masked_array: npt.NDArray[np.floating] = array[self.HRU.var.land_owners != -1]
+        return np.bincount(farmer_fields, masked_array, minlength=self.var.n).astype(
+            masked_array.dtype
+        )
 
     def farmer_to_field(self, array, nodata):
         by_field = np.take(array, self.HRU.var.land_owners)

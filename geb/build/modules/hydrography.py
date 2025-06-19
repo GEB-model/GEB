@@ -558,20 +558,17 @@ class Hydrography:
             command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
 
             # Set lakes with command area to reservoirs and reservoirs without command area to lakes
-            ids_with_command = set(command_areas["waterbody_id"])
+            ids_with_command: set = set(command_areas["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
                 "waterbody_type",
-            ] = 2
-            waterbodies.loc[
-                (waterbodies["waterbody_type"] == 2)
-                & (~waterbodies["waterbody_id"].isin(ids_with_command)),
-                "waterbody_type",
-            ] = 1
+            ] = RESERVOIR
 
             # Lastly remove command areas that have no associated water body
-            reservoir_ids = set(
-                waterbodies.loc[waterbodies["waterbody_type"] == 2, "waterbody_id"]
+            reservoir_ids: set = set(
+                waterbodies.loc[
+                    waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
+                ]
             )
             command_areas_dissolved = command_areas[
                 command_areas["waterbody_id"].isin(reservoir_ids)
