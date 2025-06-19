@@ -119,6 +119,17 @@ class Agents:
                 municipal_water_withdrawal_m3_per_capita_per_day
             ).dropna()
 
+            municipal_water_withdrawal_m3_per_capita_per_day = (
+                municipal_water_withdrawal_m3_per_capita_per_day.reindex(
+                    list(
+                        range(
+                            self.start_date.year,
+                            self.end_date.year + 1,
+                        )
+                    )
+                ).interpolate(method="linear")
+            )  # interpolate also extrapolates with constant values
+
             assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
                 f"Too large water withdrawal data for {ISO3}"
             )

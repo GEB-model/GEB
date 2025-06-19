@@ -200,13 +200,16 @@ class Reporter:
                     dimension_names=["time", "y", "x"],
                 )
 
+                crs = raster.crs
+                assert isinstance(crs, str)
+
                 zarr_data.attrs.update(
                     {
                         "grid_mapping": "crs",
                         "coordinates": "time y x",
                         "units": "unknown",
                         "long_name": name,
-                        "_CRS": raster.crs,
+                        "_CRS": {"wkt": crs},
                     }
                 )
                 return zarr_store

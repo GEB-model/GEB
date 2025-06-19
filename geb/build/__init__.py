@@ -13,7 +13,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import List, Union
+from typing import Any, List, Union
 
 import geopandas as gpd
 import networkx
@@ -519,15 +519,15 @@ def create_riverine_mask(
 
 
 class DelayedReader:
-    def __init__(self, reader):
-        self.reader = reader
-        self.geoms = {}
+    def __init__(self, reader: Any) -> None:
+        self.reader: Any = reader
+        self.items: dict[str, Any] = {}
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value: Any) -> None:
         self.geoms[key] = value
 
-    def __getitem__(self, key):
-        fp = self.geoms[key]
+    def __getitem__(self, key: str) -> Any:
+        fp: str | Path = self.items[key]
         return self.reader(fp)
 
 
@@ -758,17 +758,17 @@ class GEBModel(
         self.create_subgrid(subgrid_factor)
 
     def extend_mask_to_coastal_area(self, ldd, riverine_mask, subbasins):
-        flow_raster = pyflwdir.from_array(
+        flow_raster: pyflwdir.FlwdirRaster = pyflwdir.from_array(
             ldd.values,
             ftype="d8",
             transform=ldd.rio.transform(recalc=True),
             latlon=True,
         )
 
-        STUDY_AREA_OUTFLOW = 1
-        NEARBY_OUTFLOW = 2
+        STUDY_AREA_OUTFLOW: int = 1
+        NEARBY_OUTFLOW: int = 2
 
-        rivers = gpd.read_parquet(
+        rivers: gpd.GeoDataFrame = gpd.read_parquet(
             self.data_catalog.get_source("MERIT_Basins_riv").path,
             columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
             bbox=ldd.rio.bounds(),
@@ -992,7 +992,14 @@ class GEBModel(
     def end_date(self):
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
-    def snap_to_grid(self, ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
+    def snap_to_grid(
+        self,
+        ds: xr.DataArray | xr.Dataset,
+        reference: xr.DataArray | xr.Dataset,
+        relative_tollerance: float = 0.02,
+        ydim: str = "y",
+        xdim: str = "x",
+    ) -> xr.Dataset | xr.DataArray:
         # make sure all datasets have more or less the same coordinates
         assert np.isclose(
             ds.coords[ydim].values,
@@ -1345,14 +1352,15 @@ class GEBModel(
         super().set_root(root, mode)
 
     @property
-    def subgrid_factor(self):
-        subgrid_factor = self.subgrid.dims["x"] // self.grid.dims["x"]
+    def subgrid_factor(self) -> int:
+        """The factor by which the subgrid is smaller than the original grid."""
+        subgrid_factor: int = self.subgrid.dims["x"] // self.grid.dims["x"]
         assert subgrid_factor == self.subgrid.dims["y"] // self.grid.dims["y"]
         return subgrid_factor
 
     @property
-    def ldd_scale_factor(self):
-        scale_factor = (
+    def ldd_scale_factor(self) -> int:
+        scale_factor: int = (
             self.other["drainage/original_d8_flow_directions"].shape[0]
             // self.grid["mask"].shape[0]
         )
@@ -1438,7 +1446,7 @@ class GEBModel(
         self.logger.info("Finished!")
 
     def build(self, region: dict, methods: dict):
-        methods = methods or {}
+        methods: dict[str:Any] = methods or {}
         methods = self.check_methods(methods)
         methods["setup_region"].update(region=region)
 

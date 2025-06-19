@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import math
 import warnings
+from datetime import datetime
 from typing import Literal, Union
 
 import geopandas as gpd
@@ -444,22 +445,37 @@ class Grid(BaseVariables):
 
     @property
     def spei_uncompressed(self):
+        """Get uncompressed version of SPEI.
+
+        We want to get the closest SPEI value, so if we are in the second
+        half of the month, we want to get the first day of the next month.
+
+        This is UNLESS we are at the end of the model run and the next
+        SPEI value does not exist, in which case we want to keep using the
+        last SPEI value available.
+        """
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("SPEI")
 
-        current_time = self.model.current_time
+        current_time: datetime = self.model.current_time
 
         # Determine the nearest first day of the month
         if current_time.day <= 15:
-            spei_time = current_time.replace(day=1)
+            spei_time: datetime = current_time.replace(day=1)
         else:
             # Move to the first day of the next month
             if current_time.month == 12:
-                spei_time = current_time.replace(
+                spei_time: datetime = current_time.replace(
                     year=current_time.year + 1, month=1, day=1
                 )
             else:
-                spei_time = current_time.replace(month=current_time.month + 1, day=1)
+                spei_time: datetime = current_time.replace(
+                    month=current_time.month + 1, day=1
+                )
+
+            # Check if we ran out of SPEI data. If we did, revert to using the last month
+            if np.datetime64(spei_time, "ns") > self.spei_ds.datetime_index[-1]:
+                spei_time: datetime = current_time.replace(day=1)
 
         spei = self.load_forcing(self.spei_ds, spei_time, compress=False)
         assert not np.isnan(

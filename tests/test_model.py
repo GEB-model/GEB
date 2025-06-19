@@ -2,11 +2,12 @@ import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 import xarray as xr
 
-from geb.cli import build_fn, parse_config, run_model_with_method, update_fn
+from geb.cli import build_fn, init_fn, parse_config, run_model_with_method, update_fn
 from geb.workflows.io import WorkingDirectory
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -14,13 +15,12 @@ from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 example = Path("../../../examples/geul")
 
 
-working_directory = tmp_folder / "model"
-working_directory.mkdir(parents=True, exist_ok=True)
+working_directory: Path = tmp_folder / "model"
 
 DEFAULT_BUILD_ARGS = {
     "data_catalog": [Path("../../../geb/data_catalog.yml")],
-    "config": str(example / "model.yml"),
-    "build_config": str(example / "build.yml"),
+    "config": "model.yml",
+    "build_config": "build.yml",
     "working_directory": working_directory,
     "custom_model": None,
     "data_provider": None,
@@ -28,7 +28,7 @@ DEFAULT_BUILD_ARGS = {
 }
 
 DEFAULT_RUN_ARGS = {
-    "config": str(example / "model.yml"),
+    "config": "model.yml",
     "working_directory": working_directory,
     "gui": False,
     "no_browser": True,
@@ -37,6 +37,30 @@ DEFAULT_RUN_ARGS = {
     "timing": False,
     "optimize": False,
 }
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_init():
+    working_directory.mkdir(parents=True, exist_ok=True)
+
+    args: dict[str, Any] = {
+        "config": "model.yml",
+        "build_config": "build.yml",
+        "working_directory": working_directory,
+        "from_example": "geul",
+        "basin_id": "23011134",
+    }
+    init_fn(
+        **args,
+        overwrite=True,
+    )
+
+    pytest.raises(
+        FileExistsError,
+        init_fn,
+        **args,
+        overwrite=False,
+    )  # should raise an error if the folder already exists
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -60,7 +84,30 @@ def test_update_with_dict():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-@pytest.mark.dependency(name="test_build")
+@pytest.mark.parametrize(
+    "method",
+    [
+        "setup_crop_prices",
+        "setup_discharge_observations",
+        "setup_forcing_era5",
+        "setup_water_demand",
+        "setup_SPEI",
+    ],
+)
+def test_update_with_method(method: str):
+    args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
+
+    build_config: dict[str, dict] = parse_config(
+        working_directory / args["build_config"]
+    )
+
+    update: dict[str, dict] = {method: build_config[method]}
+
+    args["build_config"] = update
+    update_fn(**args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_spinup():
     run_model_with_method(method="spinup", **DEFAULT_RUN_ARGS)
 
@@ -71,25 +118,22 @@ def test_run():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-@pytest.mark.dependency(depends=["test_spinup"])
 def test_run_yearly():
     args = DEFAULT_RUN_ARGS.copy()
     config = parse_config(working_directory / args["config"])
     config["general"]["start_time"] = date(2000, 1, 1)
-    config["general"]["start_time"] = date(2050, 1, 1)
+    config["general"]["end_time"] = date(2049, 12, 31)
     args["config"] = config
     args["config"]["report"] = {}
     run_model_with_method(method="run_yearly", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-@pytest.mark.dependency(depends=["test_spinup"])
 def test_estimate_return_periods():
     run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-@pytest.mark.dependency(depends=["test_spinup"])
 def test_multiverse():
     args = DEFAULT_RUN_ARGS.copy()
 
@@ -146,3 +190,36 @@ def test_multiverse():
         assert forecast_mean_discharge == mean_discharge
 
     geb.close()
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_ISIMIP_forcing():
+    """
+    Test the ISIMIP forcing update function.
+    This is a special case that requires a specific setup.
+    """
+    args = DEFAULT_BUILD_ARGS.copy()
+
+    build_config = parse_config(working_directory / args["build_config"])
+
+    original_time_range = build_config["set_time_range"]
+
+    args["build_config"] = {
+        # "set_time_range": {
+        #     "start_date": date(2000, 1, 1),
+        #     "end_date": date(2024, 12, 31),
+        # },
+        "setup_forcing_ISIMIP": {
+            "resolution_arcsec": 30,
+            "forcing": "chelsa-w5e5",
+            "ssp": "ssp370",
+        },
+    }
+    update_fn(**args)
+
+    # Reset the time range to the original one
+    args["build_config"] = {
+        "set_time_range": original_time_range,
+    }
+
+    update_fn(**args)
