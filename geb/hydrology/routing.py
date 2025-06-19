@@ -181,7 +181,7 @@ class Router:
         assert (Q_initial[self.waterbody_id != -1] == 0).all()
         self.Q_prev = Q_initial
 
-    def get_total_storage(self):
+    def get_total_storage(self) -> npt.NDArray[np.float32]:
         """
         Get the total storage of the river network, which is the sum of the
         available storage in each cell.
@@ -254,11 +254,20 @@ class KinematicWave(Router):
         self.river_beta = river_beta
 
     def calculate_river_storage_from_discharge(
-        self, discharge, river_alpha, river_length, river_beta, waterbody_id
-    ):
+        self,
+        discharge: npt.NDArray[np.float32],
+        river_alpha: npt.NDArray[np.float32],
+        river_length: npt.NDArray[np.float32],
+        river_beta: float,
+        waterbody_id: npt.NDArray[np.int32],
+    ) -> npt.NDArray[np.float32]:
         # The momentum equation, see eq. 18 in https://gmd.copernicus.org/articles/13/3267/2020/
-        cross_sectional_area_of_flow = river_alpha * discharge**river_beta
-        river_storage = cross_sectional_area_of_flow * river_length
+        cross_sectional_area_of_flow: npt.NDArray[np.float32] = (
+            river_alpha * discharge**river_beta
+        )
+        river_storage: npt.NDArray[np.float32] = (
+            cross_sectional_area_of_flow * river_length
+        )
         river_storage[waterbody_id != -1] = 0.0
         return river_storage
 
@@ -268,20 +277,31 @@ class KinematicWave(Router):
         # The momentum equation (solved for Q), see eq. 18 in https://gmd.copernicus.org/articles/13/3267/2020/
         return (river_storage / (river_length * river_alpha)) ** (1 / river_beta)
 
-    def get_available_storage(self, maximum_abstraction_ratio=0.9):
+    def get_available_storage(
+        self, maximum_abstraction_ratio: float = 0.9
+    ) -> npt.NDArray[np.float32]:
         """
         Get the available storage of the river network, which is the sum of the
         available storage in each cell.
+
+        Args:
+            maximum_abstraction_ratio: he maximum abstraction ratio, default is 0.9.
+                This is the ratio of the available storage that can be used for abstraction.
+
+        Returns:
+            The available storage of the river network.
         """
         assert not np.isnan(self.Q_prev).any()
         assert (self.Q_prev >= 0.0).all()
 
-        river_storage = self.calculate_river_storage_from_discharge(
-            discharge=self.Q_prev,
-            river_alpha=self.river_alpha,
-            river_length=self.river_length,
-            river_beta=self.river_beta,
-            waterbody_id=self.waterbody_id,
+        river_storage: npt.NDArray[np.float32] = (
+            self.calculate_river_storage_from_discharge(
+                discharge=self.Q_prev,
+                river_alpha=self.river_alpha,
+                river_length=self.river_length,
+                river_beta=self.river_beta,
+                waterbody_id=self.waterbody_id,
+            )
         )
         return river_storage * maximum_abstraction_ratio
 
@@ -360,8 +380,8 @@ class KinematicWave(Router):
 
             node_waterbody_id: np.int32 = waterbody_id[node]
             if node_waterbody_id != -1:
-                assert sideflow_node_m3 == np.float32(0.0)
                 waterbody_storage_m3[node_waterbody_id] += Qin * dt
+                waterbody_storage_m3[node_waterbody_id] += sideflow_node_m3
             else:
                 Qnew[node] = update_node_kinematic(
                     Qin,
@@ -407,7 +427,9 @@ class Accuflux(Router):
     def __init__(self, dt, river_network, *args, **kwargs):
         super().__init__(dt, river_network, *args, **kwargs)
 
-    def get_available_storage(self, maximum_abstraction_ratio=0.9):
+    def get_available_storage(
+        self, maximum_abstraction_ratio=0.9
+    ) -> npt.NDArray[np.float32]:
         assert not np.isnan(self.Q_prev).any()
         assert (self.Q_prev >= 0.0).all()
         return self.Q_prev * self.dt * maximum_abstraction_ratio
@@ -638,7 +660,9 @@ class Routing(Module):
     ):
         if __debug__:
             pre_storage: np.ndarray = self.hydrology.lakes_reservoirs.var.storage.copy()
-            pre_river_storage_m3: np.ndarray = self.router.get_total_storage()
+            pre_river_storage_m3: npt.NDArray[np.float32] = (
+                self.router.get_total_storage()
+            )
 
         channel_abstraction_m3_per_routing_step: np.ndarray = (
             channel_abstraction_m3 / self.var.n_routing_substeps

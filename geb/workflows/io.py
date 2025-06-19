@@ -98,7 +98,7 @@ def calculate_scaling(
     return scaling_factor, out_dtype
 
 
-def open_zarr(zarr_folder):
+def open_zarr(zarr_folder) -> xr.DataArray:
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
@@ -176,7 +176,7 @@ def to_zarr(
     filters: list = [],
     compressor=None,
     progress: bool = True,
-):
+) -> xr.DataArray:
     """
     Save an xarray DataArray to a zarr file.
 
@@ -343,7 +343,7 @@ def to_zarr(
             shutil.rmtree(path)
         shutil.move(tmp_zarr, folder)
 
-    da_disk = open_zarr(path)
+    da_disk: xr.DataArray = open_zarr(path)
 
     # perform some asserts to check if the data was written and read correctly
     assert da.dtype == da_disk.dtype, "dtype mismatch"
