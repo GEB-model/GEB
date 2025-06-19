@@ -581,9 +581,6 @@ def abstract_water(
     remaining_irrigation_limit_m3: np.ndarray,
     gross_irrigation_demand_m3_per_field: np.ndarray,
 ):
-    for activated_farmer_index in range(activation_order.size):
-        farmer = activation_order[activated_farmer_index]
-        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
     n_hydrological_response_units = cell_area.size
     water_withdrawal_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
     water_consumption_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
@@ -607,12 +604,12 @@ def abstract_water(
     # in one go, reducing the risk of (larger) floating point errors.
     groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
 
-    for activated_farmer_index in range(activation_order.size):
-        farmer = activation_order[activated_farmer_index]
+    for farmer in activation_order:
         farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
         potential_irrigation_consumption_m3_farmer = (
             gross_irrigation_demand_m3_per_field[farmer_fields]
         )
+
         if potential_irrigation_consumption_m3_farmer.sum() <= 0:
             continue
 
@@ -625,7 +622,6 @@ def abstract_water(
                     gross_irrigation_demand_m3_per_field[field] / cell_area[field]
                 )
                 assert 1 >= irrigation_water_demand_field_m >= 0
-
                 if surface_irrigated[farmer]:
                     # command areas
                     command_area = farmer_command_area[farmer]
