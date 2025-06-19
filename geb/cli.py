@@ -195,7 +195,7 @@ def run_model_with_method(
     optimize,
     method_args: dict = {},
     close_after_run=True,
-):
+) -> GEBModel | None:
     """Run model."""
     # check if we need to run the model in optimized mode
     # if the model is already running in optimized mode, we don't need to restart it

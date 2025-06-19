@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import requests
+import rioxarray as rxr
 import xarray as xr
 import xclim.indices as xci
 from dateutil.relativedelta import relativedelta
@@ -31,7 +32,7 @@ from ..workflows.general import (
 
 def reproject_and_apply_lapse_rate_temperature(
     T, elevation_forcing, elevation_target, lapse_rate=-0.0065
-):
+) -> xr.DataArray:
     assert (T.x.values == elevation_forcing.x.values).all()
     assert (T.y.values == elevation_forcing.y.values).all()
     t_at_sea_level = T - elevation_forcing * lapse_rate
@@ -55,7 +56,7 @@ def reproject_and_apply_lapse_rate_pressure(
     g=9.80665,
     Mo=0.0289644,
     lapse_rate=-0.0065,
-):
+) -> xr.DataArray:
     """Pressure correction based on elevation lapse_rate.
 
     Parameters
@@ -464,13 +465,15 @@ class Forcing:
         }
         ds.raster.set_crs(4326)
 
+        ds: xr.Dataset = ds.rename({"lon": "x", "lat": "y"})
+
         # check whether data is for noon or midnight. If noon, subtract 12 hours from time coordinate to align with other datasets
         if hasattr(ds, "time") and pd.to_datetime(ds.time[0].values).hour == 12:
             # subtract 12 hours from time coordinate
             self.logger.warning(
                 "Subtracting 12 hours from time coordinate to align climate datasets"
             )
-            ds = ds.assign_coords(time=ds.time - np.timedelta64(12, "h"))
+            ds: xr.Dataset = ds.assign_coords(time=ds.time - np.timedelta64(12, "h"))
         return ds
 
     def plot_forcing(self, da, name):
@@ -495,9 +498,28 @@ class Forcing:
                     axes[i + 1],
                 )
 
+        fp = self.report_dir / (name + "_timeline.png")
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(fp)
+
         fp = self.report_dir / (name + ".png")
         fp.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(fp)
+
+        plt.close(fig)
+
+        spatial_data = da.mean(dim="time").compute()
+
+        spatial_data.plot()
+
+        plt.title(name)
+        plt.xlabel("Longitude")
+        plt.ylabel("Latitude")
+
+        spatial_fp = self.report_dir / (name + "_spatial.png")
+        plt.savefig(spatial_fp)
+
+        plt.close()
 
     def set_xy_attrs(self, da: xr.DataArray) -> None:
         """Set CF-compliant attributes for the x and y coordinates of a DataArray."""
@@ -1067,7 +1089,7 @@ class Forcing:
             )
             # download source data from ISIMIP
             self.logger.info("setting up forcing data")
-            high_res_variables = ["pr", "rsds", "tas", "tasmax", "tasmin"]
+            high_res_variables: list = ["pr", "rsds", "tas", "tasmax", "tasmin"]
             self.setup_30arcsec_variables_isimip(high_res_variables)
             self.logger.info("setting up relative humidity...")
             self.setup_hurs_isimip_30arcsec()
@@ -1114,8 +1136,7 @@ class Forcing:
         -----
         This method sets up the forcing data for GEB. It first downloads the high-resolution variables
         (precipitation, surface solar radiation, air temperature, maximum air temperature, and minimum air temperature) from
-        the ISIMIP dataset for the specified time period. The data is downloaded using the `setup_30arcsec_variables_isimip`
-        method.
+        the ISIMIP dataset for the specified time period.
 
         The method then sets up the relative humidity, longwave radiation, pressure, and wind data for the model. The
         relative humidity data is downloaded from the ISIMIP dataset using the `setup_hurs_isimip_30arcsec` method. The longwave radiation
@@ -1165,8 +1186,8 @@ class Forcing:
 
         def download_variable(variable_name, forcing, ssp):
             self.logger.info(f"Setting up {variable_name}...")
-            first_year_future_climate = 2015
-            var = []
+            first_year_future_climate: int = 2015
+            da_list: list = []
             if ssp == "picontrol":
                 ds = self.download_isimip(
                     product="InputData",
@@ -1186,7 +1207,7 @@ class Forcing:
                 )
                 and ssp != "picontrol"
             ):  # isimip cutoff date between historic and future climate
-                ds = self.download_isimip(
+                ds: xr.Dataset = self.download_isimip(
                     product="InputData",
                     simulation_round="ISIMIP3b",
                     climate_scenario="historical",
@@ -1197,14 +1218,14 @@ class Forcing:
                     resolution=None,
                     buffer=1,
                 )
-                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
+                da_list.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
             if (
                 self.start_date.year >= first_year_future_climate
                 or self.end_date.year >= first_year_future_climate
             ) and ssp != "picontrol":
                 assert ssp is not None, "ssp must be specified for future climate"
                 assert ssp != "historical", "historical scenarios run until 2014"
-                ds = self.download_isimip(
+                ds: xr.Dataset = self.download_isimip(
                     product="InputData",
                     simulation_round="ISIMIP3b",
                     climate_scenario=ssp,
@@ -1215,36 +1236,38 @@ class Forcing:
                     resolution=None,
                     buffer=1,
                 )
-                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
+                da_list.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
 
-            var = xr.concat(
-                var, dim="time", combine_attrs="drop_conflicts", compat="equals"
+            var: xr.DataArray = xr.concat(
+                da_list, dim="time", combine_attrs="drop_conflicts", compat="equals"
             )  # all values and dimensions must be the same
 
             # assert that time is monotonically increasing with a constant step size
             assert (
-                ds.time.diff("time").astype(np.int64)
-                == (ds.time[1] - ds.time[0]).astype(np.int64)
+                var.time.diff("time").astype(np.int64)
+                == (var.time[1] - var.time[0]).astype(np.int64)
             ).all(), "time is not monotonically increasing with a constant step size"
 
-            var = var.rename({"lon": "x", "lat": "y"})
             if variable_name in ("tas", "tasmin", "tasmax", "ps"):
                 elevation_forcing, elevation_grid = self.get_elevation_forcing_and_grid(
                     self.grid["mask"], var, forcing_type="ISIMIP"
                 )
 
                 if variable_name in ("tas", "tasmin", "tasmax"):
-                    var = reproject_and_apply_lapse_rate_temperature(
+                    var: xr.DataArray = reproject_and_apply_lapse_rate_temperature(
                         var, elevation_forcing, elevation_grid
                     )
                 elif variable_name == "ps":
-                    var = reproject_and_apply_lapse_rate_pressure(
+                    var: xr.DataArray = reproject_and_apply_lapse_rate_pressure(
                         var, elevation_forcing, elevation_grid
                     )
                 else:
                     raise ValueError
             else:
-                var = self.interpolate(var, "linear")
+                target: xr.DataArray = self.grid["mask"]
+                var: xr.DataArray = resample_like(
+                    var, target, method="conservative"
+                )  # resample to the model grid
             var.attrs["_FillValue"] = np.nan
             self.logger.info(f"Completed {variable_name}")
 
@@ -1286,7 +1309,6 @@ class Forcing:
                 forcing="chelsa-w5e5",
                 resolution="30arcsec",
             )
-            ds: xr.Dataset = ds.rename({"lon": "x", "lat": "y"})
             var: xr.DataArray = ds[variable].raster.clip_bbox(ds.raster.bounds)
             # TODO: Due to the offset of the MERIT grid, the snapping to the MERIT grid is not perfect
             # and thus the snapping needs to consider quite a large tollerance. We can consider interpolating
@@ -1325,45 +1347,53 @@ class Forcing:
 
         The resulting relative humidity data is set as forcing data in the model with names of the form 'climate/hurs'.
         """
-        hurs_30_min = self.download_isimip(
+        hurs_30_min: xr.DataArray = self.download_isimip(
             product="SecondaryInputData",
             variable="hurs",
             start_date=self.start_date,
             end_date=self.end_date,
             forcing="w5e5v2.0",
             buffer=1,
-        )  # some buffer to avoid edge effects / errors in ISIMIP API
+        )["hurs"]  # some buffer to avoid edge effects / errors in ISIMIP API
 
         # just taking the years to simplify things
-        start_year = self.start_date.year
-        end_year = self.end_date.year
+        start_year: int = self.start_date.year
+        end_year: int = self.end_date.year
 
-        chelsa_folder = self.preprocessing_dir / "climate" / "chelsa-bioclim+" / "hurs"
+        chelsa_folder: Path = (
+            self.preprocessing_dir / "climate" / "chelsa-bioclim+" / "hurs"
+        )
         chelsa_folder.mkdir(parents=True, exist_ok=True)
 
         self.logger.info(
             "Downloading/reading monthly CHELSA-BIOCLIM+ hurs data at 30 arcsec resolution"
         )
-        hurs_ds_30sec, hurs_time = [], []
+        hurs_ds_30sec: list[xr.DataArray] = []
+        hurs_time: list[str] = []
         for year in tqdm(range(start_year, end_year + 1)):
             for month in range(1, 13):
-                fn = chelsa_folder / f"hurs_{year}_{month:02d}.zarr"
-                if not fn.exists():
-                    hurs = self.data_catalog.get_rasterdataset(
-                        f"CHELSA-BIOCLIM+_monthly_hurs_{month:02d}_{year}",
-                        bbox=hurs_30_min.raster.bounds,
-                        buffer=1,
+                fp: Path = chelsa_folder / f"hurs_{year}_{month:02d}.zarr"
+                if not fp.exists():
+                    url: str = self.data_catalog.get_source(
+                        f"CHELSA-BIOCLIM+_monthly_hurs_{month:02d}_{year}"
+                    ).path
+                    hurs: xr.DataArray = rxr.open_rasterio(
+                        url,
+                    ).isel(band=0)
+                    hurs: xr.DataArray = hurs.isel(
+                        get_window(hurs.x, hurs.y, hurs_30_min.raster.bounds, buffer=1)
                     )
-                    hurs = to_zarr(hurs, fn, crs=4326, progress=False)
+
+                    hurs: xr.DataArray = to_zarr(hurs, fp, crs=4326, progress=False)
                 else:
-                    hurs = open_zarr(fn)
+                    hurs: xr.DataArray = open_zarr(fp)
                 hurs_ds_30sec.append(hurs)
                 hurs_time.append(f"{year}-{month:02d}")
 
-        hurs_ds_30sec = xr.concat(hurs_ds_30sec, dim="time")
+        hurs_ds_30sec: xr.DataArray = xr.concat(hurs_ds_30sec, dim="time")
         hurs_ds_30sec["time"] = pd.date_range(hurs_time[0], hurs_time[-1], freq="MS")
 
-        hurs_output = self.full_like(
+        hurs_output: xr.DataArray = self.full_like(
             self.other["climate/tas"], fill_value=np.nan, nodata=np.nan
         )
         hurs_ds_30sec.raster.set_crs(4326)
@@ -1374,9 +1404,8 @@ class Forcing:
                 end_month = datetime(year, month, monthrange(year, month)[1])
 
                 w5e5_30min_sel = hurs_30_min.sel(time=slice(start_month, end_month))
-                w5e5_regridded = (
-                    resample_like(w5e5_30min_sel, hurs_ds_30sec, method="conservative")
-                    * 0.01
+                w5e5_regridded = resample_like(
+                    w5e5_30min_sel, hurs_ds_30sec, method="conservative"
                 )
                 w5e5_regridded = w5e5_regridded * 0.01  # convert to fraction
 
@@ -1406,9 +1435,9 @@ class Forcing:
                     1 / (1 + np.exp(-w5e5_regridded_tr_corr))
                 ) * 100  # back transform
                 w5e5_regridded_corr.raster.set_crs(4326)
-                w5e5_regridded_corr_clipped = w5e5_regridded_corr[
-                    "hurs"
-                ].raster.clip_bbox(hurs_output.raster.bounds)
+                w5e5_regridded_corr_clipped = w5e5_regridded_corr.raster.clip_bbox(
+                    hurs_output.raster.bounds
+                )
 
                 hurs_output.loc[dict(time=slice(start_month, end_month))] = (
                     self.snap_to_grid(
@@ -1832,7 +1861,9 @@ class Forcing:
                     name="climate/gev_scale",
                 )
 
-    def get_elevation_forcing_and_grid(self, grid, forcing_grid, forcing_type):
+    def get_elevation_forcing_and_grid(
+        self, grid, forcing_grid, forcing_type
+    ) -> tuple[xr.DataArray, xr.DataArray]:
         # we also need to process the elevation data for the grid, because the
         # elevation data that is available in the model is masked to the grid
         elevation_forcing_fp = (

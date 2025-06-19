@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Union
+from typing import Any, List, Union
 
 import geopandas as gpd
 import networkx
@@ -524,7 +525,7 @@ class DelayedReader:
         self.items: dict[str, Any] = {}
 
     def __setitem__(self, key: str, value: Any) -> None:
-        self.geoms[key] = value
+        self.items[key] = value
 
     def __getitem__(self, key: str) -> Any:
         fp: str | Path = self.items[key]
@@ -567,13 +568,15 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geoms = DelayedReader(reader=gpd.read_parquet)
-        self.table = {}
-        self.array = {}
-        self.dict = {}
-        self.other = {}
+        self.geoms: DelayedReader = DelayedReader(reader=gpd.read_parquet)
+        self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
+        self.array: DelayedReader = DelayedReader(zarr.load)
+        self.dict: DelayedReader = DelayedReader(
+            reader=lambda x: json.load(open(x, "r"))
+        )
+        self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
-        self.files = defaultdict(dict)
+        self.files: defaultdict = defaultdict(dict)
 
     def setup_region(
         self,
@@ -1109,38 +1112,38 @@ class GEBModel(
             zarr.save_array(fp, data, overwrite=True)
 
     def set_dict(self, data, name, write=True):
-        self.dict[name] = data
-
+        fp: Path = Path("dict") / (name + ".json")
+        fp_with_root: Path = Path(self.root) / fp
+        fp_with_root.parent.mkdir(parents=True, exist_ok=True)
         if write:
-            fn = Path("dict") / (name + ".json")
-            self.logger.info(f"Writing file {fn}")
+            self.logger.info(f"Writing file {fp}")
 
-            self.files["dict"][name] = fn
+            self.files["dict"][name] = fp
 
-            fp = Path(self.root) / fn
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            with open(fp, "w") as f:
+            with open(fp_with_root, "w") as f:
                 json.dump(data, f, default=convert_timestamp_to_string)
 
+        self.dict[name] = fp_with_root
+
     def set_geoms(self, geoms, name, write=True):
-        fn = Path("geom") / (name + ".geoparquet")
-        fp = self.root / fn
+        fp: Path = Path("geom") / (name + ".geoparquet")
+        fp_with_root: Path = self.root / fp
         if write:
-            self.logger.info(f"Writing file {fn}")
-            self.files["geoms"][name] = fn
+            self.logger.info(f"Writing file {fp}")
+            self.files["geoms"][name] = fp
             fp.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
             # we use the highest compression level for gzip
             geoms.to_parquet(
-                fp, engine="pyarrow", compression="gzip", compression_level=9
+                fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
             )
 
-        self.geoms[name] = fp
+        self.geoms[name] = fp_with_root
 
     def write_file_library(self):
-        file_library = self.read_file_library()
+        file_library: defaultdict = self.read_file_library()
 
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
@@ -1152,13 +1155,13 @@ class GEBModel(
         with open(Path(self.root, "files.json"), "w") as f:
             json.dump(file_library, f, indent=4, cls=PathEncoder)
 
-    def read_file_library(self):
-        fp = Path(self.root, "files.json")
+    def read_file_library(self) -> defaultdict:
+        fp: Path = Path(self.root, "files.json")
         if not fp.exists():
-            return {}
+            return defaultdict(dict)  # return empty defaultdict if file does not exist
         else:
             with open(Path(self.root, "files.json"), "r") as f:
-                files = json.load(f)
+                files: dict[str, dict[str, str]] = json.load(f)
         return defaultdict(dict, files)  # convert dict to defaultdict
 
     def read_geoms(self):
@@ -1167,44 +1170,38 @@ class GEBModel(
 
     def read_array(self):
         for name, fn in self.files["array"].items():
-            array = zarr.load(Path(self.root, fn))
-            self.set_array(array, name=name, write=False)
+            self.array[name] = Path(self.root, fn)
 
     def read_table(self):
         for name, fn in self.files["table"].items():
-            table = pd.read_parquet(Path(self.root, fn))
-            self.set_table(table, name=name, write=False)
+            self.table[name] = Path(self.root, fn)
 
     def read_dict(self):
         for name, fn in self.files["dict"].items():
-            with open(Path(self.root, fn), "r") as f:
-                d = json.load(f)
-            self.set_dict(d, name=name, write=False)
+            self.dict[name] = Path(self.root, fn)
 
-    def _read_grid(self, fn) -> xr.Dataset:
-        da = open_zarr(Path(self.root) / fn)
+    def _read_grid(self, fn) -> xr.DataArray:
+        da: xr.DataArray = open_zarr(Path(self.root) / fn)
         return da
 
     def read_grid(self) -> None:
         for name, fn in self.files["grid"].items():
-            data = self._read_grid(fn)
+            data: xr.DataArray = self._read_grid(fn)
             self.set_grid(data, name=name, write=False)
 
     def read_subgrid(self) -> None:
         for name, fn in self.files["subgrid"].items():
-            data = self._read_grid(fn)
+            data: xr.DataArray = self._read_grid(fn)
             self.set_subgrid(data, name=name, write=False)
 
     def read_region_subgrid(self) -> None:
         for name, fn in self.files["region_subgrid"].items():
-            data = self._read_grid(fn)
+            data: xr.DataArray = self._read_grid(fn)
             self.set_region_subgrid(data, name=name, write=False)
 
     def read_other(self) -> None:
         for name, fn in self.files["other"].items():
-            da = open_zarr(Path(self.root) / fn)
-            self.set_other(da, name=name, write=False)
-        return None
+            self.other[name] = Path(self.root, fn)
 
     def read(self):
         with suppress_logging_warning(self.logger):
@@ -1223,12 +1220,12 @@ class GEBModel(
 
     def set_other(
         self,
-        da,
+        da: xr.DataArray,
         name: str,
-        write=True,
-        x_chunksize=XY_CHUNKSIZE,
-        y_chunksize=XY_CHUNKSIZE,
-        time_chunksize=1,
+        write: bool = True,
+        x_chunksize: int = XY_CHUNKSIZE,
+        y_chunksize: int = XY_CHUNKSIZE,
+        time_chunksize: int = 1,
         *args,
         **kwargs,
     ):
@@ -1237,13 +1234,13 @@ class GEBModel(
         if write:
             self.logger.info(f"Write {name}")
 
-            fp = Path("other") / (name + ".zarr")
+            fp: Path = Path("other") / (name + ".zarr")
             self.files["other"][name] = fp
 
-            dst_file = Path(self.root, fp)
-            da = to_zarr(
+            fp_with_root: Path = Path(self.root, fp)
+            da: xr.DataArray = to_zarr(
                 da,
-                dst_file,
+                fp_with_root,
                 x_chunksize=x_chunksize,
                 y_chunksize=y_chunksize,
                 time_chunksize=time_chunksize,
@@ -1251,7 +1248,7 @@ class GEBModel(
                 *args,
                 **kwargs,
             )
-        self.other[name] = da
+            self.other[name] = fp_with_root
         return self.other[name]
 
     def _set_grid(
@@ -1387,12 +1384,12 @@ class GEBModel(
         self._root = Path(root).absolute()
 
     @property
-    def preprocessing_dir(self):
+    def preprocessing_dir(self) -> Path:
         return Path(self.root).parent / "preprocessing"
 
     @property
-    def report_dir(self):
-        path = Path(self.root).parent / "output" / "build"
+    def report_dir(self) -> Path:
+        path: Path = Path(self.root).parent / "output" / "build"
         path.mkdir(parents=True, exist_ok=True)
         return path
 

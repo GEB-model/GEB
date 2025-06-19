@@ -219,6 +219,7 @@ def to_zarr(
     if "y" in da.dims and "x" in da.dims:
         assert da.dims[-2] == "y", "y should be the second last dimension"
         assert da.dims[-1] == "x", "x should be the last dimension"
+        assert (np.diff(da.y.values) < 0).all(), "y should be decreasing"
 
     assert da.dtype != np.float64, "should be float32"
 
