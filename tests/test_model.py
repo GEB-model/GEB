@@ -92,6 +92,7 @@ def test_update_with_dict():
         "setup_forcing_era5",
         "setup_water_demand",
         "setup_SPEI",
+        "setup_CO2_concentration",
     ],
 )
 def test_update_with_method(method: str):
@@ -206,8 +207,8 @@ def test_ISIMIP_forcing_low_res():
 
     args["build_config"] = {
         "set_time_range": {
-            "start_date": date(2000, 1, 1),
-            "end_date": date(2000, 12, 31),
+            "start_date": date(2001, 1, 1),
+            "end_date": date(2024, 12, 31),
         },
         "setup_forcing_ISIMIP": {
             "resolution_arcsec": 1800,

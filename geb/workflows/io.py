@@ -256,6 +256,7 @@ def to_zarr(
                     "x": min(x_chunksize, da.sizes["x"]),
                 }
             )
+            da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
         if "time" in da.dims:
             chunks.update({"time": min(time_chunksize, da.sizes["time"])})
@@ -295,8 +296,6 @@ def to_zarr(
             check_buffer_size(da, chunks_or_shards=chunks)
 
         da = da.chunk(shards if shards is not None else chunks)
-
-        da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
         chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)

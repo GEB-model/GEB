@@ -204,14 +204,14 @@ class Forcing:
         self,
         product: str,
         variable: str,
-        forcing: str,
-        start_date: date | None = None,
-        end_date: date | None = None,
+        forcing: str | None = None,
+        start_date: date | datetime | None = None,
+        end_date: date | datetime | None = None,
         simulation_round: str = "ISIMIP3a",
         climate_scenario: str = "obsclim",
         resolution: str | None = None,
         buffer: int = 0,
-    ) -> xr.Dataset:
+    ) -> xr.DataArray:
         """
         This method downloads ISIMIP climate data for GEB. It first retrieves the dataset
         metadata from the ISIMIP repository using the specified `product`, `variable`, `forcing`, and `resolution`
@@ -236,8 +236,16 @@ class Forcing:
         # if start_date is specified, end_date must be specified as well
         assert (start_date is None) == (end_date is None)
 
-        client = ISIMIPClient()
-        download_path = self.preprocessing_dir / "climate" / forcing / variable
+        if isinstance(start_date, datetime):
+            start_date: date = start_date.date()
+        if isinstance(end_date, datetime):
+            end_date: date = end_date.date()
+
+        client: ISIMIPClient = ISIMIPClient()
+        download_path: Path = self.preprocessing_dir / "climate"
+        if forcing is not None:
+            download_path: Path = download_path / forcing
+        download_path: Path = download_path / variable
         download_path.mkdir(parents=True, exist_ok=True)
 
         # Code to get data from disk rather than server.
@@ -284,197 +292,261 @@ class Forcing:
             download_files = []
             parse_files = []
             for file in files:
-                name = file["name"]
-                assert name.endswith(".nc")
-                splitted_filename = name.split("_")
-                date = splitted_filename[-1].split(".")[0]
-                if "-" in date:
-                    file_start_date, file_end_date = date.split("-")
-                    file_start_date = datetime.strptime(
-                        file_start_date, "%Y%m%d"
-                    ).date()
-                    file_end_date = datetime.strptime(file_end_date, "%Y%m%d").date()
-                elif len(date) == 6:
-                    file_start_date = datetime.strptime(date, "%Y%m").date()
-                    file_end_date = (
-                        file_start_date
-                        + relativedelta(months=1)
-                        - relativedelta(days=1)
-                    )
-                elif len(date) == 4:  # is year
-                    assert splitted_filename[-2].isdigit()
-                    file_start_date = datetime.strptime(
-                        splitted_filename[-2], "%Y"
-                    ).date()
-                    file_end_date = datetime.strptime(date, "%Y").date()
-                else:
-                    raise ValueError(f"could not parse date {date} from file {name}")
+                name: str = file["name"]
+                if name.endswith(".nc"):
+                    splitted_filename = name.split("_")
+                    dt = splitted_filename[-1].split(".")[0]
+                    if "-" in dt:
+                        file_start_date, file_end_date = date.split("-")
+                        file_start_date = datetime.strptime(
+                            file_start_date, "%Y%m%d"
+                        ).date()
+                        file_end_date = datetime.strptime(
+                            file_end_date, "%Y%m%d"
+                        ).date()
+                    elif len(dt) == 6:
+                        file_start_date = datetime.strptime(dt, "%Y%m").date()
+                        file_end_date = (
+                            file_start_date
+                            + relativedelta(months=1)
+                            - relativedelta(days=1)
+                        )
+                    elif len(dt) == 4:  # is year
+                        assert splitted_filename[-2].isdigit()
+                        file_start_date = datetime.strptime(
+                            splitted_filename[-2], "%Y"
+                        ).date()
+                        file_end_date = date(int(dt), 12, 31)
+                    else:
+                        raise ValueError(f"could not parse date {dt} from file {name}")
 
-                if not (
-                    file_end_date < file_start_date or file_start_date > file_end_date
-                ):
-                    parse_files.append(file["name"].replace("_global", ""))
-                    if not (
-                        download_path / file["name"].replace("_global", "")
-                    ).exists():
+                    if not (file_end_date < start_date or file_start_date > end_date):
+                        parse_files.append(file["name"].replace("_global", ""))
+                        if not (
+                            download_path / file["name"].replace("_global", "")
+                        ).exists():
+                            download_files.append(file["path"])
+                elif name.endswith(".txt"):
+                    parse_files.append(name)
+                    if not (download_path / name).exists():
                         download_files.append(file["path"])
+                else:
+                    raise ValueError(f"Unknown file type {name} in ISIMIP dataset")
+
+        if not parse_files:
+            raise ValueError(
+                f"No files found for variable {variable} in ISIMIP dataset {dataset['id']}"
+            )
+
+        all_nc = all(str(f).endswith(".nc") for f in parse_files)
+        all_txt = all(str(f).endswith(".txt") for f in parse_files)
+        assert all_nc or all_txt, "All parse_files must end with either .nc or .txt"
+        if all_txt:
+            assert len(parse_files) == 1, "Only one .txt file is expected"
 
         if download_files:
             self.logger.info(f"Requesting download of {len(download_files)} files")
-            while True:
-                try:
-                    response = client.cutout(download_files, [ymin, ymax, xmin, xmax])
-                except requests.exceptions.HTTPError:
-                    self.logger.warning(
-                        "HTTPError, could not download files, retrying in 60 seconds"
+            if all_nc:
+                while True:
+                    try:
+                        response = client.cutout(
+                            download_files, [ymin, ymax, xmin, xmax]
+                        )
+                    except requests.exceptions.HTTPError:
+                        self.logger.warning(
+                            "HTTPError, could not download files, retrying in 60 seconds"
+                        )
+                    else:
+                        if response["status"] == "finished":
+                            break
+                        elif response["status"] == "started":
+                            self.logger.info(
+                                f"{response['meta']['created_files']}/{response['meta']['total_files']} files prepared on ISIMIP server for {variable}, waiting 60 seconds before retrying"
+                            )
+                        elif response["status"] == "queued":
+                            self.logger.info(
+                                f"Data preparation queued for {variable} on ISIMIP server, waiting 60 seconds before retrying"
+                            )
+                        elif response["status"] == "failed":
+                            self.logger.info(
+                                "ISIMIP internal server error, waiting 60 seconds before retrying"
+                            )
+                        else:
+                            raise ValueError(
+                                f"Could not download files: {response['status']}"
+                            )
+                    time.sleep(60)
+
+                self.logger.info(f"Starting download of files for {variable}")
+                # download the file when it is ready
+                client.download(
+                    response["file_url"],
+                    path=download_path,
+                    validate=False,
+                    extract=False,
+                )
+
+                self.logger.info(f"Download finished for {variable}")
+                # remove zip file
+                zip_file = download_path / Path(
+                    urlparse(response["file_url"]).path.split("/")[-1]
+                )
+                # make sure the file exists
+                assert zip_file.exists()
+                # Open the zip file
+                with zipfile.ZipFile(zip_file, "r") as zip_ref:
+                    # Get a list of all the files in the zip file
+                    file_list = [f for f in zip_ref.namelist() if f.endswith(".nc")]
+                    # Extract each file one by one
+                    for i, file_name in enumerate(file_list):
+                        # Rename the file
+                        bounds_str = ""
+                        if isinstance(ymin, float):
+                            bounds_str += f"_lat{ymin}"
+                        else:
+                            bounds_str += f"_lat{ymin:.1f}"
+                        if isinstance(ymax, float):
+                            bounds_str += f"to{ymax}"
+                        else:
+                            bounds_str += f"to{ymax:.1f}"
+                        if isinstance(xmin, float):
+                            bounds_str += f"lon{xmin}"
+                        else:
+                            bounds_str += f"lon{xmin:.1f}"
+                        if isinstance(xmax, float):
+                            bounds_str += f"to{xmax}"
+                        else:
+                            bounds_str += f"to{xmax:.1f}"
+                        assert bounds_str in file_name
+                        new_file_name = file_name.replace(bounds_str, "")
+                        zip_ref.getinfo(file_name).filename = new_file_name
+                        # Extract the file
+                        if os.name == "nt":
+                            max_file_path_length = 260
+                        else:
+                            max_file_path_length = os.pathconf("/", "PC_PATH_MAX")
+                        assert (
+                            len(str(download_path / new_file_name))
+                            <= max_file_path_length
+                        ), (
+                            f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
+                        )
+                        zip_ref.extract(file_name, path=download_path)
+                # remove zip file
+                (
+                    download_path
+                    / Path(urlparse(response["file_url"]).path.split("/")[-1])
+                ).unlink()
+
+            else:
+                client.download(
+                    "https://files.isimip.org/" + download_files[0],
+                    path=download_path,
+                )
+
+        if all_nc:
+            datasets: list[xr.Dataset] = [
+                xr.open_dataset(download_path / file, chunks={}) for file in parse_files
+            ]
+            for dataset in datasets:
+                assert "lat" in dataset.coords and "lon" in dataset.coords
+
+            # make sure y is decreasing rather than increasing
+            datasets: list[xr.Dataset] = [
+                (
+                    dataset.reindex(lat=dataset.lat[::-1])
+                    if dataset.lat[0] < dataset.lat[-1]
+                    else dataset
+                )
+                for dataset in datasets
+            ]
+
+            reference = datasets[0]
+            for dataset in datasets:
+                # make sure all datasets have more or less the same coordinates
+                assert np.isclose(
+                    dataset.coords["lat"].values,
+                    reference["lat"].values,
+                    atol=abs(datasets[0].rio.resolution()[1] / 50),
+                    rtol=0,
+                ).all()
+                assert np.isclose(
+                    dataset.coords["lon"].values,
+                    reference["lon"].values,
+                    atol=abs(datasets[0].rio.resolution()[0] / 50),
+                    rtol=0,
+                ).all()
+
+            datasets: list[xr.Dataset] = [
+                ds.assign_coords(
+                    lon=reference["lon"].values, lat=reference["lat"].values
+                )
+                for ds in datasets
+            ]
+            if len(datasets) > 1:
+                ds: xr.Dataset = xr.concat(datasets, dim="time")
+            else:
+                ds: xr.Dataset = datasets[0]
+
+            if start_date is not None:
+                ds = ds.sel(time=slice(start_date, end_date))
+                # assert that time is monotonically increasing with a constant step size
+                assert (
+                    ds.time.diff("time").astype(np.int64)
+                    == (ds.time[1] - ds.time[0]).astype(np.int64)
+                ).all()
+
+            ds.raster.set_spatial_dims(x_dim="lon", y_dim="lat")
+            assert not ds.lat.attrs, "lat already has attributes"
+            assert not ds.lon.attrs, "lon already has attributes"
+            ds.lat.attrs = {
+                "long_name": "latitude of grid cell center",
+                "units": "degrees_north",
+            }
+            ds.lon.attrs = {
+                "long_name": "longitude of grid cell center",
+                "units": "degrees_east",
+            }
+            ds.raster.set_crs(4326)
+
+            ds: xr.Dataset = ds.rename({"lon": "x", "lat": "y"})
+
+            # check whether data is for noon or midnight. If noon, subtract 12 hours from time coordinate to align with other datasets
+            if hasattr(ds, "time") and pd.to_datetime(ds.time[0].values).hour == 12:
+                # subtract 12 hours from time coordinate
+                self.logger.warning(
+                    "Subtracting 12 hours from time coordinate to align climate datasets"
+                )
+                ds: xr.Dataset = ds.assign_coords(
+                    time=ds.time - np.timedelta64(12, "h")
+                )
+            return ds[variable]
+
+        elif all_txt:
+            assert len(parse_files) == 1, "Only one .txt file is expected"
+            df = pd.read_csv(
+                download_path / parse_files[0], sep=r"\s+", names=["year", variable]
+            ).set_index("year")
+            df = df[(df.index >= start_date.year) & (df.index <= end_date.year)]
+            assert len(df.columns) == 1, "Only one column expected in .txt file"
+            # convert df to xarray DataArray
+            da = xr.DataArray(
+                df[variable].values,
+                coords={
+                    "time": pd.date_range(
+                        start=f"{df.index[0]}-01-01",
+                        end=f"{df.index[-1]}-12-31",
+                        freq="YS",
                     )
-                else:
-                    if response["status"] == "finished":
-                        break
-                    elif response["status"] == "started":
-                        self.logger.info(
-                            f"{response['meta']['created_files']}/{response['meta']['total_files']} files prepared on ISIMIP server for {variable}, waiting 60 seconds before retrying"
-                        )
-                    elif response["status"] == "queued":
-                        self.logger.info(
-                            f"Data preparation queued for {variable} on ISIMIP server, waiting 60 seconds before retrying"
-                        )
-                    elif response["status"] == "failed":
-                        self.logger.info(
-                            "ISIMIP internal server error, waiting 60 seconds before retrying"
-                        )
-                    else:
-                        raise ValueError(
-                            f"Could not download files: {response['status']}"
-                        )
-                time.sleep(60)
-            self.logger.info(f"Starting download of files for {variable}")
-            # download the file when it is ready
-            client.download(
-                response["file_url"], path=download_path, validate=False, extract=False
+                },
+                dims=["time"],
             )
-            self.logger.info(f"Download finished for {variable}")
-            # remove zip file
-            zip_file = download_path / Path(
-                urlparse(response["file_url"]).path.split("/")[-1]
-            )
-            # make sure the file exists
-            assert zip_file.exists()
-            # Open the zip file
-            with zipfile.ZipFile(zip_file, "r") as zip_ref:
-                # Get a list of all the files in the zip file
-                file_list = [f for f in zip_ref.namelist() if f.endswith(".nc")]
-                # Extract each file one by one
-                for i, file_name in enumerate(file_list):
-                    # Rename the file
-                    bounds_str = ""
-                    if isinstance(ymin, float):
-                        bounds_str += f"_lat{ymin}"
-                    else:
-                        bounds_str += f"_lat{ymin:.1f}"
-                    if isinstance(ymax, float):
-                        bounds_str += f"to{ymax}"
-                    else:
-                        bounds_str += f"to{ymax:.1f}"
-                    if isinstance(xmin, float):
-                        bounds_str += f"lon{xmin}"
-                    else:
-                        bounds_str += f"lon{xmin:.1f}"
-                    if isinstance(xmax, float):
-                        bounds_str += f"to{xmax}"
-                    else:
-                        bounds_str += f"to{xmax:.1f}"
-                    assert bounds_str in file_name
-                    new_file_name = file_name.replace(bounds_str, "")
-                    zip_ref.getinfo(file_name).filename = new_file_name
-                    # Extract the file
-                    if os.name == "nt":
-                        max_file_path_length = 260
-                    else:
-                        max_file_path_length = os.pathconf("/", "PC_PATH_MAX")
-                    assert (
-                        len(str(download_path / new_file_name)) <= max_file_path_length
-                    ), (
-                        f"File path too long: {download_path / zip_ref.getinfo(file_name).filename}"
-                    )
-                    zip_ref.extract(file_name, path=download_path)
-            # remove zip file
-            (
-                download_path / Path(urlparse(response["file_url"]).path.split("/")[-1])
-            ).unlink()
-
-        datasets: list[xr.Dataset] = [
-            xr.open_dataset(download_path / file, chunks={}) for file in parse_files
-        ]
-        for dataset in datasets:
-            assert "lat" in dataset.coords and "lon" in dataset.coords
-
-        # make sure y is decreasing rather than increasing
-        datasets: list[xr.Dataset] = [
-            (
-                dataset.reindex(lat=dataset.lat[::-1])
-                if dataset.lat[0] < dataset.lat[-1]
-                else dataset
-            )
-            for dataset in datasets
-        ]
-
-        reference = datasets[0]
-        for dataset in datasets:
-            # make sure all datasets have more or less the same coordinates
-            assert np.isclose(
-                dataset.coords["lat"].values,
-                reference["lat"].values,
-                atol=abs(datasets[0].rio.resolution()[1] / 50),
-                rtol=0,
-            ).all()
-            assert np.isclose(
-                dataset.coords["lon"].values,
-                reference["lon"].values,
-                atol=abs(datasets[0].rio.resolution()[0] / 50),
-                rtol=0,
-            ).all()
-
-        datasets: list[xr.Dataset] = [
-            ds.assign_coords(lon=reference["lon"].values, lat=reference["lat"].values)
-            for ds in datasets
-        ]
-        if len(datasets) > 1:
-            ds: xr.Dataset = xr.concat(datasets, dim="time")
+            return da
         else:
-            ds: xr.Dataset = datasets[0]
-
-        if start_date is not None:
-            ds = ds.sel(time=slice(start_date, end_date))
-            # assert that time is monotonically increasing with a constant step size
-            assert (
-                ds.time.diff("time").astype(np.int64)
-                == (ds.time[1] - ds.time[0]).astype(np.int64)
-            ).all()
-
-        ds.raster.set_spatial_dims(x_dim="lon", y_dim="lat")
-        assert not ds.lat.attrs, "lat already has attributes"
-        assert not ds.lon.attrs, "lon already has attributes"
-        ds.lat.attrs = {
-            "long_name": "latitude of grid cell center",
-            "units": "degrees_north",
-        }
-        ds.lon.attrs = {
-            "long_name": "longitude of grid cell center",
-            "units": "degrees_east",
-        }
-        ds.raster.set_crs(4326)
-
-        ds: xr.Dataset = ds.rename({"lon": "x", "lat": "y"})
-
-        # check whether data is for noon or midnight. If noon, subtract 12 hours from time coordinate to align with other datasets
-        if hasattr(ds, "time") and pd.to_datetime(ds.time[0].values).hour == 12:
-            # subtract 12 hours from time coordinate
-            self.logger.warning(
-                "Subtracting 12 hours from time coordinate to align climate datasets"
+            raise ValueError(
+                "All parse_files must end with either .nc or .txt, but got: "
+                f"{parse_files}"
             )
-            ds: xr.Dataset = ds.assign_coords(time=ds.time - np.timedelta64(12, "h"))
-        return ds
 
     def plot_forcing(self, da, name):
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
@@ -1156,6 +1228,111 @@ class Forcing:
         else:
             raise ValueError(f"Unknown data source: {data_source}")
 
+    def construct_ISIMIP_variable(
+        self, variable_name: str, forcing: str | None, ssp: str
+    ) -> xr.DataArray:
+        self.logger.info(f"Setting up {variable_name}...")
+        first_year_future_climate: int = 2015
+        da_list: list = []
+        if ssp == "picontrol":
+            da: xr.DataArray = self.download_isimip(
+                product="InputData",
+                simulation_round="ISIMIP3b",
+                climate_scenario=ssp,
+                variable=variable_name,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                forcing=forcing,
+                resolution=None,
+                buffer=1,
+            )
+            da_list.append(da)
+
+        if (
+            (
+                self.end_date.year < first_year_future_climate
+                or self.start_date.year < first_year_future_climate
+            )
+            and ssp != "picontrol"
+        ):  # isimip cutoff date between historic and future climate
+            da: xr.DataArray = self.download_isimip(
+                product="InputData",
+                simulation_round="ISIMIP3b",
+                climate_scenario="historical",
+                variable=variable_name,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                forcing=forcing,
+                resolution=None,
+                buffer=1,
+            )
+            da_list.append(da)
+        if (
+            self.start_date.year >= first_year_future_climate
+            or self.end_date.year >= first_year_future_climate
+        ) and ssp != "picontrol":
+            assert ssp is not None, "ssp must be specified for future climate"
+            assert ssp != "historical", "historical scenarios run until 2014"
+            da: xr.DataArray = self.download_isimip(
+                product="InputData",
+                simulation_round="ISIMIP3b",
+                climate_scenario=ssp,
+                variable=variable_name,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                forcing=forcing,
+                resolution=None,
+                buffer=1,
+            )
+            da_list.append(da)
+
+        da: xr.DataArray = xr.concat(
+            da_list, dim="time", combine_attrs="drop_conflicts", compat="equals"
+        )  # all values and dimensions must be the same
+
+        da = da.raster.clip_bbox(da.raster.bounds)
+
+        step_size = (da.time[1] - da.time[0]).astype(np.int64)
+
+        # assert that time is monotonically increasing with a constant step size
+        # check if step size is yearly
+        if step_size == 365 * 24 * 3600 * 1e9 or step_size == 366 * 24 * 3600 * 1e9:
+            assert (da.time.dt.year.diff("time").astype(np.int64) == 1).all(), (
+                "time is not monotonically increasing with a constant step size"
+            )
+        else:  # if not check if step size is constant
+            assert (
+                da.time.diff("time").astype(np.int64)
+                == (da.time[1] - da.time[0]).astype(np.int64)
+            ).all(), "time is not monotonically increasing with a constant step size"
+
+        if variable_name in ("co2",):
+            da = da
+
+        elif variable_name in ("tas", "tasmin", "tasmax", "ps"):
+            elevation_forcing, elevation_grid = self.get_elevation_forcing_and_grid(
+                self.grid["mask"], da, forcing_type="ISIMIP"
+            )
+
+            if variable_name in ("tas", "tasmin", "tasmax"):
+                da: xr.DataArray = reproject_and_apply_lapse_rate_temperature(
+                    da, elevation_forcing, elevation_grid
+                )
+            elif variable_name == "ps":
+                da: xr.DataArray = reproject_and_apply_lapse_rate_pressure(
+                    da, elevation_forcing, elevation_grid
+                )
+            else:
+                raise ValueError
+        else:
+            target: xr.DataArray = self.grid["mask"]
+            da: xr.DataArray = resample_like(
+                da, target, method="conservative"
+            )  # resample to the model grid
+        da.attrs["_FillValue"] = np.nan
+        self.logger.info(f"Completed {variable_name}")
+        return da
+
     def setup_1800arcsec_variables_isimip(
         self,
         forcing: str,
@@ -1184,97 +1361,9 @@ class Forcing:
         The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable_name, forcing, ssp):
-            self.logger.info(f"Setting up {variable_name}...")
-            first_year_future_climate: int = 2015
-            da_list: list = []
-            if ssp == "picontrol":
-                ds = self.download_isimip(
-                    product="InputData",
-                    simulation_round="ISIMIP3b",
-                    climate_scenario=ssp,
-                    variable=variable_name,
-                    forcing=forcing,
-                    resolution=None,
-                    buffer=1,
-                )
-                var.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
-
-            if (
-                (
-                    self.end_date.year < first_year_future_climate
-                    or self.start_date.year < first_year_future_climate
-                )
-                and ssp != "picontrol"
-            ):  # isimip cutoff date between historic and future climate
-                ds: xr.Dataset = self.download_isimip(
-                    product="InputData",
-                    simulation_round="ISIMIP3b",
-                    climate_scenario="historical",
-                    variable=variable_name,
-                    start_date=self.start_date,
-                    end_date=self.end_date,
-                    forcing=forcing,
-                    resolution=None,
-                    buffer=1,
-                )
-                da_list.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
-            if (
-                self.start_date.year >= first_year_future_climate
-                or self.end_date.year >= first_year_future_climate
-            ) and ssp != "picontrol":
-                assert ssp is not None, "ssp must be specified for future climate"
-                assert ssp != "historical", "historical scenarios run until 2014"
-                ds: xr.Dataset = self.download_isimip(
-                    product="InputData",
-                    simulation_round="ISIMIP3b",
-                    climate_scenario=ssp,
-                    variable=variable_name,
-                    start_date=self.start_date,
-                    end_date=self.end_date,
-                    forcing=forcing,
-                    resolution=None,
-                    buffer=1,
-                )
-                da_list.append(ds[variable_name].raster.clip_bbox(ds.raster.bounds))
-
-            var: xr.DataArray = xr.concat(
-                da_list, dim="time", combine_attrs="drop_conflicts", compat="equals"
-            )  # all values and dimensions must be the same
-
-            # assert that time is monotonically increasing with a constant step size
-            assert (
-                var.time.diff("time").astype(np.int64)
-                == (var.time[1] - var.time[0]).astype(np.int64)
-            ).all(), "time is not monotonically increasing with a constant step size"
-
-            if variable_name in ("tas", "tasmin", "tasmax", "ps"):
-                elevation_forcing, elevation_grid = self.get_elevation_forcing_and_grid(
-                    self.grid["mask"], var, forcing_type="ISIMIP"
-                )
-
-                if variable_name in ("tas", "tasmin", "tasmax"):
-                    var: xr.DataArray = reproject_and_apply_lapse_rate_temperature(
-                        var, elevation_forcing, elevation_grid
-                    )
-                elif variable_name == "ps":
-                    var: xr.DataArray = reproject_and_apply_lapse_rate_pressure(
-                        var, elevation_forcing, elevation_grid
-                    )
-                else:
-                    raise ValueError
-            else:
-                target: xr.DataArray = self.grid["mask"]
-                var: xr.DataArray = resample_like(
-                    var, target, method="conservative"
-                )  # resample to the model grid
-            var.attrs["_FillValue"] = np.nan
-            self.logger.info(f"Completed {variable_name}")
-
-            getattr(self, f"set_{variable_name}")(var)
-
         for variable in variables:
-            download_variable(variable, forcing, ssp)
+            da = self.construct_ISIMIP_variable(variable, forcing, ssp)
+            getattr(self, f"set_{variable}")(da)
 
     def setup_30arcsec_variables_isimip(self, variables: List[str]):
         """
@@ -1903,4 +1992,15 @@ class Forcing:
 
         return elevation_forcing.chunk({"x": -1, "y": -1}), elevation_grid.chunk(
             {"x": -1, "y": -1}
+        )
+
+    def setup_CO2_concentration(self, ssp: str) -> None:
+        da: xr.DataArray = self.construct_ISIMIP_variable(
+            variable_name="co2",
+            forcing=None,
+            ssp=ssp,
+        ).astype(np.float32)
+        self.set_other(
+            da,
+            name="climate/CO2_ppm",
         )
