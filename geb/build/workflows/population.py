@@ -1,4 +1,5 @@
 import gzip
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -23,13 +24,28 @@ def load_GLOPOP_S(data_catalog, GDL_region):
         "WALL",
         "ROOF",
         "SOURCE",
-        "GRID_CELL",
+        "GRID_CELL",  # CHECK WHAT THE NEW COLUMN IS (ASK MARIJN)
     ]
 
-    GLOPOP_S = data_catalog.get_source("GLOPOP-S")
+    GLOPOP_SG = data_catalog.get_source("GLOPOP-SG")
 
-    with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
-        GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
+    # load the GLOPOP files for the specified GDL region
+    file_name_tif = f"{GDL_region}_grid_nr.tif"
+    file_name_gz = f"synthpop_{GDL_region}_grid.dat.gz"
+    # Open the zip file
+    with zipfile.ZipFile(GLOPOP_SG.path, "r") as zip_ref:
+        # Open the GLOPOP_SG grid file
+        with zip_ref.open(file_name_tif) as file:
+            GLOPOP_GRID_region = rioxarray.open_rasterio(file)
+        # Open the GLOPOP_SG synthpop file
+        with zip_ref.open(file_name_gz) as file:
+            with gzip.open(file, "rb") as f:
+                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
+
+    # reading method old file
+    # GLOPOP_S = data_catalog.get_source("GLOPOP-S").path.format(region=GDL_region)
+    # with gzip.open(GLOPOP_S, "rb") as f:
+    #     GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
 
     n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
     GLOPOP_S_region = pd.DataFrame(
@@ -37,11 +53,6 @@ def load_GLOPOP_S(data_catalog, GDL_region):
             GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
         ).transpose(),
         columns=GLOPOP_S_attribute_names,
-    )
-
-    # load grid
-    GLOPOP_GRID_region = rioxarray.open_rasterio(
-        GLOPOP_SG.path.format(region=GDL_region)
     )
 
     # Get coordinates of each GRID_CELL in GLOPOP_GRID_region

@@ -78,18 +78,55 @@ class Agents:
             ISO3 = region["ISO3"]
             region_id = region["region_id"]
 
-            # select domestic water demand for the region
-            municipal_water_demand_region = municipal_water_demand.loc[ISO3]
-            population = municipal_water_demand_region[
-                municipal_water_demand_region["Variable"] == "Total population"
-            ]
-            population = population.set_index("Year")
-            population = population["Value"] * 1000
+            def load_water_demand_and_pop_data(ISO3):
+                # Load the municipal water demand data for the given ISO3 code
+                municipal_water_demand_region = municipal_water_demand.loc[ISO3]
+                population = municipal_water_demand_region[
+                    municipal_water_demand_region["Variable"] == "Total population"
+                ]
+                population = population.set_index("Year")
+                population = population["Value"] * 1000
 
-            municipal_water_withdrawal = municipal_water_demand_region[
-                municipal_water_demand_region["Variable"]
-                == "Municipal water withdrawal"
-            ]
+                municipal_water_withdrawal = municipal_water_demand_region[
+                    municipal_water_demand_region["Variable"]
+                    == "Municipal water withdrawal"
+                ]
+                return municipal_water_withdrawal, population
+
+            municipal_water_withdrawal, population = load_water_demand_and_pop_data(
+                ISO3
+            )
+
+            if population.isna().any() or len(population) == 0:
+                raise ValueError(
+                    f"Missing population data for {ISO3}. Please check the population dataset."
+                )
+            if len(municipal_water_withdrawal) == 0:
+                countries_with_water_withdrawal_data = (
+                    municipal_water_demand[
+                        municipal_water_demand["Variable"]
+                        == "Municipal water withdrawal"
+                    ]
+                    .dropna(axis=0, how="any")
+                    .index.unique()
+                    .tolist()
+                )
+                # get all countries with NO data
+                # countries_without_water_withdrawal_data = [
+                #     c for c in municipal_water_demand.index.unique() if c not in countries_with_water_withdrawal_data
+                # ]
+
+                donor_countries = setup_donor_countries(
+                    self, countries_with_water_withdrawal_data
+                )
+                donor_country = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing municipal water withdrawal data for {ISO3}, filling with donor country {donor_country}"
+                )
+                municipal_water_withdrawal, population = load_water_demand_and_pop_data(
+                    donor_country
+                )
+
             assert len(municipal_water_withdrawal) > 0, (
                 f"Missing municipal water withdrawal data for {ISO3}"
             )
@@ -108,19 +145,29 @@ class Agents:
                 f"Too large water withdrawal data for {ISO3}"
             )
 
-            municipal_water_demand_2000_m3_per_capita_per_day = (
-                municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
-            )
+            if 2000 not in municipal_water_withdrawal_m3_per_capita_per_day.index:
+                # use the first available date as baseline
+                municipal_water_demand_baseline_m3_per_capita_per_day = (
+                    municipal_water_withdrawal_m3_per_capita_per_day.iloc[0].item()
+                )
+                self.logger.warning(
+                    f"Missing baseline year (2000) for municipal water withdrawal data for {ISO3}, using the first available date as baseline (year {municipal_water_withdrawal_m3_per_capita_per_day.index[0]})"
+                )
+            else:
+                # use the 2000 as baseline
+                municipal_water_demand_baseline_m3_per_capita_per_day = (
+                    municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
+                )
 
             municipal_water_demand_per_capita[
                 self.array["agents/households/region_id"] == region_id
-            ] = municipal_water_demand_2000_m3_per_capita_per_day
+            ] = municipal_water_demand_baseline_m3_per_capita_per_day
 
             # scale municipal water demand table to use baseline as 1.00 and scale other values
             # relatively
             municipal_water_withdrawal_m3_per_capita_per_day_multiplier[region_id] = (
                 municipal_water_withdrawal_m3_per_capita_per_day
-                / municipal_water_demand_2000_m3_per_capita_per_day
+                / municipal_water_demand_baseline_m3_per_capita_per_day
             )
 
         # we don't want to calculate the water demand for every year,
@@ -294,19 +341,16 @@ class Agents:
                 )
 
                 ## get all the donor countries for countries in the dataset
-                inflation_donor_countries = setup_donor_countries(
-                    self, countries_with_data
-                )
-                inflation_donor_country = inflation_donor_countries.get(ISO3, None)
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(ISO3, None)
 
                 self.logger.info(
-                    f"Using inflation donor country {inflation_donor_country} for a region in country {ISO3}"
+                    f"Missing inflation rates for {ISO3}, using donor country {donor_country}"
                 )
-
                 donor_country_inflation_rates = process_rates(
                     inflation_rates,
                     years_inflation_rates,
-                    inflation_donor_country,
+                    donor_country,
                     convert_percent_to_ratio=True,
                 )
 
@@ -324,6 +368,31 @@ class Agents:
             price_ratio_dict["data"][region_id] = process_rates(
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
+
+            if np.all(np.isnan(price_ratio_dict["data"][region_id])):
+                # check which countries are NOT fully nan
+                price_ratio_filter_index = price_ratio_filtered.set_index(
+                    "Country Code"
+                )
+                countries_with_price_ratio_data = (
+                    price_ratio_filter_index[years_price_ratio]
+                    .dropna(axis=0, how="all")
+                    .index.unique()
+                    .tolist()
+                )
+                donor_countries = setup_donor_countries(
+                    self, countries_with_price_ratio_data
+                )
+                donor_country = donor_countries.get(ISO3, None)
+                price_ratio_dict["data"][region_id] = process_rates(
+                    price_ratio_filtered,
+                    years_price_ratio,
+                    donor_country,
+                )
+
+                self.logger.info(
+                    f"Missing price ratio data for {ISO3}, using donor country {donor_country}"
+                )
 
         # convert to pandas dataframe
         inflation_rates = pd.DataFrame(
@@ -968,9 +1037,8 @@ class Agents:
             )
 
         all_agents = []
-        self.logger.info(f"Starting processing of {len(regions_shapes)} regions")
 
-        # load the farm size donor countries
+        self.logger.info(f"Starting processing of {len(regions_shapes)} regions")
 
         farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
         farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
@@ -986,9 +1054,8 @@ class Agents:
                 if ISO3 in farm_size_donor_country.keys():
                     ISO3 = farm_size_donor_country.get(ISO3)
                     self.logger.info(
-                        f"Using farm size donor country {ISO3} for a region in country {region['ISO3']}"
+                        f"Missing farm sizes for {region[country_iso3_column]}, using donor country {ISO3}"
                     )
-
             else:
                 state, district, tehsil = (
                     region["state_name"],
@@ -1487,11 +1554,6 @@ class Agents:
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            if GDL_region == "ANDt":
-                GDL_region = "ESPr112"
-            if GDL_region == "LIEt":
-                GDL_region = "CHEr105"
-
             GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
@@ -1743,13 +1805,25 @@ class Agents:
 
         donor_data = {}
         for ISO3 in ISO3_codes_GLOBIOM_region:
-            if ISO3 == "AND":
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":
-                ISO3 = "CHE"
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
+            if region_risk_aversion_data.empty:
+                countries_with_preferences_data = (
+                    preferences_global["ISO3"].unique().tolist()
+                )
+                donor_countries = setup_donor_countries(
+                    self, countries_with_preferences_data
+                )
+                donor_country = donor_countries.get(ISO3, None)
+
+                region_risk_aversion_data = preferences_global[
+                    preferences_global["ISO3"] == donor_country
+                ]
+
+                self.logger.info(
+                    f"Missing risk aversion data for {ISO3}, filling with {donor_country} instead."
+                )
 
             region_risk_aversion_data = region_risk_aversion_data[
                 [

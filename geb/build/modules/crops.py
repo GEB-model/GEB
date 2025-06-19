@@ -13,6 +13,7 @@ from geb.workflows.io import get_window
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
     M49_to_ISO3,
+    setup_donor_countries,
 )
 from ..workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from ..workflows.farmers import get_farm_locations
@@ -480,14 +481,19 @@ class Crops:
 
         for _, region in recipient_regions.iterrows():
             ISO3 = region["ISO3"]
-            if ISO3 == "AND":
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":
-                ISO3 = "CHE"
             region_id = region["region_id"]
             self.logger.info(f"Processing region {region_id}")
             # Filter the data for the current country
+
             country_data = donor_data[donor_data["ISO3"] == ISO3]
+
+            if country_data.empty:
+                countries_with_donor_data = donor_data.ISO3.unique().tolist()
+                donor_countries = setup_donor_countries(self, countries_with_donor_data)
+                ISO3 = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing donor data for {region['ISO3']}, using donor country {ISO3}"
+                )
 
             GLOBIOM_region = GLOBIOM_regions.loc[
                 GLOBIOM_regions["ISO3"] == ISO3, "Region37"
@@ -883,6 +889,34 @@ class Crops:
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
+        # Check if any key has an empty value
+        if any(value in [None, "", [], {}] for value in crop_calendar.values()):
+            missing_mirca_unit = [
+                unit for unit, calendars in crop_calendar.items() if not calendars
+            ]
+            self.logger.warning(
+                f"Missing crop calendar for MIRCA unit(s): {missing_mirca_unit}"
+            )
+
+            for mirca_unit in missing_mirca_unit:
+                # Filter out the current mirca_unit from crop_calendar.keys()
+                valid_keys = [key for key in crop_calendar.keys() if key != mirca_unit]
+
+                # Find the closest MIRCA unit with a crop calendar
+                if valid_keys:  # Ensure there are valid keys to process
+                    closest_mirca_unit = min(
+                        valid_keys, key=lambda x: abs(x - mirca_unit)
+                    )
+                else:
+                    raise ValueError(
+                        f"No valid MIRCA units found to replace missing crop calendar for {mirca_unit}."
+                    )
+
+                # use this closest_mirca_unit to fill the missing crop calendar
+                crop_calendar[mirca_unit] = crop_calendar[closest_mirca_unit]
+
+        else:
+            print("All keys have valid values.")
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
