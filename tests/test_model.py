@@ -174,7 +174,7 @@ def test_multiverse():
 
     args["config"] = config
 
-    geb = run_model_with_method(method=None, close_after_run=False, **args)
+    geb = run_model_with_method(method=None, close_after_run=False, gui=False, **args)
     with WorkingDirectory(working_directory):
         geb.run(initialize_only=True)
         for i in range(forecast_after_n_days):
@@ -193,7 +193,7 @@ def test_multiverse():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_ISIMIP_forcing():
+def test_ISIMIP_forcing_low_res():
     """
     Test the ISIMIP forcing update function.
     This is a special case that requires a specific setup.
@@ -205,13 +205,13 @@ def test_ISIMIP_forcing():
     original_time_range = build_config["set_time_range"]
 
     args["build_config"] = {
-        # "set_time_range": {
-        #     "start_date": date(2000, 1, 1),
-        #     "end_date": date(2024, 12, 31),
-        # },
+        "set_time_range": {
+            "start_date": date(2000, 1, 1),
+            "end_date": date(2000, 12, 31),
+        },
         "setup_forcing_ISIMIP": {
-            "resolution_arcsec": 30,
-            "forcing": "chelsa-w5e5",
+            "resolution_arcsec": 1800,
+            "forcing": "gfdl-esm4",
             "ssp": "ssp370",
         },
     }
