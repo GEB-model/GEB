@@ -992,7 +992,14 @@ class GEBModel(
     def end_date(self):
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
-    def snap_to_grid(self, ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
+    def snap_to_grid(
+        self,
+        ds: xr.DataArray | xr.Dataset,
+        reference: xr.DataArray | xr.Dataset,
+        relative_tollerance: float = 0.02,
+        ydim: str = "y",
+        xdim: str = "x",
+    ) -> xr.Dataset | xr.DataArray:
         # make sure all datasets have more or less the same coordinates
         assert np.isclose(
             ds.coords[ydim].values,

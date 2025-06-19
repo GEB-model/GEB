@@ -5,7 +5,7 @@ import zipfile
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import List
+from typing import Any, List
 from urllib.parse import urlparse
 
 import matplotlib.pyplot as plt
@@ -191,7 +191,7 @@ def plot_timeline(da, data, name, ax):
     ax.set_title(name)
 
 
-def get_chunk_size(da, target=1e8):
+def get_chunk_size(da, target: float | int = 1e8) -> int:
     return int(target / (da.dtype.itemsize * da.x.size * da.y.size))
 
 
@@ -201,43 +201,17 @@ class Forcing:
 
     def download_isimip(
         self,
-        product,
-        variable,
-        forcing,
-        start_date=None,
-        end_date=None,
-        simulation_round="ISIMIP3a",
-        climate_scenario="obsclim",
-        resolution=None,
-        buffer=0,
-    ):
+        product: str,
+        variable: str,
+        forcing: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        simulation_round: str = "ISIMIP3a",
+        climate_scenario: str = "obsclim",
+        resolution: str | None = None,
+        buffer: int = 0,
+    ) -> xr.Dataset:
         """
-        Downloads ISIMIP climate data for GEB.
-
-        Parameters
-        ----------
-        product : str
-            The name of the ISIMIP product to download.
-        variable : str
-            The name of the climate variable to download.
-        forcing : str
-            The name of the climate forcing to download.
-        start_date : date, optional
-            The start date of the data. Default is None.
-        end_date : date, optional
-            The end date of the data. Default is None.
-        resolution : str, optional
-            The resolution of the data to download. Default is None.
-        buffer : int, optional
-            The buffer size in degrees to add to the bounding box of the data to download. Default is 0.
-
-        Returns
-        -------
-        xr.Dataset
-            The downloaded climate data as an xarray dataset.
-
-        Notes
-        -----
         This method downloads ISIMIP climate data for GEB. It first retrieves the dataset
         metadata from the ISIMIP repository using the specified `product`, `variable`, `forcing`, and `resolution`
         parameters. It then downloads the data files that match the specified `start_date` and `end_date` parameters, and
@@ -245,6 +219,18 @@ class Forcing:
 
         The resulting climate data is returned as an xarray dataset. The dataset is assigned the coordinate reference system
         EPSG:4326, and the spatial dimensions are set to 'lon' and 'lat'.
+
+        Args:
+            product: The name of the ISIMIP product to download.
+            variable: The name of the climate variable to download.
+            forcing: The name of the climate forcing to download.
+            start_date: The start date of the data. Default is None.
+            end_date: The end date of the data. Default is None.
+            resolution: The resolution of the data to download. Default is None.
+            buffer: The buffer size in degrees to add to the bounding box of the data to download. Default is 0.
+
+        Returns:
+            The downloaded climate data as an xarray dataset.
         """
         # if start_date is specified, end_date must be specified as well
         assert (start_date is None) == (end_date is None)
@@ -302,22 +288,30 @@ class Forcing:
                 splitted_filename = name.split("_")
                 date = splitted_filename[-1].split(".")[0]
                 if "-" in date:
-                    start_date, end_date = date.split("-")
-                    start_date = datetime.strptime(start_date, "%Y%m%d").date()
-                    end_date = datetime.strptime(end_date, "%Y%m%d").date()
+                    file_start_date, file_end_date = date.split("-")
+                    file_start_date = datetime.strptime(
+                        file_start_date, "%Y%m%d"
+                    ).date()
+                    file_end_date = datetime.strptime(file_end_date, "%Y%m%d").date()
                 elif len(date) == 6:
-                    start_date = datetime.strptime(date, "%Y%m").date()
-                    end_date = (
-                        start_date + relativedelta(months=1) - relativedelta(days=1)
+                    file_start_date = datetime.strptime(date, "%Y%m").date()
+                    file_end_date = (
+                        file_start_date
+                        + relativedelta(months=1)
+                        - relativedelta(days=1)
                     )
                 elif len(date) == 4:  # is year
                     assert splitted_filename[-2].isdigit()
-                    start_date = datetime.strptime(splitted_filename[-2], "%Y").date()
-                    end_date = datetime.strptime(date, "%Y").date()
+                    file_start_date = datetime.strptime(
+                        splitted_filename[-2], "%Y"
+                    ).date()
+                    file_end_date = datetime.strptime(date, "%Y").date()
                 else:
                     raise ValueError(f"could not parse date {date} from file {name}")
 
-                if not (end_date < start_date or start_date > end_date):
+                if not (
+                    file_end_date < file_start_date or file_start_date > file_end_date
+                ):
                     parse_files.append(file["name"].replace("_global", ""))
                     if not (
                         download_path / file["name"].replace("_global", "")
@@ -408,14 +402,14 @@ class Forcing:
                 download_path / Path(urlparse(response["file_url"]).path.split("/")[-1])
             ).unlink()
 
-        datasets = [
+        datasets: list[xr.Dataset] = [
             xr.open_dataset(download_path / file, chunks={}) for file in parse_files
         ]
         for dataset in datasets:
             assert "lat" in dataset.coords and "lon" in dataset.coords
 
         # make sure y is decreasing rather than increasing
-        datasets = [
+        datasets: list[xr.Dataset] = [
             (
                 dataset.reindex(lat=dataset.lat[::-1])
                 if dataset.lat[0] < dataset.lat[-1]
@@ -440,14 +434,14 @@ class Forcing:
                 rtol=0,
             ).all()
 
-        datasets = [
+        datasets: list[xr.Dataset] = [
             ds.assign_coords(lon=reference["lon"].values, lat=reference["lat"].values)
             for ds in datasets
         ]
         if len(datasets) > 1:
-            ds = xr.concat(datasets, dim="time")
+            ds: xr.Dataset = xr.concat(datasets, dim="time")
         else:
-            ds = datasets[0]
+            ds: xr.Dataset = datasets[0]
 
         if start_date is not None:
             ds = ds.sel(time=slice(start_date, end_date))
@@ -505,12 +499,13 @@ class Forcing:
         fp.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(fp)
 
-    def set_xy_attrs(self, da):
+    def set_xy_attrs(self, da: xr.DataArray) -> None:
+        """Set CF-compliant attributes for the x and y coordinates of a DataArray."""
         da.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         da.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
-    def set_pr_hourly(self, da, *args, **kwargs):
-        name = "climate/pr_hourly"
+    def set_pr_hourly(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/pr_hourly"
         da.attrs = {
             "standard_name": "precipitation_flux",
             "long_name": "Precipitation",
@@ -531,7 +526,7 @@ class Forcing:
             0, max_value, offset=offset, precision=precision
         )
 
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -550,8 +545,8 @@ class Forcing:
         )
         return da
 
-    def set_pr(self, da, *args, **kwargs):
-        name = "climate/pr"
+    def set_pr(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/pr"
         da.attrs = {
             "standard_name": "precipitation_flux",
             "long_name": "Precipitation",
@@ -571,7 +566,7 @@ class Forcing:
         scaling_factor, out_dtype = calculate_scaling(
             0, max_value, offset=offset, precision=precision
         )
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -592,8 +587,8 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_rsds(self, da, *args, **kwargs):
-        name = "climate/rsds"
+    def set_rsds(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/rsds"
         da.attrs = {
             "standard_name": "surface_downwelling_shortwave_flux_in_air",
             "long_name": "Surface Downwelling Shortwave Radiation",
@@ -606,7 +601,7 @@ class Forcing:
         scaling_factor, out_dtype = calculate_scaling(
             0, 1361, offset=offset, precision=0.1
         )
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -627,8 +622,8 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_rlds(self, da, *args, **kwargs):
-        name = "climate/rlds"
+    def set_rlds(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/rlds"
         da.attrs = {
             "standard_name": "surface_downwelling_longwave_flux_in_air",
             "long_name": "Surface Downwelling Longwave Radiation",
@@ -641,7 +636,7 @@ class Forcing:
         scaling_factor, out_dtype = calculate_scaling(
             0, 1361, offset=offset, precision=0.1
         )
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -662,8 +657,8 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tas(self, da, *args, **kwargs):
-        name = "climate/tas"
+    def set_tas(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/tas"
         da.attrs = {
             "standard_name": "air_temperature",
             "long_name": "Near-Surface Air Temperature",
@@ -678,7 +673,7 @@ class Forcing:
             -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -701,8 +696,8 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tasmax(self, da, *args, **kwargs):
-        name = "climate/tasmax"
+    def set_tasmax(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/tasmax"
         da.attrs = {
             "standard_name": "air_temperature",
             "long_name": "Daily Maximum Near-Surface Air Temperature",
@@ -717,7 +712,7 @@ class Forcing:
             -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -739,8 +734,8 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tasmin(self, da, *args, **kwargs):
-        name = "climate/tasmin"
+    def set_tasmin(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/tasmin"
         da.attrs = {
             "standard_name": "air_temperature",
             "long_name": "Daily Minimum Near-Surface Air Temperature",
@@ -755,7 +750,7 @@ class Forcing:
             -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -777,8 +772,8 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_hurs(self, da, *args, **kwargs):
-        name = "climate/hurs"
+    def set_hurs(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/hurs"
         da.attrs = {
             "standard_name": "relative_humidity",
             "long_name": "Near-Surface Relative Humidity",
@@ -792,7 +787,7 @@ class Forcing:
             0, 100, offset=offset, precision=0.1
         )
 
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -820,8 +815,8 @@ class Forcing:
         da = da_.transpose(*da.dims)
         return da
 
-    def set_ps(self, da, *args, **kwargs):
-        name = "climate/ps"
+    def set_ps(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/ps"
         da.attrs = {
             "standard_name": "surface_air_pressure",
             "long_name": "Surface Air Pressure",
@@ -835,7 +830,7 @@ class Forcing:
             30_000, 120_000, offset=offset, precision=10
         )
 
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -857,8 +852,8 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_sfcwind(self, da, *args, **kwargs):
-        name = "climate/sfcwind"
+    def set_sfcwind(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/sfcwind"
         da.attrs = {
             "standard_name": "wind_speed",
             "long_name": "Near-Surface Wind Speed",
@@ -871,7 +866,7 @@ class Forcing:
         scaling_factor, out_dtype = calculate_scaling(
             0, 120, offset=offset, precision=0.1
         )
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -893,8 +888,8 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_SPEI(self, da, *args, **kwargs):
-        name = "climate/SPEI"
+    def set_SPEI(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/SPEI"
         da.attrs = {
             "units": "-",
             "long_name": "Standard Precipitation Evapotranspiration Index",
@@ -914,7 +909,7 @@ class Forcing:
             min_SPEI, max_SPEI, offset=offset, precision=0.001
         )
 
-        filters = [
+        filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
@@ -940,7 +935,7 @@ class Forcing:
         target = self.grid["mask"]
         target.raster.set_crs(4326)
 
-        download_args = {
+        download_args: dict[str, Any] = {
             "folder": self.preprocessing_dir / "climate" / "ERA5",
             "start_date": self.start_date
             - relativedelta(
@@ -1283,7 +1278,7 @@ class Forcing:
 
         def download_variable(variable):
             self.logger.info(f"Setting up {variable}...")
-            ds = self.download_isimip(
+            ds: xr.Dataset = self.download_isimip(
                 product="InputData",
                 variable=variable,
                 start_date=self.start_date,
@@ -1291,12 +1286,14 @@ class Forcing:
                 forcing="chelsa-w5e5",
                 resolution="30arcsec",
             )
-            ds = ds.rename({"lon": "x", "lat": "y"})
-            var = ds[variable].raster.clip_bbox(ds.raster.bounds)
+            ds: xr.Dataset = ds.rename({"lon": "x", "lat": "y"})
+            var: xr.DataArray = ds[variable].raster.clip_bbox(ds.raster.bounds)
             # TODO: Due to the offset of the MERIT grid, the snapping to the MERIT grid is not perfect
             # and thus the snapping needs to consider quite a large tollerance. We can consider interpolating
             # or this may be fixed when the we go to HydroBASINS v2
-            var = self.snap_to_grid(var, self.grid, relative_tollerance=0.07)
+            var: xr.DataArray = self.snap_to_grid(
+                var, self.grid, relative_tollerance=0.07
+            )
             var.attrs["_FillValue"] = np.nan
             self.logger.info(f"Completed {variable}")
             getattr(self, f"set_{variable}")(var)
@@ -1589,15 +1586,6 @@ class Forcing:
 
     def setup_wind_isimip_30arcsec(self):
         """
-        Sets up the wind data for GEB.
-
-        Parameters
-        ----------
-        folder: str
-            The folder to save the forcing data in.
-
-        Notes
-        -----
         This method sets up the wind data for GEB. It first downloads the global wind atlas data and
         regrids it to the target grid using the `xe.Regridder` method. It then downloads the 30-minute average wind data
         from the ISIMIP dataset for the specified time period and regrids it to the target grid using the `xe.Regridder`
@@ -1678,7 +1666,7 @@ class Forcing:
         calibration_period_start: date = date(1981, 1, 1),
         calibration_period_end: date = date(2010, 1, 1),
         window_months: int = 12,
-    ):
+    ) -> None:
         """
         Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
         due to the sliding window, the SPEI data will be shorter than the original data. When
@@ -1692,14 +1680,10 @@ class Forcing:
         create an intermediate temporary file of the water balance wher chunks are in an intermediate
         size between the xy and time chunks.
 
-        Parameters
-        ----------
-        calibration_period_start : date
-            The start time of the reSPEI data in ISO 8601 format (YYYY-MM-DD).
-        calibration_period_end : date
-            The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
-        window_months : int
-            The window size in months for the SPEI calculation. Default is 12 months.
+        Args:
+            calibration_period_start: The start time of the reSPEI data in ISO 8601 format (YYYY-MM-DD).
+            calibration_period_end: The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
+            window_months: The window size in months for the SPEI calculation. Default is 12 months.
         """
         self.logger.info("setting up SPEI...")
 

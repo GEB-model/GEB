@@ -32,7 +32,9 @@ def load_array(fp: Path) -> np.ndarray:
         raise ValueError(f"Unsupported file format: {fp.suffix}")
 
 
-def calculate_scaling(min_value, max_value, precision, offset=0):
+def calculate_scaling(
+    min_value: float, max_value: float, precision: float, offset=0.0
+) -> tuple[float, str]:
     """
     This function calculates the scaling factor and output dtype for
     a fixed scale and offset codec. The expected minimum and maximum
@@ -46,58 +48,50 @@ def calculate_scaling(min_value, max_value, precision, offset=0):
     there may be some issues due to rounding and the given factors may
     become slighly imprecise.
 
-    Parameters
-    ----------
-    min_value : float
-        The minimum expected value of the original data. Outside this range
-        the data may start to behave unexpectedly.
-    max_value : float
-        The maximum expected value of the original data. Outside this range
-        the data may start to behave unexpectedly.
-    precision : float
-        The precision of the data, i.e. the maximum difference between the
-        original and decoded data.
-    offset : float, optional
-        The offset to apply to the original data before scaling.
+    Args:
+        min_value: The minimum expected value of the original data. Outside this range
+            the data may start to behave unexpectedly.
+        max_value: The maximum expected value of the original data. Outside this range
+            the data may start to behave unexpectedly.
+        precision: The precision of the data, i.e. the maximum difference between the
+            original and decoded data.
+        offset: The offset to apply to the original data before scaling.
 
-    Returns
-    -------
-    scaling_factor : float
-        The scaling factor to apply to the original data.
-    out_dtype : str
-        The output dtype to use for the fixed scale and offset codec.
+    Returns:
+        scaling_factor: The scaling factor to apply to the original data.
+        out_dtype: The output dtype to use for the fixed scale and offset codec.
     """
 
     assert min_value < max_value, "min_value must be less than max_value"
     assert precision > 0, "precision must be greater than 0"
 
-    min_with_offset = min_value + offset
-    max_with_offset = max_value + offset
+    min_with_offset: float = min_value + offset
+    max_with_offset: float = max_value + offset
 
-    max_abs_value = max(abs(min_with_offset), abs(max_with_offset))
+    max_abs_value: float = max(abs(min_with_offset), abs(max_with_offset))
 
-    steps_required = int(max_abs_value / precision / 2) + 1
+    steps_required: int = int(max_abs_value / precision / 2) + 1
 
-    bits_required = steps_required.bit_length()
+    bits_required: int = steps_required.bit_length()
 
-    steps_available = 2**bits_required
+    steps_available: int = 2**bits_required
 
     if min_with_offset < 0:
         bits_required += 1  # need to account for the sign bit
-        out_dtype_prefix = ""
+        out_dtype_prefix: str = ""
     else:
-        out_dtype_prefix = "u"
+        out_dtype_prefix: str = "u"
 
-    scaling_factor = steps_available / max_abs_value
+    scaling_factor: float = steps_available / max_abs_value
 
     if bits_required <= 8:
-        out_dtype = out_dtype_prefix + "int8"
+        out_dtype: str = out_dtype_prefix + "int8"
     elif bits_required <= 16:
-        out_dtype = out_dtype_prefix + "int16"
+        out_dtype: str = out_dtype_prefix + "int16"
     elif bits_required <= 32:
-        out_dtype = out_dtype_prefix + "int32"
+        out_dtype: str = out_dtype_prefix + "int32"
     elif bits_required <= 64:
-        out_dtype = out_dtype_prefix + "int64"
+        out_dtype: str = out_dtype_prefix + "int64"
     else:
         raise ValueError("Too many bits required for precision and range")
 
