@@ -1082,33 +1082,35 @@ class GEBModel(
         self.set_table(risk_scaling_factors, name="precipitation_scaling_factors")
 
     def set_table(self, table, name, write=True):
-        self.table[name] = table
+        fp: Path = Path("table") / (name + ".parquet")
+        fp_with_root: Path = Path(self.root, fp)
         if write:
-            fn = Path("table") / (name + ".parquet")
-            self.logger.info(f"Writing file {fn}")
+            self.logger.info(f"Writing file {fp}")
 
-            self.files["table"][name] = fn
+            self.files["table"][name] = fp
 
-            fp = Path(self.root, fn)
-            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp_with_root.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
             # we use the highest compression level for gzip
             table.to_parquet(
-                fp, engine="pyarrow", compression="gzip", compression_level=9
+                fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
             )
 
+        self.table[name] = fp_with_root
+
     def set_array(self, data, name, write=True):
-        self.array[name] = data
+        fp: Path = Path("array") / (name + ".zarr")
+        fp_with_root: Path = Path(self.root, fp)
 
         if write:
-            fn = Path("array") / (name + ".zarr")
-            self.logger.info(f"Writing file {fn}")
-            self.files["array"][name] = fn
-            fp = Path(self.root, fn)
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            zarr.save_array(fp, data, overwrite=True)
+            self.logger.info(f"Writing file {fp}")
+            self.files["array"][name] = fp
+            fp_with_root.parent.mkdir(parents=True, exist_ok=True)
+            zarr.save_array(fp_with_root, data, overwrite=True)
+
+        self.array[name] = fp_with_root
 
     def set_dict(self, data, name, write=True):
         fp: Path = Path("dict") / (name + ".json")
