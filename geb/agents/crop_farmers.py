@@ -977,7 +977,7 @@ class CropFarmers(AgentBaseClass):
             weights=water_deficit_day_m3[self.HRU.var.land_owners != -1],
         )
 
-        day_index = self.model.current_day_of_year - 1
+        day_index: int = self.model.current_day_of_year - 1
 
         (
             self.var.cumulative_water_deficit_current_day,
@@ -1017,37 +1017,39 @@ class CropFarmers(AgentBaseClass):
 
     def get_gross_irrigation_demand_m3(
         self, potential_evapotranspiration, available_infiltration
-    ) -> np.ndarray:
-        gross_irrigation_demand_m3 = get_gross_irrigation_demand_m3(
-            day_index=self.model.current_day_of_year - 1,
-            n=self.var.n,
-            currently_irrigated_fields=self.currently_irrigated_fields,
-            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
-            field_indices=self.var.field_indices,
-            irrigation_efficiency=self.var.irrigation_efficiency.data,
-            fraction_irrigated_field=self.var.fraction_irrigated_field.data,
-            cell_area=self.model.hydrology.HRU.var.cell_area,
-            crop_map=self.HRU.var.crop_map,
-            topwater=self.HRU.var.topwater,
-            available_infiltration=available_infiltration,
-            potential_evapotranspiration=potential_evapotranspiration,
-            root_depth=self.HRU.var.root_depth,
-            soil_layer_height=self.HRU.var.soil_layer_height,
-            field_capacity=self.HRU.var.wfc,
-            wilting_point=self.HRU.var.wwp,
-            w=self.HRU.var.w,
-            ws=self.HRU.var.ws,
-            arno_beta=self.HRU.var.arnoBeta,
-            remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
-            cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
-            crop_calendar=self.var.crop_calendar.data,
-            crop_group_numbers=self.var.crop_data["crop_group_number"].values.astype(
-                np.float32
-            ),
-            paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
-            current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
-            max_paddy_water_level=self.var.max_paddy_water_level.data,
-            minimum_effective_root_depth=self.model.hydrology.soil.var.minimum_effective_root_depth,
+    ) -> npt.NDArray[np.float32]:
+        gross_irrigation_demand_m3: npt.NDArray[np.float32] = (
+            get_gross_irrigation_demand_m3(
+                day_index=self.model.current_day_of_year - 1,
+                n=self.var.n,
+                currently_irrigated_fields=self.currently_irrigated_fields,
+                field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+                field_indices=self.var.field_indices,
+                irrigation_efficiency=self.var.irrigation_efficiency.data,
+                fraction_irrigated_field=self.var.fraction_irrigated_field.data,
+                cell_area=self.model.hydrology.HRU.var.cell_area,
+                crop_map=self.HRU.var.crop_map,
+                topwater=self.HRU.var.topwater,
+                available_infiltration=available_infiltration,
+                potential_evapotranspiration=potential_evapotranspiration,
+                root_depth=self.HRU.var.root_depth,
+                soil_layer_height=self.HRU.var.soil_layer_height,
+                field_capacity=self.HRU.var.wfc,
+                wilting_point=self.HRU.var.wwp,
+                w=self.HRU.var.w,
+                ws=self.HRU.var.ws,
+                arno_beta=self.HRU.var.arnoBeta,
+                remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
+                cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
+                crop_calendar=self.var.crop_calendar.data,
+                crop_group_numbers=self.var.crop_data[
+                    "crop_group_number"
+                ].values.astype(np.float32),
+                paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
+                current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
+                max_paddy_water_level=self.var.max_paddy_water_level.data,
+                minimum_effective_root_depth=self.model.hydrology.soil.var.minimum_effective_root_depth,
+            )
         )
 
         assert (
@@ -1116,6 +1118,7 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
+            reservoir_abstraction_m3,
             groundwater_abstraction_m3,
         ) = abstract_water(
             activation_order=self.activation_order_by_elevation.data,
@@ -1236,6 +1239,7 @@ class CropFarmers(AgentBaseClass):
             water_consumption_m,
             returnFlowIrr_m,
             addtoevapotrans_m,
+            reservoir_abstraction_m3,
             groundwater_abstraction_m3,
         )
 

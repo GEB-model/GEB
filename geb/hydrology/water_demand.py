@@ -261,6 +261,7 @@ class WaterDemand(Module):
             irrigation_water_consumption_m,
             return_flow_irrigation_m,
             irrigation_loss_to_evaporation_m,
+            reservoir_abstraction_m3_farmers,
             groundwater_abstraction_m3_farmers,
         ) = self.model.agents.crop_farmers.abstract_water(
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
@@ -270,6 +271,7 @@ class WaterDemand(Module):
             available_reservoir_storage_m3=available_reservoir_storage_m3,
         )
 
+        self.withdraw(available_reservoir_storage_m3, reservoir_abstraction_m3_farmers)
         self.withdraw(available_groundwater_m3, groundwater_abstraction_m3_farmers)
 
         assert (available_reservoir_storage_m3 < 50).all(), (

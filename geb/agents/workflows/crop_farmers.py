@@ -281,6 +281,7 @@ def withdraw_reservoir(
     command_area: int,
     field: int,
     farmer: int,
+    reservoir_abstraction_m3: np.ndarray,
     available_reservoir_storage_m3: np.ndarray,
     irrigation_water_demand_field_m: float,
     water_withdrawal_m: np.ndarray,
@@ -288,12 +289,21 @@ def withdraw_reservoir(
     reservoir_abstraction_m3_by_farmer: np.ndarray,
     cell_area: np.ndarray,
 ):
-    water_demand_cell_M3 = irrigation_water_demand_field_m * cell_area[field]
-    reservoir_abstraction_m_cell_m3 = min(
-        available_reservoir_storage_m3[command_area],
-        water_demand_cell_M3,
+    water_demand_cell_m3 = irrigation_water_demand_field_m * cell_area[field]
+
+    remaining_reservoir_m3 = (
+        available_reservoir_storage_m3[command_area]
+        - reservoir_abstraction_m3[command_area]
     )
-    available_reservoir_storage_m3[command_area] -= reservoir_abstraction_m_cell_m3
+
+    reservoir_abstraction_m_cell_m3 = min(
+        remaining_reservoir_m3,
+        water_demand_cell_m3,
+    )
+    # ensure reservoir abstraction is non-negative
+    reservoir_abstraction_m_cell_m3 = max(reservoir_abstraction_m_cell_m3, 0)
+
+    reservoir_abstraction_m3[command_area] += reservoir_abstraction_m_cell_m3
 
     reservoir_abstraction_m_cell = reservoir_abstraction_m_cell_m3 / cell_area[field]
     water_withdrawal_m[field] += reservoir_abstraction_m_cell
@@ -325,18 +335,17 @@ def withdraw_groundwater(
 ):
     # groundwater irrigation
     if groundwater_depth[grid_cell] < well_depth[farmer]:
-        groundwater_abstraction_cell_m3 = min(
-            available_groundwater_m3[grid_cell],
-            irrigation_water_demand_field_m * cell_area[field],
+        potential_groundwater_abstraction_cell_m3 = (
+            irrigation_water_demand_field_m * cell_area[field]
         )
-        assert groundwater_abstraction_cell_m3 >= 0
+        assert potential_groundwater_abstraction_cell_m3 >= 0
 
         remaining_groundwater_m3 = (
             available_groundwater_m3[grid_cell] - groundwater_abstraction_m3[grid_cell]
         )
 
         groundwater_abstraction_cell_m3 = min(
-            groundwater_abstraction_cell_m3, remaining_groundwater_m3
+            potential_groundwater_abstraction_cell_m3, remaining_groundwater_m3
         )
         # ensure groundwater abstraction is non-negative
         groundwater_abstraction_cell_m3 = max(groundwater_abstraction_cell_m3, 0)
@@ -459,7 +468,7 @@ def get_gross_irrigation_demand_m3(
     current_crop_calendar_rotation_year_index: np.ndarray,
     max_paddy_water_level: np.ndarray,
     minimum_effective_root_depth: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> npt.NDArray[np.float32]:
     """
     This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
 
@@ -600,13 +609,14 @@ def abstract_water(
         activation_order.size, dtype=np.float32
     )
 
-    # Because the groundwater source is much larger than the other
-    # sources, and taking out small amounts cannot be represented by
+    # Because the groundwater and reservoir source are much larger than the surface water
+    # and taking out small amounts cannot be represented by
     # floating point numbers, we need to use a separate array that tracks
     # the groundwater abstraction for each field. This is used to
-    # then remove the groundwater abstraction from the available
+    # then remove the groundwater and reservoir abstraction from the available
     # in one go, reducing the risk of (larger) floating point errors.
     groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
+    reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
 
     for activated_farmer_index in range(activation_order.size):
         farmer = activation_order[activated_farmer_index]
@@ -635,6 +645,7 @@ def abstract_water(
                             command_area=command_area,
                             field=field,
                             farmer=farmer,
+                            reservoir_abstraction_m3=reservoir_abstraction_m3,
                             available_reservoir_storage_m3=available_reservoir_storage_m3,
                             irrigation_water_demand_field_m=irrigation_water_demand_field_m,
                             water_withdrawal_m=water_withdrawal_m,
@@ -706,6 +717,7 @@ def abstract_water(
         water_consumption_m,
         irrigation_return_flow_m,
         irrigation_evaporation_m,
+        reservoir_abstraction_m3,
         groundwater_abstraction_m3,
     )
 
@@ -747,7 +759,7 @@ def plant(
     )
 
     plant: npt.NDArray[np.int32] = np.full_like(crop_map, -1, dtype=np.int32)
-    sell_land: npt.NDArray[bool] = np.zeros(n, dtype=np.bool_)
+    sell_land: npt.NDArray[bool] = np.zeros(n, dtype=bool)
 
     planting_farmers_per_season: npt.NDArray[bool] = (
         crop_calendar[:, :, 1] == day_index
