@@ -8,6 +8,7 @@ import pytest
 import xarray as xr
 
 from geb.cli import build_fn, init_fn, parse_config, run_model_with_method, update_fn
+from geb.model import GEBModel
 from geb.workflows.io import WorkingDirectory
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -114,6 +115,11 @@ def test_spinup():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate():
+    run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_run():
     run_model_with_method(method="run", **DEFAULT_RUN_ARGS)
 
@@ -175,17 +181,22 @@ def test_multiverse():
 
     args["config"] = config
 
-    geb = run_model_with_method(method=None, close_after_run=False, gui=False, **args)
+    geb: GEBModel = run_model_with_method(method=None, close_after_run=False, **args)
     with WorkingDirectory(working_directory):
         geb.run(initialize_only=True)
         for i in range(forecast_after_n_days):
             geb.step()
-        mean_discharge_after_forecast = geb.multiverse(return_mean_discharge=True)
+
+        mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
+            return_mean_discharge=True
+        )
 
         for i in range(forecast_n_days):
             geb.step()
 
-        mean_discharge = geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
+        mean_discharge: float = (
+            geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
+        )
 
     for member, forecast_mean_discharge in mean_discharge_after_forecast.items():
         assert forecast_mean_discharge == mean_discharge
