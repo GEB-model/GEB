@@ -13,12 +13,9 @@ from geb.workflows.io import WorkingDirectory
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
-example = Path("../../../examples/geul")
-
-
 working_directory: Path = tmp_folder / "model"
 
-DEFAULT_BUILD_ARGS = {
+DEFAULT_BUILD_ARGS: dict[str, Any] = {
     "data_catalog": [Path("../../../geb/data_catalog.yml")],
     "config": "model.yml",
     "build_config": "build.yml",
@@ -28,7 +25,7 @@ DEFAULT_BUILD_ARGS = {
     "data_root": str(Path(os.getenv("GEB_DATA_ROOT", ""))),
 }
 
-DEFAULT_RUN_ARGS = {
+DEFAULT_RUN_ARGS: dict[str, Any] = {
     "config": "model.yml",
     "working_directory": working_directory,
     "gui": False,
@@ -47,6 +44,7 @@ def test_init():
     args: dict[str, Any] = {
         "config": "model.yml",
         "build_config": "build.yml",
+        "update_config": "update.yml",
         "working_directory": working_directory,
         "from_example": "geul",
         "basin_id": "23011134",
@@ -56,7 +54,11 @@ def test_init():
         overwrite=True,
     )
 
-    pytest.raises(
+    assert (working_directory / "model.yml").exists()
+    assert (working_directory / "build.yml").exists()
+    assert (working_directory / "update.yml").exists()
+
+    assert pytest.raises(
         FileExistsError,
         init_fn,
         **args,
@@ -72,7 +74,7 @@ def test_build():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_update_with_file():
     args = DEFAULT_BUILD_ARGS.copy()
-    args["build_config"] = example / "update.yml"
+    args["build_config"] = "update.yml"
     update_fn(**args)
 
 
