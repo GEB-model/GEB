@@ -1132,7 +1132,7 @@ class GEBModel(
         if write:
             self.logger.info(f"Writing file {fp}")
             self.files["geoms"][name] = fp
-            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp_with_root.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
