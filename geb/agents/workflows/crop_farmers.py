@@ -759,7 +759,7 @@ def plant(
     )
 
     plant: npt.NDArray[np.int32] = np.full_like(crop_map, -1, dtype=np.int32)
-    sell_land: npt.NDArray[bool] = np.zeros(n, dtype=bool)
+    sell_land: npt.NDArray[bool] = np.zeros(n, dtype=np.bool_)
 
     planting_farmers_per_season: npt.NDArray[bool] = (
         crop_calendar[:, :, 1] == day_index
