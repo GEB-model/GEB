@@ -197,6 +197,18 @@ class Crops:
                 GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
             ]["ISO3"]
 
+            missing_regions_in_GLOBIOM = set(ISO3_codes_region) - set(
+                ISO3_codes_GLOBIOM_region
+            )
+            self.logger.info(
+                f"Regions in the model not present in GLOBIOM: {missing_regions_in_GLOBIOM}"
+            )
+            for region in missing_regions_in_GLOBIOM:
+                if not crop_data[crop_data["ISO3"] == region].empty:
+                    raise ValueError(
+                        f"Region {region} is not present in GLOBIOM, but it has crop data. This situation gives problems in the donate_and_receive_crop_prices function, because it will substitute the region's data for donor data. Please consult Tim to change the function"
+                    )
+
             # Setup dataFrame for further data corrections
             donor_data = {}
             for ISO3 in ISO3_codes_GLOBIOM_region:
@@ -474,6 +486,8 @@ class Crops:
         2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
         4. Drops the 'ISO3' column before returning the updated DataFrame.
+
+        Note: some countries are not in the GLOBIOM dataset (e.g Liechtenstein (LIE)). For these countries, we cannot assess which donor we should take, and the country_data will be empty for these countries. Therefore, we first estimate the most similar country based on the setup_donor_countries function.
         """
 
         # create a copy of the data to avoid using data that was adjusted in this function
@@ -483,8 +497,8 @@ class Crops:
             ISO3 = region["ISO3"]
             region_id = region["region_id"]
             self.logger.info(f"Processing region {region_id}")
-            # Filter the data for the current country
 
+            # Filter the data for the current country
             country_data = donor_data[donor_data["ISO3"] == ISO3]
 
             if country_data.empty:
@@ -494,6 +508,7 @@ class Crops:
                 self.logger.info(
                     f"Missing donor data for {region['ISO3']}, using donor country {ISO3}"
                 )
+                country_data = donor_data[donor_data["ISO3"] == ISO3]
 
             GLOBIOM_region = GLOBIOM_regions.loc[
                 GLOBIOM_regions["ISO3"] == ISO3, "Region37"
@@ -889,7 +904,7 @@ class Crops:
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
-        # Check if any key has an empty value
+        # Note: missing MIRCA units should be improved further! Check with Jens
         if any(value in [None, "", [], {}] for value in crop_calendar.values()):
             missing_mirca_unit = [
                 unit for unit, calendars in crop_calendar.items() if not calendars
@@ -914,6 +929,9 @@ class Crops:
 
                 # use this closest_mirca_unit to fill the missing crop calendar
                 crop_calendar[mirca_unit] = crop_calendar[closest_mirca_unit]
+                self.logger.info(
+                    f"Filling missing crop calendar for MIRCA unit {mirca_unit} with data from {closest_mirca_unit}."
+                )
 
         else:
             print("All keys have valid values.")

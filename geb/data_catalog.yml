@@ -437,7 +437,7 @@ GLOPOP-S:
 GLOPOP-SG:
   data_type: RasterDataset
   driver: raster
-  path: population/GLOPOP-SG/GLOPOP_SG.zip
+  path: population/GLOPOP-SG/GLOPOP_SG_V2.zip
 AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
