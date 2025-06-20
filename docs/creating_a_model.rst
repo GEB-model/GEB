@@ -101,7 +101,7 @@ Some of the data that is obtained from online sources and APIs requires keys. Yo
     MERIT_USERNAME=<your_username>
     MERIT_PASSWORD=<your_password>
 
-2. To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on `Destination Earth <https://earthdatahub.destine.eu/>`_ and following the instructions `here <https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land>`_.
+2. To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on `Destination Earth <https://earthdatahub.destine.eu/>`_ and copy your personal access token to a .netrc file, located in your home directory. You can find the personal access token `here <https://earthdatahub.destine.eu/account-settings>`_.
 
 Building to model
 -------------------
