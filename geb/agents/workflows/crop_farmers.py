@@ -1,7 +1,7 @@
 from typing import Union
 
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 from geb.hydrology.soil import (
     get_fraction_easily_available_soil_water,
@@ -581,9 +581,6 @@ def abstract_water(
     remaining_irrigation_limit_m3: np.ndarray,
     gross_irrigation_demand_m3_per_field: np.ndarray,
 ):
-    for activated_farmer_index in range(activation_order.size):
-        farmer = activation_order[activated_farmer_index]
-        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
     n_hydrological_response_units = cell_area.size
     water_withdrawal_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
     water_consumption_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
@@ -607,12 +604,12 @@ def abstract_water(
     # in one go, reducing the risk of (larger) floating point errors.
     groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
 
-    for activated_farmer_index in range(activation_order.size):
-        farmer = activation_order[activated_farmer_index]
+    for farmer in activation_order:
         farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
         potential_irrigation_consumption_m3_farmer = (
             gross_irrigation_demand_m3_per_field[farmer_fields]
         )
+
         if potential_irrigation_consumption_m3_farmer.sum() <= 0:
             continue
 
@@ -625,7 +622,6 @@ def abstract_water(
                     gross_irrigation_demand_m3_per_field[field] / cell_area[field]
                 )
                 assert 1 >= irrigation_water_demand_field_m >= 0
-
                 if surface_irrigated[farmer]:
                     # command areas
                     command_area = farmer_command_area[farmer]
@@ -788,7 +784,7 @@ def plant(
             assert not np.isnan(cultivation_cost_farmer)
 
             interest_rate_farmer = interest_rate[farmer_idx]
-            loan_duration = 2
+            loan_duration = 1
             annual_cost_input_loan = cultivation_cost_farmer * (
                 interest_rate_farmer
                 * (1 + interest_rate_farmer) ** loan_duration
@@ -860,243 +856,252 @@ def find_most_similar_index(target_series, yield_ratios, groups):
     return indices[min_idx]
 
 
-@njit(cache=True)
-def crop_yield_ratio_difference_test_njit(
-    yield_ratios,
+@njit(cache=True, parallel=True)
+def crop_profit_difference_njit_parallel(
+    yearly_profits,
     crop_elevation_group,
     unique_crop_groups,
     group_indices,
     crop_calendar,
     unique_crop_calendars,
     p_droughts,
+    past_window,
 ):
+    """
+    Parallelized only over unique crop groups; everything else follows your original logic exactly.
+    """
     n_groups = len(unique_crop_groups)
     n_calendars = len(unique_crop_calendars)
-    n_droughts = len(p_droughts)
+    n_rotation = unique_crop_calendars.shape[1]
 
-    unique_yield_ratio_gain = np.full(
-        (n_groups, n_calendars, n_droughts),
-        0.0,
-        dtype=np.float32,
-    )
+    unique_profit_gain = np.full((n_groups, n_calendars), 0.0, dtype=np.float32)
+    id_to_switch_to = np.full((n_groups, n_calendars), -1, dtype=np.int32)
 
-    id_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    # Precompute weights
+    weights = np.empty(past_window, dtype=yearly_profits.dtype)
+    weight_total = 0.0
+    if past_window > 1:
+        weight_step = (0.5 - 0.2) / (past_window - 1)
+    else:
+        weight_step = 0.0
 
-    crop_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    for j in range(past_window):
+        w = 0.5 - j * weight_step
+        weights[j] = w
+        weight_total += w
 
-    for group_id in range(n_groups):
+    # Parallel only over groups
+    for group_id in prange(n_groups):
         unique_group = unique_crop_groups[group_id]
         unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
 
-        # Identify the adapted counterparts of the current group
-        mask = np.empty(n_calendars, dtype=np.bool_)
+        # build mask & collect candidate calendar‐indices
+        candidate_idxs = np.empty(n_calendars, dtype=np.int32)
+        num_cand = 0
         for i in range(n_calendars):
             match = True
-            for j in range(unique_crop_calendars.shape[1]):
+            for j in range(n_rotation):
                 if unique_crop_calendars[i, j] != unique_group[j]:
                     match = False
                     break
-            mask[i] = not match
+            if not match:
+                candidate_idxs[num_cand] = i
+                num_cand += 1
 
-        # Collect candidate crop rotations
-        candidate_crop_rotations = []
-        for i in range(n_calendars):
-            if mask[i]:
-                candidate_crop_rotations.append(unique_crop_calendars[i])
+        metadata = unique_group[n_rotation:]
 
-        num_candidates = len(candidate_crop_rotations)
+        # sequentially over each candidate (same order as original)
+        for c in range(num_cand):
+            cal_idx = candidate_idxs[c]
+            unique_rotation = unique_crop_calendars[cal_idx]
 
-        # Loop over the counterparts
-        for crop_id in range(num_candidates):
-            unique_rotation = candidate_crop_rotations[crop_id]
-            farmer_class = unique_group[-1]
-            basin_location = unique_group[-2]
-            unique_group_other_crop = np.empty(
-                len(unique_rotation) + 2, dtype=unique_rotation.dtype
-            )
-            unique_group_other_crop[: len(unique_rotation)] = unique_rotation
-            unique_group_other_crop[len(unique_rotation)] = basin_location
-            unique_group_other_crop[len(unique_rotation) + 1] = farmer_class
+            # form the “other” group key
+            other_key = np.empty(unique_group.shape[0], unique_group.dtype)
+            for k in range(n_rotation):
+                other_key[k] = unique_rotation[k]
+            for k in range(n_rotation, other_key.shape[0]):
+                other_key[k] = metadata[k - n_rotation]
 
-            unique_farmer_groups_other_crop = find_matching_rows(
-                crop_elevation_group, unique_group_other_crop
-            )
+            unique_farmer_other = find_matching_rows(crop_elevation_group, other_key)
 
-            if np.any(unique_farmer_groups_other_crop):
-                # Compute current yield ratio mean
-                current_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_current = 0
-                for i in range(unique_farmer_groups.size):
-                    if unique_farmer_groups[i]:
-                        current_sum += yield_ratios[i]
-                        count_current += 1
-                current_yield_ratio = (
-                    current_sum / count_current if count_current > 0 else current_sum
+            if not np.any(unique_farmer_other):
+                continue
+
+            # current group weighted average
+            current_sum = 0.0
+            count_cur = 0
+            for i in range(unique_farmer_groups.size):
+                if unique_farmer_groups[i]:
+                    wp = 0.0
+                    for j in range(past_window):
+                        wp += yearly_profits[i, j] * weights[j]
+                    current_sum += wp / weight_total
+                    count_cur += 1
+            current_avg = current_sum / count_cur if count_cur > 0 else 0.0
+
+            # candidate group weighted average
+            cand_sum = 0.0
+            count_cand = 0
+            for i in range(unique_farmer_other.size):
+                if unique_farmer_other[i]:
+                    wp = 0.0
+                    for j in range(past_window):
+                        wp += yearly_profits[i, j] * weights[j]
+                    cand_sum += wp / weight_total
+                    count_cand += 1
+            cand_avg = cand_sum / count_cand if count_cand > 0 else 0.0
+
+            gain = cand_avg - current_avg
+            if gain != gain:  # NaN check
+                gain = 0.0
+            else:
+                id_to_switch_to[group_id, c] = find_most_similar_index(
+                    gain, yearly_profits, unique_farmer_other
                 )
 
-                # Compute candidate yield ratio mean
-                candidate_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_candidate = 0
-                for i in range(unique_farmer_groups_other_crop.size):
-                    if unique_farmer_groups_other_crop[i]:
-                        candidate_sum += yield_ratios[i]
-                        count_candidate += 1
-                candidate_yield_ratio = (
-                    candidate_sum / count_candidate
-                    if count_candidate > 0
-                    else candidate_sum
-                )
+            unique_profit_gain[group_id, c] = gain
 
-                yield_ratio_gain = candidate_yield_ratio - current_yield_ratio
-
-                crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
-
-                if np.all(np.isnan(yield_ratio_gain)):
-                    yield_ratio_gain = np.zeros_like(yield_ratio_gain)
-                else:
-                    id_to_switch_to[group_id, crop_id] = find_most_similar_index(
-                        yield_ratio_gain,
-                        yield_ratios,
-                        unique_farmer_groups_other_crop,
-                    )
-
-                unique_yield_ratio_gain[group_id, crop_id, :] = yield_ratio_gain
-
-    gains_adaptation = unique_yield_ratio_gain[group_indices, :, :]
-    new_crop_nr = crop_to_switch_to[group_indices, :]
+    # Re‐index per‐farmer
+    gains_adaptation = unique_profit_gain[group_indices, :]
     new_farmer_id = id_to_switch_to[group_indices, :]
 
-    return (
-        gains_adaptation,
-        new_crop_nr,
-        new_farmer_id,
-    )
+    return gains_adaptation, new_farmer_id
 
 
-@njit(cache=True)
-def crop_profit_difference_njit(
-    yield_ratios,
-    crop_elevation_group,
-    unique_crop_groups,
-    group_indices,
-    crop_calendar,
-    unique_crop_calendars,
-    p_droughts,
+@njit
+def gev_ppf_scalar(u, c, loc, scale):
+    """Scalar GEV inverse CDF."""
+    if c != 0.0:
+        return loc + scale * ((-np.log(u)) ** (-c) - 1.0) / c
+    else:
+        return loc - scale * np.log(-np.log(u))
+
+
+@njit(cache=True, parallel=True)
+def compute_premiums_and_best_contracts_numba(
+    gev_params,
+    spei_hist,
+    losses,
+    strike_vals,
+    exit_vals,
+    rate_vals,
+    n_sims,
+    seed=42,
 ):
-    n_groups = len(unique_crop_groups)
-    n_calendars = len(unique_crop_calendars)
-    n_droughts = len(p_droughts)
+    """
+    For each agent, loop once over (strike, exit):
+    1) Monte Carlo → expected_ratio
+    2) Historical SPEI → sum_ratio_sq, sum_ratio_loss )
+    3) Over all rates → compute both premium = rate * expected_ratio
+                            and RMSE via quadratic form,
+        tracking the (strike_idx, exit_idx, rate_idx) that minimizes RMSE.
 
-    unique_yield_ratio_gain = np.full(
-        (n_groups, n_calendars, n_droughts),
-        0.0,
-        dtype=np.float32,
-    )
+    Returns
+    -------
+    best_strike_idx : (n_agents,)  index into strike_vals
+    best_exit_idx   : (n_agents,)  index into exit_vals
+    best_rate_idx   : (n_agents,)  index into rate_vals
+    best_rmse       : (n_agents,)  the minimal RMSE for each agent
+    best_premium    : (n_agents,)  the premium corresponding to that minimal‐RMSE contract
+    """
+    np.random.seed(seed)
+    n_agents = gev_params.shape[0]
+    n_years = spei_hist.shape[1]
+    n_strikes = strike_vals.shape[0]
+    n_exits = exit_vals.shape[0]
+    n_rates = rate_vals.shape[0]
 
-    id_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    # Output arrays
+    best_strike_idx = np.empty(n_agents, dtype=np.int64)
+    best_exit_idx = np.empty(n_agents, dtype=np.int64)
+    best_rate_idx = np.empty(n_agents, dtype=np.int64)
+    best_rmse_arr = np.empty(n_agents, dtype=np.float64)
+    best_prem_arr = np.empty(n_agents, dtype=np.float64)
 
-    crop_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    for agent_idx in prange(n_agents):
+        # Extract GEV parameters
+        shape = -gev_params[agent_idx, 0]
+        loc = gev_params[agent_idx, 1]
+        scale = gev_params[agent_idx, 2]
 
-    for group_id in range(n_groups):
-        unique_group = unique_crop_groups[group_id]
-        unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
+        # Precompute sum of squared losses for this agent
+        loss_sq_sum = 0.0
+        for yr in range(n_years):
+            loss_sq_sum += losses[agent_idx, yr] ** 2
 
-        # Identify the adapted counterparts of the current group
-        mask = np.empty(n_calendars, dtype=np.bool_)
-        for i in range(n_calendars):
-            match = True
-            for j in range(unique_crop_calendars.shape[1]):
-                if unique_crop_calendars[i, j] != unique_group[j]:
-                    match = False
-                    break
-            mask[i] = not match
+        # Initialize "best so far" placeholders
+        best_rmse_val = 1e20
+        best_s_idx = 0
+        best_e_idx = 0
+        best_r_idx = 0
+        best_premium = 0.0
 
-        # Collect candidate crop rotations
-        candidate_crop_rotations = []
-        for i in range(n_calendars):
-            if mask[i]:
-                candidate_crop_rotations.append(unique_crop_calendars[i])
+        # Loop once over all (strike, exit) pairs
+        for strike_idx in range(n_strikes):
+            strike = strike_vals[strike_idx]
 
-        num_candidates = len(candidate_crop_rotations)
+            for exit_idx in range(n_exits):
+                exit_threshold = exit_vals[exit_idx]
+                if exit_threshold >= strike:
+                    continue
+                denom = strike - exit_threshold
 
-        # Loop over the counterparts
-        for crop_id in range(num_candidates):
-            unique_rotation = candidate_crop_rotations[crop_id]
-            farmer_class = unique_group[-1]
-            basin_location = unique_group[-2]
-            unique_group_other_crop = np.empty(
-                len(unique_rotation) + 2, dtype=unique_rotation.dtype
-            )
-            unique_group_other_crop[: len(unique_rotation)] = unique_rotation
-            unique_group_other_crop[len(unique_rotation)] = basin_location
-            unique_group_other_crop[len(unique_rotation) + 1] = farmer_class
+                # Monte Carlo → expected_ratio
+                expected_ratio = 0.0
+                for _ in range(n_sims):
+                    u = np.random.random()  # Uniform(0,1)
+                    spei_val = gev_ppf_scalar(u, shape, loc, scale)
+                    shortfall = strike - spei_val
+                    if shortfall <= 0.0:
+                        continue
+                    if shortfall > denom:
+                        shortfall = denom
+                    expected_ratio += shortfall / denom
+                expected_ratio /= n_sims
 
-            unique_farmer_groups_other_crop = find_matching_rows(
-                crop_elevation_group, unique_group_other_crop
-            )
+                sum_ratio_sq = 0.0
+                sum_ratio_loss = 0.0
+                for yr in range(n_years):
+                    shortfall = strike - spei_hist[agent_idx, yr]
+                    if shortfall <= 0.0:
+                        ratio = 0.0
+                    elif shortfall >= denom:
+                        ratio = 1.0
+                    else:
+                        ratio = shortfall / denom
 
-            if np.any(unique_farmer_groups_other_crop):
-                # Compute current yield ratio mean
-                current_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_current = 0
-                for i in range(unique_farmer_groups.size):
-                    if unique_farmer_groups[i]:
-                        current_sum += yield_ratios[i]
-                        count_current += 1
-                current_yield_ratio = (
-                    current_sum / count_current if count_current > 0 else current_sum
-                )
+                    sum_ratio_sq += ratio * ratio
+                    sum_ratio_loss += ratio * losses[agent_idx, yr]
 
-                # Compute candidate yield ratio mean
-                candidate_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_candidate = 0
-                for i in range(unique_farmer_groups_other_crop.size):
-                    if unique_farmer_groups_other_crop[i]:
-                        candidate_sum += yield_ratios[i]
-                        count_candidate += 1
-                candidate_yield_ratio = (
-                    candidate_sum / count_candidate
-                    if count_candidate > 0
-                    else candidate_sum
-                )
-
-                yield_ratio_gain = candidate_yield_ratio - current_yield_ratio
-
-                crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
-
-                if np.all(np.isnan(yield_ratio_gain)):
-                    yield_ratio_gain = np.zeros_like(yield_ratio_gain)
-                else:
-                    id_to_switch_to[group_id, crop_id] = find_most_similar_index(
-                        yield_ratio_gain,
-                        yield_ratios,
-                        unique_farmer_groups_other_crop,
+                # Over all candidate rates, compute premium & RMSE via quadratic form
+                for rate_idx in range(n_rates):
+                    rate = rate_vals[rate_idx]
+                    # RMSE’s sum of squared errors:
+                    sse = (
+                        (rate * rate) * sum_ratio_sq
+                        - 2.0 * rate * sum_ratio_loss
+                        + loss_sq_sum
                     )
+                    rmse_val = np.sqrt(sse / n_years)
 
-                unique_yield_ratio_gain[group_id, crop_id, :] = yield_ratio_gain
+                    if rmse_val < best_rmse_val:
+                        best_rmse_val = rmse_val
+                        best_s_idx = strike_idx
+                        best_e_idx = exit_idx
+                        best_r_idx = rate_idx
+                        best_premium = rate * expected_ratio
 
-    gains_adaptation = unique_yield_ratio_gain[group_indices, :, :]
-    new_crop_nr = crop_to_switch_to[group_indices, :]
-    new_farmer_id = id_to_switch_to[group_indices, :]
+        # Store best‐so‐far for this agent
+        best_strike_idx[agent_idx] = best_s_idx
+        best_exit_idx[agent_idx] = best_e_idx
+        best_rate_idx[agent_idx] = best_r_idx
+        best_rmse_arr[agent_idx] = best_rmse_val
+        best_prem_arr[agent_idx] = best_premium
 
     return (
-        gains_adaptation,
-        new_crop_nr,
-        new_farmer_id,
+        best_strike_idx,
+        best_exit_idx,
+        best_rate_idx,
+        best_rmse_arr,
+        best_prem_arr,
     )

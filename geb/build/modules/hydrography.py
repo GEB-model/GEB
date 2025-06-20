@@ -554,6 +554,31 @@ class Hydrography:
                 np.int32
             )
 
+            # Dissolve command areas with same reservoir
+            command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
+
+            # Set lakes with command area to reservoirs and reservoirs without command area to lakes
+            ids_with_command = set(command_areas["waterbody_id"])
+            waterbodies.loc[
+                waterbodies["waterbody_id"].isin(ids_with_command),
+                "waterbody_type",
+            ] = 2
+            waterbodies.loc[
+                (waterbodies["waterbody_type"] == 2)
+                & (~waterbodies["waterbody_id"].isin(ids_with_command)),
+                "waterbody_type",
+            ] = 1
+
+            # Lastly remove command areas that have no associated water body
+            reservoir_ids = set(
+                waterbodies.loc[waterbodies["waterbody_type"] == 2, "waterbody_id"]
+            )
+            command_areas_dissolved = command_areas[
+                command_areas["waterbody_id"].isin(reservoir_ids)
+            ].reset_index(drop=True)
+
+            assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
+
             self.set_grid(
                 self.grid.raster.rasterize(
                     command_areas,
@@ -575,10 +600,6 @@ class Hydrography:
                 name="waterbodies/subcommand_areas",
             )
 
-            # set all lakes with command area to reservoir
-            waterbodies.loc[
-                waterbodies.index.isin(command_areas["waterbody_id"]), "waterbody_type"
-            ] = RESERVOIR
         else:
             command_areas = self.full_like(
                 self.grid["mask"],
