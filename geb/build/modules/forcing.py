@@ -1290,9 +1290,7 @@ class Forcing:
             da_list, dim="time", combine_attrs="drop_conflicts", compat="equals"
         )  # all values and dimensions must be the same
 
-        da = da.raster.clip_bbox(da.raster.bounds)
-
-        step_size = (da.time[1] - da.time[0]).astype(np.int64)
+        step_size: np.int64 = (da.time[1] - da.time[0]).astype(np.int64)
 
         # assert that time is monotonically increasing with a constant step size
         # check if step size is yearly
@@ -1307,7 +1305,7 @@ class Forcing:
             ).all(), "time is not monotonically increasing with a constant step size"
 
         if variable_name in ("co2",):
-            da = da
+            pass
 
         elif variable_name in ("tas", "tasmin", "tasmax", "ps"):
             elevation_forcing, elevation_grid = self.get_elevation_forcing_and_grid(
