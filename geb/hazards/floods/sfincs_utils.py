@@ -119,9 +119,9 @@ def update_forcing(
         mod.plot_forcing(join(mod.root, "forcing.png"))
 
 
-def run_sfincs_subprocess(root, cmd):
+def run_sfincs_subprocess(root: Path, cmd: list[str], log_file: Path) -> int:
     print(f"Running SFINCS with: {cmd}")
-    with open(join(root, "sfincs.log"), "w") as log_file:
+    with open(log_file, "w") as log:
         process = subprocess.Popen(
             cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
@@ -131,8 +131,8 @@ def run_sfincs_subprocess(root, cmd):
             lambda: process.stdout.readline() or process.stderr.readline(), ""
         ):
             print(line.rstrip())
-            log_file.write(line)
-            log_file.flush()
+            log.write(line)
+            log.flush()
 
         process.stdout.close()
         process.stderr.close()
@@ -236,21 +236,21 @@ def check_docker_running():
         return False
 
 
-def run_sfincs_simulation(model_root, simulation_root, gpu=False):
+def run_sfincs_simulation(model_root, simulation_root, gpu=False) -> int:
     # Check if we are on Linux or Windows and run the appropriate script
     if gpu:
-        version = os.getenv("SFINCS_GPU_SIF")
+        version: str | None = os.getenv("SFINCS_GPU_SIF", None)
         if version is None:
             raise EnvironmentError("Environment variable SFINCS_GPU_SIF is not set")
     else:
-        version = "deltares/sfincs-cpu:latest"
+        version: str = "deltares/sfincs-cpu:latest"
 
     if os.name == "posix":
         # If not a singularity image, add docker:// prefix
         # to the version string
         if not version.endswith(".sif"):
-            version = "docker://" + version
-        cmd = [
+            version: str = "docker://" + version
+        cmd: list[str] = [
             "singularity",
             "run",
             "-B",  ## Bind mount
@@ -267,7 +267,7 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False):
         # but since we also want to load files that are from the model
         # root, we mount the model root to /data and then change the
         # working directory within the Docker image to the simulation root
-        cmd = [
+        cmd: list[str] = [
             "docker",
             "run",
             "-v",
@@ -277,8 +277,14 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False):
             version,
         ]
 
-    return_code = run_sfincs_subprocess(simulation_root, cmd)
-    assert return_code == 0, f"Error running SFINCS simulation: {return_code}"
+    log_file: Path = simulation_root / "sfincs.log"
+    return_code: int = run_sfincs_subprocess(simulation_root, cmd, log_file=log_file)
+    if return_code != 0:
+        raise RuntimeError(
+            f"Error running SFINCS simulation: {return_code}. The used command was: {' '.join(cmd)}. The log file is located at {log_file}."
+        )
+    else:
+        return return_code
 
 
 def get_representative_river_points(river_ID: set, rivers: pd.DataFrame):
