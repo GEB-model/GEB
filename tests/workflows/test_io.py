@@ -91,7 +91,7 @@ def test_calculate_scaling():
 
 def test_io():
     x = np.linspace(-5, 5, 10)
-    y = np.linspace(0, 10, 10)
+    y = np.linspace(10, 0, 10)
 
     values = np.random.rand(x.size, y.size).astype(np.float32)
     da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()

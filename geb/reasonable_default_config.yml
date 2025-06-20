@@ -65,6 +65,7 @@ agent_settings:
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
     microcredit:
+      ruleset: base
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
@@ -73,6 +74,12 @@ agent_settings:
       radius: 5000 # m
       size: 10 # nr of neighbors
     expected_utility:
+      insurance:
+        duration: 2
+        personal_insurance: 
+          ruleset: base
+        index_insurance: 
+          ruleset: base
       crop_switching: 
         ruleset: no-adaptation
       adaptation_sprinkler:

@@ -13,7 +13,9 @@ from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
+    INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
+    PERSONAL_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
@@ -116,6 +118,17 @@ class Agents:
             municipal_water_withdrawal_m3_per_capita_per_day = (
                 municipal_water_withdrawal_m3_per_capita_per_day
             ).dropna()
+
+            municipal_water_withdrawal_m3_per_capita_per_day = (
+                municipal_water_withdrawal_m3_per_capita_per_day.reindex(
+                    list(
+                        range(
+                            self.start_date.year,
+                            self.end_date.year + 1,
+                        )
+                    )
+                ).interpolate(method="linear")
+            )  # interpolate also extrapolates with constant values
 
             assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
                 f"Too large water withdrawal data for {ISO3}"
@@ -233,6 +246,7 @@ class Agents:
         # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
         price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
+        LCU_per_USD = self.data_catalog.get_dataframe("wb_LCU_per_USD")
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
@@ -258,6 +272,10 @@ class Agents:
         )
         years_price_ratio = extract_years(price_ratio_filtered)
         price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
+
+        lcu_filtered = filter_and_rename(LCU_per_USD, ["Country Name", "Country Code"])
+        years_lcu = extract_years(lcu_filtered)
+        lcu_dict = {"time": years_lcu, "data": {}}  # LCU per USD
 
         # Assume lending_rates and inflation_rates are available
         # years_lending_rates = extract_years(lending_rates)
@@ -324,6 +342,10 @@ class Agents:
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
+            lcu_dict["data"][region_id] = process_rates(
+                lcu_filtered, years_lcu, region["ISO3"]
+            )
+
         # convert to pandas dataframe
         inflation_rates = pd.DataFrame(
             inflation_rates_dict["data"], index=inflation_rates_dict["time"]
@@ -372,94 +394,10 @@ class Agents:
         self.set_dict(inflation_rates_dict, name="socioeconomics/inflation_rates")
         # self.set_dict(lending_rates_dict, name="socioeconomics/lending_rates")
         self.set_dict(price_ratio_dict, name="socioeconomics/price_ratio")
+        self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
-
-    def setup_well_prices_by_reference_year(
-        self,
-        irrigation_maintenance: float,
-        pump_cost: float,
-        borewell_cost_1: float,
-        borewell_cost_2: float,
-        electricity_cost: float,
-        reference_year: int,
-        start_year: int,
-        end_year: int,
-    ):
-        """
-        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
-
-        Parameters
-        ----------
-        well_price : float
-            The price of a well in the reference year.
-        upkeep_price_per_m2 : float
-            The upkeep price per square meter of a well in the reference year.
-        reference_year : int
-            The reference year for the well prices and upkeep prices.
-        start_year : int
-            The start year for the well prices and upkeep prices.
-        end_year : int
-            The end year for the well prices and upkeep prices.
-
-        Notes
-        -----
-        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
-        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
-        data dimension.
-
-        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
-
-        The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
-        """
-        self.logger.info("Setting up well prices by reference year")
-
-        # Retrieve the inflation rates data
-        inflation_rates = self.dict["socioeconomics/inflation_rates"]
-        regions = list(inflation_rates["data"].keys())
-
-        # Create a dictionary to store the various types of prices with their initial reference year values
-        price_types = {
-            "irrigation_maintenance": irrigation_maintenance,
-            "pump_cost": pump_cost,
-            "borewell_cost_1": borewell_cost_1,
-            "borewell_cost_2": borewell_cost_2,
-            "electricity_cost": electricity_cost,
-        }
-
-        # Iterate over each price type and calculate the prices across years for each region
-        for price_type, initial_price in price_types.items():
-            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
-
-            for region in regions:
-                prices = pd.Series(index=range(start_year, end_year + 1))
-                prices.loc[reference_year] = initial_price
-
-                # Forward calculation from the reference year
-                for year in range(reference_year + 1, end_year + 1):
-                    prices.loc[year] = (
-                        prices[year - 1]
-                        * inflation_rates["data"][region][
-                            inflation_rates["time"].index(str(year))
-                        ]
-                    )
-                # Backward calculation from the reference year
-                for year in range(reference_year - 1, start_year - 1, -1):
-                    prices.loc[year] = (
-                        prices[year + 1]
-                        / inflation_rates["data"][region][
-                            inflation_rates["time"].index(str(year + 1))
-                        ]
-                    )
-
-                prices_dict["data"][region] = prices.tolist()
-
-            # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
     def setup_irrigation_prices_by_reference_year(
         self,
@@ -1934,6 +1872,8 @@ class Agents:
                         WELL_ADAPTATION,
                         IRRIGATION_EFFICIENCY_ADAPTATION,
                         FIELD_EXPANSION_ADAPTATION,
+                        PERSONAL_INSURANCE_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,

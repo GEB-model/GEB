@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 import math
 import warnings
-from typing import Union
+from datetime import datetime
+from typing import Literal, Union
 
 import geopandas as gpd
 import numpy as np
@@ -37,27 +38,33 @@ def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
     return nearest_indices_in_valid[HRU_to_grid]
 
 
-def load_grid(filepath, layer=1, return_transform_and_crs=False):
+def load_grid(
+    filepath, layer=1, return_transform_and_crs=False
+) -> np.ndarray | tuple[np.ndarray, Affine, str]:
     if filepath.suffix == ".tif":
         warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
         with rasterio.open(filepath) as src:
-            data = src.read(layer)
-            data = data.astype(np.float32) if data.dtype == np.float64 else data
+            data: np.ndarray = src.read(layer)
+            data: np.ndarray = (
+                data.astype(np.float32) if data.dtype == np.float64 else data
+            )
             if return_transform_and_crs:
                 return data, src.transform, src.crs
             else:
                 return data
     elif filepath.suffix == ".zarr":
-        store = zarr.storage.LocalStore(filepath, read_only=True)
-        group = zarr.open_group(store, mode="r")
-        data = group[filepath.stem][:]
-        data = data.astype(np.float32) if data.dtype == np.float64 else data
+        store: zarr.storage._local.LocalStore = zarr.storage.LocalStore(
+            filepath, read_only=True
+        )
+        group: zarr.core.group.Group = zarr.open_group(store, mode="r")
+        data: np.ndarray = group[filepath.stem][:]
+        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
         if return_transform_and_crs:
-            x = group["x"][:]
-            y = group["y"][:]
-            x_diff = np.diff(x[:]).mean()
-            y_diff = np.diff(y[:]).mean()
-            transform = Affine(
+            x: np.ndarray = group["x"][:]
+            y: np.ndarray = group["y"][:]
+            x_diff: float = np.diff(x[:]).mean().item()
+            y_diff: float = np.diff(y[:]).mean().item()
+            transform: Affine = Affine(
                 a=x_diff,
                 b=0,
                 c=x[0] - x_diff / 2,
@@ -65,7 +72,7 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
                 e=y_diff,
                 f=y[0] - y_diff / 2,
             )
-            wkt = group[filepath.stem].attrs["_CRS"]
+            wkt: str = group[filepath.stem].attrs["_CRS"]["wkt"]
             return data, transform, wkt
         else:
             return data
@@ -438,22 +445,37 @@ class Grid(BaseVariables):
 
     @property
     def spei_uncompressed(self):
+        """Get uncompressed version of SPEI.
+
+        We want to get the closest SPEI value, so if we are in the second
+        half of the month, we want to get the first day of the next month.
+
+        This is UNLESS we are at the end of the model run and the next
+        SPEI value does not exist, in which case we want to keep using the
+        last SPEI value available.
+        """
         if not hasattr(self, "spei_ds"):
             self.spei_ds = self.load_forcing_ds("SPEI")
 
-        current_time = self.model.current_time
+        current_time: datetime = self.model.current_time
 
         # Determine the nearest first day of the month
         if current_time.day <= 15:
-            spei_time = current_time.replace(day=1)
+            spei_time: datetime = current_time.replace(day=1)
         else:
             # Move to the first day of the next month
             if current_time.month == 12:
-                spei_time = current_time.replace(
+                spei_time: datetime = current_time.replace(
                     year=current_time.year + 1, month=1, day=1
                 )
             else:
-                spei_time = current_time.replace(month=current_time.month + 1, day=1)
+                spei_time: datetime = current_time.replace(
+                    month=current_time.month + 1, day=1
+                )
+
+            # Check if we ran out of SPEI data. If we did, revert to using the last month
+            if np.datetime64(spei_time, "ns") > self.spei_ds.datetime_index[-1]:
+                spei_time: datetime = current_time.replace(day=1)
 
         spei = self.load_forcing(self.spei_ds, spei_time, compress=False)
         assert not np.isnan(
@@ -765,12 +787,12 @@ class HRUs(BaseVariables):
             outarray: Decompressed HRU_array.
         """
         if np.issubdtype(HRU_array.dtype, np.integer):
-            nanvalue = -1
+            nanvalue: Literal[-1] = -1
         elif np.issubdtype(HRU_array.dtype, bool):
-            nanvalue = False
+            nanvalue: Literal[False] = False
         else:
-            nanvalue = np.nan
-        outarray = HRU_array[self.var.unmerged_HRU_indices]
+            nanvalue: int | float = np.nan
+        outarray: np.ndarray = HRU_array[self.var.unmerged_HRU_indices]
         outarray[self.mask] = nanvalue
         return outarray
 

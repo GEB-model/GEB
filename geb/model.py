@@ -2,6 +2,7 @@ import copy
 import datetime
 from pathlib import Path
 from time import time
+from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -79,7 +80,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def multiverse(
         self, return_mean_discharge: bool = False
-    ) -> None | dict[str, float]:
+    ) -> None | dict[Any, float]:
         # copy current state of timestep and time
         store_timestep = copy.copy(self.current_timestep)
 
@@ -212,8 +213,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.store.load()
 
         if self.simulate_hydrology:
-            if load_data_from_store:
-                self.hydrology.routing.set_router()
+            self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
             self.hydrology.soil.set_global_variables()
 

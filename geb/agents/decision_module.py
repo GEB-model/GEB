@@ -163,7 +163,7 @@ class DecisionModule:
         return EU_do_nothing_array
 
     @staticmethod
-    @njit(cache=True)
+    @njit(cache=True, parallel=True)
     def calcEU_adapt_numba(
         expenditure_cap: float,
         loan_duration: int,
@@ -221,7 +221,7 @@ class DecisionModule:
         unconstrained_mask = (
             (profits_no_event * expenditure_cap > total_annual_costs)
             & (~adapted)
-            & extra_constraint
+            & (extra_constraint)
         )
 
         # Iterate only through agents who can afford to adapt

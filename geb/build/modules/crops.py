@@ -123,6 +123,7 @@ class Crops:
         self,
         crop_prices,
         translate_crop_names=None,
+        adjust_currency=False,
     ):
         """
         Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
@@ -289,11 +290,16 @@ class Crops:
                 [
                     col
                     for col in data.columns
-                    if col.lower() in crop_names or col == "_crop_price_inflation"
+                    if col.lower() in crop_names
+                    or col in ("_crop_price_inflation", "_crop_price_LCU_USD")
                 ]
             ]
 
             data = self.inter_and_extrapolate_prices(data, unique_regions)
+
+            # remove columns that are not needed anymore
+            data = data.drop(columns=["_crop_price_inflation"])
+            data = data.drop(columns=["_crop_price_LCU_USD"])
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
@@ -422,7 +428,9 @@ class Crops:
             )
 
             data = self.assign_crop_price_inflation(data, self.geoms["regions"])
-            data = self.inter_and_extrapolate_prices(data, self.geoms["regions"])
+            data = self.inter_and_extrapolate_prices(
+                data, self.geoms["regions"], adjust_currency
+            )
 
             data = {
                 "type": "time_series",
@@ -562,6 +570,8 @@ class Crops:
             The updated DataFrame with a new column 'changes' that contains the average price changes for each region.
         """
         costs["_crop_price_inflation"] = np.nan
+        costs["_crop_price_LCU_USD"] = np.nan
+
         # Determine the average changes of price of all crops in the region and add it to the data
         for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
@@ -576,11 +586,23 @@ class Crops:
             years_with_no_crop_inflation_data = costs.loc[
                 region_id, "_crop_price_inflation"
             ]
+            years_with_no_crop_inflation_data = costs.loc[
+                region_id, "_crop_price_inflation"
+            ]
             region_inflation_rates = self.dict["socioeconomics/inflation_rates"][
+                "data"
+            ][str(region["region_id"])]
+            region_currency_conversion_rates = self.dict["socioeconomics/LCU_per_USD"][
                 "data"
             ][str(region["region_id"])]
 
             for year, crop_inflation_rate in years_with_no_crop_inflation_data.items():
+                year_currency_conversion = region_currency_conversion_rates[
+                    self.dict["socioeconomics/LCU_per_USD"]["time"].index(str(year))
+                ]
+                costs.at[(region_id, year), "_crop_price_LCU_USD"] = (
+                    year_currency_conversion
+                )
                 if np.isnan(crop_inflation_rate):
                     year_inflation_rate = region_inflation_rates[
                         self.dict["socioeconomics/inflation_rates"]["time"].index(
@@ -593,7 +615,7 @@ class Crops:
 
         return costs
 
-    def inter_and_extrapolate_prices(self, data, unique_regions):
+    def inter_and_extrapolate_prices(self, data, unique_regions, adjust_currency=False):
         """
         Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
@@ -658,16 +680,19 @@ class Crops:
                         )
                         for i, change in zip(range(j, k), scaled_crop_price_inflation):
                             crop_data[i] = crop_data[i - 1] * change
-                data.loc[region_id, crop] = crop_data
+                if adjust_currency:
+                    conversion_data = region_data["_crop_price_LCU_USD"].to_numpy()
+                    data.loc[region_id, crop] = crop_data / conversion_data
+                else:
+                    data.loc[region_id, crop] = crop_data
 
-        # assert no nan values in costs
-        data = data.drop(columns=["_crop_price_inflation"])
         return data
 
     def setup_cultivation_costs(
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
         translate_crop_names: Optional[Dict[str, str]] = None,
+        adjust_currency=False,
     ):
         """
         Sets up the cultivation costs for the model.
@@ -683,6 +708,7 @@ class Crops:
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
+            adjust_currency=adjust_currency,
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
@@ -690,6 +716,7 @@ class Crops:
         self,
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
         translate_crop_names: Optional[Dict[str, str]] = None,
+        adjust_currency=False,
     ):
         """
         Sets up the crop prices for the model.
@@ -705,9 +732,10 @@ class Crops:
         crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,
+            adjust_currency=adjust_currency,
         )
         self.set_dict(crop_prices, name="crops/crop_prices")
-        self.set_dict(crop_prices, name="crops/cultivation_costs")
+        # self.set_dict(crop_prices, name="crops/cultivation_costs")
 
     def determine_crop_area_fractions(self, resolution="5-arcminute"):
         output_folder = "plot/mirca_crops"

@@ -185,7 +185,7 @@ def click_run_options():
 
 def run_model_with_method(
     method: str | None,
-    profiling,
+    profiling: bool,
     config,
     working_directory,
     gui,
@@ -193,8 +193,9 @@ def run_model_with_method(
     port,
     timing,
     optimize,
+    method_args: dict = {},
     close_after_run=True,
-):
+) -> GEBModel | None:
     """Run model."""
     # check if we need to run the model in optimized mode
     # if the model is already running in optimized mode, we don't need to restart it
@@ -230,7 +231,7 @@ def run_model_with_method(
 
             geb = GEBModel(**model_params)
             if method is not None:
-                getattr(geb, method)()
+                getattr(geb, method)(**method_args)
             if close_after_run:
                 geb.close()
 
@@ -422,6 +423,7 @@ def get_builder(config, data_catalog, custom_model, data_provider, data_root):
 def init_fn(
     config: str | Path,
     build_config: str | Path,
+    update_config: str | Path,
     working_directory: str | Path,
     from_example: str,
     basin_id: str | None = None,
@@ -447,9 +449,10 @@ def init_fn(
 
     """
 
-    config = Path(config)
-    build_config = Path(build_config)
-    working_directory = Path(working_directory)
+    config: Path = Path(config)
+    build_config: Path = Path(build_config)
+    update_config: Path = Path(update_config)
+    working_directory: Path = Path(working_directory)
 
     if not working_directory.exists():
         working_directory.mkdir(parents=True, exist_ok=True)
@@ -457,12 +460,17 @@ def init_fn(
     with WorkingDirectory(working_directory):
         if config.exists() and not overwrite:
             raise FileExistsError(
-                f"Config file {config} already exists. Please remove it or use a different name."
+                f"Config file {config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
         if build_config.exists() and not overwrite:
             raise FileExistsError(
-                f"Build config file {build_config} already exists. Please remove it or use a different name."
+                f"Build config file {build_config} already exists. Please remove it or use a different name, or use --overwrite."
+            )
+
+        if update_config.exists() and not overwrite:
+            raise FileExistsError(
+                f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
         example_folder: Path = (
@@ -481,9 +489,11 @@ def init_fn(
         if basin_id is not None:
             # Allow passing a comma-separated list of integers
             if "," in basin_id:
-                basin_ids = [int(x) for x in basin_id.split(",") if x.strip()]
+                basin_ids: list[int] = [
+                    int(x) for x in basin_id.split(",") if x.strip()
+                ]
             else:
-                basin_ids = int(basin_id)
+                basin_ids: int = int(basin_id)
 
             config_dict["general"]["region"]["subbasin"] = basin_ids
 
@@ -491,6 +501,7 @@ def init_fn(
             yaml.dump(config_dict, f, default_flow_style=False)
 
         shutil.copy(example_folder / "build.yml", build_config)
+        shutil.copy(example_folder / "update.yml", update_config)
 
 
 @cli.command()
@@ -500,6 +511,12 @@ def init_fn(
     "-b",
     default="build.yml",
     help="Path of the model build configuration file.",
+)
+@click.option(
+    "--update-config",
+    "-u",
+    default="update.yml",
+    help="Path of the model update configuration file.",
 )
 @click.option(
     "--from-example",
@@ -618,8 +635,15 @@ def update(*args, **kwargs):
 
 @cli.command()
 @click_run_options()
-def evaluate(*args, **kwargs):
-    run_model_with_method(method="evaluate", *args, **kwargs)
+@click.option(
+    "--methods", default=None, help="Comma-seperated list of methods to evaluate."
+)
+def evaluate(methods: list | None, *args, **kwargs) -> None:
+    # If no methods are provided, pass None to run_model_with_method
+    methods: list | None = None if not methods else methods.split(",")
+    run_model_with_method(
+        method="evaluate", method_args={"methods": methods}, *args, **kwargs
+    )
 
 
 @working_directory_option

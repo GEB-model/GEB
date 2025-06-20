@@ -354,3 +354,6 @@ setup_SPEI:
 
 setup_discharge_observations:
   custom_river_stations: null
+
+setup_CO2_concentration:
+  ssp: ssp370

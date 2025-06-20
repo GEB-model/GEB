@@ -20,41 +20,12 @@ class Hydrology:
     def __init__(self):
         pass
 
-    def evaluate_discharge_grid(self, correct_Q_obs=False):
-        """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
-        Correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the diff in upstream area
-        between the Q_obs station and the discharge from GEB.
-        """
-
-        #  create folders
-        eval_plot_folder = Path(self.output_folder_evaluate) / "discharge" / "plots"
-        eval_result_folder = (
-            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
-        )
-
-        eval_plot_folder.mkdir(parents=True, exist_ok=True)
-        eval_result_folder.mkdir(parents=True, exist_ok=True)
-
-        # load input data files
-        snapped_locations = gpd.read_parquet(
-            self.model.files["geoms"]["discharge/discharge_snapped_locations"]
-        )  # load the snapped locations of the Q_obs stations
-        Q_obs = pd.read_parquet(
-            self.model.files["table"]["discharge/Q_obs"]
-        )  # load the Q_obs discharge data
-
-        region_shapefile = gpd.read_parquet(
-            self.model.files["geoms"]["mask"]
-        )  # load the region shapefile
-        rivers = gpd.read_parquet(
-            self.model.files["geoms"]["routing/rivers"]
-        )  # load the rivers shapefile
-
+    def plot_discharge(self):
         # load the discharge simulation
         GEB_discharge = xr.open_dataarray(
             self.model.output_folder
             / "report"
-            / "spinup"
+            / "default"
             / "hydrology.routing"
             / "discharge_daily.zarr"
         )
@@ -80,7 +51,48 @@ class Hydrology:
             self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
         )
 
-        evaluation_per_station = []
+    def evaluate_discharge(self, correct_Q_obs=False):
+        """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
+        Correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the diff in upstream area
+        between the Q_obs station and the discharge from GEB.
+        """
+
+        #  create folders
+        eval_plot_folder: Path = (
+            Path(self.output_folder_evaluate) / "discharge" / "plots"
+        )
+        eval_result_folder = (
+            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+        )
+
+        eval_plot_folder.mkdir(parents=True, exist_ok=True)
+        eval_result_folder.mkdir(parents=True, exist_ok=True)
+
+        # load the discharge simulation
+        GEB_discharge = xr.open_dataarray(
+            self.model.output_folder
+            / "report"
+            / "spinup"
+            / "hydrology.routing"
+            / "discharge_daily.zarr"
+        )
+
+        # load input data files
+        snapped_locations = gpd.read_parquet(
+            self.model.files["geoms"]["discharge/discharge_snapped_locations"]
+        )  # load the snapped locations of the Q_obs stations
+        Q_obs = pd.read_parquet(
+            self.model.files["table"]["discharge/Q_obs"]
+        )  # load the Q_obs discharge data
+
+        region_shapefile = gpd.read_parquet(
+            self.model.files["geoms"]["mask"]
+        )  # load the region shapefile
+        rivers = gpd.read_parquet(
+            self.model.files["geoms"]["routing/rivers"]
+        )  # load the rivers shapefiles
+
+        evaluation_per_station: list = []
 
         # start validation loop over Q_obs stations
         for ID in tqdm(Q_obs.columns):

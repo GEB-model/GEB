@@ -16,14 +16,14 @@ import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
 
-all_async_readers = []
+all_async_readers: list = []
 
 
 def load_table(fp):
     return pd.read_parquet(fp, engine="pyarrow")
 
 
-def load_array(fp):
+def load_array(fp: Path) -> np.ndarray:
     if fp.suffix == ".npz":
         return np.load(fp)["data"]
     elif fp.suffix == ".zarr":
@@ -32,7 +32,9 @@ def load_array(fp):
         raise ValueError(f"Unsupported file format: {fp.suffix}")
 
 
-def calculate_scaling(min_value, max_value, precision, offset=0):
+def calculate_scaling(
+    min_value: float, max_value: float, precision: float, offset=0.0
+) -> tuple[float, str]:
     """
     This function calculates the scaling factor and output dtype for
     a fixed scale and offset codec. The expected minimum and maximum
@@ -46,65 +48,57 @@ def calculate_scaling(min_value, max_value, precision, offset=0):
     there may be some issues due to rounding and the given factors may
     become slighly imprecise.
 
-    Parameters
-    ----------
-    min_value : float
-        The minimum expected value of the original data. Outside this range
-        the data may start to behave unexpectedly.
-    max_value : float
-        The maximum expected value of the original data. Outside this range
-        the data may start to behave unexpectedly.
-    precision : float
-        The precision of the data, i.e. the maximum difference between the
-        original and decoded data.
-    offset : float, optional
-        The offset to apply to the original data before scaling.
+    Args:
+        min_value: The minimum expected value of the original data. Outside this range
+            the data may start to behave unexpectedly.
+        max_value: The maximum expected value of the original data. Outside this range
+            the data may start to behave unexpectedly.
+        precision: The precision of the data, i.e. the maximum difference between the
+            original and decoded data.
+        offset: The offset to apply to the original data before scaling.
 
-    Returns
-    -------
-    scaling_factor : float
-        The scaling factor to apply to the original data.
-    out_dtype : str
-        The output dtype to use for the fixed scale and offset codec.
+    Returns:
+        scaling_factor: The scaling factor to apply to the original data.
+        out_dtype: The output dtype to use for the fixed scale and offset codec.
     """
 
     assert min_value < max_value, "min_value must be less than max_value"
     assert precision > 0, "precision must be greater than 0"
 
-    min_with_offset = min_value + offset
-    max_with_offset = max_value + offset
+    min_with_offset: float = min_value + offset
+    max_with_offset: float = max_value + offset
 
-    max_abs_value = max(abs(min_with_offset), abs(max_with_offset))
+    max_abs_value: float = max(abs(min_with_offset), abs(max_with_offset))
 
-    steps_required = int(max_abs_value / precision / 2) + 1
+    steps_required: int = int(max_abs_value / precision / 2) + 1
 
-    bits_required = steps_required.bit_length()
+    bits_required: int = steps_required.bit_length()
 
-    steps_available = 2**bits_required
+    steps_available: int = 2**bits_required
 
     if min_with_offset < 0:
         bits_required += 1  # need to account for the sign bit
-        out_dtype_prefix = ""
+        out_dtype_prefix: str = ""
     else:
-        out_dtype_prefix = "u"
+        out_dtype_prefix: str = "u"
 
-    scaling_factor = steps_available / max_abs_value
+    scaling_factor: float = steps_available / max_abs_value
 
     if bits_required <= 8:
-        out_dtype = out_dtype_prefix + "int8"
+        out_dtype: str = out_dtype_prefix + "int8"
     elif bits_required <= 16:
-        out_dtype = out_dtype_prefix + "int16"
+        out_dtype: str = out_dtype_prefix + "int16"
     elif bits_required <= 32:
-        out_dtype = out_dtype_prefix + "int32"
+        out_dtype: str = out_dtype_prefix + "int32"
     elif bits_required <= 64:
-        out_dtype = out_dtype_prefix + "int64"
+        out_dtype: str = out_dtype_prefix + "int64"
     else:
         raise ValueError("Too many bits required for precision and range")
 
     return scaling_factor, out_dtype
 
 
-def open_zarr(zarr_folder):
+def open_zarr(zarr_folder) -> xr.DataArray:
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
@@ -182,7 +176,7 @@ def to_zarr(
     filters: list = [],
     compressor=None,
     progress: bool = True,
-):
+) -> xr.DataArray:
     """
     Save an xarray DataArray to a zarr file.
 
@@ -225,6 +219,7 @@ def to_zarr(
     if "y" in da.dims and "x" in da.dims:
         assert da.dims[-2] == "y", "y should be the second last dimension"
         assert da.dims[-1] == "x", "x should be the last dimension"
+        assert (np.diff(da.y.values) < 0).all(), "y should be decreasing"
 
     assert da.dtype != np.float64, "should be float32"
 
@@ -244,7 +239,7 @@ def to_zarr(
             f"Fill value must be nan, not {da.attrs['_FillValue']}"
         )
 
-    path = Path(path)
+    path: Path = Path(path)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_zarr = Path(tmp_dir) / path.name
@@ -261,6 +256,7 @@ def to_zarr(
                     "x": min(x_chunksize, da.sizes["x"]),
                 }
             )
+            da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
         if "time" in da.dims:
             chunks.update({"time": min(time_chunksize, da.sizes["time"])})
@@ -300,8 +296,6 @@ def to_zarr(
             check_buffer_size(da, chunks_or_shards=chunks)
 
         da = da.chunk(shards if shards is not None else chunks)
-
-        da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
         chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)
@@ -349,7 +343,7 @@ def to_zarr(
             shutil.rmtree(path)
         shutil.move(tmp_zarr, folder)
 
-    da_disk = open_zarr(path)
+    da_disk: xr.DataArray = open_zarr(path)
 
     # perform some asserts to check if the data was written and read correctly
     assert da.dtype == da_disk.dtype, "dtype mismatch"
@@ -407,7 +401,7 @@ def get_window(
         raise ValueError("y must not be empty")
 
     # So that we can do item assignment
-    bounds = list(bounds)
+    bounds: list = list(bounds)
 
     if bounds[0] < x[0]:
         if raise_on_out_of_bounds:
@@ -557,7 +551,7 @@ class AsyncForcingReader:
         # that the dataset is the same as the previous one or the next one in line,
         # so we can just check the current index and the next one. Only if those do not match
         # we have to search for the correct index.
-        numpy_date = np.datetime64(date, "ns")
+        numpy_date: np.datetime64 = np.datetime64(date, "ns")
         if self.datetime_index[self.current_index] == numpy_date:
             return self.current_index
         elif self.datetime_index[self.current_index + 1] == numpy_date:
