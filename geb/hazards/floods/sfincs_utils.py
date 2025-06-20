@@ -239,11 +239,11 @@ def check_docker_running():
 def run_sfincs_simulation(model_root, simulation_root, gpu=False) -> int:
     # Check if we are on Linux or Windows and run the appropriate script
     if gpu:
-        version: str | None = os.getenv("SFINCS_GPU_SIF", None)
+        version: str | None = os.getenv("SFINCS_SIF_GPU", None)
         if version is None:
             raise EnvironmentError("Environment variable SFINCS_GPU_SIF is not set")
     else:
-        version: str = "deltares/sfincs-cpu:latest"
+        version: str = os.getenv("SFINCS_SIF", "deltares/sfincs-cpu:latest")
 
     if os.name == "posix":
         # If not a singularity image, add docker:// prefix
