@@ -76,6 +76,8 @@ class Agents:
         municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
         for _, region in self.geoms["regions"].iterrows():
             ISO3 = region["ISO3"]
+            ISO3 = "LIE"
+
             region_id = region["region_id"]
 
             def load_water_demand_and_pop_data(ISO3):
@@ -137,6 +139,59 @@ class Agents:
             municipal_water_withdrawal_m3_per_capita_per_day = (
                 municipal_water_withdrawal / population / 365.2425
             )
+
+            if municipal_water_withdrawal_m3_per_capita_per_day.isna().any():
+                # check which countries have data for these years. ONLY for these nan years
+                start_model_time = self.start_date.year
+                end_model_time = self.end_date.year
+                missing_years = municipal_water_withdrawal_m3_per_capita_per_day[
+                    municipal_water_withdrawal_m3_per_capita_per_day.isna()
+                ].index.tolist()
+                # filter out years that are not in the model time
+                missing_years = [
+                    year
+                    for year in missing_years
+                    if start_model_time <= year <= end_model_time
+                ]
+                # get all the countries with data for these years
+                test = municipal_water_demand[
+                    municipal_water_demand["Variable"] == "Municipal water withdrawal"
+                ]
+                # i want to get the countries (ISO3 is in index) with rows that have data in the missing years list.the years are in the Years column
+                countries_with_data = (
+                    test.loc[test["Year"].isin(missing_years)]
+                    .dropna(axis=0, how="any")
+                    .index.unique()
+                    .tolist()
+                )
+
+                # gfill the municipal water withdrawal data for missing years from donor countries
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing municipal water withdrawal data for {ISO3}, using donor country {donor_country}"
+                )
+                municipal_water_withdrawal_donor, population_donor = (
+                    load_water_demand_and_pop_data(donor_country)
+                )
+
+                municipal_water_withdrawal_donor = (
+                    municipal_water_withdrawal_donor.set_index("Year")
+                )
+                municipal_water_withdrawal_donor = (
+                    municipal_water_withdrawal_donor["Value"] * 10e9
+                )
+
+                municipal_water_withdrawal_m3_per_capita_per_day_donor = (
+                    municipal_water_withdrawal_donor / population_donor / 365.2425
+                )
+
+                # use the donor country data to fill the missing values
+                for year in missing_years:
+                    municipal_water_withdrawal_m3_per_capita_per_day.loc[year] = (
+                        municipal_water_withdrawal_m3_per_capita_per_day_donor.loc[year]
+                    )
+
             municipal_water_withdrawal_m3_per_capita_per_day = (
                 municipal_water_withdrawal_m3_per_capita_per_day
             ).dropna()
@@ -145,19 +200,10 @@ class Agents:
                 f"Too large water withdrawal data for {ISO3}"
             )
 
-            if 2000 not in municipal_water_withdrawal_m3_per_capita_per_day.index:
-                # use the first available date as baseline
-                municipal_water_demand_baseline_m3_per_capita_per_day = (
-                    municipal_water_withdrawal_m3_per_capita_per_day.iloc[0].item()
-                )
-                self.logger.warning(
-                    f"Missing baseline year (2000) for municipal water withdrawal data for {ISO3}, using the first available date as baseline (year {municipal_water_withdrawal_m3_per_capita_per_day.index[0]})"
-                )
-            else:
-                # use the 2000 as baseline
-                municipal_water_demand_baseline_m3_per_capita_per_day = (
-                    municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
-                )
+            # use the 2000 as baseline
+            municipal_water_demand_baseline_m3_per_capita_per_day = (
+                municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
+            )
 
             municipal_water_demand_per_capita[
                 self.array["agents/households/region_id"] == region_id
