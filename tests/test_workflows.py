@@ -1,11 +1,13 @@
 import shutil
 from datetime import date
+from pathlib import Path
 from time import sleep, time
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 import zarr
+import zarr.storage
 
 from geb.workflows.io import (
     AsyncForcingReader,
@@ -14,25 +16,25 @@ from geb.workflows.io import (
 from .testconfig import tmp_folder
 
 
-def zarr_file(varname):
-    size = 1000
+def zarr_file(varname: str) -> Path:
+    size: int = 1000
     # Create a temporary zarr file for testing
-    file_path = tmp_folder / f"{varname}.zarr"
+    file_path: Path = tmp_folder / f"{varname}.zarr"
 
-    periods = 100
+    periods: int = 100
 
     times = pd.date_range("2000-01-01", periods=periods, freq="D")
     data = np.empty((periods, size, size), dtype=np.int32)
     for i in range(periods):
         data[i][:] = i
-    ds = xr.Dataset(
+    ds: xr.Dataset = xr.Dataset(
         {
             varname: (("time", "x", "y"), data),
         },
-        coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)},
+        coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)[::-1]},
     )
 
-    store = zarr.storage.LocalStore(file_path, read_only=False)
+    store: zarr.storage.LocalStore = zarr.storage.LocalStore(file_path, read_only=False)
     ds.to_zarr(
         store,
         mode="w",
@@ -47,12 +49,18 @@ def zarr_file(varname):
 
 
 def test_read_timestep():
-    temperature_file = zarr_file("temperature")
-    precipitation_file = zarr_file("precipitation")
-    pressure_file = zarr_file("pressure")
-    reader1 = AsyncForcingReader(temperature_file, variable_name="temperature")
-    reader2 = AsyncForcingReader(precipitation_file, variable_name="precipitation")
-    reader3 = AsyncForcingReader(pressure_file, variable_name="pressure")
+    temperature_file: Path = zarr_file("temperature")
+    precipitation_file: Path = zarr_file("precipitation")
+    pressure_file: Path = zarr_file("pressure")
+    reader1: AsyncForcingReader = AsyncForcingReader(
+        temperature_file, variable_name="temperature"
+    )
+    reader2: AsyncForcingReader = AsyncForcingReader(
+        precipitation_file, variable_name="precipitation"
+    )
+    reader3: AsyncForcingReader = AsyncForcingReader(
+        pressure_file, variable_name="pressure"
+    )
 
     data0 = reader1.read_timestep(date(2000, 1, 1))
 
