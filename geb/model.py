@@ -1,5 +1,6 @@
 import copy
 import datetime
+import os
 from pathlib import Path
 from time import time
 from typing import Any
@@ -425,6 +426,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @property
     def input_folder(self):
         return Path(self.config["general"]["input_folder"])
+
+    @property
+    def bin_folder(self) -> Path:
+        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
     @property
     def crs(self):

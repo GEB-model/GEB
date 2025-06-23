@@ -29,11 +29,12 @@ from time import time
 
 import flopy
 import numpy as np
+import numpy.typing as npt
 from numba import njit
 from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
 
-MODFLOW_VERSION = "6.6.2"
+MODFLOW_VERSION: str = "6.6.2"
 
 
 @contextmanager
@@ -507,24 +508,20 @@ class ModFlowSimulation:
         else:
             return False
 
-    def bmi_return(self, success):
+    def bmi_return(self) -> list[str]:
         """Parse libmf6.so and libmf6.dll stdout file."""
-        fpth = os.path.join("mfsim.stdout")
-        with open(fpth) as f:
-            lines = f.readlines()
-        return success, lines
+        with open("mfsim.stdout") as f:
+            return f.readlines()
 
-    def load_bmi(self, heads):
+    def load_bmi(self, heads: npt.NDArray[np.float64]):
         """Load the Basic Model Interface."""
-        success = False
-
         # Current model version 6.5.0 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.5.0
         if platform.system() == "Windows":
-            libary_name = "libmf6.dll"
+            libary_name: str = "libmf6.dll"
         elif platform.system() == "Linux":
-            libary_name = "libmf6.so"
+            libary_name: str = "libmf6.so"
         elif platform.system() == "Darwin":
-            libary_name = "libmf6.dylib"
+            libary_name: str = "libmf6.dylib"
         else:
             raise ValueError(f"Platform {platform.system()} not supported.")
 
@@ -532,8 +529,10 @@ class ModFlowSimulation:
             # XmiWrapper requires the real path (no symlinks etc.)
             # include the version in the folder name to allow updating the version
             # so that the user will automatically get the new version
-            library_folder = (Path(__file__).parent / "bin" / MODFLOW_VERSION).resolve()
-            library_path = library_folder / libary_name
+            library_folder: Path = (
+                self.model.bin_folder / "modflow" / MODFLOW_VERSION
+            ).resolve()
+            library_path: Path = library_folder / libary_name
 
             if not library_path.exists():
                 library_folder.mkdir(exist_ok=True, parents=True)
@@ -551,11 +550,11 @@ class ModFlowSimulation:
             except Exception as e:
                 print("Failed to load " + str(library_path))
                 print("with message: " + str(e))
-                self.bmi_return(success)
+                self.bmi_return()
                 raise
 
             # modflow requires the real path (no symlinks etc.)
-            config_file = os.path.realpath("mfsim.nam")
+            config_file: str = os.path.realpath("mfsim.nam")
             if not os.path.exists(config_file):
                 raise FileNotFoundError(
                     f"Config file {config_file} not found on disk. Did you create the model first (load_from_disk = False)?"
@@ -565,27 +564,29 @@ class ModFlowSimulation:
             try:
                 self.mf6.initialize(config_file)
             except:
-                self.bmi_return(success)
+                self.bmi_return()
                 raise
 
             if self.verbose:
                 print("MODFLOW model initialized")
 
-        self.end_time = self.mf6.get_end_time()
-        area_tag = self.mf6.get_var_address("AREA", self.name, "DIS")
-        area = self.mf6.get_value_ptr(area_tag).reshape(self.nlay, self.n_active_cells)
+        self.end_time: float = self.mf6.get_end_time()
+        area_tag: str = self.mf6.get_var_address("AREA", self.name, "DIS")
+        area: npt.NDArray[np.float64] = self.mf6.get_value_ptr(area_tag).reshape(
+            self.nlay, self.n_active_cells
+        )
 
         # ensure that the areas of all vertical cells are equal
         assert (np.diff(area, axis=0) == 0).all()
 
         # so we can use the area of the top layer
-        self.area = area[0].copy()
+        self.area: npt.NDArray[np.float32] = area[0].astype(np.float32)
 
         self.prepare_time_step()
 
         # because modflow rounds heads when they are written to file, we set the modflow heads
         # to the actual model heads to ensure that the model is in the same state as the modflow model
-        self.heads = heads
+        self.heads: npt.NDArray[np.float64] = heads
         assert not np.isnan(self.heads).any()
 
     @property
