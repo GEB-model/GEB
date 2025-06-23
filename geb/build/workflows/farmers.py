@@ -8,8 +8,7 @@ from numba import njit
 
 @njit(cache=True)
 def create_farms_numba(cultivated_land, ids, farm_sizes):
-    """
-    Creates random farms considering the farm size distribution.
+    """Creates random farms considering the farm size distribution.
 
     Args:
         cultivated_land: map of cultivated land.
@@ -22,7 +21,6 @@ def create_farms_numba(cultivated_land, ids, farm_sizes):
         farms: map of farms. Each unique ID is land owned by a single farmer. Non-cultivated land is represented by -1.
         farmer_coords: 2 dimensional numpy array of farmer locations. First dimension corresponds to the IDs of `farms`, and the second dimension are longitude and latitude.
     """
-
     current_farm_counter = 0
     cur_farm_size = 0
     farm_done = False

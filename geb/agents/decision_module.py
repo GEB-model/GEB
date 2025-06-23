@@ -30,7 +30,6 @@ class DecisionModule:
         Returns:
             NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
         """
-
         # Allocate array
         NPV_summed = np.full((n_floods + 3, n_agents), -1, dtype=np.float32)
 
@@ -97,7 +96,6 @@ class DecisionModule:
         Returns:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
-
         # Ensure p floods is in increasing order
         indices = np.argsort(p_droughts)
         total_profits = total_profits[indices]
@@ -208,7 +206,6 @@ class DecisionModule:
         Returns:
             EU_adapt: array containing the time-discounted subjective utility of adapting for each agent.
         """
-
         # Preallocate arrays
         EU_adapt = np.full(n_agents, -np.inf, dtype=np.float32)
 

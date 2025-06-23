@@ -21,8 +21,7 @@ from .general import AgentBaseClass
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs):
-    """
-    Convert raster data into separate GeoDataFrames for specified land use values.
+    """Convert raster data into separate GeoDataFrames for specified land use values.
 
     Parameters:
     - landuse: An xarray DataArray or similar with land use data and 'x' and 'y' coordinates.
@@ -31,7 +30,6 @@ def from_landuse_raster_to_polygon(mask, transform, crs):
     Returns:
     - Geodataframe
     """
-
     shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
 
     polygons = []
@@ -91,7 +89,6 @@ class Households(AgentBaseClass):
 
     def load_flood_maps(self):
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
-
         self.return_periods = np.array(
             self.model.config["hazards"]["floods"]["return_periods"]
         )
@@ -168,8 +165,8 @@ class Households(AgentBaseClass):
     def assign_household_attributes(self):
         """Household locations are already sampled from population map in GEBModel.setup_population()
         These are loaded in the spinup() method.
-        Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
-
+        Here we assign additional attributes (dummy data) to the households that are used in the decision module.
+        """
         # load household locations
         locations = load_array(self.model.files["array"]["agents/households/location"])
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
@@ -322,8 +319,8 @@ class Households(AgentBaseClass):
 
     def get_flood_risk_information_damage_scanner(self):
         """Initiate flood risk information for each household. This information is used in the decision module.
-        For now also only dummy data is created."""
-
+        For now also only dummy data is created.
+        """
         # preallocate array for damages
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
@@ -370,7 +367,6 @@ class Households(AgentBaseClass):
 
     def decide_household_strategy(self):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
-
         # update risk perceptions
         self.update_risk_perceptions()
 
@@ -717,7 +713,6 @@ class Households(AgentBaseClass):
         This function uses a multiplier to calculate the water demand for
         for each region with respect to the base year.
         """
-
         # the water demand multiplier is a function of the year and region
         water_demand_multiplier_per_region = (
             self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[

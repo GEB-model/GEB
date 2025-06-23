@@ -20,7 +20,8 @@ def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
     """This function finds the nearest river cell to each HRU. It does so
     by first selecting the rivers, by checking if the upstream area is
     above a certain threshold. then for each grid cell, it finds the nearest
-    river cell. Finally, it maps the nearest river cell to each HRU."""
+    river cell. Finally, it maps the nearest river cell to each HRU.
+    """
     valid_indices = np.argwhere(~mask)
     valid_values = upstream_area[~mask]
 

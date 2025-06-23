@@ -50,7 +50,7 @@ if SHAPE == "rectangular":
         return lake_factor * height_above_outflow**1.5
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """inverse function of estimate_lake_outflow"""
+        """Inverse function of estimate_lake_outflow"""
         return (outflow / lake_factor) ** (2 / 3)
 
 elif SHAPE == "parabola":
@@ -60,7 +60,7 @@ elif SHAPE == "parabola":
         return lake_factor * height_above_outflow**2
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """inverse function of estimate_lake_outflow"""
+        """Inverse function of estimate_lake_outflow"""
         return np.sqrt(outflow / lake_factor)
 
 else:
@@ -73,8 +73,7 @@ def get_lake_height_from_bottom(lake_storage, lake_area):
 
 
 def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
-    """
-    Calculate the storage of a lake given its height above the bottom and area.
+    """Calculate the storage of a lake given its height above the bottom and area.
 
     Parameters
     ----------
@@ -83,7 +82,7 @@ def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
     lake_area : float
         Area of the lake in m2
 
-    Returns
+    Returns:
     -------
     float
         Storage of the lake in m3
@@ -128,8 +127,7 @@ def get_lake_outflow(
     lake_area,
     outflow_height,
 ):
-    """
-    Calculate outflow and storage for a lake using the Modified Puls method
+    """Calculate outflow and storage for a lake using the Modified Puls method
 
     Parameters
     ----------
@@ -150,7 +148,7 @@ def get_lake_outflow(
     outflow_height : float
         Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
 
-    Returns
+    Returns:
     -------
     outflow : float
         New outflow from the lake in m3/s
@@ -395,8 +393,7 @@ class LakesReservoirs(Module):
         return waterbody_outflow_points
 
     def routing_lakes(self, routing_step_length_seconds):
-        """
-        Lake routine to calculate lake outflow
+        """Lake routine to calculate lake outflow
         :param inflowC: inflow to lakes and reservoirs [m3]
         :param NoRoutingExecuted: actual number of routing substep
         :return: QLakeOutM3DtC - lake outflow in [m3] per subtime step
@@ -420,8 +417,7 @@ class LakesReservoirs(Module):
         return lake_outflow_m3
 
     def routing_reservoirs(self, n_routing_substeps, current_substep):
-        """
-        Routine to update reservoir volumes and calculate reservoir outflow
+        """Routine to update reservoir volumes and calculate reservoir outflow
 
         Parameters
         ----------
@@ -430,7 +426,7 @@ class LakesReservoirs(Module):
         n_routing_substeps : int
             Number of routing substeps per time step
 
-        Returns
+        Returns:
         -------
         reservoir_release_m3 : np.ndarray
             Outflow from the reservoirs in m3 per routing substep
@@ -534,8 +530,7 @@ class LakesReservoirs(Module):
         return array
 
     def step(self):
-        """
-        Dynamic part set lakes and reservoirs for each year
+        """Dynamic part set lakes and reservoirs for each year
         """
         # if first timestep, or beginning of new year
         if self.model.current_timestep == 1 or (

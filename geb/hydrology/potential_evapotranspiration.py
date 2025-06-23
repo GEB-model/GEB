@@ -156,8 +156,7 @@ def PET(
 
 
 class PotentialEvapotranspiration(Module):
-    """
-    POTENTIAL REFERENCE EVAPO(TRANSPI)RATION
+    """POTENTIAL REFERENCE EVAPO(TRANSPI)RATION
     Calculate potential evapotranspiration from climate data mainly based on FAO 56 and LISVAP
     Based on Penman Monteith
 
@@ -208,8 +207,7 @@ class PotentialEvapotranspiration(Module):
         pass
 
     def step(self):
-        """
-        Dynamic part of the potential evaporation module
+        """Dynamic part of the potential evaporation module
         Based on Penman Monteith - FAO 56
         """
         (

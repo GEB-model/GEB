@@ -59,8 +59,7 @@ class Router:
         waterbody_id: np.ndarray,
         is_waterbody_outflow: np.ndarray,
     ) -> None:
-        """
-        Prepare the routing for the model.
+        """Prepare the routing for the model.
 
         Parameters
         ----------
@@ -95,7 +94,7 @@ class Router:
             where the flow ends. The value is -1 if there is no pit.
             Uses masked indices (see below).
 
-        Notes
+        Notes:
         -----
         The ldd is a 2D array with the same shape as the grid, where each cell
         contains the flow direction of the cell. The following keys are used:
@@ -182,8 +181,7 @@ class Router:
         self.Q_prev = Q_initial
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
-        """
-        Get the total storage of the river network, which is the sum of the
+        """Get the total storage of the river network, which is the sum of the
         available storage in each cell.
         """
         return self.get_available_storage(maximum_abstraction_ratio=1.0)
@@ -280,8 +278,7 @@ class KinematicWave(Router):
     def get_available_storage(
         self, maximum_abstraction_ratio: float = 0.9
     ) -> npt.NDArray[np.float32]:
-        """
-        Get the available storage of the river network, which is the sum of the
+        """Get the available storage of the river network, which is the sum of the
         available storage in each cell.
 
         Args:
@@ -321,8 +318,7 @@ class KinematicWave(Router):
         river_length,
         dt,
     ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-        """
-        Kinematic wave routing
+        """Kinematic wave routing
 
         Parameters
         ----------

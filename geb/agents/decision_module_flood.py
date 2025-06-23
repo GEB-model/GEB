@@ -72,8 +72,8 @@ class DecisionModule:
             r: time discounting rate
 
         Returns:
-            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent"""
-
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+        """
         # Allocate array
         NPV_summed = np.full((n_floods + 3, n_agents), -1, dtype=np.float32)
 
@@ -278,7 +278,6 @@ class DecisionModule:
         Returns:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
-
         # multiply damages by deductable
         expected_damages_insured = expected_damages * deductable
 
@@ -846,11 +845,13 @@ class DecisionModule:
         """This function allocates agents to regions based on the highest expected utility of migration.
             It checks if the number of household agents does not exceed a percentage of the current populaton, if it does it sets the expected utility of migration to -np.inf for all other agents.
             This is done to prevent agents from migrating to a region that is already full.
+
         Args:
             EU_regions: array containing the expected utility of migration for each agent in each region.
             regions_select: array containing the region IDs of the regions that are selected for migration.
             n_agents: integer containing the number of agents in the simulation.
             n_choices: integer containing the number of regions to consider for migration.
+
         Returns:
             EU_migr_MAX_return: array containing the maximum expected utility of migration of each agent.
             ID_migr_MAX_return: array containing the region IDs for which the utility of migration is highest for each agent.

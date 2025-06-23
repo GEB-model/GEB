@@ -53,8 +53,7 @@ def update_forcing(
     plot: bool = False,
     **config_kwargs,
 ) -> None:
-    """
-    Update the forcing of a sfincs model with the given forcing data.
+    """Update the forcing of a sfincs model with the given forcing data.
 
     Parameters
     ----------

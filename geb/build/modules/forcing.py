@@ -72,12 +72,11 @@ def reproject_and_apply_lapse_rate_pressure(
     lapse_rate : float, deafult -0.0065
         lapse rate of temperature [C m-1]
 
-    Returns
+    Returns:
     -------
     press_fact : xarray.DataArray
         pressure correction factor
     """
-
     assert (pressure.x.values == elevation_forcing.x.values).all()
     assert (pressure.y.values == elevation_forcing.y.values).all
     pressure_at_sea_level = pressure / get_pressure_correction_factor(
@@ -222,8 +221,7 @@ class Forcing:
         resolution: str | None = None,
         buffer: int = 0,
     ) -> xr.DataArray:
-        """
-        This method downloads ISIMIP climate data for GEB. It first retrieves the dataset
+        """This method downloads ISIMIP climate data for GEB. It first retrieves the dataset
         metadata from the ISIMIP repository using the specified `product`, `variable`, `forcing`, and `resolution`
         parameters. It then downloads the data files that match the specified `start_date` and `end_date` parameters, and
         extracts them to the specified `download_path` directory.
@@ -1152,8 +1150,7 @@ class Forcing:
     def setup_forcing_ISIMIP(
         self, resolution_arcsec: int, forcing: str, ssp: str
     ) -> None:
-        """
-        Sets up the forcing data for GEB using ISIMIP data.
+        """Sets up the forcing data for GEB using ISIMIP data.
 
         Parameters
         ----------
@@ -1206,15 +1203,14 @@ class Forcing:
         forcing,
         ssp: None | str = None,
     ):
-        """
-        Sets up the forcing data for GEB.
+        """Sets up the forcing data for GEB.
 
         Parameters
         ----------
         data_source : str, optional
             The data source to use for the forcing data. Default is 'isimip'.
 
-        Notes
+        Notes:
         -----
         This method sets up the forcing data for GEB. It first downloads the high-resolution variables
         (precipitation, surface solar radiation, air temperature, maximum air temperature, and minimum air temperature) from
@@ -1347,8 +1343,7 @@ class Forcing:
         variables: List[str],
         ssp: str,
     ):
-        """
-        Sets up the high-resolution climate variables for GEB.
+        """Sets up the high-resolution climate variables for GEB.
 
         Parameters
         ----------
@@ -1357,7 +1352,7 @@ class Forcing:
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the high-resolution climate variables for GEB. It downloads the specified
         climate variables from the ISIMIP dataset for the specified time period. The data is downloaded using the
@@ -1368,14 +1363,12 @@ class Forcing:
 
         The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
-
         for variable in variables:
             da = self.construct_ISIMIP_variable(variable, forcing, ssp)
             getattr(self, f"set_{variable}")(da)
 
     def setup_30arcsec_variables_isimip(self, variables: List[str]):
-        """
-        Sets up the high-resolution climate variables for GEB.
+        """Sets up the high-resolution climate variables for GEB.
 
         Parameters
         ----------
@@ -1384,7 +1377,7 @@ class Forcing:
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the high-resolution climate variables for GEB. It downloads the specified
         climate variables from the ISIMIP dataset for the specified time period. The data is downloaded using the
@@ -1421,15 +1414,14 @@ class Forcing:
             download_variable(variable)
 
     def setup_hurs_isimip_30arcsec(self):
-        """
-        Sets up the relative humidity data for GEB.
+        """Sets up the relative humidity data for GEB.
 
         Parameters
         ----------
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the relative humidity data for GEB. It first downloads the relative humidity
         data from the ISIMIP dataset for the specified time period using the `download_isimip` method. The data is downloaded
@@ -1547,15 +1539,14 @@ class Forcing:
         self.set_hurs(hurs_output)
 
     def setup_longwave_isimip_30arcsec(self):
-        """
-        Sets up the longwave radiation data for GEB.
+        """Sets up the longwave radiation data for GEB.
 
         Parameters
         ----------
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the longwave radiation data for GEB. It first downloads the relative humidity,
         air temperature, and downward longwave radiation data from the ISIMIP dataset for the specified time period using the
@@ -1654,15 +1645,14 @@ class Forcing:
         self.set_rlds(lw_fine)
 
     def setup_pressure_isimip_30arcsec(self):
-        """
-        Sets up the surface pressure data for GEB.
+        """Sets up the surface pressure data for GEB.
 
         Parameters
         ----------
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the surface pressure data for GEB. It then downloads
         the orography data and surface pressure data from the ISIMIP dataset for the specified time period using the
@@ -1711,8 +1701,7 @@ class Forcing:
         self.set_ps(pressure_30_min_regridded_corr)
 
     def setup_wind_isimip_30arcsec(self):
-        """
-        This method sets up the wind data for GEB. It first downloads the global wind atlas data and
+        """This method sets up the wind data for GEB. It first downloads the global wind atlas data and
         regrids it to the target grid using the `xe.Regridder` method. It then downloads the 30-minute average wind data
         from the ISIMIP dataset for the specified time period and regrids it to the target grid using the `xe.Regridder`
         method.
@@ -1793,8 +1782,7 @@ class Forcing:
         calibration_period_end: date = date(2010, 1, 1),
         window_months: int = 12,
     ) -> None:
-        """
-        Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
+        """Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
         due to the sliding window, the SPEI data will be shorter than the original data. When
         a sliding window of 12 months is used, the SPEI data will be shorter by 11 months.
 

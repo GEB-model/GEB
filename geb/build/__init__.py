@@ -68,8 +68,7 @@ def convert_timestamp_to_string(timestamp):
 
 @contextmanager
 def suppress_logging_warning(logger):
-    """
-    A context manager to suppress logging warning messages temporarily.
+    """A context manager to suppress logging warning messages temporarily.
     """
     current_level = logger.getEffectiveLevel()
     logger.setLevel(logging.ERROR)  # Set level to ERROR to suppress WARNING messages
@@ -88,8 +87,7 @@ class PathEncoder(json.JSONEncoder):
 
 
 def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
-    """
-    Convert a boolean mask to an undirected NetworkX graph.
+    """Convert a boolean mask to an undirected NetworkX graph.
     Additional attributes can be passed as keyword arguments, which
     will be added as attributes to the nodes of the graph.
 
@@ -109,7 +107,6 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     G : networkx.Graph
         Undirected graph where nodes are (y,x) coordinates of True cells
     """
-
     # check dtypes
     assert isinstance(mask, (np.ndarray))
     for item in kwargs.values():
@@ -483,7 +480,7 @@ def create_riverine_mask(
     geom : geopandas.GeoDataFrame
         The geometry of the riverine basin, which is used to clip the mask.
 
-    Returns
+    Returns:
     -------
     xarray.DataArray
         A boolean mask where True indicates riverine cells and False indicates non-riverine cells.
@@ -601,7 +598,6 @@ class GEBModel(
         subgrid_factor : int
             GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
         """
-
         assert resolution_arcsec % 3 == 0, (
             "resolution_arcsec must be a multiple of 3 to align with MERIT"
         )
@@ -1274,7 +1270,6 @@ class GEBModel(
             Name of new map layer, this is used to overwrite the name of a DataArray
             and ignored if data is a Dataset
         """
-
         assert isinstance(data, xr.DataArray)
 
         if name in grid:

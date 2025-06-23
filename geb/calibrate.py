@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-Calibration tool for Hydrological models
+"""Calibration tool for Hydrological models
 using a distributed evolutionary algorithms in python
 DEAP library
 https://github.com/DEAP/deap/blob/master/README.md
@@ -43,8 +42,7 @@ from sklearn.model_selection import KFold
 
 
 def KGE_calculation(s, o):
-    """
-    Kling Gupta Efficiency (Kling et al., 2012, http://dx.doi.org/10.1016/j.jhydrol.2012.01.011)
+    """Kling Gupta Efficiency (Kling et al., 2012, http://dx.doi.org/10.1016/j.jhydrol.2012.01.011)
     input:
             s: simulated
             o: observed
@@ -1315,8 +1313,7 @@ def export_front_history(config, ngen, effmax, effmin, effstd, effavg):
 
 @handle_ctrl_c
 def run_model(individual, config, gauges, observed_streamflow):
-    """
-    This function takes an individual from the population and runs the model
+    """This function takes an individual from the population and runs the model
     with the corresponding parameters in a subfolder. Then it returns the
     fitness scores (KGE, irrigation wells score, etc.) for that run.
     """
@@ -1397,8 +1394,7 @@ def run_model(individual, config, gauges, observed_streamflow):
             lock.release()
 
             def run_model_scenario(run_command):
-                """
-                Run the shell command for spinup or run scenario,
+                """Run the shell command for spinup or run scenario,
                 redirecting stdout/stderr to their own log files.
                 """
                 env = os.environ.copy()
@@ -1579,8 +1575,7 @@ def run_model(individual, config, gauges, observed_streamflow):
 
 
 def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu):
-    """
-    Initialize the global variables for the process pool.
+    """Initialize the global variables for the process pool.
     """
     global ctrl_c_entered
     global default_sigint_handler

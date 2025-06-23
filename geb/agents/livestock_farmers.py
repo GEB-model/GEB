@@ -42,8 +42,7 @@ class LiveStockFarmers(AgentBaseClass):
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        """
-        Dynamic part of the water demand module - livestock
+        """Dynamic part of the water demand module - livestock
         read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
 
         """

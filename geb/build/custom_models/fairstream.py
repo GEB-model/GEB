@@ -187,12 +187,11 @@ class Survey:
         method="rejection",
         show_progress=True,
     ):
-        """
-        Args:
-            n (int): number of samples to generate
-            evidence (list): list of evidence values (i.e., all samples will have these values ...)
-            evidence_columns (list): list of evidence column names (i.e., ... for these columns)
-            method (str): sampling method, only 'rejection' is implemented
+        """Args:
+        n (int): number of samples to generate
+        evidence (list): list of evidence values (i.e., all samples will have these values ...)
+        evidence_columns (list): list of evidence column names (i.e., ... for these columns)
+        method (str): sampling method, only 'rejection' is implemented
         """
         assert method == "rejection", "Only rejection sampling is implemented"
         if show_progress:

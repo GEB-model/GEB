@@ -35,8 +35,7 @@ def load_array(fp: Path) -> np.ndarray:
 def calculate_scaling(
     min_value: float, max_value: float, precision: float, offset=0.0
 ) -> tuple[float, str]:
-    """
-    This function calculates the scaling factor and output dtype for
+    """This function calculates the scaling factor and output dtype for
     a fixed scale and offset codec. The expected minimum and maximum
     values along with the precision are used to determine the number
     of bits required to represent the data. The scaling factor is then
@@ -61,7 +60,6 @@ def calculate_scaling(
         scaling_factor: The scaling factor to apply to the original data.
         out_dtype: The output dtype to use for the fixed scale and offset codec.
     """
-
     assert min_value < max_value, "min_value must be less than max_value"
     assert precision > 0, "precision must be greater than 0"
 
@@ -177,8 +175,7 @@ def to_zarr(
     compressor=None,
     progress: bool = True,
 ) -> xr.DataArray:
-    """
-    Save an xarray DataArray to a zarr file.
+    """Save an xarray DataArray to a zarr file.
 
     Parameters
     ----------
@@ -206,7 +203,7 @@ def to_zarr(
     progress : bool, optional
         Whether to show a progress bar. Default is True.
 
-    Returns
+    Returns:
     -------
     da_disk : xarray.DataArray
         The xarray DataArray saved to disk.
@@ -361,8 +358,7 @@ def get_window(
     raise_on_out_of_bounds: bool = True,
     raise_on_buffer_out_of_bounds: bool = True,
 ) -> dict[str, slice]:
-    """
-    Get a window for the given x and y coordinates based on the provided bounds and buffer.
+    """Get a window for the given x and y coordinates based on the provided bounds and buffer.
 
     Parameters
     ----------
@@ -379,7 +375,7 @@ def get_window(
     raise_on_buffer_out_of_bounds : bool, optional
         Whether to raise an error if the buffer goes out of the x or y coordinate range. Default is True.
 
-    Returns
+    Returns:
     -------
     dict
         A dictionary with slices for the x and y coordinates, e.g. {"x": slice(start, stop), "y": slice(start, stop)}.
@@ -583,8 +579,7 @@ class AsyncForcingReader:
 
 
 class WorkingDirectory:
-    """
-    A context manager for temporarily changing the current working directory.
+    """A context manager for temporarily changing the current working directory.
 
     Usage:
         with WorkingDirectory('/path/to/new/directory'):
@@ -592,8 +587,7 @@ class WorkingDirectory:
     """
 
     def __init__(self, new_path):
-        """
-        Initializes the context manager with the path to change to.
+        """Initializes the context manager with the path to change to.
 
         Args:
             new_path (str): The path to the directory to change into.

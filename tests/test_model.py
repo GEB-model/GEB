@@ -208,8 +208,7 @@ def test_multiverse():
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_ISIMIP_forcing_low_res():
-    """
-    Test the ISIMIP forcing update function.
+    """Test the ISIMIP forcing update function.
     This is a special case that requires a specific setup.
     """
     args = DEFAULT_BUILD_ARGS.copy()

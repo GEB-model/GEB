@@ -278,7 +278,6 @@ class Reporter:
             value: The array itself.
             conf: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
         """
-
         # here we return None if the value is not to be reported on this timestep
         if "frequency" in config:
             if config["frequency"] == "initial":

@@ -508,8 +508,7 @@ class ModFlowSimulation:
             return False
 
     def bmi_return(self, success):
-        """
-        parse libmf6.so and libmf6.dll stdout file
+        """Parse libmf6.so and libmf6.dll stdout file
         """
         fpth = os.path.join("mfsim.stdout")
         with open(fpth) as f:

@@ -89,8 +89,7 @@ class Crops:
         source: Union[str, None] = "MIRCA2000",
         crop_specifier: Union[str, None] = None,
     ):
-        """
-        Sets up the crops data for the model.
+        """Sets up the crops data for the model.
         """
         self.logger.info("Preparing crops data")
 
@@ -125,8 +124,7 @@ class Crops:
         translate_crop_names=None,
         adjust_currency=False,
     ):
-        """
-        Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
+        """Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
 
         Parameters
         ----------
@@ -137,17 +135,17 @@ class Crops:
         project_future_until_year : int, optional
             The year to project future data until. Defaults to False.
 
-        Returns
+        Returns:
         -------
         dict
             A dictionary containing processed crop data in a time series format or as a constant value.
 
-        Raises
+        Raises:
         ------
         ValueError
             If crop_prices is neither a valid file path nor an integer/float.
 
-        Notes
+        Notes:
         -----
         The function performs the following steps:
         1. Fetches and processes crop data from FAO statistics if crop_prices is 'FAO_stat'.
@@ -155,7 +153,6 @@ class Crops:
         3. Determines price variability and performs interpolation/extrapolation of crop prices.
         4. Formats the processed data into a nested dictionary structure.
         """
-
         if crop_prices == "FAO_stat":
             crop_data = self.data_catalog.get_dataframe(
                 "FAO_crop_price",
@@ -458,8 +455,7 @@ class Crops:
     def donate_and_receive_crop_prices(
         self, donor_data, recipient_regions, GLOBIOM_regions
     ):
-        """
-        If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
+        """If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
         this gives issues. This function adjusts crop data for those countries by filling in missing values using data from nearby regions
         and PPP conversion rates.
 
@@ -469,12 +465,12 @@ class Crops:
             A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'. The DataFrame
             contains crop prices for different regions.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with missing crop data filled in using PPP conversion rates from nearby regions.
 
-        Notes
+        Notes:
         -----
         The function performs the following steps:
         1. Identifies columns where all values are NaN for each country and stores this information.
@@ -482,7 +478,6 @@ class Crops:
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
         4. Drops the 'ISO3' column before returning the updated DataFrame.
         """
-
         # create a copy of the data to avoid using data that was adjusted in this function
         data_out = None
 
@@ -555,8 +550,7 @@ class Crops:
         return data_out
 
     def assign_crop_price_inflation(self, costs, unique_regions):
-        """
-        Determines the price inflation of all crops in the region and adds a column that describes this inflation.
+        """Determines the price inflation of all crops in the region and adds a column that describes this inflation.
         If there is no data for a certain year, the inflation rate is taken from the socioeconomics data.
 
         Parameters
@@ -564,7 +558,7 @@ class Crops:
         costs : DataFrame
             A DataFrame containing the cost data for different regions. The DataFrame should be indexed by region IDs.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with a new column 'changes' that contains the average price changes for each region.
@@ -616,8 +610,7 @@ class Crops:
         return costs
 
     def inter_and_extrapolate_prices(self, data, unique_regions, adjust_currency=False):
-        """
-        Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
+        """Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
         Parameters
         ----------
@@ -625,13 +618,13 @@ class Crops:
             A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
             and have columns corresponding to different crops.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
             crops are also added.
 
-        Notes
+        Notes:
         -----
         The function performs the following steps:
         1. Extracts crop names from the internal crop data dictionary.
@@ -640,7 +633,6 @@ class Crops:
         4. Filters and updates the original data with the computed averages.
         5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
         """
-
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
@@ -694,8 +686,7 @@ class Crops:
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
     ):
-        """
-        Sets up the cultivation costs for the model.
+        """Sets up the cultivation costs for the model.
 
         Parameters
         ----------
@@ -718,8 +709,7 @@ class Crops:
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
     ):
-        """
-        Sets up the crop prices for the model.
+        """Sets up the crop prices for the model.
 
         Parameters
         ----------

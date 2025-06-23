@@ -43,8 +43,7 @@ from .water_demand import WaterDemand
 
 class Hydrology(Data, Module):
     def __init__(self, model):
-        """
-        Init part of the initial part
+        """Init part of the initial part
         defines the mask map and the outlet points
         initialization of the hydrological modules
         """
@@ -122,8 +121,7 @@ class Hydrology(Data, Module):
         self.report(self, locals())
 
     def finalize(self) -> None:
-        """
-        Finalize the model
+        """Finalize the model
         """
         # finalize modflow model
         if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
