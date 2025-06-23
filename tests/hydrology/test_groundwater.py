@@ -1,5 +1,7 @@
 import math
+import os
 from copy import deepcopy
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -79,6 +81,10 @@ class DummyModel:
     def __init__(self):
         self.simulation_root_spinup = tmp_folder / "modflow"
         self.hydrology = DummyHydrology()
+
+    @property
+    def bin_folder(self) -> Path:
+        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
 
 default_params = {
