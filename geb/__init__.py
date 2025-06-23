@@ -5,13 +5,13 @@ __version__ = "1.0.0b5"
 import faulthandler
 import os
 import platform
-import sys
 from pathlib import Path
 
+import numpy as np
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
-from numba import config
+from numba import config, njit, prange, threading_layer
 
 from geb.workflows.io import fetch_and_save
 
@@ -29,6 +29,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
         version: version of TBB to use, default is "2022.1.0".
 
     """
+    version = "2022.1.0"
     bin_path: Path = Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin" / "tbb"
     tbb_uncompressed_folder: Path = Path("oneapi-tbb-" + version)
 
@@ -42,7 +43,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
         tbb_compressed_file: str = f"{tbb_platform}.zip"
     elif platform.system() == "Darwin":
         tbb_platform: str = "mac"
-        tbb_file: Path = Path("libtbb.12.dylib")
+        tbb_file: Path = Path("libtbb.12.15.dylib")
         tbb_compressed_file: str = f"{tbb_platform}.tgz"
     else:
         raise RuntimeError(f"Unsupported platform: {platform.system()}")
@@ -84,11 +85,28 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
 
     binding.load_library_permanently(str(tbb_library))
 
-    # test import
-    from numba.np.ufunc import tbbpool  # noqa: F401
-
     # set threading layer
     config.THREADING_LAYER = "tbb"
+
+    # test import
+    from numba.np.ufunc import tbbpool  # noqa: F401
+    from numba.np.ufunc.parallel import _check_tbb_version_compatible
+
+    _check_tbb_version_compatible()
+
+    @njit(parallel=True)
+    def test_threading_layer():
+        array = np.zeros(10, dtype=np.int32)
+        """Test function to check if TBB is loaded correctly."""
+        for i in prange(10):
+            array[i] = i
+        return array
+
+    test_threading_layer()
+
+    assert threading_layer() == "tbb", (
+        f"Expected threading layer to be 'tbb', but got {threading_layer()}"
+    )
 
 
 if __debug__:
