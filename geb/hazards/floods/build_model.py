@@ -96,8 +96,7 @@ def build_sfincs(
     derive_river_method=None,
     mask_flood_plains=False,
 ):
-    """
-    Build a SFINCS model for a given basin_id and configuration file.
+    """Build a SFINCS model for a given basin_id and configuration file.
 
     Parameters
     ----------

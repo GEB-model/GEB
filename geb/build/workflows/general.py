@@ -92,7 +92,7 @@ def pad_xy(
         The value used for padding. If None, nodata will be used if it is
         set, and np.nan otherwise.
 
-    Returns
+    Returns:
     -------
     :obj:`xarray.DataArray`:
         The padded object.
@@ -146,62 +146,6 @@ def pad_xy(
         }
     else:
         return superset
-
-
-def fetch_and_save(
-    url, file_path, overwrite=False, max_retries=3, delay=5, chunk_size=16384
-):
-    """
-    Fetches data from a URL and saves it to a temporary file, with a retry mechanism.
-    Moves the file to the destination if the download is complete.
-    Removes the temporary file if the download is interrupted.
-    """
-    if not overwrite and file_path.exists():
-        return True
-
-    attempts = 0
-    temp_file = None
-
-    while attempts < max_retries:
-        try:
-            print(f"Downloading {url} to {file_path}")
-            # Attempt to make the request
-            response = requests.get(url, stream=True)
-            response.raise_for_status()  # Raises HTTPError for bad status codes
-
-            # Create a temporary file
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
-
-            # Write to the temporary file
-            total_size = int(response.headers.get("content-length", 0))
-            progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-            for data in response.iter_content(chunk_size=chunk_size):
-                temp_file.write(data)
-                progress_bar.update(len(data))
-            progress_bar.close()
-
-            # Close the temporary file
-            temp_file.close()
-
-            # Move the temporary file to the destination
-            shutil.move(temp_file.name, file_path)
-
-            return True  # Exit the function after successful write
-
-        except requests.RequestException as e:
-            # Log the error
-            print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
-
-            # Remove the temporary file if it exists
-            if temp_file is not None and os.path.exists(temp_file.name):
-                os.remove(temp_file.name)
-
-            # Increment the attempt counter and wait before retrying
-            attempts += 1
-            time.sleep(delay)
-
-    # If all attempts fail, raise an exception
-    raise Exception("All attempts to download the file have failed.")
 
 
 def project_to_future(df, project_future_until_year, inflation_rates):

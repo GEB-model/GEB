@@ -22,9 +22,11 @@ from .sfincs_utils import (
 
 
 def get_topological_stream_order(rivers):
-    """Calculate the topological stream order for each river segment. The topological stream order is
-    calculated by following the river rivers upstream and each time finding the rivers that connect
-    to the previous segment."""
+    """Calculate the topological stream order for each river segment.
+
+    The topological stream order is calculated by following the river rivers upstream
+    and each time finding the rivers that connect to the previous segment.
+    """
     # find endpoints of each geometry
     startpoint = rivers.geometry.apply(lambda geom: geom.coords[0])
     endpoint = rivers.geometry.apply(lambda geom: geom.coords[-1])
@@ -52,7 +54,9 @@ def get_topological_stream_order(rivers):
 
 
 def assign_calculation_group(rivers):
-    """We want to run every river rivers independently of the other river rivers. Here, we make
+    """Assign calculation groups to river segments based on their topological stream order and endpoints.
+
+    We want to run every river rivers independently of the other river rivers. Here, we make
     two observations:
 
     1. If two river rivers have the same endpoint, they must performed in another run.
@@ -73,7 +77,7 @@ def assign_calculation_group(rivers):
     rivers : GeoDataFrame
         GeoDataFrame with the river rivers
 
-    Returns
+    Returns:
     -------
     GeoDataFrame
         GeoDataFrame with an additional column 'calculation_group' that assigns the rivers to a calculation group

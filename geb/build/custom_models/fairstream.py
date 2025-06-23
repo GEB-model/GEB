@@ -181,18 +181,20 @@ class Survey:
 
     def sample(
         self,
-        n,
-        evidence=[],
-        evidence_columns=None,
-        method="rejection",
-        show_progress=True,
+        n: int,
+        evidence: list = [],
+        evidence_columns: list = None,
+        method: str = "rejection",
+        show_progress: str = True,
     ):
-        """
+        """Sample from the Bayesian network.
+
         Args:
-            n (int): number of samples to generate
-            evidence (list): list of evidence values (i.e., all samples will have these values ...)
-            evidence_columns (list): list of evidence column names (i.e., ... for these columns)
-            method (str): sampling method, only 'rejection' is implemented
+            n: number of samples to generate
+            evidence: list of evidence values (i.e., all samples will have these values ...)
+            evidence_columns: list of evidence column names (i.e., ... for these columns)
+            method: sampling method, only 'rejection' is implemented.
+            show_progress: whether to show progress bar
         """
         assert method == "rejection", "Only rejection sampling is implemented"
         if show_progress:

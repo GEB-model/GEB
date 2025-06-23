@@ -160,10 +160,9 @@ class Hydrography:
         pass
 
     def setup_mannings(self) -> None:
-        """
-        Sets up the Manning's coefficient for the model.
+        """Sets up the Manning's coefficient for the model.
 
-        Notes
+        Notes:
         -----
         This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
         and topography of the grid. It first calculates the upstream area of each cell in the grid using the
@@ -449,10 +448,9 @@ class Hydrography:
         command_areas=None,
         custom_reservoir_capacity=None,
     ):
-        """
-        Sets up the waterbodies for GEB.
+        """Sets up the waterbodies for GEB.
 
-        Notes
+        Notes:
         -----
         This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
         specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model

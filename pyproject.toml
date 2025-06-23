@@ -54,10 +54,9 @@ dependencies = [
     "ruff",
     "s3fs>=2023.6.0",
     "SALib>=1.4.8", # for sensitivity analysis
-    "scipy>=1.14.0",
+    "scipy>=1.14.0,<1.16",  # update blocked until https://github.com/statsmodels/statsmodels/issues/9584 is fixed
     "setuptools>=75.8.0",
     "statsmodels>=0.14.4",
-    "tbb>=2022.0.0",
     "tqdm>=4.66.1",
     "xarray>=2025.3.0",
     "xarray-regrid[accel]>=0.4.1",
@@ -81,6 +80,7 @@ classifiers = [
 required-environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'win32'",
+    "sys_platform == 'darwin'"
 ]
 
 [dependency-groups]
@@ -115,11 +115,26 @@ plantfate = [
 
 [tool.ruff]
 target-version = "py313"
-lint.extend-select = ["I"]
+
+[tool.ruff.lint]
+select = ["D"]
+extend-select = ["I"]
+ignore = [
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D107"
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
 combine-as-imports = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.pyright]
 include = ["geb"]

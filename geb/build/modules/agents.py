@@ -19,7 +19,7 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
-from geb.workflows.io import get_window
+from geb.workflows.io import fetch_and_save, get_window
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
@@ -30,7 +30,6 @@ from ..workflows.conversions import (
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
 from ..workflows.general import (
     clip_with_grid,
-    fetch_and_save,
 )
 from ..workflows.population import load_GLOPOP_S
 
@@ -40,10 +39,9 @@ class Agents:
         pass
 
     def setup_water_demand(self, ssp):
-        """
-        Sets up the water demand data for GEB.
+        """Sets up the water demand data for GEB.
 
-        Notes
+        Notes:
         -----
         This method sets up the water demand data for GEB. It retrieves the domestic, industry, and
         livestock water demand data from the specified data catalog and sets it as forcing data in the model. The domestic
@@ -57,7 +55,6 @@ class Agents:
 
         The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
         """
-
         self.logger.info("Setting up municipal water demands")
 
         municipal_water_demand = self.data_catalog.get_dataframe(
@@ -225,10 +222,9 @@ class Agents:
         )
 
     def setup_economic_data(self):
-        """
-        Sets up the economic data for GEB.
+        """Sets up the economic data for GEB.
 
-        Notes
+        Notes:
         -----
         This method sets up the lending rates and inflation rates data for GEB. It first retrieves the
         lending rates and inflation rates data from the World Bank dataset using the `get_geodataframe` method of the
@@ -411,8 +407,7 @@ class Agents:
         start_year: int,
         end_year: int,
     ):
-        """
-        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+        """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
         Parameters
         ----------
@@ -427,7 +422,7 @@ class Agents:
         end_year : int
             The end year for the well prices and upkeep prices.
 
-        Notes
+        Notes:
         -----
         This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
         retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
@@ -493,8 +488,7 @@ class Agents:
         WHY_30: float,
         reference_year: int,
     ):
-        """
-        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+        """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
         Parameters
         ----------
@@ -505,7 +499,7 @@ class Agents:
         reference_year : int
             The reference year for the well prices and upkeep prices.
 
-        Notes
+        Notes:
         -----
         This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
         retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
@@ -618,8 +612,7 @@ class Agents:
         start_year: int,
         end_year: int,
     ):
-        """
-        Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
+        """Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
 
         Parameters
         ----------
@@ -633,9 +626,8 @@ class Agents:
         end_year : int
             The end year for the drip_irrigation prices and upkeep prices.
 
-        Notes
+        Notes:
         -----
-
         The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
         resulting prices are stored in the dictionaries with the region ID as the key.
 
@@ -682,8 +674,7 @@ class Agents:
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
     def setup_farmers(self, farmers):
-        """
-        Sets up the farmers data for GEB.
+        """Sets up the farmers data for GEB.
 
         Parameters
         ----------
@@ -694,7 +685,7 @@ class Agents:
         n_seasons : int, optional
             The number of seasons to simulate.
 
-        Notes
+        Notes:
         -----
         This method sets up the farmers data for GEB. It first retrieves the region data from the
         `regions` and `subgrid` grids. It then creates a `farms` grid with the same shape as the
@@ -796,15 +787,14 @@ class Agents:
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
     def setup_farmers_from_csv(self, path=None):
-        """
-        Sets up the farmers data for GEB from a CSV file.
+        """Sets up the farmers data for GEB from a CSV file.
 
         Parameters
         ----------
         path : str
             The path to the CSV file containing the farmer data.
 
-        Notes
+        Notes:
         -----
         This method sets up the farmers data for GEB from a CSV file. It first reads the farmer data from
         the CSV file using the `pandas.read_csv` method.
@@ -824,8 +814,7 @@ class Agents:
         data_source="lowder",
         size_class_boundaries=None,
     ):
-        """
-        Sets up the farmers for GEB.
+        """Sets up the farmers for GEB.
 
         Parameters
         ----------
@@ -838,7 +827,7 @@ class Agents:
             Default is None.
 
 
-        Notes
+        Notes:
         -----
         This method sets up the farmers for GEB. This is a simplified method that generates an example set of agent data.
         It first calculates the number of farmers and their farm sizes for each region based on the agricultural data for
@@ -1954,8 +1943,7 @@ class Agents:
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
     def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
-        """
-        Get assets from OpenStreetMap (OSM) data.
+        """Get assets from OpenStreetMap (OSM) data.
 
         Parameters
         ----------

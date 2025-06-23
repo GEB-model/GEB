@@ -183,8 +183,8 @@ class Observations:
         max_spatial_difference_degrees: float = 0.1,
         custom_river_stations: None = None,
     ) -> None:
-        """
-        setup_discharge_observations is responsible for setting up discharge observations from the Q_obs dataset.
+        """setup_discharge_observations is responsible for setting up discharge observations from the Q_obs dataset.
+
         It clips Q_obs to the basin area, and snaps the Q_obs locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in Q_obs.
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
         Additional stations can be added as csv files in the custom_stations folder in the GEB data catalog.
@@ -198,7 +198,6 @@ class Observations:
         custom_river_stations : str, optional
             Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
         """
-
         # load data
         upstream_area = self.grid[
             "routing/upstream_area"
@@ -220,8 +219,7 @@ class Observations:
 
         # add external stations to Q_obs
         def add_station_Q_obs(station_name, station_coords, station_dataframe):
-            """This function adds a new station to the Q_obs dataset (in this case GRDC). It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4)"""
-
+            """This function adds a new station to the Q_obs dataset (in this case GRDC). It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4)."""
             # Convert the pandas DataFrame to an xarray Dataset
             new_station_ds = xr.Dataset(
                 {
@@ -326,9 +324,7 @@ class Observations:
 
         # Clip the Q_obs dataset to the region shapefile
         def clip_Q_obs(Q_obs_merged, region_shapefile):
-            """
-            Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries
-            """
+            """Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries."""
             # Convert Q_obs points to GeoDataFrame
             Q_obs_gdf = gpd.GeoDataFrame(
                 {
@@ -404,7 +400,7 @@ class Observations:
 
             # find river section closest to the Q_obs station
             def get_distance_to_stations(rivers):
-                """This function returns the distance of each river section to the station"""
+                """This function returns the distance of each river section to the station."""
                 return rivers.distance(Q_obs_location).values.item()
 
             rivers["station_distance"] = rivers.geometry.apply(
@@ -415,8 +411,8 @@ class Observations:
             def select_river_segment(
                 max_uparea_difference_ratio, max_spatial_difference_degrees
             ):
-                """
-                This function selects the closest river segment to the Q_obs station based on the spatial distance.
+                """This function selects the closest river segment to the Q_obs station based on the spatial distance.
+
                 It returns an error if the spatial distance is larger than the max_spatial_difference_degrees. If the difference between the upstream area from MERIT (from the river centerlines)
                 and the Q_obs upstream area is larger than the max_uparea_difference_ratio, it will select the closest river segment within the correct upstream area range.
                 """

@@ -137,8 +137,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             return None
 
     def step(self) -> None:
-        """
-        Forward the model by the given the number of steps.
+        """Forward the model by the given the number of steps.
 
         Args:
             step_size: Number of steps the model should take. Can be integer or string `day`, `week`, `month`, `year`, `decade` or `century`.

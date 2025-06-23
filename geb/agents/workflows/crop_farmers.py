@@ -18,8 +18,9 @@ def get_farmer_HRUs(
     """Gets indices of field for given farmer.
 
     Args:
-        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
         field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
+        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+        farmer_index: Index of the farmer for which to get the field indices.
 
     Returns:
         field_indices_for_farmer: the indices of the fields for the given farmer.
@@ -77,8 +78,7 @@ def get_farmer_groundwater_depth(
 def get_deficit_between_dates(
     cumulative_water_deficit_m3, farmer, start_index, end_index
 ):
-    """
-    Get the water deficit between two dates for a farmer.
+    """Get the water deficit between two dates for a farmer.
 
     Parameters
     ----------
@@ -91,7 +91,7 @@ def get_deficit_between_dates(
     end_index : int
         End day of cumulative water deficit calculation (index-based; Jan 1 == 0).
 
-    Returns
+    Returns:
     -------
     float
         Water deficit in m3 between the two dates.
@@ -126,8 +126,7 @@ def get_future_deficit(
     potential_irrigation_consumption_farmer_m3: float,
     reset_day_index=0,
 ):
-    """
-    Get the future water deficit for a farmer.
+    """Get the future water deficit for a farmer.
 
     Parameters
     ----------
@@ -153,7 +152,7 @@ def get_future_deficit(
         deficit is calculated up to Dec 31. When the reset day index is 0, the deficit is
         calculated up to Jan 1. Default is 0.
 
-    Returns
+    Returns:
     -------
     float
         Future water deficit in m3 for the farmer in the growing season.
@@ -469,25 +468,7 @@ def get_gross_irrigation_demand_m3(
     max_paddy_water_level: np.ndarray,
     minimum_effective_root_depth: float,
 ) -> npt.NDArray[np.float32]:
-    """
-    This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
-
-    Args:
-        activation_order: Order in which the agents are activated. Agents that are activated first get a first go at extracting water, leaving less water for other farmers.
-        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
-        field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
-        irrigation_efficiency: Boolean array that specifies whether the specific farmer is efficient with water use.
-        irrigated: Array that specifies whether a farm is irrigated.
-        well_irrigated: Array that specifies whether a farm is groundwater irrigated.
-        cell_area: The area of each subcell in m2.
-        HRU_to_grid: Array to map the index of each subcell to the corresponding cell.
-        crop_map: Map of the currently growing crops.
-        totalPotIrrConsumption: Potential irrigation consumption.
-        available_channel_storage_m3: Water available for irrigation from channels.
-        groundwater_head: Groundwater head.
-        available_groundwater_m3: Water available for irrigation from groundwater.
-        available_reservoir_storage_m3: Water available for irrigation from reservoirs.
-        command_areas: Command areas associated with reservoirs (i.e., which areas can access water from which reservoir.)
+    """This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
 
     Returns:
         channel_abstraction_m3_by_farmer: Channel abstraction by farmer in m3.
@@ -498,7 +479,6 @@ def get_gross_irrigation_demand_m3(
         irrigation_return_flow_m: Return flow in meters.
         irrigation_evaporation_m: Evaporated irrigation water in meters.
     """
-
     n_hydrological_response_units = cell_area.size
     gross_potential_irrigation_m3 = np.zeros(
         n_hydrological_response_units, dtype=np.float32
@@ -740,19 +720,35 @@ def plant(
     interest_rate: np.ndarray,
     farmers_going_out_of_business: bool,
 ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int64]]:
-    """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
+    """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the harvest age of the plant.
 
     Args:
         n: Number of farmers.
-        start_day_per_month: Starting day of each month of year.
-        current_day: Current day.
-        crop: Crops grown by each farmer.
+        day_index: Current day index (0-indexed; Jan 1 == 0).
+        crop_calendar: Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
+            Each crop is a list of [crop_type, planting_day, growing_days, crop_year_index].
+            Planting day is 0-indexed (Jan 1 == 0).
+            Growing days is the number of days the crop grows.
+            Crop year index is the index of the year in the crop rotation.
+        current_crop_calendar_rotation_year_index: Current crop calendar rotation year index for each farmer.
+        crop_map: Map of the currently growing crops.
+        crop_harvest_age_days: Array that contains the harvest age of each field in days.
+        cultivation_cost: Cultivation cost per farmer per crop in m2. If this is a single value, it is used for all farmers and crops.
+        region_ids_per_farmer: Region IDs for each farmer.
+            This is used to determine the cultivation cost for each farmer.
         field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
         field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
         field_size_per_farmer: Field size per farmer in m2
+        all_loans_annual_cost: Annual cost of all loans for each farmer and crop.
+            This is a 3D array with shape (n, 1, 4), where n is the number of farmers.
+            The first dimension is the farmer, the second dimension is the crop, and the third dimension is the loan type.
+        loan_tracker: Loan tracker for each farmer and crop. This is a 3D array with shape (n, 1, 4).
+        interest_rate: Interest rate for each farmer.
+        farmers_going_out_of_business: If True, farmers are going out of business. Not implemented yet.
 
     Returns:
         plant: Subarray map of what crops are planted this day.
+        farmers_selling_land: Indices of farmers selling land (currently always empty).
     """
     assert farmers_going_out_of_business is False, (
         "Farmers going out of business not implemented."
@@ -888,9 +884,7 @@ def crop_profit_difference_njit_parallel(
     p_droughts,
     past_window,
 ):
-    """
-    Parallelized only over unique crop groups; everything else follows your original logic exactly.
-    """
+    """Parallelized only over unique crop groups; everything else follows your original logic exactly."""
     n_groups = len(unique_crop_groups)
     n_calendars = len(unique_crop_calendars)
     n_rotation = unique_crop_calendars.shape[1]
@@ -1009,7 +1003,8 @@ def compute_premiums_and_best_contracts_numba(
     n_sims,
     seed=42,
 ):
-    """
+    """Computes the best insurance contracts for each agent based on GEV parameters, historical SPEI data, and losses.
+
     For each agent, loop once over (strike, exit):
     1) Monte Carlo → expected_ratio
     2) Historical SPEI → sum_ratio_sq, sum_ratio_loss )
@@ -1017,7 +1012,7 @@ def compute_premiums_and_best_contracts_numba(
                             and RMSE via quadratic form,
         tracking the (strike_idx, exit_idx, rate_idx) that minimizes RMSE.
 
-    Returns
+    Returns:
     -------
     best_strike_idx : (n_agents,)  index into strike_vals
     best_exit_idx   : (n_agents,)  index into exit_vals

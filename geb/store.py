@@ -11,6 +11,8 @@ from .HRUs import load_geom
 
 
 class DynamicArray:
+    """A dynamic array almost identical to a Numpy array, but that can grow and shrink in size."""
+
     __slots__: list = ["_data", "_n", "_extra_dims_names"]
 
     def __init__(
@@ -361,6 +363,11 @@ class DynamicArray:
 
 
 class Bucket:
+    """A class to manage the storage of model data in a bucket.
+
+    Each bucket is associated with a specific part of the model, usually a Module.
+    """
+
     def __init__(self):
         pass
 
@@ -463,6 +470,11 @@ class Bucket:
 
 
 class Store:
+    """A class to manage the storage of model data in buckets.
+
+    This class is use to store and restore the model's state in a structured way.
+    """
+
     def __init__(self, model):
         self.model = model
         self.buckets = {}

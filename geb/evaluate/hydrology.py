@@ -53,10 +53,10 @@ class Hydrology:
 
     def evaluate_discharge(self, correct_Q_obs=False):
         """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
+
         Correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the diff in upstream area
         between the Q_obs station and the discharge from GEB.
         """
-
         #  create folders
         eval_plot_folder: Path = (
             Path(self.output_folder_evaluate) / "discharge" / "plots"
@@ -109,7 +109,7 @@ class Hydrology:
             ].Q_obs_to_GEB_upstream_area_ratio
 
             def create_validation_df():
-                """create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station"""
+                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station."""
                 # select data closest to meerssen point
                 GEB_discharge_station = GEB_discharge.isel(
                     x=snapped_xy_coords[0], y=snapped_xy_coords[1]
@@ -149,8 +149,7 @@ class Hydrology:
             else:
 
                 def calculate_validation_metrics():
-                    """calculate the validation metrics for the current station"""
-
+                    """Calculate the validation metrics for the current station."""
                     # calculate kupta coefficient
                     y_true = validation_df["Q_obs"].values
                     y_pred = validation_df["Q_sim"].values
@@ -169,8 +168,7 @@ class Hydrology:
                 KGE, NSE, R = calculate_validation_metrics()
 
                 def plot_validation_graphs(ID):
-                    """plot the validation results for the current station"""
-
+                    """Plot the validation results for the current station."""
                     # scatter plot
                     fig, ax = plt.subplots()
                     ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
@@ -285,8 +283,7 @@ class Hydrology:
 
         # plot the evaluation metrics (R, KGE, NSE) on a 1x3 subplot
         def plot_validation_map():
-            """plot the validation results on a map"""
-
+            """Plot the validation results on a map."""
             fig, ax = plt.subplots(1, 3, figsize=(20, 10))
 
             # Plot evaluation metrics without default colorbars
@@ -426,7 +423,6 @@ class Hydrology:
 
         def create_folium_map(evaluation_gdf):
             """Create a Folium map with evaluation results and station markers."""
-
             # Create a Folium map centered on the mean coordinates of the stations
             map_center = [
                 evaluation_gdf.geometry.y.mean(),

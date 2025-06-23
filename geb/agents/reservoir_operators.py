@@ -286,7 +286,8 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         daily_substeps,
     ):
-        """
+        """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release.
+
         Parameters
         ----------
 
@@ -351,9 +352,7 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         n_monthly_substeps,
     ):
-        """
-        https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py
-        """
+        """https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py."""
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
         M = 0.1
@@ -417,15 +416,15 @@ class ReservoirOperators(AgentBaseClass):
     def get_flood_control_reservoir_release(
         self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha
     ):
-        """
-        Computes release from flood control reservoirs
+        """Computes release from flood control reservoirs.
+
         cpa = reservoir capacity                                    (m^3)
         cond_ppose = array containing irrigation reservoir cells
         based on selection mask
         qin = inflow                                                (m^3/s)
         Sini = initial storage                                      (m^3)
         mtifl = annual mean total annual inflow                     (m^3/s)
-        alpha = reservoir capacity reduction factor                 (dimensionless)
+        alpha = reservoir capacity reduction factor                 (dimensionless).
         """
         # flood Reservoirs
         # initialization

@@ -20,15 +20,14 @@ class LandSurface:
         pass
 
     def setup_cell_area(self) -> None:
-        """
-        Sets up the cell area map for the model.
+        """Sets up the cell area map for the model.
 
-        Raises
+        Raises:
         ------
         ValueError
             If the grid mask is not available.
 
-        Notes
+        Notes:
         -----
         This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
         retrieves the grid mask from the `mask` attribute of the grid, and then calculates the cell area
@@ -91,8 +90,10 @@ class LandSurface:
             {"name": "gebco"},
         ],
     ):
-        """For configuration of DEMs parameters, see
-        https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html
+        """Sets up the elevation data for the model.
+
+        For configuration of DEMs parameters, see
+        https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html.
         """
         if not DEMs:
             DEMs = []
@@ -161,9 +162,10 @@ class LandSurface:
         ISO3_column="GID_0",
         land_cover="esa_worldcover_2021_v200",
     ):
-        """
-        Sets up the (administrative) regions and land use data for GEB. The regions can be used for multiple purposes,
-        for example for creating the agents in the model, assigning unique crop prices and other economic variables
+        """Sets up the (administrative) regions and land use data for GEB.
+
+        The regions can be used for multiple purposes, for example for creating the
+        agents in the model, assigning unique crop prices and other economic variables
         per region and for aggregating the results.
 
         Parameters
@@ -174,7 +176,7 @@ class LandSurface:
             The name of the column in the region database that contains the unique region ID. Default is 'UID',
             which is the unique identifier for the GADM database.
 
-        Notes
+        Notes:
         -----
         This method sets up the regions and land use data for GEB. It first retrieves the region data from
         the specified region database and sets it as a geometry in the model. It then pads the subgrid to cover the entire
@@ -315,15 +317,14 @@ class LandSurface:
         self,
         land_cover="esa_worldcover_2021_v200",
     ) -> None:
-        """
-        Sets up the land use parameters for the model.
+        """Sets up the land use parameters for the model.
 
         Parameters
         ----------
         interpolation_method : str, optional
             The interpolation method to use when interpolating the land use parameters. Default is 'nearest'.
 
-        Notes
+        Notes:
         -----
         This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
         interpolating the data to the model grid. It first retrieves the land use dataset from the `data_catalog`, and
@@ -439,13 +440,12 @@ class LandSurface:
             )
 
     def setup_soil_parameters(self) -> None:
-        """
-        Sets up the soil parameters for the model.
+        """Sets up the soil parameters for the model.
 
         Parameters
         ----------
 
-        Notes
+        Notes:
         -----
         This method sets up the soil parameters for the model by retrieving soil data from the CWATM dataset and interpolating
         the data to the model grid. It first retrieves the soil dataset from the `data_catalog`, and
@@ -461,7 +461,6 @@ class LandSurface:
         form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
         with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
-
         self.logger.info("Setting up soil parameters")
         ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 

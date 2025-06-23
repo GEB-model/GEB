@@ -117,8 +117,7 @@ def get_soil_water_potential(
     bubbling_pressure_cm,
     minimum_effective_saturation=np.float32(0.01),
 ):
-    """
-    Calculates the soil water potential (capillary suction) using the van Genuchten model.
+    """Calculates the soil water potential (capillary suction) using the van Genuchten model.
 
     Note that theta, thetar and thetas can also be given as the height of the water column
     in the soil layer as w, wres and ws since only there relative size is used. Of course
@@ -165,22 +164,19 @@ def get_soil_water_potential(
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
-    """
-    Calculates the soil moisture content at a given soil water potential (capillary suction)
-    using the van Genuchten model.
+    """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
 
-    Parameters
-    ----------
-    capillary_suction : np.ndarray
-        The soil water potential (capillary suction) (m)
-    bubbling_pressure_cm : np.ndarray
-        The bubbling pressure (cm)
-    thetas : np.ndarray
-        The saturated soil moisture content (m³/m³)
-    thetar : np.ndarray
-        The residual soil moisture content (m³/m³)
-    lambda_ : np.ndarray
-        The van Genuchten parameter lambda (1/m)
+    Args:
+        capillary_suction : np.ndarray
+            The soil water potential (capillary suction) (m)
+        bubbling_pressure_cm : np.ndarray
+            The bubbling pressure (cm)
+        thetas : np.ndarray
+            The saturated soil moisture content (m³/m³)
+        thetar : np.ndarray
+            The residual soil moisture content (m³/m³)
+        lambda_ : np.ndarray
+            The van Genuchten parameter lambda (1/m)
     """
     alpha = np.float32(1) / bubbling_pressure_cm
     n = lambda_ + np.float32(1)
@@ -195,11 +191,12 @@ def get_soil_moisture_at_pressure(
 
 @njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(p, wfc, wwp):
-    """
-    "The critical soil moisture content is defined as the quantity of stored soil moisture below
+    """Calculate the critical soil moisture content.
+
+    The critical soil moisture content is defined as the quantity of stored soil moisture below
     which water uptake is impaired and the crop begins to close its stomata. It is not a fixed
     value. Restriction of water uptake due to water stress starts at a higher water content
-    when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86)
+    when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86).
 
     A higher p value means that the critical soil moisture content is higher, i.e. the plant can
     extract water from the soil at a lower soil moisture content. Thus when p is 1 the critical
@@ -213,9 +210,10 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
 def get_fraction_easily_available_soil_water(
     crop_group_number, potential_evapotranspiration
 ):
-    """
-    Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
-    following Van Diepen et al., 1988: WOFOST 6.0, p.87
+    """Calculate the fraction of easily available soil water.
+
+    Calculation is based on crop group number and potential evapotranspiration
+    following Van Diepen et al., 1988: WOFOST 6.0, p.87.
 
     Parameters
     ----------
@@ -225,7 +223,7 @@ def get_fraction_easily_available_soil_water(
     potential_evapotranspiration : np.ndarray
         Potential evapotranspiration in m
 
-    Returns
+    Returns:
     -------
     np.ndarray
         The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
@@ -303,19 +301,17 @@ def get_available_water_infiltration(
     EWRef,
     topwater,
 ):
-    """
-    Update the soil water storage based on the water balance calculations.
+    """Update the soil water storage based on the water balance calculations.
 
     Parameters
     ----------
     wwp : np.ndarray
 
-    Notes
+    Notes:
     -----
     This function requires N_SOIL_LAYERS to be defined in the global scope. Which can help
     the compiler to optimize the code better.
     """
-
     available_water_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
     open_water_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
     for i in prange(land_use_type.size):
@@ -393,8 +389,7 @@ def evapotranspirate(
     mask,
     mask_transpiration,
 ):
-    """
-    Evapotranspiration calculation for the soil module.
+    """Evapotranspiration calculation for the soil module.
 
     Parameters
     ----------
@@ -636,26 +631,15 @@ def vertical_water_transport(
     topwater,
     soil_layer_height,
 ):
-    """
-    Parameters
-    ----------
-    preferential_flow_constant : float
-        The preferential flow constant. Because effective saturation is always below 1, a higher
-        preferential flow constant will result in less preferential flow.
+    """Simulates vertical transport of water in the soil using Darcy's equation.
 
-    Simulates vertical transport of water in the soil using Darcy's equation,
-    combining infiltration, percolation, and capillary rise into a single process.
-    Considers soil water potential and varying soil layer heights.
-
-    Returns
-    -------
-    preferential_flow : np.ndarray
-        The preferential flow of water through the soil
-    direct_runoff : np.ndarray
-        The direct runoff of water from the soil
-    groundwater_recharge : np.ndarray
-        The recharge of groundwater from the soil
-
+    Returns:
+        preferential_flow : np.ndarray
+            The preferential flow of water through the soil
+        direct_runoff : np.ndarray
+            The direct runoff of water from the soil
+        groundwater_recharge : np.ndarray
+            The recharge of groundwater from the soil
     """
     # Initialize variables
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
@@ -792,8 +776,7 @@ def vertical_water_transport(
 
 
 def thetas_toth(soil_organic_carbon, bulk_density, is_top_soil, clay, silt):
-    """
-    Determine saturated water content [m3/m3].
+    """Determine saturated water content [m3/m3].
 
     Based on:
     Tóth, B., Weynants, M., Nemes, A., Makó, A., Bilas, G., and Tóth, G.:
@@ -811,7 +794,7 @@ def thetas_toth(soil_organic_carbon, bulk_density, is_top_soil, clay, silt):
     is_top_soil: bool
         top soil flag.
 
-    Returns
+    Returns:
     -------
     thetas : float
         saturated water content [cm3/cm3].
@@ -834,8 +817,7 @@ def thetas_toth(soil_organic_carbon, bulk_density, is_top_soil, clay, silt):
 
 
 def thetar_brakensiek(sand, clay, thetas):
-    """
-    Determine residual water content [m3/m3].
+    """Determine residual water content [m3/m3].
 
     Thetas is equal to porosity (Φ) in this case.
 
@@ -855,7 +837,7 @@ def thetar_brakensiek(sand, clay, thetas):
     thetas : float
         saturated water content [m3/m3].
 
-    Returns
+    Returns:
     -------
     thetar : float
         residual water content [m3/m3].
@@ -894,8 +876,7 @@ def get_bubbling_pressure(clay, sand, thetas):
 
 
 def get_pore_size_index_brakensiek(sand, thetas, clay):
-    """
-    Determine Brooks-Corey pore size distribution index [-].
+    """Determine Brooks-Corey pore size distribution index [-].
 
     Thetas is equal to porosity (Φ) in this case.
 
@@ -914,7 +895,7 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
     clay: float
         clay percentage [%].
 
-    Returns
+    Returns:
     -------
     poresizeindex : float
         pore size distribution index [-].
@@ -939,8 +920,7 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
 
 
 def kv_brakensiek(thetas, clay, sand):
-    """
-    Determine saturated hydraulic conductivity kv [m/day].
+    """Determine saturated hydraulic conductivity kv [m/day].
 
     Based on:
       Brakensiek, D.L., Rawls, W.J.,and Stephenson, G.R.: Modifying scs hydrologic
@@ -956,7 +936,7 @@ def kv_brakensiek(thetas, clay, sand):
     sand: float
         sand percentage [%].
 
-    Returns
+    Returns:
     -------
     kv : float
         saturated hydraulic conductivity [m/day].
@@ -1455,8 +1435,7 @@ class Soil(Module):
         natural_available_water_infiltration,
         actual_irrigation_consumption,
     ):
-        """
-        Dynamic part of the soil module
+        """Dynamic part of the soil module.
 
         For each of the land cover classes the vertical water transport is simulated
         Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow, preferential flow
