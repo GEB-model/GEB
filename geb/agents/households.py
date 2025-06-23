@@ -163,7 +163,8 @@ class Households(AgentBaseClass):
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
     def assign_household_attributes(self):
-        """Household locations are already sampled from population map in GEBModel.setup_population()
+        """Household locations are already sampled from population map in GEBModel.setup_population().
+
         These are loaded in the spinup() method.
         Here we assign additional attributes (dummy data) to the households that are used in the decision module.
         """
@@ -318,7 +319,9 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def get_flood_risk_information_damage_scanner(self):
-        """Initiate flood risk information for each household. This information is used in the decision module.
+        """Initiate flood risk information for each household.
+
+        This information is used in the decision module.
         For now also only dummy data is created.
         """
         # preallocate array for damages

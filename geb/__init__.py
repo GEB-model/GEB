@@ -18,8 +18,7 @@ load_dotenv()
 
 
 def load_numba_threading_layer():
-    """Load TBB shared library, a very efficient threading layer
-    for parallelizing CPU-bound tasks in Numba-compiled functions.
+    """Load TBB shared library, a very efficient threading layer for parallelizing CPU-bound tasks in Numba-compiled functions.
 
     However, there is some trouble finding the shared libraries.
     Therefore, we load the shared library manually and check

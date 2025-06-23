@@ -454,7 +454,9 @@ class Crops:
     def donate_and_receive_crop_prices(
         self, donor_data, recipient_regions, GLOBIOM_regions
     ):
-        """If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
+        """Gets crop prices from other to fill missing data.
+
+        If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
         this gives issues. This function adjusts crop data for those countries by filling in missing values using data from nearby regions
         and PPP conversion rates.
 
@@ -550,6 +552,7 @@ class Crops:
 
     def assign_crop_price_inflation(self, costs, unique_regions):
         """Determines the price inflation of all crops in the region and adds a column that describes this inflation.
+
         If there is no data for a certain year, the inflation rate is taken from the socioeconomics data.
 
         Parameters

@@ -12,10 +12,8 @@ def create_farms_numba(cultivated_land, ids, farm_sizes):
 
     Args:
         cultivated_land: map of cultivated land.
-        gt: geotransformation of cultivated land map.
-        farm_size_probabilities: map of the probabilities for the various farm sizes to exist in a specific cell.
-        farm_size_choices: Lower and upper bound of the farm size correlating to the farm size probabilities. First dimension must be equal to number of layers of farm_size_probabilities. Size of the second dimension is 2, to represent the lower and upper bound.
-        cell_area: map of cell areas for all cells.
+        ids: unique IDs of the farmers.
+        farm_sizes: map of farm sizes. The size of the first dimension must be equal to the number of layers in `farm_size_probabilities`.
 
     Returns:
         farms: map of farms. Each unique ID is land owned by a single farmer. Non-cultivated land is represented by -1.

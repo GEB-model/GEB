@@ -286,7 +286,9 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         daily_substeps,
     ):
-        """Parameters
+        """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release.
+
+        Parameters
         ----------
 
         minimum_release_m3 : float
@@ -414,7 +416,8 @@ class ReservoirOperators(AgentBaseClass):
     def get_flood_control_reservoir_release(
         self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha
     ):
-        """Computes release from flood control reservoirs
+        """Computes release from flood control reservoirs.
+
         cpa = reservoir capacity                                    (m^3)
         cond_ppose = array containing irrigation reservoir cells
         based on selection mask

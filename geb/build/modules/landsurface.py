@@ -90,7 +90,9 @@ class LandSurface:
             {"name": "gebco"},
         ],
     ):
-        """For configuration of DEMs parameters, see
+        """Sets up the elevation data for the model.
+
+        For configuration of DEMs parameters, see
         https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html.
         """
         if not DEMs:
@@ -160,8 +162,10 @@ class LandSurface:
         ISO3_column="GID_0",
         land_cover="esa_worldcover_2021_v200",
     ):
-        """Sets up the (administrative) regions and land use data for GEB. The regions can be used for multiple purposes,
-        for example for creating the agents in the model, assigning unique crop prices and other economic variables
+        """Sets up the (administrative) regions and land use data for GEB.
+
+        The regions can be used for multiple purposes, for example for creating the
+        agents in the model, assigning unique crop prices and other economic variables
         per region and for aggregating the results.
 
         Parameters

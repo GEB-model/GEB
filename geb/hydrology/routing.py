@@ -181,9 +181,7 @@ class Router:
         self.Q_prev = Q_initial
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
-        """Get the total storage of the river network, which is the sum of the
-        available storage in each cell.
-        """
+        """Get the total storage of the river network, which is the sum of the available storage in each cell."""
         return self.get_available_storage(maximum_abstraction_ratio=1.0)
 
 
@@ -278,8 +276,7 @@ class KinematicWave(Router):
     def get_available_storage(
         self, maximum_abstraction_ratio: float = 0.9
     ) -> npt.NDArray[np.float32]:
-        """Get the available storage of the river network, which is the sum of the
-        available storage in each cell.
+        """Get the available storage of the river network, which is the sum of the available storage in each cell.
 
         Args:
             maximum_abstraction_ratio: he maximum abstraction ratio, default is 0.9.

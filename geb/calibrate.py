@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Calibration tool for Hydrological models
-using a distributed evolutionary algorithms in python
-DEAP library
+"""Calibration tool for Hydrological models.
+
+Uses a distributed evolutionary algorithms in python DEAP library
 https://github.com/DEAP/deap/blob/master/README.md.
 
 Félix-Antoine Fortin, François-Michel De Rainville, Marc-André Gardner, Marc Parizeau and Christian Gagné, "DEAP: Evolutionary Algorithms Made Easy", Journal of Machine Learning Research, vol. 13, pp. 2171-2175, jul 2012
@@ -42,12 +42,14 @@ from sklearn.model_selection import KFold
 
 
 def KGE_calculation(s, o):
-    """Kling Gupta Efficiency (Kling et al., 2012, http://dx.doi.org/10.1016/j.jhydrol.2012.01.011)
-    input:
-            s: simulated
-            o: observed
-    output:
-            KGE: Kling Gupta Efficiency.
+    """Kling Gupta Efficiency (Kling et al., 2012, http://dx.doi.org/10.1016/j.jhydrol.2012.01.011).
+
+    Args:
+        s: simulated
+        o: observed
+
+    Returns:
+        KGE: Kling Gupta Efficiency.
     """
     B = np.mean(s) / np.mean(o)
     y = (np.std(s) / np.mean(s)) / (np.std(o) / np.mean(o))
@@ -1313,7 +1315,9 @@ def export_front_history(config, ngen, effmax, effmin, effstd, effavg):
 
 @handle_ctrl_c
 def run_model(individual, config, gauges, observed_streamflow):
-    """This function takes an individual from the population and runs the model
+    """Run the model for an individual in the population.
+
+    This function takes an individual from the population and runs the model
     with the corresponding parameters in a subfolder. Then it returns the
     fitness scores (KGE, irrigation wells score, etc.) for that run.
     """
@@ -1394,8 +1398,9 @@ def run_model(individual, config, gauges, observed_streamflow):
             lock.release()
 
             def run_model_scenario(run_command):
-                """Run the shell command for spinup or run scenario,
-                redirecting stdout/stderr to their own log files.
+                """Run the shell command for spinup or run scenario.
+
+                stdout/stderr are redirected to their own log files.
                 """
                 env = os.environ.copy()
                 # Already set globally, but we can re-ensure here:

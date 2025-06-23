@@ -385,6 +385,7 @@ def get_model_builder_class(custom_model):
 
 def customize_data_catalog(data_catalogs, data_root=None):
     """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
+
     This enables reading the data catalog from a different location than the location of the yml-file
     without the need to specify root in the meta of the data catalog.
     """

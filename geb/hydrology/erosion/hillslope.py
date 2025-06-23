@@ -152,15 +152,14 @@ def get_particle_fall_number(
     return N_f
 
 
-def get_deposition(particle_fall_number):
+def get_deposition(particle_fall_number: np.ndarray):
     """Gets the percentage of particles deposited on the soil surface.
-    Parameters.
-    ----------
-    particle_fall_number : np.array
+
+    Args:
+        particle_fall_number : np.array
 
     Returns:
-    -------
-    np.array
+        np.array: Percentage of particles deposited on the soil surface.
     """
     return np.minimum(44.1 * particle_fall_number**0.29, 100)
 
@@ -205,7 +204,9 @@ def get_flow_velocity(manning, water_depth, slope, minimum_slope=1e-5):
 
 
 class HillSlopeErosion(Module):
-    """The Morgan–Morgan–Finney (MMF) model is a process-based soil erosion model
+    """Calculate soil erosion on hillslopes using the MMF model.
+
+    The Morgan–Morgan–Finney (MMF) model is a process-based soil erosion model
     developed by Morgan, Morgan, and Finney (1984). It is designed to estimate annual
     or event-based soil loss by considering the detachment and transport of soil
     particles separately.

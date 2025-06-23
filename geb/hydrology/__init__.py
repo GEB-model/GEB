@@ -43,10 +43,7 @@ from .water_demand import WaterDemand
 
 class Hydrology(Data, Module):
     def __init__(self, model):
-        """Init part of the initial part
-        defines the mask map and the outlet points
-        initialization of the hydrological modules.
-        """
+        """Create the hydrology module."""
         Data.__init__(self, model)
         Module.__init__(self, model)
 

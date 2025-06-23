@@ -164,21 +164,19 @@ def get_soil_water_potential(
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
-    """Calculates the soil moisture content at a given soil water potential (capillary suction)
-    using the van Genuchten model.
+    """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
 
-    Parameters
-    ----------
-    capillary_suction : np.ndarray
-        The soil water potential (capillary suction) (m)
-    bubbling_pressure_cm : np.ndarray
-        The bubbling pressure (cm)
-    thetas : np.ndarray
-        The saturated soil moisture content (m³/m³)
-    thetar : np.ndarray
-        The residual soil moisture content (m³/m³)
-    lambda_ : np.ndarray
-        The van Genuchten parameter lambda (1/m)
+    Args:
+        capillary_suction : np.ndarray
+            The soil water potential (capillary suction) (m)
+        bubbling_pressure_cm : np.ndarray
+            The bubbling pressure (cm)
+        thetas : np.ndarray
+            The saturated soil moisture content (m³/m³)
+        thetar : np.ndarray
+            The residual soil moisture content (m³/m³)
+        lambda_ : np.ndarray
+            The van Genuchten parameter lambda (1/m)
     """
     alpha = np.float32(1) / bubbling_pressure_cm
     n = lambda_ + np.float32(1)
@@ -193,7 +191,9 @@ def get_soil_moisture_at_pressure(
 
 @njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(p, wfc, wwp):
-    """"The critical soil moisture content is defined as the quantity of stored soil moisture below
+    """Calculate the critical soil moisture content.
+
+    The critical soil moisture content is defined as the quantity of stored soil moisture below
     which water uptake is impaired and the crop begins to close its stomata. It is not a fixed
     value. Restriction of water uptake due to water stress starts at a higher water content
     when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86).
@@ -210,7 +210,9 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
 def get_fraction_easily_available_soil_water(
     crop_group_number, potential_evapotranspiration
 ):
-    """Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
+    """Calculate the fraction of easily available soil water.
+
+    Calculation is based on crop group number and potential evapotranspiration
     following Van Diepen et al., 1988: WOFOST 6.0, p.87.
 
     Parameters
@@ -629,25 +631,15 @@ def vertical_water_transport(
     topwater,
     soil_layer_height,
 ):
-    """Parameters
-    ----------
-    preferential_flow_constant : float
-        The preferential flow constant. Because effective saturation is always below 1, a higher
-        preferential flow constant will result in less preferential flow.
-
-    Simulates vertical transport of water in the soil using Darcy's equation,
-    combining infiltration, percolation, and capillary rise into a single process.
-    Considers soil water potential and varying soil layer heights.
+    """Simulates vertical transport of water in the soil using Darcy's equation.
 
     Returns:
-    -------
-    preferential_flow : np.ndarray
-        The preferential flow of water through the soil
-    direct_runoff : np.ndarray
-        The direct runoff of water from the soil
-    groundwater_recharge : np.ndarray
-        The recharge of groundwater from the soil
-
+        preferential_flow : np.ndarray
+            The preferential flow of water through the soil
+        direct_runoff : np.ndarray
+            The direct runoff of water from the soil
+        groundwater_recharge : np.ndarray
+            The recharge of groundwater from the soil
     """
     # Initialize variables
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)

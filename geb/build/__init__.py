@@ -87,6 +87,7 @@ class PathEncoder(json.JSONEncoder):
 
 def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     """Convert a boolean mask to an undirected NetworkX graph.
+
     Additional attributes can be passed as keyword arguments, which
     will be added as attributes to the nodes of the graph.
 
@@ -581,6 +582,7 @@ class GEBModel(
         include_coastal_area: bool = True,
     ) -> None:
         """Creates a 2D regular grid or reads an existing grid.
+
         An 2D regular grid will be created from a geometry (geom_fn) or bbox. If an existing
         grid is given, then no new grid will be generated.
 

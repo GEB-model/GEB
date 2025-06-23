@@ -17,8 +17,9 @@ from geb.workflows.io import AsyncForcingReader
 
 
 def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
-    """This function finds the nearest river cell to each HRU. It does so
-    by first selecting the rivers, by checking if the upstream area is
+    """This function finds the nearest river cell to each HRU.
+
+    It does so by first selecting the rivers, by checking if the upstream area is
     above a certain threshold. then for each grid cell, it finds the nearest
     river cell. Finally, it maps the nearest river cell to each HRU.
     """
@@ -159,6 +160,7 @@ def to_HRU(data, grid_to_HRU, land_use_ratio, output_data, fn=None):
         data: The grid data to be converted.
         grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
         land_use_ratio: Relative size of HRU to grid.
+        output_data: Array to store the output data. Must be of size of the HRUs.
         fn: Name of function to apply to data. None if data should be directly inserted into HRUs - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
 
     Returns:
@@ -344,6 +346,7 @@ class Grid(BaseVariables):
         Args:
             filepath: Filepath of map.
             compress: Whether to compress array.
+            layer: Layer to load from file. Defaults to 1.
 
         Returns:
             array: Loaded array.
@@ -756,22 +759,24 @@ class HRUs(BaseVariables):
         """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
 
         Args:
-            *args: Variable length argument list.
-            **kwargs: Arbitrary keyword arguments.
+            size: Size of the array to create.
+            dtype: Data type of the array.
+            *args: Additional arguments for np.zeros.
+            **kwargs: Additional keyword arguments for np.zeros.
 
         Returns:
             array: Array with size of number of HRUs.
         """
         return np.zeros(size, dtype, *args, **kwargs)
 
-    def full_compressed(
-        self, fill_value, dtype, gpu=None, *args, **kwargs
-    ) -> np.ndarray:
+    def full_compressed(self, fill_value, dtype, *args, **kwargs) -> np.ndarray:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
 
         Args:
-            *args: Variable length argument list.
-            **kwargs: Arbitrary keyword arguments.
+            fill_value: Value to fill the array with.
+            dtype: Data type of the array.
+            *args: Additional arguments for np.full.
+            **kwargs: Arbitrary keyword arguments for np.full.
 
         Returns:
             array: Array with size of number of HRUs.

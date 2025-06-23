@@ -392,11 +392,15 @@ class LakesReservoirs(Module):
 
         return waterbody_outflow_points
 
-    def routing_lakes(self, routing_step_length_seconds):
-        """Lake routine to calculate lake outflow
-        :param inflowC: inflow to lakes and reservoirs [m3]
-        :param NoRoutingExecuted: actual number of routing substep
-        :return: QLakeOutM3DtC - lake outflow in [m3] per subtime step.
+    def routing_lakes(self, routing_step_length_seconds: int | float):
+        """Lake routine to calculate lake outflow.
+
+        Args:
+            routing_step_length_seconds: length of the routing step in seconds.
+
+        Returns:
+            lake_outflow_m3: Outflow from the lakes in m3 per routing step.
+
         """
         is_lake = self.is_lake
         # check if there are any lakes in the model

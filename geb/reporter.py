@@ -96,7 +96,9 @@ class Reporter:
             self.activated = False
 
     def create_variable(self, config: dict, module_name: str, name: str) -> None:
-        """This function creates a variable for the reporter. For
+        """This function creates a variable for the reporter.
+
+        For
         configurations without a aggregation function, a zarr file is created. For
         configurations with an aggregation function, the data
         is stored in memory and exported on the final timestep.
@@ -274,9 +276,12 @@ class Reporter:
         """This method is used to save and/or export model values.
 
         Args:
+            module_name: Name of the module to which the value belongs.
             name: Name of the value to be exported.
-            value: The array itself.
-            conf: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
+            module: The module to report data from.
+            local_variables: A dictionary of local variables from the function
+                that calls this one.
+            config: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
         """
         # here we return None if the value is not to be reported on this timestep
         if "frequency" in config:
@@ -343,7 +348,7 @@ class Reporter:
             module_name: Name of the module to which the value belongs.
             name: Name of the value to be exported.
             value: The array itself.
-            conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
+            config: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
         """
         if config["type"] in ("grid", "HRU"):
             if config["function"] is None:
@@ -511,7 +516,7 @@ class Reporter:
 
         Args:
             module: The module to report data from.
-            variables: A dictionary of local variables from the function
+            local_variables: A dictionary of local variables from the function
                 that calls this one.
             module_name: The name of the module.
         """

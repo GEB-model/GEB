@@ -25,9 +25,7 @@ from geb.module import Module
 
 
 class Evaporation(Module):
-    """Evaporation module
-    Calculate potential evaporation and pot. transpiration.
-    """
+    """Calculate potential evaporation and pot. transpiration."""
 
     def __init__(self, model, hydrology):
         super().__init__(model)

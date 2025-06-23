@@ -221,7 +221,9 @@ class Forcing:
         resolution: str | None = None,
         buffer: int = 0,
     ) -> xr.DataArray:
-        """This method downloads ISIMIP climate data for GEB. It first retrieves the dataset
+        """This method downloads ISIMIP climate data for GEB.
+
+        It first retrieves the dataset
         metadata from the ISIMIP repository using the specified `product`, `variable`, `forcing`, and `resolution`
         parameters. It then downloads the data files that match the specified `start_date` and `end_date` parameters, and
         extracts them to the specified `download_path` directory.
@@ -235,6 +237,8 @@ class Forcing:
             forcing: The name of the climate forcing to download.
             start_date: The start date of the data. Default is None.
             end_date: The end date of the data. Default is None.
+            simulation_round: The ISIMIP simulation round to download data for. Default is "ISIMIP3a".
+            climate_scenario: The climate scenario to download data for. Default is "obsclim".
             resolution: The resolution of the data to download. Default is None.
             buffer: The buffer size in degrees to add to the bounding box of the data to download. Default is 0.
 
@@ -1701,7 +1705,9 @@ class Forcing:
         self.set_ps(pressure_30_min_regridded_corr)
 
     def setup_wind_isimip_30arcsec(self):
-        """This method sets up the wind data for GEB. It first downloads the global wind atlas data and
+        """This method sets up the wind data for GEB.
+
+        It first downloads the global wind atlas data and
         regrids it to the target grid using the `xe.Regridder` method. It then downloads the 30-minute average wind data
         from the ISIMIP dataset for the specified time period and regrids it to the target grid using the `xe.Regridder`
         method.
@@ -1782,8 +1788,9 @@ class Forcing:
         calibration_period_end: date = date(2010, 1, 1),
         window_months: int = 12,
     ) -> None:
-        """Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
-        due to the sliding window, the SPEI data will be shorter than the original data. When
+        """Sets up the Standardized Precipitation Evapotranspiration Index (SPEI).
+
+        Note that due to the sliding window, the SPEI data will be shorter than the original data. When
         a sliding window of 12 months is used, the SPEI data will be shorter by 11 months.
 
         Also sets up the Generalized Extreme Value (GEV) parameters for the SPEI data, being

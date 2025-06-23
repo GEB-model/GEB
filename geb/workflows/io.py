@@ -35,9 +35,9 @@ def load_array(fp: Path) -> np.ndarray:
 def calculate_scaling(
     min_value: float, max_value: float, precision: float, offset=0.0
 ) -> tuple[float, str]:
-    """This function calculates the scaling factor and output dtype for
-    a fixed scale and offset codec. The expected minimum and maximum
-    values along with the precision are used to determine the number
+    """This function calculates the scaling factor and output dtype for a fixed scale and offset codec.
+
+    The expected minimum and maximum values along with the precision are used to determine the number
     of bits required to represent the data. The scaling factor is then
     calculated to scale the original data to the required integer
     range. The output dtype is determined based on the number of bits

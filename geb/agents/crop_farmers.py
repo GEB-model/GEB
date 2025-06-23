@@ -56,13 +56,13 @@ INDEX_INSURANCE_ADAPTATION = 5
 
 
 def cumulative_mean(mean, counter, update, mask=None):
-    """Calculates the cumulative mean of a series of numbers. This function
-    operates in place.
+    """Calculates the cumulative mean of a series of numbers. This function operates in place.
 
     Args:
         mean: The cumulative mean.
         counter: The number of elements that have been added to the mean.
         update: The new elements that needs to be added to the mean.
+        mask: A mask that indicates which elements should be updated. If None, all elements are updated.
 
     """
     if mask is not None:
@@ -919,6 +919,7 @@ class CropFarmers(AgentBaseClass):
     @property
     def activation_order_by_elevation(self):
         """Activation order is determined by the agent elevation, starting from the highest.
+
         Agents with the same elevation are randomly shuffled.
         """
         # if activation order is fixed. Get the random state, and set a fixed seet.
@@ -1078,17 +1079,7 @@ class CropFarmers(AgentBaseClass):
         groundwater_depth: np.ndarray,
         available_reservoir_storage_m3: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """This function allows the abstraction of water by farmers for irrigation purposes. It's main purpose is to call the relevant numba function to do the actual abstraction. In addition, the function saves the abstraction from the various sources by farmer.
-
-        Args:
-            cell_area: the area of each subcell in m2.
-            HRU_to_grid: array to map the index of each subcell to the corresponding cell.
-            totalPotIrrConsumption: potential irrigation consumption.
-            available_channel_storage_m3: water available for irrigation from channels.
-            groundwater_head: groundwater head.
-            available_groundwater_m3: water available for irrigation from groundwater.
-            available_reservoir_storage_m3: water available for irrigation from reservoirs.
-            command_areas: command areas associated with reservoirs (i.e., which areas can access water from which reservoir.)
+        """This function allows the abstraction of water by farmers for irrigation purposes. Its main purpose is to call the relevant numba function to do the actual abstraction. In addition, the function saves the abstraction from the various sources by farmer.
 
         Returns:
             water_withdrawal_m: water withdrawal in meters
@@ -1410,8 +1401,7 @@ class CropFarmers(AgentBaseClass):
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
             crop_map: Subarray map of crops.
             crop_age_days: Subarray map of current crop age in days.
-            crop: Crops grown by each farmer.
-            switch_crops: Whether to switch crops or not.
+            crop_harvest_age_days: Subarray map of crop harvest age in days. I.e., the age at which the crop is ready to be harvested.
 
         Returns:
             harvest: Boolean subarray map of fields to be harvested.
@@ -1435,6 +1425,7 @@ class CropFarmers(AgentBaseClass):
 
     def harvest(self):
         """Determine which crops need to be harvested based on their current age and their harvest age.
+
         Once harvested, compute various metrics related to the harvest including potential profit,
         actual profit, crop age, drought perception, and update corresponding attributes of the model.
         Save the corresponding SPEI over the last harvest.
@@ -1585,13 +1576,14 @@ class CropFarmers(AgentBaseClass):
     ) -> None:
         """Calculate and update the drought risk perception for harvesting farmers.
 
-        Args:
-            harvesting_farmers: Index array of farmers that are currently harvesting.
-
         This function computes the risk perception of farmers based on the difference
         between their latest profits and potential profits. The perception is influenced
         by the historical losses and time since the last drought event. Farmers who have
         experienced a drought event will have their drought timer reset.
+
+        Args:
+            harvesting_farmers: Index array of farmers that are currently harvesting.
+            current_crop_age: Array of current crop age for each farmer.
 
         TODO: Perhaps move the constant to the model.yml
         """
@@ -1692,8 +1684,7 @@ class CropFarmers(AgentBaseClass):
         drought_loss_current: np.ndarray,
         current_crop_age: np.ndarray,
     ) -> None:
-        """Compute the microcredit for farmers based on their average profits, drought losses, and the age of their crops
-        with respect to their total cropping time.
+        """Compute the microcredit for farmers based on their average profits, drought losses, and the age of their crops with respect to their total cropping time.
 
         Parameters:
         - loaning_farmers: Boolean mask of farmers looking to obtain a loan, based on drought loss of harvesting farmers.
@@ -1983,8 +1974,9 @@ class CropFarmers(AgentBaseClass):
         )
 
     def water_abstraction_sum(self) -> None:
-        """Aggregates yearly water abstraction from different sources (channel, reservoir, groundwater) for each farmer
-        and also computes the total abstraction per farmer.
+        """Aggregates yearly water abstraction from different sources (channel, reservoir, groundwater) for each farmer.
+
+        Also computes the total abstraction per farmer.
 
         Note:
             This function performs the following steps:
@@ -2017,8 +2009,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     def save_harvest_spei(self, harvesting_farmers) -> None:
-        """Update the monthly Standardized Precipitation Evapotranspiration Index (SPEI) array by shifting past records and
-        adding the SPEI for the current month.
+        """Update the monthly Standardized Precipitation Evapotranspiration Index (SPEI) array by shifting past records and adding the SPEI for the current month.
 
         Note:
             This method updates the `monthly_SPEI` attribute in place.
@@ -2075,11 +2066,6 @@ class CropFarmers(AgentBaseClass):
         potential_income: np.ndarray,
     ) -> None:
         """Saves the latest profit and potential profit values for harvesting farmers to determine yearly profits, considering inflation and field size.
-
-        Args:
-            harvesting_farmers: Array of farmers who are currently harvesting.
-            profit: Array representing the profit value for each farmer per season.
-            potential_profit: Array representing the potential profit value for each farmer per season.
 
         Note:
             This function performs the following operations:
@@ -2900,8 +2886,6 @@ class CropFarmers(AgentBaseClass):
         and the provided constraints. It calculates the costs and the benefits for each farmer and updates
         their statuses (e.g., irrigation source, adaptation costs) accordingly.
 
-        Note:
-
         Todo:
             - Possibly externalize hard-coded values.
         """
@@ -3039,8 +3023,6 @@ class CropFarmers(AgentBaseClass):
         This function checks which farmers will adopt irrigation wells based on their expected utility
         and the provided constraints. It calculates the costs and the benefits for each farmer and updates
         their statuses (e.g., irrigation source, adaptation costs) accordingly.
-
-        Note:
 
         Todo:
             - Possibly externalize hard-coded values.
@@ -3313,8 +3295,6 @@ class CropFarmers(AgentBaseClass):
         This function checks which farmers will adopt irrigation wells based on their expected utility
         and the provided constraints. It calculates the costs and the benefits for each farmer and updates
         their statuses (e.g., irrigation source, adaptation costs) accordingly.
-
-        Note:
 
         Todo:
             - Possibly externalize hard-coded values.
@@ -3780,8 +3760,7 @@ class CropFarmers(AgentBaseClass):
         np.ndarray,
         np.ndarray,
     ]:
-        """Calculate total profits under different drought probability scenarios, with and without adaptation measures
-        for adaptation types 0 and 1.
+        """Calculate total profits under different drought probability scenarios, with and without adaptation measures for adaptation types 0 and 1.
 
         Parameters:
             adaptation_type (int): The type of adaptation to consider.
@@ -4034,9 +4013,6 @@ class CropFarmers(AgentBaseClass):
 
         The additional differentiator must be different from the adapted class
 
-        Args:
-            adaptation_type: The type of adaptation being considered.
-
         Returns:
             An array representing the relative yield ratio improvement for each agent.
 
@@ -4132,6 +4108,7 @@ class CropFarmers(AgentBaseClass):
         are doing in terms of their yield ratio as compared to those who haven't.
 
         Args:
+            additional_diffentiators (np.ndarray): Additional differentiators for grouping agents.
             adapted (np.ndarray): Array indicating adaptation status (0 or 1) for each agent.
             energy_cost (np.ndarray): Array of energy costs for each agent.
             water_cost (np.ndarray): Array of water costs for each agent.
@@ -4199,6 +4176,7 @@ class CropFarmers(AgentBaseClass):
             yield_ratios: The array of yield ratios for the crops.
             crops_mask: A mask that denotes valid crops, based on certain conditions.
             array_with_reference: An array initialized with NaNs, later used to store reference yields and crop prices.
+            nan_array: An array filled with NaNs, used for initializing arrays.
 
         Returns:
             An array representing the profit values for each crop based on the given yield ratios.

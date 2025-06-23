@@ -184,6 +184,7 @@ class Observations:
         custom_river_stations: None = None,
     ) -> None:
         """setup_discharge_observations is responsible for setting up discharge observations from the Q_obs dataset.
+
         It clips Q_obs to the basin area, and snaps the Q_obs locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in Q_obs.
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
         Additional stations can be added as csv files in the custom_stations folder in the GEB data catalog.
@@ -411,6 +412,7 @@ class Observations:
                 max_uparea_difference_ratio, max_spatial_difference_degrees
             ):
                 """This function selects the closest river segment to the Q_obs station based on the spatial distance.
+
                 It returns an error if the spatial distance is larger than the max_spatial_difference_degrees. If the difference between the upstream area from MERIT (from the river centerlines)
                 and the Q_obs upstream area is larger than the max_uparea_difference_ratio, it will select the closest river segment within the correct upstream area range.
                 """

@@ -152,6 +152,7 @@ def fetch_and_save(
     url, file_path, overwrite=False, max_retries=3, delay=5, chunk_size=16384
 ):
     """Fetches data from a URL and saves it to a temporary file, with a retry mechanism.
+
     Moves the file to the destination if the download is complete.
     Removes the temporary file if the download is interrupted.
     """

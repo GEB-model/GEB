@@ -58,6 +58,7 @@ def multi_set(dict_obj, value, *attrs):
 @handle_ctrl_c
 def run_model(args):
     """This function takes an individual from the population and runs the model with the corresponding parameters.
+
     It first checks if the run directory already exists and whether the model was run before.
     If the directory exists and the model was run before, it skips running the model.
     Otherwise, it runs the model and saves the results to the run directory.
