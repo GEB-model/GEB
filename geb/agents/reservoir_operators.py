@@ -286,15 +286,7 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         daily_substeps,
     ):
-        """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release.
-
-        Parameters
-        ----------
-
-        minimum_release_m3 : float
-            The minimum release from the reservoir. This is the environmental flow requirement
-            in m3/s. It is assumed that this is the same for all reservoirs.
-        """
+        """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release."""
         # release is at least 10% of the mean monthly inflow (environmental flow)
         reservoir_release_m3 = np.maximum(
             provisional_reservoir_release_m3, environmental_flow_requirement_m3

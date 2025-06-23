@@ -469,18 +469,12 @@ def create_riverine_mask(
 ) -> xr.DataArray:
     """Create a riverine mask from the ldd and the river network.
 
-    Parameters
-    ----------
-    ldd : xarray.DataArray
-        The local drainage direction (ldd) data array.
-    ldd_network : pyflwdir.FlwdirRaster
-        The flow direction raster created from the ldd data.
-    geom : geopandas.GeoDataFrame
-        The geometry of the riverine basin, which is used to clip the mask.
+    Args:
+        ldd : The local drainage direction (ldd) data array.
+        ldd_network : The flow direction raster created from the ldd data.
+        geom : The geometry of the riverine basin, which is used to clip the mask.
 
     Returns:
-    -------
-    xarray.DataArray
         A boolean mask where True indicates riverine cells and False indicates non-riverine cells.
 
     """

@@ -432,21 +432,15 @@ def init_fn(
 ) -> None:
     """Create a new model.
 
-    Parameters
-    ----------
-    config : str | Path
-        Path to the model configuration file to create.
-    build_config : str | Path
-        Path to the model build configuration file to create.
-    working_directory : str | Path
-        Working directory for the model.
-    from_example : str
-        Name of the example to use as a base for the model.
-    basin_id : str | None, optional
-        Basin ID(s) to use for the model. Can be a comma-separated list of integers.
-        If not set, the basin ID is taken from the config file.
-    overwrite : bool, optional
-        If True, overwrite existing config and build config files. Defaults to False.
+    Args:
+        config: Path to the model configuration file to create.
+        build_config: Path to the model build configuration file to create.
+        update_config: Path to the model update configuration file to create.
+        working_directory: Working directory for the model.
+        from_example: Name of the example to use as a base for the model.
+        basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
+            If not set, the basin ID is taken from the config file.
+        overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
     """
     config: Path = Path(config)

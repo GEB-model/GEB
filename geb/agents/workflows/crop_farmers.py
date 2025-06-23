@@ -76,24 +76,20 @@ def get_farmer_groundwater_depth(
 
 @njit(cache=True, inline="always")
 def get_deficit_between_dates(
-    cumulative_water_deficit_m3, farmer, start_index, end_index
-):
+    cumulative_water_deficit_m3: np.ndarray,
+    farmer: int,
+    start_index: int,
+    end_index: int,
+) -> np.ndarray:
     """Get the water deficit between two dates for a farmer.
 
-    Parameters
-    ----------
-    cumulative_water_deficit_m3 : np.ndarray
-        Cumulative water deficit in m3 for each day of the year for each farmer.
-    farmer : int
-        Farmer index.
-    start_index : int
-        Start day of cumulative water deficit calculation (index-based; Jan 1 == 0).
-    end_index : int
-        End day of cumulative water deficit calculation (index-based; Jan 1 == 0).
+    Args:
+        cumulative_water_deficit_m3: Cumulative water deficit in m3 for each day of the year for each farmer.
+        farmer: The index of the farmer in the cumulative water deficit.
+        start_index: Start day of cumulative water deficit calculation (index-based; Jan 1 == 0).
+        end_index: End day of cumulative water deficit calculation (index-based; Jan 1 == 0).
 
     Returns:
-    -------
-    float
         Water deficit in m3 between the two dates.
     """
     if end_index == start_index:
@@ -128,33 +124,23 @@ def get_future_deficit(
 ):
     """Get the future water deficit for a farmer.
 
-    Parameters
-    ----------
-    farmer : int
-        Farmer index.
-    day_index : int
-        Current day index (0-indexed).
-    cumulative_water_deficit_m3 : np.ndarray
-        Cumulative water deficit in m3 for each day of the year for each farmer.
-    crop_calendar : np.ndarray
-        Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
-        Each crop is a list of [crop_type, planting_day, growing_days, crop_year_index].
-        Planting day is 0-indexed (Jan 1 == 0).
-        Growing days is the number of days the crop grows.
-        Crop year index is the index of the year in the crop rotation.
-    crop_rotation_year_index : np.ndarray
-        Crop rotation year index for each farmer.
-    potential_irrigation_consumption_farmer_m3 : float
-        Potential irrigation consumption in m3 for each farmer on the current day.
-    reset_day_index : int, optional
-        Day index to reset the water year (0-indexed; Jan 1 == 0). Default is 0. Deficit
-        is calculated up to this day. For example, when the reset day index is 364, the
-        deficit is calculated up to Dec 31. When the reset day index is 0, the deficit is
-        calculated up to Jan 1. Default is 0.
+    Args:
+        farmer: Farmer index.
+        day_index: Current day index (0-indexed).
+        cumulative_water_deficit_m3: Cumulative water deficit in m3 for each day of the year for each farmer.
+        crop_calendar: Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
+            Each crop is a list of [crop_type, planting_day, growing_days, crop_year_index].
+            Planting day is 0-indexed (Jan 1 == 0).
+            Growing days is the number of days the crop grows.
+            Crop year index is the index of the year in the crop rotation.
+        crop_rotation_year_index: Crop rotation year index for each farmer.
+        potential_irrigation_consumption_farmer_m3: Potential irrigation consumption in m3 for each farmer on the current day.
+        reset_day_index: Day index to reset the water year (0-indexed; Jan 1 == 0). Default is 0. Deficit
+            is calculated up to this day. For example, when the reset day index is 364, the
+            deficit is calculated up to Dec 31. When the reset day index is 0, the deficit is
+            calculated up to Jan 1. Default is 0.
 
     Returns:
-    -------
-    float
         Future water deficit in m3 for the farmer in the growing season.
     """
     if reset_day_index >= 365 or reset_day_index < 0:
@@ -1013,12 +999,11 @@ def compute_premiums_and_best_contracts_numba(
         tracking the (strike_idx, exit_idx, rate_idx) that minimizes RMSE.
 
     Returns:
-    -------
-    best_strike_idx : (n_agents,)  index into strike_vals
-    best_exit_idx   : (n_agents,)  index into exit_vals
-    best_rate_idx   : (n_agents,)  index into rate_vals
-    best_rmse       : (n_agents,)  the minimal RMSE for each agent
-    best_premium    : (n_agents,)  the premium corresponding to that minimal‐RMSE contract
+        best_strike_idx : (n_agents,)  index into strike_vals
+        best_exit_idx   : (n_agents,)  index into exit_vals
+        best_rate_idx   : (n_agents,)  index into rate_vals
+        best_rmse       : (n_agents,)  the minimal RMSE for each agent
+        best_premium    : (n_agents,)  the premium corresponding to that minimal‐RMSE contract
     """
     np.random.seed(seed)
     n_agents = gev_params.shape[0]

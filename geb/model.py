@@ -25,12 +25,11 @@ from .hydrology import Hydrology
 class GEBModel(Module, HazardDriver, ABM_Model):
     """GEB parent class.
 
-    Parameters
-    ----------
-    config: Filepath of the YAML-configuration file (e.g. model.yml).
-    files: Dictionary with the paths of the input files.
-    mode: Mode of the model. Either `w` (write) or `r` (read).
-    timing: Boolean indicating if the model steps should be timed.
+    Args:
+        config: Filepath of the YAML-configuration file (e.g. model.yml).
+        files: Dictionary with the paths of the input files.
+        mode: Mode of the model. Either `w` (write) or `r` (read).
+        timing: Boolean indicating if the model steps should be timed.
     """
 
     def __init__(
