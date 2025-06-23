@@ -1686,10 +1686,10 @@ class CropFarmers(AgentBaseClass):
     ) -> None:
         """Compute the microcredit for farmers based on their average profits, drought losses, and the age of their crops with respect to their total cropping time.
 
-        Parameters:
-        - loaning_farmers: Boolean mask of farmers looking to obtain a loan, based on drought loss of harvesting farmers.
-        - drought_loss_current: Array of drought losses of the most recent harvest for each farmer.
-        - total_crop_age: Array of total age for crops of each farmer.
+        Args:
+            loaning_farmers: Boolean mask of farmers looking to obtain a loan, based on drought loss of harvesting farmers.
+            drought_loss_current: Array of drought losses of the most recent harvest for each farmer.
+            current_crop_age: Array of current crop age for each farmer.
         """
         # Compute the maximum loan amount based on the average profits of the last 10 years
         max_loan = np.median(self.var.yearly_income[loaning_farmers, :5], axis=1)
@@ -3660,14 +3660,14 @@ class CropFarmers(AgentBaseClass):
         associated with pumping groundwater for each agent (farmer). It takes into account regional variations
         in costs and agent-specific parameters such as groundwater depth and extraction speed.
 
-        Parameters:
+        Args:
             groundwater_depth (np.ndarray): Array of groundwater depths per agent (in meters).
             average_extraction_speed (np.ndarray): Array of average water extraction speeds per agent (m³/s).
 
         Returns:
             Tuple[np.ndarray, np.ndarray]:
-                - annual_cost (np.ndarray): Annual cost per agent (local currency units per year).
-                - potential_well_length (np.ndarray): Potential well length per agent (in meters).
+            annual_cost (np.ndarray): Annual cost per agent (local currency units per year).
+            potential_well_length (np.ndarray): Potential well length per agent (in meters).
         """
         # Retrieve aquifer-specific unit costs for well drilling per meter
         well_cost_class_1 = self.get_value_per_farmer_from_region_id(
@@ -3762,15 +3762,17 @@ class CropFarmers(AgentBaseClass):
     ]:
         """Calculate total profits under different drought probability scenarios, with and without adaptation measures for adaptation types 0 and 1.
 
-        Parameters:
-            adaptation_type (int): The type of adaptation to consider.
-                - 0: No adaptation.
-                - 1: Adaptation Type 1 (e.g., installing wells).
-            adapted (np.ndarray, optional): An array indicating which agents have adapted (relevant for adaptation_type == 1).
+        Args:
+            additional_diffentiators: Additional differentiators for grouping agents.
+            adapted (np.ndarray): An array indicating which agents have adapted (relevant for adaptation_type == 1).
+            farmer_yield_probability_relation (np.ndarray): Yield probability relation for farmers.
 
         Returns:
-            Depending on adaptation_type, returns a tuple containing total profits and profits under 'no drought' scenario,
-            possibly including adaptation profits.
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            total_profits (np.ndarray): Total profits under different drought scenarios without adaptation.
+            profits_no_event (np.ndarray): Profits under the 'no drought' scenario without adaptation.
+            total_profits_adaptation (np.ndarray): Total profits under different drought scenarios with adaptation.
+            profits_no_event_adaptation (np.ndarray): Profits under the 'no drought' scenario with adaptation.
         """
         # Main function logic
         yield_ratios = self.convert_probability_to_yield_ratio(
@@ -3899,7 +3901,7 @@ class CropFarmers(AgentBaseClass):
     def compute_total_profits(self, yield_ratios: np.ndarray) -> np.ndarray:
         """Compute total profits for all agents across different drought scenarios.
 
-        Parameters:
+        Args:
             yield_ratios (np.ndarray): Yield ratios for agents under different drought scenarios.
             crops_mask (np.ndarray): Mask indicating valid crop entries.
             nan_array (np.ndarray): Array filled with NaNs for reference.
@@ -3926,7 +3928,7 @@ class CropFarmers(AgentBaseClass):
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Transpose and slice the total profits matrix, and extract the 'no drought' scenario profits.
 
-        Parameters:
+        Args:
             total_profits (np.ndarray): Total profits matrix.
 
         Returns:
@@ -3988,11 +3990,8 @@ class CropFarmers(AgentBaseClass):
     def create_unique_groups(self, *additional_diffentiators):
         """Create unique groups based on elevation data and merge with crop calendar.
 
-        Parameters:
-        N (int): Number of groups to divide the elevation data into.
-
         Returns:
-        numpy.ndarray: Merged array with crop calendar and elevation distribution groups.
+            numpy.ndarray: Merged array with crop calendar and elevation distribution groups.
         """
         if additional_diffentiators:
             agent_classes = np.stack(

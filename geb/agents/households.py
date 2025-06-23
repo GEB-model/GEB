@@ -20,15 +20,16 @@ from .decision_module_flood import DecisionModule
 from .general import AgentBaseClass
 
 
-def from_landuse_raster_to_polygon(mask, transform, crs):
+def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
     """Convert raster data into separate GeoDataFrames for specified land use values.
 
-    Parameters:
-    - landuse: An xarray DataArray or similar with land use data and 'x' and 'y' coordinates.
-    - values_to_extract: List of integer values to extract (e.g., [0, 1] for forest and agriculture).
+    Args:
+        mask: A 2D numpy array representing the land use raster, where each unique value corresponds to a different land use type.
+        transform: A rasterio Affine transform object that defines the spatial reference of the raster.
+        crs: The coordinate reference system (CRS) to use for the resulting GeoDataFrame.
 
     Returns:
-    - Geodataframe
+        A GeoDataFrame containing polygons for the specified land use values.
     """
     shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
 

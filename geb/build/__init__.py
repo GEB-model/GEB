@@ -91,21 +91,19 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     Additional attributes can be passed as keyword arguments, which
     will be added as attributes to the nodes of the graph.
 
-    Parameters:
-    -----------
-    mask : xarray.DataArray or numpy.ndarray
-        Boolean mask where True values are nodes in the graph
-    connectivity : int
-        4 for von Neumann neighborhood (up, down, left, right)
-        8 for Moore neighborhood (includes diagonals)
-    kwargs : dict
-        Additional attributes to be added to the nodes of the graph.
-        Must be 2D arrays with the same shape as the mask.
+    Args:
+        mask (xarray.DataArray or numpy.ndarray):
+            Boolean mask where True values are nodes in the graph
+        connectivity (int):
+            4 for von Neumann neighborhood (up, down, left, right)
+            8 for Moore neighborhood (includes diagonals)
+        **kwargs:
+            Additional attributes to be added to the nodes of the graph.
+            Must be 2D arrays with the same shape as the mask.
 
     Returns:
-    --------
-    G : networkx.Graph
-        Undirected graph where nodes are (y,x) coordinates of True cells
+        networkx.Graph:
+            Undirected graph where nodes are (y,x) coordinates of True cells
     """
     # check dtypes
     assert isinstance(mask, (np.ndarray))
