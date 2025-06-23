@@ -54,7 +54,7 @@ dependencies = [
     "ruff",
     "s3fs>=2023.6.0",
     "SALib>=1.4.8", # for sensitivity analysis
-    "scipy>=1.14.0",
+    "scipy>=1.14.0,<1.16",  # update blocked until https://github.com/statsmodels/statsmodels/issues/9584 is fixed
     "setuptools>=75.8.0",
     "statsmodels>=0.14.4",
     "tbb>=2022.0.0",
