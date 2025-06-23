@@ -8,6 +8,7 @@ resolution-markers = [
 required-markers = [
     "sys_platform == 'linux'",
     "sys_platform == 'win32'",
+    "sys_platform == 'darwin'",
 ]
 
 [[package]]
@@ -1253,7 +1254,6 @@ dependencies = [
     { name = "scipy" },
     { name = "setuptools" },
     { name = "statsmodels" },
-    { name = "tbb" },
     { name = "tqdm" },
     { name = "xarray" },
     { name = "xarray-regrid", extra = ["accel"] },
@@ -1337,7 +1337,6 @@ requires-dist = [
     { name = "seaborn", marker = "extra == 'display'", specifier = ">=0.13.2" },
     { name = "setuptools", specifier = ">=75.8.0" },
     { name = "statsmodels", specifier = ">=0.14.4" },
-    { name = "tbb", specifier = ">=2022.0.0" },
     { name = "tqdm", specifier = ">=4.66.1" },
     { name = "xarray", specifier = ">=2025.3.0" },
     { name = "xarray-regrid", extras = ["accel"], specifier = ">=0.4.1" },
@@ -4432,33 +4431,12 @@ wheels = [
 ]
 
 [[package]]
-name = "tbb"
-version = "2022.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "tcmlib" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/64/3d24181aaea3fb892d4a46f8171845782ee364d60e9494426daf31d12f47/tbb-2022.1.0-py2.py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:4992a3f2268b33f9a7b4c274af9d7001f550e74246436647b267d58e4947628a", size = 3614726, upload-time = "2025-03-21T15:26:50.39Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/e5/09786318a0fcd5a9b9589759ec91fe1815db064ab6bb6d4083ea24dbb859/tbb-2022.1.0-py3-none-win_amd64.whl", hash = "sha256:ae9cc327606f604324441abf3ab984c12ea4f6f1ea2a84230874fc40036d0913", size = 299568, upload-time = "2025-03-21T15:28:27.22Z" },
-]
-
-[[package]]
 name = "tblib"
 version = "3.1.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/54/95/4b3044ec4bf248186769629bbfb495a458deb6e4c1f9eff7f298ae1e336e/tblib-3.1.0.tar.gz", hash = "sha256:06404c2c9f07f66fee2d7d6ad43accc46f9c3361714d9b8426e7f47e595cd652", size = 30766, upload-time = "2025-03-31T12:58:27.473Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/27/44/aa5c8b10b2cce7a053018e0d132bd58e27527a0243c4985383d5b6fd93e9/tblib-3.1.0-py3-none-any.whl", hash = "sha256:670bb4582578134b3d81a84afa1b016128b429f3d48e6cbbaecc9d15675e984e", size = 12552, upload-time = "2025-03-31T12:58:26.142Z" },
-]
-
-[[package]]
-name = "tcmlib"
-version = "1.3.0"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/bb/09a6dc2f1110b409d6d2f96429969d7466bde9bf4ad8b2e682d851ef104b/tcmlib-1.3.0-py2.py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:c328ba464c556e46174879c694cafd17ba17c3e7406a79fee47bb3e8c9c6a6c5", size = 4158009, upload-time = "2025-03-21T15:29:35.675Z" },
-    { url = "https://files.pythonhosted.org/packages/07/d2/11754d24c4ee4a78e11da4fd34ccdc948261b359e525ee74fc9aae485fd0/tcmlib-1.3.0-py2.py3-none-win_amd64.whl", hash = "sha256:878c9ce2ae5705da3964b7d00ff721c0c61b23a0aa93960629b2119c2921a1e2", size = 356902, upload-time = "2025-03-21T15:24:46.837Z" },
 ]
 
 [[package]]

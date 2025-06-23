@@ -80,6 +80,7 @@ classifiers = [
 required-environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'win32'",
+    "sys_platform == 'darwin'"
 ]
 
 [dependency-groups]
